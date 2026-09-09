@@ -3,8 +3,7 @@
 //! OpenTelemetry observable callbacks are synchronous, so this module keeps
 //! async storage and filesystem reads in a sampler task that updates a small
 //! in-memory snapshot. The server composition root injects only the storage
-//! handles and service facts each source needs; the sampler never owns the
-//! whole [`storage::AppState`].
+//! handles and service facts each source needs.
 
 use std::fs;
 use std::io;
@@ -1109,13 +1108,14 @@ mod tests {
         )
         .await
         .expect("open database");
-        let state = factory.app_state();
+        let feed_events = factory.feed_events();
+        let media = factory.media();
+        let write_scope = factory.write_scope();
         let feed_path = storage::test_support::fp("/feed.rss");
-        let feed_events = state.feed_events.clone();
-        let outcome = state
-            .write_scope
+        let queued_feed_events = Arc::clone(&feed_events);
+        let outcome = write_scope
             .run(move |transaction| {
-                Box::pin(async move { feed_events.enqueue(transaction, &feed_path).await })
+                Box::pin(async move { queued_feed_events.enqueue(transaction, &feed_path).await })
             })
             .await
             .expect("enqueue feed event");
@@ -1144,8 +1144,8 @@ mod tests {
         )
         .expect("write manifest");
         let sources = SaturationSources::real(
-            state.feed_events.clone(),
-            state.media.clone(),
+            feed_events,
+            media,
             media_root,
             Some(backup_root),
             pool_observer,
@@ -1188,16 +1188,11 @@ mod tests {
         )
         .await
         .expect("open database");
-        let state = factory.app_state();
+        let feed_events = factory.feed_events();
+        let media = factory.media();
         let media_root = base.path().join("media");
         std::fs::create_dir(&media_root).expect("media directory");
-        let sources = SaturationSources::real(
-            state.feed_events.clone(),
-            state.media.clone(),
-            media_root,
-            None,
-            pool_observer,
-        );
+        let sources = SaturationSources::real(feed_events, media, media_root, None, pool_observer);
         let snapshot = seeded_snapshot();
 
         sample_saturation_once(&sources, &snapshot).await;

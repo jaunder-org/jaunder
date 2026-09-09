@@ -448,12 +448,11 @@ mod tests {
     use std::sync::Arc;
 
     async fn create_audience_confirmed(
-        state: &Arc<crate::AppState>,
+        audiences: Arc<dyn crate::AudienceStorage>,
+        write_scope: crate::WriteScope,
         author_user_id: common::ids::UserId,
         name: &AudienceName,
     ) -> AudienceId {
-        let audiences = Arc::clone(&state.audiences);
-        let write_scope = state.write_scope.clone();
         let name = name.clone();
         crate::test_support::confirmed_for(
             write_scope
@@ -530,12 +529,17 @@ mod tests {
     #[tokio::test]
     async fn create_audience_preserves_non_unique_database_errors(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let author_user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let author_user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         block_audience_write(backend, env.base.pool(), BlockedAudienceWrite::Create).await;
-        let audiences = Arc::clone(&env.state.audiences);
+        let audiences = Arc::clone(&env.audiences());
         let result = env
-            .state
-            .write_scope
+            .write_scope()
             .run(move |transaction| {
                 Box::pin(async move {
                     audiences
@@ -564,15 +568,24 @@ mod tests {
     #[tokio::test]
     async fn rename_audience_preserves_non_unique_database_errors(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let author_user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let audience_id =
-            create_audience_confirmed(&env.state, author_user_id, &parse_audience_name("Original"))
-                .await;
+        let author_user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let audience_id = create_audience_confirmed(
+            env.audiences().clone(),
+            env.write_scope().clone(),
+            author_user_id,
+            &parse_audience_name("Original"),
+        )
+        .await;
         block_audience_write(backend, env.base.pool(), BlockedAudienceWrite::Rename).await;
-        let audiences = Arc::clone(&env.state.audiences);
+        let audiences = Arc::clone(&env.audiences());
         let result = env
-            .state
-            .write_scope
+            .write_scope()
             .run(move |transaction| {
                 Box::pin(async move {
                     audiences
@@ -602,12 +615,27 @@ mod tests {
     #[tokio::test]
     async fn audience_created_at_round_trips_and_list_preserves_id_order(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let author = SeedUser::new().seed(&env.state).await.user_id;
-        let first_id =
-            create_audience_confirmed(&env.state, author, &parse_audience_name("Close Friends"))
-                .await;
-        let second_id =
-            create_audience_confirmed(&env.state, author, &parse_audience_name("Family")).await;
+        let author = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let first_id = create_audience_confirmed(
+            env.audiences().clone(),
+            env.write_scope().clone(),
+            author,
+            &parse_audience_name("Close Friends"),
+        )
+        .await;
+        let second_id = create_audience_confirmed(
+            env.audiences().clone(),
+            env.write_scope().clone(),
+            author,
+            &parse_audience_name("Family"),
+        )
+        .await;
         let first_created_at = "2026-01-02T03:04:05.654321Z".parse::<UtcInstant>().unwrap();
         let second_created_at = "2026-01-02T03:04:05.123456Z".parse::<UtcInstant>().unwrap();
 
@@ -626,7 +654,7 @@ mod tests {
                 .unwrap();
         });
 
-        let listed = env.state.audiences.list_audiences(author).await.unwrap();
+        let listed = env.audiences().list_audiences(author).await.unwrap();
         assert_eq!(listed.len(), 2);
         assert_eq!(listed[0].audience_id, first_id);
         assert_eq!(listed[0].created_at, first_created_at);
@@ -641,7 +669,13 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let author = SeedUser::new().seed(&env.state).await.user_id;
+        let author = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         // A whitespace-only name bypasses `AudienceName` validation (which
         // `create_audience` enforces) — only reachable via DB tampering. The
         // validating bridge `Decode` rejects it on read as a column-decode error.
@@ -653,12 +687,7 @@ mod tests {
                 .map(|_| ())
         })
         .unwrap();
-        let err = env
-            .state
-            .audiences
-            .list_audiences(author)
-            .await
-            .unwrap_err();
+        let err = env.audiences().list_audiences(author).await.unwrap_err();
         assert!(
             matches!(err, sqlx::Error::ColumnDecode { .. }),
             "expected a column-decode error, got: {err:?}"
@@ -669,17 +698,35 @@ mod tests {
     #[tokio::test]
     async fn named_target_validation_is_author_scoped_and_opaque(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let author = SeedUser::new().seed(&env.state).await;
-        let other = SeedUser::new().seed(&env.state).await;
-        let owned =
-            create_audience_confirmed(&env.state, author.user_id, &parse_audience_name("Owned"))
-                .await;
-        let foreign =
-            create_audience_confirmed(&env.state, other.user_id, &parse_audience_name("Foreign"))
-                .await;
+        let author = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
+        let other = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
+        let owned = create_audience_confirmed(
+            env.audiences().clone(),
+            env.write_scope().clone(),
+            author.user_id,
+            &parse_audience_name("Owned"),
+        )
+        .await;
+        let foreign = create_audience_confirmed(
+            env.audiences().clone(),
+            env.write_scope().clone(),
+            other.user_id,
+            &parse_audience_name("Foreign"),
+        )
+        .await;
 
         validate_named_audience_targets(
-            env.state.audiences.as_ref(),
+            env.audiences().as_ref(),
             author.user_id,
             &[AudienceTarget::Public, AudienceTarget::Named(owned)],
         )
@@ -687,14 +734,14 @@ mod tests {
         .unwrap();
 
         let foreign = validate_named_audience_targets(
-            env.state.audiences.as_ref(),
+            env.audiences().as_ref(),
             author.user_id,
             &[AudienceTarget::Named(foreign)],
         )
         .await
         .unwrap_err();
         let unknown = validate_named_audience_targets(
-            env.state.audiences.as_ref(),
+            env.audiences().as_ref(),
             author.user_id,
             &[AudienceTarget::Named(common::ids::AudienceId::from(
                 999_999,

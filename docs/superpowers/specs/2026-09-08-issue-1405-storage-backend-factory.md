@@ -35,9 +35,11 @@ This is a behavior-preserving architectural cutover for SQLite and PostgreSQL.
 - A factory is used only at an executable, CLI, or test-harness composition
   root. It is never injected into a command, application module, fixture
   operation, or long-lived service as a storage locator.
-- No heterogeneous storage aggregate replaces `AppState`. Serve keeps broad
-  wiring local to its composition root and injects exact handles into router,
-  context, worker, manager, and metrics modules.
+- No heterogeneous storage aggregate replaces `AppState` as an application
+  dependency. Serve may use one private lifecycle-only root wiring value to
+  organize its broad composition; that value never crosses into a router,
+  context, worker, manager, metrics module, or other runtime subsystem, all of
+  which receive exact handles.
 - Each affected command receives its exact storage dependencies directly:
   - user creation: user storage and `WriteScope`;
   - App Password creation: user storage, session storage, and `WriteScope`;
@@ -85,15 +87,18 @@ This is a behavior-preserving architectural cutover for SQLite and PostgreSQL.
 - `AppState`, its module/export, `StorageFactory::app_state`, and every
   construction/import/reference in live Rust code are removed.
 - The serve path mints exact dependencies from one factory and retains current
-  pool-observer, instance-identity, worker, router, and startup behavior without
-  passing a heterogeneous holder across a function interface.
+  pool-observer, instance-identity, worker, router, and startup behavior. Its
+  private root wiring value may cross only lifecycle composition helpers; every
+  runtime subsystem receives exact dependencies.
 - `jaunder init` completes initialization without constructing storage handles.
 - The account, site-configuration, and WebSub command roots listed in #1405 mint
   only the handles and `WriteScope` required by the selected command, then pass
   those dependencies directly into command logic.
-- Router/context functions, lifecycle helpers, storage fixtures, server test
-  helpers, and the external seed binary accept exact dependencies rather than
-  `AppState`, `StorageFactory`, a raw pool, or a replacement aggregate.
+- Router/context functions, runtime lifecycle components, storage fixtures,
+  server test helpers, and the external seed binary accept exact dependencies
+  rather than `AppState`, `StorageFactory`, a raw pool, or a replacement
+  application aggregate. Private serve composition helpers may receive the
+  lifecycle-only root wiring value described above.
 - `TestEnv` preserves SQLite/PostgreSQL lifetime, raw-SQL inspection, and pool
   fault-injection behavior while ceasing to expose an assembled storage state.
 - Existing successful command output and state changes remain unchanged for both
@@ -116,8 +121,10 @@ This is a behavior-preserving architectural cutover for SQLite and PostgreSQL.
 - No change to the public meaning or generic bounds of `Backend`.
 - No factory or raw pool is injected into production, application, or fixture
   modules; the existing test-root-only raw-SQL, fault-injection, and resource
-  lifetime capability remains. No service locator, replacement storage
-  aggregate, or second services bundle.
+  lifetime capability remains. No service locator, replacement application
+  aggregate, or second services bundle. The private serve root wiring value is
+  an implementation detail of lifecycle composition and is never a runtime
+  dependency.
 - No refactor of backup, restore, PostgreSQL bootstrap, publisher mutation
   semantics, or unrelated application behavior.
 - No compatibility shim for `AppState` or the former opener return type;

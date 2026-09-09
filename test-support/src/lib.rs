@@ -27,9 +27,9 @@ use host::config_key::SiteConfigKey;
 use host::feed::{FeedEventPhase, FeedPath};
 use jiff::{Timestamp, ToSpan};
 use storage::{
-    AppState, OperatorStatus, PostBookkeepingExpectation, PostFormat, PostStorage,
-    RenderedPostContent, SiteConfigStorage, ThemeAssetManager, ThemeOwner, ThemeRoleBinding,
-    UserStorage, WriteScope, render_post_input, seed_post_input,
+    FeedEventStorage, OperatorStatus, PostBookkeepingExpectation, PostFormat, PostStorage,
+    RenderedPostContent, SessionStorage, SiteConfigStorage, ThemeAssetManager, ThemeOwner,
+    ThemeRoleBinding, ThemeStorage, UserStorage, WriteScope, render_post_input, seed_post_input,
 };
 
 pub mod panic_gate;
@@ -97,7 +97,9 @@ fn confirmed_fixture_outcome<T>(
 /// Returns `Err` if `username` is invalid or unknown, a generated slug or body
 /// fails to parse, or a post fails to persist.
 pub async fn seed_posts_for_user(
-    state: &Arc<AppState>,
+    users: Arc<dyn UserStorage>,
+    posts: Arc<dyn PostStorage>,
+    write_scope: WriteScope,
     username: &str,
     count: usize,
     published: bool,
@@ -106,8 +108,7 @@ pub async fn seed_posts_for_user(
     let uname = username
         .parse::<Username>()
         .map_err(|_| anyhow::anyhow!("invalid username: {username}"))?;
-    let user = state
-        .users
+    let user = users
         .get_user_by_username(&uname)
         .await?
         .ok_or_else(|| anyhow::anyhow!("no such user: {username}"))?;
@@ -124,9 +125,7 @@ pub async fn seed_posts_for_user(
         };
         inputs.push(seed_post_input(user.user_id, slug, body, published));
     }
-    let posts = Arc::clone(&state.posts);
-    let outcome = state
-        .write_scope
+    let outcome = write_scope
         .run(move |transaction| {
             Box::pin(async move { posts.create_posts(transaction, &inputs).await })
         })
@@ -136,12 +135,12 @@ pub async fn seed_posts_for_user(
     confirmed_fixture_outcome(outcome, format_args!("batch seed of {count} posts"))
 }
 async fn author_fixture_theme(
-    state: &Arc<AppState>,
+    themes: Arc<dyn ThemeStorage>,
+    write_scope: WriteScope,
     owner: ThemeOwner,
     compiled: &host::theme_package::CompiledThemeRevision,
 ) -> anyhow::Result<(common::ids::ThemeId, bool)> {
-    let existing = state
-        .themes
+    let existing = themes
         .list_themes(owner)
         .await?
         .into_iter()
@@ -160,8 +159,8 @@ async fn author_fixture_theme(
         Some(entry) => entry.id,
         None => {
             storage::seed_theme_fixture::try_create_theme(
-                Arc::clone(&state.themes),
-                state.write_scope.clone(),
+                Arc::clone(&themes),
+                write_scope.clone(),
                 owner,
                 compiled,
             )
@@ -182,21 +181,23 @@ async fn author_fixture_theme(
 /// Returns `Err` if the fixture cannot be published, selected, or its commit
 /// acknowledgement is indeterminate.
 pub async fn seed_published_author_theme(
-    state: &Arc<AppState>,
+    users: Arc<dyn UserStorage>,
+    themes: Arc<dyn ThemeStorage>,
+    write_scope: WriteScope,
     storage_path: &Path,
     author_username: &str,
 ) -> anyhow::Result<()> {
     let author_username = author_username
         .parse::<Username>()
         .map_err(|_| anyhow::anyhow!("invalid username: {author_username}"))?;
-    let author = state
-        .users
+    let author = users
         .get_user_by_username(&author_username)
         .await?
         .ok_or_else(|| anyhow::anyhow!("no such user: {author_username}"))?;
     let owner = ThemeOwner::Author(author.user_id);
     let compiled = storage::seed_theme_fixture::try_compiled_theme_fixture()?;
-    let (theme_id, already_published) = author_fixture_theme(state, owner, &compiled).await?;
+    let (theme_id, already_published) =
+        author_fixture_theme(Arc::clone(&themes), write_scope.clone(), owner, &compiled).await?;
     let content_bytes = compiled
         .css()
         .bytes()
@@ -211,8 +212,8 @@ pub async fn seed_published_author_theme(
     limits.site_retained_revisions = i64::MAX;
     limits.site_physical_bytes = i64::MAX;
     let manager = ThemeAssetManager::new(
-        Arc::clone(&state.themes),
-        state.write_scope.clone(),
+        Arc::clone(&themes),
+        write_scope.clone(),
         Arc::new(storage_path.to_path_buf()),
     );
     if !already_published {
@@ -230,9 +231,7 @@ pub async fn seed_published_author_theme(
 
     let bindings = [ThemeImageRole::Logo, ThemeImageRole::Header]
         .map(|role| ThemeRoleBinding::PackagedDefault { theme_id, role });
-    let themes = Arc::clone(&state.themes);
-    let selection = state
-        .write_scope
+    let selection = write_scope
         .run(move |transaction| {
             Box::pin(async move {
                 for binding in &bindings {
@@ -260,20 +259,19 @@ pub async fn seed_published_author_theme(
 ///
 /// Returns `Err` when the author is unknown or the selection cannot be reset.
 pub async fn reset_author_theme_fixture(
-    state: &Arc<AppState>,
+    users: Arc<dyn UserStorage>,
+    themes: Arc<dyn ThemeStorage>,
+    write_scope: WriteScope,
     author_username: &str,
 ) -> anyhow::Result<()> {
     let author_username = author_username
         .parse::<Username>()
         .map_err(|_| anyhow::anyhow!("invalid username: {author_username}"))?;
-    let author = state
-        .users
+    let author = users
         .get_user_by_username(&author_username)
         .await?
         .ok_or_else(|| anyhow::anyhow!("no such user: {author_username}"))?;
-    let themes = Arc::clone(&state.themes);
-    let reset = state
-        .write_scope
+    let reset = write_scope
         .run(move |transaction| {
             Box::pin(async move {
                 themes
@@ -294,7 +292,8 @@ pub async fn reset_author_theme_fixture(
 ///
 /// Returns an error if a generated feed path or any storage transition fails.
 pub async fn seed_dead_letters(
-    state: &Arc<AppState>,
+    feed_events: Arc<dyn FeedEventStorage>,
+    write_scope: WriteScope,
     phase: FeedEventPhase,
     count: usize,
 ) -> anyhow::Result<Vec<FeedEventId>> {
@@ -303,11 +302,10 @@ pub async fn seed_dead_letters(
         let feed_path = format!("/~websub-fixture-{index}/feed.rss")
             .parse::<FeedPath>()
             .map_err(|_| anyhow::anyhow!("generated WebSub fixture feed path was invalid"))?;
-        let feed_events = Arc::clone(&state.feed_events);
+        let feed_events = Arc::clone(&feed_events);
         let diagnostic = format!("fixture {phase:?} failure {index}");
         let id = confirmed_fixture_outcome(
-            state
-                .write_scope
+            write_scope
                 .run(move |transaction| {
                     Box::pin(async move {
                         let id = feed_events.enqueue(transaction, &feed_path).await?;
@@ -358,7 +356,8 @@ pub async fn seed_dead_letters(
 /// Returns `Err` if the username or password is invalid, or the user cannot be
 /// created (e.g. a duplicate username).
 pub async fn create_user(
-    state: &Arc<AppState>,
+    users: Arc<dyn UserStorage>,
+    write_scope: WriteScope,
     username: &str,
     password: &str,
     display_name: Option<&DisplayName>,
@@ -379,11 +378,8 @@ pub async fn create_user(
     } else {
         OperatorStatus::STANDARD
     };
-    let users = Arc::clone(&state.users);
-    let outcome = state
-        .write_scope
+    let outcome = write_scope
         .run(move |transaction| {
-            let users = Arc::clone(&users);
             Box::pin(async move {
                 users
                     .create_user(
@@ -677,7 +673,8 @@ const DEFAULT_SEED_LABEL: &str = "E2E seed";
 /// `SessionStorage` path and derive both client-visible artifacts from the
 /// server's own primitives.
 async fn session_record(
-    state: &Arc<AppState>,
+    sessions: Arc<dyn SessionStorage>,
+    write_scope: WriteScope,
     user_id: UserId,
     username: &Username,
     is_operator: bool,
@@ -687,9 +684,7 @@ async fn session_record(
         .unwrap_or(DEFAULT_SEED_LABEL)
         .parse::<common::session_label::SessionLabel>()
         .map_err(|e| anyhow::anyhow!("invalid session label: {e}"))?;
-    let sessions = Arc::clone(&state.sessions);
-    let outcome = state
-        .write_scope
+    let outcome = write_scope
         .run(move |transaction| {
             let sessions = Arc::clone(&sessions);
             Box::pin(async move { sessions.create_session(transaction, user_id, &label).await })
@@ -722,16 +717,26 @@ async fn session_record(
 /// Returns `Err` if the username or password is invalid, the label is invalid,
 /// or the user cannot be created (e.g. a duplicate username).
 pub async fn seed_user(
-    state: &Arc<AppState>,
+    users: Arc<dyn UserStorage>,
+    sessions: Arc<dyn SessionStorage>,
+    write_scope: WriteScope,
     username: &str,
     password: &str,
     label: Option<&str>,
 ) -> anyhow::Result<SeedRecord> {
-    let user_id = create_user(state, username, password, None, false).await?;
+    let user_id = create_user(
+        Arc::clone(&users),
+        write_scope.clone(),
+        username,
+        password,
+        None,
+        false,
+    )
+    .await?;
     let uname = username
         .parse::<Username>()
         .map_err(|_| anyhow::anyhow!("invalid username: {username}"))?;
-    session_record(state, user_id, &uname, false, label).await
+    session_record(sessions, write_scope, user_id, &uname, false, label).await
 }
 
 /// Create a session for an EXISTING user (e.g. the harness-seeded
@@ -744,20 +749,22 @@ pub async fn seed_user(
 /// Returns `Err` if the username is invalid or unknown, or the label is
 /// invalid.
 pub async fn create_session_for_user(
-    state: &Arc<AppState>,
+    users: Arc<dyn UserStorage>,
+    sessions: Arc<dyn SessionStorage>,
+    write_scope: WriteScope,
     username: &str,
     label: Option<&str>,
 ) -> anyhow::Result<SeedRecord> {
     let uname = username
         .parse::<Username>()
         .map_err(|_| anyhow::anyhow!("invalid username: {username}"))?;
-    let user = state
-        .users
+    let user = users
         .get_user_by_username(&uname)
         .await?
         .ok_or_else(|| anyhow::anyhow!("no such user: {username}"))?;
     session_record(
-        state,
+        sessions,
+        write_scope,
         user.user_id,
         &uname,
         user.is_operator.is_operator(),
@@ -778,7 +785,6 @@ mod sandbox_profile_tests {
         PostFormat,
         Option<UtcInstant>,
     );
-
     fn assert_demo_aggregates(actual: &[StoredSandboxPost], anchor: UtcInstant) {
         assert_eq!(actual.len(), 68);
         assert_eq!(
@@ -824,23 +830,21 @@ mod sandbox_profile_tests {
         assert_eq!(generated_anchor.value().subsec_nanosecond(), 0);
     }
 
-    async fn assert_loginable(state: &Arc<AppState>, username: &str) {
+    async fn assert_loginable(users: Arc<dyn UserStorage>, username: &str) {
         let username = username.parse::<Username>().expect("fixed username");
         let password = SANDBOX_PASSWORD
             .parse::<host::password::Password>()
             .expect("fixed password");
-        state
-            .users
+        users
             .prepare_authentication(&username, &password)
             .await
             .expect("fixed fixture credentials authenticate");
     }
 
-    async fn assert_sandbox_users(state: &Arc<AppState>, expected: &[(&str, bool)]) {
+    async fn assert_sandbox_users(users: Arc<dyn UserStorage>, expected: &[(&str, bool)]) {
         for &(username, operator) in expected {
             let username = username.parse::<Username>().expect("fixed username");
-            let user = state
-                .users
+            let user = users
                 .get_user_by_username(&username)
                 .await
                 .expect("user lookup")
@@ -853,23 +857,26 @@ mod sandbox_profile_tests {
                     OperatorStatus::STANDARD
                 }
             );
-            assert_loginable(state, username.as_ref()).await;
+            assert_loginable(Arc::clone(&users), username.as_ref()).await;
         }
     }
 
     #[tokio::test]
     async fn standard_profile_has_only_its_explicit_configuration_and_loginable_users() {
-        let test_support::TestEnv { state, base: _base } =
-            test_support::Backend::Sqlite.setup().pristine().await;
+        let env = test_support::Backend::Sqlite.setup().pristine().await;
+        let site_config = env.site_config();
+        let users = env.users();
+        let posts = env.posts();
+        let write_scope = env.write_scope();
         let anchor = "2026-09-06T12:34:00Z"
             .parse::<UtcInstant>()
             .expect("fixed anchor");
 
         seed_sandbox_profile(
-            Arc::clone(&state.site_config),
-            Arc::clone(&state.users),
-            Arc::clone(&state.posts),
-            state.write_scope.clone(),
+            Arc::clone(&site_config),
+            Arc::clone(&users),
+            Arc::clone(&posts),
+            write_scope.clone(),
             SandboxProfile::Standard,
             anchor,
         )
@@ -877,30 +884,27 @@ mod sandbox_profile_tests {
         .expect("standard profile seeds");
 
         assert_eq!(
-            state.site_config.list().await.expect("site config list"),
+            site_config.list().await.expect("site config list"),
             vec![("site.title".to_owned(), SANDBOX_TITLE.to_owned())]
         );
         assert!(
-            state
-                .site_config
+            site_config
                 .get_raw(SiteConfigKey::SiteBaseUrl)
                 .await
                 .expect("base URL lookup")
                 .is_none()
         );
         assert!(
-            state
-                .site_config
+            site_config
                 .get_raw(SiteConfigKey::SiteRegistrationPolicy)
                 .await
                 .expect("registration policy lookup")
                 .is_none()
         );
-        assert_sandbox_users(&state, &SANDBOX_USERS[..2]).await;
+        assert_sandbox_users(Arc::clone(&users), &SANDBOX_USERS[..2]).await;
         for &(username, _) in &SANDBOX_USERS[2..] {
             assert!(
-                state
-                    .users
+                users
                     .get_user_by_username(&username.parse().expect("fixed username"))
                     .await
                     .expect("user lookup")
@@ -908,15 +912,13 @@ mod sandbox_profile_tests {
             );
         }
         for &(username, _) in &SANDBOX_USERS[..2] {
-            let user = state
-                .users
+            let user = users
                 .get_user_by_username(&username.parse().expect("fixed username"))
                 .await
                 .expect("user lookup")
                 .expect("fixture user exists");
             assert!(
-                state
-                    .posts
+                posts
                     .list_collection_by_user(
                         user.user_id,
                         None,
@@ -931,18 +933,21 @@ mod sandbox_profile_tests {
 
     #[tokio::test]
     async fn demo_profile_matches_the_typed_manifest_and_rounded_anchor() {
-        let test_support::TestEnv { state, base: _base } =
-            test_support::Backend::Sqlite.setup().pristine().await;
+        let env = test_support::Backend::Sqlite.setup().pristine().await;
+        let site_config = env.site_config();
+        let users = env.users();
+        let posts = env.posts();
+        let write_scope = env.write_scope();
         let anchor = "2026-09-06T12:34:00Z"
             .parse::<UtcInstant>()
             .expect("fixed minute anchor");
         let expected = sandbox_profile_manifest(anchor);
 
         seed_sandbox_profile(
-            Arc::clone(&state.site_config),
-            Arc::clone(&state.users),
-            Arc::clone(&state.posts),
-            state.write_scope.clone(),
+            Arc::clone(&site_config),
+            Arc::clone(&users),
+            Arc::clone(&posts),
+            write_scope.clone(),
             SandboxProfile::Demo,
             anchor,
         )
@@ -950,22 +955,20 @@ mod sandbox_profile_tests {
         .expect("demo profile seeds");
 
         assert_eq!(
-            state.site_config.list().await.expect("site config list"),
+            site_config.list().await.expect("site config list"),
             vec![("site.title".to_owned(), SANDBOX_TITLE.to_owned())]
         );
-        assert_sandbox_users(&state, &SANDBOX_USERS).await;
+        assert_sandbox_users(Arc::clone(&users), &SANDBOX_USERS).await;
 
         let mut actual = Vec::new();
         for &(username, _) in &SANDBOX_USERS {
-            let user = state
-                .users
+            let user = users
                 .get_user_by_username(&username.parse().expect("fixed username"))
                 .await
                 .expect("user lookup")
                 .expect("fixture user exists");
             actual.extend(
-                state
-                    .posts
+                posts
                     .list_collection_by_user(
                         user.user_id,
                         None,
@@ -1088,21 +1091,32 @@ mod seed_tests {
 
     #[tokio::test]
     async fn seeds_public_published_posts_visible_to_a_non_author() {
-        let test_support::TestEnv { state, base: _base } =
-            test_support::Backend::Sqlite.setup().await;
-        let user = test_support::SeedUser::new().seed(&state).await;
+        let env = test_support::Backend::Sqlite.setup().await;
+        let users = env.users();
+        let posts = env.posts();
+        let write_scope = env.write_scope();
+        let user = test_support::SeedUser::new()
+            .seed(Arc::clone(&users), write_scope.clone())
+            .await;
 
-        let ids = seed_posts_for_user(&state, &user.username, 3, true, "Timeline Post")
-            .await
-            .expect("seed ok");
+        let ids = seed_posts_for_user(
+            Arc::clone(&users),
+            Arc::clone(&posts),
+            write_scope.clone(),
+            &user.username,
+            3,
+            true,
+            "Timeline Post",
+        )
+        .await
+        .expect("seed ok");
         assert_eq!(ids.len(), 3);
 
         // The point of the tool: seeded posts are Public + published, so an
         // Anonymous (non-author) viewer sees all three. A bare `posts` insert
         // with no `post_audiences` row would be private and this would return 0
         // — this asserts the tool seeds a *timeline-visible* post, not just a row.
-        let page = state
-            .posts
+        let page = posts
             .list_published_by_user(
                 &user.username,
                 None,
@@ -1117,23 +1131,27 @@ mod seed_tests {
 
     #[tokio::test]
     async fn publishes_and_resets_the_author_theme_fixture() {
-        let test_support::TestEnv { state, base: _base } =
-            test_support::Backend::Sqlite.setup().await;
-        let user = test_support::SeedUser::new().seed(&state).await;
+        let env = test_support::Backend::Sqlite.setup().await;
+        let users = env.users();
+        let themes = env.themes();
+        let write_scope = env.write_scope();
+        let user = test_support::SeedUser::new()
+            .seed(Arc::clone(&users), write_scope.clone())
+            .await;
         let storage = tempfile::TempDir::new().expect("temporary storage");
         let compiled =
             storage::seed_theme_fixture::try_compiled_theme_fixture().expect("valid theme fixture");
         let site_theme = storage::seed_theme_fixture::try_create_theme(
-            Arc::clone(&state.themes),
-            state.write_scope.clone(),
+            Arc::clone(&themes),
+            write_scope.clone(),
             ThemeOwner::Site,
             &compiled,
         )
         .await
         .expect("site fixture theme");
         let manager = ThemeAssetManager::new(
-            Arc::clone(&state.themes),
-            state.write_scope.clone(),
+            Arc::clone(&themes),
+            write_scope.clone(),
             Arc::new(storage.path().to_path_buf()),
         );
         let site_publication = manager
@@ -1151,29 +1169,58 @@ mod seed_tests {
 
         // Seed twice: the second call must recognize the immutable revision it
         // created, reuse that theme row, and retain the selected fixture.
-        seed_published_author_theme(&state, storage.path(), user.username.as_ref())
-            .await
-            .expect("theme fixture publishes");
-        seed_published_author_theme(&state, storage.path(), user.username.as_ref())
-            .await
-            .expect("existing published fixture is reused");
-        reset_author_theme_fixture(&state, user.username.as_ref())
-            .await
-            .expect("theme fixture resets");
+        seed_published_author_theme(
+            Arc::clone(&users),
+            Arc::clone(&themes),
+            write_scope.clone(),
+            storage.path(),
+            user.username.as_ref(),
+        )
+        .await
+        .expect("theme fixture publishes");
+        seed_published_author_theme(
+            Arc::clone(&users),
+            Arc::clone(&themes),
+            write_scope.clone(),
+            storage.path(),
+            user.username.as_ref(),
+        )
+        .await
+        .expect("existing published fixture is reused");
+        reset_author_theme_fixture(
+            Arc::clone(&users),
+            Arc::clone(&themes),
+            write_scope.clone(),
+            user.username.as_ref(),
+        )
+        .await
+        .expect("theme fixture resets");
     }
 
     #[tokio::test]
     async fn rejects_a_prefix_that_cannot_form_a_valid_slug() {
-        let test_support::TestEnv { state, base: _base } =
-            test_support::Backend::Sqlite.setup().await;
-        let user = test_support::SeedUser::new().seed(&state).await;
+        let env = test_support::Backend::Sqlite.setup().await;
+        let users = env.users();
+        let posts = env.posts();
+        let write_scope = env.write_scope();
+        let user = test_support::SeedUser::new()
+            .seed(Arc::clone(&users), write_scope.clone())
+            .await;
 
         // A prefix with no alphanumerics collapses to an empty base, so the slug
         // would begin with '-' and fail `Slug` parsing — surfaced as an error
         // (not a panic) before any post is persisted.
-        let err = seed_posts_for_user(&state, &user.username, 1, false, "***")
-            .await
-            .expect_err("invalid generated slug should error");
+        let err = seed_posts_for_user(
+            Arc::clone(&users),
+            Arc::clone(&posts),
+            write_scope.clone(),
+            &user.username,
+            1,
+            false,
+            "***",
+        )
+        .await
+        .expect_err("invalid generated slug should error");
         assert!(err.to_string().contains("generated slug invalid"));
     }
 }
@@ -1189,15 +1236,16 @@ mod dead_letter_tests {
 
     #[tokio::test]
     async fn seeds_terminal_events_in_each_requested_phase() {
-        let test_support::TestEnv { state, base: _base } =
-            test_support::Backend::Sqlite.setup().await;
+        let env = test_support::Backend::Sqlite.setup().await;
+        let feed_events = env.feed_events();
+        let write_scope = env.write_scope();
 
         for phase in [FeedEventPhase::Regeneration, FeedEventPhase::Publication] {
-            let ids = seed_dead_letters(&state, phase, 2).await.expect("seed ok");
-            assert_eq!(ids.len(), 2);
+            let ids = seed_dead_letters(Arc::clone(&feed_events), write_scope.clone(), phase, 2)
+                .await
+                .expect("seed ok");
 
-            let page = state
-                .feed_events
+            let page = feed_events
                 .dead_letters(phase, None, PageSize::default())
                 .await
                 .expect("dead-letter page");
@@ -1219,12 +1267,19 @@ mod dead_letter_tests {
 
     #[tokio::test]
     async fn reports_atomic_seed_transaction_failures() {
-        let test_support::TestEnv { state, base } = test_support::Backend::Sqlite.setup().await;
-        base.close_pool().await;
+        let env = test_support::Backend::Sqlite.setup().await;
+        let feed_events = env.feed_events();
+        let write_scope = env.write_scope();
+        env.base.close_pool().await;
 
-        let error = seed_dead_letters(&state, FeedEventPhase::Regeneration, 1)
-            .await
-            .expect_err("closed storage must reject the atomic fixture");
+        let error = seed_dead_letters(
+            Arc::clone(&feed_events),
+            write_scope.clone(),
+            FeedEventPhase::Regeneration,
+            1,
+        )
+        .await
+        .expect_err("closed storage must reject the atomic fixture");
 
         assert!(
             error
@@ -1245,15 +1300,22 @@ mod create_user_tests {
 
     #[tokio::test]
     async fn creates_a_lookupable_operator_and_rejects_duplicates() {
-        let test_support::TestEnv { state, base: _base } =
-            test_support::Backend::Sqlite.setup().await;
+        let env = test_support::Backend::Sqlite.setup().await;
+        let users = env.users();
+        let write_scope = env.write_scope();
 
-        let id = create_user(&state, "testoperator", "testpassword123", None, true)
-            .await
-            .expect("create ok");
+        let id = create_user(
+            Arc::clone(&users),
+            write_scope.clone(),
+            "testoperator",
+            "testpassword123",
+            None,
+            true,
+        )
+        .await
+        .expect("create ok");
 
-        let u = state
-            .users
+        let u = users
             .get_user_by_username(&"testoperator".parse().unwrap())
             .await
             .expect("lookup ok")
@@ -1263,9 +1325,16 @@ mod create_user_tests {
 
         // A freshly-init'd DB has a per-user uniqueness constraint, so a second
         // create with the same username surfaces as an error (no upsert).
-        create_user(&state, "testoperator", "testpassword123", None, false)
-            .await
-            .expect_err("duplicate username should error");
+        create_user(
+            Arc::clone(&users),
+            write_scope.clone(),
+            "testoperator",
+            "testpassword123",
+            None,
+            false,
+        )
+        .await
+        .expect_err("duplicate username should error");
     }
 }
 
@@ -1297,13 +1366,12 @@ mod seed_session_tests {
     }
 
     async fn authenticate_session(
-        state: &Arc<AppState>,
+        sessions: Arc<dyn SessionStorage>,
+        write_scope: WriteScope,
         token: &RawToken,
     ) -> anyhow::Result<storage::SessionRecord> {
         let token = token.clone();
-        let sessions = Arc::clone(&state.sessions);
-        let outcome = state
-            .write_scope
+        let outcome = write_scope
             .run(move |transaction| {
                 let sessions = Arc::clone(&sessions);
                 Box::pin(async move { sessions.authenticate(transaction, &token).await })
@@ -1315,16 +1383,25 @@ mod seed_session_tests {
 
     #[tokio::test]
     async fn seed_user_returns_a_session_that_authenticates() {
-        let test_support::TestEnv { state, base: _base } =
-            test_support::Backend::Sqlite.setup().await;
+        let env = test_support::Backend::Sqlite.setup().await;
+        let users = env.users();
+        let sessions = env.sessions();
+        let write_scope = env.write_scope();
 
-        let record = seed_user(&state, "alice", "password123", None)
-            .await
-            .expect("seed ok");
+        let record = seed_user(
+            Arc::clone(&users),
+            Arc::clone(&sessions),
+            write_scope.clone(),
+            "alice",
+            "password123",
+            None,
+        )
+        .await
+        .expect("seed ok");
 
         // The cookie's token authenticates and resolves to the seeded user.
         let token = cookie_token(&record);
-        let session = authenticate_session(&state, &token)
+        let session = authenticate_session(Arc::clone(&sessions), write_scope.clone(), &token)
             .await
             .expect("token authenticates");
         assert_eq!(session.user_id, UserId::from(record.user_id));
@@ -1337,69 +1414,115 @@ mod seed_session_tests {
         assert!(!marker.is_operator);
 
         // The default label makes seeded sessions obvious on /sessions.
-        let sessions = state
-            .sessions
+        let listed_sessions = sessions
             .list_sessions(session.user_id)
             .await
             .expect("list ok");
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].label, "E2E seed");
+        assert_eq!(listed_sessions.len(), 1);
+        assert_eq!(listed_sessions[0].label, "E2E seed");
     }
 
     #[tokio::test]
     async fn seed_user_honours_an_explicit_label() {
-        let test_support::TestEnv { state, base: _base } =
-            test_support::Backend::Sqlite.setup().await;
+        let env = test_support::Backend::Sqlite.setup().await;
+        let users = env.users();
+        let sessions = env.sessions();
+        let write_scope = env.write_scope();
 
-        let record = seed_user(&state, "alice", "password123", Some("CI bot"))
-            .await
-            .expect("seed ok");
-        let sessions = state
-            .sessions
+        let record = seed_user(
+            Arc::clone(&users),
+            Arc::clone(&sessions),
+            write_scope.clone(),
+            "alice",
+            "password123",
+            Some("CI bot"),
+        )
+        .await
+        .expect("seed ok");
+        let listed_sessions = sessions
             .list_sessions(UserId::from(record.user_id))
             .await
             .expect("list ok");
-        assert_eq!(sessions[0].label, "CI bot");
+        assert_eq!(listed_sessions[0].label, "CI bot");
     }
 
     #[tokio::test]
     async fn create_session_for_user_reflects_the_operator_flag() {
-        let test_support::TestEnv { state, base: _base } =
-            test_support::Backend::Sqlite.setup().await;
-        create_user(&state, "testoperator", "testpassword123", None, true)
-            .await
-            .expect("create ok");
+        let env = test_support::Backend::Sqlite.setup().await;
+        let users = env.users();
+        let sessions = env.sessions();
+        let write_scope = env.write_scope();
+        create_user(
+            Arc::clone(&users),
+            write_scope.clone(),
+            "testoperator",
+            "testpassword123",
+            None,
+            true,
+        )
+        .await
+        .expect("create ok");
 
-        let record = create_session_for_user(&state, "testoperator", None)
-            .await
-            .expect("session ok");
+        let record = create_session_for_user(
+            Arc::clone(&users),
+            Arc::clone(&sessions),
+            write_scope.clone(),
+            "testoperator",
+            None,
+        )
+        .await
+        .expect("session ok");
         let marker = decode_marker(&record.marker).expect("marker decodes");
         assert!(marker.is_operator, "operator user's marker must say so");
         let token = cookie_token(&record);
-        authenticate_session(&state, &token)
+        authenticate_session(Arc::clone(&sessions), write_scope.clone(), &token)
             .await
             .expect("token authenticates");
     }
 
     #[tokio::test]
     async fn create_session_for_user_unknown_username_errors() {
-        let test_support::TestEnv { state, base: _base } =
-            test_support::Backend::Sqlite.setup().await;
-        create_session_for_user(&state, "ghost", None)
-            .await
-            .expect_err("unknown user should error");
+        let env = test_support::Backend::Sqlite.setup().await;
+        let users = env.users();
+        let sessions = env.sessions();
+        let write_scope = env.write_scope();
+        create_session_for_user(
+            Arc::clone(&users),
+            Arc::clone(&sessions),
+            write_scope.clone(),
+            "ghost",
+            None,
+        )
+        .await
+        .expect_err("unknown user should error");
     }
 
     #[tokio::test]
     async fn seed_user_duplicate_username_errors() {
-        let test_support::TestEnv { state, base: _base } =
-            test_support::Backend::Sqlite.setup().await;
-        seed_user(&state, "alice", "password123", None)
-            .await
-            .expect("first seed ok");
-        seed_user(&state, "alice", "password123", None)
-            .await
-            .expect_err("duplicate username should error");
+        let env = test_support::Backend::Sqlite.setup().await;
+        let users = env.users();
+        let sessions = env.sessions();
+        let write_scope = env.write_scope();
+        seed_user(
+            Arc::clone(&users),
+            Arc::clone(&sessions),
+            write_scope.clone(),
+            "alice",
+            "password123",
+            None,
+        )
+        .await
+        .expect("first seed ok");
+        seed_user(
+            Arc::clone(&users),
+            Arc::clone(&sessions),
+            write_scope.clone(),
+            "alice",
+            "password123",
+            None,
+        )
+        .await
+        .expect_err("duplicate username should error");
     }
 }
 

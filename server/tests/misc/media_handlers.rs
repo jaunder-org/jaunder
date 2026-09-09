@@ -12,7 +12,7 @@ use common::ids::UserId;
 use common::test_support::parse_content_hash;
 use host::etag::from_content_hash;
 use server_fn::ServerFn;
-use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
+use storage::test_support::{Backend, backends, backends_matrix};
 
 use crate::helpers::{
     MultipartFile, body_string, confirmed_mutation, create_user_and_session, make_app,
@@ -26,17 +26,23 @@ use crate::helpers::{
 #[apply(backends)]
 #[tokio::test]
 async fn serve_returns_200_with_cache_headers(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
 
-    let cookie = create_user_and_session(&state).await.cookie();
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let storage = TempDir::new().unwrap();
+    let app = make_app!(&env, &storage);
 
     // Upload via the `upload_media` server fn so a file lands on `storage`'s disk;
     // the fn returns 200 with a confirmed `UploadedMedia` mutation payload.
     let (status, body) = post_multipart(
-        &state,
-        &storage,
+        app.clone(),
         <web::media::Upload as ServerFn>::PATH,
         MultipartFile {
             filename: "serve_test.png",
@@ -51,8 +57,7 @@ async fn serve_returns_200_with_cache_headers(#[case] backend: Backend) {
     let upload_json: serde_json::Value = confirmed_mutation(&body);
     let url = upload_json["url"].as_str().unwrap().to_owned();
 
-    // A fresh app over the SAME storage serves the persisted file.
-    let app = make_app(&state, &storage);
+    // The same root-composed router serves the persisted file.
 
     let serve_response = app
         .oneshot(
@@ -81,7 +86,7 @@ async fn serve_returns_200_with_cache_headers(#[case] backend: Backend) {
 #[tokio::test]
 async fn serve_without_database_record_preserves_file_response(#[case] backend: Backend) {
     const HASH: &str = "13015a3cf02c05dafbefab3b331350db348e70e86f4e43e73f325473957f0a5c";
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
     let storage = TempDir::new().unwrap();
     let file = storage
         .path()
@@ -93,7 +98,7 @@ async fn serve_without_database_record_preserves_file_response(#[case] backend: 
         .unwrap();
     tokio::fs::write(&file, b"file-bytes").await.unwrap();
 
-    let response = make_app(&state, &storage)
+    let response = make_app!(&env, &storage)
         .oneshot(
             Request::builder()
                 .method("GET")
@@ -129,12 +134,19 @@ async fn serve_without_database_record_preserves_file_response(#[case] backend: 
 async fn serve_returns_404_when_recorded_file_disappears_after_router_setup(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
     let storage = TempDir::new().unwrap();
+    let app = make_app!(&env, &storage);
+
     let (status, body) = post_multipart(
-        &state,
-        &storage,
+        app.clone(),
         <web::media::Upload as ServerFn>::PATH,
         MultipartFile {
             filename: "disappearing.png",
@@ -148,10 +160,9 @@ async fn serve_returns_404_when_recorded_file_disappears_after_router_setup(
     let upload: serde_json::Value = confirmed_mutation(&body);
     let url = upload["url"].as_str().expect("uploaded media URL");
 
-    // Build the router while both metadata and bytes exist, then remove only the
-    // bytes. This deterministically exercises the post-lookup disappearance path
-    // on every platform and does not depend on chmod semantics under root.
-    let app = make_app(&state, &storage);
+    // The router was built while both metadata and bytes existed; remove only
+    // the bytes to deterministically exercise the post-lookup disappearance
+    // path on every platform without relying on chmod semantics under root.
     let file_path = storage.path().join(url.trim_start_matches('/'));
     tokio::fs::remove_file(&file_path)
         .await
@@ -177,9 +188,9 @@ async fn serve_returns_404_when_recorded_file_disappears_after_router_setup(
 )]
 #[tokio::test]
 async fn serve_returns_404_for_valid_absent_address(backend: Backend, #[case] uri: &str) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
     let storage = TempDir::new().unwrap();
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
 
     let response = app
         .oneshot(
@@ -217,9 +228,9 @@ async fn serve_returns_404_for_valid_absent_address(backend: Backend, #[case] ur
 )]
 #[tokio::test]
 async fn serve_rejects_malformed_address_before_handler(backend: Backend, #[case] uri: &str) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
     let storage = TempDir::new().unwrap();
-    let response = make_app(&state, &storage)
+    let response = make_app!(&env, &storage)
         .oneshot(
             Request::builder()
                 .method("GET")
@@ -276,16 +287,22 @@ async fn media_open_classifies_only_not_found_as_404_and_reports_other_io_once()
 #[apply(backends)]
 #[tokio::test]
 async fn serve_returns_304_on_if_none_match(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
 
-    let cookie = create_user_and_session(&state).await.cookie();
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let storage = TempDir::new().unwrap();
+    let app = make_app!(&env, &storage);
 
     // Upload via the `upload_media` server fn so a file lands on `storage`'s disk.
     let (status, body) = post_multipart(
-        &state,
-        &storage,
+        app.clone(),
         <web::media::Upload as ServerFn>::PATH,
         MultipartFile {
             filename: "etag_test.png",
@@ -304,7 +321,6 @@ async fn serve_returns_304_on_if_none_match(#[case] backend: Backend) {
     // expectation tracks the producer.
     let etag = from_content_hash(&parse_content_hash(&sha256));
 
-    let app = make_app(&state, &storage);
     let resp = app
         .oneshot(
             Request::builder()
@@ -328,10 +344,10 @@ async fn serve_returns_304_on_if_none_match(#[case] backend: Backend) {
 async fn proxy_rejects_unauthenticated_malformed_url_before_query_extraction(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
 
     let response = app
         .oneshot(
@@ -351,13 +367,18 @@ async fn proxy_rejects_unauthenticated_malformed_url_before_query_extraction(
 #[apply(backends)]
 #[tokio::test]
 async fn proxy_redirects_authenticated_to_canonical_location(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
 
-    let session = create_user_and_session(&state).await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let cookie = session.cookie();
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
 
     let url = format!(
         "/media/proxy?url=HTTP%3A%2F%2FEXAMPLE.COM%3A80&user_id={}",
@@ -390,11 +411,16 @@ async fn proxy_redirects_authenticated_to_canonical_location(#[case] backend: Ba
 #[case::non_http("%66tp%3A%2F%2Fexample.com%2Fimage.jpg")]
 #[tokio::test]
 async fn proxy_rejects_authenticated_invalid_url(backend: Backend, #[case] encoded_url: &str) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let cookie = session.cookie();
     let storage = TempDir::new().unwrap();
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
     let url = format!("/media/proxy?url={encoded_url}&user_id={}", session.user_id);
 
     let response = app
@@ -415,14 +441,19 @@ async fn proxy_rejects_authenticated_invalid_url(backend: Backend, #[case] encod
 #[apply(backends)]
 #[tokio::test]
 async fn proxy_rejects_mismatched_user_id(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
 
-    let session = create_user_and_session(&state).await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let user_id = session.user_id;
     let cookie = session.cookie();
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
 
     // Pass a different user_id in query params.
     let wrong_user_id = UserId::from(i64::from(user_id) + 999);

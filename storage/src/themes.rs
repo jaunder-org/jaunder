@@ -1274,7 +1274,7 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         let draft = ThemeDraft {
             theme_id: ThemeId::from(0),
             manifest: b"{}".to_vec(),
@@ -1296,8 +1296,7 @@ mod tests {
             ],
         };
         let created = confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -1321,8 +1320,7 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(
-            env.state
-                .themes
+            env.themes()
                 .list_themes(ThemeOwner::Site)
                 .await
                 .unwrap()
@@ -1330,8 +1328,7 @@ mod tests {
             1
         );
         assert_eq!(
-            env.state
-                .themes
+            env.themes()
                 .get_draft(ThemeOwner::Site, created)
                 .await
                 .unwrap()
@@ -1365,10 +1362,9 @@ mod tests {
             }],
         };
         let expected_replacement = replacement.clone();
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -1391,15 +1387,14 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(
-            env.state
-                .themes
+            env.themes()
                 .get_draft(ThemeOwner::Site, created)
                 .await
                 .unwrap(),
             Some(expected_replacement)
         );
 
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         let revision = ThemeRevision {
             theme_id: created,
             digest: "b".repeat(64).parse().unwrap(),
@@ -1421,8 +1416,7 @@ mod tests {
         let expected_assets = assets.clone();
         let revision_digest = revision.digest.clone();
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -1434,23 +1428,21 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(
-            env.state
-                .themes
+            env.themes()
                 .revision_assets(ThemeOwner::Site, created, &revision_digest)
                 .await
                 .unwrap(),
             expected_assets
         );
 
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         let binding = ThemeRoleBinding::PackageAsset {
             theme_id: created,
             role: ThemeImageRole::Logo,
             package_path: "assets/replacement.png".into(),
         };
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -1462,8 +1454,7 @@ mod tests {
                 .unwrap(),
         );
         assert!(matches!(
-            env.state
-                .themes
+            env.themes()
                 .role_binding(ThemeOwner::Site, created, ThemeImageRole::Logo)
                 .await
                 .unwrap(),
@@ -1471,7 +1462,7 @@ mod tests {
                 if package_path == "assets/replacement.png"
         ));
 
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         let pool = vec![ThemeHeaderPoolEntry {
             ordinal: 0,
             package_path: Some("assets/replacement.png".into()),
@@ -1481,8 +1472,7 @@ mod tests {
             media_filename: None,
         }];
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -1494,8 +1484,7 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(
-            env.state
-                .themes
+            env.themes()
                 .header_pool(ThemeOwner::Site, created)
                 .await
                 .unwrap()
@@ -1503,10 +1492,9 @@ mod tests {
             1
         );
 
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -1522,16 +1510,12 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(
-            env.state.themes.selection(ThemeOwner::Site).await.unwrap(),
+            env.themes().selection(ThemeOwner::Site).await.unwrap(),
             Some(PublicThemeSelection::BuiltIn(Theme::Reader))
         );
 
         assert_eq!(
-            env.state
-                .themes
-                .owner_quota(ThemeOwner::Site)
-                .await
-                .unwrap(),
+            env.themes().owner_quota(ThemeOwner::Site).await.unwrap(),
             Some(ThemeOwnerQuota {
                 active_themes: 1,
                 retained_revisions: 0,
@@ -1560,10 +1544,9 @@ mod tests {
         };
 
         let rejected = draft(0, 'a', 5);
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         assert!(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| Box::pin(async move {
                     themes
                         .create_theme(transaction, ThemeOwner::Site, "Rejected", &rejected, limits)
@@ -1573,8 +1556,7 @@ mod tests {
                 .is_err()
         );
         assert!(
-            env.state
-                .themes
+            env.themes()
                 .list_themes(ThemeOwner::Site)
                 .await
                 .unwrap()
@@ -1582,10 +1564,9 @@ mod tests {
         );
 
         let initial = draft(0, 'b', 4);
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         let id = confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -1597,8 +1578,7 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(
-            env.state
-                .themes
+            env.themes()
                 .owner_quota(ThemeOwner::Site)
                 .await
                 .unwrap()
@@ -1606,23 +1586,18 @@ mod tests {
                 .logical_bytes,
             4
         );
-        assert_eq!(
-            env.state.themes.site_quota().await.unwrap().physical_bytes,
-            4
-        );
+        assert_eq!(env.themes().site_quota().await.unwrap().physical_bytes, 4);
 
         let growth = draft(id.into(), 'c', 5);
         let expected = env
-            .state
-            .themes
+            .themes()
             .get_draft(ThemeOwner::Site, id)
             .await
             .unwrap()
             .unwrap();
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         let error = env
-            .state
-            .write_scope
+            .write_scope()
             .run(move |transaction| {
                 Box::pin(async move {
                     themes
@@ -1637,8 +1612,7 @@ mod tests {
             crate::WriteScopeError::Operation(ReplaceDraftError::QuotaExceeded)
         ));
         assert_eq!(
-            env.state
-                .themes
+            env.themes()
                 .get_draft(ThemeOwner::Site, id)
                 .await
                 .unwrap()
@@ -1646,10 +1620,9 @@ mod tests {
             expected
         );
         let missing = draft(999, 'e', 2);
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         let error = env
-            .state
-            .write_scope
+            .write_scope()
             .run(move |transaction| {
                 Box::pin(async move {
                     themes
@@ -1665,10 +1638,9 @@ mod tests {
         ));
 
         let shrink = draft(id.into(), 'd', 2);
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -1680,8 +1652,7 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(
-            env.state
-                .themes
+            env.themes()
                 .owner_quota(ThemeOwner::Site)
                 .await
                 .unwrap()
@@ -1689,16 +1660,12 @@ mod tests {
                 .logical_bytes,
             2
         );
-        assert_eq!(
-            env.state.themes.site_quota().await.unwrap().physical_bytes,
-            2
-        );
+        assert_eq!(env.themes().site_quota().await.unwrap().physical_bytes, 2);
 
         let exact = draft(0, 'e', 2);
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -1709,15 +1676,11 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        assert_eq!(
-            env.state.themes.site_quota().await.unwrap().physical_bytes,
-            4
-        );
+        assert_eq!(env.themes().site_quota().await.unwrap().physical_bytes, 4);
 
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -1729,8 +1692,7 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(
-            env.state
-                .themes
+            env.themes()
                 .owner_quota(ThemeOwner::Site)
                 .await
                 .unwrap()
@@ -1738,10 +1700,7 @@ mod tests {
                 .logical_bytes,
             2
         );
-        assert_eq!(
-            env.state.themes.site_quota().await.unwrap().physical_bytes,
-            2
-        );
+        assert_eq!(env.themes().site_quota().await.unwrap().physical_bytes, 2);
     }
 
     #[apply(backends)]
@@ -1764,11 +1723,10 @@ mod tests {
         };
 
         for name in ["  ", "tErMiNaL", "STUDIO", "reader"] {
-            let themes = Arc::clone(&env.state.themes);
+            let themes = Arc::clone(&env.themes());
             let draft = draft.clone();
             assert!(
-                env.state
-                    .write_scope
+                env.write_scope()
                     .run(move |transaction| Box::pin(async move {
                         themes
                             .create_theme(transaction, ThemeOwner::Site, name, &draft, limits)
@@ -1778,10 +1736,9 @@ mod tests {
                     .is_err()
             );
         }
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         let created = confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -1799,19 +1756,13 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(
-            env.state
-                .themes
-                .list_themes(ThemeOwner::Site)
-                .await
-                .unwrap()[0]
-                .name,
+            env.themes().list_themes(ThemeOwner::Site).await.unwrap()[0].name,
             "Parchment"
         );
 
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -1823,10 +1774,9 @@ mod tests {
                 .unwrap(),
         );
         for name in ["", "  TeRmInAl  ", "studio", "READER"] {
-            let themes = Arc::clone(&env.state.themes);
+            let themes = Arc::clone(&env.themes());
             assert!(
-                env.state
-                    .write_scope
+                env.write_scope()
                     .run(move |transaction| Box::pin(async move {
                         themes
                             .rename_theme(transaction, ThemeOwner::Site, created, name)
@@ -1837,12 +1787,7 @@ mod tests {
             );
         }
         assert_eq!(
-            env.state
-                .themes
-                .list_themes(ThemeOwner::Site)
-                .await
-                .unwrap()[0]
-                .name,
+            env.themes().list_themes(ThemeOwner::Site).await.unwrap()[0].name,
             "Canvas"
         );
     }
@@ -1870,10 +1815,9 @@ mod tests {
                 digest: "b".repeat(64).parse().unwrap(),
             }],
         };
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         let theme_id = confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -1896,10 +1840,9 @@ mod tests {
             role: ThemeImageRole::Logo,
             package_path: "assets/type.woff2".to_owned(),
         };
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         assert!(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| Box::pin(async move {
                     themes
                         .replace_role_binding(transaction, ThemeOwner::Site, &binding)
@@ -1917,10 +1860,9 @@ mod tests {
             media_digest: None,
             media_filename: None,
         }];
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         assert!(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| Box::pin(async move {
                     themes
                         .replace_header_pool(transaction, ThemeOwner::Site, theme_id, &pool)
@@ -1930,16 +1872,14 @@ mod tests {
                 .is_err()
         );
         assert!(
-            env.state
-                .themes
+            env.themes()
                 .role_binding(ThemeOwner::Site, theme_id, ThemeImageRole::Logo)
                 .await
                 .unwrap()
                 .is_none()
         );
         assert!(
-            env.state
-                .themes
+            env.themes()
                 .header_pool(ThemeOwner::Site, theme_id)
                 .await
                 .unwrap()
@@ -1971,10 +1911,9 @@ mod tests {
                 },
             ],
         };
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         let created = confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -1993,8 +1932,7 @@ mod tests {
         );
 
         assert_eq!(
-            env.state
-                .themes
+            env.themes()
                 .get_draft(ThemeOwner::Site, created)
                 .await
                 .unwrap(),
@@ -2047,10 +1985,9 @@ mod tests {
                 },
             ],
         };
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         let created = confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -2087,10 +2024,9 @@ mod tests {
                 },
             ],
         };
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -2108,8 +2044,7 @@ mod tests {
         );
 
         assert_eq!(
-            env.state
-                .themes
+            env.themes()
                 .get_draft(ThemeOwner::Site, created)
                 .await
                 .unwrap(),
@@ -2153,10 +2088,9 @@ mod tests {
                 digest: "b".repeat(64).parse().unwrap(),
             }],
         };
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         let created = confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -2175,8 +2109,7 @@ mod tests {
         );
 
         assert_eq!(
-            env.state
-                .themes
+            env.themes()
                 .get_draft(owner, created)
                 .await
                 .unwrap()
@@ -2191,16 +2124,14 @@ mod tests {
         );
 
         assert_eq!(
-            env.state
-                .themes
+            env.themes()
                 .get_draft(ThemeOwner::Author(UserId::from(42)), created)
                 .await
                 .unwrap(),
             None
         );
         assert_eq!(
-            env.state
-                .themes
+            env.themes()
                 .get_draft(ThemeOwner::Site, created)
                 .await
                 .unwrap(),
@@ -2219,10 +2150,9 @@ mod tests {
             source_digest: "a".repeat(64).parse().unwrap(),
             assets: Vec::new(),
         };
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         let created = confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -2241,8 +2171,7 @@ mod tests {
         );
 
         assert_eq!(
-            env.state
-                .themes
+            env.themes()
                 .get_draft(ThemeOwner::Site, created)
                 .await
                 .unwrap(),
@@ -2275,10 +2204,9 @@ mod tests {
             logical_bytes: 4,
             physical_bytes: 5,
         };
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -2289,15 +2217,14 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         let eligibility = ThemeContentEligibility {
             digest: digest.clone(),
             mime: "text/plain".into(),
             retained_until_unix_seconds: 0,
         };
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -2308,10 +2235,9 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -2327,15 +2253,14 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         let charge = ThemeContentCharge {
             digest: digest.clone(),
             logical_bytes: 4,
             physical_bytes: 5,
         };
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -2346,11 +2271,10 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         let digest_to_collect = digest.clone();
         let before_expiry = env
-            .state
-            .write_scope
+            .write_scope()
             .run(move |transaction| {
                 Box::pin(async move {
                     themes
@@ -2366,18 +2290,16 @@ mod tests {
             .await;
         assert!(before_expiry.is_err());
         assert!(
-            env.state
-                .themes
+            env.themes()
                 .content_eligibility(&digest)
                 .await
                 .unwrap()
                 .is_some()
         );
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         let digest_to_collect = digest.clone();
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -2394,8 +2316,7 @@ mod tests {
                 .unwrap(),
         );
         assert!(
-            env.state
-                .themes
+            env.themes()
                 .content_eligibility(&digest)
                 .await
                 .unwrap()
@@ -2418,10 +2339,9 @@ mod tests {
         let first_author = ThemeOwner::Author(UserId::from(1));
         let second_author = ThemeOwner::Author(UserId::from(2));
         for owner in [site, first_author, second_author] {
-            let themes = Arc::clone(&env.state.themes);
+            let themes = Arc::clone(&env.themes());
             confirmed(
-                env.state
-                    .write_scope
+                env.write_scope()
                     .run(move |transaction| {
                         Box::pin(
                             async move { themes.admit_theme(transaction, owner, limits).await },
@@ -2431,10 +2351,9 @@ mod tests {
                     .expect("admit owner at active-theme boundary"),
             );
         }
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         assert!(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move { themes.admit_theme(transaction, site, limits).await })
                 })
@@ -2445,15 +2364,14 @@ mod tests {
         let first_digest = "d".repeat(64).parse::<ThemeContentDigest>().unwrap();
         let second_digest = "e".repeat(64).parse::<ThemeContentDigest>().unwrap();
         for digest in [&first_digest, &second_digest] {
-            let themes = Arc::clone(&env.state.themes);
+            let themes = Arc::clone(&env.themes());
             let eligibility = ThemeContentEligibility {
                 digest: digest.clone(),
                 mime: "image/png".into(),
                 retained_until_unix_seconds: 0,
             };
             confirmed(
-                env.state
-                    .write_scope
+                env.write_scope()
                     .run(move |transaction| {
                         Box::pin(async move {
                             themes
@@ -2470,10 +2388,9 @@ mod tests {
             logical_bytes: 4,
             physical_bytes: 4,
         };
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -2489,10 +2406,9 @@ mod tests {
             logical_bytes: 4,
             physical_bytes: 4,
         };
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -2513,10 +2429,9 @@ mod tests {
             logical_bytes: 1,
             physical_bytes: 1,
         };
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         assert!(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -2537,10 +2452,9 @@ mod tests {
             logical_bytes: 1,
             physical_bytes: 1,
         };
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         assert!(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -2571,10 +2485,9 @@ mod tests {
         };
         let owners = [ThemeOwner::Site, ThemeOwner::Author(UserId::from(1))];
         for owner in owners {
-            let themes = Arc::clone(&env.state.themes);
+            let themes = Arc::clone(&env.themes());
             confirmed(
-                env.state
-                    .write_scope
+                env.write_scope()
                     .run(move |transaction| {
                         Box::pin(
                             async move { themes.admit_theme(transaction, owner, limits).await },
@@ -2590,10 +2503,9 @@ mod tests {
             mime: "image/png".into(),
             retained_until_unix_seconds: 0,
         };
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -2604,10 +2516,10 @@ mod tests {
                 .await
                 .expect("make shared content eligible"),
         );
-        let first_themes = Arc::clone(&env.state.themes);
-        let second_themes = Arc::clone(&env.state.themes);
-        let first_scope = env.state.write_scope.clone();
-        let second_scope = env.state.write_scope.clone();
+        let first_themes = Arc::clone(&env.themes());
+        let second_themes = Arc::clone(&env.themes());
+        let first_scope = env.write_scope().clone();
+        let second_scope = env.write_scope().clone();
         let first_charge = ThemeContentCharge {
             digest: digest.clone(),
             logical_bytes: 4,
@@ -2649,10 +2561,9 @@ mod tests {
         };
         let owners = [ThemeOwner::Site, ThemeOwner::Author(UserId::from(1))];
         for owner in owners {
-            let themes = Arc::clone(&env.state.themes);
+            let themes = Arc::clone(&env.themes());
             confirmed(
-                env.state
-                    .write_scope
+                env.write_scope()
                     .run(move |transaction| {
                         Box::pin(
                             async move { themes.admit_theme(transaction, owner, limits).await },
@@ -2668,10 +2579,9 @@ mod tests {
             mime: "image/png".into(),
             retained_until_unix_seconds: 0,
         };
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -2683,15 +2593,14 @@ mod tests {
                 .expect("make shared content eligible"),
         );
         for owner in owners {
-            let themes = Arc::clone(&env.state.themes);
+            let themes = Arc::clone(&env.themes());
             let charge = ThemeContentCharge {
                 digest: digest.clone(),
                 logical_bytes: 4,
                 physical_bytes: 4,
             };
             confirmed(
-                env.state
-                    .write_scope
+                env.write_scope()
                     .run(move |transaction| {
                         Box::pin(async move {
                             themes
@@ -2704,11 +2613,7 @@ mod tests {
             );
         }
         assert_eq!(
-            env.state
-                .themes
-                .site_quota()
-                .await
-                .expect("read site quota"),
+            env.themes().site_quota().await.expect("read site quota"),
             ThemeSiteQuota {
                 retained_revisions: 2,
                 physical_bytes: 4,
@@ -2716,8 +2621,7 @@ mod tests {
         );
         for owner in owners {
             assert_eq!(
-                env.state
-                    .themes
+                env.themes()
                     .owner_quota(owner)
                     .await
                     .expect("read owner quota")
@@ -2745,11 +2649,10 @@ mod tests {
             ThemeOwner::Site,
         ];
         for owner in owners {
-            let themes = Arc::clone(&env.state.themes);
+            let themes = Arc::clone(&env.themes());
             let draft = draft.clone();
             confirmed(
-                env.state
-                    .write_scope
+                env.write_scope()
                     .run(move |transaction| {
                         Box::pin(async move {
                             themes
@@ -2772,7 +2675,7 @@ mod tests {
                     .await
                     .unwrap(),
             );
-            assert_eq!(env.state.themes.list_themes(owner).await.unwrap().len(), 1);
+            assert_eq!(env.themes().list_themes(owner).await.unwrap().len(), 1);
         }
         assert_eq!(
             catalog_owner_key(ThemeOwner::Author(UserId::from(-1))),

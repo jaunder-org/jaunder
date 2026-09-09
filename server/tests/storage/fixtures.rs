@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use common::ids::{ChannelId, SubscriptionId};
 use common::tag::Tag;
 use common::test_support::parse_row_limit;
@@ -6,7 +8,7 @@ use common::username::Username;
 use common::visibility::ViewerIdentity;
 use host::password::Password;
 use sqlx::{AssertSqlSafe, SqlitePool};
-use storage::{AppState, DbConnectOptions};
+use storage::DbConnectOptions;
 use tempfile::TempDir;
 
 use storage::test_support::{Backend, TestEnv, sqlite_url};
@@ -23,12 +25,11 @@ use storage::test_support::{Backend, TestEnv, sqlite_url};
 // an *error* call the store directly, and that difference is the point — a call that
 // goes through a helper is one that expects rows.
 pub(super) async fn anon_by_tag(
-    state: &AppState,
+    posts: Arc<dyn storage::PostStorage>,
     tag: &Tag,
     limit: &str,
 ) -> Vec<storage::PostRecord> {
-    state
-        .posts
+    posts
         .list_posts_by_tag(
             tag,
             None,
@@ -40,9 +41,11 @@ pub(super) async fn anon_by_tag(
         .expect("list_posts_by_tag failed")
 }
 
-pub(super) async fn anon_published(state: &AppState, limit: &str) -> Vec<storage::PostRecord> {
-    state
-        .posts
+pub(super) async fn anon_published(
+    posts: Arc<dyn storage::PostStorage>,
+    limit: &str,
+) -> Vec<storage::PostRecord> {
+    posts
         .list_published(
             None,
             parse_row_limit(limit),

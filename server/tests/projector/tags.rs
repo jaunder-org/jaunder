@@ -1,9 +1,8 @@
+use axum::http::{StatusCode, header};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
-
-use axum::http::{StatusCode, header};
 use tower::ServiceExt;
 
 use common::{
@@ -17,7 +16,7 @@ use crate::helpers::body_string;
 
 use storage::{
     MockUserStorage, ThemeOwner, UserStorage,
-    test_support::{Backend, TestEnv, backends},
+    test_support::{Backend, backends},
 };
 
 use super::fixtures::{
@@ -28,9 +27,9 @@ use super::fixtures::{
 #[apply(backends)]
 #[tokio::test]
 async fn site_tag_projects_tagged_posts(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let (_u, title) = seed_tagged_post(&state).await;
-    let resp = projector_app(&state)
+    let env = backend.setup().await;
+    let (_u, title) = seed_tagged_post(env.users(), env.posts(), env.write_scope()).await;
+    let resp = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get("/tags/rust"))
         .await
         .expect("request");
@@ -44,9 +43,9 @@ async fn site_tag_projects_tagged_posts(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn user_tag_projects_tagged_posts(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let (u, title) = seed_tagged_post(&state).await;
-    let resp = projector_app(&state)
+    let env = backend.setup().await;
+    let (u, title) = seed_tagged_post(env.users(), env.posts(), env.write_scope()).await;
+    let resp = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get(&format!("/~{u}/tags/rust")))
         .await
         .expect("request");
@@ -59,18 +58,18 @@ async fn user_tag_projects_tagged_posts(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn user_tag_projects_the_authors_override_into_initial_markup(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let (username, title) = seed_tagged_post(&state).await;
+    let env = backend.setup().await;
+    let (username, title) = seed_tagged_post(env.users(), env.posts(), env.write_scope()).await;
     let parsed_username = username.parse().expect("seeded username");
-    let author = state
-        .users
+    let author = env
+        .users()
         .get_user_by_username(&parsed_username)
         .await
         .expect("author lookup")
         .expect("seeded author");
-    let themes = Arc::clone(&state.themes);
-    let outcome = state
-        .write_scope
+    let themes = env.themes();
+    let outcome = env
+        .write_scope()
         .run(|transaction| {
             Box::pin(async move {
                 themes
@@ -93,7 +92,7 @@ async fn user_tag_projects_the_authors_override_into_initial_markup(#[case] back
         .expect("theme write");
     assert!(matches!(outcome, MutationOutcome::Confirmed(())));
 
-    let response = projector_app(&state)
+    let response = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get(&format!("/~{username}/tags/rust")))
         .await
         .expect("request");
@@ -113,8 +112,8 @@ async fn user_tag_projects_the_authors_override_into_initial_markup(#[case] back
 #[apply(backends)]
 #[tokio::test]
 async fn site_tag_invalid_serves_shell(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let resp = projector_app(&state)
+    let env = backend.setup().await;
+    let resp = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get("/tags/-rust"))
         .await
         .expect("request");
@@ -126,8 +125,8 @@ async fn site_tag_invalid_serves_shell(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn user_tag_invalid_serves_shell(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let resp = projector_app(&state)
+    let env = backend.setup().await;
+    let resp = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get("/~in.valid/tags/rust"))
         .await
         .expect("request");
@@ -143,8 +142,8 @@ async fn user_tag_invalid_serves_shell(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn user_tag_invalid_tag_serves_shell(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let resp = projector_app(&state)
+    let env = backend.setup().await;
+    let resp = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get("/~alice/tags/-rust"))
         .await
         .expect("request");
@@ -156,8 +155,8 @@ async fn user_tag_invalid_tag_serves_shell(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn user_tag_unknown_valid_username_serves_shell(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let resp = projector_app(&state)
+    let env = backend.setup().await;
+    let resp = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get("/~ghost/tags/rust"))
         .await
         .expect("request");
@@ -180,8 +179,8 @@ async fn user_tag_unknown_valid_username_serves_shell(#[case] backend: Backend) 
 async fn user_tag_listing_user_lookup_failure_keeps_no_store_shell_and_reports_once(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let (username, _title) = seed_tagged_post(&state).await;
+    let env = backend.setup().await;
+    let (username, _title) = seed_tagged_post(env.users(), env.posts(), env.write_scope()).await;
     let mut users = MockUserStorage::new();
     users
         .expect_get_user_by_username()
@@ -192,9 +191,9 @@ async fn user_tag_listing_user_lookup_failure_keeps_no_store_shell_and_reports_o
             )))
         });
     let app = projector_app_with_dependencies(
-        Arc::clone(&state.posts),
+        env.posts(),
         Arc::new(users) as Arc<dyn UserStorage>,
-        Arc::clone(&state.themes),
+        env.themes(),
     );
 
     let (response, event) = crate::assert_error_signal!(
@@ -232,11 +231,11 @@ async fn user_tag_listing_user_lookup_failure_keeps_no_store_shell_and_reports_o
 async fn user_tag_theme_owner_lookup_failure_keeps_500_and_reports_boundary_once(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let (username, _title) = seed_tagged_post(&state).await;
+    let env = backend.setup().await;
+    let (username, _title) = seed_tagged_post(env.users(), env.posts(), env.write_scope()).await;
     let parsed_username = username.parse().expect("seeded username");
-    let author = state
-        .users
+    let author = env
+        .users()
         .get_user_by_username(&parsed_username)
         .await
         .expect("author lookup")
@@ -256,9 +255,9 @@ async fn user_tag_theme_owner_lookup_failure_keeps_500_and_reports_boundary_once
             }
         });
     let app = projector_app_with_dependencies(
-        Arc::clone(&state.posts),
+        env.posts(),
         Arc::new(users) as Arc<dyn UserStorage>,
-        Arc::clone(&state.themes),
+        env.themes(),
     );
 
     let (response, event) = crate::assert_error_signal!(
@@ -283,10 +282,10 @@ async fn user_tag_theme_owner_lookup_failure_keeps_500_and_reports_boundary_once
 #[apply(backends)]
 #[tokio::test]
 async fn site_tag_storage_failure_keeps_no_store_shell_and_reports_once(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    seed_tagged_post(&state).await;
-    let app = projector_app(&state);
-    base.close_pool().await;
+    let env = backend.setup().await;
+    seed_tagged_post(env.users(), env.posts(), env.write_scope()).await;
+    let app = projector_app(env.posts(), env.users(), env.themes());
+    env.base.close_pool().await;
 
     let (response, event) = crate::assert_error_signal!(
         async { app.oneshot(get("/tags/rust")).await.expect("request") },
@@ -317,11 +316,11 @@ async fn site_tag_storage_failure_keeps_no_store_shell_and_reports_once(#[case] 
 #[apply(backends)]
 #[tokio::test]
 async fn site_tag_theme_failure_keeps_500_and_reports_boundary_once(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    seed_tagged_post(&state).await;
+    let env = backend.setup().await;
+    seed_tagged_post(env.users(), env.posts(), env.write_scope()).await;
     let app = projector_app_with_dependencies(
-        Arc::clone(&state.posts),
-        Arc::clone(&state.users),
+        env.posts(),
+        env.users(),
         failing_site_theme_selection("injected site tag theme failure"),
     );
 

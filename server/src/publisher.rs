@@ -336,11 +336,13 @@ mod tests {
     #[tokio::test]
     async fn websub_trait_preserves_confirmed_hub_mutation_outcome(#[case] backend: Backend) {
         let env = backend.setup().await;
+        let publisher = env.publisher();
+        let write_scope = env.write_scope();
         let directory = tempfile::tempdir().expect("temporary storage directory");
         let service = PublisherService::new(
             directory.path().to_owned(),
-            Arc::clone(&env.state.publisher),
-            env.state.write_scope.clone(),
+            Arc::clone(&publisher),
+            write_scope,
         );
 
         let outcome =
@@ -359,11 +361,13 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
+        let publisher = env.publisher();
+        let write_scope = env.write_scope();
         let directory = tempfile::tempdir().expect("temporary storage directory");
         let service = PublisherService::new(
             directory.path().to_owned(),
-            Arc::clone(&env.state.publisher),
-            env.state.write_scope.clone(),
+            Arc::clone(&publisher),
+            write_scope,
         );
 
         let outcome = service
@@ -404,8 +408,7 @@ mod tests {
     async fn finalization_commit_maps_operation_errors(#[case] backend: Backend) {
         let env = backend.setup().await;
         let generation = env
-            .state
-            .publisher
+            .publisher()
             .snapshot()
             .await
             .expect("snapshot")
@@ -439,19 +442,11 @@ mod tests {
     #[tokio::test]
     async fn finalization_commit_maps_begin_errors(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let generation = env
-            .state
-            .publisher
-            .snapshot()
-            .await
-            .expect("snapshot")
-            .generation;
+        let publisher = env.publisher();
+        let generation = publisher.snapshot().await.expect("snapshot").generation;
+        let write_scope = env.write_scope();
         let directory = tempfile::tempdir().expect("temporary storage directory");
-        let service = PublisherService::new(
-            directory.path().to_owned(),
-            Arc::clone(&env.state.publisher),
-            env.state.write_scope.clone(),
-        );
+        let service = PublisherService::new(directory.path().to_owned(), publisher, write_scope);
         let guard = service.finalization_guard().await.expect("gate acquired");
         env.base.close_pool().await;
 
@@ -492,12 +487,15 @@ mod tests {
         inject_invalid_site_config(&env, SiteConfigKey::FeedsWebsubHubUrl, "malformed")
             .await
             .expect("seed malformed hub");
-        let before = env.state.publisher.snapshot().await.unwrap().generation;
+        let publisher = env.publisher();
+        let site_config = env.site_config();
+        let before = publisher.snapshot().await.unwrap().generation;
+        let write_scope = env.write_scope();
         let directory = tempfile::tempdir().expect("temporary storage directory");
         let service = PublisherService::new(
             directory.path().to_owned(),
-            Arc::clone(&env.state.publisher),
-            env.state.write_scope.clone(),
+            Arc::clone(&publisher),
+            write_scope,
         );
 
         let snapshot = service.snapshot().await.expect("repairing snapshot");
@@ -506,8 +504,7 @@ mod tests {
         assert!(snapshot.malformed_hub().is_none());
         assert!(snapshot.generation > before);
         assert_eq!(
-            env.state
-                .site_config
+            site_config
                 .get_raw(SiteConfigKey::FeedsWebsubHubUrl)
                 .await
                 .unwrap(),

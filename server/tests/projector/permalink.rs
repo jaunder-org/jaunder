@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use axum::http::{StatusCode, header};
 use tower::ServiceExt;
 
@@ -8,7 +6,7 @@ use rstest_reuse::*;
 
 use crate::helpers::body_string;
 
-use storage::test_support::{Backend, TestEnv, backends};
+use storage::test_support::{Backend, backends};
 
 use super::fixtures::{
     assert_sanitized_internal_server_error, failing_author_theme_selection,
@@ -19,11 +17,12 @@ use super::fixtures::{
 #[apply(backends)]
 #[tokio::test]
 async fn permalink_projects_cacheable_crawlable_html(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let (u, y, m, d, slug, title, rendered_html) = seed_published_post(&state).await;
+    let env = backend.setup().await;
+    let (u, y, m, d, slug, title, rendered_html) =
+        seed_published_post(env.users(), env.posts(), env.write_scope()).await;
     let uri = format!("/~{u}/{y}/{m}/{d}/{slug}");
 
-    let resp = projector_app(&state)
+    let resp = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get(&uri))
         .await
         .expect("request");
@@ -46,7 +45,7 @@ async fn permalink_projects_cacheable_crawlable_html(#[case] backend: Backend) {
 
     // Byte-identical on repeat — no per-request variation, so CDN-cacheable.
     let body2 = axum::body::to_bytes(
-        projector_app(&state)
+        projector_app(env.posts(), env.users(), env.themes())
             .oneshot(get(&uri))
             .await
             .unwrap()
@@ -64,8 +63,8 @@ async fn permalink_unknown_serves_spa_shell(#[case] backend: Backend) {
     // A URL with no anonymous-public post (nonexistent, or a draft only its
     // author may see) must serve the SPA shell — not a hard 404 — so the CSR
     // client resolves it with the session (draft view, or a client-side 404).
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let resp = projector_app(&state)
+    let env = backend.setup().await;
+    let resp = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get("/~ghost/2026/1/2/missing"))
         .await
         .expect("request");
@@ -83,8 +82,8 @@ async fn permalink_unknown_serves_spa_shell(#[case] backend: Backend) {
 async fn permalink_non_numeric_date_serves_shell(#[case] backend: Backend) {
     // A decoded five-segment permalink with a non-numeric date remains a projector soft miss:
     // the shell, never axum's pre-handler 400 (#697, ADR-0063 §4).
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let resp = projector_app(&state)
+    let env = backend.setup().await;
+    let resp = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get("/~ghost/not-a-year/1/2/missing"))
         .await
         .expect("request");
@@ -100,8 +99,8 @@ async fn permalink_non_numeric_date_serves_shell(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn permalink_overflowing_date_serves_shell(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let resp = projector_app(&state)
+    let env = backend.setup().await;
+    let resp = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get("/~ghost/2147483648/1/2/missing"))
         .await
         .expect("request");
@@ -117,8 +116,8 @@ async fn permalink_overflowing_date_serves_shell(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn permalink_impossible_date_serves_shell(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let resp = projector_app(&state)
+    let env = backend.setup().await;
+    let resp = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get("/~ghost/2026/13/40/missing"))
         .await
         .expect("request");
@@ -132,8 +131,8 @@ async fn permalink_impossible_date_serves_shell(#[case] backend: Backend) {
 async fn permalink_invalid_segment_serves_shell(#[case] backend: Backend) {
     // An unparseable username segment (a dot is not allowed) is never public
     // content — serve the shell and let the client route it.
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let resp = projector_app(&state)
+    let env = backend.setup().await;
+    let resp = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get("/~in.valid/2026/1/2/slug"))
         .await
         .expect("request");
@@ -149,11 +148,12 @@ async fn permalink_invalid_segment_serves_shell(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn permalink_storage_failure_keeps_500_and_reports_boundary_once(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let (u, y, m, d, slug, ..) = seed_published_post(&state).await;
+    let env = backend.setup().await;
+    let (u, y, m, d, slug, ..) =
+        seed_published_post(env.users(), env.posts(), env.write_scope()).await;
     let uri = format!("/~{u}/{y}/{m}/{d}/{slug}");
-    let app = projector_app(&state);
-    base.close_pool().await;
+    let app = projector_app(env.posts(), env.users(), env.themes());
+    env.base.close_pool().await;
 
     let (response, event) = crate::assert_error_signal!(
         async { app.oneshot(get(&uri)).await.expect("request") },
@@ -183,12 +183,13 @@ async fn permalink_storage_failure_keeps_500_and_reports_boundary_once(#[case] b
 async fn permalink_site_theme_failure_keeps_500_and_reports_boundary_once(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let (u, y, m, d, slug, ..) = seed_published_post(&state).await;
+    let env = backend.setup().await;
+    let (u, y, m, d, slug, ..) =
+        seed_published_post(env.users(), env.posts(), env.write_scope()).await;
     let uri = format!("/~{u}/{y}/{m}/{d}/{slug}");
     let app = projector_app_with_dependencies(
-        Arc::clone(&state.posts),
-        Arc::clone(&state.users),
+        env.posts(),
+        env.users(),
         failing_site_theme_selection("injected permalink site selection failure"),
     );
 
@@ -212,12 +213,13 @@ async fn permalink_site_theme_failure_keeps_500_and_reports_boundary_once(
 async fn permalink_author_theme_failure_keeps_500_and_reports_boundary_once(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let (u, y, m, d, slug, ..) = seed_published_post(&state).await;
+    let env = backend.setup().await;
+    let (u, y, m, d, slug, ..) =
+        seed_published_post(env.users(), env.posts(), env.write_scope()).await;
     let uri = format!("/~{u}/{y}/{m}/{d}/{slug}");
     let app = projector_app_with_dependencies(
-        Arc::clone(&state.posts),
-        Arc::clone(&state.users),
+        env.posts(),
+        env.users(),
         failing_author_theme_selection("injected permalink author selection failure"),
     );
 

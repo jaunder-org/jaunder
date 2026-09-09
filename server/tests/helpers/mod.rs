@@ -16,6 +16,7 @@ mod registrar;
 mod session;
 mod site_config;
 mod websub_capturing;
+pub(crate) use http::make_app_macro as make_app;
 
 // Two items are deliberately absent from the re-export lists below —
 // `atompub_authed` and `basic_header`. Each is now consumed only from inside
@@ -29,20 +30,18 @@ pub use atompub::{
 };
 pub use http::{
     ForeignReferenceResolver, MultipartFile, TestHttpResponse, body_string, confirmed_mutation,
-    get_asset, make_app, make_app_with_media_ownership_resolver, post_form, post_form_with_bearer,
-    post_form_with_credentials, post_form_with_mailer, post_form_with_secure_flag, post_json,
-    post_json_with_credentials, post_multipart, post_password_reset_form_with_dependencies,
-    post_password_reset_request_with_dependencies, post_server_fn, post_server_fn_request_fixture,
-    post_server_fn_request_fixture_with_mailer, post_server_fn_request_fixture_with_secure_flag,
-    post_server_fn_with_mailer, post_server_fn_with_media_ownership_resolver,
-    post_server_fn_with_secure_flag, post_server_fn_with_ua,
+    get_asset, post_form, post_form_with_bearer, post_form_with_credentials,
+    post_form_with_secure_flag, post_json, post_json_with_credentials, post_multipart,
+    post_password_reset_form_with_dependencies, post_password_reset_request_with_dependencies,
+    post_server_fn, post_server_fn_request_fixture,
+    post_server_fn_request_fixture_with_secure_flag, post_server_fn_with_media_ownership_resolver,
+    post_server_fn_with_secure_flag, post_server_fn_with_ua, prepare_app,
 };
 pub use posts::{create_post_json, update_post_json};
 pub use registrar::{REGISTERED_SERVER_FN_COUNT, ensure_server_fns_registered};
 pub use session::{
     SeededSession, assert_no_email, assert_one_absolute_link_email, create_operator_and_session,
-    create_session_for, create_user_and_session, session_cookie, tmp_storage_path,
-    token_from_set_cookie,
+    create_session_for, create_user_and_session, session_cookie, token_from_set_cookie,
 };
 pub use site_config::{delete_site_config, set_site_config};
 // The capturing WebSub client used by `feed_worker.rs`.

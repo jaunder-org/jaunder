@@ -9,19 +9,27 @@ use axum::http::StatusCode;
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::post_json;
-use storage::test_support::{Backend, SeedRawPost, SeedUser, TestEnv, backends};
+use crate::helpers::{make_app, post_json};
+use storage::{
+    PostStorage, UserStorage, WriteScope,
+    test_support::{Backend, SeedRawPost, SeedUser, backends},
+};
 
 async fn seed_user_and_tagged_post(
-    state: &Arc<storage::AppState>,
+    users: Arc<dyn UserStorage>,
+    posts: Arc<dyn PostStorage>,
+    write_scope: WriteScope,
     slug: &str,
     tags: &[&str],
 ) -> (PostId, UserId) {
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(users, write_scope.clone())
+        .await
+        .user_id;
     let post_id = SeedRawPost::new(user_id)
         .slug(slug)
         .tags(tags.iter().copied())
-        .seed(state)
+        .seed(posts, write_scope)
         .await
         .post_id;
     (post_id, user_id)
@@ -30,10 +38,11 @@ async fn seed_user_and_tagged_post(
 #[apply(backends)]
 #[tokio::test]
 async fn list_tags_returns_empty_when_no_tags(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
     let (status, body) = post_json(
-        &state,
+        app.clone(),
         <web::tags::List as ServerFn>::PATH,
         serde_json::json!({}),
         None,
@@ -48,16 +57,19 @@ async fn list_tags_returns_empty_when_no_tags(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn list_tags_returns_all_when_prefix_absent(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
     seed_user_and_tagged_post(
-        &state,
+        Arc::clone(&env.users()),
+        Arc::clone(&env.posts()),
+        env.write_scope(),
         "post-1",
         &["Rust", "rust-lang", "performance", "web"],
     )
     .await;
 
     let (status, body) = post_json(
-        &state,
+        app.clone(),
         <web::tags::List as ServerFn>::PATH,
         serde_json::json!({ "prefix": null, "limit": null }),
         None,
@@ -78,16 +90,19 @@ async fn list_tags_returns_all_when_prefix_absent(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn list_tags_filters_by_prefix_case_insensitive(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
     seed_user_and_tagged_post(
-        &state,
+        Arc::clone(&env.users()),
+        Arc::clone(&env.posts()),
+        env.write_scope(),
         "post-2",
         &["rust", "rust-lang", "javascript", "web"],
     )
     .await;
 
     let (status, body) = post_json(
-        &state,
+        app.clone(),
         <web::tags::List as ServerFn>::PATH,
         serde_json::json!({ "prefix": "RUST" }),
         None,
@@ -103,14 +118,15 @@ async fn list_tags_filters_by_prefix_case_insensitive(#[case] backend: Backend) 
 #[apply(backends)]
 #[tokio::test]
 async fn list_tags_rejects_out_of_range_limit(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
     // `limit=1000` is outside `PageSize`'s `1..=50`; the typed wire arg rejects it on
     // deserialization instead of coercing it down to the cap (#691). Mirrors
     // `list_my_media_rejects_out_of_range_limit`; the status is asserted only as
     // "not OK" because this endpoint is `input = Json` and that one is form-encoded.
     let (status, _body) = post_json(
-        &state,
+        app.clone(),
         <web::tags::List as ServerFn>::PATH,
         serde_json::json!({ "limit": 1000 }),
         None,
@@ -127,14 +143,22 @@ async fn list_tags_rejects_out_of_range_limit(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn list_tags_uses_default_limit_when_unspecified(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let (post, user_id) = seed_user_and_tagged_post(&state, "post-4", &[]).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let (post, user_id) = seed_user_and_tagged_post(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.posts()),
+        env.write_scope(),
+        "post-4",
+        &[],
+    )
+    .await;
     let labels: Vec<TagLabel> = (0..20)
         .map(|n| format!("tag{n:02}").parse().expect("valid tag label"))
         .collect();
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post,
         user_id,
         &labels,
@@ -143,7 +167,7 @@ async fn list_tags_uses_default_limit_when_unspecified(#[case] backend: Backend)
     .unwrap();
 
     let (status, body) = post_json(
-        &state,
+        app.clone(),
         <web::tags::List as ServerFn>::PATH,
         serde_json::json!({}),
         None,

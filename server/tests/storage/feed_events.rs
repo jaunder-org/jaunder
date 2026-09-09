@@ -9,15 +9,13 @@ use storage::test_support::{Backend, backends, fp};
 #[tokio::test]
 async fn feed_events_marks_run(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let feed_events_for_enqueue = state.feed_events.clone();
+    let feed_events_for_enqueue = env.feed_events();
 
     // Enqueue + claim to obtain real ids, then exercise every
     // FeedEventDialect mark_* method on this backend. Each is an independent
     // `UPDATE … WHERE id IN (…)`, so they all run regardless of row state.
     let feed_path = fp("/feed.rss");
-    state
-        .write_scope
+    env.write_scope()
         .run(move |transaction| {
             Box::pin(async move {
                 feed_events_for_enqueue
@@ -27,12 +25,11 @@ async fn feed_events_marks_run(#[case] backend: Backend) {
         })
         .await
         .unwrap();
-    let feed_events_for_claim = state.feed_events.clone();
+    let feed_events_for_claim = env.feed_events();
     let claim_limit = 50;
     let claim_lease = std::time::Duration::from_mins(5);
     let claimed = storage::test_support::confirmed_for(
-        state
-            .write_scope
+        env.write_scope()
             .run(move |transaction| {
                 Box::pin(async move {
                     feed_events_for_claim
@@ -47,10 +44,9 @@ async fn feed_events_marks_run(#[case] backend: Backend) {
     let ids: Vec<FeedEventId> = claimed.iter().map(|r| r.id).collect();
     assert!(!ids.is_empty());
 
-    let feed_events_for_regeneration = state.feed_events.clone();
+    let feed_events_for_regeneration = env.feed_events();
     let ids_for_regeneration = ids.clone();
-    state
-        .write_scope
+    env.write_scope()
         .run(move |transaction| {
             Box::pin(async move {
                 feed_events_for_regeneration
@@ -60,11 +56,10 @@ async fn feed_events_marks_run(#[case] backend: Backend) {
         })
         .await
         .unwrap();
-    let feed_events_for_ping = state.feed_events.clone();
+    let feed_events_for_ping = env.feed_events();
     let ids_for_ping = ids.clone();
     let pinged_at = UtcInstant::now();
-    state
-        .write_scope
+    env.write_scope()
         .run(move |transaction| {
             Box::pin(async move {
                 feed_events_for_ping
@@ -74,7 +69,7 @@ async fn feed_events_marks_run(#[case] backend: Backend) {
         })
         .await
         .unwrap();
-    let feed_events_for_failure = state.feed_events.clone();
+    let feed_events_for_failure = env.feed_events();
     let ids_for_failure = ids.clone();
     let failure_reason = "boom";
     let retry_at = UtcInstant::from(
@@ -83,8 +78,7 @@ async fn feed_events_marks_run(#[case] backend: Backend) {
             .checked_add(1.minute())
             .expect("fixture is within Timestamp range"),
     );
-    state
-        .write_scope
+    env.write_scope()
         .run(move |transaction| {
             Box::pin(async move {
                 feed_events_for_failure
@@ -94,12 +88,11 @@ async fn feed_events_marks_run(#[case] backend: Backend) {
         })
         .await
         .unwrap();
-    let feed_events_for_exhaustion = state.feed_events.clone();
+    let feed_events_for_exhaustion = env.feed_events();
     let ids_for_exhaustion = ids;
     let exhaustion_reason = "gave up";
     let exhausted_at = UtcInstant::now();
-    state
-        .write_scope
+    env.write_scope()
         .run(move |transaction| {
             Box::pin(async move {
                 feed_events_for_exhaustion
@@ -120,11 +113,9 @@ async fn feed_events_marks_run(#[case] backend: Backend) {
 #[tokio::test]
 async fn stale_generation_restarts_with_fresh_regeneration_budget(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let feed_events = state.feed_events.clone();
+    let feed_events = env.feed_events();
     let event_id = storage::test_support::confirmed_for(
-        state
-            .write_scope
+        env.write_scope()
             .run(move |transaction| {
                 Box::pin(async move { feed_events.enqueue(transaction, &fp("/feed.rss")).await })
             })
@@ -140,10 +131,9 @@ async fn stale_generation_restarts_with_fresh_regeneration_budget(#[case] backen
             .expect("fixture is within Timestamp range"),
     );
 
-    let feed_events = state.feed_events.clone();
+    let feed_events = env.feed_events();
     let ids = event_ids.clone();
-    state
-        .write_scope
+    env.write_scope()
         .run(move |transaction| {
             Box::pin(async move {
                 feed_events
@@ -153,19 +143,17 @@ async fn stale_generation_restarts_with_fresh_regeneration_budget(#[case] backen
         })
         .await
         .unwrap();
-    let feed_events = state.feed_events.clone();
+    let feed_events = env.feed_events();
     let ids = event_ids.clone();
-    state
-        .write_scope
+    env.write_scope()
         .run(move |transaction| {
             Box::pin(async move { feed_events.mark_regenerated(transaction, &ids).await })
         })
         .await
         .unwrap();
-    let feed_events = state.feed_events.clone();
+    let feed_events = env.feed_events();
     let ids = event_ids.clone();
-    state
-        .write_scope
+    env.write_scope()
         .run(move |transaction| {
             Box::pin(async move {
                 feed_events
@@ -175,10 +163,9 @@ async fn stale_generation_restarts_with_fresh_regeneration_budget(#[case] backen
         })
         .await
         .unwrap();
-    let feed_events = state.feed_events.clone();
+    let feed_events = env.feed_events();
     let ids = event_ids.clone();
-    state
-        .write_scope
+    env.write_scope()
         .run(move |transaction| {
             Box::pin(async move {
                 feed_events
@@ -189,10 +176,9 @@ async fn stale_generation_restarts_with_fresh_regeneration_budget(#[case] backen
         .await
         .unwrap();
 
-    let feed_events = state.feed_events.clone();
+    let feed_events = env.feed_events();
     let claimed = storage::test_support::confirmed_for(
-        state
-            .write_scope
+        env.write_scope()
             .run(move |transaction| {
                 Box::pin(async move {
                     feed_events

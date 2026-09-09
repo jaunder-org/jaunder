@@ -1145,26 +1145,25 @@ mod reader_tests {
         }
     }
     async fn assert_reader_inventory(args: &StorageArgs) {
-        let state = compatibility_result(
+        let factory = compatibility_result(
             open_existing_database(&args.db, &StorageRuntimeConfig::default()).await,
             "open restored database",
-        )
-        .app_state();
+        );
         let user_id = UserId::from(41);
         let post_id = PostId::from(71);
         let username: Username =
             compatibility_result("legacyuser".parse(), "parse fixture username");
         let user = compatibility_option(
             compatibility_result(
-                state.users.get_user_by_username(&username).await,
+                factory.users().get_user_by_username(&username).await,
                 "read restored user",
             ),
             "fixture user exists",
         );
         let post = compatibility_option(
             compatibility_result(
-                state
-                    .posts
+                factory
+                    .posts()
                     .get_post_by_id(post_id, &ViewerIdentity::local(user_id))
                     .await,
                 "read restored post",
@@ -1173,8 +1172,8 @@ mod reader_tests {
         );
         let history = compatibility_option(
             compatibility_result(
-                state
-                    .posts
+                factory
+                    .posts()
                     .list_post_revision_history(user_id, post_id, None, PageSize::default())
                     .await,
                 "read restored revision history",
@@ -1187,8 +1186,8 @@ mod reader_tests {
         );
         let revision = compatibility_option(
             compatibility_result(
-                state
-                    .posts
+                factory
+                    .posts()
                     .get_post_revision_detail(user_id, post_id, first_revision.revision_id)
                     .await,
                 "read restored revision",
@@ -1198,8 +1197,8 @@ mod reader_tests {
         .revision;
         let media = compatibility_option(
             compatibility_result(
-                state
-                    .media
+                factory
+                    .media()
                     .get_media(
                         user_id,
                         &parse_content_hash(

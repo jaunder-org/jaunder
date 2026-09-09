@@ -2,7 +2,7 @@
 //! rendering/extraction paths; raw storage-layer post inputs belong in [`super::posts`].
 
 use super::{confirmed_for, fixture_media_content_locks};
-use crate::{AppState, PostBookkeepingExpectation, PostFormat};
+use crate::{FeedEventStorage, PostBookkeepingExpectation, PostFormat, PostStorage, WriteScope};
 
 use common::ids::{PostId, UserId};
 use common::post_body::PostBody;
@@ -18,11 +18,21 @@ use std::sync::Arc;
 ///
 /// If the post cannot be created.
 pub async fn create_post_via_service(
-    state: &Arc<AppState>,
+    posts: Arc<dyn PostStorage>,
+    feed_events: Arc<dyn FeedEventStorage>,
+    write_scope: WriteScope,
     user_id: UserId,
     body: PostBody,
 ) -> PostId {
-    create_via_service(state, user_id, body, Some(UtcInstant::now())).await
+    create_via_service(
+        posts,
+        feed_events,
+        write_scope,
+        user_id,
+        body,
+        Some(UtcInstant::now()),
+    )
+    .await
 }
 
 /// The unpublished twin of [`create_post_via_service`] — the draft a publication test
@@ -32,27 +42,31 @@ pub async fn create_post_via_service(
 ///
 /// If the post cannot be created.
 pub async fn create_draft_via_service(
-    state: &Arc<AppState>,
+    posts: Arc<dyn PostStorage>,
+    feed_events: Arc<dyn FeedEventStorage>,
+    write_scope: WriteScope,
     user_id: UserId,
     body: PostBody,
 ) -> PostId {
-    create_via_service(state, user_id, body, None).await
+    create_via_service(posts, feed_events, write_scope, user_id, body, None).await
 }
 
 /// Shared body of the two service-layer creators: everything but `published_at` is
 /// fixed (public, Markdown, title derived from the body), as the two differ in exactly
 /// that one field.
 async fn create_via_service(
-    state: &Arc<AppState>,
+    posts: Arc<dyn PostStorage>,
+    feed_events: Arc<dyn FeedEventStorage>,
+    write_scope: WriteScope,
     user_id: UserId,
     body: PostBody,
     published_at: Option<UtcInstant>,
 ) -> PostId {
     let outcome = crate::perform_post_creation(
-        &state.write_scope,
+        &write_scope,
         &fixture_media_content_locks(),
-        Arc::clone(&state.posts),
-        Arc::clone(&state.feed_events),
+        posts,
+        feed_events,
         crate::PostCreation {
             user_id,
             body,
@@ -81,16 +95,18 @@ async fn create_via_service(
 ///
 /// If the update fails.
 pub async fn update_post_body_via_service(
-    state: &Arc<AppState>,
+    posts: Arc<dyn PostStorage>,
+    feed_events: Arc<dyn FeedEventStorage>,
+    write_scope: WriteScope,
     post_id: PostId,
     editor_user_id: UserId,
     body: PostBody,
 ) {
     let outcome = crate::perform_post_update(
-        &state.write_scope,
+        &write_scope,
         &fixture_media_content_locks(),
-        Arc::clone(&state.posts),
-        Arc::clone(&state.feed_events),
+        posts,
+        feed_events,
         crate::PostUpdate {
             post_id,
             editor_user_id,

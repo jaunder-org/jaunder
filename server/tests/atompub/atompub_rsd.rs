@@ -8,7 +8,7 @@ use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{body_string, create_user_and_session, make_app};
-use storage::test_support::{Backend, TestEnv, backends_matrix};
+use storage::test_support::{Backend, backends_matrix};
 
 // The plain `use` suffices: `#[apply]` resolves a cross-module `#[template]` by
 // bare name (docs/adr/0124-rstest-reuse-cross-module-templates.md).
@@ -18,22 +18,22 @@ use storage::test_support::backends;
 #[apply(backends)]
 #[tokio::test]
 async fn rsd_document_advertises_service_url(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let env = backend.setup().await;
+    let base = &env.base;
     let identity = common::site::SiteIdentity {
         title: common::test_support::parse_site_title("Test"),
         base_url: Some(common::test_support::parse_url("https://example.test/")),
     };
-    let site_config = std::sync::Arc::clone(&state.site_config);
+    let site_config = std::sync::Arc::clone(&env.site_config());
     storage::test_support::confirmed(
-        state
-            .write_scope
+        env.write_scope()
             .run(move |transaction| {
                 Box::pin(async move { site_config.set_identity(transaction, &identity).await })
             })
             .await
             .unwrap(),
     );
-    let app = make_app(&state, &base);
+    let app = make_app!(&env, base);
 
     // RSD is public — no authentication required.
     let response = app
@@ -79,9 +79,15 @@ async fn user_page_includes_rsd_autodiscovery_link(
     backend: Backend,
     #[case] expected_fragment: &str,
 ) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
 
     // The projector's render of the user page hoists the EditURI autodiscovery
     // link into the document head.

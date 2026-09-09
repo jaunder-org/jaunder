@@ -24,8 +24,8 @@ use jaunder::commands::{
 };
 use sqlx::{postgres::PgPoolOptions, sqlite::SqlitePoolOptions};
 use storage::{
-    BackupError, BackupManifest, BackupMode, OpenedDatabase, OperatorStatus, open_database,
-    open_existing_database, open_existing_database_with_observer,
+    BackupError, BackupManifest, BackupMode, OperatorStatus, open_database, open_existing_database,
+    open_existing_database_with_observer,
 };
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -38,8 +38,8 @@ use crate::misc::backup_fixture::{
 };
 use storage::test_support::{
     Backend, PostgresDbGuard, PostgresTestConfig, SeedUser, backends, confirmed,
-    nonexistent_postgres_url, noop_mailer, raw_media_filename_exists,
-    rewrite_media_filename_in_backup, sqlite_url, unique_postgres_url,
+    nonexistent_postgres_url, raw_media_filename_exists, rewrite_media_filename_in_backup,
+    sqlite_url, unique_postgres_url,
 };
 
 fn default_host_config() -> (host::telemetry::TelemetryConfig, Option<ServeCapturePaths>) {
@@ -164,14 +164,13 @@ fn uninitialized_storage_args(backend: Backend, base: &TempDir) -> StorageArgs {
 }
 
 async fn enable_cli_invites(args: &StorageArgs) {
-    let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
+    let factory = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
-        .expect("open db")
-        .app_state();
-    let site_config = Arc::clone(&state.site_config);
+        .expect("open db");
+    let site_config = factory.site_config();
     confirmed(
-        state
-            .write_scope
+        factory
+            .write_scope()
             .run(move |transaction| {
                 Box::pin(async move {
                     site_config
@@ -334,15 +333,20 @@ async fn command_source_chain_cmd_smtp_test_open(#[case] backend: Backend) {
 async fn command_source_chain_cmd_smtp_test_quoted_sender_reaches_send(#[case] backend: Backend) {
     let env = InitializedCommandEnv::new(backend).await;
     let args = env.args;
-    let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
+    let factory = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
-        .expect("open")
-        .app_state();
-    crate::helpers::set_site_config(&state, SiteConfigKey::SmtpHost, "mail.example.com")
-        .await
-        .expect("set host");
+        .expect("open");
     crate::helpers::set_site_config(
-        &state,
+        factory.site_config(),
+        factory.write_scope(),
+        SiteConfigKey::SmtpHost,
+        "mail.example.com",
+    )
+    .await
+    .expect("set host");
+    crate::helpers::set_site_config(
+        factory.site_config(),
+        factory.write_scope(),
         SiteConfigKey::SmtpSender,
         "Acme, Inc <noreply@example.com>",
     )
@@ -367,16 +371,15 @@ async fn command_source_chain_cmd_smtp_test_quoted_sender_reaches_send(#[case] b
 async fn command_source_chain_cmd_smtp_test_send(#[case] backend: Backend) {
     let env = InitializedCommandEnv::new(backend).await;
     let args = env.args;
-    let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
+    let factory = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
-        .expect("open")
-        .app_state();
+        .expect("open");
     for (key, value) in [
         (SiteConfigKey::SmtpHost, "127.0.0.1"),
         (SiteConfigKey::SmtpPort, "1"),
         (SiteConfigKey::SmtpTlsMode, "plain"),
     ] {
-        crate::helpers::set_site_config(&state, key, value)
+        crate::helpers::set_site_config(factory.site_config(), factory.write_scope(), key, value)
             .await
             .expect("set SMTP config");
     }
@@ -399,25 +402,24 @@ async fn command_source_chain_cmd_smtp_test_send(#[case] backend: Backend) {
 async fn websub_dispatch_lists_and_redrives_the_exact_terminal_selection(#[case] backend: Backend) {
     let env = InitializedCommandEnv::new(backend).await;
     let args = env.args.clone();
-    let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
+    let factory = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
-        .expect("open initialized database")
-        .app_state();
+        .expect("open initialized database");
     let path = "/feed.rss".parse().expect("feed path");
-    let feed_events = Arc::clone(&state.feed_events);
+    let feed_events = factory.feed_events();
     let id = confirmed(
-        state
-            .write_scope
+        factory
+            .write_scope()
             .run(move |transaction| {
                 Box::pin(async move { feed_events.enqueue(transaction, &path).await })
             })
             .await
             .expect("enqueue terminal fixture"),
     );
-    let feed_events = Arc::clone(&state.feed_events);
+    let feed_events = factory.feed_events();
     confirmed(
-        state
-            .write_scope
+        factory
+            .write_scope()
             .run(move |transaction| {
                 Box::pin(async move {
                     feed_events
@@ -450,8 +452,8 @@ async fn websub_dispatch_lists_and_redrives_the_exact_terminal_selection(#[case]
     .expect("list terminal events");
     assert!(matches!(output, CommandOutput::None));
 
-    let page = state
-        .feed_events
+    let page = factory
+        .feed_events()
         .dead_letters(FeedEventPhase::Publication, None, PageSize::default())
         .await
         .expect("inspect terminal events");
@@ -473,8 +475,8 @@ async fn websub_dispatch_lists_and_redrives_the_exact_terminal_selection(#[case]
     .expect("redrive exact terminal event");
     assert!(matches!(output, CommandOutput::None));
     assert!(
-        state
-            .feed_events
+        factory
+            .feed_events()
             .dead_letters(FeedEventPhase::Publication, None, PageSize::default())
             .await
             .expect("inspect redriven terminal events")
@@ -522,22 +524,17 @@ async fn after_init_server_responds_to_health_check(#[case] backend: Backend) {
     let env = InitializedCommandEnv::new(backend).await;
     let args = env.args;
 
-    let OpenedDatabase {
-        factory,
-        instance_id,
-        ..
-    } = open_existing_database_with_observer(&args.db, &storage::StorageRuntimeConfig::default())
-        .await
-        .unwrap();
-    let state = factory.app_state();
-    let router = jaunder::create_router(
-        state,
-        instance_id,
-        noop_mailer(),
+    let (telemetry, _capture) = default_host_config();
+    let router = prepare_server(
+        &args,
+        "127.0.0.1:0".parse().expect("loopback socket address"),
         true,
-        args.storage_path.clone(),
+        &telemetry,
+        None,
     )
-    .expect("canonical instance identity is an HTTP header");
+    .await
+    .expect("initialized database prepares a server")
+    .router;
 
     let response = router
         .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
@@ -661,17 +658,20 @@ async fn app_password_create_records_the_default_label(#[case] backend: Backend)
         .await
         .expect("minting with the default label should succeed");
 
-    let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
+    let factory = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
-        .expect("reopen")
-        .app_state();
-    let user = state
-        .users
+        .expect("reopen");
+    let user = factory
+        .users()
         .get_user_by_username(&username)
         .await
         .unwrap()
         .expect("alice exists");
-    let sessions = state.sessions.list_sessions(user.user_id).await.unwrap();
+    let sessions = factory
+        .sessions()
+        .list_sessions(user.user_id)
+        .await
+        .unwrap();
     assert_eq!(sessions.len(), 1, "one app password was minted");
     assert_eq!(sessions[0].label, "app-password");
 }
@@ -699,9 +699,9 @@ async fn typed_account_command_source_app_password_lookup(#[case] backend: Backe
     let label = parse_session_label("CLI");
 
     let error = app_password_create(
-        &env.state.write_scope,
-        env.state.users(),
-        Arc::clone(&env.state.sessions),
+        &env.write_scope(),
+        env.users().as_ref(),
+        Arc::clone(&env.sessions()),
         &username,
         label,
     )
@@ -720,7 +720,9 @@ async fn typed_account_command_source_app_password_lookup(#[case] backend: Backe
 #[tokio::test]
 async fn typed_account_command_source_app_password_session_create(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let user = SeedUser::new().seed(&env.state).await;
+    let user = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await;
     env.base
         .pool()
         .execute("ALTER TABLE sessions RENAME TO sessions_broken")
@@ -729,9 +731,9 @@ async fn typed_account_command_source_app_password_session_create(#[case] backen
     let label = parse_session_label("CLI");
 
     let error = app_password_create(
-        &env.state.write_scope,
-        env.state.users(),
-        Arc::clone(&env.state.sessions),
+        &env.write_scope(),
+        env.users().as_ref(),
+        Arc::clone(&env.sessions()),
         &user.username,
         label,
     )
@@ -757,12 +759,11 @@ async fn cmd_user_create_creates_retrievable_user(#[case] backend: Backend) {
         .await
         .expect("user create");
 
-    let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
+    let factory = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
-        .expect("open db")
-        .app_state();
-    let user = state
-        .users
+        .expect("open db");
+    let user = factory
+        .users()
         .get_user_by_username(&username)
         .await
         .expect("db query");
@@ -805,12 +806,11 @@ async fn cmd_user_create_with_operator_flag_sets_is_operator(#[case] backend: Ba
         .await
         .expect("user create");
 
-    let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
+    let factory = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
-        .expect("open db")
-        .app_state();
-    let user = state
-        .users
+        .expect("open db");
+    let user = factory
+        .users()
         .get_user_by_username(&username)
         .await
         .expect("db query")
@@ -832,11 +832,14 @@ async fn cmd_user_invite_creates_retrievable_invite(#[case] backend: Backend) {
         .await
         .expect("user invite");
 
-    let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
+    let factory = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
-        .expect("open db")
-        .app_state();
-    let invites = state.invites.list_invites().await.expect("list invites");
+        .expect("open db");
+    let invites = factory
+        .invites()
+        .list_invites()
+        .await
+        .expect("list invites");
     assert_eq!(invites.len(), 1, "exactly one invite should exist");
 }
 
@@ -848,11 +851,14 @@ async fn cmd_user_invite_default_expires_in(#[case] backend: Backend) {
     enable_cli_invites(&args).await;
     execute_user_invite(&args, None).await.expect("user invite");
 
-    let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
+    let factory = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
-        .expect("open db")
-        .app_state();
-    let invites = state.invites.list_invites().await.expect("list invites");
+        .expect("open db");
+    let invites = factory
+        .invites()
+        .list_invites()
+        .await
+        .expect("list invites");
     assert_eq!(invites.len(), 1, "exactly one invite should exist");
 }
 
@@ -1763,28 +1769,57 @@ async fn cmd_smtp_test_succeeds_with_mock_server(#[case] backend: Backend) {
     server.start();
     let env = InitializedCommandEnv::new(backend).await;
     let args = env.args;
-    let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
+    let factory = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
-        .expect("open db")
-        .app_state();
-    crate::helpers::set_site_config(&state, SiteConfigKey::SmtpHost, &server.host().to_string())
-        .await
-        .expect("set host");
-    crate::helpers::set_site_config(&state, SiteConfigKey::SmtpPort, &server.port().to_string())
-        .await
-        .expect("set port");
-    crate::helpers::set_site_config(&state, SiteConfigKey::SmtpTlsMode, "plain")
-        .await
-        .expect("set tls_mode");
-    crate::helpers::set_site_config(&state, SiteConfigKey::SmtpSender, "noreply@example.com")
-        .await
-        .expect("set sender");
-    crate::helpers::set_site_config(&state, SiteConfigKey::SmtpUsername, "user")
-        .await
-        .expect("set username");
-    crate::helpers::set_site_config(&state, SiteConfigKey::SmtpPassword, "password")
-        .await
-        .expect("set password");
+        .expect("open db");
+    crate::helpers::set_site_config(
+        factory.site_config(),
+        factory.write_scope(),
+        SiteConfigKey::SmtpHost,
+        &server.host().to_string(),
+    )
+    .await
+    .expect("set host");
+    crate::helpers::set_site_config(
+        factory.site_config(),
+        factory.write_scope(),
+        SiteConfigKey::SmtpPort,
+        &server.port().to_string(),
+    )
+    .await
+    .expect("set port");
+    crate::helpers::set_site_config(
+        factory.site_config(),
+        factory.write_scope(),
+        SiteConfigKey::SmtpTlsMode,
+        "plain",
+    )
+    .await
+    .expect("set tls_mode");
+    crate::helpers::set_site_config(
+        factory.site_config(),
+        factory.write_scope(),
+        SiteConfigKey::SmtpSender,
+        "noreply@example.com",
+    )
+    .await
+    .expect("set sender");
+    crate::helpers::set_site_config(
+        factory.site_config(),
+        factory.write_scope(),
+        SiteConfigKey::SmtpUsername,
+        "user",
+    )
+    .await
+    .expect("set username");
+    crate::helpers::set_site_config(
+        factory.site_config(),
+        factory.write_scope(),
+        SiteConfigKey::SmtpPassword,
+        "password",
+    )
+    .await
+    .expect("set password");
 
     execute_smtp_test(&args, &parse_email("alice@example.com"))
         .await

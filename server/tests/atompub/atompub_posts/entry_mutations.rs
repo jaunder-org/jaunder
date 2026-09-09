@@ -16,20 +16,26 @@ use crate::helpers::{
     atompub_at, atompub_get, atompub_location, atompub_post_xml, atompub_put_xml, body_string,
     create_user_and_session, make_app,
 };
-use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
+use storage::test_support::{Backend, backends, backends_matrix};
 
 use super::fixtures::{entry_xml, location_post_id};
 
 #[apply(backends)]
 #[tokio::test]
 async fn create_post_returns_201_and_is_retrievable(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     // Set default format to Markdown so text entries round-trip properly.
-    let user_config = Arc::clone(&state.user_config);
+    let user_config = Arc::clone(&env.user_config());
     let user_id = session.user_id;
-    let outcome = state
-        .write_scope
+    let outcome = env
+        .write_scope()
         .run(move |transaction| {
             Box::pin(async move {
                 storage::set_default_post_format(
@@ -44,7 +50,7 @@ async fn create_post_returns_201_and_is_retrievable(#[case] backend: Backend) {
         .await
         .unwrap();
     assert!(matches!(outcome, MutationOutcome::Confirmed(())));
-    let app = make_app(&state, &base);
+    let app = make_app!(&env, base);
 
     let xml = entry_xml("Hello", "text", "the body");
     let response = app
@@ -64,7 +70,7 @@ async fn create_post_returns_201_and_is_retrievable(#[case] backend: Backend) {
         "response should have Location header: {loc:?}"
     );
 
-    let app2 = make_app(&state, &base);
+    let app2 = make_app!(&env, base);
     let loc_path = atompub_location(&loc.unwrap());
     let get_response = app2
         .oneshot(
@@ -90,9 +96,15 @@ async fn create_post_returns_201_and_is_retrievable(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_post_applies_categories(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
 
     let xml = entry_xml("Hello", "text", "the body");
     let response = app
@@ -111,9 +123,15 @@ async fn create_post_applies_categories(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_html_entry_is_stored_as_html(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
 
     let xml = entry_xml("H", "html", "&lt;p&gt;hi&lt;/p&gt;");
     let response = app
@@ -142,9 +160,15 @@ async fn create_format_media_type_round_trips(
     #[case] content_type: &str,
     #[case] content: &str,
 ) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
 
     let xml = entry_xml("Formatted", content_type, content);
     let response = app
@@ -164,7 +188,7 @@ async fn create_format_media_type_round_trips(
     );
 
     // GET the member back: it must echo the same content media type.
-    let get = make_app(&state, &base)
+    let get = make_app!(&env, base)
         .oneshot(
             atompub_at(&session, Method::GET, &location)
                 .body(Body::empty())
@@ -184,12 +208,25 @@ async fn create_format_media_type_round_trips(
 #[apply(backends)]
 #[tokio::test]
 async fn update_replaces_post_body(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
 
-    let post = session.seed_post().seed(&state).await;
+    let post = session
+        .seed_post()
+        .seed(
+            std::sync::Arc::clone(&env.posts()),
+            std::sync::Arc::clone(&env.feed_events()),
+            env.write_scope(),
+        )
+        .await;
 
-    let app = make_app(&state, &base);
+    let app = make_app!(&env, base);
 
     let xml = entry_xml("New", "text", "new body");
     let response = app
@@ -212,9 +249,15 @@ async fn update_replaces_post_body(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_rejects_malformed_entry(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
 
     let response = app
         .oneshot(atompub_post_xml(&session, "posts", "not xml"))
@@ -227,14 +270,27 @@ async fn create_rejects_malformed_entry(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn update_removes_categories_not_in_new_entry(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
 
-    let post = session.seed_post().seed(&state).await;
+    let post = session
+        .seed_post()
+        .seed(
+            std::sync::Arc::clone(&env.posts()),
+            std::sync::Arc::clone(&env.feed_events()),
+            env.write_scope(),
+        )
+        .await;
 
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post.post_id,
         session.user_id,
         &["original-tag".parse::<TagLabel>().unwrap()],
@@ -242,7 +298,7 @@ async fn update_removes_categories_not_in_new_entry(#[case] backend: Backend) {
     .await
     .unwrap();
 
-    let app = make_app(&state, &base);
+    let app = make_app!(&env, base);
 
     // Update without the tag
     let xml = entry_xml("Title", "text", "new body");
@@ -264,12 +320,25 @@ async fn update_removes_categories_not_in_new_entry(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn update_with_put_returns_200_and_etag(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
 
-    let post = session.seed_post().seed(&state).await;
+    let post = session
+        .seed_post()
+        .seed(
+            std::sync::Arc::clone(&env.posts()),
+            std::sync::Arc::clone(&env.feed_events()),
+            env.write_scope(),
+        )
+        .await;
 
-    let app = make_app(&state, &base);
+    let app = make_app!(&env, base);
 
     let xml = entry_xml("Updated", "text", "updated body");
     let response = app
@@ -311,14 +380,27 @@ enum EmptyEntryOp {
 #[case::update(EmptyEntryOp::Update)]
 #[tokio::test]
 async fn empty_entry_returns_400(backend: Backend, #[case] op: EmptyEntryOp) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
 
     let request = match op {
         EmptyEntryOp::Create => atompub_post_xml(&session, "posts", EMPTY_ENTRY_XML),
         EmptyEntryOp::Update => {
             // Create an initial post to update.
-            let post = session.seed_post().seed(&state).await;
+            let post = session
+                .seed_post()
+                .seed(
+                    std::sync::Arc::clone(&env.posts()),
+                    std::sync::Arc::clone(&env.feed_events()),
+                    env.write_scope(),
+                )
+                .await;
             atompub_put_xml(
                 &session,
                 &format!("posts/{}", post.post_id),
@@ -327,7 +409,7 @@ async fn empty_entry_returns_400(backend: Backend, #[case] op: EmptyEntryOp) {
         }
     };
 
-    let app = make_app(&state, &base);
+    let app = make_app!(&env, base);
 
     let response = app.oneshot(request).await.unwrap();
 
@@ -342,10 +424,16 @@ async fn empty_entry_returns_400(backend: Backend, #[case] op: EmptyEntryOp) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_title_only_org_entry_returns_400(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
 
-    let response = make_app(&state, &base)
+    let response = make_app!(&env, base)
         .oneshot(atompub_post_xml(
             &session,
             "posts",
@@ -358,7 +446,7 @@ async fn create_title_only_org_entry_returns_400(#[case] backend: Backend) {
 
     // The discriminator: identical bytes as Markdown are ordinary content, so the
     // rejection is Org's title-stripping rather than anything about the request.
-    let ok = make_app(&state, &base)
+    let ok = make_app!(&env, base)
         .oneshot(atompub_post_xml(
             &session,
             "posts",
@@ -375,12 +463,22 @@ async fn create_title_only_org_entry_returns_400(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn malformed_org_header_update_returns_400_without_mutation(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let post = session
         .seed_post()
         .body(parse_post_body("Original body"))
-        .seed(&state)
+        .seed(
+            std::sync::Arc::clone(&env.posts()),
+            std::sync::Arc::clone(&env.feed_events()),
+            env.write_scope(),
+        )
         .await;
     let invalid = entry_xml(
         "Replacement",
@@ -388,7 +486,7 @@ async fn malformed_org_header_update_returns_400_without_mutation(#[case] backen
         "#+PROPERTY: JAUNDER_STATUS draft\n#+PROPERTY: JAUNDER_STATUS published\n\nReplacement body",
     );
 
-    let response = make_app(&state, &base)
+    let response = make_app!(&env, base)
         .oneshot(atompub_put_xml(
             &session,
             &format!("posts/{}", post.post_id),
@@ -398,7 +496,7 @@ async fn malformed_org_header_update_returns_400_without_mutation(#[case] backen
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let response = make_app(&state, &base)
+    let response = make_app!(&env, base)
         .oneshot(atompub_get(&session, &format!("posts/{}", post.post_id)))
         .await
         .unwrap();
@@ -413,12 +511,22 @@ async fn malformed_org_header_update_returns_400_without_mutation(#[case] backen
 #[apply(backends)]
 #[tokio::test]
 async fn metadata_only_org_update_returns_400_without_mutation(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let post = session
         .seed_post()
         .body(parse_post_body("Original body"))
-        .seed(&state)
+        .seed(
+            std::sync::Arc::clone(&env.posts()),
+            std::sync::Arc::clone(&env.feed_events()),
+            env.write_scope(),
+        )
         .await;
     let metadata_only = entry_xml(
         "Replacement",
@@ -426,7 +534,7 @@ async fn metadata_only_org_update_returns_400_without_mutation(#[case] backend: 
         "#+TITLE: Header title\n#+PROPERTY: JAUNDER_STATUS draft",
     );
 
-    let response = make_app(&state, &base)
+    let response = make_app!(&env, base)
         .oneshot(atompub_put_xml(
             &session,
             &format!("posts/{}", post.post_id),
@@ -436,7 +544,7 @@ async fn metadata_only_org_update_returns_400_without_mutation(#[case] backend: 
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
-    let response = make_app(&state, &base)
+    let response = make_app!(&env, base)
         .oneshot(atompub_get(&session, &format!("posts/{}", post.post_id)))
         .await
         .unwrap();
@@ -450,12 +558,22 @@ async fn metadata_only_org_update_returns_400_without_mutation(#[case] backend: 
 #[apply(backends)]
 #[tokio::test]
 async fn mismatched_org_id_returns_400_without_mutation(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let post = session
         .seed_post()
         .body(parse_post_body("Original body"))
-        .seed(&state)
+        .seed(
+            std::sync::Arc::clone(&env.posts()),
+            std::sync::Arc::clone(&env.feed_events()),
+            env.write_scope(),
+        )
         .await;
     let xml = entry_xml(
         "Replacement",
@@ -463,7 +581,7 @@ async fn mismatched_org_id_returns_400_without_mutation(#[case] backend: Backend
         "#+PROPERTY: JAUNDER_ID 999999999\n#+PROPERTY: JAUNDER_STATUS draft\n\nReplacement body",
     );
 
-    let response = make_app(&state, &base)
+    let response = make_app!(&env, base)
         .oneshot(atompub_put_xml(
             &session,
             &format!("posts/{}", post.post_id),
@@ -472,7 +590,7 @@ async fn mismatched_org_id_returns_400_without_mutation(#[case] backend: Backend
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let response = make_app(&state, &base)
+    let response = make_app!(&env, base)
         .oneshot(atompub_get(&session, &format!("posts/{}", post.post_id)))
         .await
         .unwrap();
@@ -486,9 +604,15 @@ async fn mismatched_org_id_returns_400_without_mutation(#[case] backend: Backend
 #[apply(backends)]
 #[tokio::test]
 async fn incoming_j_slug_is_ignored(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
 
     // A client-supplied <j:slug> must NOT determine the stored slug — the server
     // derives its own from the title (ADR-0023: j:slug is read-only).
@@ -509,8 +633,8 @@ async fn incoming_j_slug_is_ignored(#[case] backend: Backend) {
     let post_id = location_post_id(&response);
 
     let viewer = common::visibility::ViewerIdentity::local(session.user_id);
-    let rec = state
-        .posts
+    let rec = env
+        .posts()
         .get_post_by_id(PostId::from(post_id), &viewer)
         .await
         .unwrap()
@@ -524,9 +648,15 @@ async fn incoming_j_slug_is_ignored(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_with_blank_title_stores_an_untitled_post(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
 
     // A whitespace-only <title> means the client supplied no title — it is absence,
     // not a client error (#830). `PostTitle`'s FromStr rejects it and the mapping
@@ -548,8 +678,8 @@ async fn create_with_blank_title_stores_an_untitled_post(#[case] backend: Backen
     let post_id = location_post_id(&response);
 
     let viewer = common::visibility::ViewerIdentity::local(session.user_id);
-    let rec = state
-        .posts
+    let rec = env
+        .posts()
         .get_post_by_id(PostId::from(post_id), &viewer)
         .await
         .unwrap()
@@ -561,9 +691,15 @@ async fn create_with_blank_title_stores_an_untitled_post(#[case] backend: Backen
 #[apply(backends)]
 #[tokio::test]
 async fn create_skips_invalid_category(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
 
     let xml = r#"<?xml version="1.0"?>
 <entry xmlns="http://www.w3.org/2005/Atom">
@@ -593,9 +729,15 @@ async fn create_skips_invalid_category(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_with_over_cap_categories_is_rejected(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
 
     let categories = (0..=MAX_TAGS_PER_POST)
         .map(|n| format!("  <category term=\"tag{n}\"/>"))
@@ -636,13 +778,26 @@ async fn create_with_over_cap_categories_is_rejected(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn update_with_over_cap_categories_is_rejected(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let post = session.seed_post().seed(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let post = session
+        .seed_post()
+        .seed(
+            std::sync::Arc::clone(&env.posts()),
+            std::sync::Arc::clone(&env.feed_events()),
+            env.write_scope(),
+        )
+        .await;
 
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post.post_id,
         session.user_id,
         &["original-tag".parse::<TagLabel>().unwrap()],
@@ -650,7 +805,7 @@ async fn update_with_over_cap_categories_is_rejected(#[case] backend: Backend) {
     .await
     .unwrap();
 
-    let app = make_app(&state, &base);
+    let app = make_app!(&env, base);
 
     let categories = (0..=MAX_TAGS_PER_POST)
         .map(|n| format!("  <category term=\"tag{n}\"/>"))
@@ -701,9 +856,15 @@ async fn update_with_over_cap_categories_is_rejected(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_dedupes_categories_keeping_first_casing(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
 
     let xml = r#"<?xml version="1.0"?>
 <entry xmlns="http://www.w3.org/2005/Atom">
@@ -737,9 +898,15 @@ async fn create_dedupes_categories_keeping_first_casing(#[case] backend: Backend
 #[apply(backends)]
 #[tokio::test]
 async fn create_skips_malformed_category_beside_a_valid_one(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
 
     let xml = r#"<?xml version="1.0"?>
 <entry xmlns="http://www.w3.org/2005/Atom">
@@ -774,9 +941,15 @@ async fn create_skips_malformed_category_beside_a_valid_one(#[case] backend: Bac
 #[apply(backends)]
 #[tokio::test]
 async fn update_keeps_unchanged_category(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
 
     let with_rust = r#"<?xml version="1.0"?>
 <entry xmlns="http://www.w3.org/2005/Atom">

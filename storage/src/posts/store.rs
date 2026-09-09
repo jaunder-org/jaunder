@@ -2183,13 +2183,12 @@ mod tests {
     use tokio::sync::Barrier;
 
     async fn update_post_scoped(
-        state: &Arc<crate::AppState>,
+        posts: Arc<dyn PostStorage>,
+        write_scope: crate::WriteScope,
         post_id: PostId,
         editor_user_id: UserId,
         input: UpdatePostInput,
     ) -> Result<common::MutationOutcome<PostRecord>, crate::WriteScopeError<UpdatePostError>> {
-        let write_scope = state.write_scope.clone();
-        let posts = Arc::clone(&state.posts);
         write_scope
             .run(move |transaction| {
                 Box::pin(async move {
@@ -2203,13 +2202,14 @@ mod tests {
     }
 
     async fn update_post_confirmed(
-        state: &Arc<crate::AppState>,
+        posts: Arc<dyn PostStorage>,
+        write_scope: crate::WriteScope,
         post_id: PostId,
         editor_user_id: UserId,
         input: UpdatePostInput,
     ) -> PostRecord {
         crate::test_support::confirmed_for(
-            update_post_scoped(state, post_id, editor_user_id, input)
+            update_post_scoped(posts, write_scope, post_id, editor_user_id, input)
                 .await
                 .expect("post update succeeds"),
             "post update fixture",
@@ -2217,11 +2217,10 @@ mod tests {
     }
 
     async fn create_post_confirmed(
-        state: &Arc<crate::AppState>,
+        posts: Arc<dyn PostStorage>,
+        write_scope: crate::WriteScope,
         input: CreatePostInput,
     ) -> PostRecord {
-        let posts = Arc::clone(&state.posts);
-        let write_scope = state.write_scope.clone();
         crate::test_support::confirmed_for(
             write_scope
                 .run(move |transaction| {
@@ -2239,12 +2238,11 @@ mod tests {
     }
 
     async fn publish_post_scoped(
-        state: &Arc<crate::AppState>,
+        posts: Arc<dyn PostStorage>,
+        write_scope: crate::WriteScope,
         post_id: PostId,
         user_id: UserId,
     ) -> Result<common::MutationOutcome<PostRecord>, crate::WriteScopeError<UpdatePostError>> {
-        let posts = Arc::clone(&state.posts);
-        let write_scope = state.write_scope.clone();
         write_scope
             .run(move |transaction| {
                 Box::pin(async move {
@@ -2258,12 +2256,13 @@ mod tests {
     }
 
     async fn publish_post_confirmed(
-        state: &Arc<crate::AppState>,
+        posts: Arc<dyn PostStorage>,
+        write_scope: crate::WriteScope,
         post_id: PostId,
         user_id: UserId,
     ) -> PostRecord {
         crate::test_support::confirmed_for(
-            publish_post_scoped(state, post_id, user_id)
+            publish_post_scoped(posts, write_scope, post_id, user_id)
                 .await
                 .expect("post publication succeeds"),
             "post publication fixture",
@@ -2271,12 +2270,11 @@ mod tests {
     }
 
     async fn unpublish_post_scoped(
-        state: &Arc<crate::AppState>,
+        posts: Arc<dyn PostStorage>,
+        write_scope: crate::WriteScope,
         post_id: PostId,
         user_id: UserId,
     ) -> Result<common::MutationOutcome<PostRecord>, crate::WriteScopeError<UpdatePostError>> {
-        let posts = Arc::clone(&state.posts);
-        let write_scope = state.write_scope.clone();
         write_scope
             .run(move |transaction| {
                 Box::pin(async move {
@@ -2290,12 +2288,13 @@ mod tests {
     }
 
     async fn unpublish_post_confirmed(
-        state: &Arc<crate::AppState>,
+        posts: Arc<dyn PostStorage>,
+        write_scope: crate::WriteScope,
         post_id: PostId,
         user_id: UserId,
     ) -> PostRecord {
         crate::test_support::confirmed_for(
-            unpublish_post_scoped(state, post_id, user_id)
+            unpublish_post_scoped(posts, write_scope, post_id, user_id)
                 .await
                 .expect("post unpublication succeeds"),
             "post unpublication fixture",
@@ -2303,12 +2302,11 @@ mod tests {
     }
 
     async fn soft_delete_post_scoped(
-        state: &Arc<crate::AppState>,
+        posts: Arc<dyn PostStorage>,
+        write_scope: crate::WriteScope,
         post_id: PostId,
         user_id: UserId,
     ) -> Result<common::MutationOutcome<()>, crate::WriteScopeError<UpdatePostError>> {
-        let posts = Arc::clone(&state.posts);
-        let write_scope = state.write_scope.clone();
         write_scope
             .run(move |transaction| {
                 Box::pin(async move {
@@ -2322,12 +2320,13 @@ mod tests {
     }
 
     async fn soft_delete_post_confirmed(
-        state: &Arc<crate::AppState>,
+        posts: Arc<dyn PostStorage>,
+        write_scope: crate::WriteScope,
         post_id: PostId,
         user_id: UserId,
     ) {
         crate::test_support::confirmed_for(
-            soft_delete_post_scoped(state, post_id, user_id)
+            soft_delete_post_scoped(posts, write_scope, post_id, user_id)
                 .await
                 .expect("post deletion succeeds"),
             "post deletion fixture",
@@ -2363,10 +2362,18 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let user = SeedUser::new().seed(&env.state).await;
+        let user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         let post_id = SeedRawPost::new(user.user_id)
             .published_at(parse_utc_instant("2026-04-12T08:30:00.123456Z"))
-            .seed(&env.state)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
             .await
             .post_id;
 
@@ -2382,8 +2389,7 @@ mod tests {
             .unwrap();
 
         let record = env
-            .state
-            .posts
+            .posts()
             .get_post_by_id(
                 post_id,
                 &ViewerIdentity::Local {
@@ -2413,12 +2419,14 @@ mod tests {
 
         let draft_id = SeedRawPost::new(user.user_id)
             .draft()
-            .seed(&env.state)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
             .await
             .post_id;
         let draft = env
-            .state
-            .posts
+            .posts()
             .get_post_by_id(
                 draft_id,
                 &ViewerIdentity::Local {
@@ -2439,17 +2447,25 @@ mod tests {
     #[tokio::test]
     async fn opposite_media_updates_complete_without_deadlock(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let [user] = seed_users::<1>(&env.state).await;
+        let [user] = seed_users::<1>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
         let first = media_url_for("first-lock.jpg");
         let second = media_url_for("second-lock.jpg");
         let first_post = create_post_via_service(
-            &env.state,
+            env.posts().clone(),
+            env.feed_events().clone(),
+            env.write_scope().clone(),
             user,
             parse_post_body(&format!("<img src=\"{first}\">")),
         )
         .await;
         let second_post = create_post_via_service(
-            &env.state,
+            env.posts().clone(),
+            env.feed_events().clone(),
+            env.write_scope().clone(),
             user,
             parse_post_body(&format!("<img src=\"{second}\">")),
         )
@@ -2457,21 +2473,41 @@ mod tests {
 
         let barrier = Arc::new(Barrier::new(3));
         let first_update = tokio::spawn({
-            let state = Arc::clone(&env.state);
+            let posts = env.posts();
+            let feed_events = env.feed_events();
+            let write_scope = env.write_scope();
             let barrier = Arc::clone(&barrier);
             let body = parse_post_body(&format!("<img src=\"{second}\">"));
             async move {
                 barrier.wait().await;
-                update_post_body_via_service(&state, first_post, user, body).await;
+                update_post_body_via_service(
+                    posts,
+                    feed_events,
+                    write_scope,
+                    first_post,
+                    user,
+                    body,
+                )
+                .await;
             }
         });
         let second_update = tokio::spawn({
-            let state = Arc::clone(&env.state);
+            let posts = env.posts();
+            let feed_events = env.feed_events();
+            let write_scope = env.write_scope();
             let barrier = Arc::clone(&barrier);
             let body = parse_post_body(&format!("<img src=\"{first}\">"));
             async move {
                 barrier.wait().await;
-                update_post_body_via_service(&state, second_post, user, body).await;
+                update_post_body_via_service(
+                    posts,
+                    feed_events,
+                    write_scope,
+                    second_post,
+                    user,
+                    body,
+                )
+                .await;
             }
         });
         barrier.wait().await;
@@ -2503,7 +2539,11 @@ mod tests {
     #[tokio::test]
     async fn reversed_media_batches_complete_without_deadlock(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let [user] = seed_users::<1>(&env.state).await;
+        let [user] = seed_users::<1>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
         let first = media_url_for("batch-first-lock.jpg");
         let second = media_url_for("batch-second-lock.jpg");
         let forward = [
@@ -2539,19 +2579,21 @@ mod tests {
 
         let barrier = Arc::new(Barrier::new(3));
         let forward_create = tokio::spawn({
-            let state = Arc::clone(&env.state);
+            let posts = env.posts();
+            let write_scope = env.write_scope();
             let barrier = Arc::clone(&barrier);
             async move {
                 barrier.wait().await;
-                create_posts_confirmed(&state, forward.to_vec()).await
+                create_posts_confirmed(posts, write_scope, forward.to_vec()).await
             }
         });
         let reverse_create = tokio::spawn({
-            let state = Arc::clone(&env.state);
+            let posts = env.posts();
+            let write_scope = env.write_scope();
             let barrier = Arc::clone(&barrier);
             async move {
                 barrier.wait().await;
-                create_posts_confirmed(&state, reverse.to_vec()).await
+                create_posts_confirmed(posts, write_scope, reverse.to_vec()).await
             }
         });
         barrier.wait().await;
@@ -2826,13 +2868,25 @@ mod tests {
     #[tokio::test]
     async fn set_post_tags_adds_removes_and_clears(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user = SeedUser::new().seed(&env.state).await.user_id;
-        let post = SeedRawPost::new(user).seed(&env.state).await.post_id;
-        let posts = &*env.state.posts;
+        let user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let post = SeedRawPost::new(user)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
+            .await
+            .post_id;
+        let posts = &*env.posts();
 
         set_post_tags_confirmed(
-            &env.state.write_scope,
-            Arc::clone(&env.state.posts),
+            &env.write_scope(),
+            Arc::clone(&env.posts()),
             post,
             user,
             &[parse_tag_label("rust"), parse_tag_label("web")],
@@ -2843,8 +2897,8 @@ mod tests {
 
         // Reconcile: "web" drops, "nix" arrives, "rust" stays.
         set_post_tags_confirmed(
-            &env.state.write_scope,
-            Arc::clone(&env.state.posts),
+            &env.write_scope(),
+            Arc::clone(&env.posts()),
             post,
             user,
             &[parse_tag_label("rust"), parse_tag_label("nix")],
@@ -2856,8 +2910,8 @@ mod tests {
         // An empty desired set clears; it is deliberately NOT a no-op, unlike
         // `enqueue_many`'s empty-input early return (#771).
         set_post_tags_confirmed(
-            &env.state.write_scope,
-            Arc::clone(&env.state.posts),
+            &env.write_scope(),
+            Arc::clone(&env.posts()),
             post,
             user,
             &[],
@@ -2871,13 +2925,25 @@ mod tests {
     #[tokio::test]
     async fn set_post_tags_preserves_existing_display_casing(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user = SeedUser::new().seed(&env.state).await.user_id;
-        let post = SeedRawPost::new(user).seed(&env.state).await.post_id;
-        let posts = &*env.state.posts;
+        let user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let post = SeedRawPost::new(user)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
+            .await
+            .post_id;
+        let posts = &*env.posts();
 
         set_post_tags_confirmed(
-            &env.state.write_scope,
-            Arc::clone(&env.state.posts),
+            &env.write_scope(),
+            Arc::clone(&env.posts()),
             post,
             user,
             &[parse_tag_label("Rust")],
@@ -2887,8 +2953,8 @@ mod tests {
         // Same slug, different casing: the stored row is left untouched, so the
         // original casing survives.
         set_post_tags_confirmed(
-            &env.state.write_scope,
-            Arc::clone(&env.state.posts),
+            &env.write_scope(),
+            Arc::clone(&env.posts()),
             post,
             user,
             &[parse_tag_label("rUsT")],
@@ -2909,14 +2975,26 @@ mod tests {
     #[tokio::test]
     async fn set_post_tags_is_idempotent_and_absorbs_duplicate_slugs(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user = SeedUser::new().seed(&env.state).await.user_id;
-        let post = SeedRawPost::new(user).seed(&env.state).await.post_id;
-        let posts = &*env.state.posts;
+        let user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let post = SeedRawPost::new(user)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
+            .await
+            .post_id;
+        let posts = &*env.posts();
 
         let desired = [parse_tag_label("rust"), parse_tag_label("web")];
         set_post_tags_confirmed(
-            &env.state.write_scope,
-            Arc::clone(&env.state.posts),
+            &env.write_scope(),
+            Arc::clone(&env.posts()),
             post,
             user,
             &desired,
@@ -2924,8 +3002,8 @@ mod tests {
         .await
         .expect("first");
         set_post_tags_confirmed(
-            &env.state.write_scope,
-            Arc::clone(&env.state.posts),
+            &env.write_scope(),
+            Arc::clone(&env.posts()),
             post,
             user,
             &desired,
@@ -2938,8 +3016,8 @@ mod tests {
         // both reach the insert; the conflict-tolerant insert absorbs the second
         // and the first occurrence's casing wins.
         set_post_tags_confirmed(
-            &env.state.write_scope,
-            Arc::clone(&env.state.posts),
+            &env.write_scope(),
+            Arc::clone(&env.posts()),
             post,
             user,
             &[parse_tag_label("Nix"), parse_tag_label("nix")],
@@ -2959,13 +3037,31 @@ mod tests {
     #[tokio::test]
     async fn set_post_tags_requires_an_active_owner(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let owner = SeedUser::new().seed(&env.state).await.user_id;
-        let other = SeedUser::new().seed(&env.state).await.user_id;
-        let post = SeedRawPost::new(owner).seed(&env.state).await.post_id;
+        let owner = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let other = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let post = SeedRawPost::new(owner)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
+            .await
+            .post_id;
 
         let missing = set_post_tags_confirmed(
-            &env.state.write_scope,
-            Arc::clone(&env.state.posts),
+            &env.write_scope(),
+            Arc::clone(&env.posts()),
             PostId::from(999_999),
             owner,
             &[parse_tag_label("rust")],
@@ -2978,8 +3074,8 @@ mod tests {
         ));
 
         let unauthorized = set_post_tags_confirmed(
-            &env.state.write_scope,
-            Arc::clone(&env.state.posts),
+            &env.write_scope(),
+            Arc::clone(&env.posts()),
             post,
             other,
             &[parse_tag_label("rust")],
@@ -2991,10 +3087,11 @@ mod tests {
             crate::WriteScopeError::Operation(TaggingError::Unauthorized)
         ));
 
-        soft_delete_post_confirmed(&env.state, post, owner).await;
+        soft_delete_post_confirmed(env.posts().clone(), env.write_scope().clone(), post, owner)
+            .await;
         let deleted = set_post_tags_confirmed(
-            &env.state.write_scope,
-            Arc::clone(&env.state.posts),
+            &env.write_scope(),
+            Arc::clone(&env.posts()),
             post,
             owner,
             &[parse_tag_label("rust")],
@@ -3018,12 +3115,24 @@ mod tests {
     #[tokio::test]
     async fn set_post_tags_locks_before_snapshotting(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user = SeedUser::new().seed(&env.state).await.user_id;
-        let post = SeedRawPost::new(user).seed(&env.state).await.post_id;
+        let user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let post = SeedRawPost::new(user)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
+            .await
+            .post_id;
 
         set_post_tags_confirmed(
-            &env.state.write_scope,
-            Arc::clone(&env.state.posts),
+            &env.write_scope(),
+            Arc::clone(&env.posts()),
             post,
             user,
             &[parse_tag_label("alpha")],
@@ -3050,8 +3159,8 @@ mod tests {
         // This is also safe under the current-thread runtime `#[tokio::test]`
         // defaults to: sqlx-sqlite runs each connection on its own OS thread
         // (docs/adr/0126-sqlx-sqlite-busy-handler-threading.md).
-        let posts = Arc::clone(&env.state.posts);
-        let write_scope = env.state.write_scope.clone();
+        let posts = Arc::clone(&env.posts());
+        let write_scope = env.write_scope().clone();
         let mut racer = tokio::spawn(async move {
             set_post_tags_confirmed(&write_scope, posts, post, user, &[parse_tag_label("gamma")])
                 .await
@@ -3083,7 +3192,7 @@ mod tests {
         // leaves exactly {gamma}. A read-then-lock implementation snapshots
         // {alpha} before the rival commits, never removes "beta", and leaves
         // {beta, gamma}.
-        assert_eq!(slugs_of(&*env.state.posts, post).await, vec!["gamma"]);
+        assert_eq!(slugs_of(&*env.posts(), post).await, vec!["gamma"]);
     }
 
     /// An abandoned test lock must have the same rollback and reuse behavior on
@@ -3095,8 +3204,20 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let user = SeedUser::new().seed(&env.state).await.user_id;
-        let post = SeedRawPost::new(user).seed(&env.state).await.post_id;
+        let user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let post = SeedRawPost::new(user)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
+            .await
+            .post_id;
 
         let mut abandoned = env
             .base
@@ -3110,21 +3231,18 @@ mod tests {
             .expect("write through held lock");
         drop(abandoned);
 
-        assert_eq!(
-            slugs_of(&*env.state.posts, post).await,
-            Vec::<String>::new()
-        );
+        assert_eq!(slugs_of(&*env.posts(), post).await, Vec::<String>::new());
 
         set_post_tags_confirmed(
-            &env.state.write_scope,
-            Arc::clone(&env.state.posts),
+            &env.write_scope(),
+            Arc::clone(&env.posts()),
             post,
             user,
             &[parse_tag_label("committed")],
         )
         .await
         .expect("subsequent writer succeeds");
-        assert_eq!(slugs_of(&*env.state.posts, post).await, vec!["committed"]);
+        assert_eq!(slugs_of(&*env.posts(), post).await, vec!["committed"]);
     }
 
     /// #883: the upsert returns the tag id on its **conflict** path, not just when
@@ -3137,14 +3255,32 @@ mod tests {
     #[tokio::test]
     async fn set_post_tags_reuses_an_existing_tag_across_posts(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user = SeedUser::new().seed(&env.state).await.user_id;
-        let first = SeedRawPost::new(user).seed(&env.state).await.post_id;
-        let second = SeedRawPost::new(user).seed(&env.state).await.post_id;
-        let posts = &*env.state.posts;
+        let user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let first = SeedRawPost::new(user)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
+            .await
+            .post_id;
+        let second = SeedRawPost::new(user)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
+            .await
+            .post_id;
+        let posts = &*env.posts();
 
         set_post_tags_confirmed(
-            &env.state.write_scope,
-            Arc::clone(&env.state.posts),
+            &env.write_scope(),
+            Arc::clone(&env.posts()),
             first,
             user,
             &[parse_tag_label("rust")],
@@ -3152,8 +3288,8 @@ mod tests {
         .await
         .expect("first post takes the insert path");
         set_post_tags_confirmed(
-            &env.state.write_scope,
-            Arc::clone(&env.state.posts),
+            &env.write_scope(),
+            Arc::clone(&env.posts()),
             second,
             user,
             &[parse_tag_label("rust")],
@@ -3169,13 +3305,25 @@ mod tests {
     #[tokio::test]
     async fn set_post_tags_with_unchanged_set_writes_nothing(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user = SeedUser::new().seed(&env.state).await.user_id;
-        let post = SeedRawPost::new(user).seed(&env.state).await.post_id;
+        let user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let post = SeedRawPost::new(user)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
+            .await
+            .post_id;
 
         let desired = [parse_tag_label("rust"), parse_tag_label("web")];
         set_post_tags_confirmed(
-            &env.state.write_scope,
-            Arc::clone(&env.state.posts),
+            &env.write_scope(),
+            Arc::clone(&env.posts()),
             post,
             user,
             &desired,
@@ -3187,10 +3335,16 @@ mod tests {
         // rowids. Without it, `max(rowid)+1` would hand the target's rows their
         // original rowids back after a delete-and-reinsert and this test would
         // pass against the very implementation it exists to reject.
-        let decoy = SeedRawPost::new(user).seed(&env.state).await.post_id;
+        let decoy = SeedRawPost::new(user)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
+            .await
+            .post_id;
         set_post_tags_confirmed(
-            &env.state.write_scope,
-            Arc::clone(&env.state.posts),
+            &env.write_scope(),
+            Arc::clone(&env.posts()),
             decoy,
             user,
             &[parse_tag_label("decoy-a"), parse_tag_label("decoy-b")],
@@ -3200,8 +3354,8 @@ mod tests {
 
         let before = physical_row_ids(&env, post).await;
         set_post_tags_confirmed(
-            &env.state.write_scope,
-            Arc::clone(&env.state.posts),
+            &env.write_scope(),
+            Arc::clone(&env.posts()),
             post,
             user,
             &desired,
@@ -3221,15 +3375,31 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let owner = SeedUser::new().seed(&env.state).await.user_id;
+        let owner = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         let post = SeedRawPost::new(owner)
             .draft()
-            .seed(&env.state)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
             .await
             .post_id;
         let input = UpdateRawPost::new("semantic-no-op").build();
 
-        let first = update_post_confirmed(&env.state, post, owner, input.clone()).await;
+        let first = update_post_confirmed(
+            env.posts().clone(),
+            env.write_scope().clone(),
+            post,
+            owner,
+            input.clone(),
+        )
+        .await;
         let revision_count = env
             .base
             .pool()
@@ -3237,7 +3407,14 @@ mod tests {
             .await
             .expect("count revisions");
 
-        let unchanged = update_post_confirmed(&env.state, post, owner, input).await;
+        let unchanged = update_post_confirmed(
+            env.posts().clone(),
+            env.write_scope().clone(),
+            post,
+            owner,
+            input,
+        )
+        .await;
 
         assert_eq!(unchanged.updated_at, first.updated_at);
         assert_eq!(
@@ -3257,9 +3434,27 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let owner = SeedUser::new().seed(&env.state).await.user_id;
-        let old_media = seed_media(&env.state, owner, "revision-prior.jpg").await;
-        let new_media = seed_media(&env.state, owner, "revision-current.jpg").await;
+        let owner = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let old_media = seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            owner,
+            "revision-prior.jpg",
+        )
+        .await;
+        let new_media = seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            owner,
+            "revision-current.jpg",
+        )
+        .await;
         let prior_body = parse_post_body(&format!(
             "<img src=\"{}\">",
             media_url_for("revision-prior.jpg")
@@ -3274,17 +3469,17 @@ mod tests {
             .tags(["PriorTag", "AnotherTag"])
             .build();
         seed.title = Some(parse_post_title("Prior title"));
-        let post_id = create_post_confirmed(&env.state, seed).await.post_id;
+        let post_id = create_post_confirmed(env.posts().clone(), env.write_scope().clone(), seed)
+            .await
+            .post_id;
         let prior = env
-            .state
-            .posts
+            .posts()
             .get_post_by_id(post_id, &ViewerIdentity::Local { user_id: owner })
             .await
             .expect("read prior post")
             .expect("prior post exists");
         let prior_audiences = env
-            .state
-            .posts
+            .posts()
             .get_post_audiences(post_id)
             .await
             .expect("read prior audiences");
@@ -3309,7 +3504,8 @@ mod tests {
         let capture_clock = parse_utc_instant("2026-08-27T12:00:00Z");
 
         let updated = update_post_confirmed(
-            &env.state,
+            env.posts().clone(),
+            env.write_scope().clone(),
             post_id,
             owner,
             UpdateRawPost::new("revision-current-slug")
@@ -3378,8 +3574,20 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let owner = SeedUser::new().seed(&env.state).await.user_id;
-        seed_media(&env.state, owner, "tag-only.jpg").await;
+        let owner = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            owner,
+            "tag-only.jpg",
+        )
+        .await;
         let body = parse_post_body(&format!("<img src=\"{}\">", media_url_for("tag-only.jpg")));
         let post_id = SeedRawPost::new(owner)
             .draft()
@@ -3387,17 +3595,16 @@ mod tests {
             .body(body.clone())
             .audiences(vec![AudienceTarget::Subscribers])
             .tags(["OldTag"])
-            .seed(&env.state)
+            .seed(env.posts().clone(), env.write_scope().clone())
             .await
             .post_id;
         let prior = env
-            .state
-            .posts
+            .posts()
             .get_post_by_id(post_id, &ViewerIdentity::Local { user_id: owner })
             .await
             .unwrap()
             .unwrap();
-        let audiences = env.state.posts.get_post_audiences(post_id).await.unwrap();
+        let audiences = env.posts().get_post_audiences(post_id).await.unwrap();
         let media = media_for_subject(
             &env,
             post_id,
@@ -3408,7 +3615,8 @@ mod tests {
         let clock = parse_utc_instant("2026-08-27T12:01:00Z");
 
         update_post_confirmed(
-            &env.state,
+            env.posts().clone(),
+            env.write_scope().clone(),
             post_id,
             owner,
             UpdateRawPost::new("tag-only")
@@ -3425,11 +3633,11 @@ mod tests {
 
         assert_complete_prior_revision(&env, post_id, &prior, &audiences, &media, clock).await;
         assert_eq!(
-            owner_slugs_of(&*env.state.posts, post_id, owner).await,
+            owner_slugs_of(&*env.posts(), post_id, owner).await,
             vec!["newtag"]
         );
         assert_eq!(
-            env.state.posts.get_post_audiences(post_id).await.unwrap(),
+            env.posts().get_post_audiences(post_id).await.unwrap(),
             audiences
         );
         assert_eq!(
@@ -3450,8 +3658,20 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let owner = SeedUser::new().seed(&env.state).await.user_id;
-        seed_media(&env.state, owner, "audience-only.jpg").await;
+        let owner = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            owner,
+            "audience-only.jpg",
+        )
+        .await;
         let body = parse_post_body(&format!(
             "<img src=\"{}\">",
             media_url_for("audience-only.jpg")
@@ -3462,17 +3682,16 @@ mod tests {
             .body(body.clone())
             .audiences(vec![AudienceTarget::Subscribers])
             .tags(["KeptTag"])
-            .seed(&env.state)
+            .seed(env.posts().clone(), env.write_scope().clone())
             .await
             .post_id;
         let prior = env
-            .state
-            .posts
+            .posts()
             .get_post_by_id(post_id, &ViewerIdentity::Local { user_id: owner })
             .await
             .unwrap()
             .unwrap();
-        let audiences = env.state.posts.get_post_audiences(post_id).await.unwrap();
+        let audiences = env.posts().get_post_audiences(post_id).await.unwrap();
         let media = media_for_subject(
             &env,
             post_id,
@@ -3483,7 +3702,8 @@ mod tests {
         let clock = parse_utc_instant("2026-08-27T12:02:00Z");
 
         update_post_confirmed(
-            &env.state,
+            env.posts().clone(),
+            env.write_scope().clone(),
             post_id,
             owner,
             UpdateRawPost::new("audience-only")
@@ -3500,11 +3720,11 @@ mod tests {
 
         assert_complete_prior_revision(&env, post_id, &prior, &audiences, &media, clock).await;
         assert_eq!(
-            owner_slugs_of(&*env.state.posts, post_id, owner).await,
+            owner_slugs_of(&*env.posts(), post_id, owner).await,
             vec!["kepttag"]
         );
         assert_eq!(
-            env.state.posts.get_post_audiences(post_id).await.unwrap(),
+            env.posts().get_post_audiences(post_id).await.unwrap(),
             vec![AudienceTarget::Public]
         );
         assert_eq!(
@@ -3525,9 +3745,27 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let owner = SeedUser::new().seed(&env.state).await.user_id;
-        seed_media(&env.state, owner, "media-only-prior.jpg").await;
-        let current_media = seed_media(&env.state, owner, "media-only-current.jpg").await;
+        let owner = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            owner,
+            "media-only-prior.jpg",
+        )
+        .await;
+        let current_media = seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            owner,
+            "media-only-current.jpg",
+        )
+        .await;
         let prior_body = parse_post_body(&format!(
             "<img src=\"{}\">",
             media_url_for("media-only-prior.jpg")
@@ -3538,17 +3776,16 @@ mod tests {
             .body(prior_body)
             .audiences(vec![AudienceTarget::Subscribers])
             .tags(["KeptTag"])
-            .seed(&env.state)
+            .seed(env.posts().clone(), env.write_scope().clone())
             .await
             .post_id;
         let prior = env
-            .state
-            .posts
+            .posts()
             .get_post_by_id(post_id, &ViewerIdentity::Local { user_id: owner })
             .await
             .unwrap()
             .unwrap();
-        let audiences = env.state.posts.get_post_audiences(post_id).await.unwrap();
+        let audiences = env.posts().get_post_audiences(post_id).await.unwrap();
         let media = media_for_subject(
             &env,
             post_id,
@@ -3559,7 +3796,8 @@ mod tests {
         let clock = parse_utc_instant("2026-08-27T12:03:00Z");
 
         update_post_confirmed(
-            &env.state,
+            env.posts().clone(),
+            env.write_scope().clone(),
             post_id,
             owner,
             UpdateRawPost::new("media-only")
@@ -3579,11 +3817,11 @@ mod tests {
 
         assert_complete_prior_revision(&env, post_id, &prior, &audiences, &media, clock).await;
         assert_eq!(
-            owner_slugs_of(&*env.state.posts, post_id, owner).await,
+            owner_slugs_of(&*env.posts(), post_id, owner).await,
             vec!["kepttag"]
         );
         assert_eq!(
-            env.state.posts.get_post_audiences(post_id).await.unwrap(),
+            env.posts().get_post_audiences(post_id).await.unwrap(),
             audiences
         );
         assert_eq!(
@@ -3611,14 +3849,16 @@ mod tests {
         // error (#728). It must not be silently dropped — that would lose an audience
         // row with no error and no log.
         let env = backend.setup().await;
-        let state = &env.state;
-        let author = SeedUser::new().seed(state).await.user_id;
+        let author = SeedUser::new()
+            .seed(env.users(), env.write_scope())
+            .await
+            .user_id;
         let post = SeedRawPost::new(author)
             .audiences(vec![AudienceTarget::Public])
-            .seed(state)
+            .seed(env.posts(), env.write_scope())
             .await;
         assert_eq!(
-            state.posts.get_post_audiences(post.post_id).await.unwrap(),
+            env.posts().get_post_audiences(post.post_id).await.unwrap(),
             vec![AudienceTarget::Public],
             "precondition: the audience reads back before tampering"
         );
@@ -3630,8 +3870,8 @@ mod tests {
             .await
             .unwrap();
 
-        let err = state
-            .posts
+        let err = env
+            .posts()
             .get_post_audiences(post.post_id)
             .await
             .unwrap_err();
@@ -3649,10 +3889,15 @@ mod tests {
         // A `feed_url` that will not decode into a `FeedPath` must cost only its own
         // row (docs/adr/0122-one-bad-row-must-not-stop-the-scan.md).
         let env = backend.setup().await;
-        let state = &env.state;
-        let author = SeedUser::new().seed(state).await.user_id;
+        let author = SeedUser::new()
+            .seed(env.users(), env.write_scope())
+            .await
+            .user_id;
         let now = UtcInstant::now();
-        SeedRawPost::new(author).published_at(now).seed(state).await;
+        SeedRawPost::new(author)
+            .published_at(now)
+            .seed(env.posts(), env.write_scope())
+            .await;
 
         // Two stale cached feeds, both older than the post above, so both would need
         // catch-up if they were readable.
@@ -3667,7 +3912,7 @@ mod tests {
                 .etag(parse_etag("\"sha256-deadbeef\""))
                 .representation_modified_at(stale)
                 .generated_at(stale)
-                .seed(state)
+                .seed(env.feed_cache(), env.write_scope())
                 .await;
         }
         // Only reachable by DB tampering or a row written under a looser grammar:
@@ -3690,10 +3935,10 @@ mod tests {
             .await
             .unwrap();
 
-        let (needing, trace) = crate::helpers::swallowed_test::capture_async(
-            state.posts.feed_urls_needing_catchup(now),
-        )
-        .await;
+        let posts = env.posts();
+        let (needing, trace) =
+            crate::helpers::swallowed_test::capture_async(posts.feed_urls_needing_catchup(now))
+                .await;
         let needing = needing.unwrap();
 
         assert_eq!(
@@ -3712,15 +3957,24 @@ mod tests {
     #[tokio::test]
     async fn lifecycle_decode_failure_rolls_back_revision_and_state(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let owner = SeedUser::new().seed(&env.state).await.user_id;
+        let owner = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         let post_id = SeedRawPost::new(owner)
             .draft()
-            .seed(&env.state)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
             .await
             .post_id;
         set_post_tags_confirmed(
-            &env.state.write_scope,
-            Arc::clone(&env.state.posts),
+            &env.write_scope(),
+            Arc::clone(&env.posts()),
             post_id,
             owner,
             &[parse_tag_label("Rust")],
@@ -3739,9 +3993,14 @@ mod tests {
             .expect("corrupt tag slug");
         });
 
-        let error = publish_post_scoped(&env.state, post_id, owner)
-            .await
-            .expect_err("malformed aggregate must reject publication");
+        let error = publish_post_scoped(
+            env.posts().clone(),
+            env.write_scope().clone(),
+            post_id,
+            owner,
+        )
+        .await
+        .expect_err("malformed aggregate must reject publication");
         assert!(
             matches!(
                 &error,
@@ -3781,12 +4040,18 @@ mod tests {
     #[tokio::test]
     async fn create_post_persists_summary(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let posts = &*env.state.posts;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let posts = &*env.posts();
         let post_id = SeedRawPost::new(user_id)
             .draft()
             .summary(parse_post_summary("the summary"))
-            .seed(&env.state)
+            .seed(env.posts().clone(), env.write_scope().clone())
             .await
             .post_id;
         let post = posts
@@ -3805,14 +4070,20 @@ mod tests {
         // would silently drop an edited summary. An edit replaces the value; `None`
         // clears it. The returned record reflects the RETURNING row.
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
 
         // Seed with an initial summary so the first edit exercises replace-an-existing
         // value (not set-from-none); the second edit then clears it.
         let post_id = SeedRawPost::new(user_id)
             .draft()
             .summary(parse_post_summary("original summary"))
-            .seed(&env.state)
+            .seed(env.posts().clone(), env.write_scope().clone())
             .await
             .post_id;
 
@@ -3826,7 +4097,8 @@ mod tests {
 
         // An edit replaces the summary.
         let changed = update_post_confirmed(
-            &env.state,
+            env.posts().clone(),
+            env.write_scope().clone(),
             post_id,
             user_id,
             update(Some(parse_post_summary("edited summary"))),
@@ -3835,7 +4107,14 @@ mod tests {
         assert_eq!(changed.summary, Some(parse_post_summary("edited summary")));
 
         // `None` clears it.
-        let cleared = update_post_confirmed(&env.state, post_id, user_id, update(None)).await;
+        let cleared = update_post_confirmed(
+            env.posts().clone(),
+            env.write_scope().clone(),
+            post_id,
+            user_id,
+            update(None),
+        )
+        .await;
         assert_eq!(cleared.summary, None);
     }
 
@@ -3843,13 +4122,18 @@ mod tests {
     #[tokio::test]
     async fn publish_post_captures_complete_prior_state(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user = SeedUser::new().seed(&env.state).await;
-        let posts = &*env.state.posts;
+        let user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
+        let posts = &*env.posts();
         let seeded = SeedRawPost::new(user.user_id)
             .draft()
             .summary(parse_post_summary("the summary"))
             .tags(["Rust"])
-            .seed(&env.state)
+            .seed(env.posts().clone(), env.write_scope().clone())
             .await;
         let before = posts
             .get_post_by_id(seeded.post_id, &ViewerIdentity::Anonymous)
@@ -3864,7 +4148,13 @@ mod tests {
             .await
             .unwrap();
 
-        let after = publish_post_confirmed(&env.state, seeded.post_id, user.user_id).await;
+        let after = publish_post_confirmed(
+            env.posts().clone(),
+            env.write_scope().clone(),
+            seeded.post_id,
+            user.user_id,
+        )
+        .await;
 
         assert!(after.published_at.is_some());
         assert_eq!(after.title, before.title);
@@ -3905,15 +4195,36 @@ mod tests {
         // COALESCE, not overwrite: the permalink is derived from `published_at`, so
         // re-publishing must not restamp it.
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         let post_id = SeedRawPost::new(user_id)
             .draft()
-            .seed(&env.state)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
             .await
             .post_id;
 
-        let first = publish_post_confirmed(&env.state, post_id, user_id).await;
-        let second = publish_post_confirmed(&env.state, post_id, user_id).await;
+        let first = publish_post_confirmed(
+            env.posts().clone(),
+            env.write_scope().clone(),
+            post_id,
+            user_id,
+        )
+        .await;
+        let second = publish_post_confirmed(
+            env.posts().clone(),
+            env.write_scope().clone(),
+            post_id,
+            user_id,
+        )
+        .await;
 
         assert!(first.published_at.is_some());
         assert_eq!(first.published_at, second.published_at);
@@ -3936,20 +4247,39 @@ mod tests {
         // a post that is gone reads as NotFound, someone else's live post as
         // Unauthorized (both mask as a 404 at the web boundary).
         let env = backend.setup().await;
-        let [owner, stranger] = seed_users::<2>(&env.state).await;
-        let posts = &*env.state.posts;
+        let [owner, stranger] = seed_users::<2>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
+        let posts = &*env.posts();
         let post_id = SeedRawPost::new(owner)
             .draft()
-            .seed(&env.state)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
             .await
             .post_id;
 
         assert!(matches!(
-            publish_post_scoped(&env.state, PostId::from(999_999), owner).await,
+            publish_post_scoped(
+                env.posts().clone(),
+                env.write_scope().clone(),
+                PostId::from(999_999),
+                owner,
+            )
+            .await,
             Err(crate::WriteScopeError::Operation(UpdatePostError::NotFound))
         ));
         assert!(matches!(
-            publish_post_scoped(&env.state, post_id, stranger).await,
+            publish_post_scoped(
+                env.posts().clone(),
+                env.write_scope().clone(),
+                post_id,
+                stranger,
+            )
+            .await,
             Err(crate::WriteScopeError::Operation(
                 UpdatePostError::Unauthorized
             ))
@@ -3965,9 +4295,21 @@ mod tests {
                 .is_none()
         );
 
-        soft_delete_post_confirmed(&env.state, post_id, owner).await;
+        soft_delete_post_confirmed(
+            env.posts().clone(),
+            env.write_scope().clone(),
+            post_id,
+            owner,
+        )
+        .await;
         assert!(matches!(
-            publish_post_scoped(&env.state, post_id, owner).await,
+            publish_post_scoped(
+                env.posts().clone(),
+                env.write_scope().clone(),
+                post_id,
+                owner,
+            )
+            .await,
             Err(crate::WriteScopeError::Operation(UpdatePostError::NotFound))
         ));
     }
@@ -3978,13 +4320,18 @@ mod tests {
         // Unpublish changes lifecycle state while preserving current content and
         // recording that complete prior state.
         let env = backend.setup().await;
-        let user = SeedUser::new().seed(&env.state).await;
-        let posts = &*env.state.posts;
+        let user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
+        let posts = &*env.posts();
         let seeded = SeedRawPost::new(user.user_id)
             .slug("unpublish-complete-row")
             .summary(parse_post_summary("the summary"))
             .tags(["Zed", "alpha", "beta"])
-            .seed(&env.state)
+            .seed(env.posts().clone(), env.write_scope().clone())
             .await;
         let before = posts
             .get_post_by_id(seeded.post_id, &ViewerIdentity::Anonymous)
@@ -3998,7 +4345,13 @@ mod tests {
             .await
             .unwrap();
 
-        let updated = unpublish_post_confirmed(&env.state, seeded.post_id, user.user_id).await;
+        let updated = unpublish_post_confirmed(
+            env.posts().clone(),
+            env.write_scope().clone(),
+            seeded.post_id,
+            user.user_id,
+        )
+        .await;
 
         assert_eq!(updated.post_id, before.post_id);
         assert_eq!(updated.user_id, before.user_id);
@@ -4056,13 +4409,17 @@ mod tests {
     #[tokio::test]
     async fn soft_delete_captures_prior_state_and_rejects_repeats(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let [owner, stranger] = seed_users::<2>(&env.state).await;
-        let posts = &*env.state.posts;
+        let [owner, stranger] = seed_users::<2>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
+        let posts = &*env.posts();
         let post_id = SeedRawPost::new(owner)
             .draft()
             .summary(parse_post_summary("the summary"))
             .tags(["Rust"])
-            .seed(&env.state)
+            .seed(env.posts().clone(), env.write_scope().clone())
             .await
             .post_id;
         let before = posts
@@ -4078,16 +4435,34 @@ mod tests {
             .unwrap();
 
         assert!(matches!(
-            soft_delete_post_scoped(&env.state, PostId::from(999_999), owner).await,
+            soft_delete_post_scoped(
+                env.posts().clone(),
+                env.write_scope().clone(),
+                PostId::from(999_999),
+                owner,
+            )
+            .await,
             Err(crate::WriteScopeError::Operation(UpdatePostError::NotFound))
         ));
         assert!(matches!(
-            soft_delete_post_scoped(&env.state, post_id, stranger).await,
+            soft_delete_post_scoped(
+                env.posts().clone(),
+                env.write_scope().clone(),
+                post_id,
+                stranger,
+            )
+            .await,
             Err(crate::WriteScopeError::Operation(
                 UpdatePostError::Unauthorized
             ))
         ));
-        soft_delete_post_confirmed(&env.state, post_id, owner).await;
+        soft_delete_post_confirmed(
+            env.posts().clone(),
+            env.write_scope().clone(),
+            post_id,
+            owner,
+        )
+        .await;
         assert_eq!(
             env.base
                 .pool()
@@ -4108,7 +4483,13 @@ mod tests {
         assert_eq!(revision.published_at, before.published_at);
         assert_eq!(revision.deleted_at, before.deleted_at);
         assert!(matches!(
-            soft_delete_post_scoped(&env.state, post_id, owner).await,
+            soft_delete_post_scoped(
+                env.posts().clone(),
+                env.write_scope().clone(),
+                post_id,
+                owner,
+            )
+            .await,
             Err(crate::WriteScopeError::Operation(UpdatePostError::NotFound))
         ));
         assert_eq!(
@@ -4126,11 +4507,20 @@ mod tests {
     #[tokio::test]
     async fn unpublish_draft_is_a_semantic_no_op(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let owner = SeedUser::new().seed(&env.state).await.user_id;
-        let posts = &*env.state.posts;
+        let owner = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let posts = &*env.posts();
         let post_id = SeedRawPost::new(owner)
             .draft()
-            .seed(&env.state)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
             .await
             .post_id;
         let before = posts
@@ -4138,7 +4528,13 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let after = unpublish_post_confirmed(&env.state, post_id, owner).await;
+        let after = unpublish_post_confirmed(
+            env.posts().clone(),
+            env.write_scope().clone(),
+            post_id,
+            owner,
+        )
+        .await;
         assert_eq!(after.published_at, None);
         assert_eq!(after.updated_at, before.updated_at);
         assert_eq!(
@@ -4157,20 +4553,39 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let [owner, stranger] = seed_users::<2>(&env.state).await;
-        let posts = &*env.state.posts;
+        let [owner, stranger] = seed_users::<2>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
+        let posts = &*env.posts();
         let post_id = SeedRawPost::new(owner)
             .slug("guarded-unpublish")
-            .seed(&env.state)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
             .await
             .post_id;
 
         assert!(matches!(
-            unpublish_post_scoped(&env.state, PostId::from(999_999), owner).await,
+            unpublish_post_scoped(
+                env.posts().clone(),
+                env.write_scope().clone(),
+                PostId::from(999_999),
+                owner,
+            )
+            .await,
             Err(crate::WriteScopeError::Operation(UpdatePostError::NotFound))
         ));
         assert!(matches!(
-            unpublish_post_scoped(&env.state, post_id, stranger).await,
+            unpublish_post_scoped(
+                env.posts().clone(),
+                env.write_scope().clone(),
+                post_id,
+                stranger,
+            )
+            .await,
             Err(crate::WriteScopeError::Operation(
                 UpdatePostError::Unauthorized
             ))
@@ -4186,9 +4601,21 @@ mod tests {
             "the foreign rejection must not clear publication"
         );
 
-        soft_delete_post_confirmed(&env.state, post_id, owner).await;
+        soft_delete_post_confirmed(
+            env.posts().clone(),
+            env.write_scope().clone(),
+            post_id,
+            owner,
+        )
+        .await;
         assert!(matches!(
-            unpublish_post_scoped(&env.state, post_id, owner).await,
+            unpublish_post_scoped(
+                env.posts().clone(),
+                env.write_scope().clone(),
+                post_id,
+                owner,
+            )
+            .await,
             Err(crate::WriteScopeError::Operation(UpdatePostError::NotFound))
         ));
         let publication_rows = crate::with_closeable_pool!(env.base.pool(), pool, {
@@ -4210,7 +4637,13 @@ mod tests {
     async fn publish_post_with_closed_pool_returns_error(#[case] backend: Backend) {
         let env = backend.setup().await;
         env.base.close_pool().await;
-        let result = publish_post_scoped(&env.state, PostId::from(1), UserId::from(1)).await;
+        let result = publish_post_scoped(
+            env.posts().clone(),
+            env.write_scope().clone(),
+            PostId::from(1),
+            UserId::from(1),
+        )
+        .await;
         assert!(matches!(result, Err(crate::WriteScopeError::Begin(_))));
     }
 
@@ -4225,11 +4658,28 @@ mod tests {
         // `web::posts::create` uses, so this drives render -> extract -> write through
         // the product's own path rather than a synthetic input.
         let env = backend.setup().await;
-        let [user] = seed_users::<1>(&env.state).await;
-        let uploaded = seed_media(&env.state, user, "photo.jpg").await;
+        let [user] = seed_users::<1>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
+        let uploaded = seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            user,
+            "photo.jpg",
+        )
+        .await;
         let body = format!("<img src=\"{}\">", media_url_for("photo.jpg"));
 
-        let post_id = create_post_via_service(&env.state, user, parse_post_body(&body)).await;
+        let post_id = create_post_via_service(
+            env.posts().clone(),
+            env.feed_events().clone(),
+            env.write_scope().clone(),
+            user,
+            parse_post_body(&body),
+        )
+        .await;
 
         assert_eq!(
             fetch_post_media(&env.base, post_id).await,
@@ -4243,7 +4693,7 @@ mod tests {
         );
         // The recorded triple names the entry the `media` table holds — the join a
         // reference guard reads in the other direction.
-        assert!(media_row_exists(&env.state, user, &uploaded).await);
+        assert!(media_row_exists(env.media().clone(), user, &uploaded).await);
     }
 
     #[apply(backends)]
@@ -4254,12 +4704,23 @@ mod tests {
         // spelling, and the AtomPub member layout (which carries no source segment)
         // is recognised too.
         let env = backend.setup().await;
-        let [user] = seed_users::<1>(&env.state).await;
+        let [user] = seed_users::<1>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
         let raw = media_url_for("my photo.jpg").replace("%20", " ");
         let member = format!("/atompub/alice/media/{MEDIA_TEST_SHA256}/photo.jpg");
         let body = format!("<img src=\"{raw}\"><a href=\"{member}\">doc</a>");
 
-        let post_id = create_post_via_service(&env.state, user, parse_post_body(&body)).await;
+        let post_id = create_post_via_service(
+            env.posts().clone(),
+            env.feed_events().clone(),
+            env.write_scope().clone(),
+            user,
+            parse_post_body(&body),
+        )
+        .await;
 
         let names: Vec<String> = fetch_post_media(&env.base, post_id)
             .await
@@ -4281,10 +4742,20 @@ mod tests {
     async fn a_post_referencing_nothing_writes_no_media_rows(#[case] backend: Backend) {
         // A13 — no false positives: prose that names no file writes no rows.
         let env = backend.setup().await;
-        let [user] = seed_users::<1>(&env.state).await;
+        let [user] = seed_users::<1>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
 
-        let post_id =
-            create_post_via_service(&env.state, user, parse_post_body("just some prose")).await;
+        let post_id = create_post_via_service(
+            env.posts().clone(),
+            env.feed_events().clone(),
+            env.write_scope().clone(),
+            user,
+            parse_post_body("just some prose"),
+        )
+        .await;
 
         assert!(fetch_post_media(&env.base, post_id).await.is_empty());
     }
@@ -4296,18 +4767,26 @@ mod tests {
         // old row and adds the new one, and an edit that removes every embed empties
         // the set. This is why `replace_post_media` deletes before inserting.
         let env = backend.setup().await;
-        let [user] = seed_users::<1>(&env.state).await;
+        let [user] = seed_users::<1>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
         let a = media_url_for("a.jpg");
         let b = media_url_for("b.jpg");
         let post_id = create_post_via_service(
-            &env.state,
+            env.posts().clone(),
+            env.feed_events().clone(),
+            env.write_scope().clone(),
             user,
             parse_post_body(&format!("<img src=\"{a}\">")),
         )
         .await;
 
         update_post_body_via_service(
-            &env.state,
+            env.posts().clone(),
+            env.feed_events().clone(),
+            env.write_scope().clone(),
             post_id,
             user,
             parse_post_body(&format!("<img src=\"{b}\">")),
@@ -4329,7 +4808,9 @@ mod tests {
         );
 
         update_post_body_via_service(
-            &env.state,
+            env.posts().clone(),
+            env.feed_events().clone(),
+            env.write_scope().clone(),
             post_id,
             user,
             parse_post_body("no media at all"),
@@ -4348,9 +4829,20 @@ mod tests {
         // publish call happened to carry. It lives here rather than beside the other
         // `publish_post` tests because it needs `post_media` to exist.
         let env = backend.setup().await;
-        let [user] = seed_users::<1>(&env.state).await;
+        let [user] = seed_users::<1>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
         let body = format!("<img src=\"{}\">", media_url_for("photo.jpg"));
-        let post_id = create_draft_via_service(&env.state, user, parse_post_body(&body)).await;
+        let post_id = create_draft_via_service(
+            env.posts().clone(),
+            env.feed_events().clone(),
+            env.write_scope().clone(),
+            user,
+            parse_post_body(&body),
+        )
+        .await;
         let before = fetch_post_media(&env.base, post_id).await;
         assert_eq!(
             before.len(),
@@ -4358,7 +4850,13 @@ mod tests {
             "precondition: the draft records its reference"
         );
 
-        publish_post_confirmed(&env.state, post_id, user).await;
+        publish_post_confirmed(
+            env.posts().clone(),
+            env.write_scope().clone(),
+            post_id,
+            user,
+        )
+        .await;
 
         assert_eq!(
             fetch_post_media(&env.base, post_id).await,
@@ -4372,21 +4870,64 @@ mod tests {
     async fn list_posts_referencing_media_scopes_and_orders(#[case] backend: Backend) {
         // A16.
         let env = backend.setup().await;
-        let [owner, stranger] = seed_users::<2>(&env.state).await;
+        let [owner, stranger] = seed_users::<2>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
         let evidence = MediaReferenceEvidence::new(env.base.instance_id().clone());
         let embed = format!("<img src=\"{}\">", media_url_for("photo.jpg"));
 
-        let first = create_post_via_service(&env.state, owner, parse_post_body(&embed)).await;
-        let second = create_post_via_service(&env.state, owner, parse_post_body(&embed)).await;
-        let deleted = create_post_via_service(&env.state, owner, parse_post_body(&embed)).await;
-        let foreign = create_post_via_service(&env.state, stranger, parse_post_body(&embed)).await;
-        let unrelated =
-            create_post_via_service(&env.state, owner, parse_post_body("no media")).await;
-        soft_delete_post_confirmed(&env.state, deleted, owner).await;
+        let first = create_post_via_service(
+            env.posts().clone(),
+            env.feed_events().clone(),
+            env.write_scope().clone(),
+            owner,
+            parse_post_body(&embed),
+        )
+        .await;
+        let second = create_post_via_service(
+            env.posts().clone(),
+            env.feed_events().clone(),
+            env.write_scope().clone(),
+            owner,
+            parse_post_body(&embed),
+        )
+        .await;
+        let deleted = create_post_via_service(
+            env.posts().clone(),
+            env.feed_events().clone(),
+            env.write_scope().clone(),
+            owner,
+            parse_post_body(&embed),
+        )
+        .await;
+        let foreign = create_post_via_service(
+            env.posts().clone(),
+            env.feed_events().clone(),
+            env.write_scope().clone(),
+            stranger,
+            parse_post_body(&embed),
+        )
+        .await;
+        let unrelated = create_post_via_service(
+            env.posts().clone(),
+            env.feed_events().clone(),
+            env.write_scope().clone(),
+            owner,
+            parse_post_body("no media"),
+        )
+        .await;
+        soft_delete_post_confirmed(
+            env.posts().clone(),
+            env.write_scope().clone(),
+            deleted,
+            owner,
+        )
+        .await;
 
         let found = env
-            .state
-            .posts
+            .posts()
             .list_posts_referencing_media(
                 owner,
                 &media_ref_for("photo.jpg"),
@@ -4419,11 +4960,23 @@ mod tests {
     ) {
         let env = backend.setup().await;
         let evidence = MediaReferenceEvidence::new(env.base.instance_id().clone());
-        let [user] = seed_users::<1>(&env.state).await;
-        let media = seed_media(&env.state, user, "mixed-origin.jpg").await;
+        let [user] = seed_users::<1>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
+        let media = seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            user,
+            "mixed-origin.jpg",
+        )
+        .await;
         let media_url = media_url_for("mixed-origin.jpg");
         let post_id = create_post_via_service(
-            &env.state,
+            env.posts().clone(),
+            env.feed_events().clone(),
+            env.write_scope().clone(),
             user,
             parse_post_body(&format!(
                 "<img src=\"{media_url}\"><img src=\"https://foreign.example{media_url}\">"
@@ -4437,8 +4990,7 @@ mod tests {
             "both persisted URL spellings retain their distinct exact forms"
         );
         assert_eq!(
-            env.state
-                .posts
+            env.posts()
                 .list_posts_referencing_media(user, &media, env.base.instance_id(), &evidence)
                 .await
                 .expect("listing succeeds"),
@@ -4463,7 +5015,11 @@ mod tests {
         // the assertions actually rest on.
         let env = backend.setup().await;
         let evidence = MediaReferenceEvidence::new(env.base.instance_id().clone());
-        let [user] = seed_users::<1>(&env.state).await;
+        let [user] = seed_users::<1>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
         let body = parse_post_body(&format!("<img src=\"{}\">", media_url_for("needle.jpg")));
 
         // One batched transaction, not 1201 round trips. `create_posts` shares
@@ -4472,11 +5028,11 @@ mod tests {
         let inputs: Vec<CreatePostInput> = (0..1201)
             .map(|_| SeedRawPost::new(user).body(body.clone()).build())
             .collect();
-        let ids = create_posts_confirmed(&env.state, inputs).await;
+        let ids =
+            create_posts_confirmed(env.posts().clone(), env.write_scope().clone(), inputs).await;
 
         let found = env
-            .state
-            .posts
+            .posts()
             .list_posts_referencing_media(
                 user,
                 &media_ref_for("needle.jpg"),
@@ -4505,7 +5061,11 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let [user] = seed_users::<1>(&env.state).await;
+        let [user] = seed_users::<1>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
         let media = media_ref_for("bounded-snapshot.jpg");
         let body = parse_post_body(&format!(
             "<img src=\"{}\">",
@@ -4514,9 +5074,9 @@ mod tests {
         let inputs: Vec<CreatePostInput> = (0..=media::MAX_MEDIA_REFERENCE_SNAPSHOT)
             .map(|_| SeedRawPost::new(user).body(body.clone()).build())
             .collect();
-        create_posts_confirmed(&env.state, inputs).await;
+        create_posts_confirmed(env.posts().clone(), env.write_scope().clone(), inputs).await;
 
-        let snapshot = env.state.posts.list_media_references(&media).await.unwrap();
+        let snapshot = env.posts().list_media_references(&media).await.unwrap();
 
         assert_eq!(
             snapshot.references().len(),
@@ -4534,13 +5094,23 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let [user] = seed_users::<1>(&env.state).await;
+        let [user] = seed_users::<1>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
         let evidence = MediaReferenceEvidence::new(env.base.instance_id().clone());
-        create_post_via_service(&env.state, user, parse_post_body("no media")).await;
+        create_post_via_service(
+            env.posts().clone(),
+            env.feed_events().clone(),
+            env.write_scope().clone(),
+            user,
+            parse_post_body("no media"),
+        )
+        .await;
 
         let found = env
-            .state
-            .posts
+            .posts()
             .list_posts_referencing_media(
                 user,
                 &media_ref_for("absent.jpg"),
@@ -4562,11 +5132,20 @@ mod tests {
         // unconstructible via the newtype, so it is forced in with raw SQL.
         // Mirrors `users.rs`'s overlong-display-name fail-closed test.
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let posts = &*env.state.posts;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let posts = &*env.posts();
         let post_id = SeedRawPost::new(user_id)
             .draft()
-            .seed(&env.state)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
             .await
             .post_id;
 
@@ -4600,11 +5179,20 @@ mod tests {
         // bridge decodes a borrowed `&'r str` without allocating (`macros`'
         // `validating_bridge_decodes_a_borrowed_str_without_allocating`, #758).
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let posts = &*env.state.posts;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let posts = &*env.posts();
         let post_id = SeedRawPost::new(user_id)
             .draft()
-            .seed(&env.state)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
             .await
             .post_id;
 
@@ -4634,11 +5222,20 @@ mod tests {
         // the blank-title test above does. Whitespace (not "") is used deliberately:
         // it pins the newtype's *blank* rule rather than a mere emptiness check.
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let posts = &*env.state.posts;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let posts = &*env.posts();
         let post_id = SeedRawPost::new(user_id)
             .draft()
-            .seed(&env.state)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
             .await
             .post_id;
 
@@ -4664,7 +5261,7 @@ mod tests {
         env.base.close_pool().await;
         let result = SeedRawPost::new(UserId::from(1))
             .draft()
-            .create(&env.state)
+            .create(env.posts().clone(), env.write_scope().clone())
             .await;
         assert!(result.is_err());
     }
@@ -4675,8 +5272,7 @@ mod tests {
         let env = backend.setup().await;
         env.base.close_pool().await;
         let result = env
-            .state
-            .posts
+            .posts()
             .get_post_by_id(PostId::from(1), &ViewerIdentity::Anonymous)
             .await;
         assert!(result.is_err());
@@ -4688,8 +5284,7 @@ mod tests {
         let env = backend.setup().await;
         env.base.close_pool().await;
         let result = env
-            .state
-            .posts
+            .posts()
             .list_published(
                 None,
                 parse_row_limit("10"),
@@ -4704,8 +5299,21 @@ mod tests {
     #[tokio::test]
     async fn set_post_tags_insert_error_returns_internal(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let uid = SeedUser::new().seed(&env.state).await.user_id;
-        let post_id = SeedRawPost::new(uid).draft().seed(&env.state).await.post_id;
+        let uid = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let post_id = SeedRawPost::new(uid)
+            .draft()
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
+            .await
+            .post_id;
 
         // Break the post_tags statements inside the transaction (but not the
         // post-existence check, which reads `posts`) so they return a plain
@@ -4718,8 +5326,8 @@ mod tests {
             .unwrap();
 
         let result = set_post_tags_confirmed(
-            &env.state.write_scope,
-            Arc::clone(&env.state.posts),
+            &env.write_scope(),
+            Arc::clone(&env.posts()),
             post_id,
             uid,
             &[parse_tag_label("rust")],
@@ -4737,7 +5345,13 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let uid = SeedUser::new().seed(&env.state).await.user_id;
+        let uid = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         let now = UtcInstant::now();
 
         let mk = |slug: &str, published: bool| {
@@ -4754,9 +5368,18 @@ mod tests {
         };
 
         // Post 1: draft. Post 2: published. Post 3: soft-deleted (excluded).
-        let post1_id = mk("draft-post", false).seed(&env.state).await.post_id;
-        let post2_id = mk("published-post", true).seed(&env.state).await.post_id;
-        let post3_id = mk("deleted-post", true).seed(&env.state).await.post_id;
+        let post1_id = mk("draft-post", false)
+            .seed(env.posts().clone(), env.write_scope().clone())
+            .await
+            .post_id;
+        let post2_id = mk("published-post", true)
+            .seed(env.posts().clone(), env.write_scope().clone())
+            .await
+            .post_id;
+        let post3_id = mk("deleted-post", true)
+            .seed(env.posts().clone(), env.write_scope().clone())
+            .await
+            .post_id;
 
         // Give distinct updated_at (post2 more recent than post1) and soft-delete post3.
         crate::with_closeable_pool!(env.base.pool(), pool, {
@@ -4789,8 +5412,7 @@ mod tests {
         });
 
         let results = env
-            .state
-            .posts
+            .posts()
             .list_collection_by_user(uid, None, parse_row_limit("10"))
             .await
             .unwrap();
@@ -4828,9 +5450,22 @@ mod tests {
     #[tokio::test]
     async fn fetch_post_record_returns_seeded_post_and_none_for_missing(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let posts = &*env.state.posts;
-        let ids = crate::test_support::seed_posts(&env.state, user_id, 1, true).await;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let posts = &*env.posts();
+        let ids = crate::test_support::seed_posts(
+            env.posts().clone(),
+            env.write_scope().clone(),
+            user_id,
+            1,
+            true,
+        )
+        .await;
         let record = posts
             .get_post_by_id(ids[0], &ViewerIdentity::Anonymous)
             .await
@@ -4873,19 +5508,28 @@ mod tests {
     #[tokio::test]
     async fn set_post_tags_round_trips_slug_and_label(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let posts = &*env.state.posts;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let posts = &*env.posts();
         let post_id = SeedRawPost::new(user_id)
             .draft()
-            .seed(&env.state)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
             .await
             .post_id;
 
         // Tagging with a case-preserving label stores the canonical slug and the
         // author's casing; both read back intact on either backend.
         set_post_tags_confirmed(
-            &env.state.write_scope,
-            Arc::clone(&env.state.posts),
+            &env.write_scope(),
+            Arc::clone(&env.posts()),
             post_id,
             user_id,
             &[parse_tag_label("Rust")],
@@ -4910,9 +5554,14 @@ mod tests {
         // Keep the whole `TestEnv` bound: dropping `base` unlinks the SQLite file
         // (ADR-0053 TempDir hazard).
         let env = backend.setup().await;
-        let user = SeedUser::new().seed(&env.state).await;
+        let user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         let user_id = user.user_id;
-        let posts = &*env.state.posts;
+        let posts = &*env.posts();
 
         // `create_post` binds a typed `Slug`, `Option<&PostTitle>`, and `&PostBody`;
         // `set_post_tags` binds a `TagLabel`. The read decodes the `slug`/`title`/`body`/
@@ -4922,12 +5571,12 @@ mod tests {
         let post = SeedRawPost::new(user_id)
             .draft()
             .body(body.clone())
-            .seed(&env.state)
+            .seed(env.posts().clone(), env.write_scope().clone())
             .await;
         let post_id = post.post_id;
         set_post_tags_confirmed(
-            &env.state.write_scope,
-            Arc::clone(&env.state.posts),
+            &env.write_scope(),
+            Arc::clone(&env.posts()),
             post_id,
             user_id,
             &[parse_tag_label("Rust")],
@@ -4952,7 +5601,8 @@ mod tests {
         // `Option<PostTitle>`.
         let untitled_body = parse_post_body("body");
         let untitled_id = create_post_confirmed(
-            &env.state,
+            env.posts().clone(),
+            env.write_scope().clone(),
             CreatePostInput {
                 user_id,
                 title: None,
@@ -4984,16 +5634,25 @@ mod tests {
         // Keep the whole `TestEnv` bound: dropping `base` unlinks the SQLite file
         // (ADR-0053 TempDir hazard).
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let posts = &*env.state.posts;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let posts = &*env.posts();
         let post_id = SeedRawPost::new(user_id)
             .draft()
-            .seed(&env.state)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
             .await
             .post_id;
         set_post_tags_confirmed(
-            &env.state.write_scope,
-            Arc::clone(&env.state.posts),
+            &env.write_scope(),
+            Arc::clone(&env.posts()),
             post_id,
             user_id,
             &[parse_tag_label("Rust")],
@@ -5031,11 +5690,20 @@ mod tests {
     #[tokio::test]
     async fn get_post_rejects_a_malformed_slug_column(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let posts = &*env.state.posts;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let posts = &*env.posts();
         let post_id = SeedRawPost::new(user_id)
             .draft()
-            .seed(&env.state)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
             .await
             .post_id;
 
@@ -5071,8 +5739,14 @@ mod tests {
     async fn post_format_column_round_trips_all_variants(#[case] backend: Backend) {
         // Keep the whole `TestEnv` bound (ADR-0053 TempDir hazard).
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let posts = &*env.state.posts;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let posts = &*env.posts();
 
         // Org and Html exercise the `PostFormat` bridge Encode (write) + Decode (read)
         // for the non-default variants; Markdown is covered by the round-trip tests.
@@ -5080,7 +5754,7 @@ mod tests {
             let post_id = SeedRawPost::new(user_id)
                 .draft()
                 .format(fmt)
-                .seed(&env.state)
+                .seed(env.posts().clone(), env.write_scope().clone())
                 .await
                 .post_id;
             let record = posts
@@ -5096,11 +5770,20 @@ mod tests {
     #[tokio::test]
     async fn get_post_rejects_a_malformed_format_column(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let posts = &*env.state.posts;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let posts = &*env.posts();
         let post_id = SeedRawPost::new(user_id)
             .draft()
-            .seed(&env.state)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
             .await
             .post_id;
 
@@ -5132,30 +5815,63 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let posts = &*env.state.posts;
+        let posts = &*env.posts();
         let now = UtcInstant::now();
         let scheduled_at = UtcInstant::from(
             now.value()
                 .checked_add(Duration::from_hours(720))
                 .expect("test instant remains representable"),
         );
-        let author = SeedUser::new().seed(&env.state).await.user_id;
-        let other = SeedUser::new().seed(&env.state).await.user_id;
+        let author = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let other = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
 
-        let draft = SeedRawPost::new(author).draft().seed(&env.state).await;
+        let draft = SeedRawPost::new(author)
+            .draft()
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
+            .await;
         let scheduled = SeedRawPost::new(author)
             .published_at(scheduled_at)
-            .seed(&env.state)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
             .await;
         let live_at_boundary = SeedRawPost::new(author)
             .published_at(now)
-            .seed(&env.state)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
             .await;
         let deleted = SeedRawPost::new(author)
             .published_at(scheduled_at)
-            .seed(&env.state)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
             .await;
-        soft_delete_post_confirmed(&env.state, deleted.post_id, author).await;
+        soft_delete_post_confirmed(
+            env.posts().clone(),
+            env.write_scope().clone(),
+            deleted.post_id,
+            author,
+        )
+        .await;
 
         let draft_record = posts
             .get_post_by_id(draft.post_id, &ViewerIdentity::Local { user_id: author })

@@ -12,18 +12,48 @@ use common::test_support::{parse_email, parse_raw_token};
 use common::time::UtcInstant;
 use server_fn::ServerFn;
 use storage::{
-    AppState, EmailVerified, MockPasswordResetStorage, MockSiteConfigStorage, MockUserStorage,
-    UserRecord,
+    EmailVerified, MockPasswordResetStorage, MockSiteConfigStorage, MockUserStorage,
+    SessionStorage, UserRecord, UserStorage, WriteScope,
 };
 use tokio::sync::oneshot;
 
 use crate::helpers::{
     SeededSession, assert_no_email, assert_one_absolute_link_email, create_session_for,
-    create_user_and_session, post_form_with_mailer, post_password_reset_form_with_dependencies,
-    post_password_reset_request_with_dependencies, post_server_fn_request_fixture_with_mailer,
-    post_server_fn_with_mailer,
+    create_user_and_session, make_app, post_form, post_password_reset_form_with_dependencies,
+    post_password_reset_request_with_dependencies, post_server_fn, post_server_fn_request_fixture,
 };
-use storage::test_support::{Backend, SeedUser, TestEnv, backends, mock_write_scope};
+use storage::test_support::{Backend, SeedUser, backends, mock_write_scope};
+
+macro_rules! password_reset_app {
+    ($env:expr; $mailer:expr, $users:expr, $password_resets:expr, $write_scope:expr, $site_config:expr) => {
+        make_app!(
+            @build &($env).base,
+            storage::InstanceId::new(),
+            {
+                let mailer: Arc<dyn MailSender> = $mailer.clone();
+                mailer
+            },
+            false,
+            Arc::new(jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new());
+            site_config = $site_config,
+            users = $users,
+            sessions = ($env).sessions(),
+            invites = ($env).invites(),
+            email_verifications = ($env).email_verifications(),
+            password_resets = $password_resets,
+            posts = ($env).posts(),
+            write_scope = $write_scope,
+            subscriptions = ($env).subscriptions(),
+            audiences = ($env).audiences(),
+            media = ($env).media(),
+            user_config = ($env).user_config(),
+            themes = ($env).themes(),
+            feed_cache = ($env).feed_cache(),
+            feed_events = ($env).feed_events(),
+            publisher = ($env).publisher(),
+        )
+    };
+}
 
 #[derive(serde::Serialize)]
 struct ConfirmPasswordResetDecodeFixture<'a> {
@@ -61,41 +91,28 @@ fn reset_token_from_message(message: &EmailMessage) -> common::token::RawToken {
 }
 
 async fn assert_invalid_reset_identifier_does_not_start_worker(
-    state: &Arc<AppState>,
+    app: axum::Router,
+    mailer: &CapturingMailSender,
     identifier: &str,
 ) {
-    let mailer = Arc::new(CapturingMailSender::new());
-    let mut users = MockUserStorage::new();
-    users.expect_get_user_by_username().never();
-    users.expect_get_users_by_email().never();
-    let mut password_resets = MockPasswordResetStorage::new();
-    password_resets.expect_create_password_reset().never();
-    let mut site_config = MockSiteConfigStorage::new();
-    site_config.expect_get_identity().never();
-
-    let (status, _) = post_password_reset_form_with_dependencies(
-        state,
-        mailer.clone(),
-        format!("identifier={identifier}"),
-        Arc::new(users),
-        Arc::new(password_resets),
-        mock_write_scope(),
-        Arc::new(site_config),
-    )
-    .await;
+    let (status, _) =
+        post_password_reset_form_with_dependencies(app, format!("identifier={identifier}")).await;
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_no_email(&mailer);
+    assert_no_email(mailer);
 }
 use rstest_reuse::*;
 
 /// Creates a user with a verified email address and an authenticated session.
-async fn create_user_with_verified_email(state: &Arc<AppState>, email: &str) -> SeededSession {
-    let session = create_user_and_session(state).await;
+async fn create_user_with_verified_email(
+    users: Arc<dyn UserStorage>,
+    sessions: Arc<dyn SessionStorage>,
+    write_scope: WriteScope,
+    email: &str,
+) -> SeededSession {
+    let session = create_user_and_session(Arc::clone(&users), sessions, write_scope.clone()).await;
     let email = parse_email(email);
-    let users = Arc::clone(&state.users);
-    let outcome = state
-        .write_scope
+    let outcome = write_scope
         .run(|transaction| {
             Box::pin(async move {
                 users
@@ -185,10 +202,16 @@ fn reset_site_config() -> MockSiteConfigStorage {
 async fn request_password_reset_returns_before_gated_lookup_and_token_then_delivers(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_with_verified_email(&state, "alice@example.com").await;
-    let user = state
-        .users
+    let env = backend.setup().await;
+    let session = create_user_with_verified_email(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+        "alice@example.com",
+    )
+    .await;
+    let user = env
+        .users()
         .get_user(session.user_id)
         .await
         .expect("load seeded user")
@@ -229,19 +252,14 @@ async fn request_password_reset_returns_before_gated_lookup_and_token_then_deliv
     let mailer: Arc<dyn MailSender> = Arc::new(TerminalMailer {
         terminal: terminal_tx,
     });
+    let app = password_reset_app!(
+        env; mailer.clone(), Arc::new(users), Arc::new(password_resets), env.write_scope(), env.site_config()
+    );
     let request = web::password_reset::Request {
         identifier: web::password_reset::PasswordResetIdentifier::Username(session.username),
     };
-    let (status, _body) = post_password_reset_request_with_dependencies(
-        &state,
-        mailer,
-        &request,
-        Arc::new(users),
-        Arc::new(password_resets),
-        mock_write_scope(),
-        Arc::new(reset_site_config()),
-    )
-    .await;
+    let (status, _body) =
+        post_password_reset_request_with_dependencies(app.clone(), &request).await;
 
     assert_eq!(status, StatusCode::OK);
     lookup_entered_rx
@@ -266,13 +284,19 @@ async fn request_password_reset_returns_before_gated_lookup_and_token_then_deliv
 async fn request_password_reset_accepts_and_eventually_sends_for_verified_user(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
-    let session = create_user_with_verified_email(&state, "alice@example.com").await;
+    let app = make_app!(&env, &env.base; override_mailer = mailer.clone());
+    let session = create_user_with_verified_email(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+        "alice@example.com",
+    )
+    .await;
 
-    let (status, _body) = post_form_with_mailer(
-        &state,
-        &mailer,
+    let (status, _body) = post_form(
+        app.clone(),
         <web::password_reset::Request as ServerFn>::PATH,
         format!("identifier={}", session.username),
         None,
@@ -289,15 +313,30 @@ async fn request_password_reset_accepts_and_eventually_sends_for_verified_user(
 #[apply(backends)]
 #[tokio::test]
 async fn request_password_reset_email_fans_out_only_to_verified_users(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
-    let first = create_user_with_verified_email(&state, "shared@example.com").await;
-    let second = create_user_with_verified_email(&state, "shared@example.com").await;
-    let unverified = SeedUser::new().seed(&state).await;
+    let app = make_app!(&env, &env.base; override_mailer = mailer.clone());
+    let first = create_user_with_verified_email(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+        "shared@example.com",
+    )
+    .await;
+    let second = create_user_with_verified_email(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+        "shared@example.com",
+    )
+    .await;
+    let unverified = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await;
     let email = parse_email("shared@example.com");
-    let users = Arc::clone(&state.users);
-    let outcome = state
-        .write_scope
+    let users = Arc::clone(&env.users());
+    let outcome = env
+        .write_scope()
         .run(|transaction| {
             Box::pin(async move {
                 users
@@ -314,9 +353,8 @@ async fn request_password_reset_email_fans_out_only_to_verified_users(#[case] ba
         .expect("set unverified duplicate");
     assert!(matches!(outcome, MutationOutcome::Confirmed(())));
 
-    let (status, _body) = post_form_with_mailer(
-        &state,
-        &mailer,
+    let (status, _body) = post_form(
+        app.clone(),
         <web::password_reset::Request as ServerFn>::PATH,
         "identifier=shared%40example.com",
         None,
@@ -343,9 +381,8 @@ async fn request_password_reset_email_fans_out_only_to_verified_users(#[case] ba
         (first_token, "first-reset-password"),
         (second_token, "second-reset-password"),
     ] {
-        let (status, _body) = post_server_fn_with_mailer(
-            &state,
-            &mailer,
+        let (status, _body) = post_server_fn(
+            app.clone(),
             &web::password_reset::Confirm {
                 request: web::password_reset::ConfirmPasswordResetRequest {
                     token,
@@ -361,7 +398,7 @@ async fn request_password_reset_email_fans_out_only_to_verified_users(#[case] ba
         (first, "first-reset-password"),
         (second, "second-reset-password"),
     ] {
-        let users = Arc::clone(&state.users);
+        let users = Arc::clone(&env.users());
         let authentication = users
             .prepare_authentication(
                 &session.username,
@@ -369,8 +406,8 @@ async fn request_password_reset_email_fans_out_only_to_verified_users(#[case] ba
             )
             .await
             .expect("reset password authenticates its User");
-        let outcome = state
-            .write_scope
+        let outcome = env
+            .write_scope()
             .run(|transaction| {
                 Box::pin(async move { users.authenticate(transaction, authentication).await })
             })
@@ -387,9 +424,15 @@ async fn request_password_reset_email_fans_out_only_to_verified_users(#[case] ba
 async fn request_password_reset_base_url_failure_is_neutral_and_reported_once(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
-    let session = create_user_with_verified_email(&state, "private-reset@example.test").await;
+    let session = create_user_with_verified_email(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+        "private-reset@example.test",
+    )
+    .await;
     let (terminal_tx, terminal_rx) = oneshot::channel();
     let mut site_config = MockSiteConfigStorage::new();
     site_config.expect_get_identity().return_once(move || {
@@ -401,22 +444,17 @@ async fn request_password_reset_base_url_failure_is_neutral_and_reported_once(
             base_url: None,
         })
     });
+    let app = password_reset_app!(
+        env; mailer.clone(), env.users(), env.password_resets(), env.write_scope(), Arc::new(site_config)
+    );
     let request = web::password_reset::Request {
         identifier: web::password_reset::PasswordResetIdentifier::Username(session.username),
     };
 
     let ((status, _body), event) = crate::assert_error_signal!(
         async {
-            let response = post_password_reset_request_with_dependencies(
-                &state,
-                mailer.clone(),
-                &request,
-                state.users.clone(),
-                state.password_resets.clone(),
-                state.write_scope.clone(),
-                Arc::new(site_config),
-            )
-            .await;
+            let response =
+                post_password_reset_request_with_dependencies(app.clone(), &request).await;
             terminal_rx
                 .await
                 .expect("worker terminates after base URL failure");
@@ -444,7 +482,7 @@ async fn request_password_reset_lookup_failure_is_neutral_and_reported_once(
     #[case] backend: Backend,
     #[values("private-reset", "private-reset@example.test")] raw_identifier: &str,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
     let (terminal_tx, terminal_rx) = oneshot::channel();
     let identifier = raw_identifier
@@ -469,20 +507,15 @@ async fn request_password_reset_lookup_failure_is_neutral_and_reported_once(
             });
         }
     }
+    let app = password_reset_app!(
+        env; mailer.clone(), Arc::new(users), env.password_resets(), env.write_scope(), env.site_config()
+    );
     let request = web::password_reset::Request { identifier };
 
     let ((status, _body), event) = crate::assert_error_signal!(
         async {
-            let response = post_password_reset_request_with_dependencies(
-                &state,
-                mailer.clone(),
-                &request,
-                Arc::new(users),
-                state.password_resets.clone(),
-                state.write_scope.clone(),
-                state.site_config.clone(),
-            )
-            .await;
+            let response =
+                post_password_reset_request_with_dependencies(app.clone(), &request).await;
             terminal_rx
                 .await
                 .expect("worker terminates after lookup failure");
@@ -509,11 +542,17 @@ async fn request_password_reset_lookup_failure_is_neutral_and_reported_once(
 async fn request_password_reset_token_write_failure_is_neutral_and_reported_once(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
-    let session = create_user_with_verified_email(&state, "private-reset@example.test").await;
-    let user = state
-        .users
+    let session = create_user_with_verified_email(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+        "private-reset@example.test",
+    )
+    .await;
+    let user = env
+        .users()
         .get_user(session.user_id)
         .await
         .expect("load seeded user")
@@ -534,22 +573,17 @@ async fn request_password_reset_token_write_failure_is_neutral_and_reported_once
                 "token reset-token-secret rejected with super-secret-password",
             )))
         });
+    let app = password_reset_app!(
+        env; mailer.clone(), Arc::new(users), Arc::new(password_resets), env.write_scope(), Arc::new(reset_site_config())
+    );
     let request = web::password_reset::Request {
         identifier: web::password_reset::PasswordResetIdentifier::Username(session.username),
     };
 
     let ((status, _body), event) = crate::assert_error_signal!(
         async {
-            let response = post_password_reset_request_with_dependencies(
-                &state,
-                mailer.clone(),
-                &request,
-                Arc::new(users),
-                Arc::new(password_resets),
-                state.write_scope.clone(),
-                Arc::new(reset_site_config()),
-            )
-            .await;
+            let response =
+                post_password_reset_request_with_dependencies(app.clone(), &request).await;
             terminal_rx
                 .await
                 .expect("worker terminates after token-write rollback");
@@ -576,10 +610,16 @@ async fn request_password_reset_token_write_failure_is_neutral_and_reported_once
 async fn request_password_reset_mail_failure_is_neutral_and_reported_once(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_with_verified_email(&state, "private-reset@example.test").await;
-    let user = state
-        .users
+    let env = backend.setup().await;
+    let session = create_user_with_verified_email(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+        "private-reset@example.test",
+    )
+    .await;
+    let user = env
+        .users()
         .get_user(session.user_id)
         .await
         .expect("load seeded user")
@@ -596,22 +636,17 @@ async fn request_password_reset_mail_failure_is_neutral_and_reported_once(
     let mailer: Arc<dyn MailSender> = Arc::new(TerminalFailingMailer {
         terminal: Mutex::new(Some(terminal_tx)),
     });
+    let app = password_reset_app!(
+        env; Arc::clone(&mailer), Arc::new(users), Arc::new(password_resets), env.write_scope(), Arc::new(reset_site_config())
+    );
     let request = web::password_reset::Request {
         identifier: web::password_reset::PasswordResetIdentifier::Username(session.username),
     };
 
     let ((status, _body), event) = crate::assert_error_signal!(
         async {
-            let response = post_password_reset_request_with_dependencies(
-                &state,
-                Arc::clone(&mailer),
-                &request,
-                Arc::new(users),
-                Arc::new(password_resets),
-                state.write_scope.clone(),
-                Arc::new(reset_site_config()),
-            )
-            .await;
+            let response =
+                post_password_reset_request_with_dependencies(app.clone(), &request).await;
             terminal_rx
                 .await
                 .expect("worker terminates after mail failure");
@@ -637,11 +672,13 @@ async fn request_password_reset_mail_failure_is_neutral_and_reported_once(
 async fn request_password_reset_is_neutral_for_user_without_verified_email(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
-    let seeded = SeedUser::new().seed(&state).await;
-    let user = state
-        .users
+    let seeded = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await;
+    let user = env
+        .users()
         .get_user(seeded.user_id)
         .await
         .expect("load seeded user")
@@ -654,20 +691,20 @@ async fn request_password_reset_is_neutral_for_user_without_verified_email(
             .expect("worker reports ineligible lookup");
         Ok(Some(user))
     });
+    let app = password_reset_app!(
+        env;
+        mailer.clone(),
+        Arc::new(users),
+        env.password_resets(),
+        env.write_scope(),
+        env.site_config()
+    );
     let request = web::password_reset::Request {
         identifier: web::password_reset::PasswordResetIdentifier::Username(seeded.username),
     };
 
-    let (status, _body) = post_password_reset_request_with_dependencies(
-        &state,
-        mailer.clone(),
-        &request,
-        Arc::new(users),
-        state.password_resets.clone(),
-        state.write_scope.clone(),
-        state.site_config.clone(),
-    )
-    .await;
+    let (status, _body) =
+        post_password_reset_request_with_dependencies(app.clone(), &request).await;
 
     assert_eq!(status, StatusCode::OK);
     terminal_rx
@@ -676,18 +713,32 @@ async fn request_password_reset_is_neutral_for_user_without_verified_email(
     assert_no_email(&mailer);
 }
 
-async fn duplicate_verified_email_users(state: &Arc<AppState>) -> Vec<UserRecord> {
-    let first = create_user_with_verified_email(state, "shared@example.com").await;
-    let second = create_user_with_verified_email(state, "shared@example.com").await;
+async fn duplicate_verified_email_users(
+    users: Arc<dyn UserStorage>,
+    sessions: Arc<dyn SessionStorage>,
+    write_scope: WriteScope,
+) -> Vec<UserRecord> {
+    let first = create_user_with_verified_email(
+        Arc::clone(&users),
+        Arc::clone(&sessions),
+        write_scope.clone(),
+        "shared@example.com",
+    )
+    .await;
+    let second = create_user_with_verified_email(
+        Arc::clone(&users),
+        sessions,
+        write_scope,
+        "shared@example.com",
+    )
+    .await;
     vec![
-        state
-            .users
+        users
             .get_user(first.user_id)
             .await
             .expect("load first duplicate user")
             .expect("first duplicate user exists"),
-        state
-            .users
+        users
             .get_user(second.user_id)
             .await
             .expect("load second duplicate user")
@@ -724,8 +775,13 @@ impl MailSender for FirstMailFailureThenTerminalMailer {
 async fn request_password_reset_continues_after_first_duplicate_token_failure(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let users_to_deliver = duplicate_verified_email_users(&state).await;
+    let env = backend.setup().await;
+    let users_to_deliver = duplicate_verified_email_users(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let first_user_id = users_to_deliver[0].user_id;
     let (terminal_tx, terminal_rx) = channel();
     let mut users = MockUserStorage::new();
@@ -748,6 +804,9 @@ async fn request_password_reset_continues_after_first_duplicate_token_failure(
     let mailer: Arc<dyn MailSender> = Arc::new(TerminalMailer {
         terminal: terminal_tx,
     });
+    let app = password_reset_app!(
+        env; mailer.clone(), Arc::new(users), Arc::new(password_resets), mock_write_scope(), Arc::new(reset_site_config())
+    );
     let request = web::password_reset::Request {
         identifier: web::password_reset::PasswordResetIdentifier::Email(parse_email(
             "shared@example.com",
@@ -756,16 +815,8 @@ async fn request_password_reset_continues_after_first_duplicate_token_failure(
 
     let ((status, _body), event) = crate::assert_error_signal!(
         async {
-            let response = post_password_reset_request_with_dependencies(
-                &state,
-                mailer,
-                &request,
-                Arc::new(users),
-                Arc::new(password_resets),
-                mock_write_scope(),
-                Arc::new(reset_site_config()),
-            )
-            .await;
+            let response =
+                post_password_reset_request_with_dependencies(app.clone(), &request).await;
             terminal_rx
                 .recv()
                 .expect("second duplicate delivery terminates worker");
@@ -791,8 +842,13 @@ async fn request_password_reset_continues_after_first_duplicate_token_failure(
 async fn request_password_reset_continues_after_first_duplicate_mail_failure(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let users_to_deliver = duplicate_verified_email_users(&state).await;
+    let env = backend.setup().await;
+    let users_to_deliver = duplicate_verified_email_users(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let mut users = MockUserStorage::new();
     users
         .expect_get_users_by_email()
@@ -807,6 +863,9 @@ async fn request_password_reset_continues_after_first_duplicate_mail_failure(
         attempts: Mutex::new(0),
         terminal: terminal_tx,
     });
+    let app = password_reset_app!(
+        env; mailer.clone(), Arc::new(users), Arc::new(password_resets), mock_write_scope(), Arc::new(reset_site_config())
+    );
     let request = web::password_reset::Request {
         identifier: web::password_reset::PasswordResetIdentifier::Email(parse_email(
             "shared@example.com",
@@ -815,16 +874,8 @@ async fn request_password_reset_continues_after_first_duplicate_mail_failure(
 
     let ((status, _body), event) = crate::assert_error_signal!(
         async {
-            let response = post_password_reset_request_with_dependencies(
-                &state,
-                mailer,
-                &request,
-                Arc::new(users),
-                Arc::new(password_resets),
-                mock_write_scope(),
-                Arc::new(reset_site_config()),
-            )
-            .await;
+            let response =
+                post_password_reset_request_with_dependencies(app.clone(), &request).await;
             terminal_rx
                 .recv()
                 .expect("second duplicate delivery terminates worker");
@@ -850,8 +901,13 @@ async fn request_password_reset_continues_after_first_duplicate_mail_failure(
 async fn request_password_reset_mails_commit_indeterminate_token_once_reported_by_write_scope(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let users_to_deliver = duplicate_verified_email_users(&state).await;
+    let env = backend.setup().await;
+    let users_to_deliver = duplicate_verified_email_users(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let (terminal_tx, terminal_rx) = channel();
     let mut users = MockUserStorage::new();
     users
@@ -864,6 +920,9 @@ async fn request_password_reset_mails_commit_indeterminate_token_once_reported_b
     let mailer: Arc<dyn MailSender> = Arc::new(TerminalMailer {
         terminal: terminal_tx,
     });
+    let app = password_reset_app!(
+        env; mailer.clone(), Arc::new(users), Arc::new(password_resets), storage::test_support::mock_write_scope_with_commit_acknowledgement_loss(), Arc::new(reset_site_config())
+    );
     let request = web::password_reset::Request {
         identifier: web::password_reset::PasswordResetIdentifier::Email(parse_email(
             "shared@example.com",
@@ -872,16 +931,8 @@ async fn request_password_reset_mails_commit_indeterminate_token_once_reported_b
 
     let ((status, _body), _event) = crate::assert_error_signal!(
         async {
-            let response = post_password_reset_request_with_dependencies(
-                &state,
-                mailer,
-                &request,
-                Arc::new(users),
-                Arc::new(password_resets),
-                storage::test_support::mock_write_scope_with_commit_acknowledgement_loss(),
-                Arc::new(reset_site_config()),
-            )
-            .await;
+            let response =
+                post_password_reset_request_with_dependencies(app.clone(), &request).await;
             terminal_rx
                 .recv()
                 .expect("indeterminate token is mailed before worker termination");
@@ -902,17 +953,22 @@ async fn request_password_reset_mails_commit_indeterminate_token_once_reported_b
 #[apply(backends)]
 #[tokio::test]
 async fn request_password_reset_invalid_identifier_does_not_start_worker(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let mailer = Arc::new(CapturingMailSender::new());
+    let app = password_reset_app!(
+        env; mailer.clone(), env.users(), env.password_resets(), env.write_scope(), env.site_config()
+    );
 
-    assert_invalid_reset_identifier_does_not_start_worker(&state, "invalid username").await;
-    assert_invalid_reset_identifier_does_not_start_worker(&state, "invalid%40").await;
+    assert_invalid_reset_identifier_does_not_start_worker(app.clone(), &mailer, "invalid username")
+        .await;
+    assert_invalid_reset_identifier_does_not_start_worker(app.clone(), &mailer, "invalid%40").await;
 }
 
 // Unknown identifiers have the same accepted response as eligible identifiers.
 #[apply(backends)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_password_reset_is_neutral_for_unknown_username(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
     let (entered_tx, entered_rx) = channel();
     let (release_tx, release_rx): (Sender<()>, Receiver<()>) = channel();
@@ -937,22 +993,22 @@ async fn request_password_reset_is_neutral_for_unknown_username(#[case] backend:
     password_resets.expect_create_password_reset().never();
     let mut site_config = MockSiteConfigStorage::new();
     site_config.expect_get_identity().never();
+    let app = password_reset_app!(
+        env;
+        mailer.clone(),
+        Arc::new(users),
+        Arc::new(password_resets),
+        env.write_scope(),
+        Arc::new(site_config)
+    );
     let request = web::password_reset::Request {
         identifier: web::password_reset::PasswordResetIdentifier::Username(
             common::test_support::parse_username("nobody"),
         ),
     };
 
-    let (status, _body) = post_password_reset_request_with_dependencies(
-        &state,
-        mailer.clone(),
-        &request,
-        Arc::new(users),
-        Arc::new(password_resets),
-        mock_write_scope(),
-        Arc::new(site_config),
-    )
-    .await;
+    let (status, _body) =
+        post_password_reset_request_with_dependencies(app.clone(), &request).await;
 
     assert_eq!(status, StatusCode::OK);
     entered_rx
@@ -972,7 +1028,7 @@ async fn request_password_reset_is_neutral_for_unknown_username(#[case] backend:
 #[apply(backends)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_password_reset_is_neutral_for_unknown_email(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
     let (terminal_tx, terminal_rx) = channel();
     let mut users = MockUserStorage::new();
@@ -986,22 +1042,22 @@ async fn request_password_reset_is_neutral_for_unknown_email(#[case] backend: Ba
     password_resets.expect_create_password_reset().never();
     let mut site_config = MockSiteConfigStorage::new();
     site_config.expect_get_identity().never();
+    let app = password_reset_app!(
+        env;
+        mailer.clone(),
+        Arc::new(users),
+        Arc::new(password_resets),
+        env.write_scope(),
+        Arc::new(site_config)
+    );
     let request = web::password_reset::Request {
         identifier: web::password_reset::PasswordResetIdentifier::Email(parse_email(
             "nobody@example.com",
         )),
     };
 
-    let (status, _body) = post_password_reset_request_with_dependencies(
-        &state,
-        mailer.clone(),
-        &request,
-        Arc::new(users),
-        Arc::new(password_resets),
-        mock_write_scope(),
-        Arc::new(site_config),
-    )
-    .await;
+    let (status, _body) =
+        post_password_reset_request_with_dependencies(app.clone(), &request).await;
 
     assert_eq!(status, StatusCode::OK);
     terminal_rx
@@ -1015,18 +1071,30 @@ async fn request_password_reset_is_neutral_for_unknown_email(#[case] backend: Ba
 #[apply(backends)]
 #[tokio::test]
 async fn confirm_nested_request_maps_token_and_password(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let mailer = Arc::new(CapturingMailSender::new());
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
-    let session = create_user_with_verified_email(&state, "carol@example.com").await;
+    let session = create_user_with_verified_email(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+        "carol@example.com",
+    )
+    .await;
     let user_id = session.user_id;
     // Create a second session to ensure all are revoked
-    create_session_for(&state, user_id).await;
+    create_session_for(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+        user_id,
+    )
+    .await;
 
     let expires_at: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
-    let password_resets = Arc::clone(&state.password_resets);
-    let outcome = state
-        .write_scope
+    let password_resets = Arc::clone(&env.password_resets());
+    let outcome = env
+        .write_scope()
         .run(|transaction| {
             Box::pin(async move {
                 password_resets
@@ -1038,9 +1106,8 @@ async fn confirm_nested_request_maps_token_and_password(#[case] backend: Backend
         .unwrap();
     let raw_token = storage::test_support::confirmed_for(outcome, "password-reset fixture setup");
 
-    let (status, _body) = post_server_fn_with_mailer(
-        &state,
-        &mailer,
+    let (status, _body) = post_server_fn(
+        app.clone(),
         &web::password_reset::Confirm {
             request: web::password_reset::ConfirmPasswordResetRequest {
                 token: raw_token,
@@ -1054,22 +1121,22 @@ async fn confirm_nested_request_maps_token_and_password(#[case] backend: Backend
     assert_eq!(status, StatusCode::OK);
 
     // Old password should fail authentication
-    let users = Arc::clone(&state.users);
+    let users = Arc::clone(&env.users());
     let username = session.username.clone();
     let password = "password123".parse().unwrap();
     let old_auth = users.prepare_authentication(&username, &password).await;
     assert!(old_auth.is_err(), "old password should no longer work");
 
     // New password should succeed
-    let users = Arc::clone(&state.users);
+    let users = Arc::clone(&env.users());
     let username = session.username.clone();
     let password = "newpassword456".parse().unwrap();
     let authentication = users
         .prepare_authentication(&username, &password)
         .await
         .unwrap();
-    let outcome = state
-        .write_scope
+    let outcome = env
+        .write_scope()
         .run(|transaction| {
             Box::pin(async move { users.authenticate(transaction, authentication).await })
         })
@@ -1078,7 +1145,7 @@ async fn confirm_nested_request_maps_token_and_password(#[case] backend: Backend
     assert!(matches!(outcome, MutationOutcome::Confirmed(_)));
 
     // All sessions should be revoked
-    let sessions = state.sessions.list_sessions(user_id).await.unwrap();
+    let sessions = env.sessions().list_sessions(user_id).await.unwrap();
     assert!(sessions.is_empty(), "all sessions should be revoked");
 }
 
@@ -1086,17 +1153,22 @@ async fn confirm_nested_request_maps_token_and_password(#[case] backend: Backend
 #[apply(backends)]
 #[tokio::test]
 async fn confirm_password_reset_with_expired_token_returns_error(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let mailer = Arc::new(CapturingMailSender::new());
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
-    let user_id = create_user_with_verified_email(&state, "dave@example.com")
-        .await
-        .user_id;
+    let user_id = create_user_with_verified_email(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+        "dave@example.com",
+    )
+    .await
+    .user_id;
 
     let expires_at: UtcInstant = "2000-01-02T03:04:05.123456Z".parse().unwrap();
-    let password_resets = Arc::clone(&state.password_resets);
-    let outcome = state
-        .write_scope
+    let password_resets = Arc::clone(&env.password_resets());
+    let outcome = env
+        .write_scope()
         .run(|transaction| {
             Box::pin(async move {
                 password_resets
@@ -1108,9 +1180,8 @@ async fn confirm_password_reset_with_expired_token_returns_error(#[case] backend
         .unwrap();
     let raw_token = storage::test_support::confirmed_for(outcome, "password-reset fixture setup");
 
-    let (status, response_body) = post_server_fn_with_mailer(
-        &state,
-        &mailer,
+    let (status, response_body) = post_server_fn(
+        app.clone(),
         &web::password_reset::Confirm {
             request: web::password_reset::ConfirmPasswordResetRequest {
                 token: raw_token,
@@ -1132,13 +1203,11 @@ async fn confirm_password_reset_with_expired_token_returns_error(#[case] backend
 #[apply(backends)]
 #[tokio::test]
 async fn confirm_password_reset_with_invalid_token_returns_error(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let mailer = Arc::new(CapturingMailSender::new());
-
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
     let (status, response_body) =
-        post_server_fn_request_fixture_with_mailer::<web::password_reset::Confirm, _, _>(
-            &state,
-            &mailer,
+        post_server_fn_request_fixture::<web::password_reset::Confirm, _>(
+            app.clone(),
             &ConfirmPasswordResetDecodeFixture {
                 token: "not-a-real-token",
                 new_password: "newpassword456",
@@ -1157,17 +1226,22 @@ async fn confirm_password_reset_with_invalid_token_returns_error(#[case] backend
 #[apply(backends)]
 #[tokio::test]
 async fn confirm_nested_request_rejects_malformed_token_before_handler(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let mailer = Arc::new(CapturingMailSender::new());
-    let session = create_user_with_verified_email(&state, "malformed@example.com").await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_with_verified_email(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+        "malformed@example.com",
+    )
+    .await;
 
     // `bad!token` is outside base64url, so `RawToken` rejects it (at wire-decode once
     // `token` is typed). `new_password` is valid-length, so the failure isolates to the
     // token.
     let (status, response_body) =
-        post_server_fn_request_fixture_with_mailer::<web::password_reset::Confirm, _, _>(
-            &state,
-            &mailer,
+        post_server_fn_request_fixture::<web::password_reset::Confirm, _>(
+            app.clone(),
             &ConfirmPasswordResetDecodeFixture {
                 token: "bad!token",
                 new_password: "newpassword456",
@@ -1181,15 +1255,15 @@ async fn confirm_nested_request_rejects_malformed_token_before_handler(#[case] b
         response_body.contains("server_function"),
         "expected a server-fn decode rejection; body: {response_body}"
     );
-    let users = Arc::clone(&state.users);
+    let users = Arc::clone(&env.users());
     let username = session.username.clone();
     let password = "password123".parse().unwrap();
     let authentication = users
         .prepare_authentication(&username, &password)
         .await
         .unwrap();
-    let outcome = state
-        .write_scope
+    let outcome = env
+        .write_scope()
         .run(|transaction| {
             Box::pin(async move { users.authenticate(transaction, authentication).await })
         })
@@ -1200,8 +1274,7 @@ async fn confirm_nested_request_rejects_malformed_token_before_handler(#[case] b
         "a malformed token must not change the password"
     );
     assert_eq!(
-        state
-            .sessions
+        env.sessions()
             .list_sessions(session.user_id)
             .await
             .unwrap()
@@ -1215,17 +1288,22 @@ async fn confirm_nested_request_rejects_malformed_token_before_handler(#[case] b
 #[apply(backends)]
 #[tokio::test]
 async fn confirm_password_reset_with_used_token_returns_error(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let mailer = Arc::new(CapturingMailSender::new());
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
-    let user_id = create_user_with_verified_email(&state, "eve@example.com")
-        .await
-        .user_id;
+    let user_id = create_user_with_verified_email(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+        "eve@example.com",
+    )
+    .await
+    .user_id;
 
     let expires_at: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
-    let password_resets = Arc::clone(&state.password_resets);
-    let outcome = state
-        .write_scope
+    let password_resets = Arc::clone(&env.password_resets());
+    let outcome = env
+        .write_scope()
         .run(|transaction| {
             Box::pin(async move {
                 password_resets
@@ -1245,11 +1323,11 @@ async fn confirm_password_reset_with_used_token_returns_error(#[case] backend: B
     };
 
     // Use it once — should succeed
-    let (status, _) = post_server_fn_with_mailer(&state, &mailer, &request, None).await;
+    let (status, _) = post_server_fn(app.clone(), &request, None).await;
     assert_eq!(status, StatusCode::OK);
 
     // Use it again — should fail
-    let (status, response_body) = post_server_fn_with_mailer(&state, &mailer, &request, None).await;
+    let (status, response_body) = post_server_fn(app.clone(), &request, None).await;
     assert_ne!(status, StatusCode::OK);
     assert!(
         response_body.contains("\"validation\""),
@@ -1262,15 +1340,21 @@ async fn confirm_password_reset_with_used_token_returns_error(#[case] backend: B
 #[apply(backends)]
 #[tokio::test]
 async fn confirm_nested_request_rejects_short_password_before_handler(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let mailer = Arc::new(CapturingMailSender::new());
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
-    let session = create_user_with_verified_email(&state, "frank@example.com").await;
+    let session = create_user_with_verified_email(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+        "frank@example.com",
+    )
+    .await;
 
-    let password_resets = Arc::clone(&state.password_resets);
+    let password_resets = Arc::clone(&env.password_resets());
     let expires_at: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
-    let outcome = state
-        .write_scope
+    let outcome = env
+        .write_scope()
         .run(|transaction| {
             Box::pin(async move {
                 password_resets
@@ -1283,9 +1367,8 @@ async fn confirm_nested_request_rejects_short_password_before_handler(#[case] ba
     let raw_token = storage::test_support::confirmed_for(outcome, "password-reset fixture setup");
 
     let (status, response_body) =
-        post_server_fn_request_fixture_with_mailer::<web::password_reset::Confirm, _, _>(
-            &state,
-            &mailer,
+        post_server_fn_request_fixture::<web::password_reset::Confirm, _>(
+            app.clone(),
             &ConfirmPasswordResetDecodeFixture {
                 token: raw_token.as_ref(),
                 new_password: "short",
@@ -1306,15 +1389,15 @@ async fn confirm_nested_request_rejects_short_password_before_handler(#[case] ba
     );
 
     // The reset must not have been applied: the original password still authenticates.
-    let users = Arc::clone(&state.users);
+    let users = Arc::clone(&env.users());
     let username = session.username.clone();
     let password = "password123".parse().unwrap();
     let authentication = users
         .prepare_authentication(&username, &password)
         .await
         .unwrap();
-    let outcome = state
-        .write_scope
+    let outcome = env
+        .write_scope()
         .run(|transaction| {
             Box::pin(async move { users.authenticate(transaction, authentication).await })
         })
@@ -1325,8 +1408,7 @@ async fn confirm_nested_request_rejects_short_password_before_handler(#[case] ba
         "a too-short new password must be rejected without applying the reset"
     );
     assert_eq!(
-        state
-            .sessions
+        env.sessions()
             .list_sessions(session.user_id)
             .await
             .unwrap()

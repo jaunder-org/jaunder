@@ -291,3 +291,29 @@ owner-pinning no longer exists, and their test citations (including #138's
 `post_await_read_loses_ancestor_context_when_parent_owner_dropped`, already
 stale) should not be treated as live. Current state: see
 [ARCHITECTURE.md](../ARCHITECTURE.md).
+
+## Addendum (2026-09-08): the residual `AppState` construction bundle is retired (#1405)
+
+Phase B originally left one heterogeneous storage-only bundle at the serve
+composition root. Although it no longer crossed that root, it duplicated
+`StorageFactory`'s complete surface, forced router and test-harness setup to
+assemble every handle, and preserved a ready-made seam for dependencies to
+accumulate. The distinction between an allowed root-local bundle and a forbidden
+injected bundle also made the durable invariant harder to apply than necessary.
+
+**Resolution.** `AppState` is deleted. Every executable, command, and
+test-harness composition root retains `StorageFactory` only long enough to mint
+the named storage handles and `WriteScope` values required by its consumers. The
+broad serve path uses one private `ServeStorage` value solely to organize
+lifecycle composition helpers; it is neither public nor injected into any
+router, worker, manager, metrics subsystem, or other runtime component. Route
+families publish focused Leptos contexts and Axum extensions. `TestEnv`
+privately owns the factory and exposes focused accessors plus its
+backend-specific `TestBase`; it never assembles application state. No service
+locator or runtime dependency bundle exists.
+
+This strengthens rather than reverses the original decision: breadth remains
+lexical wiring at composition roots, while every typed seam declares only the
+dependencies it uses. The historical Phase A/Phase B account above explains the
+migration sequence; current state is
+[ARCHITECTURE.md](../ARCHITECTURE.md#dependency-injection-and-composition-roots).

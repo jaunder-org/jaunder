@@ -9,12 +9,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tempfile::TempDir;
 
 /// File name (under `TestEnv::base`) holding the Postgres connection string for
-/// the *per-test* database that [`AppState`] was migrated into. Raw-SQL tests
-/// need this because `template_postgres_url` mints a *fresh* clone on every
-/// call, so re-calling it would connect to a different (empty) database than
-/// the one the state seeded. Recorded here (instead of a new `TestEnv` field)
-/// to avoid breaking the many `let TestEnv { state, base } = ...` destructures.
-/// Absent on `SQLite`, where raw access goes through the `base` temp dir directly.
+/// the *per-test* database. Raw-SQL tests need this because
+/// `template_postgres_url` mints a *fresh* clone on every call, so re-calling it
+/// would connect to a different (empty) database than the fixture database.
+/// Recorded here (instead of a new `TestEnv` field) to keep raw access confined
+/// to the fixture base. Absent on `SQLite`, where raw access goes through the
+/// base temp dir directly.
 pub const PG_URL_FILE: &str = "pg_test_url";
 
 /// Returns the Postgres connection string recorded by [`Backend::setup`] for a
@@ -145,10 +145,10 @@ fn unique_postgres_db_name() -> String {
 /// joined before returning, so the clone's disk is reclaimed before the next
 /// test allocates. `WITH (FORCE)` (Postgres 13+) terminates any connections
 /// still open to the clone, so teardown is robust to drop ordering relative to
-/// the `AppState` pool. The drop is bounded by a timeout and never panics (it
-/// runs inside `Drop`); a failed or timed-out drop is logged to stderr rather
-/// than returned mutely, since a silently leaking clone is the disk-creep
-/// regression this guards against.
+/// the fixture pool. The drop is bounded by a timeout and never panics (it runs
+/// inside `Drop`); a failed or timed-out drop is logged to stderr rather than
+/// returned mutely, since a silently leaking clone is the disk-creep regression
+/// this guards against.
 fn drop_test_database(db_name: &str, bootstrap_url: &str) {
     let statement = format!("DROP DATABASE {} WITH (FORCE)", quote_identifier(db_name));
     std::thread::scope(|scope| {

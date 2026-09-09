@@ -15,57 +15,8 @@ use std::sync::Arc;
 use crate::helpers::{body_string, make_app};
 use storage::sql::QueryStorageExt;
 use storage::test_support::{
-    Backend, SeedFeedCache, SeedRawPost, SeedUser, TestEnv, backends, backends_matrix, fp,
+    Backend, SeedFeedCache, SeedRawPost, SeedUser, backends, backends_matrix, fp,
 };
-
-fn with_feed_cache(
-    state: &Arc<storage::AppState>,
-    feed_cache: Arc<dyn storage::FeedCacheStorage>,
-) -> Arc<storage::AppState> {
-    Arc::new(storage::AppState {
-        site_config: state.site_config.clone(),
-        users: state.users.clone(),
-        sessions: state.sessions.clone(),
-        invites: state.invites.clone(),
-        email_verifications: state.email_verifications.clone(),
-        password_resets: state.password_resets.clone(),
-        posts: state.posts.clone(),
-        subscriptions: state.subscriptions.clone(),
-        audiences: state.audiences.clone(),
-        media: state.media.clone(),
-        user_config: state.user_config.clone(),
-        feed_cache,
-        feed_events: state.feed_events.clone(),
-        publisher: state.publisher.clone(),
-        themes: state.themes.clone(),
-        write_scope: state.write_scope.clone(),
-    })
-}
-
-fn with_posts_and_publisher(
-    state: &Arc<storage::AppState>,
-    posts: Arc<dyn storage::PostStorage>,
-    publisher: Arc<dyn storage::PublisherStorage>,
-) -> Arc<storage::AppState> {
-    Arc::new(storage::AppState {
-        site_config: state.site_config.clone(),
-        users: state.users.clone(),
-        sessions: state.sessions.clone(),
-        invites: state.invites.clone(),
-        email_verifications: state.email_verifications.clone(),
-        password_resets: state.password_resets.clone(),
-        posts,
-        subscriptions: state.subscriptions.clone(),
-        audiences: state.audiences.clone(),
-        media: state.media.clone(),
-        user_config: state.user_config.clone(),
-        feed_cache: state.feed_cache.clone(),
-        feed_events: state.feed_events.clone(),
-        publisher,
-        themes: state.themes.clone(),
-        write_scope: state.write_scope.clone(),
-    })
-}
 
 fn typed_source<T: Error + 'static>(error: &web::error::InternalError) -> Option<&T> {
     let mut current: &(dyn Error + 'static) = error;
@@ -82,12 +33,17 @@ fn typed_source<T: Error + 'static>(error: &web::error::InternalError) -> Option
 async fn handler_cache_miss_lazy_regens_and_returns_200_with_correct_content_type(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base } = backend.setup().await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let app = make_app!(&env, base);
 
-    let user = SeedUser::new().seed(&state).await;
+    let user = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await;
 
-    SeedRawPost::new(user.user_id).seed(&state).await;
+    SeedRawPost::new(user.user_id)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
+        .await;
 
     let req = Request::builder()
         .method("GET")
@@ -129,8 +85,8 @@ async fn handler_cache_miss_lazy_regens_and_returns_200_with_correct_content_typ
         "Last-Modified header should be present"
     );
 
-    let cached = state
-        .feed_cache
+    let cached = env
+        .feed_cache()
         .get(&fp(&format!("/~{}/feed.rss", user.username)))
         .await
         .expect("get from cache")
@@ -146,11 +102,12 @@ async fn handler_cache_miss_lazy_regens_and_returns_200_with_correct_content_typ
 async fn handler_cache_miss_restarts_after_hub_mutation_and_caches_only_new_discovery(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base } = backend.setup().await;
+    let env = backend.setup().await;
+    let base = &env.base;
     let publisher = Arc::new(jaunder::publisher::PublisherService::new(
         base.path().to_path_buf(),
-        Arc::clone(&state.publisher),
-        state.write_scope.clone(),
+        Arc::clone(&env.publisher()),
+        env.write_scope(),
     ));
     let old_hub: HubUrl = "https://old-hub.example/".parse().expect("valid hub URL");
     let new_hub: HubUrl = "https://new-hub.example/".parse().expect("valid hub URL");
@@ -158,12 +115,12 @@ async fn handler_cache_miss_restarts_after_hub_mutation_and_caches_only_new_disc
         .mutate_hub(Some(&old_hub))
         .await
         .expect("seed old normalized hub");
-    let old_snapshot = state.publisher.snapshot().await.expect("old snapshot");
+    let old_snapshot = env.publisher().snapshot().await.expect("old snapshot");
     publisher
         .mutate_hub(Some(&new_hub))
         .await
         .expect("replace normalized hub");
-    let new_snapshot = state.publisher.snapshot().await.expect("new snapshot");
+    let new_snapshot = env.publisher().snapshot().await.expect("new snapshot");
 
     let snapshots = Arc::new(std::sync::Mutex::new(std::collections::VecDeque::from([
         old_snapshot,
@@ -211,8 +168,11 @@ async fn handler_cache_miss_restarts_after_hub_mutation_and_caches_only_new_disc
         .expect_list_published_in_window()
         .times(2)
         .returning(|_, _, _, _| Ok(vec![]));
-    let state = with_posts_and_publisher(&state, Arc::new(posts), Arc::new(publisher_storage));
-    let app = make_app(&state, &base);
+    let app = make_app!(
+        &env,
+        base;
+        override_posts_and_publisher = Arc::new(posts), Arc::new(publisher_storage)
+    );
 
     let response = app
         .oneshot(
@@ -241,12 +201,19 @@ async fn handler_cache_miss_restarts_after_hub_mutation_and_caches_only_new_disc
 #[apply(backends)]
 #[tokio::test]
 async fn handler_serves_site_tag_feed_with_200(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let app = make_app!(&env, base);
 
     // A tagged, published post so the site-tag surface has content.
-    let user_id = SeedUser::new().seed(&state).await.user_id;
-    SeedRawPost::new(user_id).tags(["rust"]).seed(&state).await;
+    let user_id = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await
+        .user_id;
+    SeedRawPost::new(user_id)
+        .tags(["rust"])
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
+        .await;
 
     // The valid site-tag route exercises feed_site_tag's happy path: parse the
     // tag, then serve/regenerate the SiteTag surface.
@@ -273,8 +240,9 @@ async fn handler_serves_site_tag_feed_with_200(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn handler_cache_hit_serves_stored_body_without_regeneration(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let app = make_app!(&env, base);
 
     // Pre-populate the cache with a known body and validators.
     let known_body = "known feed body";
@@ -285,7 +253,7 @@ async fn handler_cache_hit_serves_stored_body_without_regeneration(#[case] backe
         .etag(parse_etag(etag))
         .representation_modified_at(updated_at)
         .generated_at(UtcInstant::now())
-        .seed(&state)
+        .seed(env.feed_cache(), env.write_scope())
         .await;
 
     let req = Request::builder()
@@ -337,9 +305,14 @@ async fn handler_cache_hit_serves_stored_body_without_regeneration(#[case] backe
 async fn handler_rejects_corrupt_cache_hit_without_serving_or_rewriting_it(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base } = backend.setup().await;
-    let user = SeedUser::new().seed(&state).await;
-    SeedRawPost::new(user.user_id).seed(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let user = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await;
+    SeedRawPost::new(user.user_id)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
+        .await;
 
     let feed_path = format!("/~{}/feed.rss", user.username);
     let persisted_feed_path = fp(&feed_path);
@@ -350,7 +323,7 @@ async fn handler_rejects_corrupt_cache_hit_without_serving_or_rewriting_it(
         .etag(parse_etag(etag))
         .representation_modified_at(UtcInstant::now())
         .generated_at(UtcInstant::now())
-        .seed(&state)
+        .seed(env.feed_cache(), env.write_scope())
         .await;
 
     // Bypass the invariant-bearing storage API to model a corrupted persisted
@@ -373,7 +346,7 @@ async fn handler_rejects_corrupt_cache_hit_without_serving_or_rewriting_it(
         .uri(&feed_path)
         .body(Body::empty())
         .expect("build request");
-    let response = make_app(&state, &base)
+    let response = make_app!(&env, base)
         .oneshot(request)
         .await
         .expect("request");
@@ -428,8 +401,9 @@ async fn routed_conditional_responses_preserve_the_get_head_validator_matrix(
         expected_body: &'static str,
         has_content_type: bool,
     }
-    let TestEnv { state, base } = backend.setup().await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let app = make_app!(&env, base);
     let feed_path = "/~charlie/feed.rss";
     let body = "cached feed body";
     let etag = "\"current-feed-etag\"";
@@ -443,7 +417,7 @@ async fn routed_conditional_responses_preserve_the_get_head_validator_matrix(
         .etag(parse_etag(etag))
         .representation_modified_at(modified_at)
         .generated_at(modified_at)
-        .seed(&state)
+        .seed(env.feed_cache(), env.write_scope())
         .await;
 
     let cases = [
@@ -575,8 +549,9 @@ async fn routed_conditional_responses_preserve_the_get_head_validator_matrix(
 #[case::invalid_user_tag("/~alice/tags/-rust/feed.rss")]
 #[tokio::test]
 async fn handler_rejects_invalid_request_with_404(backend: Backend, #[case] uri: &str) {
-    let TestEnv { state, base } = backend.setup().await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let app = make_app!(&env, base);
 
     let req = Request::builder()
         .method("GET")
@@ -596,11 +571,16 @@ async fn handler_rejects_invalid_request_with_404(backend: Backend, #[case] uri:
 #[apply(backends)]
 #[tokio::test]
 async fn handler_returns_correct_content_type_per_format(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let env = backend.setup().await;
+    let base = &env.base;
 
-    let user = SeedUser::new().seed(&state).await;
+    let user = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await;
 
-    SeedRawPost::new(user.user_id).seed(&state).await;
+    SeedRawPost::new(user.user_id)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
+        .await;
 
     let test_cases = [
         ("rss", "application/rss+xml; charset=utf-8"),
@@ -609,7 +589,7 @@ async fn handler_returns_correct_content_type_per_format(#[case] backend: Backen
     ];
 
     for (ext, expected_content_type) in &test_cases {
-        let app = make_app(&state, &base);
+        let app = make_app!(&env, base);
         let req = Request::builder()
             .method("GET")
             .uri(format!("/~{}/feed.{ext}", user.username))
@@ -666,8 +646,9 @@ fn feed_failure_adapters_retain_typed_sources() {
 async fn handler_cache_read_failure_is_sanitized_and_reports_boundary_once(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base } = backend.setup().await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let app = make_app!(&env, base);
     base.close_pool().await;
     let request = Request::builder()
         .method("GET")
@@ -702,11 +683,11 @@ async fn handler_cache_read_failure_is_sanitized_and_reports_boundary_once(
 async fn handler_regeneration_failure_is_sanitized_and_reports_boundary_once(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base } = backend.setup().await;
+    let env = backend.setup().await;
+    let base = &env.base;
     let mut cache = storage::MockFeedCacheStorage::new();
     cache.expect_get().times(1).return_once(|_| Ok(None));
-    let state = with_feed_cache(&state, Arc::new(cache));
-    let app = make_app(&state, &base);
+    let app = make_app!(&env, base; override_feed_cache = Arc::new(cache));
     base.close_pool().await;
     let request = Request::builder()
         .method("GET")

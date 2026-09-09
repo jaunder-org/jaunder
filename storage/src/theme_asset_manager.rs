@@ -752,14 +752,14 @@ mod tests {
             .and_then(|bytes| i64::try_from(bytes).ok())
             .expect("fixture bytes fit");
         let theme_id = create_theme(
-            Arc::clone(&env.state.themes),
-            env.state.write_scope.clone(),
+            Arc::clone(&env.themes()),
+            env.write_scope().clone(),
             &compiled,
         )
         .await;
         let manager = ThemeAssetManager::new(
-            Arc::clone(&env.state.themes),
-            env.state.write_scope.clone(),
+            Arc::clone(&env.themes()),
+            env.write_scope().clone(),
             Arc::new(env.base.path().to_path_buf()),
         );
 
@@ -777,16 +777,14 @@ mod tests {
         let digest = digest(compiled.css().bytes());
         assert!(manager.content_path(digest.as_ref()).exists());
         assert!(
-            env.state
-                .themes
+            env.themes()
                 .content_eligibility(&digest)
                 .await
                 .expect("read eligibility")
                 .is_some()
         );
         assert_eq!(
-            env.state
-                .themes
+            env.themes()
                 .list_revisions(ThemeOwner::Site, theme_id)
                 .await
                 .expect("read revisions")
@@ -794,8 +792,7 @@ mod tests {
             1
         );
         assert_eq!(
-            env.state
-                .themes
+            env.themes()
                 .owner_quota(ThemeOwner::Site)
                 .await
                 .expect("read owner quota")
@@ -1061,10 +1058,9 @@ mod tests {
             site_retained_revisions: 1,
             site_physical_bytes: 14,
         };
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -1075,15 +1071,14 @@ mod tests {
                 .await
                 .expect("admit owner"),
         );
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         let eligibility = ThemeContentEligibility {
             digest: digest.clone(),
             mime: "image/png".into(),
             retained_until_unix_seconds: 0,
         };
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -1094,11 +1089,10 @@ mod tests {
                 .await
                 .expect("make bytes eligible"),
         );
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         let attached = charge.clone();
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -1114,10 +1108,9 @@ mod tests {
                 .await
                 .expect("attach content"),
         );
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -1137,8 +1130,8 @@ mod tests {
         fs::create_dir_all(&path).expect("create content shard");
         fs::write(path.join(digest.as_ref()), b"retained bytes").expect("write retained bytes");
         let manager = ThemeAssetManager::new(
-            Arc::clone(&env.state.themes),
-            env.state.write_scope.clone(),
+            Arc::clone(&env.themes()),
+            env.write_scope().clone(),
             Arc::new(env.base.path().to_path_buf()),
         );
 
@@ -1149,8 +1142,7 @@ mod tests {
 
         assert!(matches!(outcome, MutationOutcome::Confirmed(())));
         assert!(
-            env.state
-                .themes
+            env.themes()
                 .content_eligibility(&digest)
                 .await
                 .expect("read eligibility")

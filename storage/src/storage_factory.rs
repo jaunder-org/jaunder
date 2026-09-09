@@ -10,9 +10,9 @@ use std::sync::Arc;
 
 use sqlx::{PgPool, SqlitePool};
 
-use crate::backend::AppStateBackend;
+use crate::backend::WriteScopeFactoryBackend;
 use crate::{
-    AppState, AudienceStorage, AudienceStore, EmailVerificationStorage, EmailVerificationStore,
+    AudienceStorage, AudienceStore, EmailVerificationStorage, EmailVerificationStore,
     FeedCacheStorage, FeedCacheStore, FeedEventStorage, FeedEventStore, InviteStorage, InviteStore,
     MediaStorage, MediaStore, PasswordResetStorage, PasswordResetStore, PostStorage, PostStore,
     PublisherStorage, PublisherStore, SessionStorage, SessionStore, SiteConfigStorage,
@@ -41,29 +41,6 @@ impl StorageFactory {
         Self {
             inner: StorageFactoryInner::Postgres(pool),
         }
-    }
-
-    /// Constructs the full storage aggregate used by the serve composition root.
-    #[must_use]
-    pub fn app_state(&self) -> Arc<AppState> {
-        Arc::new(AppState {
-            site_config: self.site_config(),
-            users: self.users(),
-            sessions: self.sessions(),
-            invites: self.invites(),
-            email_verifications: self.email_verifications(),
-            password_resets: self.password_resets(),
-            posts: self.posts(),
-            subscriptions: self.subscriptions(),
-            audiences: self.audiences(),
-            media: self.media(),
-            user_config: self.user_config(),
-            feed_cache: self.feed_cache(),
-            feed_events: self.feed_events(),
-            publisher: self.publisher(),
-            themes: self.themes(),
-            write_scope: self.write_scope(),
-        })
     }
 
     /// Constructs site-configuration storage over the owned pool.

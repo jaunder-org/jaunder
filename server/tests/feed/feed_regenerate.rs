@@ -17,19 +17,16 @@ use tokio::sync::Barrier;
 
 use storage::{
     CacheCommitOutcome, FeedCacheRow, PublisherGeneration, PublisherStorage, WriteScope,
-    test_support::{Backend, SeedRawPost, SeedUser, TestEnv, backends, confirmed_for, fp},
+    test_support::{Backend, SeedRawPost, SeedUser, backends, confirmed_for, fp},
 };
 
 async fn render_feed(
-    state: &Arc<storage::AppState>,
+    publisher: Arc<dyn PublisherStorage>,
+    posts: Arc<dyn storage::PostStorage>,
     feed_path: host::feed::FeedPath,
 ) -> storage::FeedCacheRow {
-    let snapshot = state
-        .publisher
-        .snapshot()
-        .await
-        .expect("publisher snapshot");
-    render(&snapshot, state.posts.as_ref(), feed_path)
+    let snapshot = publisher.snapshot().await.expect("publisher snapshot");
+    render(&snapshot, posts.as_ref(), feed_path)
         .await
         .expect("render feed")
 }
@@ -43,13 +40,13 @@ fn fixed_instant(day: u32) -> UtcInstant {
 }
 
 async fn render_and_commit(
-    state: &Arc<storage::AppState>,
+    posts: Arc<dyn storage::PostStorage>,
     publisher: &PublisherService,
     feed_path: host::feed::FeedPath,
     generated_at: UtcInstant,
 ) -> FeedCacheRow {
     let snapshot = publisher.snapshot().await.expect("publisher snapshot");
-    let candidate = render(&snapshot, state.posts.as_ref(), feed_path)
+    let candidate = render(&snapshot, posts.as_ref(), feed_path)
         .await
         .expect("render feed");
     let candidate = FeedCacheRow::new(
@@ -120,14 +117,13 @@ async fn commit_after_barrier(
 }
 
 async fn delete_post(
-    state: &Arc<storage::AppState>,
+    posts: Arc<dyn storage::PostStorage>,
+    write_scope: WriteScope,
     post_id: PostId,
     user_id: UserId,
     deleted_at: UtcInstant,
 ) {
-    let posts = Arc::clone(&state.posts);
-    let outcome = state
-        .write_scope
+    let outcome = write_scope
         .run(move |transaction| {
             Box::pin(async move {
                 posts
@@ -143,14 +139,25 @@ async fn delete_post(
 #[apply(backends)]
 #[tokio::test]
 async fn render_user_feed_returns_expected_rss_representation(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
 
-    let user = SeedUser::new().seed(&state).await;
+    let user = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await;
 
-    SeedRawPost::new(user.user_id).seed(&state).await;
-    SeedRawPost::new(user.user_id).seed(&state).await;
+    SeedRawPost::new(user.user_id)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
+        .await;
+    SeedRawPost::new(user.user_id)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
+        .await;
 
-    let row = render_feed(&state, fp(&format!("/~{}/feed.rss", user.username))).await;
+    let row = render_feed(
+        Arc::clone(&env.publisher()),
+        Arc::clone(&env.posts()),
+        fp(&format!("/~{}/feed.rss", user.username)),
+    )
+    .await;
 
     assert_eq!(
         row.representation().content_type(),
@@ -162,12 +169,19 @@ async fn render_user_feed_returns_expected_rss_representation(#[case] backend: B
 #[apply(backends)]
 #[tokio::test]
 async fn render_empty_user_feed_returns_representation(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
 
     // Create a user but no posts
-    let user = SeedUser::new().seed(&state).await;
+    let user = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await;
 
-    let row = render_feed(&state, fp(&format!("/~{}/feed.rss", user.username))).await;
+    let row = render_feed(
+        Arc::clone(&env.publisher()),
+        Arc::clone(&env.posts()),
+        fp(&format!("/~{}/feed.rss", user.username)),
+    )
+    .await;
 
     assert_eq!(
         row.representation().content_type(),
@@ -183,15 +197,22 @@ async fn render_empty_user_feed_returns_representation(#[case] backend: Backend)
 #[apply(backends)]
 #[tokio::test]
 async fn render_tag_surfaces_returns_representations(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
 
     // Create a user (posts are not required: the tag-window queries and the
     // SiteTag/UserTag canonical_url arms execute regardless of matches).
-    let user = SeedUser::new().seed(&state).await;
+    let user = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await;
 
     // Site-tag surface exercises the SiteTag canonical_url arm and the
     // window_site_tag storage query.
-    let site_tag = render_feed(&state, fp("/tags/rust/feed.rss")).await;
+    let site_tag = render_feed(
+        Arc::clone(&env.publisher()),
+        Arc::clone(&env.posts()),
+        fp("/tags/rust/feed.rss"),
+    )
+    .await;
     assert_eq!(
         site_tag.representation().content_type(),
         "application/rss+xml; charset=utf-8",
@@ -201,7 +222,8 @@ async fn render_tag_surfaces_returns_representations(#[case] backend: Backend) {
     // User-tag surface exercises the UserTag canonical_url arm and the
     // window_user_tag storage query.
     let user_tag = render_feed(
-        &state,
+        Arc::clone(&env.publisher()),
+        Arc::clone(&env.posts()),
         fp(&format!("/~{}/tags/rust/feed.rss", user.username)),
     )
     .await;
@@ -215,12 +237,16 @@ async fn render_tag_surfaces_returns_representations(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn render_each_format(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
 
     // Create a user with one post
-    let user = SeedUser::new().seed(&state).await;
+    let user = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await;
 
-    SeedRawPost::new(user.user_id).seed(&state).await;
+    SeedRawPost::new(user.user_id)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
+        .await;
 
     // Test each format
     let formats = [
@@ -239,7 +265,12 @@ async fn render_each_format(#[case] backend: Backend) {
     ];
 
     for (feed_url, expected_content_type) in &formats {
-        let row = render_feed(&state, fp(feed_url)).await;
+        let row = render_feed(
+            Arc::clone(&env.publisher()),
+            Arc::clone(&env.posts()),
+            fp(feed_url),
+        )
+        .await;
         assert_eq!(
             row.representation().content_type(),
             *expected_content_type,
@@ -260,25 +291,32 @@ async fn render_each_format(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn feed_contains_only_public_posts(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
 
-    let user = SeedUser::new().seed(&state).await;
+    let user = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await;
 
     let public = SeedRawPost::new(user.user_id)
         .audiences(vec![AudienceTarget::Public])
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await;
     let subscribers = SeedRawPost::new(user.user_id)
         .audiences(vec![AudienceTarget::Subscribers])
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await;
     // Private = no audience rows.
     let private = SeedRawPost::new(user.user_id)
         .audiences(vec![])
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await;
 
-    let row = render_feed(&state, fp(&format!("/~{}/feed.rss", user.username))).await;
+    let row = render_feed(
+        Arc::clone(&env.publisher()),
+        Arc::clone(&env.posts()),
+        fp(&format!("/~{}/feed.rss", user.username)),
+    )
+    .await;
 
     let body = row.representation().body();
     assert!(
@@ -306,16 +344,23 @@ async fn feed_contains_only_public_posts(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn regenerated_json_feed_carries_slug_ordered_tags(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
 
-    let user = SeedUser::new().seed(&state).await;
+    let user = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await;
     // Applied in reverse-slug order: an unordered read would surface "web" first.
     SeedRawPost::new(user.user_id)
         .tags(["web", "Rust"])
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await;
 
-    let row = render_feed(&state, fp(&format!("/~{}/feed.json", user.username))).await;
+    let row = render_feed(
+        Arc::clone(&env.publisher()),
+        Arc::clone(&env.posts()),
+        fp(&format!("/~{}/feed.json", user.username)),
+    )
+    .await;
 
     let body = row.representation().body();
     let v: serde_json::Value = serde_json::from_str(body).expect("feed body is JSON");
@@ -338,18 +383,32 @@ async fn regenerated_json_feed_carries_slug_ordered_tags(#[case] backend: Backen
 async fn regeneration_preserves_identity_only_for_byte_identical_cached_representations(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base } = backend.setup().await;
+    let env = backend.setup().await;
+    let base = &env.base;
     let publisher = PublisherService::new(
         base.path().to_path_buf(),
-        Arc::clone(&state.publisher),
-        state.write_scope.clone(),
+        Arc::clone(&env.publisher()),
+        env.write_scope(),
     );
-    let user = SeedUser::new().seed(&state).await;
+    let user = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await;
     let feed_path = fp(&format!("/~{}/feed.rss", user.username));
 
-    let empty = render_and_commit(&state, &publisher, feed_path.clone(), fixed_instant(1)).await;
-    let empty_no_op =
-        render_and_commit(&state, &publisher, feed_path.clone(), fixed_instant(2)).await;
+    let empty = render_and_commit(
+        Arc::clone(&env.posts()),
+        &publisher,
+        feed_path.clone(),
+        fixed_instant(1),
+    )
+    .await;
+    let empty_no_op = render_and_commit(
+        Arc::clone(&env.posts()),
+        &publisher,
+        feed_path.clone(),
+        fixed_instant(2),
+    )
+    .await;
     assert_eq!(
         empty_no_op.representation().body(),
         empty.representation().body(),
@@ -374,8 +433,13 @@ async fn regeneration_preserves_identity_only_for_byte_identical_cached_represen
             .expect("set WebSub hub"),
         "set WebSub hub",
     );
-    let metadata_changed =
-        render_and_commit(&state, &publisher, feed_path.clone(), fixed_instant(3)).await;
+    let metadata_changed = render_and_commit(
+        Arc::clone(&env.posts()),
+        &publisher,
+        feed_path.clone(),
+        fixed_instant(3),
+    )
+    .await;
     assert_ne!(
         metadata_changed.representation().body(),
         empty.representation().body(),
@@ -386,9 +450,16 @@ async fn regeneration_preserves_identity_only_for_byte_identical_cached_represen
         "metadata-only hub change replaces representation identity",
     );
 
-    let first = SeedRawPost::new(user.user_id).seed(&state).await;
-    let from_empty =
-        render_and_commit(&state, &publisher, feed_path.clone(), fixed_instant(4)).await;
+    let first = SeedRawPost::new(user.user_id)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
+        .await;
+    let from_empty = render_and_commit(
+        Arc::clone(&env.posts()),
+        &publisher,
+        feed_path.clone(),
+        fixed_instant(4),
+    )
+    .await;
     assert_ne!(
         from_empty.representation().body(),
         metadata_changed.representation().body(),
@@ -399,12 +470,32 @@ async fn regeneration_preserves_identity_only_for_byte_identical_cached_represen
         "transition from empty changes representation identity",
     );
 
-    let second = SeedRawPost::new(user.user_id).seed(&state).await;
+    let second = SeedRawPost::new(user.user_id)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
+        .await;
 
-    let two_items =
-        render_and_commit(&state, &publisher, feed_path.clone(), fixed_instant(5)).await;
-    delete_post(&state, second.post_id, user.user_id, fixed_instant(6)).await;
-    let one_item = render_and_commit(&state, &publisher, feed_path.clone(), fixed_instant(7)).await;
+    let two_items = render_and_commit(
+        Arc::clone(&env.posts()),
+        &publisher,
+        feed_path.clone(),
+        fixed_instant(5),
+    )
+    .await;
+    delete_post(
+        Arc::clone(&env.posts()),
+        env.write_scope(),
+        second.post_id,
+        user.user_id,
+        fixed_instant(6),
+    )
+    .await;
+    let one_item = render_and_commit(
+        Arc::clone(&env.posts()),
+        &publisher,
+        feed_path.clone(),
+        fixed_instant(7),
+    )
+    .await;
     assert_ne!(
         one_item.representation().body(),
         two_items.representation().body(),
@@ -429,8 +520,21 @@ async fn regeneration_preserves_identity_only_for_byte_identical_cached_represen
         "the removed item leaves the representation",
     );
 
-    delete_post(&state, first.post_id, user.user_id, fixed_instant(8)).await;
-    let to_empty = render_and_commit(&state, &publisher, feed_path, fixed_instant(9)).await;
+    delete_post(
+        Arc::clone(&env.posts()),
+        env.write_scope(),
+        first.post_id,
+        user.user_id,
+        fixed_instant(8),
+    )
+    .await;
+    let to_empty = render_and_commit(
+        Arc::clone(&env.posts()),
+        &publisher,
+        feed_path,
+        fixed_instant(9),
+    )
+    .await;
     assert_ne!(
         to_empty.representation().body(),
         one_item.representation().body(),
@@ -455,12 +559,13 @@ async fn regeneration_preserves_identity_only_for_byte_identical_cached_represen
 async fn concurrent_cold_cache_regeneration_returns_the_effective_stored_row(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let user = SeedUser::new().seed(&state).await;
+    let env = backend.setup().await;
+    let user = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await;
     let feed_path = fp(&format!("/~{}/feed.rss", user.username));
     assert!(
-        state
-            .feed_cache
+        env.feed_cache()
             .get(&feed_path)
             .await
             .expect("read empty cache")
@@ -468,12 +573,12 @@ async fn concurrent_cold_cache_regeneration_returns_the_effective_stored_row(
         "the race begins with no cache row",
     );
 
-    let snapshot = state
-        .publisher
+    let snapshot = env
+        .publisher()
         .snapshot()
         .await
         .expect("publisher snapshot");
-    let posts = Arc::clone(&state.posts);
+    let posts = Arc::clone(&env.posts());
     let (first_candidate, second_candidate) = tokio::join!(
         render(&snapshot, posts.as_ref(), feed_path.clone()),
         render(&snapshot, posts.as_ref(), feed_path.clone()),
@@ -495,22 +600,22 @@ async fn concurrent_cold_cache_regeneration_returns_the_effective_stored_row(
     let barrier = Arc::new(Barrier::new(2));
     let (first_effective, second_effective) = tokio::join!(
         commit_after_barrier(
-            Arc::clone(&state.publisher),
-            state.write_scope.clone(),
+            Arc::clone(&env.publisher()),
+            env.write_scope(),
             snapshot.generation,
             first_candidate,
             Arc::clone(&barrier),
         ),
         commit_after_barrier(
-            Arc::clone(&state.publisher),
-            state.write_scope.clone(),
+            Arc::clone(&env.publisher()),
+            env.write_scope(),
             snapshot.generation,
             second_candidate,
             barrier,
         ),
     );
-    let persisted = state
-        .feed_cache
+    let persisted = env
+        .feed_cache()
         .get(&feed_path)
         .await
         .expect("read committed cache")

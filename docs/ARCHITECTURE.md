@@ -149,19 +149,20 @@ relocated from `server` in #517). The trait bodies are implemented once by a
 generic `XStore<DB>` bounded on public `Backend: sqlx::Database`
 (`storage/src/backend.rs`, implemented for `Sqlite` and `Postgres`). `Backend`
 carries the `db.system` span constant and adapts sealed `WriteTransaction`
-capability to the concrete connection. Crate-private `AppStateBackend: Backend`,
-implemented only for those two backends, lets `StorageFactory` convert its pool
-into a backend-erased `WriteScope` on request. Downstream code can run the
-factory-minted scope but cannot name that trait or construct one from a pool,
-preserving ADR-0164's downstream-construction invariant without changing
-ADR-0019's public marker surface. Backend-specific SQL is isolated in per-trait
-`XDialect` impls under `storage/src/{sqlite,postgres}/*.rs`. Traits with no
-divergence need no dialect at all. Neither `Backend` nor `AppStateBackend`
-carries sqlx bind/executor bounds — each store impl restates exactly the subset
-it uses ([ADR-0019](adr/0019-generic-storage-backend-via-dialect.md)). Span
-names are backend-agnostic (`storage.posts.*`) with `db.system` distinguishing
-the backend. Pure-SQL helpers shared by both dialects live in
-`storage/src/sql.rs` and `storage/src/helpers.rs`.
+capability to the concrete connection. Crate-private
+`WriteScopeFactoryBackend: Backend`, implemented only for those two backends,
+lets `StorageFactory` convert its pool into a backend-erased `WriteScope` on
+request. Downstream code can run the factory-minted scope but cannot name that
+trait or construct one from a pool, preserving ADR-0164's
+downstream-construction invariant without changing ADR-0019's public marker
+surface. Backend-specific SQL is isolated in per-trait `XDialect` impls under
+`storage/src/{sqlite,postgres}/*.rs`. Traits with no divergence need no dialect
+at all. Neither `Backend` nor `WriteScopeFactoryBackend` carries sqlx
+bind/executor bounds — each store impl restates exactly the subset it uses
+([ADR-0019](adr/0019-generic-storage-backend-via-dialect.md)). Span names are
+backend-agnostic (`storage.posts.*`) with `db.system` distinguishing the
+backend. Pure-SQL helpers shared by both dialects live in `storage/src/sql.rs`
+and `storage/src/helpers.rs`.
 
 Backup is the deliberate exception to the dedup: `storage/src/sqlite/backup.rs`
 and `storage/src/postgres/backup.rs` are kept as separate implementations
@@ -169,7 +170,7 @@ because dump/restore is fundamentally backend-specific and a shared store would
 be a thin shell over a near-total dialect
 ([ADR-0019](adr/0019-generic-storage-backend-via-dialect.md)).
 
-### Dependency injection and AppState
+### Dependency injection and composition roots
 
 `storage::StorageFactory` (`storage/src/storage_factory.rs`) owns the
 runtime-selected pool and mints any of the fifteen `Arc<dyn *Storage>` handles
@@ -177,23 +178,23 @@ or the sealed `WriteScope` on demand. Database opening returns this factory
 rather than constructing storage handles. It stays at a composition root: the
 `Commands::execute` dispatcher and its nested action dispatchers open non-serve
 storage, request only the selected path's handles and scope, and inject them
-into command handlers as explicit parameters. The serve root alone asks the
-factory to assemble `storage::AppState` with all fifteen handles and the scope.
-`AppState` remains a storage-only construction bundle; services (mailer, WebSub
-client, background workers, and the media manager) are constructed in `server`
-and injected per-consumer as constructor parameters, and there is no services
-bundle. The durable invariant is that no heterogeneous dependency holder crosses
-the composition root
-([ADR-0016](adr/0016-dependency-injection-and-appstate.md)).
+into command handlers as explicit parameters. The serve root likewise mints
+named focused handles once. A private `ServeStorage` value organizes this
+breadth only among lifecycle composition helpers; routers, Leptos contexts,
+metrics, and background workers receive exact handles and services, never that
+value. Services (mailer, WebSub client, background workers, and the media
+manager) are constructed in `server` and injected per-consumer as constructor
+parameters. No heterogeneous dependency holder crosses from composition into a
+runtime subsystem ([ADR-0016](adr/0016-dependency-injection-and-appstate.md)).
 
-The web layer takes most dependencies per-trait via Leptos context and receives
+The web layer takes dependencies per-trait via Leptos context and receives
 `WriteScope` and `MediaContentLocks` as separate context values.
-`server::provide_app_state_contexts` (`server/src/context.rs:30`) publishes
-thirteen handles (all but `feed_cache` and `publisher`) plus the separately
-injected scope. Each ordinary server fn fetches exactly what it uses—
+`server/src/context.rs` owns focused context providers; each route family
+publishes only its declared storage handles and capabilities. Each ordinary
+server fn fetches exactly what it uses—
 `expect_context::<Arc<dyn UserStorage>>()`, `expect_context::<WriteScope>()`, or
-`expect_context::<Arc<MediaContentLocks>>()`. The helper lives in `server`, not
-`storage`, because using Leptos context as the DI mechanism is an
+`expect_context::<Arc<MediaContentLocks>>()`. The providers live in `server`,
+not `storage`, because using Leptos context as the DI mechanism is an
 application-wiring decision
 ([ADR-0016](adr/0016-dependency-injection-and-appstate.md)).
 
@@ -402,8 +403,8 @@ Details in the testing section.
 
 - **Structural write scopes and mutation outcomes.** A factory-minted, sealed,
   backend-erased `WriteScope` is injected separately beside the exact storage
-  traits. `StorageFactory` uses crate-private `AppStateBackend` to mint it on
-  request; downstream code cannot construct a scope from a pool
+  traits. `StorageFactory` uses crate-private `WriteScopeFactoryBackend` to mint
+  it on request; downstream code cannot construct a scope from a pool
   ([structural write scopes and mutation outcomes](adr/0164-structural-write-scopes-and-mutation-outcomes.md)).
   Its explicit `run` boundary supplies a sealed mutable `WriteTransaction`
   capability, never storage lookup or arbitrary SQL. The closed audited
@@ -1932,9 +1933,9 @@ symlink, or non-regular non-directory entry fails the whole filesystem sample:
 the collector reports the bounded `server.metrics.media_filesystem_bytes`
 diagnostic, clears that snapshot field, and emits no datapoint rather than zero
 or a partial value. Storage opening returns the database pool observer beside
-`StorageFactory`; the serve composition root retains it beside the assembled
-`AppState`. This preserves ADR-0016's rule that `AppState` remains storage-only
-while still allowing pool metrics.
+`StorageFactory`; the serve composition root passes the observer and exact
+storage dependencies directly to the metrics subsystem. Metrics therefore add no
+reason to assemble or retain heterogeneous application state.
 
 ### Errors at the boundary
 
@@ -2700,10 +2701,11 @@ rstest templates — lives inside `storage` as the `test_support` module, gated
 `posts`, and `users`) and re-exports their public harness surface
 ([ADR-0128](adr/0128-mod-rs-assembles-module-surface.md)). `storage`'s own tests
 reach it through `cfg(test)`; external test crates enable the `test-support`
-feature. A separate crate is impossible: it must return `storage::AppState`, so
-`storage`'s tests would dev-depend on a crate that depends on `storage`, and
-`storage`'s own test target then links two distinct instances of itself
-(`E0308: multiple different versions of crate storage`).
+feature. `TestEnv` privately owns the `StorageFactory`, exposes focused
+factory-backed accessors, and keeps the backend-specific `TestBase` public only
+for lifecycle and backend-level assertions. This gives every test exact
+dependencies without assembling application state while retaining backend
+provisioning and storage's own tests in one crate instance.
 
 `Backend::setup()` is an awaitable typed builder whose bare form establishes the
 shared HTTP-test site baseline: Open registration and the canonical

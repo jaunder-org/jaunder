@@ -18,7 +18,7 @@ use rstest::*;
 use rstest_reuse::*;
 use storage::{
     SessionStorage, WriteScope,
-    test_support::{Backend, TestEnv, backends},
+    test_support::{Backend, backends},
 };
 use tower::ServiceExt;
 
@@ -197,9 +197,14 @@ fn assert_silent_rejection(observation: &Observation, expected: StatusCode) {
 #[apply(backends)]
 #[tokio::test]
 async fn missing_malformed_unknown_and_revoked_cookies_return_401(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let sessions: Arc<dyn SessionStorage> = state.sessions.clone();
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let sessions: Arc<dyn SessionStorage> = env.sessions();
     let body = event_json();
 
     let cases = [
@@ -218,18 +223,14 @@ async fn missing_malformed_unknown_and_revoked_cookies_return_401(#[case] backen
         ),
     ];
     for request in cases {
-        let observation = observe(
-            app(sessions.clone(), state.write_scope.clone(), limiter()),
-            request,
-        )
-        .await;
+        let observation =
+            observe(app(sessions.clone(), env.write_scope(), limiter()), request).await;
         assert_silent_rejection(&observation, StatusCode::UNAUTHORIZED);
     }
 
     let token_hash = host::token::hash(&session.token).expect("hash session token");
     let sessions_for_revoke = Arc::clone(&sessions);
-    state
-        .write_scope
+    env.write_scope()
         .run(|transaction| {
             Box::pin(async move {
                 sessions_for_revoke
@@ -240,7 +241,7 @@ async fn missing_malformed_unknown_and_revoked_cookies_return_401(#[case] backen
         .await
         .expect("revoke session");
     let observation = observe(
-        app(sessions, state.write_scope.clone(), limiter()),
+        app(sessions, env.write_scope(), limiter()),
         request(
             body,
             Some("application/json"),
@@ -255,9 +256,14 @@ async fn missing_malformed_unknown_and_revoked_cookies_return_401(#[case] backen
 #[apply(backends)]
 #[tokio::test]
 async fn bearer_and_basic_without_cookie_return_401(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let sessions: Arc<dyn SessionStorage> = state.sessions.clone();
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let sessions: Arc<dyn SessionStorage> = env.sessions();
     let bearer = format!("Bearer {}", session.token);
     let basic = format!(
         "Basic {}",
@@ -267,7 +273,7 @@ async fn bearer_and_basic_without_cookie_return_401(#[case] backend: Backend) {
 
     for authorization in [&bearer, &basic] {
         let observation = observe(
-            app(sessions.clone(), state.write_scope.clone(), limiter()),
+            app(sessions.clone(), env.write_scope(), limiter()),
             request(
                 event_json(),
                 Some("application/json"),
@@ -285,9 +291,14 @@ async fn bearer_and_basic_without_cookie_return_401(#[case] backend: Backend) {
 async fn malformed_json_unsupported_version_unknown_enum_and_unknown_field_return_400(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let sessions: Arc<dyn SessionStorage> = state.sessions.clone();
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let sessions: Arc<dyn SessionStorage> = env.sessions();
     let cookie = session.cookie();
     let bodies = [
         "{".to_owned(),
@@ -298,7 +309,7 @@ async fn malformed_json_unsupported_version_unknown_enum_and_unknown_field_retur
 
     for body in bodies {
         let observation = observe(
-            app(sessions.clone(), state.write_scope.clone(), limiter()),
+            app(sessions.clone(), env.write_scope(), limiter()),
             request(body, Some("application/json"), Some(&cookie), None),
         )
         .await;
@@ -309,14 +320,19 @@ async fn malformed_json_unsupported_version_unknown_enum_and_unknown_field_retur
 #[apply(backends)]
 #[tokio::test]
 async fn missing_and_text_content_types_return_415(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let sessions: Arc<dyn SessionStorage> = state.sessions.clone();
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let sessions: Arc<dyn SessionStorage> = env.sessions();
     let cookie = session.cookie();
 
     for content_type in [None, Some("text/plain")] {
         let observation = observe(
-            app(sessions.clone(), state.write_scope.clone(), limiter()),
+            app(sessions.clone(), env.write_scope(), limiter()),
             request(event_json(), content_type, Some(&cookie), None),
         )
         .await;
@@ -327,9 +343,14 @@ async fn missing_and_text_content_types_return_415(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn body_limit_accepts_1024_for_decode_and_rejects_1025(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let sessions: Arc<dyn SessionStorage> = state.sessions.clone();
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let sessions: Arc<dyn SessionStorage> = env.sessions();
     let cookie = session.cookie();
 
     for (size, status) in [
@@ -340,7 +361,7 @@ async fn body_limit_accepts_1024_for_decode_and_rejects_1025(#[case] backend: Ba
         body.extend(std::iter::repeat_n(' ', size - 1));
         assert_eq!(body.len(), size);
         let observation = observe(
-            app(sessions.clone(), state.write_scope.clone(), limiter()),
+            app(sessions.clone(), env.write_scope(), limiter()),
             request(body, Some("application/json"), Some(&cookie), None),
         )
         .await;
@@ -351,11 +372,16 @@ async fn body_limit_accepts_1024_for_decode_and_rejects_1025(#[case] backend: Ba
 #[apply(backends)]
 #[tokio::test]
 async fn closed_session_storage_returns_silent_500(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let sessions: Arc<dyn SessionStorage> = state.sessions.clone();
-    let app = app(sessions, state.write_scope.clone(), limiter());
-    base.close_pool().await;
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let sessions: Arc<dyn SessionStorage> = env.sessions();
+    let app = app(sessions, env.write_scope(), limiter());
+    env.base.close_pool().await;
 
     let observation = observe(
         app,
@@ -373,11 +399,16 @@ async fn closed_session_storage_returns_silent_500(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn sixth_event_for_one_user_returns_silent_429(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let sessions: Arc<dyn SessionStorage> = state.sessions.clone();
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let sessions: Arc<dyn SessionStorage> = env.sessions();
     let limiter = limiter();
-    let app = app(sessions, state.write_scope.clone(), limiter);
+    let app = app(sessions, env.write_scope(), limiter);
     let cookie = session.cookie();
 
     for _ in 0..5 {
@@ -405,12 +436,17 @@ async fn sixth_event_for_one_user_returns_silent_429(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn valid_cookie_returns_204_and_reports_one_client_swallow(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let sessions: Arc<dyn SessionStorage> = state.sessions.clone();
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let sessions: Arc<dyn SessionStorage> = env.sessions();
 
     let observation = observe(
-        app(sessions, state.write_scope.clone(), limiter()),
+        app(sessions, env.write_scope(), limiter()),
         request(
             event_json(),
             Some("application/json"),
@@ -469,12 +505,22 @@ async fn valid_cookie_returns_204_and_reports_one_client_swallow(#[case] backend
 #[apply(backends)]
 #[tokio::test]
 async fn valid_cookie_wins_when_valid_bearer_or_basic_is_also_present(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie_session = create_user_and_session(&state).await;
-    let authorization_session = create_user_and_session(&state).await;
-    let sessions: Arc<dyn SessionStorage> = state.sessions.clone();
+    let env = backend.setup().await;
+    let cookie_session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let authorization_session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let sessions: Arc<dyn SessionStorage> = env.sessions();
     let limiter = limiter();
-    let app = app(sessions, state.write_scope.clone(), limiter);
+    let app = app(sessions, env.write_scope(), limiter);
 
     // Exhaust the Authorization user's bucket through the only accepted credential
     // source, its cookie. If Authorization were consulted below, both requests would

@@ -220,16 +220,21 @@ mod tests {
         // Keep the whole `TestEnv` bound: dropping `base` unlinks the SQLite file
         // (ADR-0053 TempDir hazard).
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         let expires_at: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
 
         // `create_password_reset` binds the `TokenHash`; `use_password_reset`
         // re-binds the hash of the same raw token to atomically claim the stored
         // row — a round trip through the `token_hash` column's sqlx bridge (#438).
-        let password_resets = Arc::clone(&env.state.password_resets);
+        let password_resets = Arc::clone(&env.password_resets());
         let outcome = env
-            .state
-            .write_scope
+            .write_scope()
             .run(|transaction| {
                 Box::pin(async move {
                     password_resets
@@ -240,10 +245,9 @@ mod tests {
             .await
             .unwrap();
         let raw_token = confirmed_for(outcome, "password-reset fixture setup");
-        let password_resets = Arc::clone(&env.state.password_resets);
+        let password_resets = Arc::clone(&env.password_resets());
         let outcome = env
-            .state
-            .write_scope
+            .write_scope()
             .run(|transaction| {
                 Box::pin(async move {
                     password_resets
@@ -263,7 +267,13 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         let now: UtcInstant = "2050-01-02T03:04:05Z".parse().unwrap();
         let expired_at = UtcInstant::from(
             now.value()
@@ -276,10 +286,9 @@ mod tests {
                 .expect("fixture is within Timestamp range"),
         );
 
-        let password_resets = Arc::clone(&env.state.password_resets);
+        let password_resets = Arc::clone(&env.password_resets());
         let outcome = env
-            .state
-            .write_scope
+            .write_scope()
             .run(|transaction| {
                 Box::pin(async move {
                     password_resets
@@ -291,10 +300,9 @@ mod tests {
             .unwrap();
         let expired_token = confirmed_for(outcome, "expired password-reset fixture");
 
-        let password_resets = Arc::clone(&env.state.password_resets);
+        let password_resets = Arc::clone(&env.password_resets());
         let outcome = env
-            .state
-            .write_scope
+            .write_scope()
             .run(|transaction| {
                 Box::pin(async move {
                     password_resets
@@ -307,10 +315,9 @@ mod tests {
         let boundary_token = confirmed_for(outcome, "boundary password-reset fixture");
         let boundary_hash = token::hash(&boundary_token).unwrap();
 
-        let password_resets = Arc::clone(&env.state.password_resets);
+        let password_resets = Arc::clone(&env.password_resets());
         let outcome = env
-            .state
-            .write_scope
+            .write_scope()
             .run(|transaction| {
                 Box::pin(async move {
                     password_resets
@@ -339,8 +346,7 @@ mod tests {
         });
 
         assert_eq!(
-            env.state
-                .password_resets
+            env.password_resets()
                 .prune_password_resets(now)
                 .await
                 .unwrap(),
@@ -348,10 +354,9 @@ mod tests {
         );
 
         for token in [expired_token, boundary_token] {
-            let password_resets = Arc::clone(&env.state.password_resets);
+            let password_resets = Arc::clone(&env.password_resets());
             let error = env
-                .state
-                .write_scope
+                .write_scope()
                 .run(|transaction| {
                     Box::pin(async move {
                         password_resets
@@ -367,10 +372,9 @@ mod tests {
             ));
         }
 
-        let password_resets = Arc::clone(&env.state.password_resets);
+        let password_resets = Arc::clone(&env.password_resets());
         let future = env
-            .state
-            .write_scope
+            .write_scope()
             .run(|transaction| {
                 Box::pin(async move {
                     password_resets
@@ -392,8 +396,7 @@ mod tests {
         let env = backend.setup().await;
         env.base.close_pool().await;
         assert!(
-            env.state
-                .password_resets
+            env.password_resets()
                 .prune_password_resets(UtcInstant::now())
                 .await
                 .is_err()

@@ -1,11 +1,13 @@
+use std::sync::Arc;
+
 use common::ids::PostId;
 use common::tag::{Tag, TagLabel};
 use common::test_support::parse_row_limit;
 use common::visibility::ViewerIdentity;
 use rstest::*;
 use rstest_reuse::*;
+use storage::PostTag;
 use storage::test_support::{Backend, SeedRawPost, SeedUser, backends};
-use storage::{AppState, PostTag};
 
 use super::fixtures::anon_by_tag;
 
@@ -15,17 +17,14 @@ use super::fixtures::anon_by_tag;
 /// Two dozen tag tests below re-read a post purely to assert on its tags; the
 /// unwrapping is noise that buries the assertion. Mirrors `slugs_of` in
 /// `storage/src/posts.rs`' test module, which extracted the same shape there.
-async fn tags_of(state: &AppState, post_id: PostId) -> Vec<PostTag> {
-    state
-        .posts
+async fn tags_of(posts: Arc<dyn storage::PostStorage>, post_id: PostId) -> Vec<PostTag> {
+    posts
         .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
         .await
         .expect("get_post_by_id failed")
         .expect("post exists")
         .tags
 }
-
-// =============================================================================
 // Tag Tests
 // =============================================================================
 
@@ -33,18 +32,20 @@ async fn tags_of(state: &AppState, post_id: PostId) -> Vec<PostTag> {
 #[tokio::test]
 async fn multiple_tags_on_single_post(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let user = SeedUser::new()
         .display_name("Multi")
-        .seed(state)
+        .seed(env.users(), env.write_scope())
         .await
         .user_id;
 
-    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
+    let post_id = SeedRawPost::new(user)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post_id,
         user,
         &[
@@ -56,7 +57,7 @@ async fn multiple_tags_on_single_post(#[case] backend: Backend) {
     .await
     .expect("set_post_tags failed");
 
-    let tags = tags_of(state, post_id).await;
+    let tags = tags_of(env.posts(), post_id).await;
 
     assert_eq!(tags.len(), 3);
     let tag_slugs: Vec<&str> = tags.iter().map(|t| t.tag_slug.as_ref()).collect();
@@ -69,16 +70,18 @@ async fn multiple_tags_on_single_post(#[case] backend: Backend) {
 #[tokio::test]
 async fn empty_tag_list(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let user = SeedUser::new()
         .display_name("NoTag")
-        .seed(state)
+        .seed(env.users(), env.write_scope())
         .await
         .user_id;
 
-    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
+    let post_id = SeedRawPost::new(user)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
-    let tags = tags_of(state, post_id).await;
+    let tags = tags_of(env.posts(), post_id).await;
 
     assert_eq!(tags.len(), 0);
 }
@@ -87,21 +90,26 @@ async fn empty_tag_list(#[case] backend: Backend) {
 #[tokio::test]
 async fn tag_case_preservation_variants(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let user = SeedUser::new()
         .display_name("Case")
-        .seed(state)
+        .seed(env.users(), env.write_scope())
         .await
         .user_id;
 
-    let post1 = SeedRawPost::new(user).seed(state).await.post_id;
+    let post1 = SeedRawPost::new(user)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
-    let post2 = SeedRawPost::new(user).seed(state).await.post_id;
+    let post2 = SeedRawPost::new(user)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
     // Tag with different casings but same canonical form - should map to same slug
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post1,
         user,
         &["Web-Development".parse::<TagLabel>().unwrap()],
@@ -109,8 +117,8 @@ async fn tag_case_preservation_variants(#[case] backend: Backend) {
     .await
     .expect("set_post_tags post1 failed");
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post2,
         user,
         &["WEB-DEVELOPMENT".parse::<TagLabel>().unwrap()],
@@ -118,8 +126,8 @@ async fn tag_case_preservation_variants(#[case] backend: Backend) {
     .await
     .expect("set_post_tags post2 failed");
 
-    let tags1 = tags_of(state, post1).await;
-    let tags2 = tags_of(state, post2).await;
+    let tags1 = tags_of(env.posts(), post1).await;
+    let tags2 = tags_of(env.posts(), post2).await;
 
     assert_eq!(tags1[0].tag_slug, "web-development");
     assert_eq!(tags2[0].tag_slug, "web-development");
@@ -127,7 +135,7 @@ async fn tag_case_preservation_variants(#[case] backend: Backend) {
     assert_eq!(tags2[0].tag_display, "WEB-DEVELOPMENT");
 
     let tag_slug: Tag = "web-development".parse().unwrap();
-    let posts = anon_by_tag(state, &tag_slug, "50").await;
+    let posts = anon_by_tag(env.posts(), &tag_slug, "50").await;
 
     assert_eq!(posts.len(), 2);
 }
@@ -136,18 +144,20 @@ async fn tag_case_preservation_variants(#[case] backend: Backend) {
 #[tokio::test]
 async fn restating_the_set_without_one_tag_drops_only_that_tag(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let user = SeedUser::new()
         .display_name("Selective")
-        .seed(state)
+        .seed(env.users(), env.write_scope())
         .await
         .user_id;
 
-    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
+    let post_id = SeedRawPost::new(user)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post_id,
         user,
         &[
@@ -159,13 +169,13 @@ async fn restating_the_set_without_one_tag_drops_only_that_tag(#[case] backend: 
     .await
     .expect("set_post_tags failed");
 
-    let tags = tags_of(state, post_id).await;
+    let tags = tags_of(env.posts(), post_id).await;
     assert_eq!(tags.len(), 3);
 
     // Dropping one tag is expressed by restating the desired set without it.
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post_id,
         user,
         &[
@@ -176,7 +186,7 @@ async fn restating_the_set_without_one_tag_drops_only_that_tag(#[case] backend: 
     .await
     .expect("set_post_tags failed");
 
-    let tags = tags_of(state, post_id).await;
+    let tags = tags_of(env.posts(), post_id).await;
     assert_eq!(tags.len(), 2);
     let tag_slugs: Vec<&str> = tags.iter().map(|t| t.tag_slug.as_ref()).collect();
     assert!(!tag_slugs.contains(&"tag-b"));
@@ -188,18 +198,20 @@ async fn restating_the_set_without_one_tag_drops_only_that_tag(#[case] backend: 
 #[tokio::test]
 async fn numeric_tag(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let user = SeedUser::new()
         .display_name("Numeric")
-        .seed(state)
+        .seed(env.users(), env.write_scope())
         .await
         .user_id;
 
-    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
+    let post_id = SeedRawPost::new(user)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post_id,
         user,
         &[
@@ -211,7 +223,7 @@ async fn numeric_tag(#[case] backend: Backend) {
     .await
     .expect("set_post_tags failed");
 
-    let tags = tags_of(state, post_id).await;
+    let tags = tags_of(env.posts(), post_id).await;
 
     assert_eq!(tags.len(), 3);
     let tag_slugs: Vec<&str> = tags.iter().map(|t| t.tag_slug.as_ref()).collect();
@@ -224,10 +236,9 @@ async fn numeric_tag(#[case] backend: Backend) {
 #[tokio::test]
 async fn many_tags_many_posts(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let user = SeedUser::new()
         .display_name("ManyTags")
-        .seed(state)
+        .seed(env.users(), env.write_scope())
         .await
         .user_id;
 
@@ -239,12 +250,15 @@ async fn many_tags_many_posts(#[case] backend: Backend) {
         .collect();
 
     for _ in 0..3 {
-        let post_id = SeedRawPost::new(user).seed(state).await.post_id;
+        let post_id = SeedRawPost::new(user)
+            .seed(env.posts(), env.write_scope())
+            .await
+            .post_id;
         post_ids.push(post_id);
 
         storage::test_support::set_post_tags_confirmed(
-            &state.write_scope,
-            std::sync::Arc::clone(&state.posts),
+            &env.write_scope(),
+            std::sync::Arc::clone(&env.posts()),
             post_id,
             user,
             &labels,
@@ -254,13 +268,13 @@ async fn many_tags_many_posts(#[case] backend: Backend) {
     }
 
     for post_id in &post_ids {
-        let tags_on_post = tags_of(state, *post_id).await;
+        let tags_on_post = tags_of(env.posts(), *post_id).await;
         assert_eq!(tags_on_post.len(), 5);
     }
 
     for tag in &tags {
         let tag_slug: Tag = tag.parse().unwrap();
-        let posts = anon_by_tag(state, &tag_slug, "50").await;
+        let posts = anon_by_tag(env.posts(), &tag_slug, "50").await;
         assert_eq!(posts.len(), 3);
     }
 }
@@ -269,18 +283,20 @@ async fn many_tags_many_posts(#[case] backend: Backend) {
 #[tokio::test]
 async fn tag_all_numeric(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let user = SeedUser::new()
         .display_name("NumericOnly")
-        .seed(state)
+        .seed(env.users(), env.write_scope())
         .await
         .user_id;
 
-    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
+    let post_id = SeedRawPost::new(user)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post_id,
         user,
         &[
@@ -291,7 +307,7 @@ async fn tag_all_numeric(#[case] backend: Backend) {
     .await
     .expect("set_post_tags failed");
 
-    let tags = tags_of(state, post_id).await;
+    let tags = tags_of(env.posts(), post_id).await;
 
     assert_eq!(tags.len(), 2);
     let tag_slugs: Vec<&str> = tags.iter().map(|t| t.tag_slug.as_ref()).collect();
@@ -303,19 +319,21 @@ async fn tag_all_numeric(#[case] backend: Backend) {
 #[tokio::test]
 async fn tag_hyphen_boundaries(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let user = SeedUser::new()
         .display_name("Hyphen")
-        .seed(state)
+        .seed(env.users(), env.write_scope())
         .await
         .user_id;
 
-    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
+    let post_id = SeedRawPost::new(user)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
     // Valid: hyphens in the middle and at end
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post_id,
         user,
         &[
@@ -327,7 +345,7 @@ async fn tag_hyphen_boundaries(#[case] backend: Backend) {
     .await
     .expect("set_post_tags failed");
 
-    let tags = tags_of(state, post_id).await;
+    let tags = tags_of(env.posts(), post_id).await;
 
     assert_eq!(tags.len(), 3);
 
@@ -341,19 +359,21 @@ async fn tag_hyphen_boundaries(#[case] backend: Backend) {
 #[tokio::test]
 async fn tag_with_long_display(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let user = SeedUser::new()
         .display_name("LongTagUser")
-        .seed(state)
+        .seed(env.users(), env.write_scope())
         .await
         .user_id;
 
-    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
+    let post_id = SeedRawPost::new(user)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
     let long_display = "very-long-technical-term-with-many-hyphens-and-lowercase-letters";
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post_id,
         user,
         &[long_display.parse::<TagLabel>().unwrap()],
@@ -361,7 +381,7 @@ async fn tag_with_long_display(#[case] backend: Backend) {
     .await
     .expect("set_post_tags failed");
 
-    let tags = tags_of(state, post_id).await;
+    let tags = tags_of(env.posts(), post_id).await;
 
     assert_eq!(tags.len(), 1);
     assert_eq!(tags[0].tag_display, long_display);
@@ -371,21 +391,26 @@ async fn tag_with_long_display(#[case] backend: Backend) {
 #[tokio::test]
 async fn tag_list_ordering(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let user = SeedUser::new()
         .display_name("Ordering")
-        .seed(state)
+        .seed(env.users(), env.write_scope())
         .await
         .user_id;
 
-    let post1 = SeedRawPost::new(user).seed(state).await.post_id;
+    let post1 = SeedRawPost::new(user)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
-    let post2 = SeedRawPost::new(user).seed(state).await.post_id;
+    let post2 = SeedRawPost::new(user)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
     // Tag in an order that is not the expected slug order.
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post1,
         user,
         &[
@@ -398,8 +423,8 @@ async fn tag_list_ordering(#[case] backend: Backend) {
     .expect("set_post_tags failed");
 
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post2,
         user,
         &["mango".parse::<TagLabel>().unwrap()],
@@ -407,14 +432,14 @@ async fn tag_list_ordering(#[case] backend: Backend) {
     .await
     .expect("set_post_tags failed");
 
-    let tags1 = tags_of(state, post1).await;
+    let tags1 = tags_of(env.posts(), post1).await;
 
     assert_eq!(tags1.len(), 3);
     let slugs1: Vec<&str> = tags1.iter().map(|t| t.tag_slug.as_ref()).collect();
     assert_eq!(slugs1, vec!["apple", "mango", "zebra"]);
 
     // Verify consistency on multiple calls
-    let tags1_again = tags_of(state, post1).await;
+    let tags1_again = tags_of(env.posts(), post1).await;
 
     assert_eq!(tags1_again.len(), 3);
     assert_eq!(tags1_again[0].tag_slug, "apple");
@@ -424,21 +449,26 @@ async fn tag_list_ordering(#[case] backend: Backend) {
 #[tokio::test]
 async fn tags_for_multiple_posts(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let user = SeedUser::new()
         .display_name("MultiPost")
-        .seed(state)
+        .seed(env.users(), env.write_scope())
         .await
         .user_id;
 
-    let post1 = SeedRawPost::new(user).seed(state).await.post_id;
+    let post1 = SeedRawPost::new(user)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
-    let post2 = SeedRawPost::new(user).seed(state).await.post_id;
+    let post2 = SeedRawPost::new(user)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
     // Only post2 is tagged; post1 stays untagged to assert the empty case.
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post2,
         user,
         &["featured".parse::<TagLabel>().unwrap()],
@@ -446,10 +476,10 @@ async fn tags_for_multiple_posts(#[case] backend: Backend) {
     .await
     .expect("set_post_tags failed");
 
-    let tags1 = tags_of(state, post1).await;
+    let tags1 = tags_of(env.posts(), post1).await;
     assert_eq!(tags1.len(), 0);
 
-    let tags2 = tags_of(state, post2).await;
+    let tags2 = tags_of(env.posts(), post2).await;
     assert_eq!(tags2.len(), 1);
 }
 
@@ -457,18 +487,20 @@ async fn tags_for_multiple_posts(#[case] backend: Backend) {
 #[tokio::test]
 async fn tag_mixed_alphanumeric(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let user = SeedUser::new()
         .display_name("Mixed")
-        .seed(state)
+        .seed(env.users(), env.write_scope())
         .await
         .user_id;
 
-    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
+    let post_id = SeedRawPost::new(user)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post_id,
         user,
         &[
@@ -480,7 +512,7 @@ async fn tag_mixed_alphanumeric(#[case] backend: Backend) {
     .await
     .expect("set_post_tags failed");
 
-    let tags = tags_of(state, post_id).await;
+    let tags = tags_of(env.posts(), post_id).await;
 
     assert_eq!(tags.len(), 3);
     assert_eq!(tags[0].tag_slug, "3d-graphics");
@@ -492,18 +524,20 @@ async fn tag_mixed_alphanumeric(#[case] backend: Backend) {
 #[tokio::test]
 async fn simple_tag_lifecycle(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let user = SeedUser::new()
         .display_name("Simple")
-        .seed(state)
+        .seed(env.users(), env.write_scope())
         .await
         .user_id;
 
-    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
+    let post_id = SeedRawPost::new(user)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post_id,
         user,
         &["test".parse::<TagLabel>().unwrap()],
@@ -511,18 +545,18 @@ async fn simple_tag_lifecycle(#[case] backend: Backend) {
     .await
     .expect("set_post_tags failed");
 
-    let tags_before = tags_of(state, post_id).await;
+    let tags_before = tags_of(env.posts(), post_id).await;
     assert_eq!(tags_before.len(), 1);
     assert_eq!(tags_before[0].tag_display, "test");
 
     let tag_slug: Tag = "test".parse().unwrap();
-    let posts_before = anon_by_tag(state, &tag_slug, "50").await;
+    let posts_before = anon_by_tag(env.posts(), &tag_slug, "50").await;
     assert_eq!(posts_before.len(), 1);
 
     // An empty desired set clears the post's tags (D11).
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post_id,
         user,
         &[],
@@ -530,11 +564,11 @@ async fn simple_tag_lifecycle(#[case] backend: Backend) {
     .await
     .expect("set_post_tags failed");
 
-    let tags_after = tags_of(state, post_id).await;
+    let tags_after = tags_of(env.posts(), post_id).await;
     assert_eq!(tags_after.len(), 0);
 
     // List by tag again - should return empty list (tag exists but no posts have it)
-    let posts_after = anon_by_tag(state, &tag_slug, "50").await;
+    let posts_after = anon_by_tag(env.posts(), &tag_slug, "50").await;
     assert_eq!(posts_after.len(), 0);
 }
 
@@ -542,18 +576,20 @@ async fn simple_tag_lifecycle(#[case] backend: Backend) {
 #[tokio::test]
 async fn tag_creation_and_retrieval(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let user = SeedUser::new()
         .display_name("Alice")
-        .seed(state)
+        .seed(env.users(), env.write_scope())
         .await
         .user_id;
 
-    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
+    let post_id = SeedRawPost::new(user)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post_id,
         user,
         &["rust".parse::<TagLabel>().unwrap()],
@@ -561,7 +597,7 @@ async fn tag_creation_and_retrieval(#[case] backend: Backend) {
     .await
     .expect("set_post_tags failed");
 
-    let tags = tags_of(state, post_id).await;
+    let tags = tags_of(env.posts(), post_id).await;
 
     assert_eq!(tags.len(), 1);
     assert_eq!(tags[0].tag_slug, "rust");
@@ -572,18 +608,20 @@ async fn tag_creation_and_retrieval(#[case] backend: Backend) {
 #[tokio::test]
 async fn tag_normalization(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let user = SeedUser::new()
         .display_name("Bob")
-        .seed(state)
+        .seed(env.users(), env.write_scope())
         .await
         .user_id;
 
-    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
+    let post_id = SeedRawPost::new(user)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post_id,
         user,
         &["Rust-Web".parse::<TagLabel>().unwrap()],
@@ -591,7 +629,7 @@ async fn tag_normalization(#[case] backend: Backend) {
     .await
     .expect("set_post_tags failed");
 
-    let tags = tags_of(state, post_id).await;
+    let tags = tags_of(env.posts(), post_id).await;
 
     assert_eq!(tags.len(), 1);
     assert_eq!(tags[0].tag_slug, "rust-web"); // normalized
@@ -602,14 +640,19 @@ async fn tag_normalization(#[case] backend: Backend) {
 #[tokio::test]
 async fn tag_edge_case_formats(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user = SeedUser::new().seed(state).await.user_id;
+    let user = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
-    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
+    let post_id = SeedRawPost::new(user)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post_id,
         user,
         &[
@@ -621,7 +664,7 @@ async fn tag_edge_case_formats(#[case] backend: Backend) {
     .await
     .expect("numeric, hyphenated and mixed-case tags failed");
 
-    let tags = tags_of(state, post_id).await;
+    let tags = tags_of(env.posts(), post_id).await;
 
     assert_eq!(tags.len(), 3);
 }
@@ -630,14 +673,19 @@ async fn tag_edge_case_formats(#[case] backend: Backend) {
 #[tokio::test]
 async fn tag_display_preservation(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user = SeedUser::new().seed(state).await.user_id;
+    let user = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
-    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
+    let post_id = SeedRawPost::new(user)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post_id,
         user,
         &["MySpecialTag".parse::<TagLabel>().unwrap()],
@@ -645,7 +693,7 @@ async fn tag_display_preservation(#[case] backend: Backend) {
     .await
     .expect("set_post_tags failed");
 
-    let tags = tags_of(state, post_id).await;
+    let tags = tags_of(env.posts(), post_id).await;
 
     assert_eq!(tags.len(), 1);
     assert_eq!(tags[0].tag_display, "MySpecialTag");
@@ -656,14 +704,19 @@ async fn tag_display_preservation(#[case] backend: Backend) {
 #[tokio::test]
 async fn reconciling_to_a_smaller_set_preserves_the_surviving_tags(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user = SeedUser::new().seed(state).await.user_id;
+    let user = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
-    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
+    let post_id = SeedRawPost::new(user)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post_id,
         user,
         &[
@@ -675,13 +728,13 @@ async fn reconciling_to_a_smaller_set_preserves_the_surviving_tags(#[case] backe
     .await
     .expect("set_post_tags failed");
 
-    let tags = tags_of(state, post_id).await;
+    let tags = tags_of(env.posts(), post_id).await;
     assert_eq!(tags.len(), 3);
 
     // Restating the set without tag2 drops it and leaves the others in place.
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post_id,
         user,
         &[
@@ -692,7 +745,7 @@ async fn reconciling_to_a_smaller_set_preserves_the_surviving_tags(#[case] backe
     .await
     .expect("set_post_tags failed");
 
-    let tags = tags_of(state, post_id).await;
+    let tags = tags_of(env.posts(), post_id).await;
     assert_eq!(tags.len(), 2);
     let tag_slugs: Vec<_> = tags.iter().map(|t| t.tag_slug.as_ref()).collect();
     assert!(!tag_slugs.contains(&"tag2"));
@@ -704,13 +757,15 @@ async fn reconciling_to_a_smaller_set_preserves_the_surviving_tags(#[case] backe
 #[tokio::test]
 async fn list_tags_returns_alphabetical_with_prefix(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let user = SeedUser::new()
         .display_name("ListTags")
-        .seed(state)
+        .seed(env.users(), env.write_scope())
         .await
         .user_id;
-    let post = SeedRawPost::new(user).seed(state).await.post_id;
+    let post = SeedRawPost::new(user)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
     // Mixed-case display tokens — the slug should normalize to lowercase.
     let labels: Vec<TagLabel> = ["Rust", "rust-lang", "performance", "PostgreSQL", "web"]
@@ -718,8 +773,8 @@ async fn list_tags_returns_alphabetical_with_prefix(#[case] backend: Backend) {
         .map(|display| display.parse::<TagLabel>().unwrap())
         .collect();
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post,
         user,
         &labels,
@@ -728,8 +783,8 @@ async fn list_tags_returns_alphabetical_with_prefix(#[case] backend: Backend) {
     .unwrap();
 
     // No prefix → all tags, alphabetical by slug.
-    let all = state
-        .posts
+    let all = env
+        .posts()
         .list_tags(None, parse_row_limit("50"))
         .await
         .unwrap();
@@ -740,8 +795,8 @@ async fn list_tags_returns_alphabetical_with_prefix(#[case] backend: Backend) {
     );
 
     // Prefix "rust" → "rust" and "rust-lang", still alphabetical.
-    let rs = state
-        .posts
+    let rs = env
+        .posts()
         .list_tags(Some("rust"), parse_row_limit("50"))
         .await
         .unwrap();
@@ -749,8 +804,8 @@ async fn list_tags_returns_alphabetical_with_prefix(#[case] backend: Backend) {
     assert_eq!(rs_slugs, vec!["rust", "rust-lang"]);
 
     // Prefix case-insensitive: "RUST" matches the same set.
-    let upper = state
-        .posts
+    let upper = env
+        .posts()
         .list_tags(Some("RUST"), parse_row_limit("50"))
         .await
         .unwrap();
@@ -758,24 +813,24 @@ async fn list_tags_returns_alphabetical_with_prefix(#[case] backend: Backend) {
     assert_eq!(upper_slugs, vec!["rust", "rust-lang"]);
 
     // Limit clamps the result.
-    let limited = state
-        .posts
+    let limited = env
+        .posts()
         .list_tags(None, parse_row_limit("2"))
         .await
         .unwrap();
     assert_eq!(limited.len(), 2);
 
     // Empty-string prefix is treated as "no prefix".
-    let empty = state
-        .posts
+    let empty = env
+        .posts()
         .list_tags(Some("   "), parse_row_limit("50"))
         .await
         .unwrap();
     assert_eq!(empty.len(), 5);
 
     // Nonexistent prefix → empty.
-    let none = state
-        .posts
+    let none = env
+        .posts()
         .list_tags(Some("zz"), parse_row_limit("50"))
         .await
         .unwrap();
@@ -786,16 +841,18 @@ async fn list_tags_returns_alphabetical_with_prefix(#[case] backend: Backend) {
 #[tokio::test]
 async fn post_record_carries_tags(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let user = SeedUser::new()
         .display_name("Inline")
-        .seed(state)
+        .seed(env.users(), env.write_scope())
         .await
         .user_id;
 
     let mut post_ids = Vec::new();
     for _ in 1..=3 {
-        let id = SeedRawPost::new(user).seed(state).await.post_id;
+        let id = SeedRawPost::new(user)
+            .seed(env.posts(), env.write_scope())
+            .await
+            .post_id;
         post_ids.push(id);
     }
     let (p1, p2, p3) = (post_ids[0], post_ids[1], post_ids[2]);
@@ -804,8 +861,8 @@ async fn post_record_carries_tags(#[case] backend: Backend) {
     // ordering rather than coinciding with insertion order (#772);
     // p2: one tag; p3: none.
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         p1,
         user,
         &[
@@ -816,8 +873,8 @@ async fn post_record_carries_tags(#[case] backend: Backend) {
     .await
     .unwrap();
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         p2,
         user,
         &["performance".parse::<TagLabel>().unwrap()],
@@ -827,8 +884,8 @@ async fn post_record_carries_tags(#[case] backend: Backend) {
 
     // Each loaded post carries its own tags from the same query that loaded
     // the rest of the row — no separate batch call.
-    let p1_record = state
-        .posts
+    let p1_record = env
+        .posts()
         .get_post_by_id(p1, &ViewerIdentity::Anonymous)
         .await
         .expect("get_post_by_id p1")
@@ -838,8 +895,8 @@ async fn post_record_carries_tags(#[case] backend: Backend) {
     // Display casing is preserved.
     assert!(p1_record.tags.iter().any(|t| t.tag_display == "Rust"));
 
-    let p2_record = state
-        .posts
+    let p2_record = env
+        .posts()
         .get_post_by_id(p2, &ViewerIdentity::Anonymous)
         .await
         .expect("get_post_by_id p2")
@@ -848,8 +905,8 @@ async fn post_record_carries_tags(#[case] backend: Backend) {
     assert_eq!(p2_record.tags[0].tag_slug, "performance");
     assert_eq!(p2_record.tags[0].tag_display, "performance");
 
-    let p3_record = state
-        .posts
+    let p3_record = env
+        .posts()
         .get_post_by_id(p3, &ViewerIdentity::Anonymous)
         .await
         .expect("get_post_by_id p3")

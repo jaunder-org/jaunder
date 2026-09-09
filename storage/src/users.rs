@@ -686,18 +686,17 @@ mod tests {
     use std::sync::Arc;
 
     async fn create_user_confirmed(
-        state: &Arc<crate::AppState>,
+        users: Arc<dyn UserStorage>,
+        write_scope: crate::WriteScope,
         username: Username,
         password: host::password::Password,
         display_name: Option<DisplayName>,
         is_operator: OperatorStatus,
     ) -> UserId {
-        let users = Arc::clone(&state.users);
         let password = prepare_password(password)
             .await
             .expect("user fixture password preparation should succeed");
-        let outcome = state
-            .write_scope
+        let outcome = write_scope
             .run(|transaction| {
                 Box::pin(async move {
                     users
@@ -717,14 +716,13 @@ mod tests {
     }
 
     async fn set_email(
-        state: &Arc<crate::AppState>,
+        users: Arc<dyn UserStorage>,
+        write_scope: crate::WriteScope,
         user_id: UserId,
         email: Email,
         verified: EmailVerified,
     ) {
-        let users = Arc::clone(&state.users);
-        let outcome = state
-            .write_scope
+        let outcome = write_scope
             .run(|transaction| {
                 Box::pin(async move {
                     users
@@ -738,17 +736,16 @@ mod tests {
     }
 
     async fn authenticate(
-        state: &Arc<crate::AppState>,
+        users: Arc<dyn UserStorage>,
+        write_scope: crate::WriteScope,
         username: Username,
         password: host::password::Password,
     ) -> Result<UserRecord, crate::WriteScopeError<UserAuthError>> {
-        let users = Arc::clone(&state.users);
         let authentication = users
             .prepare_authentication(&username, &password)
             .await
             .map_err(crate::WriteScopeError::Operation)?;
-        let outcome = state
-            .write_scope
+        let outcome = write_scope
             .run(|transaction| {
                 Box::pin(async move { users.authenticate(transaction, authentication).await })
             })
@@ -773,7 +770,8 @@ mod tests {
         let display_name = parse_display_name("Alice Example");
         let password = host::test_support::parse_password("password123");
         let user_id = create_user_confirmed(
-            &env.state,
+            env.users().clone(),
+            env.write_scope().clone(),
             username.clone(),
             password.clone(),
             Some(display_name.clone()),
@@ -782,11 +780,10 @@ mod tests {
         .await;
 
         let email = parse_email("alice@example.com");
-        let users = Arc::clone(&env.state.users);
+        let users = Arc::clone(&env.users());
         let updated_email = email.clone();
         let outcome = env
-            .state
-            .write_scope
+            .write_scope()
             .run(|transaction| {
                 Box::pin(async move {
                     users
@@ -803,7 +800,7 @@ mod tests {
             .unwrap();
         assert!(matches!(outcome, common::MutationOutcome::Confirmed(())));
 
-        let record = env.state.users.get_user(user_id).await.unwrap().unwrap();
+        let record = env.users().get_user(user_id).await.unwrap().unwrap();
         assert_eq!(record.username, username);
         assert_eq!(record.display_name, Some(display_name));
         assert_eq!(record.email, Some(email));
@@ -813,8 +810,7 @@ mod tests {
         // `get_user_by_username` binds the `Username` and decodes the same columns
         // via a second query.
         let by_name = env
-            .state
-            .users
+            .users()
             .get_user_by_username(&username)
             .await
             .unwrap()
@@ -823,9 +819,14 @@ mod tests {
         assert_eq!(by_name.email_verified, EmailVerified::VERIFIED);
         assert_eq!(by_name.is_operator, OperatorStatus::OPERATOR);
 
-        let authenticated = authenticate(&env.state, username.clone(), password.clone())
-            .await
-            .unwrap();
+        let authenticated = authenticate(
+            env.users().clone(),
+            env.write_scope().clone(),
+            username.clone(),
+            password.clone(),
+        )
+        .await
+        .unwrap();
         assert_eq!(authenticated.email_verified, EmailVerified::VERIFIED);
         assert_eq!(authenticated.is_operator, OperatorStatus::OPERATOR);
     }
@@ -837,45 +838,62 @@ mod tests {
         let email = parse_email("shared@example.com");
 
         assert!(
-            env.state
-                .users
+            env.users()
                 .get_users_by_email(&email)
                 .await
                 .unwrap()
                 .is_empty()
         );
 
-        let alice = SeedUser::new().seed(&env.state).await;
+        let alice = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         set_email(
-            &env.state,
+            env.users().clone(),
+            env.write_scope().clone(),
             alice.user_id,
             email.clone(),
             EmailVerified::VERIFIED,
         )
         .await;
-        let one_match = env.state.users.get_users_by_email(&email).await.unwrap();
+        let one_match = env.users().get_users_by_email(&email).await.unwrap();
         assert_eq!(one_match.len(), 1);
         assert_eq!(one_match[0].user_id, alice.user_id);
         assert_eq!(one_match[0].email_verified, EmailVerified::VERIFIED);
 
-        let bob = SeedUser::new().seed(&env.state).await;
-        let carol = SeedUser::new().seed(&env.state).await;
+        let bob = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
+        let carol = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         set_email(
-            &env.state,
+            env.users().clone(),
+            env.write_scope().clone(),
             bob.user_id,
             email.clone(),
             EmailVerified::UNVERIFIED,
         )
         .await;
         set_email(
-            &env.state,
+            env.users().clone(),
+            env.write_scope().clone(),
             carol.user_id,
             email.clone(),
             EmailVerified::VERIFIED,
         )
         .await;
 
-        let matches = env.state.users.get_users_by_email(&email).await.unwrap();
+        let matches = env.users().get_users_by_email(&email).await.unwrap();
         assert_eq!(matches.len(), 3);
         assert!(matches.iter().any(|user| {
             user.user_id == alice.user_id && user.email_verified == EmailVerified::VERIFIED
@@ -895,7 +913,8 @@ mod tests {
         let env = backend.setup().await;
         let username: Username = parse_username("bob");
         let user_id = create_user_confirmed(
-            &env.state,
+            env.users().clone(),
+            env.write_scope().clone(),
             username.clone(),
             host::test_support::parse_password("password123"),
             None,
@@ -903,7 +922,7 @@ mod tests {
         )
         .await;
 
-        let record = env.state.users.get_user(user_id).await.unwrap().unwrap();
+        let record = env.users().get_user(user_id).await.unwrap().unwrap();
         assert_eq!(record.username, username);
         assert_eq!(record.display_name, None);
         assert_eq!(record.email, None);
@@ -916,7 +935,8 @@ mod tests {
         let username = parse_username("authenticated");
         let password = host::test_support::parse_password("password123");
         let user_id = create_user_confirmed(
-            &env.state,
+            env.users().clone(),
+            env.write_scope().clone(),
             username.clone(),
             password.clone(),
             None,
@@ -924,17 +944,22 @@ mod tests {
         )
         .await;
 
-        let created = env.state.users.get_user(user_id).await.unwrap().unwrap();
+        let created = env.users().get_user(user_id).await.unwrap().unwrap();
         assert!(created.created_at <= UtcInstant::now());
         assert_eq!(created.last_authenticated_at, None);
 
-        let authenticated = authenticate(&env.state, username.clone(), password.clone())
-            .await
-            .unwrap();
+        let authenticated = authenticate(
+            env.users().clone(),
+            env.write_scope().clone(),
+            username.clone(),
+            password.clone(),
+        )
+        .await
+        .unwrap();
         assert_eq!(authenticated.created_at, created.created_at);
         assert!(authenticated.last_authenticated_at.is_some());
 
-        let reread = env.state.users.get_user(user_id).await.unwrap().unwrap();
+        let reread = env.users().get_user(user_id).await.unwrap().unwrap();
         assert_eq!(
             reread
                 .last_authenticated_at
@@ -949,7 +974,13 @@ mod tests {
     #[tokio::test]
     async fn get_user_rejects_a_malformed_username_column(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
 
         // Overwrite the `username` column with an intentionally invalid
         // column-specific fixture role so the malformed value actually lands in
@@ -967,7 +998,7 @@ mod tests {
         // The read decodes the `username` column into `Username` via the sqlx
         // bridge, which validates through `FromStr`; the malformed value surfaces
         // as a column-decode error rather than being silently admitted.
-        let err = env.state.users.get_user(user_id).await.unwrap_err();
+        let err = env.users().get_user(user_id).await.unwrap_err();
         assert!(
             matches!(err, sqlx::Error::ColumnDecode { .. }),
             "expected a column-decode error, got: {err:?}"
@@ -981,13 +1012,18 @@ mod tests {
         // bridge) and decodes back into `Option<Bio>`; `None` clears it. Exercises
         // both the set and the clear paths across both backends.
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
 
         let bio = parse_bio("hi");
-        let users = Arc::clone(&env.state.users);
+        let users = Arc::clone(&env.users());
         let outcome = env
-            .state
-            .write_scope
+            .write_scope()
             .run(|transaction| {
                 Box::pin(async move {
                     users
@@ -1005,13 +1041,12 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(outcome, common::MutationOutcome::Confirmed(())));
-        let record = env.state.users.get_user(user_id).await.unwrap().unwrap();
+        let record = env.users().get_user(user_id).await.unwrap().unwrap();
         assert_eq!(record.bio, Some(parse_bio("hi")));
 
-        let users = Arc::clone(&env.state.users);
+        let users = Arc::clone(&env.users());
         let outcome = env
-            .state
-            .write_scope
+            .write_scope()
             .run(|transaction| {
                 Box::pin(async move {
                     users
@@ -1029,7 +1064,7 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(outcome, common::MutationOutcome::Confirmed(())));
-        let cleared = env.state.users.get_user(user_id).await.unwrap().unwrap();
+        let cleared = env.users().get_user(user_id).await.unwrap().unwrap();
         assert_eq!(cleared.bio, None);
     }
 
@@ -1042,7 +1077,13 @@ mod tests {
         // `Bio`'s `FromStr`. The over-cap value is unconstructible via the newtype, so
         // it is forced in with raw SQL. Mirrors the overlong-display-name case.
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         let overlong = "a".repeat(common::bio::MAX_BIO_CHARS + 1);
         crate::with_closeable_pool!(env.base.pool(), pool, {
             sqlx::query("UPDATE users SET bio = $1 WHERE user_id = $2")
@@ -1052,7 +1093,7 @@ mod tests {
                 .await
                 .unwrap();
         });
-        let err = env.state.users.get_user(user_id).await.unwrap_err();
+        let err = env.users().get_user(user_id).await.unwrap_err();
         assert!(
             matches!(err, sqlx::Error::ColumnDecode { .. }),
             "expected a column-decode error, got: {err:?}"
@@ -1065,7 +1106,8 @@ mod tests {
         let env = backend.setup().await;
         env.base.close_pool().await;
         let result = authenticate(
-            &env.state,
+            env.users().clone(),
+            env.write_scope().clone(),
             parse_username("alice"),
             host::test_support::parse_password("password123"),
         )
@@ -1088,7 +1130,12 @@ mod tests {
     #[tokio::test]
     async fn authenticate_with_corrupted_hash_returns_internal_error(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user = SeedUser::new().seed(&env.state).await;
+        let user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         crate::with_closeable_pool!(env.base.pool(), pool, {
             sqlx::query("UPDATE users SET password_hash = $1 WHERE username = $2")
                 .bind_storage(CorruptStoredPasswordHash("not-a-bcrypt-hash".to_owned()))
@@ -1098,7 +1145,8 @@ mod tests {
                 .unwrap();
         });
         let result = authenticate(
-            &env.state,
+            env.users().clone(),
+            env.write_scope().clone(),
             user.username,
             host::test_support::parse_password("password123"),
         )
@@ -1117,7 +1165,12 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let user = SeedUser::new().seed(&env.state).await;
+        let user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         crate::with_closeable_pool!(env.base.pool(), pool, {
             sqlx::query("UPDATE users SET email = $1 WHERE username = $2")
                 .bind_storage(CorruptEmail("not-an-email".to_owned()))
@@ -1127,7 +1180,8 @@ mod tests {
                 .unwrap();
         });
         let result = authenticate(
-            &env.state,
+            env.users().clone(),
+            env.write_scope().clone(),
             user.username,
             host::test_support::parse_password("password123"),
         )
@@ -1150,7 +1204,12 @@ mod tests {
         // Internal error at the strict read boundary — never a panic. Mirrors the
         // invalid-email-in-db case above.
         let env = backend.setup().await;
-        let user = SeedUser::new().seed(&env.state).await;
+        let user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         let overlong = "a".repeat(common::display_name::MAX_DISPLAY_NAME_CHARS + 1);
         crate::with_closeable_pool!(env.base.pool(), pool, {
             sqlx::query("UPDATE users SET display_name = $1 WHERE username = $2")
@@ -1161,7 +1220,8 @@ mod tests {
                 .unwrap();
         });
         let result = authenticate(
-            &env.state,
+            env.users().clone(),
+            env.write_scope().clone(),
             user.username,
             host::test_support::parse_password("password123"),
         )
@@ -1178,7 +1238,12 @@ mod tests {
     #[tokio::test]
     async fn authenticate_with_blocked_update_returns_internal_error(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user = SeedUser::new().seed(&env.state).await;
+        let user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         // Block the `last_authenticated_at` UPDATE the successful-auth path runs,
         // so authentication fails with `Internal` after the password verifies.
         match backend {
@@ -1214,7 +1279,8 @@ mod tests {
             }
         }
         let result = authenticate(
-            &env.state,
+            env.users().clone(),
+            env.write_scope().clone(),
             user.username,
             host::test_support::parse_password("password123"),
         )
@@ -1242,7 +1308,8 @@ mod tests {
         let username = parse_username("alice");
         let password = host::test_support::parse_password("password123");
         create_user_confirmed(
-            &env.state,
+            env.users().clone(),
+            env.write_scope().clone(),
             username.clone(),
             password.clone(),
             None,

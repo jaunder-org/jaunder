@@ -16,8 +16,8 @@ use jaunder::cli::StorageArgs;
 use std::sync::Arc;
 use storage::test_support::{SeedRawPost, confirmed_for, fp, seed_local_subscription};
 use storage::{
-    AppState, HubMutationOutcome, MediaRecord, OperatorStatus, PublisherGeneration,
-    StorageRuntimeConfig, open_existing_database,
+    HubMutationOutcome, MediaRecord, OperatorStatus, PublisherGeneration, StorageRuntimeConfig,
+    open_existing_database,
 };
 
 /// SHA-256 the media-table fixture row is keyed by; any stable value works, since
@@ -172,38 +172,35 @@ pub async fn assert_supported_post_precedes_out_of_range_post(
     args: &StorageArgs,
     ids: &BackupFixtureIds,
 ) {
-    let state = open_existing_database(&args.db, &StorageRuntimeConfig::default())
+    let factory = open_existing_database(&args.db, &StorageRuntimeConfig::default())
         .await
-        .expect("open restored database")
-        .app_state();
+        .expect("open restored database");
+    let posts = factory.posts();
     assert!(
-        state
-            .posts
+        posts
             .get_post_by_id(ids.public_post, &ViewerIdentity::local(ids.author))
             .await
             .expect("decode supported preceding post row")
             .is_some(),
         "supported row preceding the out-of-range row must remain readable"
     );
-    state
-        .posts
+    posts
         .get_post_by_id(ids.named_post, &ViewerIdentity::local(ids.viewer))
         .await
         .expect_err("decoding the out-of-range post row must fail");
 }
 
 pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
-    let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
+    let factory = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
-        .expect("open database")
-        .app_state();
+        .expect("open database");
+    let write_scope = factory.write_scope();
     let hub: HubUrl = "https://hub.example.test/"
         .parse()
         .expect("valid fixture WebSub hub");
-    let publisher = Arc::clone(&state.publisher);
+    let publisher = factory.publisher();
     let publisher_mutation = confirmed_for(
-        state
-            .write_scope
+        write_scope
             .run(move |transaction| {
                 Box::pin(async move { publisher.mutate_hub(transaction, Some(hub)).await })
             })
@@ -217,13 +214,12 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
     };
     let username: Username = "backupuser".parse().expect("valid username");
     let password: Password = "password123".parse().expect("valid password");
-    let users = Arc::clone(&state.users);
+    let users = factory.users();
     let display_name = parse_display_name("Backup User");
     let password_for_author = storage::prepare_password(password.clone())
         .await
         .expect("prepare author password");
-    let outcome = state
-        .write_scope
+    let outcome = write_scope
         .run(move |transaction| {
             Box::pin(async move {
                 users
@@ -243,12 +239,27 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
     let public = SeedRawPost::new(author)
         .published_at(fixture_published_at())
         .tags(["Backup-Test"])
-        .seed(&state)
+        .seed(factory.posts(), write_scope.clone())
         .await;
 
-    let (viewer, audience, subscription, named_post) =
-        seed_named_audience_post(&state, author, &password).await;
-    seed_side_tables(&state, author).await;
+    let (viewer, audience, subscription, named_post) = seed_named_audience_post(
+        factory.users(),
+        factory.subscriptions(),
+        factory.audiences(),
+        factory.posts(),
+        write_scope.clone(),
+        author,
+        &password,
+    )
+    .await;
+    seed_side_tables(
+        factory.user_config(),
+        factory.media(),
+        factory.feed_events(),
+        write_scope,
+        author,
+    )
+    .await;
 
     std::fs::write(args.storage_path.join("media").join("avatar.txt"), "media")
         .expect("write media");
@@ -270,18 +281,20 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
 /// (`subscriptions`, `audiences`, `audience_members`, `post_audiences`) must
 /// survive restore so the subscriber still resolves the private post (issue #4).
 async fn seed_named_audience_post(
-    state: &Arc<AppState>,
+    users: Arc<dyn storage::UserStorage>,
+    subscriptions: Arc<dyn storage::SubscriptionStorage>,
+    audiences: Arc<dyn storage::AudienceStorage>,
+    posts: Arc<dyn storage::PostStorage>,
+    write_scope: storage::WriteScope,
     author: UserId,
     password: &Password,
 ) -> (UserId, AudienceId, SubscriptionId, PostId) {
     let viewer_name: Username = "viewer".parse().expect("valid username");
-    let users = Arc::clone(&state.users);
     let display_name = parse_display_name("Viewer");
     let password = storage::prepare_password(password.clone())
         .await
         .expect("prepare viewer password");
-    let outcome = state
-        .write_scope
+    let outcome = write_scope
         .run(move |transaction| {
             Box::pin(async move {
                 users
@@ -298,15 +311,15 @@ async fn seed_named_audience_post(
         .await
         .expect("create viewer");
     let viewer = confirmed_for(outcome, "backup fixture viewer");
-    let subscription = seed_local_subscription(state, author, viewer).await;
+    let subscription =
+        seed_local_subscription(subscriptions, write_scope.clone(), author, viewer).await;
     let audience_name = parse_audience_name("friends");
-    let audiences = Arc::clone(&state.audiences);
+    let audience_storage = Arc::clone(&audiences);
     let audience = confirmed_for(
-        state
-            .write_scope
+        write_scope
             .run(move |transaction| {
                 Box::pin(async move {
-                    audiences
+                    audience_storage
                         .create_audience(transaction, author, &audience_name)
                         .await
                 })
@@ -315,10 +328,9 @@ async fn seed_named_audience_post(
             .expect("create audience"),
         "backup fixture audience",
     );
-    let audiences = Arc::clone(&state.audiences);
+    let audiences = Arc::clone(&audiences);
     confirmed_for(
-        state
-            .write_scope
+        write_scope
             .run(move |transaction| {
                 Box::pin(async move {
                     audiences
@@ -333,7 +345,7 @@ async fn seed_named_audience_post(
     let named_post = SeedRawPost::new(author)
         .published_at(fixture_published_at())
         .audiences(vec![AudienceTarget::Named(audience)])
-        .seed(state)
+        .seed(posts, write_scope)
         .await
         .post_id;
     (viewer, audience, subscription, named_post)
@@ -341,13 +353,17 @@ async fn seed_named_audience_post(
 
 /// Seeds the side tables: a `user_config` row, a media-table row, and a
 /// `feed_events` row.
-async fn seed_side_tables(state: &AppState, author: UserId) {
-    let user_config = Arc::clone(&state.user_config);
+async fn seed_side_tables(
+    user_config: Arc<dyn storage::UserConfigStorage>,
+    media: Arc<dyn storage::MediaStorage>,
+    feed_events: Arc<dyn storage::FeedEventStorage>,
+    write_scope: storage::WriteScope,
+    author: UserId,
+) {
     let key = UserConfigKey::DefaultPostFormat;
     let value = String::from("org");
     confirmed_for(
-        state
-            .write_scope
+        write_scope
             .run(move |transaction| {
                 Box::pin(async move { user_config.set(transaction, author, key, &value).await })
             })
@@ -355,7 +371,6 @@ async fn seed_side_tables(state: &AppState, author: UserId) {
             .expect("set user config"),
         "backup fixture user config",
     );
-    let media = Arc::clone(&state.media);
     let record = MediaRecord {
         user_id: author,
         sha256: parse_content_hash(FIXTURE_MEDIA_SHA256),
@@ -367,8 +382,7 @@ async fn seed_side_tables(state: &AppState, author: UserId) {
         created_at: fixture_published_at(),
     };
     confirmed_for(
-        state
-            .write_scope
+        write_scope
             .run(move |transaction| {
                 Box::pin(async move { media.create_media(transaction, &record).await })
             })
@@ -376,11 +390,9 @@ async fn seed_side_tables(state: &AppState, author: UserId) {
             .expect("create media row"),
         "backup fixture media",
     );
-    let feed_events = Arc::clone(&state.feed_events);
     let feed_path = fp("/feed.rss");
     confirmed_for(
-        state
-            .write_scope
+        write_scope
             .run(move |transaction| {
                 Box::pin(async move { feed_events.enqueue(transaction, &feed_path).await })
             })
@@ -391,13 +403,16 @@ async fn seed_side_tables(state: &AppState, author: UserId) {
 }
 
 pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixtureIds) {
-    let state = open_existing_database(&args.db, &StorageRuntimeConfig::default())
+    let factory = open_existing_database(&args.db, &StorageRuntimeConfig::default())
         .await
-        .expect("open restored database")
-        .app_state();
+        .expect("open restored database");
+    let users = factory.users();
+    let publisher = factory.publisher();
+    let posts = factory.posts();
+    let user_config = factory.user_config();
+    let media = factory.media();
     let username: Username = "backupuser".parse().expect("valid username");
-    let user = state
-        .users
+    let user = users
         .get_user_by_username(&username)
         .await
         .expect("get user")
@@ -406,8 +421,7 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
     assert_eq!(user.display_name.as_deref(), Some("Backup User"));
 
     assert_eq!(
-        state
-            .publisher
+        publisher
             .snapshot()
             .await
             .expect("read restored publisher state")
@@ -417,8 +431,7 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
     );
 
     // The public post resolves for its author.
-    let post = state
-        .posts
+    let post = posts
         .get_post_by_id(ids.public_post, &ViewerIdentity::local(ids.author))
         .await
         .expect("get post")
@@ -441,8 +454,7 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
     // non-author subscriber — its post_audiences / subscriptions / audience_members
     // rows are carried — and correctly invisible to an anonymous viewer.
     assert!(
-        state
-            .posts
+        posts
             .get_post_by_id(ids.named_post, &ViewerIdentity::local(ids.viewer))
             .await
             .expect("get named post")
@@ -450,8 +462,7 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
         "restored Named-audience post must be visible to its subscriber"
     );
     assert!(
-        state
-            .posts
+        posts
             .get_post_by_id(ids.named_post, &ViewerIdentity::Anonymous)
             .await
             .expect("get named post as anonymous")
@@ -461,8 +472,7 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
 
     // The side tables (`user_config`, media, `feed_events`) survived the round trip.
     assert_eq!(
-        state
-            .user_config
+        user_config
             .get(ids.author, UserConfigKey::DefaultPostFormat)
             .await
             .expect("get user config")
@@ -470,8 +480,7 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
         Some("org")
     );
     assert!(
-        state
-            .media
+        media
             .get_media(
                 ids.author,
                 &parse_content_hash(FIXTURE_MEDIA_SHA256),
@@ -494,14 +503,13 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
 /// Assert a restore target is untouched — neither the fixture's operator user
 /// nor its media file is present — after a rejected restore rolled back.
 pub async fn assert_target_unmodified(args: &StorageArgs) {
-    let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
+    let factory = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
-        .expect("open target")
-        .app_state();
+        .expect("open target");
+    let users = factory.users();
     let username: Username = "backupuser".parse().expect("valid username");
     assert!(
-        state
-            .users
+        users
             .get_user_by_username(&username)
             .await
             .expect("get user")

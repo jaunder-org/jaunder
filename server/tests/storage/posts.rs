@@ -20,20 +20,20 @@ use storage::test_support::{
     media_url_for,
 };
 use storage::{
-    CreatePostError, PostBookkeepingExpectation, PostFormat, PostLifecycle, PostUpdate,
-    PublishUpdate, RenderedPostContent, UpdatePostError, create_rendered_post, perform_post_update,
+    AudienceStorage, CreatePostError, PostBookkeepingExpectation, PostFormat, PostLifecycle,
+    PostUpdate, PublishUpdate, RenderedPostContent, UpdatePostError, create_rendered_post,
+    perform_post_update,
 };
 
 use super::fixtures::{anon_by_tag, open_pool};
 
 async fn create_audience_confirmed(
-    state: &storage::AppState,
+    audiences: Arc<dyn AudienceStorage>,
+    write_scope: storage::WriteScope,
     author: UserId,
     name: common::audience::AudienceName,
 ) -> AudienceId {
-    let audiences = Arc::clone(&state.audiences);
-    let outcome = state
-        .write_scope
+    let outcome = write_scope
         .run(move |transaction| {
             Box::pin(async move { audiences.create_audience(transaction, author, &name).await })
         })
@@ -43,11 +43,10 @@ async fn create_audience_confirmed(
 }
 
 macro_rules! update_post {
-    ($state:expr, $post_id:expr, $user_id:expr, $update:expr) => {{
-        let posts = Arc::clone(&$state.posts);
+    ($posts:expr, $write_scope:expr, $post_id:expr, $user_id:expr, $update:expr) => {{
+        let posts = Arc::clone(&$posts);
         let update = $update;
-        $state
-            .write_scope
+        $write_scope
             .run(move |transaction| {
                 Box::pin(async move {
                     posts
@@ -60,10 +59,9 @@ macro_rules! update_post {
 }
 
 macro_rules! soft_delete_post {
-    ($state:expr, $post_id:expr, $user_id:expr) => {{
-        let posts = Arc::clone(&$state.posts);
-        $state
-            .write_scope
+    ($posts:expr, $write_scope:expr, $post_id:expr, $user_id:expr) => {{
+        let posts = Arc::clone(&$posts);
+        $write_scope
             .run(move |transaction| {
                 Box::pin(async move {
                     posts
@@ -81,11 +79,10 @@ macro_rules! soft_delete_post {
 }
 
 macro_rules! create_posts {
-    ($state:expr, $inputs:expr) => {{
-        let posts = Arc::clone(&$state.posts);
+    ($posts:expr, $write_scope:expr, $inputs:expr) => {{
+        let posts = Arc::clone(&$posts);
         let inputs = ($inputs).clone();
-        $state
-            .write_scope
+        $write_scope
             .run(move |transaction| {
                 Box::pin(async move { posts.create_posts(transaction, &inputs).await })
             })
@@ -99,13 +96,18 @@ macro_rules! create_posts {
 #[tokio::test]
 async fn post_create_and_get_by_id_works(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
-    let post = SeedRawPost::new(user_id).draft().seed(state).await;
+    let post = SeedRawPost::new(user_id)
+        .draft()
+        .seed(env.posts(), env.write_scope())
+        .await;
 
-    let record = state
-        .posts
+    let record = env
+        .posts()
         .get_post_by_id(post.post_id, &ViewerIdentity::Anonymous)
         .await
         .unwrap()
@@ -123,17 +125,21 @@ async fn post_create_and_get_by_id_works(#[case] backend: Backend) {
 #[tokio::test]
 async fn post_slug_conflict_returns_slug_conflict(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
     // Two published posts with the same slug on the same date conflict on the
     // unique index (user_id, date(COALESCE(published_at, created_at)), slug).
-    let first = SeedRawPost::new(user_id).seed(state).await;
+    let first = SeedRawPost::new(user_id)
+        .seed(env.posts(), env.write_scope())
+        .await;
 
     let err = SeedRawPost::new(user_id)
         .slug(first.slug.as_ref())
         .published_at(first.published_at.unwrap())
-        .create(state)
+        .create(env.posts(), env.write_scope())
         .await
         .unwrap_err();
     assert!(
@@ -146,16 +152,32 @@ async fn post_slug_conflict_returns_slug_conflict(#[case] backend: Backend) {
 #[tokio::test]
 async fn post_update_writes_revision_and_updates_record(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
-    let post_id = SeedRawPost::new(user_id).draft().seed(state).await.post_id;
+    let post_id = SeedRawPost::new(user_id)
+        .draft()
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
     let update_input = UpdateRawPost::new("update-test")
         .format(PostFormat::Org)
         .unpublish()
         .build();
-    let record = confirmed(update_post!(state, post_id, user_id, update_input).unwrap()).record;
+    let record = confirmed(
+        update_post!(
+            Arc::clone(&env.posts()),
+            env.write_scope(),
+            post_id,
+            user_id,
+            update_input
+        )
+        .unwrap(),
+    )
+    .record;
 
     assert_eq!(record.title.as_deref(), Some("Updated Title"));
     assert_eq!(record.format, PostFormat::Org);
@@ -166,9 +188,15 @@ async fn post_update_writes_revision_and_updates_record(#[case] backend: Backend
 #[tokio::test]
 async fn post_update_not_found_returns_error(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let update_input = UpdateRawPost::new("nope").unpublish().build();
-    let err = update_post!(state, PostId::from(9999), UserId::from(1), update_input).unwrap_err();
+    let err = update_post!(
+        Arc::clone(&env.posts()),
+        env.write_scope(),
+        PostId::from(9999),
+        UserId::from(1),
+        update_input
+    )
+    .unwrap_err();
     assert!(
         matches!(
             err,
@@ -182,14 +210,24 @@ async fn post_update_not_found_returns_error(#[case] backend: Backend) {
 #[tokio::test]
 async fn post_update_by_non_owner_returns_unauthorized(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let owner = SeedUser::new().seed(state).await.user_id;
-    let other = SeedUser::new().seed(state).await.user_id;
+    let owner = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
+    let other = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
-    let post_id = SeedRawPost::new(owner).draft().seed(state).await.post_id;
+    let post_id = SeedRawPost::new(owner)
+        .draft()
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
     let err = update_post!(
-        state,
+        Arc::clone(&env.posts()),
+        env.write_scope(),
         post_id,
         other,
         UpdateRawPost::new("hijacked")
@@ -239,16 +277,22 @@ fn update_input<'a>(
 #[tokio::test]
 async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let now = UtcInstant::from(
         "2026-06-26T12:00:00Z"
             .parse::<Timestamp>()
             .expect("fixed test instant"),
     );
-    let alice = SeedUser::new().seed(state).await.user_id;
+    let alice = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
     // A fresh draft (published_at NULL).
-    let draft = SeedRawPost::new(alice).draft().seed(state).await.post_id;
+    let draft = SeedRawPost::new(alice)
+        .draft()
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
     // Pinned override slugs (already valid, as they arrive at the storage layer).
     let p: Slug = "p".parse().unwrap();
@@ -263,10 +307,10 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
     );
     let rec = confirmed(
         perform_post_update(
-            &state.write_scope,
+            &env.write_scope(),
             &storage::test_support::fixture_media_content_locks(),
-            Arc::clone(&state.posts),
-            Arc::clone(&state.feed_events),
+            Arc::clone(&env.posts()),
+            Arc::clone(&env.feed_events()),
             update_input(
                 draft,
                 alice,
@@ -292,10 +336,10 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
     );
     let backdated = confirmed(
         perform_post_update(
-            &state.write_scope,
+            &env.write_scope(),
             &storage::test_support::fixture_media_content_locks(),
-            Arc::clone(&state.posts),
-            Arc::clone(&state.feed_events),
+            Arc::clone(&env.posts()),
+            Arc::clone(&env.feed_events()),
             update_input(
                 draft,
                 alice,
@@ -316,10 +360,10 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
     // Publish { at: None } on an already-published post keeps the existing timestamp.
     let rec2 = confirmed(
         perform_post_update(
-            &state.write_scope,
+            &env.write_scope(),
             &storage::test_support::fixture_media_content_locks(),
-            Arc::clone(&state.posts),
-            Arc::clone(&state.feed_events),
+            Arc::clone(&env.posts()),
+            Arc::clone(&env.feed_events()),
             update_input(
                 draft,
                 alice,
@@ -340,10 +384,10 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
     // Unpublish clears it.
     let rec3 = confirmed(
         perform_post_update(
-            &state.write_scope,
+            &env.write_scope(),
             &storage::test_support::fixture_media_content_locks(),
-            Arc::clone(&state.posts),
-            Arc::clone(&state.feed_events),
+            Arc::clone(&env.posts()),
+            Arc::clone(&env.feed_events()),
             update_input(draft, alice, &title, &p, PublishUpdate::Unpublish),
         )
         .await
@@ -352,13 +396,17 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
     assert_eq!(rec3.published_at, None, "unpublish clears published_at");
 
     // Publish { at: None } on a never-published draft stamps ~now.
-    let draft2 = SeedRawPost::new(alice).draft().seed(state).await.post_id;
+    let draft2 = SeedRawPost::new(alice)
+        .draft()
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
     let rec4 = confirmed(
         perform_post_update(
-            &state.write_scope,
+            &env.write_scope(),
             &storage::test_support::fixture_media_content_locks(),
-            Arc::clone(&state.posts),
-            Arc::clone(&state.feed_events),
+            Arc::clone(&env.posts()),
+            Arc::clone(&env.feed_events()),
             update_input(
                 draft2,
                 alice,
@@ -413,15 +461,23 @@ async fn post_audience_rows(
 #[tokio::test]
 async fn post_audiences_are_persisted_and_replaced(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let author = SeedUser::new().seed(state).await.user_id;
-    let aud = create_audience_confirmed(state, author, parse_audience_name("Friends")).await;
+    let author = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
+    let aud = create_audience_confirmed(
+        Arc::clone(&env.audiences()),
+        env.write_scope(),
+        author,
+        parse_audience_name("Friends"),
+    )
+    .await;
 
     // Create targeting [Public, Named(aud)] → two rows.
     let post_id = SeedRawPost::new(author)
         .draft()
         .audiences(vec![AudienceTarget::Public, AudienceTarget::Named(aud)])
-        .seed(state)
+        .seed(env.posts(), env.write_scope())
         .await
         .post_id;
     let rows = post_audience_rows(backend, &env, post_id).await;
@@ -444,7 +500,8 @@ async fn post_audiences_are_persisted_and_replaced(#[case] backend: Backend) {
     // Update to [Private] → zero rows.
     confirmed(
         update_post!(
-            state,
+            Arc::clone(&env.posts()),
+            env.write_scope(),
             post_id,
             author,
             edit.clone()
@@ -461,7 +518,8 @@ async fn post_audiences_are_persisted_and_replaced(#[case] backend: Backend) {
     // Update to [] (empty) → also zero rows (equivalent to private).
     confirmed(
         update_post!(
-            state,
+            Arc::clone(&env.posts()),
+            env.write_scope(),
             post_id,
             author,
             edit.clone().audiences(vec![]).build()
@@ -476,7 +534,8 @@ async fn post_audiences_are_persisted_and_replaced(#[case] backend: Backend) {
     // Update to [Subscribers] → one subscribers row.
     confirmed(
         update_post!(
-            state,
+            Arc::clone(&env.posts()),
+            env.write_scope(),
             post_id,
             author,
             edit.audiences(vec![AudienceTarget::Subscribers]).build()
@@ -498,19 +557,27 @@ async fn get_post_audiences_round_trips(#[case] backend: Backend) {
     use std::collections::HashSet;
 
     let env = backend.setup().await;
-    let state = &env.state;
-    let author = SeedUser::new().seed(state).await.user_id;
-    let aud = create_audience_confirmed(state, author, parse_audience_name("Friends")).await;
+    let author = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
+    let aud = create_audience_confirmed(
+        Arc::clone(&env.audiences()),
+        env.write_scope(),
+        author,
+        parse_audience_name("Friends"),
+    )
+    .await;
 
     // Public + Named(aud) → union read back (order-independent compare).
     let post_id = SeedRawPost::new(author)
         .draft()
         .audiences(vec![AudienceTarget::Public, AudienceTarget::Named(aud)])
-        .seed(state)
+        .seed(env.posts(), env.write_scope())
         .await
         .post_id;
-    let read: HashSet<_> = state
-        .posts
+    let read: HashSet<_> = env
+        .posts()
         .get_post_audiences(post_id)
         .await
         .unwrap()
@@ -531,7 +598,8 @@ async fn get_post_audiences_round_trips(#[case] backend: Backend) {
     // Subscribers-only.
     confirmed(
         update_post!(
-            state,
+            Arc::clone(&env.posts()),
+            env.write_scope(),
             post_id,
             author,
             edit.clone()
@@ -541,7 +609,7 @@ async fn get_post_audiences_round_trips(#[case] backend: Backend) {
         .unwrap(),
     );
     assert_eq!(
-        state.posts.get_post_audiences(post_id).await.unwrap(),
+        env.posts().get_post_audiences(post_id).await.unwrap(),
         vec![AudienceTarget::Subscribers],
         "should read back Subscribers"
     );
@@ -549,7 +617,8 @@ async fn get_post_audiences_round_trips(#[case] backend: Backend) {
     // Private / empty → no rows → empty vec.
     confirmed(
         update_post!(
-            state,
+            Arc::clone(&env.posts()),
+            env.write_scope(),
             post_id,
             author,
             edit.audiences(vec![AudienceTarget::Private]).build()
@@ -557,8 +626,7 @@ async fn get_post_audiences_round_trips(#[case] backend: Backend) {
         .unwrap(),
     );
     assert!(
-        state
-            .posts
+        env.posts()
             .get_post_audiences(post_id)
             .await
             .unwrap()
@@ -571,20 +639,27 @@ async fn get_post_audiences_round_trips(#[case] backend: Backend) {
 #[tokio::test]
 async fn post_update_invalid_slug(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user = SeedUser::new().seed(state).await.user_id;
+    let user = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
-    let post_id = SeedRawPost::new(user).draft().seed(state).await.post_id;
+    let post_id = SeedRawPost::new(user)
+        .draft()
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
     let _post_id2 = SeedRawPost::new(user)
         .draft()
         .slug("second-slug")
-        .seed(state)
+        .seed(env.posts(), env.write_scope())
         .await
         .post_id;
 
     let update_result = update_post!(
-        state,
+        Arc::clone(&env.posts()),
+        env.write_scope(),
         post_id,
         user,
         UpdateRawPost::new("second-slug")
@@ -606,14 +681,19 @@ async fn post_update_invalid_slug(#[case] backend: Backend) {
 #[tokio::test]
 async fn soft_delete_then_operations(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user = SeedUser::new().seed(state).await.user_id;
+    let user = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
-    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
+    let post_id = SeedRawPost::new(user)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post_id,
         user,
         &["delete-tag".parse::<TagLabel>().unwrap()],
@@ -621,18 +701,21 @@ async fn soft_delete_then_operations(#[case] backend: Backend) {
     .await
     .expect("set_post_tags failed");
 
-    confirmed(soft_delete_post!(state, post_id, user).expect("soft_delete_post failed"));
+    confirmed(
+        soft_delete_post!(Arc::clone(&env.posts()), env.write_scope(), post_id, user)
+            .expect("soft_delete_post failed"),
+    );
 
     // Try to get by ID (should still exist internally)
-    let post = state
-        .posts
+    let post = env
+        .posts()
         .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
         .await
         .expect("get_post_by_id failed");
     assert!(post.is_none() || post.unwrap().deleted_at.is_some());
 
     let tag: Tag = "delete-tag".parse().unwrap();
-    let posts = anon_by_tag(state, &tag, "10").await;
+    let posts = anon_by_tag(env.posts(), &tag, "10").await;
     assert!(posts.is_empty());
 }
 
@@ -640,17 +723,27 @@ async fn soft_delete_then_operations(#[case] backend: Backend) {
 #[tokio::test]
 async fn update_soft_deleted_post(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user = SeedUser::new().seed(state).await.user_id;
+    let user = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
-    let post_id = SeedRawPost::new(user).draft().seed(state).await.post_id;
+    let post_id = SeedRawPost::new(user)
+        .draft()
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
-    confirmed(soft_delete_post!(state, post_id, user).expect("soft_delete_post failed"));
+    confirmed(
+        soft_delete_post!(Arc::clone(&env.posts()), env.write_scope(), post_id, user)
+            .expect("soft_delete_post failed"),
+    );
 
     // The update's outcome on a soft-deleted post is not part of this contract,
     // so its result is deliberately unasserted.
     let _result = update_post!(
-        state,
+        Arc::clone(&env.posts()),
+        env.write_scope(),
         post_id,
         user,
         UpdateRawPost::new("updated-slug")
@@ -660,8 +753,8 @@ async fn update_soft_deleted_post(#[case] backend: Backend) {
     );
 
     // What is pinned: no update path resurrects a soft-deleted post.
-    let post = state
-        .posts
+    let post = env
+        .posts()
         .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
         .await
         .expect("get_post_by_id failed");
@@ -672,9 +765,8 @@ async fn update_soft_deleted_post(#[case] backend: Backend) {
 #[tokio::test]
 async fn get_post_by_id_nonexistent(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let result = state
-        .posts
+    let result = env
+        .posts()
         .get_post_by_id(PostId::from(999_999), &ViewerIdentity::Anonymous)
         .await;
     match result {
@@ -687,14 +779,21 @@ async fn get_post_by_id_nonexistent(#[case] backend: Backend) {
 #[tokio::test]
 async fn post_revisions_created(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user = SeedUser::new().seed(state).await.user_id;
+    let user = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
-    let post_id = SeedRawPost::new(user).draft().seed(state).await.post_id;
+    let post_id = SeedRawPost::new(user)
+        .draft()
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
     let result = confirmed(
         update_post!(
-            state,
+            Arc::clone(&env.posts()),
+            env.write_scope(),
             post_id,
             user,
             UpdateRawPost::new("revision-test")
@@ -715,12 +814,29 @@ async fn post_revisions_created(#[case] backend: Backend) {
 #[tokio::test]
 async fn owner_revision_history_is_keyset_ordered_and_scoped(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let owner = SeedUser::new().seed(state).await.user_id;
-    let stranger = SeedUser::new().seed(state).await.user_id;
-    let first = SeedRawPost::new(owner).draft().seed(state).await.post_id;
-    let second = SeedRawPost::new(owner).draft().seed(state).await.post_id;
-    let foreign = SeedRawPost::new(stranger).draft().seed(state).await.post_id;
+    let owner = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
+    let stranger = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
+    let first = SeedRawPost::new(owner)
+        .draft()
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
+    let second = SeedRawPost::new(owner)
+        .draft()
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
+    let foreign = SeedRawPost::new(stranger)
+        .draft()
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
     for (post_id, user_id, slug) in [
         (first, owner, "history-first"),
@@ -729,7 +845,8 @@ async fn owner_revision_history_is_keyset_ordered_and_scoped(#[case] backend: Ba
     ] {
         confirmed(
             update_post!(
-                state,
+                Arc::clone(&env.posts()),
+                env.write_scope(),
                 post_id,
                 user_id,
                 UpdateRawPost::new(slug).unpublish().build()
@@ -739,7 +856,8 @@ async fn owner_revision_history_is_keyset_ordered_and_scoped(#[case] backend: Ba
     }
     confirmed(
         update_post!(
-            state,
+            Arc::clone(&env.posts()),
+            env.write_scope(),
             first,
             owner,
             UpdateRawPost::new("history-first-again")
@@ -749,8 +867,8 @@ async fn owner_revision_history_is_keyset_ordered_and_scoped(#[case] backend: Ba
         .unwrap(),
     );
 
-    let first_page = state
-        .posts
+    let first_page = env
+        .posts()
         .list_owned_revision_history(owner, None, parse_page_size("2"))
         .await
         .unwrap();
@@ -763,8 +881,8 @@ async fn owner_revision_history_is_keyset_ordered_and_scoped(#[case] backend: Ba
     );
     assert!(first_page.revisions[0].revision_id > first_page.revisions[1].revision_id);
 
-    let second_page = state
-        .posts
+    let second_page = env
+        .posts()
         .list_owned_revision_history(owner, first_page.next_cursor, parse_page_size("2"))
         .await
         .unwrap();
@@ -781,8 +899,8 @@ async fn owner_revision_history_is_keyset_ordered_and_scoped(#[case] backend: Ba
         ids.len()
     );
 
-    let post_page = state
-        .posts
+    let post_page = env
+        .posts()
         .list_post_revision_history(owner, first, None, parse_page_size("10"))
         .await
         .unwrap()
@@ -802,24 +920,36 @@ async fn revision_history_keeps_deleted_owner_post_and_hides_foreign_details(
     #[case] backend: Backend,
 ) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let owner = SeedUser::new().seed(state).await.user_id;
-    let stranger = SeedUser::new().seed(state).await.user_id;
-    let post_id = SeedRawPost::new(owner).draft().seed(state).await.post_id;
+    let owner = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
+    let stranger = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
+    let post_id = SeedRawPost::new(owner)
+        .draft()
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
     confirmed(
         update_post!(
-            state,
+            Arc::clone(&env.posts()),
+            env.write_scope(),
             post_id,
             owner,
             UpdateRawPost::new("captured-state").unpublish().build()
         )
         .unwrap(),
     );
-    confirmed(soft_delete_post!(state, post_id, owner).unwrap());
+    confirmed(
+        soft_delete_post!(Arc::clone(&env.posts()), env.write_scope(), post_id, owner).unwrap(),
+    );
 
-    let page = state
-        .posts
+    let page = env
+        .posts()
         .list_post_revision_history(owner, post_id, None, parse_page_size("10"))
         .await
         .unwrap()
@@ -828,8 +958,8 @@ async fn revision_history_keeps_deleted_owner_post_and_hides_foreign_details(
     assert!(revision.current_deleted);
     assert_eq!(revision.snapshot_lifecycle, PostLifecycle::Draft);
 
-    let detail = state
-        .posts
+    let detail = env
+        .posts()
         .get_post_revision_detail(owner, post_id, revision.revision_id)
         .await
         .unwrap()
@@ -841,24 +971,21 @@ async fn revision_history_keeps_deleted_owner_post_and_hides_foreign_details(
     assert!(detail.revision.media.is_empty());
 
     assert!(
-        state
-            .posts
+        env.posts()
             .list_post_revision_history(stranger, post_id, None, parse_page_size("10"))
             .await
             .unwrap()
             .is_none()
     );
     assert!(
-        state
-            .posts
+        env.posts()
             .get_post_revision_detail(stranger, post_id, revision.revision_id)
             .await
             .unwrap()
             .is_none()
     );
     assert!(
-        state
-            .posts
+        env.posts()
             .get_post_revision_detail(owner, PostId::from(999_999), revision.revision_id)
             .await
             .unwrap()
@@ -872,10 +999,17 @@ async fn revision_detail_round_trips_complete_snapshot_and_rejects_invalid_media
     #[case] backend: Backend,
 ) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let owner = SeedUser::new().seed(state).await.user_id;
-    let named =
-        create_audience_confirmed(state, owner, parse_audience_name("Revision readers")).await;
+    let owner = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
+    let named = create_audience_confirmed(
+        Arc::clone(&env.audiences()),
+        env.write_scope(),
+        owner,
+        parse_audience_name("Revision readers"),
+    )
+    .await;
     let media_url = media_url_for("revision-detail.png");
     let post_id = SeedRawPost::new(owner)
         .slug("complete-revision")
@@ -885,11 +1019,11 @@ async fn revision_detail_round_trips_complete_snapshot_and_rejects_invalid_media
         .summary(parse_post_summary("complete snapshot summary"))
         .audiences(vec![AudienceTarget::Public, AudienceTarget::Named(named)])
         .tags(["Rust", "Storage"])
-        .seed(state)
+        .seed(env.posts(), env.write_scope())
         .await
         .post_id;
-    let prior = state
-        .posts
+    let prior = env
+        .posts()
         .get_post_by_id(post_id, &ViewerIdentity::Local { user_id: owner })
         .await
         .unwrap()
@@ -897,7 +1031,8 @@ async fn revision_detail_round_trips_complete_snapshot_and_rejects_invalid_media
 
     confirmed(
         update_post!(
-            state,
+            Arc::clone(&env.posts()),
+            env.write_scope(),
             post_id,
             owner,
             UpdateRawPost::new("complete-revision-updated")
@@ -907,8 +1042,8 @@ async fn revision_detail_round_trips_complete_snapshot_and_rejects_invalid_media
         )
         .unwrap(),
     );
-    let revision = state
-        .posts
+    let revision = env
+        .posts()
         .list_post_revision_history(owner, post_id, None, parse_page_size("10"))
         .await
         .unwrap()
@@ -916,8 +1051,8 @@ async fn revision_detail_round_trips_complete_snapshot_and_rejects_invalid_media
         .revisions
         .pop()
         .unwrap();
-    let detail = state
-        .posts
+    let detail = env
+        .posts()
         .get_post_revision_detail(owner, post_id, revision.revision_id)
         .await
         .unwrap()
@@ -964,8 +1099,8 @@ async fn revision_detail_round_trips_complete_snapshot_and_rejects_invalid_media
         .map(|_| ())
     });
     update.unwrap();
-    let error = state
-        .posts
+    let error = env
+        .posts()
         .get_post_revision_detail(owner, post_id, revision.revision_id)
         .await
         .expect_err("invalid persisted revision media form must fail decoding");
@@ -982,8 +1117,10 @@ async fn revision_detail_round_trips_complete_snapshot_and_rejects_invalid_media
 #[tokio::test]
 async fn current_revision_summary_derives_lifecycle_from_request_clock(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let owner = SeedUser::new().seed(state).await.user_id;
+    let owner = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
     let now = UtcInstant::now();
     let scheduled_at = UtcInstant::from(
         now.value()
@@ -992,18 +1129,18 @@ async fn current_revision_summary_derives_lifecycle_from_request_clock(#[case] b
     );
     let post_id = SeedRawPost::new(owner)
         .published_at(scheduled_at)
-        .seed(state)
+        .seed(env.posts(), env.write_scope())
         .await
         .post_id;
 
-    let before = state
-        .posts
+    let before = env
+        .posts()
         .get_current_revision_summary(owner, post_id, now)
         .await
         .unwrap()
         .unwrap();
-    let after = state
-        .posts
+    let after = env
+        .posts()
         .get_current_revision_summary(
             owner,
             post_id,
@@ -1024,20 +1161,38 @@ async fn current_revision_summary_derives_lifecycle_from_request_clock(#[case] b
 #[tokio::test]
 async fn current_revision_summary_reports_draft_and_deleted_states(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let owner = SeedUser::new().seed(state).await.user_id;
-    let draft_id = SeedRawPost::new(owner).draft().seed(state).await.post_id;
-    let deleted_id = SeedRawPost::new(owner).draft().seed(state).await.post_id;
-    confirmed(soft_delete_post!(state, deleted_id, owner).unwrap());
+    let owner = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
+    let draft_id = SeedRawPost::new(owner)
+        .draft()
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
+    let deleted_id = SeedRawPost::new(owner)
+        .draft()
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
+    confirmed(
+        soft_delete_post!(
+            Arc::clone(&env.posts()),
+            env.write_scope(),
+            deleted_id,
+            owner
+        )
+        .unwrap(),
+    );
 
-    let draft = state
-        .posts
+    let draft = env
+        .posts()
         .get_current_revision_summary(owner, draft_id, UtcInstant::now())
         .await
         .unwrap()
         .unwrap();
-    let deleted = state
-        .posts
+    let deleted = env
+        .posts()
         .get_current_revision_summary(owner, deleted_id, UtcInstant::now())
         .await
         .unwrap()
@@ -1056,15 +1211,17 @@ async fn current_revision_summary_reports_draft_and_deleted_states(#[case] backe
 #[tokio::test]
 async fn create_rendered_post_markdown_renders_and_stores(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
     let post_id = confirmed(
         create_rendered_post(
-            &state.write_scope,
+            &env.write_scope(),
             &storage::test_support::fixture_media_content_locks(),
-            Arc::clone(&state.posts),
-            Arc::clone(&state.feed_events),
+            Arc::clone(&env.posts()),
+            Arc::clone(&env.feed_events()),
             RenderedPostContent {
                 user_id,
                 title: Some(parse_post_title("Rendered Markdown")),
@@ -1085,8 +1242,8 @@ async fn create_rendered_post_markdown_renders_and_stores(#[case] backend: Backe
     )
     .post_id;
 
-    let record = state
-        .posts
+    let record = env
+        .posts()
         .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
         .await
         .unwrap()
@@ -1106,15 +1263,17 @@ async fn create_rendered_post_markdown_renders_and_stores(#[case] backend: Backe
 #[tokio::test]
 async fn create_rendered_post_org_renders_and_stores(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
     let post_id = confirmed(
         create_rendered_post(
-            &state.write_scope,
+            &env.write_scope(),
             &storage::test_support::fixture_media_content_locks(),
-            Arc::clone(&state.posts),
-            Arc::clone(&state.feed_events),
+            Arc::clone(&env.posts()),
+            Arc::clone(&env.feed_events()),
             RenderedPostContent {
                 user_id,
                 title: Some(parse_post_title("Rendered Org")),
@@ -1135,8 +1294,8 @@ async fn create_rendered_post_org_renders_and_stores(#[case] backend: Backend) {
     )
     .post_id;
 
-    let record = state
-        .posts
+    let record = env
+        .posts()
         .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
         .await
         .unwrap()
@@ -1155,23 +1314,25 @@ async fn create_rendered_post_slug_conflict_returns_storage_error(#[case] backen
     use storage::CreatePostError;
 
     let env = backend.setup().await;
-    let state = &env.state;
 
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
     let now = UtcInstant::now();
 
     let occ = SeedRawPost::new(user_id)
         .published_at(now)
-        .seed(state)
+        .seed(env.posts(), env.write_scope())
         .await;
 
     // Second create with same slug+date conflicts
     let err = create_rendered_post(
-        &state.write_scope,
+        &env.write_scope(),
         &storage::test_support::fixture_media_content_locks(),
-        Arc::clone(&state.posts),
-        Arc::clone(&state.feed_events),
+        Arc::clone(&env.posts()),
+        Arc::clone(&env.feed_events()),
         RenderedPostContent {
             user_id,
             title: Some(parse_post_title("Second Post")),
@@ -1204,7 +1365,6 @@ async fn create_rendered_post_slug_conflict_returns_storage_error(#[case] backen
 #[tokio::test]
 async fn create_post_foreign_key_violation_maps_to_internal(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
 
     // A post referencing a non-existent user violates the `posts.user_id` foreign
     // key on both backends (SQLite enforces FKs here — sqlx's SqliteConnectOptions
@@ -1212,7 +1372,7 @@ async fn create_post_foreign_key_violation_maps_to_internal(#[case] backend: Bac
     // (via the shared `write_post_in_tx`) maps it to `Internal`, not `SlugConflict`
     // — exercising the generic-error arm.
     let err = SeedRawPost::new(UserId::from(999_999))
-        .create(state)
+        .create(env.posts(), env.write_scope())
         .await
         .unwrap_err();
     assert!(
@@ -1229,7 +1389,8 @@ async fn create_post_foreign_key_violation_maps_to_internal(#[case] backend: Bac
 #[tokio::test]
 async fn create_posts_empty_slice_is_noop(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let ids = confirmed(create_posts!(&env.state, Vec::new()).unwrap());
+    let ids =
+        confirmed(create_posts!(Arc::clone(&env.posts()), env.write_scope(), Vec::new()).unwrap());
     assert!(ids.is_empty());
 }
 
@@ -1237,19 +1398,22 @@ async fn create_posts_empty_slice_is_noop(#[case] backend: Backend) {
 #[tokio::test]
 async fn create_posts_batches_all_rows_in_order(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
     let inputs: Vec<_> = (0..3).map(|_| SeedRawPost::new(user_id).build()).collect();
 
-    let ids = confirmed(create_posts!(state, inputs).unwrap());
+    let ids =
+        confirmed(create_posts!(Arc::clone(&env.posts()), env.write_scope(), inputs).unwrap());
     assert_eq!(ids.len(), 3);
 
     // Each id resolves to the matching row, and its Public audience is honored
     // (visible to Anonymous — get_post_by_id filters on audience).
     for (i, id) in ids.iter().enumerate() {
-        let rec = state
-            .posts
+        let rec = env
+            .posts()
             .get_post_by_id(*id, &ViewerIdentity::Anonymous)
             .await
             .unwrap()
@@ -1262,8 +1426,10 @@ async fn create_posts_batches_all_rows_in_order(#[case] backend: Backend) {
 #[tokio::test]
 async fn create_posts_conflict_rolls_back_whole_batch(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
     let dup = parse_slug("dup");
     // Rows 0 and 2 collide on slug — the batch must fail on row 2 and undo 0/1.
@@ -1273,7 +1439,7 @@ async fn create_posts_conflict_rolls_back_whole_batch(#[case] backend: Backend) 
         SeedRawPost::new(user_id).slug(dup.as_ref()).build(),
     ];
 
-    let err = create_posts!(state, inputs).unwrap_err();
+    let err = create_posts!(Arc::clone(&env.posts()), env.write_scope(), inputs).unwrap_err();
     assert!(
         matches!(
             err,
@@ -1283,8 +1449,8 @@ async fn create_posts_conflict_rolls_back_whole_batch(#[case] backend: Backend) 
     );
 
     // Nothing persisted: the author's collection (drafts + published) is empty.
-    let collection = state
-        .posts
+    let collection = env
+        .posts()
         .list_collection_by_user(user_id, None, parse_row_limit("50"))
         .await
         .unwrap();
@@ -1299,18 +1465,23 @@ async fn create_posts_conflict_rolls_back_whole_batch(#[case] backend: Backend) 
 #[tokio::test]
 async fn perform_post_update_markdown_renders_and_updates(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
-    let post = SeedRawPost::new(user_id).draft().seed(state).await;
+    let post = SeedRawPost::new(user_id)
+        .draft()
+        .seed(env.posts(), env.write_scope())
+        .await;
     let title = parse_post_title("Updated Title");
 
     let record = confirmed(
         perform_post_update(
-            &state.write_scope,
+            &env.write_scope(),
             &storage::test_support::fixture_media_content_locks(),
-            Arc::clone(&state.posts),
-            Arc::clone(&state.feed_events),
+            Arc::clone(&env.posts()),
+            Arc::clone(&env.feed_events()),
             PostUpdate {
                 post_id: post.post_id,
                 editor_user_id: user_id,
@@ -1345,20 +1516,25 @@ async fn perform_post_update_markdown_renders_and_updates(#[case] backend: Backe
 #[tokio::test]
 async fn perform_post_update_org_renders_and_updates(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
-    let post = SeedRawPost::new(user_id).draft().seed(state).await;
+    let post = SeedRawPost::new(user_id)
+        .draft()
+        .seed(env.posts(), env.write_scope())
+        .await;
     let title = parse_post_title("Updated Org Title");
 
     // `*bold org*` is emphasis, not a heading — `* ` (with the space) is what marks a
     // title source — so canonicalization leaves it alone and it must still render.
     let record = confirmed(
         perform_post_update(
-            &state.write_scope,
+            &env.write_scope(),
             &storage::test_support::fixture_media_content_locks(),
-            Arc::clone(&state.posts),
-            Arc::clone(&state.feed_events),
+            Arc::clone(&env.posts()),
+            Arc::clone(&env.feed_events()),
             PostUpdate {
                 post_id: post.post_id,
                 editor_user_id: user_id,

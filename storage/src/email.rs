@@ -277,7 +277,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{Backend, SeedUser, TestEnv, backends, confirmed_for};
+    use crate::test_support::{Backend, SeedUser, backends, confirmed_for};
     use common::test_support::parse_email;
     use host::token;
     use jiff::ToSpan;
@@ -292,18 +292,23 @@ mod tests {
         // Keep the whole `TestEnv` bound: dropping `base` unlinks the SQLite file
         // (ADR-0053 TempDir hazard).
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         let email = parse_email("alice@example.com");
         let expires_at: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
 
         // `create_email_verification` binds the `TokenHash` and the `Email`;
         // `use_email_verification` re-binds the hash to claim the row and decodes
         // the `email` column straight back into `Email` via the sqlx bridge (#438).
-        let email_verifications = Arc::clone(&env.state.email_verifications);
+        let email_verifications = Arc::clone(&env.email_verifications());
         let verification_email = email.clone();
         let outcome = env
-            .state
-            .write_scope
+            .write_scope()
             .run(|transaction| {
                 Box::pin(async move {
                     email_verifications
@@ -320,10 +325,9 @@ mod tests {
             .unwrap();
         let raw_token = confirmed_for(outcome, "email-verification fixture setup");
 
-        let email_verifications = Arc::clone(&env.state.email_verifications);
+        let email_verifications = Arc::clone(&env.email_verifications());
         let outcome = env
-            .state
-            .write_scope
+            .write_scope()
             .run(|transaction| {
                 Box::pin(async move {
                     email_verifications
@@ -344,13 +348,18 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         let email = parse_email("alice@example.com");
         let expires_at: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
-        let email_verifications = Arc::clone(&env.state.email_verifications);
+        let email_verifications = Arc::clone(&env.email_verifications());
         let outcome = env
-            .state
-            .write_scope
+            .write_scope()
             .run(|transaction| {
                 Box::pin(async move {
                     email_verifications
@@ -376,10 +385,9 @@ mod tests {
         // bridge; a corrupt value is a data-integrity fault, surfaced as
         // `Internal(ColumnDecode)` — distinct from the not-found path (covers the
         // decode arm of the claim query's error mapping).
-        let email_verifications = Arc::clone(&env.state.email_verifications);
+        let email_verifications = Arc::clone(&env.email_verifications());
         let err = env
-            .state
-            .write_scope
+            .write_scope()
             .run(|transaction| {
                 Box::pin(async move {
                     email_verifications
@@ -424,7 +432,13 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         let email = parse_email("alice@example.com");
         let now: UtcInstant = "2050-01-02T03:04:05Z".parse().unwrap();
         let expired_at = UtcInstant::from(
@@ -439,10 +453,9 @@ mod tests {
         );
 
         let expired_email = email.clone();
-        let email_verifications = Arc::clone(&env.state.email_verifications);
+        let email_verifications = Arc::clone(&env.email_verifications());
         let outcome = env
-            .state
-            .write_scope
+            .write_scope()
             .run(|transaction| {
                 Box::pin(async move {
                     email_verifications
@@ -455,10 +468,9 @@ mod tests {
         let expired_token = confirmed_for(outcome, "expired email-verification fixture");
 
         let boundary_email = email.clone();
-        let email_verifications = Arc::clone(&env.state.email_verifications);
+        let email_verifications = Arc::clone(&env.email_verifications());
         let outcome = env
-            .state
-            .write_scope
+            .write_scope()
             .run(|transaction| {
                 Box::pin(async move {
                     email_verifications
@@ -476,10 +488,9 @@ mod tests {
         let boundary_token = confirmed_for(outcome, "boundary email-verification fixture");
         let boundary_hash = token::hash(&boundary_token).unwrap();
 
-        let email_verifications = Arc::clone(&env.state.email_verifications);
+        let email_verifications = Arc::clone(&env.email_verifications());
         let outcome = env
-            .state
-            .write_scope
+            .write_scope()
             .run(|transaction| {
                 Box::pin(async move {
                     email_verifications
@@ -508,18 +519,16 @@ mod tests {
         });
 
         assert_eq!(
-            env.state
-                .email_verifications
+            env.email_verifications()
                 .prune_email_verifications(now)
                 .await
                 .unwrap(),
             2
         );
 
-        let email_verifications = Arc::clone(&env.state.email_verifications);
+        let email_verifications = Arc::clone(&env.email_verifications());
         let expired = env
-            .state
-            .write_scope
+            .write_scope()
             .run(|transaction| {
                 Box::pin(async move {
                     email_verifications
@@ -534,10 +543,9 @@ mod tests {
             crate::WriteScopeError::Operation(UseEmailVerificationError::NotFound)
         ));
 
-        let email_verifications = Arc::clone(&env.state.email_verifications);
+        let email_verifications = Arc::clone(&env.email_verifications());
         let boundary = env
-            .state
-            .write_scope
+            .write_scope()
             .run(|transaction| {
                 Box::pin(async move {
                     email_verifications
@@ -552,10 +560,9 @@ mod tests {
             crate::WriteScopeError::Operation(UseEmailVerificationError::NotFound)
         ));
 
-        let email_verifications = Arc::clone(&env.state.email_verifications);
+        let email_verifications = Arc::clone(&env.email_verifications());
         let future = env
-            .state
-            .write_scope
+            .write_scope()
             .run(|transaction| {
                 Box::pin(async move {
                     email_verifications
@@ -574,11 +581,10 @@ mod tests {
     #[apply(backends)]
     #[tokio::test]
     async fn prune_email_verifications_with_closed_pool_returns_error(#[case] backend: Backend) {
-        let TestEnv { state, base } = backend.setup().await;
-        base.close_pool().await;
+        let env = backend.setup().await;
+        env.base.close_pool().await;
         assert!(
-            state
-                .email_verifications
+            env.email_verifications()
                 .prune_email_verifications(UtcInstant::now())
                 .await
                 .is_err()

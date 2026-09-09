@@ -579,10 +579,18 @@ mod tests {
     #[tokio::test]
     async fn postgres_tag_revision_capture_waits_for_current_media_lock() {
         let env = Backend::Postgres.setup().await;
-        let user = SeedUser::new().seed(&env.state).await.user_id;
+        let user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         let media = media_ref_for("tag-revision-lock.jpg");
         let post = create_post_via_service(
-            &env.state,
+            env.posts().clone(),
+            env.feed_events().clone(),
+            env.write_scope().clone(),
             user,
             parse_post_body(&format!(
                 "<img src=\"{}\">",
@@ -596,8 +604,8 @@ mod tests {
             .lock_media_reference_for_write(&media)
             .await
             .expect("take the current media lock");
-        let posts = Arc::clone(&env.state.posts);
-        let write_scope = env.state.write_scope.clone();
+        let posts = Arc::clone(&env.posts());
+        let write_scope = env.write_scope().clone();
         let mut tag_update = tokio::spawn(async move {
             set_post_tags_confirmed(
                 &write_scope,

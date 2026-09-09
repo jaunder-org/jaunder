@@ -4,7 +4,6 @@
 #[cfg(test)]
 use super::TestEnv;
 use super::{confirmed_for, fixture_media_content_locks};
-use crate::AppState;
 use crate::posts::{
     errors::CreatePostError,
     models::{
@@ -14,6 +13,7 @@ use crate::posts::{
 };
 #[cfg(test)]
 use crate::sql::QueryStorageExt;
+use crate::{FeedEventStorage, PostStorage, WriteScope};
 
 use common::ids::{PostId, UserId};
 use common::post_body::PostBody;
@@ -38,7 +38,8 @@ use std::sync::{
 ///
 /// If a slug fails to parse or a post fails to persist.
 pub async fn seed_posts(
-    state: &Arc<AppState>,
+    posts: Arc<dyn PostStorage>,
+    write_scope: WriteScope,
     user_id: UserId,
     count: usize,
     published: bool,
@@ -53,9 +54,7 @@ pub async fn seed_posts(
             )
         })
         .collect();
-    let posts = Arc::clone(&state.posts);
-    let outcome = state
-        .write_scope
+    let outcome = write_scope
         .run(move |transaction| {
             Box::pin(async move { posts.create_posts(transaction, &inputs).await })
         })
@@ -70,12 +69,11 @@ pub async fn seed_posts(
 ///
 /// Fixture writes require a confirmed commit.
 pub async fn create_posts_confirmed(
-    state: &Arc<AppState>,
+    posts: Arc<dyn PostStorage>,
+    write_scope: WriteScope,
     inputs: Vec<CreatePostInput>,
 ) -> Vec<PostId> {
-    let posts = Arc::clone(&state.posts);
-    let outcome = state
-        .write_scope
+    let outcome = write_scope
         .run(move |transaction| {
             Box::pin(async move { posts.create_posts(transaction, &inputs).await })
         })
@@ -88,8 +86,9 @@ pub async fn create_posts_confirmed(
 /// way — the same service-layer path production uses (renders the body, generates a
 /// unique slug via collision-retry, re-reads the row). Aggressively defaulted: a
 /// **published, public, Markdown** post with a fixed non-empty body, so the
-/// overwhelming majority of call sites are the bare `SeedPost::new(user_id).seed(&state)`
-/// and a setter appears only where a test asserts on (or requires) that field — the
+/// overwhelming majority of call sites pass their exact post, feed-event, and
+/// write-scope dependencies to a bare `SeedPost::new(user_id).seed(...)`; a
+/// setter appears only where a test asserts on (or requires) that field — the
 /// [`SeedUser`](super::SeedUser) discipline.
 ///
 /// Distinct from [`seed_posts`] (batch, generic `seed-{i}` posts) and from the
@@ -151,12 +150,17 @@ impl SeedPost {
     /// # Panics
     ///
     /// If the post cannot be created — happy-path setup only, like [`SeedUser::seed`](super::SeedUser::seed).
-    pub async fn seed(self, state: &Arc<AppState>) -> PostRecord {
+    pub async fn seed(
+        self,
+        posts: Arc<dyn PostStorage>,
+        feed_events: Arc<dyn FeedEventStorage>,
+        write_scope: WriteScope,
+    ) -> PostRecord {
         let outcome = crate::perform_post_creation(
-            &state.write_scope,
+            &write_scope,
             &fixture_media_content_locks(),
-            Arc::clone(&state.posts),
-            Arc::clone(&state.feed_events),
+            posts,
+            feed_events,
             crate::PostCreation {
                 user_id: self.user_id,
                 body: self.body,
@@ -343,7 +347,11 @@ impl SeedRawPost {
     ///
     /// Panics only if `SeedRawPost`'s invariant that it always generates a title
     /// is violated.
-    pub async fn create(self, state: &Arc<AppState>) -> Result<SeededPost, CreatePostError> {
+    pub async fn create(
+        self,
+        posts: Arc<dyn PostStorage>,
+        write_scope: WriteScope,
+    ) -> Result<SeededPost, CreatePostError> {
         let input = self.into_input();
         let slug = input.slug.clone();
         let title = input
@@ -352,9 +360,7 @@ impl SeedRawPost {
             .expect("SeedRawPost always autogenerates a title");
         let published_at = input.published_at;
         let rendered_html = input.rendered.clone().into_html();
-        let posts = Arc::clone(&state.posts);
-        let outcome = state
-            .write_scope
+        let outcome = write_scope
             .run(move |transaction| {
                 Box::pin(async move {
                     posts
@@ -382,8 +388,8 @@ impl SeedRawPost {
     /// # Panics
     ///
     /// If the post cannot be created.
-    pub async fn seed(self, state: &Arc<AppState>) -> SeededPost {
-        self.create(state)
+    pub async fn seed(self, posts: Arc<dyn PostStorage>, write_scope: WriteScope) -> SeededPost {
+        self.create(posts, write_scope)
             .await
             .expect("seed raw post should be created")
     }
@@ -559,9 +565,10 @@ mod tests {
     #[tokio::test]
     async fn seed_post_builder_defaults_create_published_public_markdown(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let state = &env.state;
-        let user = SeedUser::new().seed(state).await;
-        let post = SeedPost::new(user.user_id).seed(state).await;
+        let user = SeedUser::new().seed(env.users(), env.write_scope()).await;
+        let post = SeedPost::new(user.user_id)
+            .seed(env.posts(), env.feed_events(), env.write_scope())
+            .await;
         assert!(
             post.published_at.is_some(),
             "default post should be published"
@@ -569,7 +576,7 @@ mod tests {
         assert!(!post.slug.as_ref().is_empty(), "post should have a slug");
         assert!(!post.body.as_ref().is_empty(), "post should have a body");
         assert_eq!(post.format, PostFormat::Markdown);
-        let audiences = state.posts.get_post_audiences(post.post_id).await.unwrap();
+        let audiences = env.posts().get_post_audiences(post.post_id).await.unwrap();
         assert_eq!(audiences, vec![AudienceTarget::Public]);
     }
 
@@ -577,17 +584,16 @@ mod tests {
     #[tokio::test]
     async fn seed_post_builder_setters_apply(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let state = &env.state;
-        let user = SeedUser::new().seed(state).await;
+        let user = SeedUser::new().seed(env.users(), env.write_scope()).await;
         let post = SeedPost::new(user.user_id)
             .title(parse_post_title("Custom Title"))
             .body(parse_post_body("Custom body text"))
             .audiences(vec![AudienceTarget::Public])
-            .seed(state)
+            .seed(env.posts(), env.feed_events(), env.write_scope())
             .await;
         assert_eq!(post.title.as_ref().map(AsRef::as_ref), Some("Custom Title"));
         assert!(post.body.as_ref().contains("Custom body text"));
-        let audiences = state.posts.get_post_audiences(post.post_id).await.unwrap();
+        let audiences = env.posts().get_post_audiences(post.post_id).await.unwrap();
         assert_eq!(audiences, vec![AudienceTarget::Public]);
     }
 
@@ -595,10 +601,13 @@ mod tests {
     #[tokio::test]
     async fn seed_post_bare_repeated_seeds_get_distinct_slugs(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let state = &env.state;
-        let user = SeedUser::new().seed(state).await;
-        let a = SeedPost::new(user.user_id).seed(state).await;
-        let b = SeedPost::new(user.user_id).seed(state).await;
+        let user = SeedUser::new().seed(env.users(), env.write_scope()).await;
+        let a = SeedPost::new(user.user_id)
+            .seed(env.posts(), env.feed_events(), env.write_scope())
+            .await;
+        let b = SeedPost::new(user.user_id)
+            .seed(env.posts(), env.feed_events(), env.write_scope())
+            .await;
         assert_ne!(a.slug, b.slug, "bare seeds should get distinct slugs");
     }
 
@@ -608,11 +617,15 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let state = &env.state;
-        let author = SeedUser::new().seed(state).await.user_id;
-        let post = SeedRawPost::new(author).seed(state).await;
-        let record = state
-            .posts
+        let author = SeedUser::new()
+            .seed(env.users(), env.write_scope())
+            .await
+            .user_id;
+        let post = SeedRawPost::new(author)
+            .seed(env.posts(), env.write_scope())
+            .await;
+        let record = env
+            .posts()
             .get_post_by_id(post.post_id, &ViewerIdentity::Anonymous)
             .await
             .unwrap()
@@ -633,10 +646,16 @@ mod tests {
     #[tokio::test]
     async fn seed_raw_post_autogenerates_distinct_slugs_and_titles(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let state = &env.state;
-        let author = SeedUser::new().seed(state).await.user_id;
-        let a = SeedRawPost::new(author).seed(state).await;
-        let b = SeedRawPost::new(author).seed(state).await;
+        let author = SeedUser::new()
+            .seed(env.users(), env.write_scope())
+            .await
+            .user_id;
+        let a = SeedRawPost::new(author)
+            .seed(env.posts(), env.write_scope())
+            .await;
+        let b = SeedRawPost::new(author)
+            .seed(env.posts(), env.write_scope())
+            .await;
         assert_ne!(a.slug, b.slug, "each seed gets a fresh slug");
         assert_ne!(a.title, b.title, "each seed gets a fresh title");
     }
@@ -645,17 +664,19 @@ mod tests {
     #[tokio::test]
     async fn seed_raw_post_overrides_apply(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let state = &env.state;
-        let author = SeedUser::new().seed(state).await.user_id;
+        let author = SeedUser::new()
+            .seed(env.users(), env.write_scope())
+            .await
+            .user_id;
         let post = SeedRawPost::new(author)
             .draft()
             .format(PostFormat::Org)
             .summary(PostSummary::from_title(&parse_post_title("excerpt")))
             .tags(["rust"])
-            .seed(state)
+            .seed(env.posts(), env.write_scope())
             .await;
-        let record = state
-            .posts
+        let record = env
+            .posts()
             .get_post_by_id(post.post_id, &ViewerIdentity::Anonymous)
             .await
             .unwrap()
@@ -666,10 +687,10 @@ mod tests {
         assert_eq!(record.tags.len(), 1, "tag applied after insert");
         let targeted = SeedRawPost::new(author)
             .audiences(vec![AudienceTarget::Subscribers])
-            .seed(state)
+            .seed(env.posts(), env.write_scope())
             .await;
-        let audiences = state
-            .posts
+        let audiences = env
+            .posts()
             .get_post_audiences(targeted.post_id)
             .await
             .unwrap();
@@ -680,13 +701,17 @@ mod tests {
     #[tokio::test]
     async fn seed_raw_post_create_surfaces_slug_conflict(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let state = &env.state;
-        let author = SeedUser::new().seed(state).await.user_id;
-        let first = SeedRawPost::new(author).seed(state).await;
+        let author = SeedUser::new()
+            .seed(env.users(), env.write_scope())
+            .await
+            .user_id;
+        let first = SeedRawPost::new(author)
+            .seed(env.posts(), env.write_scope())
+            .await;
         let err = SeedRawPost::new(author)
             .slug(first.slug.as_ref())
             .published_at(first.published_at.expect("default is published"))
-            .create(state)
+            .create(env.posts(), env.write_scope())
             .await
             .unwrap_err();
         assert!(matches!(err, CreatePostError::SlugConflict));
@@ -696,14 +721,16 @@ mod tests {
     #[tokio::test]
     async fn seed_raw_post_body_override_is_persisted_and_rendered(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let state = &env.state;
-        let author = SeedUser::new().seed(state).await.user_id;
+        let author = SeedUser::new()
+            .seed(env.users(), env.write_scope())
+            .await
+            .user_id;
         let post = SeedRawPost::new(author)
             .body(parse_post_body("custom body"))
-            .seed(state)
+            .seed(env.posts(), env.write_scope())
             .await;
-        let record = state
-            .posts
+        let record = env
+            .posts()
             .get_post_by_id(post.post_id, &ViewerIdentity::Anonymous)
             .await
             .unwrap()
@@ -722,14 +749,13 @@ mod tests {
     #[tokio::test]
     async fn seed_raw_post_build_yields_a_distinct_input_without_writing(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let state = &env.state;
-        let author = SeedUser::new().seed(state).await;
+        let author = SeedUser::new().seed(env.users(), env.write_scope()).await;
         let a = SeedRawPost::new(author.user_id).build();
         let b = SeedRawPost::new(author.user_id).build();
         assert!(a.title.is_some(), "build autogenerates a title");
         assert_ne!(a.slug, b.slug, "each build autogenerates a distinct slug");
-        let published = state
-            .posts
+        let published = env
+            .posts()
             .list_published_by_user(
                 &author.username,
                 None,

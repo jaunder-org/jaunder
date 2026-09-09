@@ -102,7 +102,7 @@ mod tests {
     #[tokio::test]
     async fn load_smtp_config_returns_none_when_host_absent(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let store = &*env.state.site_config;
+        let store = &*env.site_config();
         assert!(load_smtp_config(store).await.unwrap().is_none());
     }
 
@@ -110,7 +110,7 @@ mod tests {
     #[tokio::test]
     async fn load_smtp_config_returns_some_with_all_keys_present(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let store = &*env.state.site_config;
+        let store = &*env.site_config();
         for (key, value) in [
             (SiteConfigKey::SmtpHost, "mail.example.com"),
             (SiteConfigKey::SmtpPort, "465"),
@@ -147,7 +147,7 @@ mod tests {
     #[tokio::test]
     async fn load_smtp_config_uses_defaults_for_missing_optional_fields(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let store = &*env.state.site_config;
+        let store = &*env.site_config();
         crate::test_support::set_site_config(&env, SiteConfigKey::SmtpHost, "relay.example.com")
             .await
             .unwrap();
@@ -169,7 +169,7 @@ mod tests {
     #[tokio::test]
     async fn load_smtp_config_returns_err_for_invalid_sender(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let store = &*env.state.site_config;
+        let store = &*env.site_config();
         crate::test_support::set_site_config(&env, SiteConfigKey::SmtpHost, "mail.example.com")
             .await
             .unwrap();
@@ -193,7 +193,7 @@ mod tests {
     #[tokio::test]
     async fn load_smtp_config_returns_err_for_invalid_port(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let store = &*env.state.site_config;
+        let store = &*env.site_config();
         crate::test_support::set_site_config(&env, SiteConfigKey::SmtpHost, "mail.example.com")
             .await
             .unwrap();
@@ -213,7 +213,7 @@ mod tests {
     #[tokio::test]
     async fn load_smtp_config_returns_err_for_invalid_tls_mode(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let store = &*env.state.site_config;
+        let store = &*env.site_config();
         crate::test_support::set_site_config(&env, SiteConfigKey::SmtpHost, "mail.example.com")
             .await
             .unwrap();
@@ -233,7 +233,7 @@ mod tests {
     #[tokio::test]
     async fn load_smtp_config_returns_err_for_empty_password(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let store = &*env.state.site_config;
+        let store = &*env.site_config();
         crate::test_support::set_site_config(&env, SiteConfigKey::SmtpHost, "mail.example.com")
             .await
             .unwrap();
@@ -249,7 +249,7 @@ mod tests {
     #[tokio::test]
     async fn load_smtp_config_returns_err_for_empty_username(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let store = &*env.state.site_config;
+        let store = &*env.site_config();
         crate::test_support::set_site_config(&env, SiteConfigKey::SmtpHost, "mail.example.com")
             .await
             .unwrap();

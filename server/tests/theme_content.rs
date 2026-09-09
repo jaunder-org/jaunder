@@ -8,9 +8,9 @@ use common::{MutationOutcome, theme::ThemeContentDigest};
 use rstest::*;
 use rstest_reuse::*;
 use storage::{
-    ThemeAssetManager, ThemeDraft, ThemeDraftAsset, ThemeOwner,
+    ThemeAssetManager, ThemeDraft, ThemeDraftAsset, ThemeOwner, ThemeStorage, WriteScope,
     test_support::{
-        Backend, TestEnv, backends, compiled_theme_fixture, confirmed_for, create_site_theme,
+        Backend, backends, compiled_theme_fixture, confirmed_for, create_site_theme,
         theme_quota_limits,
     },
 };
@@ -34,24 +34,20 @@ fn hex_digest(bytes: [u8; 32]) -> String {
     output
 }
 
-async fn publish_fixture(state: &Arc<storage::AppState>, storage: &TempDir) -> PublishedFixture {
+async fn publish_fixture(
+    themes: Arc<dyn ThemeStorage>,
+    write_scope: WriteScope,
+    storage: &TempDir,
+) -> PublishedFixture {
     let compiled = compiled_theme_fixture();
     let stylesheet_digest = hex_digest(compiled.css().digest());
     let stylesheet = compiled.css().bytes().to_vec();
     let (_, _, image, image_digest) = compiled.assets().next().expect("fixture contains image");
     let image_digest = hex_digest(image_digest);
     let image = image.to_vec();
-    let theme_id = create_site_theme(
-        Arc::clone(&state.themes),
-        state.write_scope.clone(),
-        &compiled,
-    )
-    .await;
-    let manager = ThemeAssetManager::new(
-        Arc::clone(&state.themes),
-        state.write_scope.clone(),
-        Arc::new(storage.path().to_path_buf()),
-    );
+    let theme_id = create_site_theme(Arc::clone(&themes), write_scope.clone(), &compiled).await;
+    let manager =
+        ThemeAssetManager::new(themes, write_scope, Arc::new(storage.path().to_path_buf()));
     let outcome = manager
         .publish(
             ThemeOwner::Site,
@@ -82,9 +78,9 @@ async fn get(app: &axum::Router, uri: String) -> axum::response::Response {
 #[apply(backends)]
 #[tokio::test]
 async fn author_draft_asset_is_private_to_its_owner(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let owner = create_user_and_session(&state).await;
-    let stranger = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let owner = create_user_and_session(env.users(), env.sessions(), env.write_scope()).await;
+    let stranger = create_user_and_session(env.users(), env.sessions(), env.write_scope()).await;
     let asset = ThemeDraftAsset {
         path: "assets/private.png".to_owned(),
         mime: "image/png".to_owned(),
@@ -102,11 +98,10 @@ async fn author_draft_asset_is_private_to_its_owner(#[case] backend: Backend) {
         source_digest: "a".repeat(64).parse().expect("valid source digest"),
         assets: vec![asset.clone()],
     };
-    let themes = Arc::clone(&state.themes);
+    let themes = env.themes();
     let owner_id = owner.user_id;
     let theme_id = confirmed_for(
-        state
-            .write_scope
+        env.write_scope()
             .run(move |transaction| {
                 Box::pin(async move {
                     themes
@@ -125,7 +120,7 @@ async fn author_draft_asset_is_private_to_its_owner(#[case] backend: Backend) {
         "author draft creation",
     );
     let storage = TempDir::new().expect("temporary content root");
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
     let uri = format!("/theme/draft/{theme_id}/{}", asset.path);
 
     let owner_response = app
@@ -193,10 +188,10 @@ async fn author_draft_asset_is_private_to_its_owner(#[case] backend: Backend) {
 async fn public_theme_content_serves_stored_css_and_image_with_immutable_headers(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
     let storage = TempDir::new().expect("temporary content root");
-    let fixture = publish_fixture(&state, &storage).await;
-    let app = make_app(&state, &storage);
+    let fixture = publish_fixture(env.themes(), env.write_scope(), &storage).await;
+    let app = make_app!(&env, &storage);
 
     for (digest, expected_mime, expected_body) in [
         (
@@ -245,10 +240,10 @@ async fn public_theme_content_serves_stored_css_and_image_with_immutable_headers
 #[apply(backends)]
 #[tokio::test]
 async fn public_theme_content_returns_not_modified_for_exact_etag(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
     let storage = TempDir::new().expect("temporary content root");
-    let fixture = publish_fixture(&state, &storage).await;
-    let app = make_app(&state, &storage);
+    let fixture = publish_fixture(env.themes(), env.write_scope(), &storage).await;
+    let app = make_app!(&env, &storage);
     let etag = format!("\"sha256-{}\"", fixture.stylesheet_digest);
     for condition in [etag.clone(), format!("\"other\", W/{etag}"), "*".to_owned()] {
         let request = Request::builder()
@@ -276,7 +271,7 @@ async fn public_theme_content_returns_not_modified_for_exact_etag(#[case] backen
 #[apply(backends)]
 #[tokio::test]
 async fn only_eligible_theme_content_is_public(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
     let storage = TempDir::new().expect("temporary content root");
     let digest = "a".repeat(64);
     let file = storage
@@ -287,7 +282,7 @@ async fn only_eligible_theme_content_is_public(#[case] backend: Backend) {
         .join(&digest);
     std::fs::create_dir_all(file.parent().expect("content parent")).expect("create content parent");
     std::fs::write(&file, b"draft css").expect("write known draft bytes");
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
 
     assert_eq!(
         get(&app, format!("/theme/{digest}")).await.status(),
@@ -295,9 +290,9 @@ async fn only_eligible_theme_content_is_public(#[case] backend: Backend) {
     );
 
     let typed_digest: ThemeContentDigest = digest.parse().expect("canonical digest");
-    let themes = Arc::clone(&state.themes);
-    let outcome = state
-        .write_scope
+    let themes = env.themes();
+    let outcome = env
+        .write_scope()
         .run(move |transaction| {
             Box::pin(async move {
                 themes
@@ -336,20 +331,20 @@ async fn only_eligible_theme_content_is_public(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn removed_theme_content_remains_public_through_retention(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
     let storage = TempDir::new().expect("temporary content root");
-    let fixture = publish_fixture(&state, &storage).await;
-    let theme = state
-        .themes
+    let fixture = publish_fixture(env.themes(), env.write_scope(), &storage).await;
+    let theme = env
+        .themes()
         .list_themes(ThemeOwner::Site)
         .await
         .expect("list published theme")
         .into_iter()
         .next()
         .expect("published theme");
-    let themes = Arc::clone(&state.themes);
-    let outcome = state
-        .write_scope
+    let themes = env.themes();
+    let outcome = env
+        .write_scope()
         .run(move |transaction| {
             Box::pin(async move {
                 themes
@@ -361,7 +356,7 @@ async fn removed_theme_content_remains_public_through_retention(#[case] backend:
         .expect("remove theme with retention");
     confirmed_for(outcome, "integration test backend");
 
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
     let response = get(&app, format!("/theme/{}", fixture.image_digest)).await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
@@ -376,9 +371,9 @@ async fn removed_theme_content_remains_public_through_retention(#[case] backend:
 #[apply(backends)]
 #[tokio::test]
 async fn public_theme_content_rejects_noncanonical_addresses(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
     let storage = TempDir::new().expect("temporary content root");
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
     for address in [
         "A".repeat(64),
         "a".repeat(63),

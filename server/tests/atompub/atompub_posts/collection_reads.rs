@@ -6,7 +6,7 @@ use rstest_reuse::*;
 use tower::ServiceExt;
 
 use crate::helpers::{atompub_get, body_string, create_user_and_session, make_app};
-use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
+use storage::test_support::{Backend, backends, backends_matrix};
 
 // #560: the AtomPub surface composes absolute URLs, so it *requires* `site.base_url`.
 // With base UNSET the handler returns `500` (`HandlerError::BaseUrlRequired`) rather than
@@ -14,10 +14,16 @@ use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
 #[apply(backends)]
 #[tokio::test]
 async fn collection_get_without_base_url_returns_500(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().base_url(None).await;
+    let env = backend.setup().base_url(None).await;
+    let base = &env.base;
     // Deliberately omit the shared fixture's base URL.
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
 
     let response = app.oneshot(atompub_get(&session, "posts")).await.unwrap();
 
@@ -27,22 +33,36 @@ async fn collection_get_without_base_url_returns_500(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn collection_lists_user_posts(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
 
     let _post1 = session
         .seed_post()
         .title(parse_post_title("Hello Title One"))
-        .seed(&state)
+        .seed(
+            std::sync::Arc::clone(&env.posts()),
+            std::sync::Arc::clone(&env.feed_events()),
+            env.write_scope(),
+        )
         .await;
 
     let _post2 = session
         .seed_post()
         .title(parse_post_title("Hello Title Two"))
-        .seed(&state)
+        .seed(
+            std::sync::Arc::clone(&env.posts()),
+            std::sync::Arc::clone(&env.feed_events()),
+            env.write_scope(),
+        )
         .await;
 
-    let app = make_app(&state, &base);
+    let app = make_app!(&env, base);
 
     let response = app.oneshot(atompub_get(&session, "posts")).await.unwrap();
 
@@ -76,14 +96,27 @@ async fn collection_lists_user_posts(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn collection_paging_emits_next_link(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
 
     for _ in 0..2 {
-        session.seed_post().seed(&state).await;
+        session
+            .seed_post()
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                std::sync::Arc::clone(&env.feed_events()),
+                env.write_scope(),
+            )
+            .await;
     }
 
-    let app = make_app(&state, &base);
+    let app = make_app!(&env, base);
 
     // Page size 1 with 2 posts -> a next link must be present.
     let response = app
@@ -128,15 +161,28 @@ async fn collection_paging_emits_next_link(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn collection_clamps_out_of_range_limit(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
 
     // Seed 51 posts so the `1..=50` page-size cap is observable (50 < 51).
     for _ in 0..51 {
-        session.seed_post().seed(&state).await;
+        session
+            .seed_post()
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                std::sync::Arc::clone(&env.feed_events()),
+                env.write_scope(),
+            )
+            .await;
     }
 
-    let app = make_app(&state, &base);
+    let app = make_app!(&env, base);
 
     // `?limit=999` clamps to PageSize::MAX (50), not 51.
     let over = app
@@ -188,12 +234,25 @@ async fn collection_cursor_validation(
     #[case] query: &str,
     #[case] expected: StatusCode,
 ) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     if seed_post {
-        session.seed_post().seed(&state).await;
+        session
+            .seed_post()
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                std::sync::Arc::clone(&env.feed_events()),
+                env.write_scope(),
+            )
+            .await;
     }
-    let app = make_app(&state, &base);
+    let app = make_app!(&env, base);
 
     let response = app
         .oneshot(atompub_get(&session, &format!("posts?{query}")))
@@ -206,9 +265,15 @@ async fn collection_cursor_validation(
 #[apply(backends)]
 #[tokio::test]
 async fn collection_empty_returns_feed_without_entries(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
 
     let response = app.oneshot(atompub_get(&session, "posts")).await.unwrap();
 

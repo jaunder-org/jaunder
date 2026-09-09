@@ -820,10 +820,12 @@ mod tests {
     use std::{sync::Arc, time::Duration};
     use tokio::{sync::oneshot, time::timeout};
 
-    async fn create_media_confirmed(state: &Arc<crate::AppState>, record: MediaRecord) {
-        let media = Arc::clone(&state.media);
-        let outcome = state
-            .write_scope
+    async fn create_media_confirmed(
+        media: Arc<dyn MediaStorage>,
+        write_scope: crate::WriteScope,
+        record: MediaRecord,
+    ) {
+        let outcome = write_scope
             .run(move |transaction| {
                 Box::pin(async move { media.create_media(transaction, &record).await })
             })
@@ -868,7 +870,8 @@ mod tests {
     }
 
     async fn try_delete_media_scoped(
-        state: &Arc<crate::AppState>,
+        media: Arc<dyn MediaStorage>,
+        write_scope: crate::WriteScope,
         user_id: UserId,
         media_ref: &MediaRef,
         instance_id: &InstanceId,
@@ -876,12 +879,10 @@ mod tests {
         mode: MediaDeleteMode,
     ) -> Result<common::MutationOutcome<TryDeleteOutcome>, crate::WriteScopeError<DeleteMediaError>>
     {
-        let media = Arc::clone(&state.media);
         let media_ref = media_ref.clone();
         let instance_id = instance_id.clone();
         let evidence = evidence.clone();
-        state
-            .write_scope
+        write_scope
             .run(move |transaction| {
                 Box::pin(async move {
                     media
@@ -900,17 +901,16 @@ mod tests {
     }
 
     async fn media_entry_is_reclaimable_scoped(
-        state: &Arc<crate::AppState>,
+        media: Arc<dyn MediaStorage>,
+        write_scope: crate::WriteScope,
         media_ref: &MediaRef,
         instance_id: &InstanceId,
         evidence: &MediaReferenceEvidence,
     ) -> Result<common::MutationOutcome<bool>, crate::WriteScopeError<sqlx::Error>> {
-        let media = Arc::clone(&state.media);
         let media_ref = media_ref.clone();
         let instance_id = instance_id.clone();
         let evidence = evidence.clone();
-        state
-            .write_scope
+        write_scope
             .run(move |transaction| {
                 Box::pin(async move {
                     media
@@ -935,14 +935,32 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let [owner, accounting_owner] = seed_users::<2>(&env.state).await;
-        let media = seed_media(&env.state, owner, "serialized.jpg").await;
-        seed_media(&env.state, accounting_owner, "serialized.jpg").await;
+        let [owner, accounting_owner] = seed_users::<2>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
+        let media = seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            owner,
+            "serialized.jpg",
+        )
+        .await;
+        seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            accounting_owner,
+            "serialized.jpg",
+        )
+        .await;
         let form: MediaReferenceForm = media_url_for("serialized.jpg")
             .parse()
             .expect("valid media reference form");
         let foreign_post = create_post_via_service(
-            &env.state,
+            env.posts().clone(),
+            env.feed_events().clone(),
+            env.write_scope().clone(),
             owner,
             parse_post_body(&format!("<img src=\"{form}\">")),
         )
@@ -967,11 +985,14 @@ mod tests {
         let (started_tx, started_rx) = oneshot::channel();
         let (finished_tx, mut finished_rx) = oneshot::channel();
         let writer = tokio::spawn({
-            let state = Arc::clone(&env.state);
+            let posts = env.posts();
+            let feed_events = env.feed_events();
+            let write_scope = env.write_scope();
             let body = parse_post_body(&format!("new reference\n\n<img src=\"{form}\">"));
             async move {
                 started_tx.send(()).expect("parent waits for writer start");
-                let post_id = create_post_via_service(&state, owner, body).await;
+                let post_id =
+                    create_post_via_service(posts, feed_events, write_scope, owner, body).await;
                 finished_tx
                     .send(post_id)
                     .expect("parent waits for writer completion");
@@ -1000,7 +1021,8 @@ mod tests {
         let (delete_started_tx, delete_started_rx) = oneshot::channel();
         let (delete_finished_tx, mut delete_finished_rx) = oneshot::channel();
         let delete = tokio::spawn({
-            let state = Arc::clone(&env.state);
+            let media_storage = env.media();
+            let write_scope = env.write_scope();
             let media = media.clone();
             let instance_id = env.base.instance_id().clone();
             let evidence = evidence.clone();
@@ -1009,7 +1031,8 @@ mod tests {
                     .send(())
                     .expect("parent waits for delete start");
                 let result = try_delete_media_scoped(
-                    &state,
+                    media_storage,
+                    write_scope,
                     owner,
                     &media,
                     &instance_id,
@@ -1043,7 +1066,7 @@ mod tests {
             "the new unevidenced owner reference must prevent the owner-row delete"
         );
         delete.await.expect("delete task does not panic");
-        assert!(media_row_exists(&env.state, owner, &media).await);
+        assert!(media_row_exists(env.media().clone(), owner, &media).await);
     }
 
     /// Reclamation takes the same target lock as writes and deletion, so it cannot
@@ -1052,8 +1075,18 @@ mod tests {
     #[tokio::test]
     async fn reclamation_serializes_on_the_media_reference_lock(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let [user] = seed_users::<1>(&env.state).await;
-        let media = seed_media(&env.state, user, "reclaim-lock.jpg").await;
+        let [user] = seed_users::<1>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
+        let media = seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            user,
+            "reclaim-lock.jpg",
+        )
+        .await;
         delete_media_accounting_row(&env, user, &media)
             .await
             .expect("remove the only accounting row");
@@ -1066,12 +1099,14 @@ mod tests {
             .expect("take the shared media lock");
         let (started_tx, started_rx) = oneshot::channel();
         let (finished_tx, mut finished_rx) = oneshot::channel();
-        let state = Arc::clone(&env.state);
+        let media_storage = env.media();
+        let write_scope = env.write_scope();
         let instance_id = env.base.instance_id().clone();
         let reclaim = tokio::spawn(async move {
             started_tx.send(()).expect("parent waits for reclaim start");
             let result = media_entry_is_reclaimable_scoped(
-                &state,
+                media_storage,
+                write_scope,
                 &media,
                 &instance_id,
                 &MediaReferenceEvidence::new(instance_id.clone()),
@@ -1109,8 +1144,18 @@ mod tests {
     #[tokio::test]
     async fn reclamation_holds_reference_lock_through_unlink(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let [user] = seed_users::<1>(&env.state).await;
-        let media = seed_media(&env.state, user, "reclaim-unlink-lock.jpg").await;
+        let [user] = seed_users::<1>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
+        let media = seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            user,
+            "reclaim-unlink-lock.jpg",
+        )
+        .await;
         delete_media_accounting_row(&env, user, &media)
             .await
             .expect("remove the only accounting row");
@@ -1119,9 +1164,8 @@ mod tests {
             .expect("valid media reference form");
         let (checked_tx, checked_rx) = oneshot::channel();
         let (unlink_tx, unlink_rx) = oneshot::channel();
-        let reclaim_state = Arc::clone(&env.state);
-        let reclaim_storage = Arc::clone(&reclaim_state.media);
-        let reclaim_scope = reclaim_state.write_scope.clone();
+        let reclaim_storage = env.media();
+        let reclaim_scope = env.write_scope();
         let instance_id = env.base.instance_id().clone();
         let reclaim = tokio::spawn(async move {
             reclaim_scope
@@ -1147,10 +1191,14 @@ mod tests {
         });
         checked_rx.await.expect("reclaimability decision completed");
 
-        let writer_state = Arc::clone(&env.state);
+        let writer_posts = env.posts();
+        let writer_feed_events = env.feed_events();
+        let writer_scope = env.write_scope();
         let mut writer = tokio::spawn(async move {
             create_post_via_service(
-                &writer_state,
+                writer_posts,
+                writer_feed_events,
+                writer_scope,
                 user,
                 parse_post_body(&format!("<img src=\"{form}\">")),
             )
@@ -1173,8 +1221,18 @@ mod tests {
     #[tokio::test]
     async fn create_media_serializes_with_reclamation_through_unlink(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let [user] = seed_users::<1>(&env.state).await;
-        let media = seed_media(&env.state, user, "create-reclaim-lock.jpg").await;
+        let [user] = seed_users::<1>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
+        let media = seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            user,
+            "create-reclaim-lock.jpg",
+        )
+        .await;
         delete_media_accounting_row(&env, user, &media)
             .await
             .expect("remove the only accounting row");
@@ -1191,9 +1249,8 @@ mod tests {
 
         let (checked_tx, checked_rx) = oneshot::channel();
         let (unlink_tx, unlink_rx) = oneshot::channel();
-        let reclaim_state = Arc::clone(&env.state);
-        let reclaim_storage = Arc::clone(&reclaim_state.media);
-        let reclaim_scope = reclaim_state.write_scope.clone();
+        let reclaim_storage = env.media();
+        let reclaim_scope = env.write_scope();
         let instance_id = env.base.instance_id().clone();
         let media_for_reclaim = media.clone();
         let reclaim = tokio::spawn(async move {
@@ -1220,9 +1277,10 @@ mod tests {
         });
         checked_rx.await.expect("reclaimability decision completed");
 
-        let create_state = Arc::clone(&env.state);
+        let media_storage = env.media();
+        let write_scope = env.write_scope();
         let mut create = tokio::spawn(async move {
-            create_media_confirmed(&create_state, record).await;
+            create_media_confirmed(media_storage, write_scope, record).await;
         });
         assert!(
             timeout(Duration::from_millis(100), &mut create)
@@ -1234,7 +1292,7 @@ mod tests {
         unlink_tx.send(()).expect("permit unlink");
         reclaim.await.expect("reclaim task does not panic");
         create.await.expect("create task does not panic");
-        assert!(media_row_exists(&env.state, user, &media).await);
+        assert!(media_row_exists(env.media().clone(), user, &media).await);
     }
 
     /// How many posts the concurrency exercise writes while the guard is hammered, and
@@ -1246,7 +1304,13 @@ mod tests {
     #[tokio::test]
     async fn content_hash_and_filename_round_trip_through_create_and_get(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         let record = MediaRecord {
             user_id,
             sha256: parse_content_hash(MEDIA_TEST_SHA256),
@@ -1257,10 +1321,9 @@ mod tests {
             source_url: None,
             created_at: UtcInstant::now(),
         };
-        create_media_confirmed(&env.state, record).await;
+        create_media_confirmed(env.media().clone(), env.write_scope().clone(), record).await;
         let got = env
-            .state
-            .media
+            .media()
             .get_media(
                 user_id,
                 &parse_content_hash(MEDIA_TEST_SHA256),
@@ -1281,7 +1344,13 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         // A non-canonical filename (`../evil`) bypasses `Filename` validation — only
         // reachable via DB tampering. The `sha256`/`source` keys stay valid so the row
         // is found; the validating bridge `Decode` then rejects the `filename` column
@@ -1295,8 +1364,7 @@ mod tests {
         .await
         .unwrap();
         let err = env
-            .state
-            .media
+            .media()
             .find_by_hash(&parse_content_hash(MEDIA_TEST_SHA256), &MediaSource::Upload)
             .await
             .unwrap_err();
@@ -1320,7 +1388,13 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         // A negative `size_bytes` bypasses `ByteSize` validation — only reachable via DB
         // tampering. On read, `MediaRecord::from_row` decodes the column through the
         // validating `ByteSize` bridge, which rejects it as a column-decode error.
@@ -1333,8 +1407,7 @@ mod tests {
         .await
         .unwrap();
         let err = env
-            .state
-            .media
+            .media()
             .find_by_hash(&parse_content_hash(MEDIA_TEST_SHA256), &MediaSource::Upload)
             .await
             .unwrap_err();
@@ -1350,7 +1423,13 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         // A negative `size_bytes` upload row (DB tampering) makes `SUM(size_bytes)` negative;
         // the sum decodes into `ByteSize`, whose bound-checking `Decode` rejects the negative
         // total as a column-decode error.
@@ -1363,8 +1442,7 @@ mod tests {
         .await
         .unwrap();
         let err = env
-            .state
-            .media
+            .media()
             .get_user_upload_usage(user_id)
             .await
             .unwrap_err();
@@ -1378,7 +1456,13 @@ mod tests {
     #[tokio::test]
     async fn list_media_skips_a_row_with_a_malformed_sha256_column(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         // A valid record is stored normally.
         let good = MediaRecord {
             user_id,
@@ -1390,7 +1474,7 @@ mod tests {
             source_url: None,
             created_at: UtcInstant::now(),
         };
-        create_media_confirmed(&env.state, good).await;
+        create_media_confirmed(env.media().clone(), env.write_scope().clone(), good).await;
         // A second row's `sha256` is tampered to a non-hex value — only reachable via
         // direct DB access, since `ContentHash::from_str` requires 64 lowercase hex chars.
         // Every media read keys the query *on* `sha256`, so the observable behavior is
@@ -1409,8 +1493,7 @@ mod tests {
         })
         .unwrap();
         let listed = env
-            .state
-            .media
+            .media()
             .list_media(user_id, None, parse_row_limit("10"), parse_page_offset("0"))
             .await
             .unwrap();
@@ -1425,10 +1508,10 @@ mod tests {
     #[apply(backends)]
     #[tokio::test]
     async fn get_media_with_closed_pool_returns_error(#[case] backend: Backend) {
-        let TestEnv { state, base } = backend.setup().await;
-        base.close_pool().await;
-        let result = state
-            .media
+        let env = backend.setup().await;
+        env.base.close_pool().await;
+        let result = env
+            .media()
             .get_media(
                 UserId::from(1),
                 &parse_content_hash(MEDIA_TEST_SHA256),
@@ -1442,10 +1525,10 @@ mod tests {
     #[apply(backends)]
     #[tokio::test]
     async fn list_media_with_closed_pool_returns_error(#[case] backend: Backend) {
-        let TestEnv { state, base } = backend.setup().await;
-        base.close_pool().await;
-        let result = state
-            .media
+        let env = backend.setup().await;
+        env.base.close_pool().await;
+        let result = env
+            .media()
             .list_media(
                 UserId::from(1),
                 None,
@@ -1461,15 +1544,33 @@ mod tests {
     async fn try_delete_media_refuses_a_referenced_item_without_force(#[case] backend: Backend) {
         // A17b.
         let env = backend.setup().await;
-        let [user] = seed_users::<1>(&env.state).await;
-        let media = seed_media(&env.state, user, "photo.jpg").await;
+        let [user] = seed_users::<1>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
+        let media = seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            user,
+            "photo.jpg",
+        )
+        .await;
         let embed = format!("<img src=\"{}\">", media_url_for("photo.jpg"));
-        let post_id = create_post_via_service(&env.state, user, parse_post_body(&embed)).await;
+        let post_id = create_post_via_service(
+            env.posts().clone(),
+            env.feed_events().clone(),
+            env.write_scope().clone(),
+            user,
+            parse_post_body(&embed),
+        )
+        .await;
 
         assert_eq!(
             confirmed(
                 try_delete_media_scoped(
-                    &env.state,
+                    env.media().clone(),
+                    env.write_scope().clone(),
                     user,
                     &media,
                     env.base.instance_id(),
@@ -1482,7 +1583,7 @@ mod tests {
             TryDeleteOutcome::OwnerRetainedHistory(vec![post_id])
         );
         assert!(
-            media_row_exists(&env.state, user, &media).await,
+            media_row_exists(env.media().clone(), user, &media).await,
             "refusal leaves the row"
         );
     }
@@ -1491,13 +1592,25 @@ mod tests {
     #[tokio::test]
     async fn foreign_evidence_exempts_only_the_exact_persisted_reference(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let [user] = seed_users::<1>(&env.state).await;
-        let media = seed_media(&env.state, user, "exact.jpg").await;
+        let [user] = seed_users::<1>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
+        let media = seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            user,
+            "exact.jpg",
+        )
+        .await;
         let form: MediaReferenceForm = media_url_for("exact.jpg")
             .parse()
             .expect("valid media reference form");
         let post_id = create_post_via_service(
-            &env.state,
+            env.posts().clone(),
+            env.feed_events().clone(),
+            env.write_scope().clone(),
             user,
             parse_post_body(&format!("<img src=\"{form}\">")),
         )
@@ -1519,7 +1632,8 @@ mod tests {
         assert_eq!(
             confirmed(
                 try_delete_media_scoped(
-                    &env.state,
+                    env.media().clone(),
+                    env.write_scope().clone(),
                     user,
                     &media,
                     env.base.instance_id(),
@@ -1543,7 +1657,8 @@ mod tests {
         assert_eq!(
             confirmed(
                 try_delete_media_scoped(
-                    &env.state,
+                    env.media().clone(),
+                    env.write_scope().clone(),
                     user,
                     &media,
                     env.base.instance_id(),
@@ -1561,13 +1676,25 @@ mod tests {
     #[tokio::test]
     async fn reclaimability_uses_the_same_exact_evidence_guard(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let [user] = seed_users::<1>(&env.state).await;
-        let media = seed_media(&env.state, user, "reclaim.jpg").await;
+        let [user] = seed_users::<1>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
+        let media = seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            user,
+            "reclaim.jpg",
+        )
+        .await;
         let form: MediaReferenceForm = media_url_for("reclaim.jpg")
             .parse()
             .expect("valid media reference form");
         let post_id = create_post_via_service(
-            &env.state,
+            env.posts().clone(),
+            env.feed_events().clone(),
+            env.write_scope().clone(),
             user,
             parse_post_body(&format!("<img src=\"{form}\">")),
         )
@@ -1580,7 +1707,8 @@ mod tests {
         assert!(
             !confirmed(
                 media_entry_is_reclaimable_scoped(
-                    &env.state,
+                    env.media().clone(),
+                    env.write_scope().clone(),
                     &media,
                     env.base.instance_id(),
                     &empty,
@@ -1598,7 +1726,8 @@ mod tests {
         assert!(
             confirmed(
                 media_entry_is_reclaimable_scoped(
-                    &env.state,
+                    env.media().clone(),
+                    env.write_scope().clone(),
                     &media,
                     env.base.instance_id(),
                     &exact,
@@ -1615,21 +1744,32 @@ mod tests {
     #[tokio::test]
     async fn revision_subject_requires_its_own_exact_foreign_evidence(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let [owner] = seed_users::<1>(&env.state).await;
-        let media = seed_media(&env.state, owner, "revision-evidence.jpg").await;
+        let [owner] = seed_users::<1>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
+        let media = seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            owner,
+            "revision-evidence.jpg",
+        )
+        .await;
         let form: MediaReferenceForm = media_url_for("revision-evidence.jpg")
             .parse()
             .expect("valid media reference form");
         let post_id = create_post_via_service(
-            &env.state,
+            env.posts().clone(),
+            env.feed_events().clone(),
+            env.write_scope().clone(),
             owner,
             parse_post_body(&format!("<img src=\"{form}\">")),
         )
         .await;
-        let posts = Arc::clone(&env.state.posts);
+        let posts = Arc::clone(&env.posts());
         let outcome = env
-            .state
-            .write_scope
+            .write_scope()
             .run(move |transaction| {
                 Box::pin(async move {
                     posts
@@ -1648,8 +1788,7 @@ mod tests {
         assert!(matches!(outcome, common::MutationOutcome::Confirmed(())));
 
         let references = env
-            .state
-            .posts
+            .posts()
             .list_media_references(&media)
             .await
             .expect("retained references load");
@@ -1667,8 +1806,7 @@ mod tests {
             .clone();
 
         assert_eq!(
-            env.state
-                .posts
+            env.posts()
                 .list_posts_referencing_media(
                     owner,
                     &media,
@@ -1689,7 +1827,8 @@ mod tests {
         assert_eq!(
             confirmed(
                 try_delete_media_scoped(
-                    &env.state,
+                    env.media().clone(),
+                    env.write_scope().clone(),
                     owner,
                     &media,
                     env.base.instance_id(),
@@ -1711,7 +1850,8 @@ mod tests {
         assert_eq!(
             confirmed(
                 try_delete_media_scoped(
-                    &env.state,
+                    env.media().clone(),
+                    env.write_scope().clone(),
                     owner,
                     &media,
                     env.base.instance_id(),
@@ -1737,7 +1877,8 @@ mod tests {
         assert_eq!(
             confirmed(
                 try_delete_media_scoped(
-                    &env.state,
+                    env.media().clone(),
+                    env.write_scope().clone(),
                     owner,
                     &media,
                     env.base.instance_id(),
@@ -1756,15 +1897,33 @@ mod tests {
     #[tokio::test]
     async fn try_delete_media_force_overrides_own_retained_reference(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let [user] = seed_users::<1>(&env.state).await;
-        let media = seed_media(&env.state, user, "photo.jpg").await;
+        let [user] = seed_users::<1>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
+        let media = seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            user,
+            "photo.jpg",
+        )
+        .await;
         let embed = format!("<img src=\"{}\">", media_url_for("photo.jpg"));
-        create_post_via_service(&env.state, user, parse_post_body(&embed)).await;
+        create_post_via_service(
+            env.posts().clone(),
+            env.feed_events().clone(),
+            env.write_scope().clone(),
+            user,
+            parse_post_body(&embed),
+        )
+        .await;
 
         assert_eq!(
             confirmed(
                 try_delete_media_scoped(
-                    &env.state,
+                    env.media().clone(),
+                    env.write_scope().clone(),
                     user,
                     &media,
                     env.base.instance_id(),
@@ -1777,7 +1936,7 @@ mod tests {
             TryDeleteOutcome::Deleted
         );
         assert!(
-            !media_row_exists(&env.state, user, &media).await,
+            !media_row_exists(env.media().clone(), user, &media).await,
             "force deliberately permits losing the owner's reconstruction"
         );
     }
@@ -1788,16 +1947,40 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let [owner, other] = seed_users::<2>(&env.state).await;
-        let media = seed_media(&env.state, owner, "photo.jpg").await;
-        seed_media(&env.state, other, "photo.jpg").await;
+        let [owner, other] = seed_users::<2>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
+        let media = seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            owner,
+            "photo.jpg",
+        )
+        .await;
+        seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            other,
+            "photo.jpg",
+        )
+        .await;
         let embed = format!("<img src=\"{}\">", media_url_for("photo.jpg"));
-        create_post_via_service(&env.state, owner, parse_post_body(&embed)).await;
+        create_post_via_service(
+            env.posts().clone(),
+            env.feed_events().clone(),
+            env.write_scope().clone(),
+            owner,
+            parse_post_body(&embed),
+        )
+        .await;
 
         assert_eq!(
             confirmed(
                 try_delete_media_scoped(
-                    &env.state,
+                    env.media().clone(),
+                    env.write_scope().clone(),
                     owner,
                     &media,
                     env.base.instance_id(),
@@ -1809,8 +1992,8 @@ mod tests {
             ),
             TryDeleteOutcome::Deleted
         );
-        assert!(!media_row_exists(&env.state, owner, &media).await);
-        assert!(media_row_exists(&env.state, other, &media).await);
+        assert!(!media_row_exists(env.media().clone(), owner, &media).await);
+        assert!(media_row_exists(env.media().clone(), other, &media).await);
     }
 
     #[apply(backends)]
@@ -1818,13 +2001,24 @@ mod tests {
     async fn try_delete_media_deletes_an_unreferenced_item(#[case] backend: Backend) {
         // A17b, the other half: nothing references it, so an unforced delete goes through.
         let env = backend.setup().await;
-        let [user] = seed_users::<1>(&env.state).await;
-        let media = seed_media(&env.state, user, "photo.jpg").await;
+        let [user] = seed_users::<1>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
+        let media = seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            user,
+            "photo.jpg",
+        )
+        .await;
 
         assert_eq!(
             confirmed(
                 try_delete_media_scoped(
-                    &env.state,
+                    env.media().clone(),
+                    env.write_scope().clone(),
                     user,
                     &media,
                     env.base.instance_id(),
@@ -1836,16 +2030,21 @@ mod tests {
             ),
             TryDeleteOutcome::Deleted
         );
-        assert!(!media_row_exists(&env.state, user, &media).await);
+        assert!(!media_row_exists(env.media().clone(), user, &media).await);
     }
 
     #[apply(backends)]
     #[tokio::test]
     async fn try_delete_media_reports_missing_distinctly_from_refusal(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let [user] = seed_users::<1>(&env.state).await;
+        let [user] = seed_users::<1>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
         let result = try_delete_media_scoped(
-            &env.state,
+            env.media().clone(),
+            env.write_scope().clone(),
             user,
             &media_ref_for("never-uploaded.jpg"),
             env.base.instance_id(),
@@ -1871,8 +2070,18 @@ mod tests {
         // the way an add/remove churn would, where a reference legitimately appearing between
         // the delete and a separate verification read looks identical to a violation.
         let env = backend.setup().await;
-        let [user] = seed_users::<1>(&env.state).await;
-        let media = seed_media(&env.state, user, "photo.jpg").await;
+        let [user] = seed_users::<1>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
+        let media = seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            user,
+            "photo.jpg",
+        )
+        .await;
         // Each body carries a distinct leading line so the service path derives a distinct
         // title, and hence a distinct slug: identical bodies would collide on the slug and
         // exhaust the creator's attempt budget long before the round count here. The embed
@@ -1882,18 +2091,24 @@ mod tests {
         // One reference exists before any delete is attempted, and none is ever removed, so
         // every unforced delete from here on must refuse.
         create_post_via_service(
-            &env.state,
+            env.posts().clone(),
+            env.feed_events().clone(),
+            env.write_scope().clone(),
             user,
             parse_post_body(&format!("reference 0\n\n{embed}")),
         )
         .await;
 
         let writer = tokio::spawn({
-            let state = Arc::clone(&env.state);
+            let posts = env.posts();
+            let feed_events = env.feed_events();
+            let write_scope = env.write_scope();
             async move {
                 for round in 1..=ROUNDS {
                     create_post_via_service(
-                        &state,
+                        posts.clone(),
+                        feed_events.clone(),
+                        write_scope.clone(),
                         user,
                         parse_post_body(&format!("reference {round}\n\n{embed}")),
                     )
@@ -1905,7 +2120,8 @@ mod tests {
         for _ in 0..ROUNDS {
             let outcome = confirmed(
                 try_delete_media_scoped(
-                    &env.state,
+                    env.media().clone(),
+                    env.write_scope().clone(),
                     user,
                     &media,
                     env.base.instance_id(),
@@ -1924,23 +2140,32 @@ mod tests {
             );
         }
         writer.await.expect("the concurrent writer does not panic");
-        assert!(media_row_exists(&env.state, user, &media).await);
+        assert!(media_row_exists(env.media().clone(), user, &media).await);
     }
 
     #[apply(backends)]
     #[tokio::test]
     async fn delete_rolls_back_when_the_scoped_operation_fails(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let [user] = seed_users::<1>(&env.state).await;
-        let media_ref = seed_media(&env.state, user, "rollback.jpg").await;
+        let [user] = seed_users::<1>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
+        let media_ref = seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            user,
+            "rollback.jpg",
+        )
+        .await;
         let instance_id = env.base.instance_id().clone();
         let evidence = MediaReferenceEvidence::new(instance_id.clone());
-        let media = Arc::clone(&env.state.media);
+        let media = Arc::clone(&env.media());
 
         let delete_media_ref = media_ref.clone();
         let result = env
-            .state
-            .write_scope
+            .write_scope()
             .run(move |transaction| {
                 Box::pin(async move {
                     assert_eq!(
@@ -1970,7 +2195,7 @@ mod tests {
             ))
         ));
         assert!(
-            media_row_exists(&env.state, user, &media_ref).await,
+            media_row_exists(env.media().clone(), user, &media_ref).await,
             "the storage delete participates in the caller's rollback"
         );
     }
@@ -1979,15 +2204,24 @@ mod tests {
     #[tokio::test]
     async fn delete_commit_acknowledgement_loss_is_indeterminate(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let [user] = seed_users::<1>(&env.state).await;
-        let media_ref = seed_media(&env.state, user, "indeterminate.jpg").await;
+        let [user] = seed_users::<1>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
+        let media_ref = seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            user,
+            "indeterminate.jpg",
+        )
+        .await;
         let instance_id = env.base.instance_id().clone();
         let evidence = MediaReferenceEvidence::new(instance_id.clone());
-        let media = Arc::clone(&env.state.media);
+        let media = Arc::clone(&env.media());
         let delete_media_ref = media_ref.clone();
         let scope = env
-            .state
-            .write_scope
+            .write_scope()
             .with_commit_acknowledgement_loss_after_commit_for_test();
 
         let outcome = scope
@@ -2013,7 +2247,7 @@ mod tests {
             common::MutationOutcome::CommitIndeterminate(TryDeleteOutcome::Deleted)
         );
         assert!(
-            !media_row_exists(&env.state, user, &media_ref).await,
+            !media_row_exists(env.media().clone(), user, &media_ref).await,
             "the commit may have succeeded despite acknowledgement loss"
         );
     }
@@ -2021,9 +2255,9 @@ mod tests {
     #[apply(backends)]
     #[tokio::test]
     async fn get_user_upload_usage_with_closed_pool_returns_error(#[case] backend: Backend) {
-        let TestEnv { state, base } = backend.setup().await;
-        base.close_pool().await;
-        let result = state.media.get_user_upload_usage(UserId::from(1)).await;
+        let env = backend.setup().await;
+        env.base.close_pool().await;
+        let result = env.media().get_user_upload_usage(UserId::from(1)).await;
         assert!(result.is_err());
     }
 
@@ -2031,11 +2265,27 @@ mod tests {
     #[tokio::test]
     async fn total_upload_bytes_sums_upload_rows(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let [alice] = seed_users(&env.state).await;
-        seed_media(&env.state, alice, "a.jpg").await;
-        seed_media(&env.state, alice, "b.jpg").await;
+        let [alice] = seed_users(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
+        seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            alice,
+            "a.jpg",
+        )
+        .await;
+        seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            alice,
+            "b.jpg",
+        )
+        .await;
 
-        let total = env.state.media.total_upload_bytes().await.unwrap();
+        let total = env.media().total_upload_bytes().await.unwrap();
 
         assert_eq!(total, parse_byte_size("2"));
     }
@@ -2044,8 +2294,18 @@ mod tests {
     #[tokio::test]
     async fn total_upload_bytes_excludes_non_upload_sources(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let [alice] = seed_users(&env.state).await;
-        seed_media(&env.state, alice, "upload.jpg").await;
+        let [alice] = seed_users(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
+        seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            alice,
+            "upload.jpg",
+        )
+        .await;
         env.base
             .pool()
             .execute(
@@ -2056,7 +2316,7 @@ mod tests {
             .await
             .unwrap();
 
-        let total = env.state.media.total_upload_bytes().await.unwrap();
+        let total = env.media().total_upload_bytes().await.unwrap();
 
         assert_eq!(total, parse_byte_size("1"));
     }
@@ -2064,10 +2324,10 @@ mod tests {
     #[apply(backends)]
     #[tokio::test]
     async fn find_by_hash_with_closed_pool_returns_error(#[case] backend: Backend) {
-        let TestEnv { state, base } = backend.setup().await;
-        base.close_pool().await;
-        let result = state
-            .media
+        let env = backend.setup().await;
+        env.base.close_pool().await;
+        let result = env
+            .media()
             .find_by_hash(&parse_content_hash(MEDIA_TEST_SHA256), &MediaSource::Upload)
             .await;
         assert!(result.is_err());

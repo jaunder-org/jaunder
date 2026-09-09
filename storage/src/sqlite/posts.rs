@@ -474,8 +474,20 @@ mod tests {
     #[tokio::test]
     async fn media_backfill_rejects_a_stale_rendered_html_snapshot(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user = SeedUser::new().seed(&env.state).await.user_id;
-        let post_id = SeedRawPost::new(user).seed(&env.state).await.post_id;
+        let user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let post_id = SeedRawPost::new(user)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
+            .await
+            .post_id;
         crate::with_closeable_pool!(env.base.pool(), pool, {
             sqlx::query(
                 "INSERT INTO post_media

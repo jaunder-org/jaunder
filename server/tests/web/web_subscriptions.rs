@@ -5,21 +5,29 @@ use server_fn::ServerFn;
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{create_user_and_session, post_form};
-use storage::test_support::{Backend, SeedUser, TestEnv, backends};
+use crate::helpers::{create_user_and_session, make_app, post_form};
+use storage::test_support::{Backend, SeedUser, backends};
 
 // Authed subscribe makes `is_subscriber` true; unsubscribe reverses it.
 #[apply(backends)]
 #[tokio::test]
 async fn subscribe_then_unsubscribe_round_trips(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let author = SeedUser::new().seed(&state).await;
-    let subscriber = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let author = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await;
+    let subscriber = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let cookie = subscriber.cookie();
     let viewer = ViewerIdentity::local(subscriber.user_id);
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::subscriptions::Subscribe as ServerFn>::PATH,
         format!("author_username={}", author.username),
         Some(&cookie),
@@ -27,8 +35,7 @@ async fn subscribe_then_unsubscribe_round_trips(#[case] backend: Backend) {
     .await;
     assert_eq!(status, StatusCode::OK, "subscribe failed: {body}");
     assert!(
-        state
-            .subscriptions
+        env.subscriptions()
             .is_subscriber(author.user_id, &viewer)
             .await
             .unwrap(),
@@ -36,7 +43,7 @@ async fn subscribe_then_unsubscribe_round_trips(#[case] backend: Backend) {
     );
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::subscriptions::Unsubscribe as ServerFn>::PATH,
         format!("author_username={}", author.username),
         Some(&cookie),
@@ -44,8 +51,7 @@ async fn subscribe_then_unsubscribe_round_trips(#[case] backend: Backend) {
     .await;
     assert_eq!(status, StatusCode::OK, "unsubscribe failed: {body}");
     assert!(
-        !state
-            .subscriptions
+        !env.subscriptions()
             .is_subscriber(author.user_id, &viewer)
             .await
             .unwrap(),
@@ -57,12 +63,18 @@ async fn subscribe_then_unsubscribe_round_trips(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn self_subscribe_is_rejected(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let me = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let me = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let cookie = me.cookie();
 
     let (status, _body) = post_form(
-        &state,
+        app.clone(),
         <web::subscriptions::Subscribe as ServerFn>::PATH,
         format!("author_username={}", me.username),
         Some(&cookie),
@@ -70,8 +82,7 @@ async fn self_subscribe_is_rejected(#[case] backend: Backend) {
     .await;
     assert_ne!(status, StatusCode::OK, "self-subscribe must be rejected");
     assert!(
-        !state
-            .subscriptions
+        !env.subscriptions()
             .is_subscriber(me.user_id, &ViewerIdentity::local(me.user_id))
             .await
             .unwrap(),
@@ -83,11 +94,14 @@ async fn self_subscribe_is_rejected(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn subscribe_unauthenticated_is_rejected(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let author = SeedUser::new().seed(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let author = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await;
 
     let (status, _body) = post_form(
-        &state,
+        app.clone(),
         <web::subscriptions::Subscribe as ServerFn>::PATH,
         format!("author_username={}", author.username),
         None,
@@ -100,12 +114,21 @@ async fn subscribe_unauthenticated_is_rejected(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn is_subscribed_to_reports_state(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let author = SeedUser::new().seed(&state).await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let author = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await;
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::subscriptions::IsSubscribed as ServerFn>::PATH,
         format!("author_username={}", author.username),
         Some(&cookie),
@@ -118,7 +141,7 @@ async fn is_subscribed_to_reports_state(#[case] backend: Backend) {
     );
 
     post_form(
-        &state,
+        app.clone(),
         <web::subscriptions::Subscribe as ServerFn>::PATH,
         format!("author_username={}", author.username),
         Some(&cookie),
@@ -126,7 +149,7 @@ async fn is_subscribed_to_reports_state(#[case] backend: Backend) {
     .await;
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::subscriptions::IsSubscribed as ServerFn>::PATH,
         format!("author_username={}", author.username),
         Some(&cookie),

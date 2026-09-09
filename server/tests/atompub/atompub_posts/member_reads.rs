@@ -8,21 +8,31 @@ use rstest_reuse::*;
 use tower::ServiceExt;
 
 use crate::helpers::{atompub, atompub_get, body_string, create_user_and_session, make_app};
-use storage::test_support::{Backend, TestEnv, backends};
+use storage::test_support::{Backend, backends};
 
 #[apply(backends)]
 #[tokio::test]
 async fn member_returns_native_source_with_etag(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
 
     let post = session
         .seed_post()
         .body(parse_post_body("# Markdown body"))
-        .seed(&state)
+        .seed(
+            std::sync::Arc::clone(&env.posts()),
+            std::sync::Arc::clone(&env.feed_events()),
+            env.write_scope(),
+        )
         .await;
 
-    let app = make_app(&state, &base);
+    let app = make_app!(&env, base);
 
     let response = app
         .oneshot(atompub_get(&session, &format!("posts/{}", post.post_id)))
@@ -50,22 +60,32 @@ async fn member_returns_native_source_with_etag(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn member_get_serializes_empty_and_genuine_titles(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
 
     let untitled = session
         .seed_post()
         .body(parse_post_body("Untitled source"))
-        .seed(&state)
+        .seed(
+            std::sync::Arc::clone(&env.posts()),
+            std::sync::Arc::clone(&env.feed_events()),
+            env.write_scope(),
+        )
         .await;
     let titled = session
         .seed_post()
         .title(parse_post_title("Genuine title"))
         .body(parse_post_body("Titled source"))
-        .seed(&state)
+        .seed(env.posts(), env.feed_events(), env.write_scope())
         .await;
 
-    let app = make_app(&state, &base);
+    let app = make_app!(&env, base);
     let untitled_response = app
         .clone()
         .oneshot(atompub_get(
@@ -106,10 +126,16 @@ async fn member_get_serializes_empty_and_genuine_titles(#[case] backend: Backend
 #[apply(backends)]
 #[tokio::test]
 async fn member_get_unknown_returns_404(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
 
-    let app = make_app(&state, &base);
+    let app = make_app!(&env, base);
 
     let response = app
         .oneshot(atompub_get(&session, "posts/999999"))
@@ -122,12 +148,25 @@ async fn member_get_unknown_returns_404(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn delete_then_get_is_404(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
 
-    let post = session.seed_post().seed(&state).await;
+    let post = session
+        .seed_post()
+        .seed(
+            std::sync::Arc::clone(&env.posts()),
+            std::sync::Arc::clone(&env.feed_events()),
+            env.write_scope(),
+        )
+        .await;
 
-    let app = make_app(&state, &base);
+    let app = make_app!(&env, base);
 
     // First, delete the post
     let delete_response = app
@@ -154,16 +193,26 @@ async fn delete_then_get_is_404(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn member_carries_read_only_j_slug(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
 
     let post = session
         .seed_post()
         .title(parse_post_title("My Post"))
-        .seed(&state)
+        .seed(
+            std::sync::Arc::clone(&env.posts()),
+            std::sync::Arc::clone(&env.feed_events()),
+            env.write_scope(),
+        )
         .await;
 
-    let app = make_app(&state, &base);
+    let app = make_app!(&env, base);
 
     let response = app
         .oneshot(atompub_get(&session, &format!("posts/{}", post.post_id)))

@@ -1,19 +1,18 @@
 use std::sync::Arc;
 
 use host::config_key::SiteConfigKey;
-use storage::AppState;
+use storage::{SiteConfigStorage, WriteScope};
 
 /// Persists a site-config fixture through the same caller-owned write boundary as production.
 pub async fn set_site_config(
-    state: &Arc<AppState>,
+    site_config: Arc<dyn SiteConfigStorage>,
+    write_scope: WriteScope,
     key: SiteConfigKey,
     value: &str,
 ) -> anyhow::Result<()> {
-    let site_config = Arc::clone(&state.site_config);
     let value = value.to_owned();
     storage::test_support::confirmed(
-        state
-            .write_scope
+        write_scope
             .run(move |transaction| {
                 Box::pin(async move { site_config.set(transaction, key, &value).await })
             })
@@ -23,11 +22,13 @@ pub async fn set_site_config(
 }
 
 /// Deletes a site-config fixture through the same caller-owned write boundary as production.
-pub async fn delete_site_config(state: &Arc<AppState>, key: SiteConfigKey) -> anyhow::Result<bool> {
-    let site_config = Arc::clone(&state.site_config);
+pub async fn delete_site_config(
+    site_config: Arc<dyn SiteConfigStorage>,
+    write_scope: WriteScope,
+    key: SiteConfigKey,
+) -> anyhow::Result<bool> {
     Ok(storage::test_support::confirmed(
-        state
-            .write_scope
+        write_scope
             .run(move |transaction| {
                 Box::pin(async move { site_config.delete(transaction, key).await })
             })

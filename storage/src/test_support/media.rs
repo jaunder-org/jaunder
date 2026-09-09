@@ -3,14 +3,16 @@
 //! pool dispatch remain in [`super::backend`].
 use super::TestBase;
 use super::confirmed_for;
+#[cfg(any(test, feature = "test-utils"))]
+use crate::MockSiteConfigStorage;
 use crate::media::MediaRecord;
 use crate::posts::media::{MediaReferenceEvidence, PersistedMediaReference};
 use crate::sql::Exists;
 use crate::sql::QueryStorageExt;
 use crate::{
-    AppState, DbConnectOptions, ForeignEvidenceSink, InstanceId, LocalMediaSink,
-    MediaReferenceOwnershipResolver, MockSiteConfigStorage, PostMediaOwnership,
-    ProvenLocalMediaRefs, StorageRuntimeConfig, resolved_postgres_options,
+    DbConnectOptions, ForeignEvidenceSink, InstanceId, LocalMediaSink,
+    MediaReferenceOwnershipResolver, MediaStorage, PostMediaOwnership, ProvenLocalMediaRefs,
+    StorageRuntimeConfig, WriteScope, resolved_postgres_options,
 };
 
 use async_trait::async_trait;
@@ -19,6 +21,7 @@ use common::media::{
     Filename, MediaRef, MediaReference, MediaReferenceForm, MediaReferenceKind, MediaSource,
     detect_content_type, url,
 };
+#[cfg(any(test, feature = "test-utils"))]
 use common::site::{SiteIdentity, SiteTitle};
 use common::tagged_url::BaseUrl;
 use common::test_support::{parse_byte_size, parse_content_hash};
@@ -154,6 +157,7 @@ impl MediaReferenceOwnershipResolver for NoMediaOwnership {
     }
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 /// Returns a post-media ownership service that proves no rendered reference local.
 ///
 /// # Panics
@@ -212,7 +216,8 @@ pub fn media_url_for(name: &str) -> String {
 ///
 /// If the row cannot be created — happy-path setup only, like [`SeedUser::seed`](super::SeedUser::seed).
 pub async fn seed_media(
-    state: &Arc<AppState>,
+    media_store: Arc<dyn MediaStorage>,
+    write_scope: WriteScope,
     user_id: common::ids::UserId,
     name: &str,
 ) -> MediaRef {
@@ -227,9 +232,7 @@ pub async fn seed_media(
         source_url: None,
         created_at: UtcInstant::now(),
     };
-    let media_store = Arc::clone(&state.media);
-    let outcome = state
-        .write_scope
+    let outcome = write_scope
         .run(move |transaction| {
             Box::pin(async move { media_store.create_media(transaction, &record).await })
         })
@@ -246,12 +249,11 @@ pub async fn seed_media(
 ///
 /// If the lookup fails.
 pub async fn media_row_exists(
-    state: &Arc<AppState>,
+    media_store: Arc<dyn MediaStorage>,
     user_id: common::ids::UserId,
     media: &MediaRef,
 ) -> bool {
-    state
-        .media
+    media_store
         .get_media(user_id, &media.sha256, &media.filename, &media.source)
         .await
         .expect("media lookup should succeed")
@@ -318,8 +320,19 @@ mod tests {
             !raw_media_filename_exists(&db, filename).await,
             "a filename with no media row is absent"
         );
-        let author = SeedUser::new().seed(&env.state).await;
-        seed_media(&env.state, author.user_id, filename).await;
+        let author = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
+        seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            author.user_id,
+            filename,
+        )
+        .await;
         assert!(
             raw_media_filename_exists(&db, filename).await,
             "a stored media row is present"

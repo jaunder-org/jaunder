@@ -84,11 +84,11 @@ mod tests {
     async fn build_mailer_returns_sender_when_smtp_config_present(#[case] backend: Backend) {
         // smtp.host set → load_smtp_config returns Ok(Some(cfg)) → LettreMailSender arm
         let env = backend.setup().await;
-        let store = &*env.state.site_config;
-        let config = Arc::clone(&env.state.site_config);
+        let site_config = env.site_config();
+        let write_scope = env.write_scope();
+        let config = Arc::clone(&site_config);
         confirmed(
-            env.state
-                .write_scope
+            write_scope
                 .run(move |transaction| {
                     Box::pin(async move {
                         config
@@ -99,7 +99,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        build_mailer(store, None)
+        build_mailer(site_config.as_ref(), None)
             .await
             .expect("present valid SMTP builds the transport");
         // Actual SMTP send requires a server.

@@ -11,7 +11,7 @@ use tower::ServiceExt;
 use crate::helpers::{
     atompub_get, atompub_post_xml, atompub_put_xml, body_string, create_user_and_session, make_app,
 };
-use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
+use storage::test_support::{Backend, backends, backends_matrix};
 
 use super::fixtures::{entry_xml, location_post_id};
 
@@ -20,14 +20,24 @@ use super::fixtures::{entry_xml, location_post_id};
 #[apply(backends)]
 #[tokio::test]
 async fn org_named_audiences_are_author_scoped(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let author = create_user_and_session(&state).await;
-    let foreign = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let author = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let foreign = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let owned_name = common::test_support::parse_audience_name("Owned");
-    let audiences = Arc::clone(&state.audiences);
+    let audiences = Arc::clone(&env.audiences());
     let owned = storage::test_support::confirmed_for(
-        state
-            .write_scope
+        env.write_scope()
             .run(move |transaction| {
                 Box::pin(async move {
                     audiences
@@ -40,10 +50,9 @@ async fn org_named_audiences_are_author_scoped(#[case] backend: Backend) {
         "author's audience fixture",
     );
     let foreign_name = common::test_support::parse_audience_name("Foreign");
-    let audiences = Arc::clone(&state.audiences);
+    let audiences = Arc::clone(&env.audiences());
     let foreign_audience = storage::test_support::confirmed_for(
-        state
-            .write_scope
+        env.write_scope()
             .run(move |transaction| {
                 Box::pin(async move {
                     audiences
@@ -63,7 +72,7 @@ async fn org_named_audiences_are_author_scoped(#[case] backend: Backend) {
             "#+PROPERTY: JAUNDER_STATUS draft\n#+PROPERTY: JAUNDER_AUDIENCE named:{owned}\n\nBody"
         ),
     );
-    let response = make_app(&state, &base)
+    let response = make_app!(&env, base)
         .oneshot(atompub_post_xml(&author, "posts", &owned_xml))
         .await
         .unwrap();
@@ -77,7 +86,7 @@ async fn org_named_audiences_are_author_scoped(#[case] backend: Backend) {
                 "#+PROPERTY: JAUNDER_STATUS draft\n#+PROPERTY: JAUNDER_AUDIENCE named:{audience_id}\n\nBody"
             ),
         );
-        let response = make_app(&state, &base)
+        let response = make_app!(&env, base)
             .oneshot(atompub_post_xml(&author, "posts", &xml))
             .await
             .unwrap();
@@ -92,8 +101,14 @@ async fn org_named_audiences_are_author_scoped(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn update_preserves_non_public_targeting(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
 
     // A Subscribers-targeted post is hidden from an anonymous viewer. Editing it
     // via AtomPub must still succeed (the handler loads it as the authenticated
@@ -102,10 +117,14 @@ async fn update_preserves_non_public_targeting(#[case] backend: Backend) {
     let post = session
         .seed_post()
         .audiences(vec![common::visibility::AudienceTarget::Subscribers])
-        .seed(&state)
+        .seed(
+            std::sync::Arc::clone(&env.posts()),
+            std::sync::Arc::clone(&env.feed_events()),
+            env.write_scope(),
+        )
         .await;
 
-    let app = make_app(&state, &base);
+    let app = make_app!(&env, base);
 
     let xml = entry_xml("New", "text", "new body");
     let response = app
@@ -123,7 +142,7 @@ async fn update_preserves_non_public_targeting(#[case] backend: Backend) {
         "owner must be able to edit a non-Public post via AtomPub"
     );
 
-    let audiences = state.posts.get_post_audiences(post.post_id).await.unwrap();
+    let audiences = env.posts().get_post_audiences(post.post_id).await.unwrap();
     assert_eq!(
         audiences,
         vec![common::visibility::AudienceTarget::Subscribers],
@@ -134,8 +153,14 @@ async fn update_preserves_non_public_targeting(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn member_get_serves_owner_non_public_post(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
 
     // A Subscribers-targeted post is hidden from Anonymous; the owner must still
     // be able to GET it via AtomPub (handler loads as the authenticated owner).
@@ -143,10 +168,10 @@ async fn member_get_serves_owner_non_public_post(#[case] backend: Backend) {
         .seed_post()
         .body(parse_post_body("Secret body"))
         .audiences(vec![common::visibility::AudienceTarget::Subscribers])
-        .seed(&state)
+        .seed(env.posts(), env.feed_events(), env.write_scope())
         .await;
 
-    let app = make_app(&state, &base);
+    let app = make_app!(&env, base);
 
     let response = app
         .oneshot(atompub_get(&session, &format!("posts/{}", post.post_id)))
@@ -176,15 +201,20 @@ async fn create_widens_each_default_audience(
     #[case] default_audience: DefaultAudience,
     #[case] expected_audiences: Vec<AudienceTarget>,
 ) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
 
     // AtomPub has no audience field, so post creation is the per-Post boundary
     // that widens this instance-wide default.
-    let site_config = std::sync::Arc::clone(&state.site_config);
+    let site_config = std::sync::Arc::clone(&env.site_config());
     storage::test_support::confirmed(
-        state
-            .write_scope
+        env.write_scope()
             .run(move |transaction| {
                 Box::pin(async move {
                     site_config
@@ -196,7 +226,7 @@ async fn create_widens_each_default_audience(
             .unwrap(),
     );
 
-    let app = make_app(&state, &base);
+    let app = make_app!(&env, base);
     let xml = entry_xml("Hello", "text", "the body");
     let response = app
         .oneshot(atompub_post_xml(&session, "posts", &xml))
@@ -204,8 +234,8 @@ async fn create_widens_each_default_audience(
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::CREATED);
-    let audiences = state
-        .posts
+    let audiences = env
+        .posts()
         .get_post_audiences(PostId::from(location_post_id(&response)))
         .await
         .unwrap();

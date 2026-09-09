@@ -6,19 +6,24 @@ use server_fn::ServerFn;
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{create_operator_and_session, create_user_and_session, post_form};
-use storage::test_support::{
-    Backend, TestEnv, backends, backends_matrix, inject_invalid_site_config,
-};
+use crate::helpers::{create_operator_and_session, create_user_and_session, make_app, post_form};
+use storage::test_support::{Backend, backends, backends_matrix, inject_invalid_site_config};
 
 #[apply(backends)]
 #[tokio::test]
 async fn operator_gets_default_backup_settings(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_operator_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::backup::GetSettings as ServerFn>::PATH,
         "",
         Some(&cookie),
@@ -42,11 +47,18 @@ async fn operator_gets_configured_backup_settings(#[case] backend: Backend) {
         retention_count: "4".parse().unwrap(),
         mode: BackupMode::Archive,
     };
-    let TestEnv { state, base: _base } = backend.setup().backup(backup).await;
-    let cookie = create_operator_and_session(&state).await.cookie();
+    let env = backend.setup().backup(backup).await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::backup::GetSettings as ServerFn>::PATH,
         "",
         Some(&cookie),
@@ -69,7 +81,14 @@ async fn operator_gets_defaults_for_invalid_backup_settings(#[case] backend: Bac
         ..BackupConfig::default()
     };
     let env = backend.setup().backup(backup).await;
-    let cookie = create_operator_and_session(&env.state).await.cookie();
+    let app = make_app!(&env, &env.base);
+    let cookie = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
     inject_invalid_site_config(&env, SiteConfigKey::BackupSchedule, "not-a-schedule")
         .await
         .unwrap();
@@ -79,10 +98,9 @@ async fn operator_gets_defaults_for_invalid_backup_settings(#[case] backend: Bac
     inject_invalid_site_config(&env, SiteConfigKey::BackupMode, "surprise")
         .await
         .unwrap();
-    let TestEnv { state, base: _base } = env;
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::backup::GetSettings as ServerFn>::PATH,
         "",
         Some(&cookie),
@@ -100,11 +118,18 @@ async fn operator_gets_defaults_for_invalid_backup_settings(#[case] backend: Bac
 #[apply(backends)]
 #[tokio::test]
 async fn operator_can_update_backup_settings(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_operator_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::backup::UpdateSettings as ServerFn>::PATH,
         "destination_path=%2Fsrv%2Fbackups&schedule=0+0+0+*+*+*&retention_count=5&mode=directory",
         Some(&cookie),
@@ -113,8 +138,7 @@ async fn operator_can_update_backup_settings(#[case] backend: Backend) {
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert_eq!(
-        state
-            .site_config
+        env.site_config()
             .get_raw(SiteConfigKey::BackupDestinationPath)
             .await
             .unwrap()
@@ -122,8 +146,7 @@ async fn operator_can_update_backup_settings(#[case] backend: Backend) {
         Some("/srv/backups")
     );
     assert_eq!(
-        state
-            .site_config
+        env.site_config()
             .get_raw(SiteConfigKey::BackupSchedule)
             .await
             .unwrap()
@@ -131,8 +154,7 @@ async fn operator_can_update_backup_settings(#[case] backend: Backend) {
         Some("0 0 0 * * *")
     );
     assert_eq!(
-        state
-            .site_config
+        env.site_config()
             .get_raw(SiteConfigKey::BackupRetentionCount)
             .await
             .unwrap()
@@ -140,8 +162,7 @@ async fn operator_can_update_backup_settings(#[case] backend: Backend) {
         Some("5")
     );
     assert_eq!(
-        state
-            .site_config
+        env.site_config()
             .get_raw(SiteConfigKey::BackupMode)
             .await
             .unwrap()
@@ -153,11 +174,18 @@ async fn operator_can_update_backup_settings(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn operator_can_update_backup_settings_to_archive_mode(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_operator_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::backup::UpdateSettings as ServerFn>::PATH,
         "destination_path=%2Fsrv%2Fbackups&schedule=0+0+0+*+*+*&retention_count=5&mode=archive",
         Some(&cookie),
@@ -166,8 +194,7 @@ async fn operator_can_update_backup_settings_to_archive_mode(#[case] backend: Ba
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert_eq!(
-        state
-            .site_config
+        env.site_config()
             .get_raw(SiteConfigKey::BackupMode)
             .await
             .unwrap()
@@ -205,11 +232,18 @@ async fn operator_update_backup_settings_rejects_invalid_typed_arg(
     backend: Backend,
     #[case] form: &str,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_operator_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::backup::UpdateSettings as ServerFn>::PATH,
         form,
         Some(&cookie),
@@ -222,11 +256,18 @@ async fn operator_update_backup_settings_rejects_invalid_typed_arg(
 #[apply(backends)]
 #[tokio::test]
 async fn non_operator_cannot_update_backup_settings(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::backup::UpdateSettings as ServerFn>::PATH,
         "destination_path=%2Fsrv%2Fbackups&schedule=0+0+0+*+*+*&retention_count=5&mode=directory",
         Some(&cookie),
@@ -240,11 +281,18 @@ async fn non_operator_cannot_update_backup_settings(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn backup_warning_visible_for_operator_without_destination(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_operator_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::backup::IsWarningVisible as ServerFn>::PATH,
         "",
         Some(&cookie),
@@ -262,11 +310,18 @@ async fn backup_warning_hidden_when_destination_configured(#[case] backend: Back
         destination_path: Some("/srv/backups".parse().unwrap()),
         ..BackupConfig::default()
     };
-    let TestEnv { state, base: _base } = backend.setup().backup(backup).await;
-    let cookie = create_operator_and_session(&state).await.cookie();
+    let env = backend.setup().backup(backup).await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::backup::IsWarningVisible as ServerFn>::PATH,
         "",
         Some(&cookie),
@@ -285,14 +340,20 @@ async fn backup_warning_visible_when_configured_schedule_is_invalid(#[case] back
         ..BackupConfig::default()
     };
     let env = backend.setup().backup(backup).await;
-    let cookie = create_operator_and_session(&env.state).await.cookie();
+    let app = make_app!(&env, &env.base);
+    let cookie = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
     inject_invalid_site_config(&env, SiteConfigKey::BackupSchedule, "not-a-schedule")
         .await
         .unwrap();
-    let TestEnv { state, base: _base } = env;
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::backup::IsWarningVisible as ServerFn>::PATH,
         "",
         Some(&cookie),
@@ -307,11 +368,18 @@ async fn backup_warning_visible_when_configured_schedule_is_invalid(#[case] back
 #[apply(backends)]
 #[tokio::test]
 async fn backup_warning_hidden_for_non_operator(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::backup::IsWarningVisible as ServerFn>::PATH,
         "",
         Some(&cookie),
@@ -325,10 +393,11 @@ async fn backup_warning_hidden_for_non_operator(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn backup_warning_hidden_without_authentication(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::backup::IsWarningVisible as ServerFn>::PATH,
         "",
         None,
@@ -347,11 +416,18 @@ async fn backup_warning_hidden_without_authentication(#[case] backend: Backend) 
 #[apply(backends)]
 #[tokio::test]
 async fn operator_can_update_backup_settings_omits_destination_as_none(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_operator_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::backup::UpdateSettings as ServerFn>::PATH,
         "schedule=0+0+0+*+*+*&retention_count=5&mode=directory",
         Some(&cookie),
@@ -360,7 +436,7 @@ async fn operator_can_update_backup_settings_omits_destination_as_none(#[case] b
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let settings = post_form(
-        &state,
+        app.clone(),
         <web::backup::GetSettings as ServerFn>::PATH,
         "",
         Some(&cookie),
@@ -379,11 +455,18 @@ async fn operator_can_update_backup_settings_omits_destination_as_none(#[case] b
 async fn operator_can_update_backup_settings_clears_via_empty_destination(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_operator_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::backup::UpdateSettings as ServerFn>::PATH,
         "destination_path=&schedule=0+0+0+*+*+*&retention_count=5&mode=directory",
         Some(&cookie),
@@ -392,7 +475,7 @@ async fn operator_can_update_backup_settings_clears_via_empty_destination(
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let (get_status, get_body) = post_form(
-        &state,
+        app.clone(),
         <web::backup::GetSettings as ServerFn>::PATH,
         "",
         Some(&cookie),
@@ -408,13 +491,20 @@ async fn operator_can_update_backup_settings_clears_via_empty_destination(
 async fn backup_warning_visible_propagates_storage_error_during_auth(#[case] backend: Backend) {
     // Covers the Err(non-Unauthorized) branch: close the pool after session
     // creation so authenticate() returns Internal (not Unauthorized) → 500.
-    let TestEnv { state, base } = backend.setup().await;
-    let cookie = create_operator_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
-    base.close_pool().await;
+    env.base.close_pool().await;
 
     let (status, _body) = post_form(
-        &state,
+        app.clone(),
         <web::backup::IsWarningVisible as ServerFn>::PATH,
         "",
         Some(&cookie),
@@ -429,14 +519,25 @@ async fn backup_warning_visible_propagates_storage_error_during_auth(#[case] bac
 #[apply(backends)]
 #[tokio::test]
 async fn session_reports_username_and_operator(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let operator = create_operator_and_session(&state).await;
-    let member = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let operator = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let member = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let operator_cookie = operator.cookie();
     let member_cookie = member.cookie();
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::auth::GetSession as ServerFn>::PATH,
         "",
         Some(&operator_cookie),
@@ -450,7 +551,7 @@ async fn session_reports_username_and_operator(#[case] backend: Backend) {
     assert!(body.contains(r#""is_operator":true"#), "body: {body}");
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::auth::GetSession as ServerFn>::PATH,
         "",
         Some(&member_cookie),
@@ -463,8 +564,13 @@ async fn session_reports_username_and_operator(#[case] backend: Backend) {
     );
     assert!(body.contains(r#""is_operator":false"#), "body: {body}");
 
-    let (status, body) =
-        post_form(&state, <web::auth::GetSession as ServerFn>::PATH, "", None).await;
+    let (status, body) = post_form(
+        app.clone(),
+        <web::auth::GetSession as ServerFn>::PATH,
+        "",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert_eq!(body.trim(), "null"); // Ok(None) serializes to JSON null
 }
@@ -474,13 +580,20 @@ async fn session_reports_username_and_operator(#[case] backend: Backend) {
 async fn session_propagates_storage_error_during_auth(#[case] backend: Backend) {
     // Covers the Err(non-Unauthorized) branch: close the pool after session
     // creation so authenticate() returns Internal (not Unauthorized) → 500.
-    let TestEnv { state, base } = backend.setup().await;
-    let cookie = create_operator_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
-    base.close_pool().await;
+    env.base.close_pool().await;
 
     let (status, _body) = post_form(
-        &state,
+        app.clone(),
         <web::auth::GetSession as ServerFn>::PATH,
         "",
         Some(&cookie),

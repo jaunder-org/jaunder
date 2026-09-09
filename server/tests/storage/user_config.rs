@@ -5,13 +5,13 @@ use rstest_reuse::*;
 use storage::test_support::{Backend, SeedUser, backends};
 
 async fn assert_confirmed_write(
-    state: &storage::AppState,
+    write_scope: storage::WriteScope,
     operation: impl for<'scope> FnOnce(
         &'scope mut storage::WriteTransaction,
     ) -> futures_util::future::BoxFuture<'scope, sqlx::Result<()>>,
 ) {
     assert!(matches!(
-        state.write_scope.run(operation).await.unwrap(),
+        write_scope.run(operation).await.unwrap(),
         MutationOutcome::Confirmed(())
     ));
 }
@@ -22,11 +22,13 @@ async fn assert_confirmed_write(
 #[tokio::test]
 async fn user_config_get_returns_none_when_unset(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
-    let val = state
-        .user_config
+    let val = env
+        .user_config()
         .get(user_id, UserConfigKey::DefaultPostFormat)
         .await
         .unwrap();
@@ -38,11 +40,13 @@ async fn user_config_get_returns_none_when_unset(#[case] backend: Backend) {
 #[tokio::test]
 async fn user_config_round_trips_through_typed_keys(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user_id = SeedUser::new().seed(state).await.user_id;
-    let config_for_write = state.user_config.clone();
-    let config_for_read = state.user_config.clone();
-    assert_confirmed_write(state, move |transaction| {
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
+    let config_for_write = env.user_config();
+    let config_for_read = env.user_config();
+    assert_confirmed_write(env.write_scope(), move |transaction| {
         Box::pin(async move {
             config_for_write
                 .set(
@@ -66,11 +70,13 @@ async fn user_config_round_trips_through_typed_keys(#[case] backend: Backend) {
 #[tokio::test]
 async fn user_config_set_and_get(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user_id = SeedUser::new().seed(state).await.user_id;
-    let config_for_write = state.user_config.clone();
-    let config_for_read = state.user_config.clone();
-    assert_confirmed_write(state, move |transaction| {
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
+    let config_for_write = env.user_config();
+    let config_for_read = env.user_config();
+    assert_confirmed_write(env.write_scope(), move |transaction| {
         Box::pin(async move {
             config_for_write
                 .set(
@@ -94,10 +100,12 @@ async fn user_config_set_and_get(#[case] backend: Backend) {
 #[tokio::test]
 async fn user_config_overwrite(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user_id = SeedUser::new().seed(state).await.user_id;
-    let config_for_initial_write = state.user_config.clone();
-    assert_confirmed_write(state, move |transaction| {
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
+    let config_for_initial_write = env.user_config();
+    assert_confirmed_write(env.write_scope(), move |transaction| {
         Box::pin(async move {
             config_for_initial_write
                 .set(
@@ -110,9 +118,9 @@ async fn user_config_overwrite(#[case] backend: Backend) {
         })
     })
     .await;
-    let config_for_overwrite = state.user_config.clone();
-    let config_for_read = state.user_config.clone();
-    assert_confirmed_write(state, move |transaction| {
+    let config_for_overwrite = env.user_config();
+    let config_for_read = env.user_config();
+    assert_confirmed_write(env.write_scope(), move |transaction| {
         Box::pin(async move {
             config_for_overwrite
                 .set(
@@ -136,10 +144,12 @@ async fn user_config_overwrite(#[case] backend: Backend) {
 #[tokio::test]
 async fn user_config_delete_removes_key(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user_id = SeedUser::new().seed(state).await.user_id;
-    let config_for_initial_write = state.user_config.clone();
-    assert_confirmed_write(state, move |transaction| {
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
+    let config_for_initial_write = env.user_config();
+    assert_confirmed_write(env.write_scope(), move |transaction| {
         Box::pin(async move {
             config_for_initial_write
                 .set(
@@ -152,9 +162,9 @@ async fn user_config_delete_removes_key(#[case] backend: Backend) {
         })
     })
     .await;
-    let config_for_delete = state.user_config.clone();
-    let config_for_read = state.user_config.clone();
-    assert_confirmed_write(state, move |transaction| {
+    let config_for_delete = env.user_config();
+    let config_for_read = env.user_config();
+    assert_confirmed_write(env.write_scope(), move |transaction| {
         Box::pin(async move {
             config_for_delete
                 .delete(transaction, user_id, UserConfigKey::DefaultPostFormat)
@@ -173,10 +183,12 @@ async fn user_config_delete_removes_key(#[case] backend: Backend) {
 #[tokio::test]
 async fn user_config_delete_nonexistent_is_ok(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user_id = SeedUser::new().seed(state).await.user_id;
-    let config_for_delete = state.user_config.clone();
-    assert_confirmed_write(state, move |transaction| {
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
+    let config_for_delete = env.user_config();
+    assert_confirmed_write(env.write_scope(), move |transaction| {
         Box::pin(async move {
             config_for_delete
                 .delete(transaction, user_id, UserConfigKey::DefaultPostFormat)

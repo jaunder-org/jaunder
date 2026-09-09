@@ -48,9 +48,8 @@ async fn posts_published_at_index_exists(#[case] backend: Backend) {
 #[tokio::test]
 async fn composite_fks_reject_cross_author_membership(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     // Users via the already-wired UserStore; audience + subscription via raw SQL.
-    let [a, b] = seed_users(state).await;
+    let [a, b] = seed_users(env.users(), env.write_scope()).await;
 
     let audience_insert = storage::with_closeable_pool!(env.base.pool(), pool, {
         sqlx::query("INSERT INTO audiences (author_user_id, name) VALUES ($1, 'Friends')")

@@ -779,8 +779,8 @@ mod tests {
     async fn published_site_theme(env: &crate::test_support::TestEnv) -> common::ids::ThemeId {
         let compiled = compiled_theme_fixture();
         let theme_id = create_site_theme(
-            Arc::clone(&env.state.themes),
-            env.state.write_scope.clone(),
+            Arc::clone(&env.themes()),
+            env.write_scope().clone(),
             &compiled,
         )
         .await;
@@ -792,8 +792,8 @@ mod tests {
             .and_then(|bytes| i64::try_from(bytes).ok())
             .expect("fixture content bytes fit");
         let manager = ThemeAssetManager::new(
-            Arc::clone(&env.state.themes),
-            env.state.write_scope.clone(),
+            Arc::clone(&env.themes()),
+            env.write_scope().clone(),
             Arc::new(env.base.path().to_path_buf()),
         );
         confirmed(
@@ -823,10 +823,9 @@ mod tests {
             source_digest: "a".repeat(64).parse().unwrap(),
             assets: Vec::new(),
         };
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         let theme_id = confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -851,8 +850,8 @@ mod tests {
             .and_then(|bytes| i64::try_from(bytes).ok())
             .expect("fixture content bytes fit");
         let manager = ThemeAssetManager::new(
-            Arc::clone(&env.state.themes),
-            env.state.write_scope.clone(),
+            Arc::clone(&env.themes()),
+            env.write_scope().clone(),
             Arc::new(env.base.path().to_path_buf()),
         );
         confirmed(
@@ -876,14 +875,32 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let actor = SeedUser::new().seed(&env.state).await.user_id;
-        let other = SeedUser::new().seed(&env.state).await.user_id;
-        let media = seed_media(&env.state, actor, "theme-logo.png").await;
+        let actor = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let other = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let media = seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            actor,
+            "theme-logo.png",
+        )
+        .await;
         let theme_id = published_site_theme(&env).await;
         let manager = ThemeManager::new(
-            Arc::clone(&env.state.themes),
-            Arc::clone(&env.state.media),
-            env.state.write_scope.clone(),
+            Arc::clone(&env.themes()),
+            Arc::clone(&env.media()),
+            env.write_scope().clone(),
             Arc::new(env.media_content_locks()),
         );
 
@@ -900,8 +917,7 @@ mod tests {
                 .expect("actor media binding succeeds"),
         );
         let media_binding = env
-            .state
-            .themes
+            .themes()
             .role_binding(ThemeOwner::Site, theme_id, ThemeImageRole::Logo)
             .await
             .expect("read media binding")
@@ -939,8 +955,7 @@ mod tests {
             "a path absent from the current revision is rejected"
         );
         assert_eq!(
-            env.state
-                .themes
+            env.themes()
                 .role_binding(ThemeOwner::Site, theme_id, ThemeImageRole::Logo)
                 .await
                 .expect("read binding after rejected replacement"),
@@ -953,13 +968,25 @@ mod tests {
     #[tokio::test]
     async fn manager_canonicalizes_mixed_pool_and_shuffles_only_its_seed(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let actor = SeedUser::new().seed(&env.state).await.user_id;
-        let media = seed_media(&env.state, actor, "theme-header.png").await;
+        let actor = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let media = seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            actor,
+            "theme-header.png",
+        )
+        .await;
         let theme_id = published_site_theme(&env).await;
         let manager = ThemeManager::new(
-            Arc::clone(&env.state.themes),
-            Arc::clone(&env.state.media),
-            env.state.write_scope.clone(),
+            Arc::clone(&env.themes()),
+            Arc::clone(&env.media()),
+            env.write_scope().clone(),
             Arc::new(env.media_content_locks()),
         );
 
@@ -979,15 +1006,13 @@ mod tests {
                 .expect("mixed pool replacement succeeds"),
         );
         let initial = env
-            .state
-            .themes
+            .themes()
             .role_binding(ThemeOwner::Site, theme_id, ThemeImageRole::Header)
             .await
             .expect("read pool binding")
             .expect("pool binding exists");
         let pool = env
-            .state
-            .themes
+            .themes()
             .header_pool(ThemeOwner::Site, theme_id)
             .await
             .expect("read canonical pool");
@@ -1013,8 +1038,7 @@ mod tests {
                 .expect("shuffle succeeds"),
         );
         let shuffled = env
-            .state
-            .themes
+            .themes()
             .role_binding(ThemeOwner::Site, theme_id, ThemeImageRole::Header)
             .await
             .expect("read shuffled binding")
@@ -1034,8 +1058,7 @@ mod tests {
             ) if initial_revision == shuffled_revision && *shuffle_seed == [2; 32]
         ));
         assert_eq!(
-            env.state
-                .themes
+            env.themes()
                 .header_pool(ThemeOwner::Site, theme_id)
                 .await
                 .expect("read pool after shuffle"),
@@ -1050,10 +1073,9 @@ mod tests {
     ) {
         let env = backend.setup().await;
         let theme_id = published_site_theme(&env).await;
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -1069,9 +1091,9 @@ mod tests {
                 .expect("select custom site theme"),
         );
         let manager = ThemeManager::new(
-            Arc::clone(&env.state.themes),
-            Arc::clone(&env.state.media),
-            env.state.write_scope.clone(),
+            Arc::clone(&env.themes()),
+            Arc::clone(&env.media()),
+            env.write_scope().clone(),
             Arc::new(env.media_content_locks()),
         );
 
@@ -1082,8 +1104,7 @@ mod tests {
                 .expect("remove published site theme"),
         );
         assert_eq!(
-            env.state
-                .themes
+            env.themes()
                 .selection(ThemeOwner::Site)
                 .await
                 .expect("read reset selection"),
@@ -1092,16 +1113,14 @@ mod tests {
             ))
         );
         assert!(
-            env.state
-                .themes
+            env.themes()
                 .list_themes(ThemeOwner::Site)
                 .await
                 .expect("read site catalog")
                 .is_empty()
         );
         assert!(
-            env.state
-                .themes
+            env.themes()
                 .list_content_eligibility()
                 .await
                 .expect("read retained content")
@@ -1116,10 +1135,9 @@ mod tests {
     async fn removing_unselected_site_theme_preserves_site_selection(#[case] backend: Backend) {
         let env = backend.setup().await;
         let theme_id = published_site_theme(&env).await;
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -1137,9 +1155,9 @@ mod tests {
                 .expect("select unrelated built-in site theme"),
         );
         let manager = ThemeManager::new(
-            Arc::clone(&env.state.themes),
-            Arc::clone(&env.state.media),
-            env.state.write_scope.clone(),
+            Arc::clone(&env.themes()),
+            Arc::clone(&env.media()),
+            env.write_scope().clone(),
             Arc::new(env.media_content_locks()),
         );
 
@@ -1150,8 +1168,7 @@ mod tests {
                 .expect("remove unselected site theme"),
         );
         assert_eq!(
-            env.state
-                .themes
+            env.themes()
                 .selection(ThemeOwner::Site)
                 .await
                 .expect("read preserved selection"),
@@ -1165,12 +1182,17 @@ mod tests {
     #[tokio::test]
     async fn manager_removes_author_override_to_inheritance(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let author = SeedUser::new().seed(&env.state).await.user_id;
+        let author = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         let theme_id = published_author_theme(&env, author).await;
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -1186,9 +1208,9 @@ mod tests {
                 .expect("select author override"),
         );
         let manager = ThemeManager::new(
-            Arc::clone(&env.state.themes),
-            Arc::clone(&env.state.media),
-            env.state.write_scope.clone(),
+            Arc::clone(&env.themes()),
+            Arc::clone(&env.media()),
+            env.write_scope().clone(),
             Arc::new(env.media_content_locks()),
         );
 
@@ -1199,16 +1221,14 @@ mod tests {
                 .expect("remove author theme"),
         );
         assert_eq!(
-            env.state
-                .themes
+            env.themes()
                 .selection(ThemeOwner::Author(author))
                 .await
                 .expect("read author selection"),
             None
         );
         assert!(
-            env.state
-                .themes
+            env.themes()
                 .list_themes(ThemeOwner::Author(author))
                 .await
                 .expect("read author catalog")
@@ -1290,12 +1310,18 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let actor = SeedUser::new().seed(&env.state).await.user_id;
+        let actor = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         let theme_id = published_site_theme(&env).await;
         let manager = ThemeManager::new(
-            Arc::clone(&env.state.themes),
-            Arc::clone(&env.state.media),
-            env.state.write_scope.clone(),
+            Arc::clone(&env.themes()),
+            Arc::clone(&env.media()),
+            env.write_scope().clone(),
             Arc::new(env.media_content_locks()),
         );
         confirmed(
@@ -1311,8 +1337,7 @@ mod tests {
                 .expect("bind current package asset"),
         );
         let current = env
-            .state
-            .themes
+            .themes()
             .list_themes(ThemeOwner::Site)
             .await
             .expect("read current theme")[0]
@@ -1324,10 +1349,9 @@ mod tests {
             stylesheet_digest: "e".repeat(64).parse().unwrap(),
             manifest: b"{}".to_vec(),
         };
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         let result = env
-            .state
-            .write_scope
+            .write_scope()
             .run(move |transaction| {
                 Box::pin(async move {
                     themes
@@ -1351,8 +1375,7 @@ mod tests {
             Err(WriteScopeError::Operation(sqlx::Error::RowNotFound))
         ));
         assert_eq!(
-            env.state
-                .themes
+            env.themes()
                 .list_themes(ThemeOwner::Site)
                 .await
                 .expect("read theme after rejected publication")[0]

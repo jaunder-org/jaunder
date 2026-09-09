@@ -10,7 +10,7 @@ use jaunder::feed::worker::FeedWorker;
 use jiff::{Span, Timestamp, ToSpan};
 use storage::MockPostStorage;
 use storage::test_support::{
-    Backend, SeedFeedCache, SeedRawPost, SeedUser, TestEnv, backends, confirmed_for, fp,
+    Backend, SeedFeedCache, SeedRawPost, SeedUser, backends, confirmed_for, fp,
 };
 
 fn fixed_instant(value: &str) -> UtcInstant {
@@ -38,7 +38,7 @@ use rstest::*;
 use rstest_reuse::*;
 
 async fn event_write<T>(
-    state: &Arc<storage::AppState>,
+    write_scope: storage::WriteScope,
     callback: impl for<'scope> FnOnce(
         &'scope mut storage::WriteTransaction,
     ) -> futures_util::future::BoxFuture<
@@ -47,25 +47,21 @@ async fn event_write<T>(
     >,
 ) -> T {
     confirmed_for(
-        state
-            .write_scope
-            .run(callback)
-            .await
-            .expect("feed-event write"),
+        write_scope.run(callback).await.expect("feed-event write"),
         "feed-event write acknowledgement",
     )
 }
 
-async fn set_hub(state: &Arc<storage::AppState>, storage_path: &Path) {
+async fn set_hub(
+    publisher: Arc<dyn storage::PublisherStorage>,
+    write_scope: storage::WriteScope,
+    storage_path: &Path,
+) {
     let hub: HubUrl = "https://hub.example.com/".parse().expect("valid hub URL");
-    jaunder::publisher::PublisherService::new(
-        storage_path.to_owned(),
-        Arc::clone(&state.publisher),
-        state.write_scope.clone(),
-    )
-    .mutate_hub(Some(&hub))
-    .await
-    .expect("set hub url");
+    jaunder::publisher::PublisherService::new(storage_path.to_owned(), publisher, write_scope)
+        .mutate_hub(Some(&hub))
+        .await
+        .expect("set hub url");
 }
 
 /// Test double whose `WebSub` client reports a retryable failure, so the worker
@@ -86,23 +82,27 @@ impl jaunder::websub::WebSubClient for FailingWebSubClient {
     }
 }
 
-/// Builds a [`FeedWorker`] from a test `AppState`'s handles plus an injected
-/// `WebSub` client (the worker no longer reaches into a shared bundle).
+/// Builds a [`FeedWorker`] from exact test storage handles and an injected
+/// `WebSub` client.
 fn make_worker(
-    state: &std::sync::Arc<storage::AppState>,
+    posts: Arc<dyn storage::PostStorage>,
+    feed_cache: Arc<dyn storage::FeedCacheStorage>,
+    publisher: Arc<dyn storage::PublisherStorage>,
+    feed_events: Arc<dyn storage::FeedEventStorage>,
+    write_scope: storage::WriteScope,
     storage_path: &Path,
-    websub: std::sync::Arc<dyn jaunder::websub::WebSubClient>,
+    websub: Arc<dyn jaunder::websub::WebSubClient>,
 ) -> FeedWorker {
     FeedWorker::new(
-        state.posts.clone(),
-        state.feed_cache.clone(),
-        Arc::new(state.write_scope.clone()),
+        posts,
+        feed_cache,
+        Arc::new(write_scope.clone()),
         Arc::new(jaunder::publisher::PublisherService::new(
             storage_path.to_owned(),
-            state.publisher.clone(),
-            state.write_scope.clone(),
+            publisher,
+            write_scope,
         )),
-        state.feed_events.clone(),
+        feed_events,
         websub,
     )
 }
@@ -110,27 +110,39 @@ fn make_worker(
 #[apply(backends)]
 #[tokio::test]
 async fn worker_regenerates_claimed_event_and_marks_done_when_no_hub(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let env = backend.setup().await;
     let capture = Arc::new(CapturingWebSubClient::default());
 
-    let user = SeedUser::new().seed(&state).await;
+    let user = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await;
 
-    let post = SeedRawPost::new(user.user_id).seed(&state).await;
+    let post = SeedRawPost::new(user.user_id)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
+        .await;
 
     let feed_path = fp(&format!("/~{}/feed.rss", user.username));
     let event_feed_path = feed_path.clone();
-    let feed_events = Arc::clone(&state.feed_events);
-    event_write(&state, move |transaction| {
+    let feed_events = Arc::clone(&env.feed_events());
+    event_write(env.write_scope(), move |transaction| {
         Box::pin(async move { feed_events.enqueue(transaction, &event_feed_path).await })
     })
     .await;
 
-    make_worker(&state, base.path(), capture.clone())
-        .tick()
-        .await;
+    make_worker(
+        Arc::clone(&env.posts()),
+        Arc::clone(&env.feed_cache()),
+        Arc::clone(&env.publisher()),
+        Arc::clone(&env.feed_events()),
+        env.write_scope(),
+        env.base.path(),
+        capture.clone(),
+    )
+    .tick()
+    .await;
 
-    let cache_row = state
-        .feed_cache
+    let cache_row = env
+        .feed_cache()
         .get(&feed_path)
         .await
         .expect("get cache")
@@ -142,8 +154,8 @@ async fn worker_regenerates_claimed_event_and_marks_done_when_no_hub(#[case] bac
             .contains(post.title.as_ref())
     );
 
-    let feed_events = Arc::clone(&state.feed_events);
-    let pending = event_write(&state, move |transaction| {
+    let feed_events = Arc::clone(&env.feed_events());
+    let pending = event_write(env.write_scope(), move |transaction| {
         Box::pin(async move {
             feed_events
                 .claim_pending_batch(
@@ -161,25 +173,42 @@ async fn worker_regenerates_claimed_event_and_marks_done_when_no_hub(#[case] bac
 #[apply(backends)]
 #[tokio::test]
 async fn worker_pings_hub_when_configured(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let env = backend.setup().await;
     let capture = Arc::new(CapturingWebSubClient::default());
 
-    let user = SeedUser::new().seed(&state).await;
+    let user = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await;
 
-    SeedRawPost::new(user.user_id).seed(&state).await;
+    SeedRawPost::new(user.user_id)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
+        .await;
 
-    set_hub(&state, base.path()).await;
+    set_hub(
+        Arc::clone(&env.publisher()),
+        env.write_scope(),
+        env.base.path(),
+    )
+    .await;
 
     let feed_path = fp(&format!("/~{}/feed.rss", user.username));
-    let feed_events = Arc::clone(&state.feed_events);
-    event_write(&state, move |transaction| {
+    let feed_events = Arc::clone(&env.feed_events());
+    event_write(env.write_scope(), move |transaction| {
         Box::pin(async move { feed_events.enqueue(transaction, &feed_path).await })
     })
     .await;
 
-    make_worker(&state, base.path(), capture.clone())
-        .tick()
-        .await;
+    make_worker(
+        Arc::clone(&env.posts()),
+        Arc::clone(&env.feed_cache()),
+        Arc::clone(&env.publisher()),
+        Arc::clone(&env.feed_events()),
+        env.write_scope(),
+        env.base.path(),
+        capture.clone(),
+    )
+    .tick()
+    .await;
 
     let pings = capture.pings();
     assert_eq!(pings.len(), 1, "should have exactly one ping");
@@ -197,29 +226,46 @@ async fn worker_pings_hub_when_configured(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn worker_groups_duplicate_events_into_single_regen(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let env = backend.setup().await;
     let capture = Arc::new(CapturingWebSubClient::default());
 
-    let user = SeedUser::new().seed(&state).await;
+    let user = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await;
 
-    SeedRawPost::new(user.user_id).seed(&state).await;
+    SeedRawPost::new(user.user_id)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
+        .await;
 
-    set_hub(&state, base.path()).await;
+    set_hub(
+        Arc::clone(&env.publisher()),
+        env.write_scope(),
+        env.base.path(),
+    )
+    .await;
 
     let feed_path = fp(&format!("/~{}/feed.rss", user.username));
-    let feed_events = Arc::clone(&state.feed_events);
+    let feed_events = Arc::clone(&env.feed_events());
     for _ in 0..5 {
         let feed_events = Arc::clone(&feed_events);
         let feed_path = feed_path.clone();
-        event_write(&state, move |transaction| {
+        event_write(env.write_scope(), move |transaction| {
             Box::pin(async move { feed_events.enqueue(transaction, &feed_path).await })
         })
         .await;
     }
 
-    make_worker(&state, base.path(), capture.clone())
-        .tick()
-        .await;
+    make_worker(
+        Arc::clone(&env.posts()),
+        Arc::clone(&env.feed_cache()),
+        Arc::clone(&env.publisher()),
+        Arc::clone(&env.feed_events()),
+        env.write_scope(),
+        env.base.path(),
+        capture.clone(),
+    )
+    .tick()
+    .await;
 
     // Verify only 1 ping was sent (grouping collapses duplicates)
     let pings = capture.pings();
@@ -248,26 +294,26 @@ async fn worker_groups_duplicate_events_into_single_regen(#[case] backend: Backe
 async fn grouped_regeneration_failure_leaves_publication_retry_in_its_phase(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base } = backend.setup().await;
+    let env = backend.setup().await;
     let feed_path = fp("/feed.rss");
-    let feed_events = Arc::clone(&state.feed_events);
-    let regeneration_id = event_write(&state, {
+    let feed_events = Arc::clone(&env.feed_events());
+    let regeneration_id = event_write(env.write_scope(), {
         let feed_path = feed_path.clone();
         move |transaction| {
             Box::pin(async move { feed_events.enqueue(transaction, &feed_path).await })
         }
     })
     .await;
-    let feed_events = Arc::clone(&state.feed_events);
-    let publication_id = event_write(&state, {
+    let feed_events = Arc::clone(&env.feed_events());
+    let publication_id = event_write(env.write_scope(), {
         let feed_path = feed_path.clone();
         move |transaction| {
             Box::pin(async move { feed_events.enqueue(transaction, &feed_path).await })
         }
     })
     .await;
-    let feed_events = Arc::clone(&state.feed_events);
-    event_write(&state, move |transaction| {
+    let feed_events = Arc::clone(&env.feed_events());
+    event_write(env.write_scope(), move |transaction| {
         Box::pin(async move {
             feed_events
                 .mark_regenerated(transaction, &[publication_id])
@@ -287,21 +333,21 @@ async fn grouped_regeneration_failure_leaves_publication_retry_in_its_phase(
         .returning(|_, _, _, _| Err(sqlx::Error::PoolClosed));
     FeedWorker::new(
         Arc::new(posts),
-        state.feed_cache.clone(),
-        Arc::new(state.write_scope.clone()),
+        env.feed_cache(),
+        Arc::new(env.write_scope()),
         Arc::new(jaunder::publisher::PublisherService::new(
-            base.path().to_owned(),
-            state.publisher.clone(),
-            state.write_scope.clone(),
+            env.base.path().to_owned(),
+            env.publisher(),
+            env.write_scope(),
         )),
-        state.feed_events.clone(),
+        env.feed_events(),
         Arc::new(jaunder::websub::NoopWebSubClient),
     )
     .tick()
     .await;
 
-    let feed_events = Arc::clone(&state.feed_events);
-    let reclaimed = event_write(&state, move |transaction| {
+    let feed_events = Arc::clone(&env.feed_events());
+    let reclaimed = event_write(env.write_scope(), move |transaction| {
         Box::pin(async move {
             feed_events
                 .claim_pending_batch(transaction, 10, std::time::Duration::ZERO)
@@ -323,34 +369,47 @@ async fn grouped_regeneration_failure_leaves_publication_retry_in_its_phase(
 async fn worker_applies_backoff_on_ping_failure(#[case] backend: Backend) {
     // WebSub ping-failure backoff is backend-agnostic: the shared setup runs it
     // on both backends so neither is left uncovered.
-    let TestEnv { state, base } = backend.setup().await;
+    let env = backend.setup().await;
 
-    let user = SeedUser::new().seed(&state).await;
+    let user = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await;
 
-    let post = SeedRawPost::new(user.user_id).seed(&state).await;
+    let post = SeedRawPost::new(user.user_id)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
+        .await;
 
-    set_hub(&state, base.path()).await;
+    set_hub(
+        Arc::clone(&env.publisher()),
+        env.write_scope(),
+        env.base.path(),
+    )
+    .await;
 
     let feed_path = fp(&format!("/~{}/feed.rss", user.username));
     let event_feed_path = feed_path.clone();
-    let feed_events = Arc::clone(&state.feed_events);
-    event_write(&state, move |transaction| {
+    let feed_events = Arc::clone(&env.feed_events());
+    event_write(env.write_scope(), move |transaction| {
         Box::pin(async move { feed_events.enqueue(transaction, &event_feed_path).await })
     })
     .await;
 
     // Run the worker - ping will fail
     make_worker(
-        &state,
-        base.path(),
+        Arc::clone(&env.posts()),
+        Arc::clone(&env.feed_cache()),
+        Arc::clone(&env.publisher()),
+        Arc::clone(&env.feed_events()),
+        env.write_scope(),
+        env.base.path(),
         std::sync::Arc::new(FailingWebSubClient),
     )
     .tick()
     .await;
 
     // Immediately after failure, the event should NOT be claimable (scheduled for future retry)
-    let feed_events = Arc::clone(&state.feed_events);
-    let immediately_claimable = event_write(&state, move |transaction| {
+    let feed_events = Arc::clone(&env.feed_events());
+    let immediately_claimable = event_write(env.write_scope(), move |transaction| {
         Box::pin(async move {
             feed_events
                 .claim_pending_batch(
@@ -368,8 +427,8 @@ async fn worker_applies_backoff_on_ping_failure(#[case] backend: Backend) {
     );
 
     // Verify the cache row was still created (regen succeeded, only ping failed)
-    let cache_row = state
-        .feed_cache
+    let cache_row = env
+        .feed_cache()
         .get(&feed_path)
         .await
         .expect("get cache")
@@ -389,14 +448,20 @@ async fn worker_applies_backoff_on_ping_failure(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn startup_catchup_regenerates_feed_for_go_live_while_down(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let env = backend.setup().await;
     let worker = make_worker(
-        &state,
-        base.path(),
+        Arc::clone(&env.posts()),
+        Arc::clone(&env.feed_cache()),
+        Arc::clone(&env.publisher()),
+        Arc::clone(&env.feed_events()),
+        env.write_scope(),
+        env.base.path(),
         Arc::new(CapturingWebSubClient::default()),
     );
 
-    let user = SeedUser::new().seed(&state).await;
+    let user = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await;
 
     let t0 = fixed_instant("2026-06-26T10:00:00Z");
     // A cached site feed generated at t0 (stale).
@@ -405,22 +470,22 @@ async fn startup_catchup_regenerates_feed_for_go_live_while_down(#[case] backend
         .etag(parse_etag("\"etag\""))
         .representation_modified_at(t0)
         .generated_at(t0)
-        .seed(&state)
+        .seed(env.feed_cache(), env.write_scope())
         .await;
 
     // A post that went live at t1 > t0 while the worker was "down".
     let t1 = add(t0, 1.hour());
     SeedRawPost::new(user.user_id)
         .published_at(t1)
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await;
 
     // Restart: first go-live pass at t2 > t1 (last_tick == None => catch-up).
     let t2 = add(t1, 1.hour());
     worker.go_live_pass(t2).await.expect("go-live pass");
 
-    let feed_events = Arc::clone(&state.feed_events);
-    let pending = event_write(&state, move |transaction| {
+    let feed_events = Arc::clone(&env.feed_events());
+    let pending = event_write(env.write_scope(), move |transaction| {
         Box::pin(async move {
             feed_events
                 .claim_pending_batch(
@@ -442,26 +507,32 @@ async fn startup_catchup_regenerates_feed_for_go_live_while_down(#[case] backend
 #[apply(backends)]
 #[tokio::test]
 async fn startup_catchup_ignores_nonpublic_posts(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let env = backend.setup().await;
     let worker = make_worker(
-        &state,
-        base.path(),
+        Arc::clone(&env.posts()),
+        Arc::clone(&env.feed_cache()),
+        Arc::clone(&env.publisher()),
+        Arc::clone(&env.feed_events()),
+        env.write_scope(),
+        env.base.path(),
         Arc::new(CapturingWebSubClient::default()),
     );
-    let user = SeedUser::new().seed(&state).await;
+    let user = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await;
     let t0 = fixed_instant("2026-06-26T10:00:00Z");
     SeedFeedCache::new(fp("/feed.atom"))
         .body("stale".to_owned())
         .etag(parse_etag("\"etag\""))
         .representation_modified_at(t0)
         .generated_at(t0)
-        .seed(&state)
+        .seed(env.feed_cache(), env.write_scope())
         .await;
     let go_live = add(t0, 1.hour());
     SeedRawPost::new(user.user_id)
         .published_at(go_live)
         .audiences(vec![AudienceTarget::Private])
-        .seed(&state)
+        .seed(env.posts(), env.write_scope())
         .await;
 
     worker
@@ -469,8 +540,8 @@ async fn startup_catchup_ignores_nonpublic_posts(#[case] backend: Backend) {
         .await
         .expect("go-live pass");
 
-    let feed_events = Arc::clone(&state.feed_events);
-    let pending = event_write(&state, move |transaction| {
+    let feed_events = Arc::clone(&env.feed_events());
+    let pending = event_write(env.write_scope(), move |transaction| {
         Box::pin(async move {
             feed_events
                 .claim_pending_batch(
@@ -493,14 +564,20 @@ async fn startup_catchup_ignores_nonpublic_posts(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn steady_state_window_enqueues_newly_live_posts(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let env = backend.setup().await;
     let worker = make_worker(
-        &state,
-        base.path(),
+        Arc::clone(&env.posts()),
+        Arc::clone(&env.feed_cache()),
+        Arc::clone(&env.publisher()),
+        Arc::clone(&env.feed_events()),
+        env.write_scope(),
+        env.base.path(),
         Arc::new(CapturingWebSubClient::default()),
     );
 
-    let user = SeedUser::new().seed(&state).await;
+    let user = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await;
 
     // First pass seeds last_tick = t0 (startup branch; nothing cached/live).
     let t0 = fixed_instant("2026-06-26T10:00:00Z");
@@ -510,21 +587,23 @@ async fn steady_state_window_enqueues_newly_live_posts(#[case] backend: Backend)
     let go_live = add(t0, 30.minute());
     SeedRawPost::new(user.user_id)
         .published_at(go_live)
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await;
 
-    let private_user = SeedUser::new().seed(&state).await;
+    let private_user = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await;
     SeedRawPost::new(private_user.user_id)
         .published_at(go_live)
         .audiences(vec![AudienceTarget::Private])
-        .seed(&state)
+        .seed(env.posts(), env.write_scope())
         .await;
 
     let t1 = add(t0, 1.hour());
     worker.go_live_pass(t1).await.expect("window pass");
 
-    let feed_events = Arc::clone(&state.feed_events);
-    let pending = event_write(&state, move |transaction| {
+    let feed_events = Arc::clone(&env.feed_events());
+    let pending = event_write(env.write_scope(), move |transaction| {
         Box::pin(async move {
             feed_events
                 .claim_pending_batch(
@@ -555,24 +634,37 @@ async fn steady_state_window_enqueues_newly_live_posts(#[case] backend: Backend)
 #[apply(backends)]
 #[tokio::test]
 async fn worker_marks_exhausted_after_backoff_attempts_are_used_up(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let env = backend.setup().await;
 
     // A published post so regeneration succeeds: the exhausted branch lives in
     // the ping sub-path, reached only after a successful regen.
-    let user = SeedUser::new().seed(&state).await;
-    SeedRawPost::new(user.user_id).seed(&state).await;
+    let user = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await;
+    SeedRawPost::new(user.user_id)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
+        .await;
 
-    set_hub(&state, base.path()).await;
+    set_hub(
+        Arc::clone(&env.publisher()),
+        env.write_scope(),
+        env.base.path(),
+    )
+    .await;
 
     let feed_path = fp(&format!("/~{}/feed.rss", user.username));
-    let feed_events = Arc::clone(&state.feed_events);
-    let event_id = event_write(&state, move |transaction| {
+    let feed_events = Arc::clone(&env.feed_events());
+    let event_id = event_write(env.write_scope(), move |transaction| {
         Box::pin(async move { feed_events.enqueue(transaction, &feed_path).await })
     })
     .await;
     let worker = make_worker(
-        &state,
-        base.path(),
+        Arc::clone(&env.posts()),
+        Arc::clone(&env.feed_cache()),
+        Arc::clone(&env.publisher()),
+        Arc::clone(&env.feed_events()),
+        env.write_scope(),
+        env.base.path(),
         std::sync::Arc::new(FailingWebSubClient),
     );
     worker.tick().await;
@@ -582,10 +674,10 @@ async fn worker_marks_exhausted_after_backoff_attempts_are_used_up(#[case] backe
     // retry time. The next real ping failure is attempt ten, which consumes
     // the publication budget.
     let past = subtract(UtcInstant::now(), 1.hour());
-    let feed_events = Arc::clone(&state.feed_events);
+    let feed_events = Arc::clone(&env.feed_events());
     for _ in 0..8 {
         let retry_publication_events = Arc::clone(&feed_events);
-        event_write(&state, move |transaction| {
+        event_write(env.write_scope(), move |transaction| {
             Box::pin(async move {
                 retry_publication_events
                     .retry_publication(transaction, &[event_id], "seed", past)
@@ -599,8 +691,8 @@ async fn worker_marks_exhausted_after_backoff_attempts_are_used_up(#[case] backe
 
     // Exhausted events move to a terminal status and are no longer claimable,
     // even with a fully-elapsed retry window.
-    let feed_events = Arc::clone(&state.feed_events);
-    let claimable = event_write(&state, move |transaction| {
+    let feed_events = Arc::clone(&env.feed_events());
+    let claimable = event_write(env.write_scope(), move |transaction| {
         Box::pin(async move {
             feed_events
                 .claim_pending_batch(

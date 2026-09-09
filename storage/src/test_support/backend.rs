@@ -5,7 +5,10 @@ use super::postgres::{PG_URL_FILE, PostgresDbGuard, PostgresTestConfig, template
 use crate::posts::tags::{INSERT_POST_TAG, UPSERT_TAG_RETURNING_ID};
 use crate::sql::QueryStorageExt;
 use crate::{
-    AppState, DbConnectOptions, PostStorage, StorageRuntimeConfig, TaggingError, WriteScope,
+    AudienceStorage, DbConnectOptions, EmailVerificationStorage, FeedCacheStorage,
+    FeedEventStorage, InviteStorage, MediaStorage, PasswordResetStorage, PostStorage,
+    PublisherStorage, SessionStorage, SiteConfigStorage, StorageFactory, StorageRuntimeConfig,
+    SubscriptionStorage, TaggingError, ThemeStorage, UserConfigStorage, UserStorage, WriteScope,
     WriteScopeError,
 };
 
@@ -65,11 +68,10 @@ pub async fn set_site_config(
     key: host::config_key::SiteConfigKey,
     value: &str,
 ) -> anyhow::Result<()> {
-    let site_config = Arc::clone(&env.state.site_config);
+    let site_config = env.site_config();
     let value = value.to_owned();
     confirmed(
-        env.state
-            .write_scope
+        env.write_scope()
             .run(move |transaction| {
                 Box::pin(async move { site_config.set(transaction, key, &value).await })
             })
@@ -132,12 +134,11 @@ pub enum Backend {
     Sqlite,
     Postgres,
 }
-
-/// A backend-tagged handle to the connection pool behind a test's [`AppState`].
+/// A backend-tagged handle to the connection pool behind a [`TestEnv`].
 ///
-/// The pool isn't otherwise reachable from `AppState`, so tests hold this to
-/// inject a storage fault by [`close`](CloseablePool::close)-ing it (the next
-/// query through any storage handle then errors) or to run raw SQL against the
+/// The pool isn't otherwise exposed through a storage handle, so tests hold this
+/// to inject a storage fault by [`close`](CloseablePool::close)-ing it (the next
+/// query through any minted handle then errors) or to run raw SQL against the
 /// per-test database ([`postgres`](CloseablePool::postgres)).
 pub enum CloseablePool {
     Sqlite(SqlitePool),
@@ -431,23 +432,119 @@ impl PostWriteLock<'_> {
     }
 }
 
-/// A ready-to-use [`AppState`] plus the temp dir backing it. `base` doubles as
-/// the media-storage root HTTP tests need on both backends, and on `SQLite` it
-/// also holds the database file alive for the lifetime of the test.
+/// A ready-to-use test composition root plus the temp dir backing it. `base`
+/// doubles as the media-storage root HTTP tests need on both backends, and on
+/// `SQLite` it also holds the database file alive for the lifetime of the test.
 pub struct TestEnv {
-    pub state: Arc<AppState>,
+    factory: StorageFactory,
     pub base: TestBase,
 }
 
 impl TestEnv {
+    /// Mints site-configuration storage for this test's backend.
+    #[must_use]
+    pub fn site_config(&self) -> Arc<dyn SiteConfigStorage> {
+        self.factory.site_config()
+    }
+
+    /// Mints user storage for this test's backend.
+    #[must_use]
+    pub fn users(&self) -> Arc<dyn UserStorage> {
+        self.factory.users()
+    }
+
+    /// Mints session storage for this test's backend.
+    #[must_use]
+    pub fn sessions(&self) -> Arc<dyn SessionStorage> {
+        self.factory.sessions()
+    }
+
+    /// Mints invitation storage for this test's backend.
+    #[must_use]
+    pub fn invites(&self) -> Arc<dyn InviteStorage> {
+        self.factory.invites()
+    }
+
+    /// Mints email-verification storage for this test's backend.
+    #[must_use]
+    pub fn email_verifications(&self) -> Arc<dyn EmailVerificationStorage> {
+        self.factory.email_verifications()
+    }
+
+    /// Mints password-reset storage for this test's backend.
+    #[must_use]
+    pub fn password_resets(&self) -> Arc<dyn PasswordResetStorage> {
+        self.factory.password_resets()
+    }
+
+    /// Mints post storage for this test's backend.
+    #[must_use]
+    pub fn posts(&self) -> Arc<dyn PostStorage> {
+        self.factory.posts()
+    }
+
+    /// Mints subscription storage for this test's backend.
+    #[must_use]
+    pub fn subscriptions(&self) -> Arc<dyn SubscriptionStorage> {
+        self.factory.subscriptions()
+    }
+
+    /// Mints audience storage for this test's backend.
+    #[must_use]
+    pub fn audiences(&self) -> Arc<dyn AudienceStorage> {
+        self.factory.audiences()
+    }
+
+    /// Mints media storage for this test's backend.
+    #[must_use]
+    pub fn media(&self) -> Arc<dyn MediaStorage> {
+        self.factory.media()
+    }
+
+    /// Mints user-configuration storage for this test's backend.
+    #[must_use]
+    pub fn user_config(&self) -> Arc<dyn UserConfigStorage> {
+        self.factory.user_config()
+    }
+
+    /// Mints Syndication Feed cache storage for this test's backend.
+    #[must_use]
+    pub fn feed_cache(&self) -> Arc<dyn FeedCacheStorage> {
+        self.factory.feed_cache()
+    }
+
+    /// Mints Syndication Feed event storage for this test's backend.
+    #[must_use]
+    pub fn feed_events(&self) -> Arc<dyn FeedEventStorage> {
+        self.factory.feed_events()
+    }
+
+    /// Mints publisher storage for this test's backend.
+    #[must_use]
+    pub fn publisher(&self) -> Arc<dyn PublisherStorage> {
+        self.factory.publisher()
+    }
+
+    /// Mints theme storage for this test's backend.
+    #[must_use]
+    pub fn themes(&self) -> Arc<dyn ThemeStorage> {
+        self.factory.themes()
+    }
+
+    /// Mints a write scope for this test's backend.
+    #[must_use]
+    pub fn write_scope(&self) -> WriteScope {
+        self.factory.write_scope()
+    }
+
     #[must_use]
     pub fn media_content_locks(&self) -> crate::MediaContentLocks {
         crate::MediaContentLocks::new(Arc::new(self.base.path().to_path_buf()))
     }
 }
 
-/// Creates the shared lock seam for fixture Post writers that receive only an
-/// [`AppState`], not their enclosing [`TestEnv`].
+/// Creates the shared lock seam for fixture Post writers that receive only a
+/// media root, not their enclosing [`TestEnv`].
 #[must_use]
 pub fn fixture_media_content_locks() -> crate::MediaContentLocks {
     crate::MediaContentLocks::new(Arc::new(
@@ -531,14 +628,13 @@ impl TestBase {
             _pg: Some(pg),
         }
     }
-
-    /// Injects a storage fault: closes the pool behind this env's [`AppState`],
-    /// so the next query through any storage handle returns an `Internal` error.
+    /// Injects a storage fault: closes this env's pool, so the next query
+    /// through any minted handle returns an `Internal` error.
     pub async fn close_pool(&self) {
         self.pool.close().await;
     }
 
-    /// The pool behind this env's [`AppState`], for raw-SQL seed/inspect.
+    /// The pool behind this env, for raw-SQL seed/inspect.
     #[must_use]
     pub fn pool(&self) -> &CloseablePool {
         &self.pool
@@ -773,10 +869,9 @@ async fn seed_site_config(
         let _ = failure;
         false
     };
-    let site_config = Arc::clone(&env.state.site_config);
+    let site_config = env.site_config();
     let outcome = env
-        .state
-        .write_scope
+        .write_scope()
         .run(move |transaction| {
             Box::pin(async move {
                 site_config
@@ -849,10 +944,7 @@ impl Backend {
                 (factory, TestBase::postgres(dir, guard, pool, instance_id))
             }
         };
-        TestEnv {
-            state: factory.app_state(),
-            base,
-        }
+        TestEnv { factory, base }
     }
 }
 #[template]
@@ -937,7 +1029,7 @@ mod tests {
     #[tokio::test]
     async fn bare_setup_seeds_open_registration_and_canonical_base_url(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let storage = &*env.state.site_config;
+        let storage = &*env.site_config();
         assert_eq!(
             storage.get_registration_policy().await.unwrap(),
             RegistrationPolicy::Open
@@ -963,7 +1055,7 @@ mod tests {
             .media_limits(max_file_size, user_quota)
             .media_uploads_enabled(false)
             .await;
-        let storage = &*env.state.site_config;
+        let storage = &*env.site_config();
         assert_eq!(
             storage.get_registration_policy().await.unwrap(),
             RegistrationPolicy::OperatorInvites
@@ -985,7 +1077,7 @@ mod tests {
     #[tokio::test]
     async fn base_url_none_omits_only_the_base_url_row(#[case] backend: Backend) {
         let env = backend.setup().base_url(None).await;
-        let storage = &*env.state.site_config;
+        let storage = &*env.site_config();
         assert_eq!(
             storage.get_registration_policy().await.unwrap(),
             RegistrationPolicy::Open
@@ -1003,7 +1095,7 @@ mod tests {
     #[tokio::test]
     async fn pristine_setup_seeds_no_site_config_rows(#[case] backend: Backend) {
         let env = backend.setup().pristine().await;
-        let storage = &*env.state.site_config;
+        let storage = &*env.site_config();
         assert!(storage.list().await.unwrap().is_empty());
         assert_eq!(
             storage.get_registration_policy().await.unwrap(),
@@ -1106,7 +1198,7 @@ mod tests {
         )
         .await;
         assert!(result.is_err());
-        assert!(env.state.site_config.list().await.unwrap().is_empty());
+        assert!(env.site_config().list().await.unwrap().is_empty());
     }
 
     // guard:no-backend — harness type-guard on the SQLite CloseablePool variant; no database ops

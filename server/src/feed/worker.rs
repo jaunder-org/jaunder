@@ -943,10 +943,12 @@ mod tests {
         websub: Arc<dyn WebSubClient>,
     ) -> (FeedWorker, TestEnv) {
         let env = backend.setup().await;
+        let publisher_storage = env.publisher();
+        let write_scope = env.write_scope();
         let publisher = Arc::new(PublisherService::new(
             env.base.path().to_path_buf(),
-            Arc::clone(&env.state.publisher),
-            env.state.write_scope.clone(),
+            publisher_storage,
+            write_scope,
         ));
         let worker = FeedWorker::new(
             Arc::new(storage::MockPostStorage::new()),
@@ -2003,11 +2005,13 @@ mod tests {
         let mut row = event(3, "/feed.rss", 0);
         row.phase = FeedEventPhase::Publication;
         let env = backend.setup().await;
+        let publisher_storage = env.publisher();
+        let write_scope = env.write_scope();
         let file = tempfile::NamedTempFile::new().expect("temporary file");
         let publisher = Arc::new(PublisherService::new(
             file.path().to_owned(),
-            Arc::clone(&env.state.publisher),
-            env.state.write_scope.clone(),
+            publisher_storage,
+            write_scope,
         ));
         let mut cache = MockFeedCacheStorage::new();
         cache
@@ -2041,10 +2045,12 @@ mod tests {
     async fn configured_hub_without_base_retries_regeneration(#[case] backend: Backend) {
         let row = event(4, "/feed.rss", 0);
         let env = backend.setup().base_url(None).await;
+        let publisher_storage = env.publisher();
+        let write_scope = env.write_scope();
         let publisher = Arc::new(PublisherService::new(
             env.base.path().to_path_buf(),
-            Arc::clone(&env.state.publisher),
-            env.state.write_scope.clone(),
+            publisher_storage,
+            write_scope,
         ));
         let mut events = MockFeedEventStorage::new();
         events

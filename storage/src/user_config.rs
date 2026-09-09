@@ -227,8 +227,14 @@ mod tests {
     #[tokio::test]
     async fn get_default_post_format_unset_returns_markdown(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let config = &*env.state.user_config;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let config = &*env.user_config();
         let result = get_default_post_format(config, user_id).await.unwrap();
         assert_eq!(result, PostFormat::Markdown);
     }
@@ -237,15 +243,20 @@ mod tests {
     #[tokio::test]
     async fn get_preserves_opaque_stored_values(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let config = std::sync::Arc::clone(&env.state.user_config);
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let config = std::sync::Arc::clone(&env.user_config());
         let config_for_write = std::sync::Arc::clone(&config);
         let key = UserConfigKey::DefaultPostFormat;
         let value = "unknown representation\nretained verbatim".to_owned();
         let expected = value.clone();
         let outcome = env
-            .state
-            .write_scope
+            .write_scope()
             .run(move |transaction| {
                 Box::pin(async move {
                     config_for_write
@@ -270,13 +281,18 @@ mod tests {
     #[tokio::test]
     async fn set_and_get_default_post_format_markdown(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let config = std::sync::Arc::clone(&env.state.user_config);
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let config = std::sync::Arc::clone(&env.user_config());
         let config_for_write = std::sync::Arc::clone(&config);
         let format = PostFormat::Markdown;
         let outcome = env
-            .state
-            .write_scope
+            .write_scope()
             .run(move |transaction| {
                 Box::pin(async move {
                     set_default_post_format(config_for_write.as_ref(), transaction, user_id, format)
@@ -296,13 +312,18 @@ mod tests {
     #[tokio::test]
     async fn set_and_get_default_post_format_org(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let config = std::sync::Arc::clone(&env.state.user_config);
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let config = std::sync::Arc::clone(&env.user_config());
         let config_for_write = std::sync::Arc::clone(&config);
         let format = PostFormat::Org;
         let outcome = env
-            .state
-            .write_scope
+            .write_scope()
             .run(move |transaction| {
                 Box::pin(async move {
                     set_default_post_format(config_for_write.as_ref(), transaction, user_id, format)
@@ -322,14 +343,19 @@ mod tests {
     #[tokio::test]
     async fn get_default_post_format_invalid_string_returns_markdown(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let config = std::sync::Arc::clone(&env.state.user_config);
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let config = std::sync::Arc::clone(&env.user_config());
         let config_for_write = std::sync::Arc::clone(&config);
         let key = UserConfigKey::DefaultPostFormat;
         let value = "garbage".to_owned();
         let outcome = env
-            .state
-            .write_scope
+            .write_scope()
             .run(move |transaction| {
                 Box::pin(async move {
                     config_for_write

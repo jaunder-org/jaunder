@@ -282,11 +282,13 @@ mod tests {
         }
     }
 
-    async fn set_registration_policy(state: &storage::AppState, policy: RegistrationPolicy) {
-        let site_config = Arc::clone(&state.site_config);
+    async fn set_registration_policy(
+        site_config: Arc<dyn storage::SiteConfigStorage>,
+        write_scope: &storage::WriteScope,
+        policy: RegistrationPolicy,
+    ) {
         confirmed(
-            state
-                .write_scope
+            write_scope
                 .run(move |transaction| {
                     Box::pin(async move {
                         site_config
@@ -403,23 +405,30 @@ mod tests {
     async fn cmd_user_invite_creates_invite_expiring_in_the_future() {
         let temp = TempDir::new().expect("temp dir");
         let storage_args = sqlite_storage_args(&temp);
-        let state = storage::open_database(&storage_args.db, &StorageRuntimeConfig::default())
+        let factory = storage::open_database(&storage_args.db, &StorageRuntimeConfig::default())
             .await
-            .expect("open db")
-            .app_state();
-        set_registration_policy(&state, RegistrationPolicy::OperatorInvites).await;
+            .expect("open db");
+        let site_config = factory.site_config();
+        let invites = factory.invites();
+        let write_scope = factory.write_scope();
+        set_registration_policy(
+            Arc::clone(&site_config),
+            &write_scope,
+            RegistrationPolicy::OperatorInvites,
+        )
+        .await;
 
         let before = common::time::UtcInstant::now();
         cmd_user_invite(
-            state.site_config.as_ref(),
-            state.invites.clone(),
-            &state.write_scope,
+            site_config.as_ref(),
+            Arc::clone(&invites),
+            &write_scope,
             Some(parse_invite_ttl_hours("24")),
         )
         .await
         .expect("create invite");
 
-        let invites = state.invites.list_invites().await.expect("list invites");
+        let invites = invites.list_invites().await.expect("list invites");
         assert_eq!(invites.len(), 1, "exactly one invite must be created");
         assert!(
             invites[0].expires_at > before,
@@ -434,15 +443,21 @@ mod tests {
         // command prints a ready-to-send invitation link rather than the bare code.
         let temp = TempDir::new().expect("temp dir");
         let storage_args = sqlite_storage_args(&temp);
-        let state = storage::open_database(&storage_args.db, &StorageRuntimeConfig::default())
+        let factory = storage::open_database(&storage_args.db, &StorageRuntimeConfig::default())
             .await
-            .expect("open db")
-            .app_state();
-        set_registration_policy(&state, RegistrationPolicy::MemberInvites).await;
-        let config = Arc::clone(&state.site_config);
+            .expect("open db");
+        let site_config = factory.site_config();
+        let invites = factory.invites();
+        let write_scope = factory.write_scope();
+        set_registration_policy(
+            Arc::clone(&site_config),
+            &write_scope,
+            RegistrationPolicy::MemberInvites,
+        )
+        .await;
+        let config = Arc::clone(&site_config);
         confirmed(
-            state
-                .write_scope
+            write_scope
                 .run(move |transaction| {
                     Box::pin(async move {
                         config
@@ -459,15 +474,15 @@ mod tests {
         );
 
         cmd_user_invite(
-            state.site_config.as_ref(),
-            state.invites.clone(),
-            &state.write_scope,
+            site_config.as_ref(),
+            Arc::clone(&invites),
+            &write_scope,
             Some(parse_invite_ttl_hours("24")),
         )
         .await
         .expect("create invite");
 
-        let invites = state.invites.list_invites().await.expect("list invites");
+        let invites = invites.list_invites().await.expect("list invites");
         assert_eq!(invites.len(), 1, "exactly one invite must be created");
     }
 
@@ -476,16 +491,19 @@ mod tests {
         for policy in [RegistrationPolicy::Closed, RegistrationPolicy::Open] {
             let temp = TempDir::new().expect("temp dir");
             let storage_args = sqlite_storage_args(&temp);
-            let state = storage::open_database(&storage_args.db, &StorageRuntimeConfig::default())
-                .await
-                .expect("open db")
-                .app_state();
-            set_registration_policy(&state, policy).await;
+            let factory =
+                storage::open_database(&storage_args.db, &StorageRuntimeConfig::default())
+                    .await
+                    .expect("open db");
+            let site_config = factory.site_config();
+            let invites = factory.invites();
+            let write_scope = factory.write_scope();
+            set_registration_policy(Arc::clone(&site_config), &write_scope, policy).await;
 
             let error = cmd_user_invite(
-                state.site_config.as_ref(),
-                state.invites.clone(),
-                &state.write_scope,
+                site_config.as_ref(),
+                Arc::clone(&invites),
+                &write_scope,
                 Some(parse_invite_ttl_hours("24")),
             )
             .await
@@ -497,8 +515,7 @@ mod tests {
                 "{policy:?} rejection: {error:#}"
             );
             assert!(
-                state
-                    .invites
+                invites
                     .list_invites()
                     .await
                     .expect("list invites")

@@ -14,7 +14,7 @@ use crate::helpers::body_string;
 
 use storage::{
     MockUserStorage, UserStorage,
-    test_support::{Backend, TestEnv, backends},
+    test_support::{Backend, backends},
 };
 
 use super::fixtures::{
@@ -25,9 +25,10 @@ use super::fixtures::{
 #[apply(backends)]
 #[tokio::test]
 async fn profile_projects_user_timeline(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let (u, .., title, _rendered_html) = seed_published_post(&state).await;
-    let resp = projector_app(&state)
+    let env = backend.setup().await;
+    let (u, .., title, _rendered_html) =
+        seed_published_post(env.users(), env.posts(), env.write_scope()).await;
+    let resp = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get(&format!("/~{u}")))
         .await
         .expect("request");
@@ -44,9 +45,10 @@ async fn profile_projects_user_timeline(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn site_timeline_projects_local_posts(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let (.., title, _rendered_html) = seed_published_post(&state).await;
-    let resp = projector_app(&state)
+    let env = backend.setup().await;
+    let (.., title, _rendered_html) =
+        seed_published_post(env.users(), env.posts(), env.write_scope()).await;
+    let resp = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get("/"))
         .await
         .expect("request");
@@ -59,8 +61,8 @@ async fn site_timeline_projects_local_posts(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn profile_invalid_username_serves_shell(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let resp = projector_app(&state)
+    let env = backend.setup().await;
+    let resp = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get("/~in.valid"))
         .await
         .expect("request");
@@ -76,8 +78,8 @@ async fn profile_invalid_username_serves_shell(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn profile_unknown_valid_username_is_cacheable_projection(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let resp = projector_app(&state)
+    let env = backend.setup().await;
+    let resp = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get("/~ghost"))
         .await
         .expect("request");
@@ -99,10 +101,10 @@ async fn profile_unknown_valid_username_is_cacheable_projection(#[case] backend:
 async fn site_timeline_storage_failure_keeps_500_and_reports_boundary_once(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base } = backend.setup().await;
-    seed_published_post(&state).await;
-    let app = projector_app(&state);
-    base.close_pool().await;
+    let env = backend.setup().await;
+    seed_published_post(env.users(), env.posts(), env.write_scope()).await;
+    let app = projector_app(env.posts(), env.users(), env.themes());
+    env.base.close_pool().await;
 
     let (response, event) = crate::assert_error_signal!(
         async { app.oneshot(get("/")).await.expect("request") },
@@ -130,11 +132,11 @@ async fn site_timeline_storage_failure_keeps_500_and_reports_boundary_once(
 #[apply(backends)]
 #[tokio::test]
 async fn site_timeline_theme_failure_keeps_500_and_reports_boundary_once(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    seed_published_post(&state).await;
+    let env = backend.setup().await;
+    seed_published_post(env.users(), env.posts(), env.write_scope()).await;
     let app = projector_app_with_dependencies(
-        Arc::clone(&state.posts),
-        Arc::clone(&state.users),
+        env.posts(),
+        env.users(),
         failing_site_theme_selection("injected site timeline theme failure"),
     );
 
@@ -156,10 +158,10 @@ async fn site_timeline_theme_failure_keeps_500_and_reports_boundary_once(#[case]
 #[apply(backends)]
 #[tokio::test]
 async fn profile_storage_failure_keeps_no_store_shell_and_reports_once(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let (username, ..) = seed_published_post(&state).await;
-    let app = projector_app(&state);
-    base.close_pool().await;
+    let env = backend.setup().await;
+    let (username, ..) = seed_published_post(env.users(), env.posts(), env.write_scope()).await;
+    let app = projector_app(env.posts(), env.users(), env.themes());
+    env.base.close_pool().await;
 
     let (response, event) = crate::assert_error_signal!(
         async {
@@ -196,8 +198,8 @@ async fn profile_storage_failure_keeps_no_store_shell_and_reports_once(#[case] b
 async fn profile_owner_lookup_failure_keeps_500_and_reports_boundary_once(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let (username, ..) = seed_published_post(&state).await;
+    let env = backend.setup().await;
+    let (username, ..) = seed_published_post(env.users(), env.posts(), env.write_scope()).await;
     let mut users = MockUserStorage::new();
     users
         .expect_get_user_by_username()
@@ -208,9 +210,9 @@ async fn profile_owner_lookup_failure_keeps_500_and_reports_boundary_once(
             )))
         });
     let app = projector_app_with_dependencies(
-        Arc::clone(&state.posts),
+        env.posts(),
         Arc::new(users) as Arc<dyn UserStorage>,
-        Arc::clone(&state.themes),
+        env.themes(),
     );
 
     let (response, event) = crate::assert_error_signal!(
@@ -235,11 +237,11 @@ async fn profile_owner_lookup_failure_keeps_500_and_reports_boundary_once(
 #[apply(backends)]
 #[tokio::test]
 async fn profile_theme_failure_keeps_500_and_reports_boundary_once(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let (username, ..) = seed_published_post(&state).await;
+    let env = backend.setup().await;
+    let (username, ..) = seed_published_post(env.users(), env.posts(), env.write_scope()).await;
     let app = projector_app_with_dependencies(
-        Arc::clone(&state.posts),
-        Arc::clone(&state.users),
+        env.posts(),
+        env.users(),
         failing_site_theme_selection("injected profile theme failure"),
     );
 
@@ -265,13 +267,14 @@ async fn profile_theme_failure_keeps_500_and_reports_boundary_once(#[case] backe
 #[apply(backends)]
 #[tokio::test]
 async fn every_page_seed_variant_serializes_without_null_fallback(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let (username, year, month, day, slug, ..) = seed_published_post(&state).await;
+    let env = backend.setup().await;
+    let (username, year, month, day, slug, ..) =
+        seed_published_post(env.users(), env.posts(), env.write_scope()).await;
     let username = username.parse().expect("seeded username");
     let slug = slug.parse().expect("seeded slug");
     let date = PermalinkDate::from_ymd(year, month, day).expect("seeded date");
     let record = storage::fetch_post_record(
-        state.posts.as_ref(),
+        env.posts().as_ref(),
         &ViewerIdentity::Anonymous,
         &username,
         date,

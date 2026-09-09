@@ -12,14 +12,13 @@ mod tests {
     async fn open_database_migrates_a_from_scratch_database() {
         let config = PostgresTestConfig::from_env();
         let (url, _pg) = unique_postgres_url(&config).await;
-        let state = open_database(&url, &StorageRuntimeConfig::default())
+        let factory = open_database(&url, &StorageRuntimeConfig::default())
             .await
-            .unwrap()
-            .app_state();
+            .unwrap();
         // A migrated-but-empty database resolves an unwritten config key to None.
         assert_eq!(
-            state
-                .site_config
+            factory
+                .site_config()
                 .get_raw(SiteConfigKey::SiteTitle)
                 .await
                 .unwrap(),

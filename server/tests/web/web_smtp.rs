@@ -6,10 +6,10 @@ use rstest_reuse::*;
 use server_fn::ServerFn;
 
 use crate::helpers::{
-    create_operator_and_session, create_user_and_session, delete_site_config, post_form,
+    create_operator_and_session, create_user_and_session, delete_site_config, make_app, post_form,
     post_server_fn, post_server_fn_request_fixture, set_site_config,
 };
-use storage::test_support::{Backend, TestEnv, backends};
+use storage::test_support::{Backend, backends};
 
 fn update_request(
     enabled: bool,
@@ -29,19 +29,26 @@ fn update_request(
     }
 }
 
-async fn raw(state: &std::sync::Arc<storage::AppState>, key: SiteConfigKey) -> Option<String> {
-    state.site_config.get_raw(key).await.unwrap()
+async fn raw(site_config: &dyn storage::SiteConfigStorage, key: SiteConfigKey) -> Option<String> {
+    site_config.get_raw(key).await.unwrap()
 }
 
 #[apply(backends)]
 #[tokio::test]
 async fn both_smtp_functions_require_operator_authorization(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let member_cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let member_cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     for cookie in [None, Some(member_cookie.as_str())] {
         let (status, body) = post_form(
-            &state,
+            app.clone(),
             <web::smtp::GetSettings as ServerFn>::PATH,
             "",
             cookie,
@@ -53,7 +60,7 @@ async fn both_smtp_functions_require_operator_authorization(#[case] backend: Bac
         let input = web::smtp::UpdateSettings {
             request: update_request(false, false, None, None),
         };
-        let (status, body) = post_server_fn(&state, &input, cookie).await;
+        let (status, body) = post_server_fn(app.clone(), &input, cookie).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
         assert!(body.contains("unauthorized"), "{body}");
     }
@@ -62,10 +69,17 @@ async fn both_smtp_functions_require_operator_authorization(#[case] backend: Bac
 #[apply(backends)]
 #[tokio::test]
 async fn disabled_settings_return_exact_secret_free_defaults(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_operator_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::smtp::GetSettings as ServerFn>::PATH,
         "",
         Some(&cookie),
@@ -85,17 +99,34 @@ async fn disabled_settings_return_exact_secret_free_defaults(#[case] backend: Ba
 #[apply(backends)]
 #[tokio::test]
 async fn configured_and_legacy_reads_expose_only_password_presence(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    set_site_config(&state, SiteConfigKey::SmtpHost, "legacy-relay")
-        .await
-        .unwrap();
-    set_site_config(&state, SiteConfigKey::SmtpPassword, "never-return-this")
-        .await
-        .unwrap();
-    let cookie = create_operator_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    set_site_config(
+        std::sync::Arc::clone(&env.site_config()),
+        env.write_scope(),
+        SiteConfigKey::SmtpHost,
+        "legacy-relay",
+    )
+    .await
+    .unwrap();
+    set_site_config(
+        std::sync::Arc::clone(&env.site_config()),
+        env.write_scope(),
+        SiteConfigKey::SmtpPassword,
+        "never-return-this",
+    )
+    .await
+    .unwrap();
+    let cookie = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::smtp::GetSettings as ServerFn>::PATH,
         "",
         Some(&cookie),
@@ -111,11 +142,16 @@ async fn configured_and_legacy_reads_expose_only_password_presence(#[case] backe
     let object = serde_json::from_str::<serde_json::Value>(&body).unwrap();
     assert!(object.get("password").is_none(), "{body}");
 
-    set_site_config(&state, SiteConfigKey::SmtpUsername, "relay-user")
-        .await
-        .unwrap();
+    set_site_config(
+        std::sync::Arc::clone(&env.site_config()),
+        env.write_scope(),
+        SiteConfigKey::SmtpUsername,
+        "relay-user",
+    )
+    .await
+    .unwrap();
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::smtp::GetSettings as ServerFn>::PATH,
         "",
         Some(&cookie),
@@ -128,11 +164,15 @@ async fn configured_and_legacy_reads_expose_only_password_presence(#[case] backe
     assert!(settings.authentication_enabled);
     assert!(!body.contains("never-return-this"), "{body}");
 
-    delete_site_config(&state, SiteConfigKey::SmtpPassword)
-        .await
-        .unwrap();
+    delete_site_config(
+        std::sync::Arc::clone(&env.site_config()),
+        env.write_scope(),
+        SiteConfigKey::SmtpPassword,
+    )
+    .await
+    .unwrap();
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::smtp::GetSettings as ServerFn>::PATH,
         "",
         Some(&cookie),
@@ -144,11 +184,15 @@ async fn configured_and_legacy_reads_expose_only_password_presence(#[case] backe
     assert!(!settings.password_configured);
     assert_eq!(settings.username.as_deref(), Some("relay-user"));
 
-    delete_site_config(&state, SiteConfigKey::SmtpUsername)
-        .await
-        .unwrap();
+    delete_site_config(
+        std::sync::Arc::clone(&env.site_config()),
+        env.write_scope(),
+        SiteConfigKey::SmtpUsername,
+    )
+    .await
+    .unwrap();
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::smtp::GetSettings as ServerFn>::PATH,
         "",
         Some(&cookie),
@@ -176,8 +220,15 @@ struct InvalidUpdateFixture<'a> {
 #[apply(backends)]
 #[tokio::test]
 async fn malformed_typed_request_is_rejected_before_mutation(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_operator_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
     let fixture = InvalidUpdateFixture {
         enabled: true,
         host: "",
@@ -190,48 +241,70 @@ async fn malformed_typed_request_is_rejected_before_mutation(#[case] backend: Ba
     };
 
     let (status, body) = post_server_fn_request_fixture::<web::smtp::UpdateSettings, _>(
-        &state,
+        app.clone(),
         &fixture,
         Some(&cookie),
     )
     .await;
     assert_ne!(status, StatusCode::OK, "{body}");
-    assert_eq!(raw(&state, SiteConfigKey::SmtpHost).await, None);
+    assert_eq!(
+        raw(env.site_config().as_ref(), SiteConfigKey::SmtpHost).await,
+        None
+    );
 }
 
 #[apply(backends)]
 #[tokio::test]
 async fn operator_can_replace_keep_clear_and_fully_disable_atomically(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_operator_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let replace = web::smtp::UpdateSettings {
         request: update_request(true, true, Some("relay-user"), Some("first-secret")),
     };
-    let (status, body) = post_server_fn(&state, &replace, Some(&cookie)).await;
+    let (status, body) = post_server_fn(app.clone(), &replace, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
-        raw(&state, SiteConfigKey::SmtpHost).await.as_deref(),
+        raw(env.site_config().as_ref(), SiteConfigKey::SmtpHost)
+            .await
+            .as_deref(),
         Some("relay.example.com")
     );
     assert_eq!(
-        raw(&state, SiteConfigKey::SmtpPort).await.as_deref(),
+        raw(env.site_config().as_ref(), SiteConfigKey::SmtpPort)
+            .await
+            .as_deref(),
         Some("2525")
     );
     assert_eq!(
-        raw(&state, SiteConfigKey::SmtpTlsMode).await.as_deref(),
+        raw(env.site_config().as_ref(), SiteConfigKey::SmtpTlsMode)
+            .await
+            .as_deref(),
         Some("tls")
     );
     assert_eq!(
-        raw(&state, SiteConfigKey::SmtpSender).await.as_deref(),
+        raw(env.site_config().as_ref(), SiteConfigKey::SmtpSender)
+            .await
+            .as_deref(),
         Some("Jaunder <mail@example.com>")
     );
     assert_eq!(
-        raw(&state, SiteConfigKey::SmtpUsername).await.as_deref(),
+        raw(env.site_config().as_ref(), SiteConfigKey::SmtpUsername)
+            .await
+            .as_deref(),
         Some("relay-user")
     );
     assert_eq!(
-        raw(&state, SiteConfigKey::SmtpPassword).await.as_deref(),
+        raw(env.site_config().as_ref(), SiteConfigKey::SmtpPassword)
+            .await
+            .as_deref(),
         Some("first-secret")
     );
     assert!(!body.contains("first-secret"), "{body}");
@@ -239,24 +312,30 @@ async fn operator_can_replace_keep_clear_and_fully_disable_atomically(#[case] ba
     let keep = web::smtp::UpdateSettings {
         request: update_request(true, true, Some("renamed-user"), None),
     };
-    let (status, body) = post_server_fn(&state, &keep, Some(&cookie)).await;
+    let (status, body) = post_server_fn(app.clone(), &keep, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
-        raw(&state, SiteConfigKey::SmtpUsername).await.as_deref(),
+        raw(env.site_config().as_ref(), SiteConfigKey::SmtpUsername)
+            .await
+            .as_deref(),
         Some("renamed-user")
     );
     assert_eq!(
-        raw(&state, SiteConfigKey::SmtpPassword).await.as_deref(),
+        raw(env.site_config().as_ref(), SiteConfigKey::SmtpPassword)
+            .await
+            .as_deref(),
         Some("first-secret")
     );
 
     let replace = web::smtp::UpdateSettings {
         request: update_request(true, true, Some("renamed-user"), Some("second-secret")),
     };
-    let (status, body) = post_server_fn(&state, &replace, Some(&cookie)).await;
+    let (status, body) = post_server_fn(app.clone(), &replace, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
-        raw(&state, SiteConfigKey::SmtpPassword).await.as_deref(),
+        raw(env.site_config().as_ref(), SiteConfigKey::SmtpPassword)
+            .await
+            .as_deref(),
         Some("second-secret")
     );
     assert!(!body.contains("second-secret"), "{body}");
@@ -264,16 +343,26 @@ async fn operator_can_replace_keep_clear_and_fully_disable_atomically(#[case] ba
     let clear = web::smtp::UpdateSettings {
         request: update_request(true, false, None, None),
     };
-    let (status, body) = post_server_fn(&state, &clear, Some(&cookie)).await;
+    let (status, body) = post_server_fn(app.clone(), &clear, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(raw(&state, SiteConfigKey::SmtpUsername).await, None);
-    assert_eq!(raw(&state, SiteConfigKey::SmtpPassword).await, None);
-    assert!(raw(&state, SiteConfigKey::SmtpHost).await.is_some());
+    assert_eq!(
+        raw(env.site_config().as_ref(), SiteConfigKey::SmtpUsername).await,
+        None
+    );
+    assert_eq!(
+        raw(env.site_config().as_ref(), SiteConfigKey::SmtpPassword).await,
+        None
+    );
+    assert!(
+        raw(env.site_config().as_ref(), SiteConfigKey::SmtpHost)
+            .await
+            .is_some()
+    );
 
     let disable = web::smtp::UpdateSettings {
         request: update_request(false, false, None, None),
     };
-    let (status, body) = post_server_fn(&state, &disable, Some(&cookie)).await;
+    let (status, body) = post_server_fn(app.clone(), &disable, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     for key in [
         SiteConfigKey::SmtpHost,
@@ -283,14 +372,15 @@ async fn operator_can_replace_keep_clear_and_fully_disable_atomically(#[case] ba
         SiteConfigKey::SmtpUsername,
         SiteConfigKey::SmtpPassword,
     ] {
-        assert_eq!(raw(&state, key).await, None, "{key:?}");
+        assert_eq!(raw(env.site_config().as_ref(), key).await, None, "{key:?}");
     }
 }
 
 #[apply(backends)]
 #[tokio::test]
 async fn stale_password_keep_conflicts_and_rolls_back_every_field(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
     for (key, value) in [
         (SiteConfigKey::SmtpHost, "old-relay"),
         (SiteConfigKey::SmtpPort, "587"),
@@ -298,68 +388,113 @@ async fn stale_password_keep_conflicts_and_rolls_back_every_field(#[case] backen
         (SiteConfigKey::SmtpSender, "old@example.com"),
         (SiteConfigKey::SmtpUsername, "old-user"),
     ] {
-        set_site_config(&state, key, value).await.unwrap();
+        set_site_config(
+            std::sync::Arc::clone(&env.site_config()),
+            env.write_scope(),
+            key,
+            value,
+        )
+        .await
+        .unwrap();
     }
-    let cookie = create_operator_and_session(&state).await.cookie();
+    let cookie = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
     let keep = web::smtp::UpdateSettings {
         request: update_request(true, true, Some("new-user"), None),
     };
 
-    let (status, body) = post_server_fn(&state, &keep, Some(&cookie)).await;
+    let (status, body) = post_server_fn(app.clone(), &keep, Some(&cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
     assert!(body.contains("SMTP authentication changed"), "{body}");
     assert_eq!(
-        raw(&state, SiteConfigKey::SmtpHost).await.as_deref(),
+        raw(env.site_config().as_ref(), SiteConfigKey::SmtpHost)
+            .await
+            .as_deref(),
         Some("old-relay")
     );
     assert_eq!(
-        raw(&state, SiteConfigKey::SmtpPort).await.as_deref(),
+        raw(env.site_config().as_ref(), SiteConfigKey::SmtpPort)
+            .await
+            .as_deref(),
         Some("587")
     );
     assert_eq!(
-        raw(&state, SiteConfigKey::SmtpTlsMode).await.as_deref(),
+        raw(env.site_config().as_ref(), SiteConfigKey::SmtpTlsMode)
+            .await
+            .as_deref(),
         Some("starttls")
     );
     assert_eq!(
-        raw(&state, SiteConfigKey::SmtpSender).await.as_deref(),
+        raw(env.site_config().as_ref(), SiteConfigKey::SmtpSender)
+            .await
+            .as_deref(),
         Some("old@example.com")
     );
     assert_eq!(
-        raw(&state, SiteConfigKey::SmtpUsername).await.as_deref(),
+        raw(env.site_config().as_ref(), SiteConfigKey::SmtpUsername)
+            .await
+            .as_deref(),
         Some("old-user")
     );
-    assert_eq!(raw(&state, SiteConfigKey::SmtpPassword).await, None);
+    assert_eq!(
+        raw(env.site_config().as_ref(), SiteConfigKey::SmtpPassword).await,
+        None
+    );
 }
 
 #[apply(backends)]
 #[tokio::test]
 async fn contradictory_secret_request_is_valueless_and_writes_nothing(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_operator_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
     let input = web::smtp::UpdateSettings {
         request: update_request(false, false, None, Some("must-not-leak")),
     };
 
-    let (status, body) = post_server_fn(&state, &input, Some(&cookie)).await;
+    let (status, body) = post_server_fn(app.clone(), &input, Some(&cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
     assert!(
         body.contains("cannot be supplied while SMTP is disabled"),
         "{body}"
     );
     assert!(!body.contains("must-not-leak"), "{body}");
-    assert_eq!(raw(&state, SiteConfigKey::SmtpHost).await, None);
-    assert_eq!(raw(&state, SiteConfigKey::SmtpPassword).await, None);
+    assert_eq!(
+        raw(env.site_config().as_ref(), SiteConfigKey::SmtpHost).await,
+        None
+    );
+    assert_eq!(
+        raw(env.site_config().as_ref(), SiteConfigKey::SmtpPassword).await,
+        None
+    );
 
     let input = web::smtp::UpdateSettings {
         request: update_request(true, false, None, Some("also-must-not-leak")),
     };
-    let (status, body) = post_server_fn(&state, &input, Some(&cookie)).await;
+    let (status, body) = post_server_fn(app.clone(), &input, Some(&cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
     assert!(
         body.contains("cannot be supplied while authentication is disabled"),
         "{body}"
     );
     assert!(!body.contains("also-must-not-leak"), "{body}");
-    assert_eq!(raw(&state, SiteConfigKey::SmtpHost).await, None);
-    assert_eq!(raw(&state, SiteConfigKey::SmtpPassword).await, None);
+    assert_eq!(
+        raw(env.site_config().as_ref(), SiteConfigKey::SmtpHost).await,
+        None
+    );
+    assert_eq!(
+        raw(env.site_config().as_ref(), SiteConfigKey::SmtpPassword).await,
+        None
+    );
 }

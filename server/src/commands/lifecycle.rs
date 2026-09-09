@@ -12,9 +12,11 @@ use host::{
     error,
     metrics::{SaturationObservableGuard, SaturationSnapshot},
     telemetry::TelemetryConfig,
+    theme_operations::ThemeOperationCoordinator,
 };
 use tokio::{net::TcpListener, sync::oneshot::Receiver, task::JoinHandle};
 
+use super::support;
 use crate::cli::StorageArgs;
 use crate::feed::worker::FeedWorker;
 use crate::maintenance::{self, DatabaseMaintenance};
@@ -25,12 +27,58 @@ use crate::scheduled_worker::ScheduledWorkerGuard;
 #[cfg(test)]
 use host::config_key::SiteConfigKey;
 use storage::{
-    AppState, DbConnectOptions, DbPoolObserver, InstanceId, MediaManager, SiteConfigStorage,
-    StorageRuntimeConfig, ThemeAssetManager,
+    AudienceStorage, DbConnectOptions, DbPoolObserver, EmailVerificationStorage, FeedCacheStorage,
+    FeedEventStorage, InstanceId, InviteStorage, MediaContentLocks, MediaManager, MediaStorage,
+    PasswordResetStorage, PostMediaOwnership, PostStorage, PublisherStorage, SessionStorage,
+    SiteConfigStorage, StorageRuntimeConfig, SubscriptionStorage, ThemeAssetManager, ThemeManager,
+    ThemeStorage, UserConfigStorage, UserStorage, WriteScope,
 };
 
-use super::support;
+/// Focused storage handles minted once by the serve composition root.
+///
+/// This root-only assembly is never injected into runtime subsystems; each
+/// consumer receives only the handles and services it directly needs.
+struct ServeStorage {
+    site_config: Arc<dyn SiteConfigStorage>,
+    users: Arc<dyn UserStorage>,
+    sessions: Arc<dyn SessionStorage>,
+    invites: Arc<dyn InviteStorage>,
+    email_verifications: Arc<dyn EmailVerificationStorage>,
+    password_resets: Arc<dyn PasswordResetStorage>,
+    posts: Arc<dyn PostStorage>,
+    subscriptions: Arc<dyn SubscriptionStorage>,
+    audiences: Arc<dyn AudienceStorage>,
+    media: Arc<dyn MediaStorage>,
+    user_config: Arc<dyn UserConfigStorage>,
+    feed_cache: Arc<dyn FeedCacheStorage>,
+    feed_events: Arc<dyn FeedEventStorage>,
+    publisher: Arc<dyn PublisherStorage>,
+    themes: Arc<dyn ThemeStorage>,
+    write_scope: WriteScope,
+}
 
+impl ServeStorage {
+    fn from_factory(factory: &storage::StorageFactory) -> Self {
+        Self {
+            site_config: factory.site_config(),
+            users: factory.users(),
+            sessions: factory.sessions(),
+            invites: factory.invites(),
+            email_verifications: factory.email_verifications(),
+            password_resets: factory.password_resets(),
+            posts: factory.posts(),
+            subscriptions: factory.subscriptions(),
+            audiences: factory.audiences(),
+            media: factory.media(),
+            user_config: factory.user_config(),
+            feed_cache: factory.feed_cache(),
+            feed_events: factory.feed_events(),
+            publisher: factory.publisher(),
+            themes: factory.themes(),
+            write_scope: factory.write_scope(),
+        }
+    }
+}
 const CAPTURE_FEED_INTERVAL: Duration = Duration::from_millis(250);
 const PRODUCTION_FEED_INTERVAL: Duration = Duration::from_secs(10);
 
@@ -329,7 +377,9 @@ impl PreparedSaturationMetrics {
 }
 
 async fn prepare_saturation_metrics(
-    db: Arc<AppState>,
+    site_config: Arc<dyn SiteConfigStorage>,
+    feed_events: Arc<dyn FeedEventStorage>,
+    media: Arc<dyn MediaStorage>,
     pool_observer: DbPoolObserver,
     media_root: PathBuf,
     telemetry: &TelemetryConfig,
@@ -337,8 +387,7 @@ async fn prepare_saturation_metrics(
     if !telemetry.otlp_endpoint_configured() {
         return Ok(None);
     }
-    let backup_config = db
-        .site_config
+    let backup_config = site_config
         .get_backup_config()
         .await
         .context("failed to load backup configuration for saturation metrics")?;
@@ -346,8 +395,8 @@ async fn prepare_saturation_metrics(
     let snapshot = Arc::new(RwLock::new(SaturationSnapshot::default()));
     let observables = host::metrics::register_saturation_observables(snapshot.clone());
     let sources = SaturationSources::real(
-        db.feed_events.clone(),
-        db.media.clone(),
+        feed_events,
+        media,
         media_root,
         backup_destination_root,
         pool_observer,
@@ -395,6 +444,325 @@ fn merge_worker_shutdown(
     }
 }
 
+fn combine_context_providers<A, P, M, T, O, U, S>(
+    accounts: A,
+    publication: P,
+    media_configuration: M,
+    themes: T,
+    ownership: O,
+    publisher: U,
+    services: S,
+) -> impl Fn() + Clone + Send + Sync + 'static
+where
+    A: Fn() + Clone + Send + Sync + 'static,
+    P: Fn() + Clone + Send + Sync + 'static,
+    M: Fn() + Clone + Send + Sync + 'static,
+    T: Fn() + Clone + Send + Sync + 'static,
+    O: Fn() + Clone + Send + Sync + 'static,
+    U: Fn() + Clone + Send + Sync + 'static,
+    S: Fn() + Clone + Send + Sync + 'static,
+{
+    move || {
+        accounts();
+        publication();
+        media_configuration();
+        themes();
+        ownership();
+        publisher();
+        services();
+    }
+}
+
+fn prepare_runtime_identity(
+    storage_path: &Path,
+    bind: SocketAddr,
+) -> anyhow::Result<(RuntimeGuard, u64)> {
+    // Establish our own start-time up front (before opening the DB): if `/proc` is
+    // unusable we cannot preserve live runtime-file detection, so refuse rather
+    // than serve with a silently-broken guard (#141).
+    let start_time = runtime_file::require_start_time_at(Path::new("/proc/self/stat"))?;
+    let runtime_path = runtime_file::canonical_runtime_path(storage_path);
+    let startup_lock = StartupLockGuard::acquire(storage_path)?;
+    match runtime_file::check_startup_mutex(&runtime_path)? {
+        StartupCheck::Refuse { pid } => anyhow::bail!(
+            "another jaunder instance is already running on data dir {} (pid {pid}); \
+             refusing to start",
+            storage_path.display()
+        ),
+        StartupCheck::Stale | StartupCheck::Proceed => {}
+    }
+    Ok((
+        startup_lock.reserve(SocketAddr::new(bind.ip(), 0), start_time)?,
+        start_time,
+    ))
+}
+
+fn publisher_service(
+    storage_path: PathBuf,
+    publisher: Arc<dyn PublisherStorage>,
+    write_scope: WriteScope,
+) -> Arc<PublisherService> {
+    Arc::new(PublisherService::new(storage_path, publisher, write_scope))
+}
+fn media_ownership(
+    instance_id: InstanceId,
+    site_config: Arc<dyn SiteConfigStorage>,
+) -> (
+    Arc<dyn storage::MediaReferenceOwnershipResolver>,
+    PostMediaOwnership,
+) {
+    let resolver = Arc::new(crate::media_ownership::LiveMediaReferenceOwnershipResolver::new());
+    let ownership = PostMediaOwnership::new(resolver.clone(), instance_id, site_config);
+    (resolver, ownership)
+}
+
+fn database_maintenance(
+    posts: Arc<dyn PostStorage>,
+    invites: Arc<dyn storage::InviteStorage>,
+    email_verifications: Arc<dyn storage::EmailVerificationStorage>,
+    password_resets: Arc<dyn storage::PasswordResetStorage>,
+    feed_events: Arc<dyn FeedEventStorage>,
+) -> DatabaseMaintenance {
+    DatabaseMaintenance::new(
+        posts,
+        invites,
+        email_verifications,
+        password_resets,
+        feed_events,
+    )
+}
+
+fn feed_worker(
+    posts: Arc<dyn PostStorage>,
+    feed_cache: Arc<dyn FeedCacheStorage>,
+    write_scope: WriteScope,
+    publisher: Arc<PublisherService>,
+    feed_events: Arc<dyn FeedEventStorage>,
+    websub: Arc<dyn crate::websub::WebSubClient>,
+) -> FeedWorker {
+    FeedWorker::new(
+        posts,
+        feed_cache,
+        Arc::new(write_scope),
+        publisher,
+        feed_events,
+        websub,
+    )
+}
+
+fn media_manager(
+    media: Arc<dyn MediaStorage>,
+    posts: Arc<dyn PostStorage>,
+    site_config: Arc<dyn SiteConfigStorage>,
+    write_scope: WriteScope,
+    content_locks: Arc<MediaContentLocks>,
+    instance_id: InstanceId,
+    ownership_resolver: Arc<dyn storage::MediaReferenceOwnershipResolver>,
+) -> Arc<MediaManager> {
+    Arc::new(MediaManager::new(
+        media,
+        posts,
+        site_config,
+        write_scope,
+        content_locks,
+        instance_id,
+        ownership_resolver,
+    ))
+}
+fn theme_asset_manager(
+    themes: Arc<dyn storage::ThemeStorage>,
+    write_scope: WriteScope,
+    storage_path: Arc<PathBuf>,
+) -> Arc<ThemeAssetManager> {
+    Arc::new(ThemeAssetManager::new(themes, write_scope, storage_path))
+}
+
+fn theme_manager(
+    themes: Arc<dyn storage::ThemeStorage>,
+    media: Arc<dyn MediaStorage>,
+    write_scope: WriteScope,
+    content_locks: Arc<MediaContentLocks>,
+) -> Arc<ThemeManager> {
+    Arc::new(ThemeManager::new(themes, media, write_scope, content_locks))
+}
+
+fn compose_server_router(
+    dependencies: &ServeStorage,
+    storage_path: PathBuf,
+    instance_id: &InstanceId,
+    mailer: Arc<dyn common::mailer::MailSender>,
+    prod: bool,
+) -> Result<Router, axum::http::header::InvalidHeaderValue> {
+    let storage_path = Arc::new(storage_path);
+    let locks = Arc::new(MediaContentLocks::new(Arc::clone(&storage_path)));
+    let (resolver, ownership) =
+        media_ownership(instance_id.clone(), Arc::clone(&dependencies.site_config));
+    let publisher = publisher_service(
+        (*storage_path).clone(),
+        Arc::clone(&dependencies.publisher),
+        dependencies.write_scope.clone(),
+    );
+    let manager = media_manager(
+        Arc::clone(&dependencies.media),
+        Arc::clone(&dependencies.posts),
+        Arc::clone(&dependencies.site_config),
+        dependencies.write_scope.clone(),
+        Arc::clone(&locks),
+        instance_id.clone(),
+        resolver,
+    );
+    let asset_manager = theme_asset_manager(
+        Arc::clone(&dependencies.themes),
+        dependencies.write_scope.clone(),
+        Arc::clone(&storage_path),
+    );
+    let manager_themes = theme_manager(
+        Arc::clone(&dependencies.themes),
+        Arc::clone(&dependencies.media),
+        dependencies.write_scope.clone(),
+        Arc::clone(&locks),
+    );
+    let contexts = combine_context_providers(
+        crate::context::account_context_provider(
+            Arc::clone(&dependencies.users),
+            Arc::clone(&dependencies.sessions),
+            Arc::clone(&dependencies.invites),
+            Arc::clone(&dependencies.email_verifications),
+            Arc::clone(&dependencies.password_resets),
+        ),
+        crate::context::publication_context_provider(
+            Arc::clone(&dependencies.posts),
+            dependencies.write_scope.clone(),
+            Arc::clone(&dependencies.subscriptions),
+            Arc::clone(&dependencies.audiences),
+            Arc::clone(&dependencies.feed_events),
+        ),
+        crate::context::media_configuration_context_provider(
+            Arc::clone(&dependencies.media),
+            Arc::clone(&dependencies.user_config),
+            Arc::clone(&dependencies.site_config),
+        ),
+        crate::context::theme_context_provider(Arc::clone(&dependencies.themes)),
+        crate::context::post_media_ownership_context_provider(ownership.clone()),
+        crate::context::publisher_context_provider(Arc::clone(&publisher)),
+        crate::context::service_context_provider(
+            mailer,
+            Arc::clone(&locks),
+            Arc::clone(&manager),
+            asset_manager,
+            Arc::new(ThemeOperationCoordinator::new()),
+            manager_themes,
+            prod,
+        ),
+    );
+    let public_projector = crate::projector::PublicProjector::new(
+        Arc::clone(&dependencies.posts),
+        Arc::clone(&dependencies.users),
+        Arc::clone(&dependencies.themes),
+        crate::projector::Shell(crate::site::shell_html()),
+    );
+    let app = crate::application_routes(
+        crate::client_telemetry_routes(
+            Arc::clone(&dependencies.sessions),
+            dependencies.write_scope.clone(),
+        ),
+        contexts,
+        public_projector,
+    );
+    let app = crate::context::with_media_extensions(app, ownership, manager, locks, storage_path);
+    let app = crate::context::with_post_account_extensions(
+        app,
+        Arc::clone(&dependencies.posts),
+        Arc::clone(&dependencies.audiences),
+        Arc::clone(&dependencies.users),
+        Arc::clone(&dependencies.user_config),
+    );
+    let app = crate::context::with_theme_media_extensions(
+        app,
+        Arc::clone(&dependencies.themes),
+        Arc::clone(&dependencies.site_config),
+        Arc::clone(&dependencies.media),
+        Arc::clone(&dependencies.feed_cache),
+    );
+    let app = crate::context::with_publisher_extensions(
+        app,
+        publisher,
+        Arc::clone(&dependencies.feed_events),
+        Arc::clone(&dependencies.sessions),
+        dependencies.write_scope.clone(),
+    );
+    crate::create_router(app, instance_id, prod)
+}
+
+async fn reconcile_theme_assets(
+    themes: Arc<dyn storage::ThemeStorage>,
+    write_scope: WriteScope,
+    storage_path: Arc<PathBuf>,
+) -> anyhow::Result<()> {
+    ThemeAssetManager::new(themes, write_scope, storage_path)
+        .reconcile_startup()
+        .await
+        .context("theme immutable-content reconciliation failed")
+        .map(|_| ())
+}
+
+fn prepare_background_worker_setup(
+    maintenance: DatabaseMaintenance,
+    backup_site_config: Arc<dyn SiteConfigStorage>,
+    database: DbConnectOptions,
+    runtime: StorageRuntimeConfig,
+    storage_path: PathBuf,
+    feed_worker: FeedWorker,
+    feed_interval: Duration,
+) -> BackgroundWorkerSetup {
+    BackgroundWorkerSetup {
+        maintenance,
+        backup_site_config,
+        database,
+        runtime,
+        storage_path,
+        feed_worker,
+        feed_interval,
+    }
+}
+
+fn prepare_background_worker_setup_from_dependencies(
+    dependencies: &ServeStorage,
+    storage: &StorageArgs,
+    runtime: StorageRuntimeConfig,
+    capture: Option<&ServeCapturePaths>,
+) -> BackgroundWorkerSetup {
+    let maintenance = database_maintenance(
+        Arc::clone(&dependencies.posts),
+        Arc::clone(&dependencies.invites),
+        Arc::clone(&dependencies.email_verifications),
+        Arc::clone(&dependencies.password_resets),
+        Arc::clone(&dependencies.feed_events),
+    );
+    let websub_capture = capture.map(|paths| paths.websub.clone());
+    let feed_interval = feed_worker_interval(websub_capture.is_some());
+    let feed_worker = feed_worker(
+        Arc::clone(&dependencies.posts),
+        Arc::clone(&dependencies.feed_cache),
+        dependencies.write_scope.clone(),
+        publisher_service(
+            storage.storage_path.clone(),
+            Arc::clone(&dependencies.publisher),
+            dependencies.write_scope.clone(),
+        ),
+        Arc::clone(&dependencies.feed_events),
+        crate::websub::default_client(websub_capture),
+    );
+    prepare_background_worker_setup(
+        maintenance,
+        Arc::clone(&dependencies.site_config),
+        storage.db.clone(),
+        runtime,
+        storage.storage_path.clone(),
+        feed_worker,
+        feed_interval,
+    )
+}
 /// Performs all of [`cmd_serve`]'s setup — open the database (auto-initializing
 /// in dev), start the backup and feed workers, build the router, and bind the
 /// listener — returning it ready to serve.
@@ -416,25 +784,7 @@ pub async fn prepare_server(
     telemetry: &TelemetryConfig,
     capture: Option<&ServeCapturePaths>,
 ) -> anyhow::Result<PreparedServer> {
-    // Establish our own start-time up front (before opening the DB): if `/proc` is
-    // unusable we cannot preserve live runtime-file detection, so refuse rather
-    // than serve with a silently-broken guard (#141).
-    let start_time = runtime_file::require_start_time_at(Path::new("/proc/self/stat"))?;
-    let runtime_path = runtime_file::canonical_runtime_path(&storage.storage_path);
-    // This is the startup mutex, keyed only by the storage directory.
-    let startup_lock = StartupLockGuard::acquire(&storage.storage_path)?;
-    // A live process predating the OS lock still owns the storage directory.
-    match runtime_file::check_startup_mutex(&runtime_path)? {
-        StartupCheck::Refuse { pid } => anyhow::bail!(
-            "another jaunder instance is already running on data dir {} (pid {pid}); \
-             refusing to start",
-            storage.storage_path.display()
-        ),
-        StartupCheck::Stale | StartupCheck::Proceed => {}
-    }
-    // Publish a mandatory identity with a not-ready port before cleanup. If this
-    // fails, do not risk deleting another process's uploads.
-    let runtime_guard = startup_lock.reserve(SocketAddr::new(bind.ip(), 0), start_time)?;
+    let (runtime_guard, start_time) = prepare_runtime_identity(&storage.storage_path, bind)?;
     // The exclusive OS lock and live reservation above prove no valid upload can
     // be active. Establish a clean transient area before any upload-capable
     // server state is prepared.
@@ -447,64 +797,39 @@ pub async fn prepare_server(
         instance_id,
         pool_observer,
     } = open_server_database(storage, &runtime, prod).await?;
-    let db = factory.app_state();
-    ThemeAssetManager::new(
-        db.themes.clone(),
-        db.write_scope.clone(),
+    let dependencies = ServeStorage::from_factory(&factory);
+    reconcile_theme_assets(
+        Arc::clone(&dependencies.themes),
+        dependencies.write_scope.clone(),
         Arc::new(storage.storage_path.clone()),
     )
-    .reconcile_startup()
-    .await
-    .context("theme immutable-content reconciliation failed")?;
-
-    let maintenance = DatabaseMaintenance::new(
-        db.posts.clone(),
-        db.invites.clone(),
-        db.email_verifications.clone(),
-        db.password_resets.clone(),
-        db.feed_events.clone(),
-    );
-    let backup_site_config = db.site_config.clone();
-    // The `WebSub` publisher is a service, not storage: it is constructed at the
-    // composition root and injected into the feed worker (ADR-0016). Capture mode
-    // also selects the shorter e2e cadence without changing the production policy.
-    let websub_capture = capture.map(|paths| paths.websub.clone());
-    let feed_interval = feed_worker_interval(websub_capture.is_some());
-    let feed_worker = FeedWorker::new(
-        db.posts.clone(),
-        db.feed_cache.clone(),
-        Arc::new(db.write_scope.clone()),
-        Arc::new(PublisherService::new(
-            storage.storage_path.clone(),
-            db.publisher.clone(),
-            db.write_scope.clone(),
-        )),
-        db.feed_events.clone(),
-        crate::websub::default_client(websub_capture),
-    );
+    .await?;
+    let worker_setup =
+        prepare_background_worker_setup_from_dependencies(&dependencies, storage, runtime, capture);
     let saturation_metrics = prepare_saturation_metrics(
-        db.clone(),
+        Arc::clone(&dependencies.site_config),
+        Arc::clone(&dependencies.feed_events),
+        Arc::clone(&dependencies.media),
         pool_observer,
         storage.storage_path.join("media"),
         telemetry,
     )
     .await?;
-    let mailer =
-        crate::mailer::build_mailer(db.site_config(), capture.map(|paths| paths.mail.clone()))
-            .await?;
-    let router = crate::create_router(db, instance_id, mailer, prod, storage.storage_path.clone())?;
-    let listener = tokio::net::TcpListener::bind(bind).await?;
-
-    let workers = BackgroundWorkers::start(BackgroundWorkerSetup {
-        maintenance,
-        backup_site_config,
-        database: storage.db.clone(),
-        runtime,
-        storage_path: storage.storage_path.clone(),
-        feed_worker,
-        feed_interval,
-    })
+    let mailer = crate::mailer::build_mailer(
+        dependencies.site_config.as_ref(),
+        capture.map(|paths| paths.mail.clone()),
+    )
     .await?;
+    let router = compose_server_router(
+        &dependencies,
+        storage.storage_path.clone(),
+        &instance_id,
+        mailer,
+        prod,
+    )?;
+
+    let listener = tokio::net::TcpListener::bind(bind).await?;
+    let workers = BackgroundWorkers::start(worker_setup).await?;
     let saturation_metrics = saturation_metrics.map(SaturationMetricsSetup::start);
 
     // `local_addr` cannot fail on a just-bound listener; fall back to the
@@ -770,32 +1095,40 @@ mod tests {
         backup_site_config: Arc<dyn SiteConfigStorage>,
         feed_interval: Duration,
     ) -> BackgroundWorkerSetup {
-        let state = storage::open_existing_database(&storage.db, &StorageRuntimeConfig::default())
-            .await
-            .expect("open test database")
-            .app_state();
+        let factory =
+            storage::open_existing_database(&storage.db, &StorageRuntimeConfig::default())
+                .await
+                .expect("open test database");
+        let posts = factory.posts();
+        let invites = factory.invites();
+        let email_verifications = factory.email_verifications();
+        let password_resets = factory.password_resets();
+        let feed_events = factory.feed_events();
+        let feed_cache = factory.feed_cache();
+        let publisher = factory.publisher();
+        let write_scope = factory.write_scope();
         BackgroundWorkerSetup {
             maintenance: DatabaseMaintenance::new(
-                state.posts.clone(),
-                state.invites.clone(),
-                state.email_verifications.clone(),
-                state.password_resets.clone(),
-                state.feed_events.clone(),
+                Arc::clone(&posts),
+                invites,
+                email_verifications,
+                password_resets,
+                Arc::clone(&feed_events),
             ),
             backup_site_config,
             database: storage.db.clone(),
             runtime: StorageRuntimeConfig::default(),
             storage_path: storage.storage_path.clone(),
             feed_worker: FeedWorker::new(
-                state.posts.clone(),
-                state.feed_cache.clone(),
-                Arc::new(state.write_scope.clone()),
+                posts,
+                feed_cache,
+                Arc::new(write_scope.clone()),
                 Arc::new(PublisherService::new(
                     storage.storage_path.clone(),
-                    state.publisher.clone(),
-                    state.write_scope.clone(),
+                    publisher,
+                    write_scope,
                 )),
-                state.feed_events.clone(),
+                feed_events,
                 crate::websub::default_client(None),
             ),
             feed_interval,
@@ -1106,19 +1439,19 @@ mod tests {
     async fn background_workers_roll_back_backup_and_maintenance_when_feed_start_fails() {
         let temp = TempDir::new().expect("temp dir");
         let storage = sqlite_storage_args(&temp);
-        let state = storage::open_database(&storage.db, &StorageRuntimeConfig::default())
+        let factory = storage::open_database(&storage.db, &StorageRuntimeConfig::default())
             .await
-            .expect("open db")
-            .app_state();
+            .expect("open db");
+        let site_config = factory.site_config();
+        let write_scope = factory.write_scope();
         let destination = temp.path().join("backups");
         let destination_for_config = destination.clone();
-        let site_config = Arc::clone(&state.site_config);
+        let config_for_update = Arc::clone(&site_config);
         confirmed(
-            state
-                .write_scope
+            write_scope
                 .run(move |transaction| {
                     Box::pin(async move {
-                        site_config
+                        config_for_update
                             .set(
                                 transaction,
                                 SiteConfigKey::BackupDestinationPath,
@@ -1132,7 +1465,7 @@ mod tests {
         );
 
         let error = BackgroundWorkers::start(
-            background_worker_setup(&storage, state.site_config.clone(), Duration::ZERO).await,
+            background_worker_setup(&storage, site_config, Duration::ZERO).await,
         )
         .await
         .err()
@@ -1145,19 +1478,19 @@ mod tests {
     async fn background_workers_shutdown_all_configured_workers() {
         let temp = TempDir::new().expect("temp dir");
         let storage = sqlite_storage_args(&temp);
-        let state = storage::open_database(&storage.db, &StorageRuntimeConfig::default())
+        let factory = storage::open_database(&storage.db, &StorageRuntimeConfig::default())
             .await
-            .expect("open db")
-            .app_state();
+            .expect("open db");
+        let site_config = factory.site_config();
+        let write_scope = factory.write_scope();
         let destination = temp.path().join("backups");
         let destination_for_config = destination.clone();
-        let site_config = Arc::clone(&state.site_config);
+        let config_for_update = Arc::clone(&site_config);
         confirmed(
-            state
-                .write_scope
+            write_scope
                 .run(move |transaction| {
                     Box::pin(async move {
-                        site_config
+                        config_for_update
                             .set(
                                 transaction,
                                 SiteConfigKey::BackupDestinationPath,

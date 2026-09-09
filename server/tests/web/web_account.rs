@@ -15,11 +15,10 @@ use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{
-    create_operator_and_session, create_session_for, create_user_and_session, post_form,
-    post_server_fn, post_server_fn_request_fixture_with_mailer, post_server_fn_with_mailer,
-    session_cookie,
+    create_operator_and_session, create_session_for, create_user_and_session, make_app, post_form,
+    post_server_fn, post_server_fn_request_fixture, session_cookie,
 };
-use storage::test_support::{Backend, SeedUser, TestEnv, backends};
+use storage::test_support::{Backend, SeedUser, backends};
 
 #[derive(serde::Serialize)]
 struct CreateInviteDecodeFixture<'a> {
@@ -33,13 +32,19 @@ struct CreateInviteDecodeFixture<'a> {
 #[apply(backends)]
 #[tokio::test]
 async fn get_profile_returns_display_name_and_bio(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let users = Arc::clone(&state.users);
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let users = Arc::clone(&env.users());
     let display_name = parse_display_name("Alice Smith");
     let bio = parse_bio("Hello world");
-    let outcome = state
-        .write_scope
+    let outcome = env
+        .write_scope()
         .run(|transaction| {
             Box::pin(async move {
                 users
@@ -60,7 +65,7 @@ async fn get_profile_returns_display_name_and_bio(#[case] backend: Backend) {
     let cookie = session.cookie();
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::profile::Get as ServerFn>::PATH,
         "",
         Some(&cookie),
@@ -75,14 +80,20 @@ async fn get_profile_returns_display_name_and_bio(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn get_profile_with_email_returns_email(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
     // Create user with email and session
-    let session = create_user_and_session(&state).await;
-    let users = Arc::clone(&state.users);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let users = Arc::clone(&env.users());
     let email = parse_email("user@example.com");
-    let outcome = state
-        .write_scope
+    let outcome = env
+        .write_scope()
         .run(|transaction| {
             Box::pin(async move {
                 users
@@ -102,7 +113,7 @@ async fn get_profile_with_email_returns_email(#[case] backend: Backend) {
     let cookie_header = session.cookie();
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::profile::Get as ServerFn>::PATH,
         "",
         Some(&cookie_header),
@@ -116,11 +127,18 @@ async fn get_profile_with_email_returns_email(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn update_profile_persists_changes(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, _) = post_form(
-        &state,
+        app.clone(),
         <web::profile::Update as ServerFn>::PATH,
         "display_name=Robert&bio=My+bio",
         Some(&cookie),
@@ -129,7 +147,7 @@ async fn update_profile_persists_changes(#[case] backend: Backend) {
     assert_eq!(status, StatusCode::OK);
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::profile::Get as ServerFn>::PATH,
         "",
         Some(&cookie),
@@ -149,15 +167,22 @@ async fn update_profile_persists_changes(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn list_sessions_returns_only_authenticated_users_sessions(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
-    let user1_id = SeedUser::new().seed(&state).await.user_id;
-    let user2_id = SeedUser::new().seed(&state).await.user_id;
+    let user1_id = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await
+        .user_id;
+    let user2_id = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await
+        .user_id;
 
-    let sessions = Arc::clone(&state.sessions);
+    let sessions = Arc::clone(&env.sessions());
     let user1_label = parse_session_label("carol-session");
-    let outcome = state
-        .write_scope
+    let outcome = env
+        .write_scope()
         .run(|transaction| {
             Box::pin(async move {
                 sessions
@@ -169,10 +194,10 @@ async fn list_sessions_returns_only_authenticated_users_sessions(#[case] backend
         .unwrap();
     let token1 = storage::test_support::confirmed_for(outcome, "session fixture setup");
     // Create a session for user2 — should NOT appear in user1's list.
-    let sessions = Arc::clone(&state.sessions);
+    let sessions = Arc::clone(&env.sessions());
     let user2_label = parse_session_label("dave-session");
-    let outcome = state
-        .write_scope
+    let outcome = env
+        .write_scope()
         .run(|transaction| {
             Box::pin(async move {
                 sessions
@@ -186,7 +211,7 @@ async fn list_sessions_returns_only_authenticated_users_sessions(#[case] backend
 
     let cookie = session_cookie(&token1);
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::sessions::List as ServerFn>::PATH,
         "",
         Some(&cookie),
@@ -208,17 +233,30 @@ async fn list_sessions_returns_only_authenticated_users_sessions(#[case] backend
 #[apply(backends)]
 #[tokio::test]
 async fn revoke_session_removes_session_and_reauth_fails(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
 
     // Create a second session: use `session` to authenticate, revoke token_b's hash.
-    let token_b = create_session_for(&state, session.user_id).await.token;
+    let token_b = create_session_for(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+        session.user_id,
+    )
+    .await
+    .token;
 
     // Authenticate token_b to get its hash from the session record.
     let token_b_for_authentication = token_b.clone();
-    let sessions = Arc::clone(&state.sessions);
-    let outcome = state
-        .write_scope
+    let sessions = Arc::clone(&env.sessions());
+    let outcome = env
+        .write_scope()
         .run(move |transaction| {
             Box::pin(async move {
                 sessions
@@ -246,7 +284,7 @@ async fn revoke_session_removes_session_and_reauth_fails(#[case] backend: Backen
             .collect::<String>()
     );
     let (status, _) = post_form(
-        &state,
+        app.clone(),
         <web::sessions::Revoke as ServerFn>::PATH,
         body,
         Some(&cookie_a),
@@ -255,9 +293,9 @@ async fn revoke_session_removes_session_and_reauth_fails(#[case] backend: Backen
     assert_eq!(status, StatusCode::OK);
 
     // Re-authenticate with token_b should fail (session revoked).
-    let sessions = Arc::clone(&state.sessions);
-    let result = state
-        .write_scope
+    let sessions = Arc::clone(&env.sessions());
+    let result = env
+        .write_scope()
         .run(|transaction| {
             Box::pin(async move { sessions.authenticate(transaction, &token_b).await })
         })
@@ -271,16 +309,21 @@ async fn revoke_session_removes_session_and_reauth_fails(#[case] backend: Backen
 #[apply(backends)]
 #[tokio::test]
 async fn create_invite_nested_request_maps_fields(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend
+    let env = backend
         .setup()
         .registration(RegistrationPolicy::OperatorInvites)
         .await;
-    let cookie = create_operator_and_session(&state).await.cookie();
     let mailer = Arc::new(CapturingMailSender::new());
-
-    let (status, body) = post_server_fn_with_mailer(
-        &state,
-        &mailer,
+    let app = make_app!(&env, &env.base; override_mailer = mailer.clone());
+    let cookie = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
+    let (status, body) = post_server_fn(
+        app.clone(),
         &web::invites::Create {
             request: web::invites::CreateInviteRequest {
                 expires_in_hours: Some(parse_invite_ttl_hours("37")),
@@ -308,7 +351,7 @@ async fn create_invite_nested_request_maps_fields(#[case] backend: Backend) {
         "email should preserve the requested TTL, got: {}",
         sent[0].body_text
     );
-    let invites = state.invites.list_invites().await.unwrap();
+    let invites = env.invites().list_invites().await.unwrap();
     assert_eq!(invites.len(), 1, "expected one stored invite");
     let stored_ttl = invites[0].expires_at.value() - invites[0].created_at.value();
     let expected_expiry = invites[0]
@@ -329,7 +372,7 @@ async fn create_invite_nested_request_maps_fields(#[case] backend: Backend) {
 
     // The invite is tracked — as metadata only, never the raw code.
     let (status, list_body) = post_form(
-        &state,
+        app.clone(),
         <web::invites::List as ServerFn>::PATH,
         "",
         Some(&cookie),
@@ -350,10 +393,11 @@ async fn create_invite_nested_request_maps_fields(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_invite_unauthorized_returns_error(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
     let (status, _) = post_server_fn(
-        &state,
+        app.clone(),
         &web::invites::Create {
             request: web::invites::CreateInviteRequest {
                 expires_in_hours: None,
@@ -380,10 +424,23 @@ async fn invitation_policy_role_matrix_enforces_authority_without_side_effects(
         (RegistrationPolicy::MemberInvites, true, true),
         (RegistrationPolicy::Open, false, false),
     ] {
-        let TestEnv { state, base: _base } = backend.setup().registration(policy).await;
-        let member_cookie = create_user_and_session(&state).await.cookie();
-        let operator_cookie = create_operator_and_session(&state).await.cookie();
+        let env = backend.setup().registration(policy).await;
         let mailer = Arc::new(CapturingMailSender::new());
+        let app = make_app!(&env, &env.base; override_mailer = mailer.clone());
+        let member_cookie = create_user_and_session(
+            std::sync::Arc::clone(&env.users()),
+            std::sync::Arc::clone(&env.sessions()),
+            env.write_scope(),
+        )
+        .await
+        .cookie();
+        let operator_cookie = create_operator_and_session(
+            std::sync::Arc::clone(&env.users()),
+            std::sync::Arc::clone(&env.sessions()),
+            env.write_scope(),
+        )
+        .await
+        .cookie();
         let request = || web::invites::Create {
             request: web::invites::CreateInviteRequest {
                 expires_in_hours: None,
@@ -391,8 +448,7 @@ async fn invitation_policy_role_matrix_enforces_authority_without_side_effects(
             },
         };
 
-        let (anonymous_status, _) =
-            post_server_fn_with_mailer(&state, &mailer, &request(), None).await;
+        let (anonymous_status, _) = post_server_fn(app.clone(), &request(), None).await;
         assert_ne!(
             anonymous_status,
             StatusCode::OK,
@@ -400,7 +456,7 @@ async fn invitation_policy_role_matrix_enforces_authority_without_side_effects(
         );
 
         let (member_status, _) =
-            post_server_fn_with_mailer(&state, &mailer, &request(), Some(&member_cookie)).await;
+            post_server_fn(app.clone(), &request(), Some(&member_cookie)).await;
         assert_eq!(
             member_status == StatusCode::OK,
             member_may_create,
@@ -408,7 +464,7 @@ async fn invitation_policy_role_matrix_enforces_authority_without_side_effects(
         );
 
         let (operator_status, _) =
-            post_server_fn_with_mailer(&state, &mailer, &request(), Some(&operator_cookie)).await;
+            post_server_fn(app.clone(), &request(), Some(&operator_cookie)).await;
         assert_eq!(
             operator_status == StatusCode::OK,
             operator_may_create,
@@ -417,8 +473,7 @@ async fn invitation_policy_role_matrix_enforces_authority_without_side_effects(
 
         let expected_invites = usize::from(member_may_create) + usize::from(operator_may_create);
         assert_eq!(
-            state
-                .invites
+            env.invites()
                 .list_invites()
                 .await
                 .expect("list stored invites")
@@ -431,8 +486,13 @@ async fn invitation_policy_role_matrix_enforces_authority_without_side_effects(
             "{policy:?} unauthorized issuance must not send mail"
         );
 
-        let (anonymous_list_status, _) =
-            post_form(&state, <web::invites::List as ServerFn>::PATH, "", None).await;
+        let (anonymous_list_status, _) = post_form(
+            app.clone(),
+            <web::invites::List as ServerFn>::PATH,
+            "",
+            None,
+        )
+        .await;
         assert_ne!(
             anonymous_list_status,
             StatusCode::OK,
@@ -440,7 +500,7 @@ async fn invitation_policy_role_matrix_enforces_authority_without_side_effects(
         );
 
         let (member_list_status, _) = post_form(
-            &state,
+            app.clone(),
             <web::invites::List as ServerFn>::PATH,
             "",
             Some(&member_cookie),
@@ -453,7 +513,7 @@ async fn invitation_policy_role_matrix_enforces_authority_without_side_effects(
         );
 
         let (operator_list_status, operator_list_body) = post_form(
-            &state,
+            app.clone(),
             <web::invites::List as ServerFn>::PATH,
             "",
             Some(&operator_cookie),
@@ -475,17 +535,22 @@ async fn invitation_policy_role_matrix_enforces_authority_without_side_effects(
 #[apply(backends)]
 #[tokio::test]
 async fn create_invite_without_base_url_errors_and_sends_nothing(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend
+    let env = backend
         .setup()
         .registration(RegistrationPolicy::OperatorInvites)
         .base_url(None)
         .await;
-    let cookie = create_operator_and_session(&state).await.cookie();
     let mailer = Arc::new(CapturingMailSender::new());
-
-    let (status, _) = post_server_fn_with_mailer(
-        &state,
-        &mailer,
+    let app = make_app!(&env, &env.base; override_mailer = mailer.clone());
+    let cookie = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
+    let (status, _) = post_server_fn(
+        app.clone(),
         &web::invites::Create {
             request: web::invites::CreateInviteRequest {
                 expires_in_hours: Some(parse_invite_ttl_hours("24")),
@@ -502,7 +567,7 @@ async fn create_invite_without_base_url_errors_and_sends_nothing(#[case] backend
         "no email must be sent when the base URL is unset"
     );
     assert!(
-        state.invites.list_invites().await.unwrap().is_empty(),
+        env.invites().list_invites().await.unwrap().is_empty(),
         "no invite must be created when the base URL is unset"
     );
 }
@@ -511,13 +576,18 @@ async fn create_invite_without_base_url_errors_and_sends_nothing(#[case] backend
 #[apply(backends)]
 #[tokio::test]
 async fn create_invite_invalid_recipient_returns_error(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_operator_and_session(&state).await.cookie();
+    let env = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
-
-    let (status, _) = post_server_fn_request_fixture_with_mailer::<web::invites::Create, _, _>(
-        &state,
-        &mailer,
+    let app = make_app!(&env, &env.base; override_mailer = mailer.clone());
+    let cookie = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
+    let (status, _) = post_server_fn_request_fixture::<web::invites::Create, _>(
+        app.clone(),
         &CreateInviteDecodeFixture {
             expires_in_hours: "24",
             recipient_email: "not-an-email",
@@ -532,7 +602,7 @@ async fn create_invite_invalid_recipient_returns_error(#[case] backend: Backend)
         "no email must be sent for a malformed recipient"
     );
     assert!(
-        state.invites.list_invites().await.unwrap().is_empty(),
+        env.invites().list_invites().await.unwrap().is_empty(),
         "no invite must be created for a malformed recipient"
     );
 }
@@ -541,16 +611,23 @@ async fn create_invite_invalid_recipient_returns_error(#[case] backend: Backend)
 #[apply(backends)]
 #[tokio::test]
 async fn create_invite_send_failure_returns_error(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend
+    let env = backend
         .setup()
         .registration(RegistrationPolicy::OperatorInvites)
         .await;
-    let cookie = create_operator_and_session(&state).await.cookie();
+    let app = make_app!(&env, &env.base);
+    let cookie = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     // `post_server_fn` uses the noop mailer, whose `send_email` fails with
     // `NotConfigured`.
     let (status, _) = post_server_fn(
-        &state,
+        app.clone(),
         &web::invites::Create {
             request: web::invites::CreateInviteRequest {
                 expires_in_hours: Some(parse_invite_ttl_hours("24")),
@@ -568,13 +645,18 @@ async fn create_invite_send_failure_returns_error(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_invite_large_hours_returns_error(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_operator_and_session(&state).await.cookie();
+    let env = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
-
-    let (status, _) = post_server_fn_request_fixture_with_mailer::<web::invites::Create, _, _>(
-        &state,
-        &mailer,
+    let app = make_app!(&env, &env.base; override_mailer = mailer.clone());
+    let cookie = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
+    let (status, _) = post_server_fn_request_fixture::<web::invites::Create, _>(
+        app.clone(),
         &CreateInviteDecodeFixture {
             expires_in_hours: "18446744073709551615", // u64::MAX
             recipient_email: "invitee@example.com",
@@ -592,7 +674,7 @@ async fn create_invite_large_hours_returns_error(#[case] backend: Backend) {
         "an out-of-range expiry must error before emailing"
     );
     assert!(
-        state.invites.list_invites().await.unwrap().is_empty(),
+        env.invites().list_invites().await.unwrap().is_empty(),
         "an out-of-range expiry must not create an invite"
     );
 }
@@ -602,16 +684,21 @@ async fn create_invite_large_hours_returns_error(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_invite_omits_hours_uses_default(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend
+    let env = backend
         .setup()
         .registration(RegistrationPolicy::OperatorInvites)
         .await;
-    let cookie = create_operator_and_session(&state).await.cookie();
     let mailer = Arc::new(CapturingMailSender::new());
-
-    let (status, body) = post_server_fn_with_mailer(
-        &state,
-        &mailer,
+    let app = make_app!(&env, &env.base; override_mailer = mailer.clone());
+    let cookie = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
+    let (status, body) = post_server_fn(
+        app.clone(),
         &web::invites::Create {
             request: web::invites::CreateInviteRequest {
                 expires_in_hours: None,
@@ -638,16 +725,21 @@ async fn create_invite_omits_hours_uses_default(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_invite_empty_hours_uses_default(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend
+    let env = backend
         .setup()
         .registration(RegistrationPolicy::OperatorInvites)
         .await;
-    let cookie = create_operator_and_session(&state).await.cookie();
     let mailer = Arc::new(CapturingMailSender::new());
-
-    let (status, body) = post_server_fn_request_fixture_with_mailer::<web::invites::Create, _, _>(
-        &state,
-        &mailer,
+    let app = make_app!(&env, &env.base; override_mailer = mailer.clone());
+    let cookie = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
+    let (status, body) = post_server_fn_request_fixture::<web::invites::Create, _>(
+        app.clone(),
         &CreateInviteDecodeFixture {
             expires_in_hours: "", // empty-present
             recipient_email: "invitee@example.com",
@@ -670,11 +762,18 @@ async fn create_invite_empty_hours_uses_default(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn revoke_session_unknown_hash_returns_error(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (_status, _) = post_form(
-        &state,
+        app.clone(),
         <web::sessions::Revoke as ServerFn>::PATH,
         "token_hash=nonexistenthash",
         Some(&cookie),
@@ -686,13 +785,25 @@ async fn revoke_session_unknown_hash_returns_error(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn revoke_session_other_user_hash_returns_error(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie1 = create_user_and_session(&state).await.cookie();
-    let user2 = create_user_and_session(&state).await;
-    let sessions = Arc::clone(&state.sessions);
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie1 = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
+    let user2 = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let sessions = Arc::clone(&env.sessions());
     let token = user2.token.clone();
-    let outcome = state
-        .write_scope
+    let outcome = env
+        .write_scope()
         .run(|transaction| {
             Box::pin(async move { sessions.authenticate(transaction, &token).await })
         })
@@ -701,7 +812,7 @@ async fn revoke_session_other_user_hash_returns_error(#[case] backend: Backend) 
     let record2 = storage::test_support::confirmed_for(outcome, "session authentication");
 
     let (status, _) = post_form(
-        &state,
+        app.clone(),
         <web::sessions::Revoke as ServerFn>::PATH,
         format!("token_hash={}", record2.token_hash),
         Some(&cookie1),
@@ -715,13 +826,20 @@ async fn revoke_session_other_user_hash_returns_error(#[case] backend: Backend) 
 #[apply(backends)]
 #[tokio::test]
 async fn list_invites_returns_error_when_policy_is_not_invitation_based(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
     // The default Open policy does not permit invitation listing.
 
-    let cookie = create_operator_and_session(&state).await.cookie();
+    let cookie = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, _) = post_form(
-        &state,
+        app.clone(),
         <web::invites::List as ServerFn>::PATH,
         "",
         Some(&cookie),
@@ -737,19 +855,21 @@ async fn list_invites_returns_error_when_policy_is_not_invitation_based(#[case] 
 #[apply(backends)]
 #[tokio::test]
 async fn get_profile_unauthorized_returns_error(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
-    let (status, _) = post_form(&state, <web::profile::Get as ServerFn>::PATH, "", None).await;
+    let (status, _) = post_form(app.clone(), <web::profile::Get as ServerFn>::PATH, "", None).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
 
 #[apply(backends)]
 #[tokio::test]
 async fn update_profile_unauthorized_returns_error(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
     let (status, _) = post_form(
-        &state,
+        app.clone(),
         <web::profile::Update as ServerFn>::PATH,
         "display_name=New&bio=Bio",
         None,
@@ -761,18 +881,19 @@ async fn update_profile_unauthorized_returns_error(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn update_profile_with_empty_fields_sets_to_none(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
     let user_id = SeedUser::new()
         .display_name("Initial")
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
         .await
         .user_id;
-    let users = Arc::clone(&state.users);
+    let users = Arc::clone(&env.users());
     let display_name = parse_display_name("Initial");
     let bio = parse_bio("Initial Bio");
-    let outcome = state
-        .write_scope
+    let outcome = env
+        .write_scope()
         .run(|transaction| {
             Box::pin(async move {
                 users
@@ -791,14 +912,21 @@ async fn update_profile_with_empty_fields_sets_to_none(#[case] backend: Backend)
         .unwrap();
     assert!(matches!(outcome, MutationOutcome::Confirmed(())));
 
-    let cookie_header = create_session_for(&state, user_id).await.cookie();
+    let cookie_header = create_session_for(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+        user_id,
+    )
+    .await
+    .cookie();
 
     // Clearing either field is the dispatch-`None` path: the typed
     // `Option<DisplayName>`/`Option<Bio>` wire args are *omitted* (serde decodes a
     // missing Option field to `None`). An empty `display_name=`/`bio=` would instead
     // fail to parse (ADR-0065), so the clear body omits both fields entirely.
     let (status, _) = post_form(
-        &state,
+        app.clone(),
         <web::profile::Update as ServerFn>::PATH,
         "",
         Some(&cookie_header),
@@ -806,7 +934,7 @@ async fn update_profile_with_empty_fields_sets_to_none(#[case] backend: Backend)
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    let user = state.users.get_user(user_id).await.unwrap().unwrap();
+    let user = env.users().get_user(user_id).await.unwrap().unwrap();
     assert!(user.display_name.is_none());
     assert!(user.bio.is_none());
 }
@@ -819,14 +947,20 @@ async fn update_profile_rejects_invalid_display_name(#[case] backend: Backend) {
     // (ADR-0065). The client's disable-until-valid gate keeps a real browser
     // from reaching this; a raw POST is the malformed-client path. Mirrors
     // web_auth::register_invalid_username_returns_error.
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let user_id = session.user_id;
     let cookie_header = session.cookie();
 
     let overlong = "a".repeat(common::display_name::MAX_DISPLAY_NAME_CHARS + 1);
     let (status, _) = post_form(
-        &state,
+        app.clone(),
         <web::profile::Update as ServerFn>::PATH,
         &format!("display_name={overlong}&bio=x"),
         Some(&cookie_header),
@@ -835,7 +969,7 @@ async fn update_profile_rejects_invalid_display_name(#[case] backend: Backend) {
 
     assert_ne!(status, StatusCode::OK, "over-long display_name should fail");
     // Store side-effect did not happen.
-    let user = state.users.get_user(user_id).await.unwrap().unwrap();
+    let user = env.users().get_user(user_id).await.unwrap().unwrap();
     assert!(
         user.display_name.is_none(),
         "invalid display_name must not persist"

@@ -107,35 +107,38 @@ mod tests {
     use rstest_reuse::*;
     use storage::{
         FeedEventDeadLetter, FeedEventDeadLetterPage, FeedEventRedriveError,
-        test_support::{Backend, TestEnv, backends, confirmed},
+        test_support::{Backend, backends, confirmed},
     };
 
     use super::super::test_support::assert_command_source;
     use super::*;
 
-    async fn terminal_event(env: &TestEnv, phase: FeedEventPhase, suffix: &str) -> FeedEventId {
+    async fn terminal_event(
+        feed_events: Arc<dyn storage::FeedEventStorage>,
+        write_scope: &storage::WriteScope,
+        phase: FeedEventPhase,
+        suffix: &str,
+    ) -> FeedEventId {
         let path = format!("/~operator-{suffix}/feed.rss")
             .parse()
             .expect("feed path");
-        let feed_events = Arc::clone(&env.state.feed_events);
+        let queued_feed_events = Arc::clone(&feed_events);
         let id = confirmed(
-            env.state
-                .write_scope
+            write_scope
                 .run(move |transaction| {
-                    Box::pin(async move { feed_events.enqueue(transaction, &path).await })
+                    Box::pin(async move { queued_feed_events.enqueue(transaction, &path).await })
                 })
                 .await
                 .expect("enqueue terminal fixture"),
         );
-        let feed_events = Arc::clone(&env.state.feed_events);
+        let terminal_feed_events = Arc::clone(&feed_events);
         confirmed(
-            env.state
-                .write_scope
+            write_scope
                 .run(move |transaction| {
                     Box::pin(async move {
                         match phase {
                             FeedEventPhase::Regeneration => {
-                                feed_events
+                                terminal_feed_events
                                     .dead_letter_regeneration(
                                         transaction,
                                         &[id],
@@ -145,7 +148,7 @@ mod tests {
                                     .await
                             }
                             FeedEventPhase::Publication => {
-                                feed_events
+                                terminal_feed_events
                                     .dead_letter_publication(
                                         transaction,
                                         &[id],
@@ -191,12 +194,26 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let regeneration = terminal_event(&env, FeedEventPhase::Regeneration, "regeneration").await;
-        let publication = terminal_event(&env, FeedEventPhase::Publication, "publication").await;
+        let feed_events = env.feed_events();
+        let write_scope = env.write_scope();
+        let regeneration = terminal_event(
+            Arc::clone(&feed_events),
+            &write_scope,
+            FeedEventPhase::Regeneration,
+            "regeneration",
+        )
+        .await;
+        let publication = terminal_event(
+            Arc::clone(&feed_events),
+            &write_scope,
+            FeedEventPhase::Publication,
+            "publication",
+        )
+        .await;
 
         let error = redrive_selected(
-            Arc::clone(&env.state.feed_events),
-            &env.state.write_scope,
+            Arc::clone(&feed_events),
+            &write_scope,
             vec![regeneration, FeedEventId::from(-1)],
         )
         .await
@@ -208,8 +225,7 @@ mod tests {
 
         for phase in [FeedEventPhase::Regeneration, FeedEventPhase::Publication] {
             assert_eq!(
-                env.state
-                    .feed_events
+                feed_events
                     .dead_letters(phase, None, PageSize::default())
                     .await
                     .unwrap()
@@ -221,16 +237,15 @@ mod tests {
         }
 
         redrive_selected(
-            Arc::clone(&env.state.feed_events),
-            &env.state.write_scope,
+            Arc::clone(&feed_events),
+            &write_scope,
             vec![regeneration, publication],
         )
         .await
         .expect("the exact terminal selection redrives atomically");
         for phase in [FeedEventPhase::Regeneration, FeedEventPhase::Publication] {
             assert!(
-                env.state
-                    .feed_events
+                feed_events
                     .dead_letters(phase, None, PageSize::default())
                     .await
                     .unwrap()
@@ -239,13 +254,9 @@ mod tests {
                 "exact selection redrove {phase:?}",
             );
         }
-        let error = redrive_selected(
-            Arc::clone(&env.state.feed_events),
-            &env.state.write_scope,
-            vec![regeneration],
-        )
-        .await
-        .expect_err("an already-redriven id is stale");
+        let error = redrive_selected(Arc::clone(&feed_events), &write_scope, vec![regeneration])
+            .await
+            .expect_err("an already-redriven id is stale");
         assert_command_source::<FeedEventRedriveError>(
             &error,
             "write operation failed: one or more feed events are absent, expired, or not dead-lettered",

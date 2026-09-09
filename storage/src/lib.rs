@@ -11,7 +11,6 @@
 #![cfg_attr(any(test, feature = "test-utils"), expect(clippy::ref_option_ref))]
 
 pub mod account_mutations;
-mod app_state;
 mod audiences;
 mod backend;
 mod backup;
@@ -59,7 +58,6 @@ pub mod seed_theme_fixture;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 
-pub use app_state::*;
 pub use audiences::*;
 pub use backend::*;
 pub use backup::{

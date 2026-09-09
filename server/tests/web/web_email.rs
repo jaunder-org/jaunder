@@ -8,9 +8,9 @@ use server_fn::ServerFn;
 use storage::EmailVerified;
 
 use crate::helpers::{
-    assert_no_email, assert_one_absolute_link_email, create_user_and_session, post_form_with_mailer,
+    assert_no_email, assert_one_absolute_link_email, create_user_and_session, make_app, post_form,
 };
-use storage::test_support::{Backend, SeedUser, TestEnv, backends};
+use storage::test_support::{Backend, SeedUser, backends};
 
 use rstest::*;
 use rstest_reuse::*;
@@ -21,14 +21,19 @@ use rstest_reuse::*;
 async fn request_email_verification_creates_row_and_sends_email(#[case] backend: Backend) {
     // The verification email composes an absolute link, so the flow requires a
     // seeded `site.base_url` (canonicalized to `https://example.com/`).
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
+    let app = make_app!(&env, &env.base; override_mailer = mailer.clone());
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
-    let cookie = create_user_and_session(&state).await.cookie();
-
-    let (status, _body) = post_form_with_mailer(
-        &state,
-        &mailer,
+    let (status, _body) = post_form(
+        app.clone(),
         <web::email::RequestVerification as ServerFn>::PATH,
         "email=alice%40example.com",
         Some(&cookie),
@@ -44,14 +49,19 @@ async fn request_email_verification_creates_row_and_sends_email(#[case] backend:
 #[apply(backends)]
 #[tokio::test]
 async fn request_email_verification_without_base_url_returns_error(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().base_url(None).await;
+    let env = backend.setup().base_url(None).await;
     let mailer = Arc::new(CapturingMailSender::new());
+    let app = make_app!(&env, &env.base; override_mailer = mailer.clone());
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
-    let cookie = create_user_and_session(&state).await.cookie();
-
-    let (status, _body) = post_form_with_mailer(
-        &state,
-        &mailer,
+    let (status, _body) = post_form(
+        app.clone(),
         <web::email::RequestVerification as ServerFn>::PATH,
         "email=alice%40example.com",
         Some(&cookie),
@@ -66,17 +76,20 @@ async fn request_email_verification_without_base_url_returns_error(#[case] backe
 #[apply(backends)]
 #[tokio::test]
 async fn verify_email_with_valid_token_sets_email_verified(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
-
-    let user_id = SeedUser::new().seed(&state).await.user_id;
+    let app = make_app!(&env, &env.base; override_mailer = mailer.clone());
+    let user_id = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await
+        .user_id;
 
     let email = parse_email("bob@example.com");
     let fixture_email = email.clone();
     let expires_at: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
-    let email_verifications = Arc::clone(&state.email_verifications);
-    let outcome = state
-        .write_scope
+    let email_verifications = Arc::clone(&env.email_verifications());
+    let outcome = env
+        .write_scope()
         .run(move |transaction| {
             Box::pin(async move {
                 email_verifications
@@ -89,9 +102,8 @@ async fn verify_email_with_valid_token_sets_email_verified(#[case] backend: Back
     let raw_token =
         storage::test_support::confirmed_for(outcome, "email-verification fixture setup");
 
-    let (status, _body) = post_form_with_mailer(
-        &state,
-        &mailer,
+    let (status, _body) = post_form(
+        app.clone(),
         <web::email::Verify as ServerFn>::PATH,
         format!("token={raw_token}"),
         None,
@@ -100,7 +112,7 @@ async fn verify_email_with_valid_token_sets_email_verified(#[case] backend: Back
 
     assert_eq!(status, StatusCode::OK);
 
-    let user = state.users.get_user(user_id).await.unwrap().unwrap();
+    let user = env.users().get_user(user_id).await.unwrap().unwrap();
     assert_eq!(user.email, Some(email));
     assert_eq!(user.email_verified, EmailVerified::VERIFIED);
 }
@@ -109,16 +121,19 @@ async fn verify_email_with_valid_token_sets_email_verified(#[case] backend: Back
 #[apply(backends)]
 #[tokio::test]
 async fn verify_email_set_failure_rolls_back_token_consumption(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let env = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
-    let user_id = SeedUser::new().seed(&state).await.user_id;
+    let app = make_app!(&env, &env.base; override_mailer = mailer.clone());
+    let user_id = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await
+        .user_id;
     let email = parse_email("rollback@example.com");
     let email_for_token = email.clone();
     let expires_at: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
-    let verifications = Arc::clone(&state.email_verifications);
+    let verifications = Arc::clone(&env.email_verifications());
     let raw_token = storage::test_support::confirmed_for(
-        state
-            .write_scope
+        env.write_scope()
             .run(move |transaction| {
                 Box::pin(async move {
                     verifications
@@ -137,7 +152,8 @@ async fn verify_email_set_failure_rolls_back_token_consumption(#[case] backend: 
     );
     match backend {
         Backend::Sqlite => {
-            base.pool()
+            env.base
+                .pool()
                 .execute(
                     "CREATE TRIGGER fail_email_update BEFORE UPDATE OF email ON users \
                      BEGIN SELECT RAISE(FAIL, 'blocked'); END",
@@ -146,14 +162,16 @@ async fn verify_email_set_failure_rolls_back_token_consumption(#[case] backend: 
                 .unwrap();
         }
         Backend::Postgres => {
-            base.pool()
+            env.base
+                .pool()
                 .execute(
                     "CREATE FUNCTION fail_email_update() RETURNS trigger AS $$ \
                      BEGIN RAISE EXCEPTION 'blocked'; END; $$ LANGUAGE plpgsql",
                 )
                 .await
                 .unwrap();
-            base.pool()
+            env.base
+                .pool()
                 .execute(
                     "CREATE TRIGGER fail_email_update BEFORE UPDATE OF email ON users \
                      FOR EACH ROW EXECUTE FUNCTION fail_email_update()",
@@ -162,45 +180,46 @@ async fn verify_email_set_failure_rolls_back_token_consumption(#[case] backend: 
                 .unwrap();
         }
     }
-    let (status, _) = post_form_with_mailer(
-        &state,
-        &mailer,
+    let (status, _) = post_form(
+        app.clone(),
         <web::email::Verify as ServerFn>::PATH,
         format!("token={raw_token}"),
         None,
     )
     .await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-    let user = state.users.get_user(user_id).await.unwrap().unwrap();
+    let user = env.users().get_user(user_id).await.unwrap().unwrap();
     assert!(user.email.is_none());
 
     match backend {
-        Backend::Sqlite => base
+        Backend::Sqlite => env
+            .base
             .pool()
             .execute("DROP TRIGGER fail_email_update")
             .await
             .unwrap(),
         Backend::Postgres => {
-            base.pool()
+            env.base
+                .pool()
                 .execute("DROP TRIGGER fail_email_update ON users")
                 .await
                 .unwrap();
-            base.pool()
+            env.base
+                .pool()
                 .execute("DROP FUNCTION fail_email_update()")
                 .await
                 .unwrap();
         }
     }
-    let (status, _) = post_form_with_mailer(
-        &state,
-        &mailer,
+    let (status, _) = post_form(
+        app.clone(),
         <web::email::Verify as ServerFn>::PATH,
         format!("token={raw_token}"),
         None,
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let user = state.users.get_user(user_id).await.unwrap().unwrap();
+    let user = env.users().get_user(user_id).await.unwrap().unwrap();
     assert_eq!(user.email, Some(email));
     assert_eq!(user.email_verified, EmailVerified::VERIFIED);
 }
@@ -209,16 +228,19 @@ async fn verify_email_set_failure_rolls_back_token_consumption(#[case] backend: 
 #[apply(backends)]
 #[tokio::test]
 async fn verify_email_with_expired_token_returns_error(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
-
-    let user_id = SeedUser::new().seed(&state).await.user_id;
+    let app = make_app!(&env, &env.base; override_mailer = mailer.clone());
+    let user_id = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await
+        .user_id;
 
     let email = "carol@example.com".parse().unwrap();
     let expires_at: UtcInstant = "2000-01-02T03:04:05.123456Z".parse().unwrap();
-    let email_verifications = Arc::clone(&state.email_verifications);
-    let outcome = state
-        .write_scope
+    let email_verifications = Arc::clone(&env.email_verifications());
+    let outcome = env
+        .write_scope()
         .run(|transaction| {
             Box::pin(async move {
                 email_verifications
@@ -231,9 +253,8 @@ async fn verify_email_with_expired_token_returns_error(#[case] backend: Backend)
     let raw_token =
         storage::test_support::confirmed_for(outcome, "email-verification fixture setup");
 
-    let (status, _body) = post_form_with_mailer(
-        &state,
-        &mailer,
+    let (status, _body) = post_form(
+        app.clone(),
         <web::email::Verify as ServerFn>::PATH,
         format!("token={raw_token}"),
         None,
@@ -247,12 +268,11 @@ async fn verify_email_with_expired_token_returns_error(#[case] backend: Backend)
 #[apply(backends)]
 #[tokio::test]
 async fn verify_email_with_unknown_token_returns_error(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
-
-    let (status, _body) = post_form_with_mailer(
-        &state,
-        &mailer,
+    let app = make_app!(&env, &env.base; override_mailer = mailer.clone());
+    let (status, _body) = post_form(
+        app.clone(),
         <web::email::Verify as ServerFn>::PATH,
         "token=this_token_does_not_exist",
         None,
@@ -265,14 +285,13 @@ async fn verify_email_with_unknown_token_returns_error(#[case] backend: Backend)
 #[apply(backends)]
 #[tokio::test]
 async fn verify_email_with_malformed_token_returns_error(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
-
+    let app = make_app!(&env, &env.base; override_mailer = mailer.clone());
     // `bad!token` is not valid base64url shape, so `RawToken` rejects it — in-body today,
     // at wire-decode once `token` is typed. Either way a non-OK response.
-    let (status, _body) = post_form_with_mailer(
-        &state,
-        &mailer,
+    let (status, _body) = post_form(
+        app.clone(),
         <web::email::Verify as ServerFn>::PATH,
         "token=bad!token",
         None,
@@ -289,12 +308,11 @@ async fn verify_email_with_malformed_token_returns_error(#[case] backend: Backen
 #[apply(backends)]
 #[tokio::test]
 async fn request_email_verification_unauthorized_returns_error(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
-
-    let (status, _) = post_form_with_mailer(
-        &state,
-        &mailer,
+    let app = make_app!(&env, &env.base; override_mailer = mailer.clone());
+    let (status, _) = post_form(
+        app.clone(),
         <web::email::RequestVerification as ServerFn>::PATH,
         "email=alice@example.com",
         None,
@@ -308,14 +326,19 @@ async fn request_email_verification_unauthorized_returns_error(#[case] backend: 
 #[apply(backends)]
 #[tokio::test]
 async fn request_email_verification_invalid_email_returns_error(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
+    let app = make_app!(&env, &env.base; override_mailer = mailer.clone());
+    let cookie_header = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
-    let cookie_header = create_user_and_session(&state).await.cookie();
-
-    let (status, _) = post_form_with_mailer(
-        &state,
-        &mailer,
+    let (status, _) = post_form(
+        app.clone(),
         <web::email::RequestVerification as ServerFn>::PATH,
         "email=invalid",
         Some(&cookie_header),

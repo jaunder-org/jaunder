@@ -7,8 +7,8 @@ use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{Backend, SeedUser, backends};
 use storage::{
-    AppState, CreateUserError, EmailVerified, OperatorStatus, ProfileUpdate, UserAuthError,
-    WriteScopeError,
+    CreateUserError, EmailVerified, OperatorStatus, ProfileUpdate, UserAuthError, UserStorage,
+    WriteScope, WriteScopeError,
 };
 
 use crate::storage::fixtures::{password, username};
@@ -16,10 +16,10 @@ use crate::storage::fixtures::{password, username};
 #[tokio::test]
 async fn create_user_succeeds_and_get_by_username_returns_record(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
 
     let user_id = create_user(
-        state,
+        &env.write_scope(),
+        env.users(),
         username("alice"),
         password("password123"),
         Some(parse_display_name("Alice")),
@@ -27,8 +27,8 @@ async fn create_user_succeeds_and_get_by_username_returns_record(#[case] backend
     )
     .await;
 
-    let record = state
-        .users
+    let record = env
+        .users()
         .get_user_by_username(&username("alice"))
         .await
         .unwrap()
@@ -42,10 +42,10 @@ async fn create_user_succeeds_and_get_by_username_returns_record(#[case] backend
 #[tokio::test]
 async fn duplicate_username_returns_username_taken(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
 
     create_user(
-        state,
+        &env.write_scope(),
+        env.users(),
         username("alice"),
         password("password123"),
         None,
@@ -54,7 +54,8 @@ async fn duplicate_username_returns_username_taken(#[case] backend: Backend) {
     .await;
 
     let err = create_user_result(
-        state,
+        &env.write_scope(),
+        env.users(),
         username("alice"),
         password("other_password"),
         None,
@@ -74,18 +75,23 @@ async fn authenticate_correct_password_returns_record_and_sets_last_authenticate
     #[case] backend: Backend,
 ) {
     let env = backend.setup().await;
-    let state = &env.state;
 
     let user = SeedUser::new()
         .password("secret_password")
-        .seed(state)
+        .seed(env.users(), env.write_scope())
         .await;
 
-    let record = authenticate(state, user.username.clone(), password("secret_password")).await;
+    let record = authenticate(
+        &env.write_scope(),
+        env.users(),
+        user.username.clone(),
+        password("secret_password"),
+    )
+    .await;
     assert_eq!(record.username, user.username);
     assert!(record.last_authenticated_at.is_some());
 
-    let fetched = state.users.get_user(record.user_id).await.unwrap().unwrap();
+    let fetched = env.users().get_user(record.user_id).await.unwrap().unwrap();
     assert!(fetched.last_authenticated_at.is_some());
 }
 
@@ -93,16 +99,20 @@ async fn authenticate_correct_password_returns_record_and_sets_last_authenticate
 #[tokio::test]
 async fn authenticate_wrong_password_returns_invalid_credentials(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
 
     let user = SeedUser::new()
         .password("correct_password")
-        .seed(state)
+        .seed(env.users(), env.write_scope())
         .await;
 
-    let err = authenticate_result(state, user.username.clone(), password("wrong_password"))
-        .await
-        .unwrap_err();
+    let err = authenticate_result(
+        &env.write_scope(),
+        env.users(),
+        user.username.clone(),
+        password("wrong_password"),
+    )
+    .await
+    .unwrap_err();
     let WriteScopeError::Operation(err) = err else {
         unreachable!("expected authentication operation error, got {err:?}");
     };
@@ -113,11 +123,15 @@ async fn authenticate_wrong_password_returns_invalid_credentials(#[case] backend
 #[tokio::test]
 async fn authenticate_unknown_username_returns_invalid_credentials(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
 
-    let err = authenticate_result(state, username("nobody"), password("some_password"))
-        .await
-        .unwrap_err();
+    let err = authenticate_result(
+        &env.write_scope(),
+        env.users(),
+        username("nobody"),
+        password("some_password"),
+    )
+    .await
+    .unwrap_err();
     let WriteScopeError::Operation(err) = err else {
         unreachable!("expected authentication operation error, got {err:?}");
     };
@@ -128,23 +142,23 @@ async fn authenticate_unknown_username_returns_invalid_credentials(#[case] backe
 #[tokio::test]
 async fn update_profile_persists_changes(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
 
     let user_id = SeedUser::new()
         .display_name("Dave")
-        .seed(state)
+        .seed(env.users(), env.write_scope())
         .await
         .user_id;
 
     update_profile(
-        state,
+        &env.write_scope(),
+        env.users(),
         user_id,
         Some(parse_display_name("David")),
         Some(parse_bio("A bio")),
     )
     .await;
 
-    let record = state.users.get_user(user_id).await.unwrap().unwrap();
+    let record = env.users().get_user(user_id).await.unwrap().unwrap();
     assert_eq!(record.display_name.as_deref(), Some("David"));
     assert_eq!(record.bio.as_deref(), Some("A bio"));
 }
@@ -153,23 +167,31 @@ async fn update_profile_persists_changes(#[case] backend: Backend) {
 #[tokio::test]
 async fn get_user_unknown_id_returns_none(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
 
-    let record = state.users.get_user(UserId::from(999)).await.unwrap();
+    let record = env.users().get_user(UserId::from(999)).await.unwrap();
     assert!(record.is_none());
 }
 #[apply(backends)]
 #[tokio::test]
 async fn set_email_persists_and_get_user_reflects_it(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
 
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
     let addr = parse_email("alice@example.com");
-    set_email(state, user_id, Some(addr.clone()), EmailVerified::VERIFIED).await;
+    set_email(
+        &env.write_scope(),
+        env.users(),
+        user_id,
+        Some(addr.clone()),
+        EmailVerified::VERIFIED,
+    )
+    .await;
 
-    let record = state.users.get_user(user_id).await.unwrap().unwrap();
+    let record = env.users().get_user(user_id).await.unwrap().unwrap();
     assert_eq!(record.email, Some(addr));
     assert_eq!(record.email_verified, EmailVerified::VERIFIED);
 }
@@ -178,16 +200,32 @@ async fn set_email_persists_and_get_user_reflects_it(#[case] backend: Backend) {
 #[tokio::test]
 async fn set_email_clears_previously_set_email(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
 
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
     let addr = parse_email("bob@example.com");
-    set_email(state, user_id, Some(addr), EmailVerified::VERIFIED).await;
+    set_email(
+        &env.write_scope(),
+        env.users(),
+        user_id,
+        Some(addr),
+        EmailVerified::VERIFIED,
+    )
+    .await;
 
-    set_email(state, user_id, None, EmailVerified::UNVERIFIED).await;
+    set_email(
+        &env.write_scope(),
+        env.users(),
+        user_id,
+        None,
+        EmailVerified::UNVERIFIED,
+    )
+    .await;
 
-    let record = state.users.get_user(user_id).await.unwrap().unwrap();
+    let record = env.users().get_user(user_id).await.unwrap().unwrap();
     assert!(record.email.is_none());
     assert_eq!(record.email_verified, EmailVerified::UNVERIFIED);
 }
@@ -197,15 +235,28 @@ async fn set_password_authenticate_with_old_returns_invalid_and_new_succeeds(
     #[case] backend: Backend,
 ) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user = SeedUser::new().password("old_password1").seed(state).await;
+    let user = SeedUser::new()
+        .password("old_password1")
+        .seed(env.users(), env.write_scope())
+        .await;
 
-    set_password(state, user.user_id, password("new_password2")).await;
+    set_password(
+        &env.write_scope(),
+        env.users(),
+        user.user_id,
+        password("new_password2"),
+    )
+    .await;
 
     // Old password no longer works.
-    let err = authenticate_result(state, user.username.clone(), password("old_password1"))
-        .await
-        .unwrap_err();
+    let err = authenticate_result(
+        &env.write_scope(),
+        env.users(),
+        user.username.clone(),
+        password("old_password1"),
+    )
+    .await
+    .unwrap_err();
     let WriteScopeError::Operation(err) = err else {
         unreachable!("expected authentication operation error, got {err:?}");
     };
@@ -215,36 +266,49 @@ async fn set_password_authenticate_with_old_returns_invalid_and_new_succeeds(
     );
 
     // New password works.
-    let record = authenticate(state, user.username.clone(), password("new_password2")).await;
+    let record = authenticate(
+        &env.write_scope(),
+        env.users(),
+        user.username.clone(),
+        password("new_password2"),
+    )
+    .await;
     assert_eq!(record.user_id, user.user_id);
 }
 
 async fn create_user(
-    state: &AppState,
+    write_scope: &WriteScope,
+    users: Arc<dyn UserStorage>,
     username: common::username::Username,
     password: host::password::Password,
     display_name: Option<common::display_name::DisplayName>,
     is_operator: OperatorStatus,
 ) -> UserId {
-    let outcome = create_user_result(state, username, password, display_name, is_operator)
-        .await
-        .expect("user fixture setup should succeed");
+    let outcome = create_user_result(
+        write_scope,
+        users,
+        username,
+        password,
+        display_name,
+        is_operator,
+    )
+    .await
+    .expect("user fixture setup should succeed");
     storage::test_support::confirmed_for(outcome, "user fixture setup")
 }
 
 async fn create_user_result(
-    state: &AppState,
+    write_scope: &WriteScope,
+    users: Arc<dyn UserStorage>,
     username: common::username::Username,
     password: host::password::Password,
     display_name: Option<common::display_name::DisplayName>,
     is_operator: OperatorStatus,
 ) -> Result<MutationOutcome<UserId>, WriteScopeError<CreateUserError>> {
-    let users = Arc::clone(&state.users);
     let password = storage::prepare_password(password).await.map_err(|error| {
         WriteScopeError::Operation(CreateUserError::Internal(sqlx::Error::Io(error)))
     })?;
-    state
-        .write_scope
+    write_scope
         .run(|transaction| {
             Box::pin(async move {
                 users
@@ -262,28 +326,28 @@ async fn create_user_result(
 }
 
 async fn authenticate(
-    state: &AppState,
+    write_scope: &WriteScope,
+    users: Arc<dyn UserStorage>,
     username: common::username::Username,
     password: host::password::Password,
 ) -> storage::UserRecord {
-    let outcome = authenticate_result(state, username, password)
+    let outcome = authenticate_result(write_scope, users, username, password)
         .await
         .expect("authentication should succeed");
     storage::test_support::confirmed_for(outcome, "authentication")
 }
 
 async fn authenticate_result(
-    state: &AppState,
+    write_scope: &WriteScope,
+    users: Arc<dyn UserStorage>,
     username: common::username::Username,
     password: host::password::Password,
 ) -> Result<MutationOutcome<storage::UserRecord>, WriteScopeError<UserAuthError>> {
-    let users = Arc::clone(&state.users);
     let authentication = users
         .prepare_authentication(&username, &password)
         .await
         .map_err(WriteScopeError::Operation)?;
-    state
-        .write_scope
+    write_scope
         .run(|transaction| {
             Box::pin(async move { users.authenticate(transaction, authentication).await })
         })
@@ -291,14 +355,13 @@ async fn authenticate_result(
 }
 
 async fn update_profile(
-    state: &AppState,
+    write_scope: &WriteScope,
+    users: Arc<dyn UserStorage>,
     user_id: UserId,
     display_name: Option<common::display_name::DisplayName>,
     bio: Option<common::bio::Bio>,
 ) {
-    let users = Arc::clone(&state.users);
-    let outcome = state
-        .write_scope
+    let outcome = write_scope
         .run(|transaction| {
             Box::pin(async move {
                 users
@@ -319,14 +382,13 @@ async fn update_profile(
 }
 
 async fn set_email(
-    state: &AppState,
+    write_scope: &WriteScope,
+    users: Arc<dyn UserStorage>,
     user_id: UserId,
     email: Option<common::email::Email>,
     verified: EmailVerified,
 ) {
-    let users = Arc::clone(&state.users);
-    let outcome = state
-        .write_scope
+    let outcome = write_scope
         .run(|transaction| {
             Box::pin(async move {
                 users
@@ -339,13 +401,16 @@ async fn set_email(
     storage::test_support::confirmed_for(outcome, "set email");
 }
 
-async fn set_password(state: &AppState, user_id: UserId, password: host::password::Password) {
-    let users = Arc::clone(&state.users);
+async fn set_password(
+    write_scope: &WriteScope,
+    users: Arc<dyn UserStorage>,
+    user_id: UserId,
+    password: host::password::Password,
+) {
     let password = storage::prepare_password(password)
         .await
         .expect("password preparation should succeed");
-    let outcome = state
-        .write_scope
+    let outcome = write_scope
         .run(|transaction| {
             Box::pin(async move { users.set_password(transaction, user_id, &password).await })
         })

@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use axum::http::StatusCode;
 use common::tag::MAX_TAGS_PER_POST;
 use common::test_support::{parse_post_body, parse_row_limit, parse_slug, parse_tag_label};
@@ -7,27 +5,26 @@ use common::time::UtcInstant;
 use common::visibility::{AudienceBase, AudienceSelection};
 use jiff::ToSpan;
 use server_fn::ServerFn;
-use storage::PostFormat;
+use storage::{AudienceStorage, PostFormat, WriteScope};
 use web::posts::{PostInputs, SavedPost};
 
 use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{
-    confirmed_mutation, create_post_json, create_user_and_session, post_form, post_json,
+    confirmed_mutation, create_post_json, create_user_and_session, make_app, post_form, post_json,
 };
-use storage::test_support::{Backend, TestEnv, backends, backends_matrix, confirmed_for};
+use storage::test_support::{Backend, backends, backends_matrix, confirmed_for};
 
-use super::fixtures::login_and_state;
+use super::fixtures::login_and_env;
 
 async fn create_audience_confirmed(
-    state: &Arc<storage::AppState>,
+    audiences: std::sync::Arc<dyn AudienceStorage>,
+    write_scope: WriteScope,
     author: common::ids::UserId,
     name: common::audience::AudienceName,
 ) -> common::ids::AudienceId {
-    let audiences = Arc::clone(&state.audiences);
-    let outcome = state
-        .write_scope
+    let outcome = write_scope
         .run(move |transaction| {
             Box::pin(async move { audiences.create_audience(transaction, author, &name).await })
         })
@@ -39,13 +36,19 @@ async fn create_audience_confirmed(
 #[apply(backends)]
 #[tokio::test]
 async fn create_post_persists_rendered_published_post(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let cookie = session.cookie();
 
     // Title embedded as # heading in the body (verbatim storage)
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(true),
             ..PostInputs::new(
@@ -62,8 +65,8 @@ async fn create_post_persists_rendered_published_post(#[case] backend: Backend) 
     assert_eq!(created.slug, "hello-world");
     assert!(created.published_at.is_some());
 
-    let record = state
-        .posts
+    let record = env
+        .posts()
         .get_post_by_id(
             created.post_id,
             &common::visibility::ViewerIdentity::Anonymous,
@@ -101,19 +104,26 @@ async fn create_post_persists_rendered_published_post(#[case] backend: Backend) 
 #[apply(backends)]
 #[tokio::test]
 async fn create_post_retries_slug_conflicts_for_same_user_and_date(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     // Title embedded as # heading; two posts with same heading produce conflicting slugs
     let (first_status, first_body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(true),
             ..PostInputs::new(
                 parse_post_body(
                     "# Repeated Title
-        
-        first",
+    
+    first",
                 ),
                 PostFormat::Markdown,
             )
@@ -124,14 +134,14 @@ async fn create_post_retries_slug_conflicts_for_same_user_and_date(#[case] backe
     assert_eq!(first_status, StatusCode::OK, "body: {first_body}");
 
     let (second_status, second_body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(true),
             ..PostInputs::new(
                 parse_post_body(
                     "# Repeated Title
-        
-        second",
+    
+    second",
                 ),
                 PostFormat::Markdown,
             )
@@ -148,12 +158,18 @@ async fn create_post_retries_slug_conflicts_for_same_user_and_date(#[case] backe
 #[apply(backends)]
 #[tokio::test]
 async fn create_post_accepts_slug_override_and_saves_draft(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let cookie = session.cookie();
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             slug_override: Some(parse_slug("Custom-Slug")),
             publish: Some(false),
@@ -178,8 +194,8 @@ async fn create_post_accepts_slug_override_and_saves_draft(#[case] backend: Back
         created.permalink
     );
 
-    let record = state
-        .posts
+    let record = env
+        .posts()
         .get_post_by_id(
             created.post_id,
             &common::visibility::ViewerIdentity::Anonymous,
@@ -196,11 +212,18 @@ async fn create_post_accepts_slug_override_and_saves_draft(#[case] backend: Back
 #[apply(backends)]
 #[tokio::test]
 async fn create_post_accepts_titleless_body(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(true),
             ..PostInputs::new(parse_post_body("Titleless note"), PostFormat::Markdown)
@@ -212,8 +235,8 @@ async fn create_post_accepts_titleless_body(#[case] backend: Backend) {
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let created: SavedPost = confirmed_mutation(&body);
     assert_eq!(created.slug, "titleless-note");
-    let record = state
-        .posts
+    let record = env
+        .posts()
         .get_post_by_id(
             created.post_id,
             &common::visibility::ViewerIdentity::Anonymous,
@@ -231,11 +254,18 @@ async fn create_post_accepts_titleless_body(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_post_extracts_markdown_heading_title(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(true),
             ..PostInputs::new(
@@ -250,8 +280,8 @@ async fn create_post_extracts_markdown_heading_title(#[case] backend: Backend) {
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let created: SavedPost = confirmed_mutation(&body);
     assert_eq!(created.slug, "extracted-title");
-    let record = state
-        .posts
+    let record = env
+        .posts()
         .get_post_by_id(
             created.post_id,
             &common::visibility::ViewerIdentity::Anonymous,
@@ -296,11 +326,18 @@ async fn create_post_rejects(
     #[case] slug_override: Option<&str>,
     #[case] expected: &str,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = post_json(
-        &state,
+        app.clone(),
         <web::posts::Create as ServerFn>::PATH,
         serde_json::json!({
             "post": {
@@ -323,14 +360,21 @@ async fn create_post_rejects(
 #[apply(backends)]
 #[tokio::test]
 async fn create_post_with_future_publish_at_is_scheduled(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let future = "2099-01-01T00:00:00Z"
         .parse::<jiff::Timestamp>()
         .expect("valid test instant");
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(true),
             publish_at: Some(UtcInstant::from(future)),
@@ -342,8 +386,8 @@ async fn create_post_with_future_publish_at_is_scheduled(#[case] backend: Backen
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let created: SavedPost = confirmed_mutation(&body);
 
-    let record = state
-        .posts
+    let record = env
+        .posts()
         .get_post_by_id(
             created.post_id,
             &common::visibility::ViewerIdentity::Anonymous,
@@ -357,8 +401,8 @@ async fn create_post_with_future_publish_at_is_scheduled(#[case] backend: Backen
     );
 
     // The scheduled post is invisible on the public timeline at "now".
-    let published = state
-        .posts
+    let published = env
+        .posts()
         .list_published(
             None,
             parse_row_limit("50"),
@@ -378,11 +422,18 @@ async fn create_post_with_future_publish_at_is_scheduled(#[case] backend: Backen
 #[apply(backends)]
 #[tokio::test]
 async fn create_post_publish_without_publish_at_is_live_now(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(true),
             ..PostInputs::new(parse_post_body("live now body"), PostFormat::Markdown)
@@ -393,8 +444,8 @@ async fn create_post_publish_without_publish_at_is_live_now(#[case] backend: Bac
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let created: SavedPost = confirmed_mutation(&body);
 
-    let record = state
-        .posts
+    let record = env
+        .posts()
         .get_post_by_id(
             created.post_id,
             &common::visibility::ViewerIdentity::Anonymous,
@@ -415,8 +466,8 @@ async fn create_post_publish_without_publish_at_is_live_now(#[case] backend: Bac
         "publish-now should stamp ~now, got {published_at}"
     );
 
-    let published = state
-        .posts
+    let published = env
+        .posts()
         .list_published(
             None,
             parse_row_limit("50"),
@@ -434,10 +485,11 @@ async fn create_post_publish_without_publish_at_is_live_now(#[case] backend: Bac
 #[apply(backends)]
 #[tokio::test]
 async fn create_post_applies_tags_from_param(#[case] backend: Backend) {
-    let (_base, state, cookie) = login_and_state(backend).await;
+    let (env, cookie) = login_and_env(backend).await;
+    let app = make_app!(&env, &env.base);
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(true),
             tags: Some(vec![parse_tag_label("Rust"), parse_tag_label("web-dev")]),
@@ -452,8 +504,8 @@ async fn create_post_applies_tags_from_param(#[case] backend: Backend) {
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: SavedPost = confirmed_mutation(&body);
 
-    let stored_tags = state
-        .posts
+    let stored_tags = env
+        .posts()
         .get_post_by_id(
             created.post_id,
             &common::visibility::ViewerIdentity::Anonymous,
@@ -472,31 +524,34 @@ async fn create_post_applies_tags_from_param(#[case] backend: Backend) {
 async fn create_org_header_merges_structured_metadata_and_stores_canonical_body(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let cookie = session.cookie();
-    let (status, body) = create_post_json(
-        &state,
-        PostInputs {
-            publish: Some(false),
-            tags: Some(Vec::new()),
-            summary: Some(common::test_support::parse_post_summary("Structured summary")),
-            audience: Some(AudienceSelection {
-                base: AudienceBase::Private,
-                named: Vec::new(),
-            }),
-            ..PostInputs::new(
-                parse_post_body("#+TITLE: Header title\n#+DESCRIPTION: Header summary\n#+KEYWORDS: header, ignored\n#+PROPERTY: JAUNDER_AUDIENCE public\n#+PROPERTY: JAUNDER_STATUS published\n#+PROPERTY: JAUNDER_SLUG header-title\n#+PROPERTY: JAUNDER_FORMAT org\n#+UNKNOWN: preserved\n\nBody"),
-                PostFormat::Org,
-            )
-        },
-        Some(&cookie),
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
     )
+    .await;
+    let cookie = session.cookie();
+    let (status, body) = create_post_json(app.clone(), PostInputs {
+        publish: Some(false),
+        tags: Some(Vec::new()),
+        summary: Some(common::test_support::parse_post_summary("Structured summary")),
+        audience: Some(AudienceSelection {
+            base: AudienceBase::Private,
+            named: Vec::new(),
+        }),
+        ..PostInputs::new(
+            parse_post_body("#+TITLE: Header title\n#+DESCRIPTION: Header summary\n#+KEYWORDS: header, ignored\n#+PROPERTY: JAUNDER_AUDIENCE public\n#+PROPERTY: JAUNDER_STATUS published\n#+PROPERTY: JAUNDER_SLUG header-title\n#+PROPERTY: JAUNDER_FORMAT org\n#+UNKNOWN: preserved\n\nBody"),
+            PostFormat::Org,
+        )
+    },
+    Some(&cookie),)
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: SavedPost = confirmed_mutation(&body);
-    let record = state
-        .posts
+    let record = env
+        .posts()
         .get_post_by_id(
             created.post_id,
             &common::visibility::ViewerIdentity::Local {
@@ -511,7 +566,7 @@ async fn create_org_header_merges_structured_metadata_and_stores_canonical_body(
     assert_eq!(record.body, "#+UNKNOWN: preserved\n\nBody\n");
     assert!(record.tags.is_empty());
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::posts::GetAudienceSelection as ServerFn>::PATH,
         format!("post_id={}", created.post_id),
         Some(&cookie),
@@ -527,10 +582,17 @@ async fn create_org_header_merges_structured_metadata_and_stores_canonical_body(
 #[apply(backends)]
 #[tokio::test]
 async fn create_org_uses_header_lifecycle_when_publish_is_omitted(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs::new(
             parse_post_body(
                 "#+TITLE: Header lifecycle\n#+PROPERTY: JAUNDER_STATUS published\n\nBody",
@@ -551,10 +613,17 @@ async fn create_org_uses_header_lifecycle_when_publish_is_omitted(#[case] backen
 #[apply(backends)]
 #[tokio::test]
 async fn create_org_without_any_lifecycle_stays_draft(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs::new(parse_post_body("Body"), PostFormat::Org),
         Some(&cookie),
     )
@@ -570,8 +639,15 @@ async fn create_org_without_any_lifecycle_stays_draft(#[case] backend: Backend) 
 #[apply(backends)]
 #[tokio::test]
 async fn create_non_org_requires_publish_presence(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
     let payload = serde_json::json!({
         "post": {
             "body": "No lifecycle",
@@ -579,7 +655,7 @@ async fn create_non_org_requires_publish_presence(#[case] backend: Backend) {
         }
     });
     let (status, body) = post_json(
-        &state,
+        app.clone(),
         <web::posts::Create as ServerFn>::PATH,
         payload,
         Some(&cookie),
@@ -591,18 +667,31 @@ async fn create_non_org_requires_publish_presence(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_org_header_named_audience_is_author_scoped_and_opaque(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let author = create_user_and_session(&state).await;
-    let foreign = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let author = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let foreign = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let cookie = author.cookie();
     let owned = create_audience_confirmed(
-        &state,
+        std::sync::Arc::clone(&env.audiences()),
+        env.write_scope(),
         author.user_id,
         common::test_support::parse_audience_name("Owned"),
     )
     .await;
     let foreign = create_audience_confirmed(
-        &state,
+        std::sync::Arc::clone(&env.audiences()),
+        env.write_scope(),
         foreign.user_id,
         common::test_support::parse_audience_name("Foreign"),
     )
@@ -617,11 +706,11 @@ async fn create_org_header_named_audience_is_author_scoped_and_opaque(#[case] ba
             PostFormat::Org,
         )
     };
-    let (status, body) = create_post_json(&state, post(owned), Some(&cookie)).await;
+    let (status, body) = create_post_json(app.clone(), post(owned), Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: SavedPost = confirmed_mutation(&body);
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::posts::GetAudienceSelection as ServerFn>::PATH,
         format!("post_id={}", created.post_id),
         Some(&cookie),
@@ -632,9 +721,9 @@ async fn create_org_header_named_audience_is_author_scoped_and_opaque(#[case] ba
     assert_eq!(selection.named, vec![owned]);
 
     let (foreign_status, foreign_body) =
-        create_post_json(&state, post(foreign), Some(&cookie)).await;
+        create_post_json(app.clone(), post(foreign), Some(&cookie)).await;
     let (unknown_status, unknown_body) = create_post_json(
-        &state,
+        app.clone(),
         post(common::ids::AudienceId::from(999_999)),
         Some(&cookie),
     )
@@ -653,8 +742,8 @@ async fn create_org_header_named_audience_is_author_scoped_and_opaque(#[case] ba
         foreign_body, unknown_body,
         "audience existence must remain opaque"
     );
-    let drafts = state
-        .posts
+    let drafts = env
+        .posts()
         .list_drafts_by_user(
             author.user_id,
             None,
@@ -673,10 +762,17 @@ async fn create_org_header_named_audience_is_author_scoped_and_opaque(#[case] ba
 #[apply(backends)]
 #[tokio::test]
 async fn create_org_publish_now_overrides_header_draft(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(true),
             ..PostInputs::new(
@@ -697,8 +793,14 @@ async fn create_org_publish_now_overrides_header_draft(#[case] backend: Backend)
 #[apply(backends)]
 #[tokio::test]
 async fn create_org_metadata_failures_do_not_create_rows(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let cookie = session.cookie();
     let structured_publish_at = UtcInstant::from(
         "2020-01-01T00:00:00Z"
@@ -734,11 +836,11 @@ async fn create_org_metadata_failures_do_not_create_rows(#[case] backend: Backen
             publish_at,
             ..PostInputs::new(parse_post_body(org_body), PostFormat::Org)
         };
-        let (status, body) = create_post_json(&state, post, Some(&cookie)).await;
+        let (status, body) = create_post_json(app.clone(), post, Some(&cookie)).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     }
-    let drafts = state
-        .posts
+    let drafts = env
+        .posts()
         .list_drafts_by_user(
             session.user_id,
             None,
@@ -753,7 +855,8 @@ async fn create_org_metadata_failures_do_not_create_rows(#[case] backend: Backen
 #[apply(backends)]
 #[tokio::test]
 async fn create_post_rejects_invalid_tag_token(#[case] backend: Backend) {
-    let (_base, state, cookie) = login_and_state(backend).await;
+    let (env, cookie) = login_and_env(backend).await;
+    let app = make_app!(&env, &env.base);
 
     let payload = serde_json::json!({
         "post": {
@@ -765,7 +868,7 @@ async fn create_post_rejects_invalid_tag_token(#[case] backend: Backend) {
         }
     });
     let (status, body) = post_json(
-        &state,
+        app.clone(),
         <web::posts::Create as ServerFn>::PATH,
         payload,
         Some(&cookie),
@@ -780,8 +883,14 @@ async fn create_post_rejects_invalid_tag_token(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_post_rejects_over_limit_tags(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let cookie = session.cookie();
     let many: Vec<String> = (0..=MAX_TAGS_PER_POST).map(|n| format!("tag{n}")).collect();
 
@@ -795,7 +904,7 @@ async fn create_post_rejects_over_limit_tags(#[case] backend: Backend) {
         }
     });
     let (status, body) = post_json(
-        &state,
+        app.clone(),
         <web::posts::Create as ServerFn>::PATH,
         payload,
         Some(&cookie),
@@ -804,8 +913,8 @@ async fn create_post_rejects_over_limit_tags(#[case] backend: Backend) {
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("too many tags"), "body: {body}");
 
-    let posts = state
-        .posts
+    let posts = env
+        .posts()
         .list_collection_by_user(session.user_id, None, parse_row_limit("50"))
         .await
         .unwrap();
@@ -814,8 +923,8 @@ async fn create_post_rejects_over_limit_tags(#[case] backend: Backend) {
         "over-limit request created posts: {posts:?}"
     );
 
-    let tags = state
-        .posts
+    let tags = env
+        .posts()
         .list_tags(None, parse_row_limit("50"))
         .await
         .unwrap();
@@ -825,10 +934,11 @@ async fn create_post_rejects_over_limit_tags(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn get_default_post_format_returns_markdown_by_default(#[case] backend: Backend) {
-    let (_base, state, cookie) = login_and_state(backend).await;
+    let (env, cookie) = login_and_env(backend).await;
+    let app = make_app!(&env, &env.base);
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::profile::GetDefaultPostFormat as ServerFn>::PATH,
         "",
         Some(&cookie),
@@ -844,10 +954,11 @@ async fn get_default_post_format_returns_markdown_by_default(#[case] backend: Ba
 #[apply(backends)]
 #[tokio::test]
 async fn set_default_post_format_persists_and_retrieves_markdown(#[case] backend: Backend) {
-    let (_base, state, cookie) = login_and_state(backend).await;
+    let (env, cookie) = login_and_env(backend).await;
+    let app = make_app!(&env, &env.base);
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::profile::SetDefaultPostFormat as ServerFn>::PATH,
         "format=markdown",
         Some(&cookie),
@@ -856,7 +967,7 @@ async fn set_default_post_format_persists_and_retrieves_markdown(#[case] backend
     assert_eq!(status, StatusCode::OK, "set body: {body}");
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::profile::GetDefaultPostFormat as ServerFn>::PATH,
         "",
         Some(&cookie),

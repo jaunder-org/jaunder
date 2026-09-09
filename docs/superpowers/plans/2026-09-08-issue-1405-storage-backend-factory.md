@@ -77,7 +77,7 @@ Out:
   - Verification: documentation formatting, links, ADR projection parity, and
     the repository static check surface passed.
 
-- [ ] Task 6: Replace the router and context aggregate seam atomically
+- [x] Task 6: Replace the router and context aggregate seam atomically
   - Contract: remove every router/context function that accepts `AppState`.
     Production `prepare_server` and the server test harness construct the
     existing Media, Theme, publisher, and ownership modules plus exact Axum
@@ -92,7 +92,7 @@ Out:
     substitution tests preserve production-shaped request behavior on both
     backends; the workspace compiles after the interface cutover.
 
-- [ ] Task 7: Replace fixture operation seams and all callers atomically
+- [x] Task 7: Replace fixture operation seams and all callers atomically
   - Contract: every `storage::test_support` and `test-support` fixture operation
     receives its exact trait handles, `WriteScope`, and genuine non-storage
     inputs. Change each fixture interface and every workspace caller together;
@@ -106,7 +106,7 @@ Out:
     user/session, Post, Theme, and feed-event root on SQLite and PostgreSQL;
     sandbox profile success/rejection retains its SQLite-only policy.
 
-- [ ] Task 8: Remove assembled state from every test harness
+- [x] Task 8: Remove assembled state from every test harness
   - Contract: `TestEnv` becomes a SQLite/PostgreSQL resource owner for a private
     `StorageFactory`, pool fault injection, test-root-only raw-SQL inspection,
     instance identity, and teardown. Tests mint named handles/scope at their
@@ -118,15 +118,16 @@ Out:
     and fixture behavior; structural inspection finds no test or fixture
     function accepting an aggregate/factory/raw pool.
 
-- [ ] Task 9: Remove serve state, delete `AppState`, and project the decision
-  - Contract: `prepare_server` mints named exact handles once and passes them to
-    lifecycle, worker, manager, metrics, and router modules. Split broad wiring
-    into private route-family functions or lexical closures rather than a holder
-    crossing an interface. Then remove `storage/src/app_state.rs`, its export,
-    every live Rust reference, and `StorageFactory::app_state`; rename
-    `AppStateBackend` for factory-owned scope construction. Add a dated ADR-0016
-    addendum and update `docs/ARCHITECTURE.md` and `CONTRIBUTING.md`; consider
-    `CONTEXT.md` and update only if domain vocabulary changes.
+- [x] Task 9: Remove serve state, delete `AppState`, and project the decision
+  - Contract: the serve composition root mints named exact handles once and
+    passes them to lifecycle, worker, manager, metrics, and router modules. One
+    private lifecycle-only root wiring value may organize that breadth across
+    composition helpers, but it never crosses into a runtime subsystem. Then
+    remove `storage/src/app_state.rs`, its export, every live Rust reference,
+    and `StorageFactory::app_state`; rename `AppStateBackend` for factory-owned
+    scope construction. Add a dated ADR-0016 addendum and update
+    `docs/ARCHITECTURE.md` and `CONTRIBUTING.md`; consider `CONTEXT.md` and
+    update only if domain vocabulary changes.
   - Verification: structural search finds no live Rust `AppState` or
     `.app_state()` reference; non-archive documentation contains no stale
     current-state guidance; focused lifecycle/metrics/startup tests, workspace

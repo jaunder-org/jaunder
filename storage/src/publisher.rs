@@ -429,10 +429,9 @@ mod tests {
         env: &TestEnv,
         mutation: FeedWindowMutation,
     ) -> FeedWindowMutationOutcome {
-        let publisher = Arc::clone(&env.state.publisher);
+        let publisher = Arc::clone(&env.publisher());
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(
                         async move { publisher.mutate_feed_window(transaction, mutation).await },
@@ -444,10 +443,9 @@ mod tests {
     }
 
     async fn seed_cache(env: &TestEnv, row: FeedCacheRow) {
-        let cache = Arc::clone(&env.state.feed_cache);
+        let cache = Arc::clone(&env.feed_cache());
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move { cache.upsert(transaction, row).await })
                 })
@@ -457,11 +455,10 @@ mod tests {
     }
 
     async fn mutate(env: &TestEnv, hub: Option<&HubUrl>) -> HubMutationOutcome {
-        let publisher = Arc::clone(&env.state.publisher);
+        let publisher = Arc::clone(&env.publisher());
         let hub = hub.cloned();
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move { publisher.mutate_hub(transaction, hub).await })
                 })
@@ -510,16 +507,13 @@ mod tests {
             mutate(&env, Some(&hub)).await,
             HubMutationOutcome::Unchanged { generation: first }
         );
-        assert_eq!(
-            env.state.publisher.snapshot().await.unwrap().generation,
-            first
-        );
+        assert_eq!(env.publisher().snapshot().await.unwrap().generation, first);
     }
     #[apply(backends)]
     #[tokio::test]
     async fn snapshot_decodes_defaults_as_one_publisher_value(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let snapshot = env.state.publisher.snapshot().await.unwrap();
+        let snapshot = env.publisher().snapshot().await.unwrap();
 
         assert_eq!(snapshot.feeds.min_items, FeedMinItems::default());
         assert_eq!(snapshot.feeds.min_days, FeedMinDays::default());
@@ -546,7 +540,7 @@ mod tests {
             FeedWindowMutation::SetMinItems(parse_feed_min_items("42")),
         )
         .await;
-        let snapshot = env.state.publisher.snapshot().await.unwrap();
+        let snapshot = env.publisher().snapshot().await.unwrap();
         assert_eq!(snapshot.feeds.min_items, parse_feed_min_items("42"));
         assert_eq!(snapshot.feeds.min_days, FeedMinDays::default());
 
@@ -555,17 +549,17 @@ mod tests {
             FeedWindowMutation::SetMinDays(parse_feed_min_days("7")),
         )
         .await;
-        let snapshot = env.state.publisher.snapshot().await.unwrap();
+        let snapshot = env.publisher().snapshot().await.unwrap();
         assert_eq!(snapshot.feeds.min_items, parse_feed_min_items("42"));
         assert_eq!(snapshot.feeds.min_days, parse_feed_min_days("7"));
 
         mutate_feed_window(&env, FeedWindowMutation::UnsetMinItems).await;
-        let snapshot = env.state.publisher.snapshot().await.unwrap();
+        let snapshot = env.publisher().snapshot().await.unwrap();
         assert_eq!(snapshot.feeds.min_items, FeedMinItems::default());
         assert_eq!(snapshot.feeds.min_days, parse_feed_min_days("7"));
 
         mutate_feed_window(&env, FeedWindowMutation::UnsetMinDays).await;
-        let snapshot = env.state.publisher.snapshot().await.unwrap();
+        let snapshot = env.publisher().snapshot().await.unwrap();
         assert_eq!(snapshot.feeds.min_items, FeedMinItems::default());
         assert_eq!(snapshot.feeds.min_days, FeedMinDays::default());
     }
@@ -581,7 +575,7 @@ mod tests {
         for path in ["/feed.rss", "/feed.atom", "/feed.json"] {
             seed_cache(&env, cache_row_at(path)).await;
         }
-        let stale = env.state.publisher.snapshot().await.unwrap().generation;
+        let stale = env.publisher().snapshot().await.unwrap().generation;
 
         let outcome = mutate_feed_window(
             &env,
@@ -592,15 +586,14 @@ mod tests {
         assert!(generation > stale, "accepted no-op must advance generation");
         for path in ["/feed.rss", "/feed.atom", "/feed.json"] {
             assert!(
-                env.state.feed_cache.get(&fp(path)).await.unwrap().is_none(),
+                env.feed_cache().get(&fp(path)).await.unwrap().is_none(),
                 "{path} must be invalidated"
             );
         }
 
-        let publisher = Arc::clone(&env.state.publisher);
+        let publisher = Arc::clone(&env.publisher());
         let outcome = confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         publisher
@@ -622,14 +615,13 @@ mod tests {
         let env = backend.setup().await;
         seed_cache(&env, cache_row()).await;
         let existing = env
-            .state
-            .feed_cache
+            .feed_cache()
             .get(&fp("/feed.rss"))
             .await
             .unwrap()
             .expect("seeded cache row");
-        let generation = env.state.publisher.snapshot().await.unwrap().generation;
-        let publisher = Arc::clone(&env.state.publisher);
+        let generation = env.publisher().snapshot().await.unwrap().generation;
+        let publisher = Arc::clone(&env.publisher());
         let candidate = FeedCacheRow::new(
             fp("/feed.rss"),
             SyndicationFeedRepresentation::try_from_stored(
@@ -657,8 +649,7 @@ mod tests {
         )
         .expect("matching cache row");
         let outcome = confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         publisher
@@ -701,13 +692,12 @@ mod tests {
         let existing = cache_row();
         seed_cache(&env, existing).await;
         let existing = env
-            .state
-            .feed_cache
+            .feed_cache()
             .get(&fp("/feed.rss"))
             .await
             .unwrap()
             .expect("seeded cache row");
-        let generation = env.state.publisher.snapshot().await.unwrap().generation;
+        let generation = env.publisher().snapshot().await.unwrap().generation;
         let candidate = |body: &str, offset| {
             FeedCacheRow::new(
                 fp("/feed.rss"),
@@ -746,10 +736,10 @@ mod tests {
         );
         let second = candidate("<rss>second candidate</rss>", 2);
         let barrier = Arc::new(Barrier::new(2));
-        let one_publisher = Arc::clone(&env.state.publisher);
-        let two_publisher = Arc::clone(&env.state.publisher);
-        let one_scope = env.state.write_scope.clone();
-        let two_scope = env.state.write_scope.clone();
+        let one_publisher = Arc::clone(&env.publisher());
+        let two_publisher = Arc::clone(&env.publisher());
+        let one_scope = env.write_scope().clone();
+        let two_scope = env.write_scope().clone();
         let one_barrier = Arc::clone(&barrier);
         let two_barrier = Arc::clone(&barrier);
         let (one, two) = tokio::join!(
@@ -798,8 +788,7 @@ mod tests {
             assert!(row.generated_at <= latest_generated_at);
         }
         let persisted = env
-            .state
-            .feed_cache
+            .feed_cache()
             .get(&fp("/feed.rss"))
             .await
             .unwrap()
@@ -825,12 +814,11 @@ mod tests {
     ) {
         let env = backend.setup().await;
         seed_cache(&env, cache_row()).await;
-        let before = env.state.publisher.snapshot().await.unwrap();
-        let publisher = Arc::clone(&env.state.publisher);
+        let before = env.publisher().snapshot().await.unwrap();
+        let publisher = Arc::clone(&env.publisher());
 
         let error = env
-            .state
-            .write_scope
+            .write_scope()
             .run(move |transaction| {
                 Box::pin(async move {
                     publisher
@@ -848,10 +836,9 @@ mod tests {
             error,
             crate::WriteScopeError::Operation(PublisherStorageError::Db(Error::PoolClosed))
         ));
-        assert_eq!(env.state.publisher.snapshot().await.unwrap(), before);
+        assert_eq!(env.publisher().snapshot().await.unwrap(), before);
         assert!(
-            env.state
-                .feed_cache
+            env.feed_cache()
                 .get(&fp("/feed.rss"))
                 .await
                 .unwrap()
@@ -865,10 +852,9 @@ mod tests {
     #[tokio::test]
     async fn feed_window_commit_acknowledgement_loss_is_indeterminate(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let publisher = Arc::clone(&env.state.publisher);
+        let publisher = Arc::clone(&env.publisher());
         let outcome = env
-            .state
-            .write_scope
+            .write_scope()
             .with_commit_acknowledgement_loss_after_commit_for_test()
             .run(move |transaction| {
                 Box::pin(async move {
@@ -899,7 +885,7 @@ mod tests {
             .await
             .expect("seed corrupt feed minimum");
 
-        let err = env.state.publisher.snapshot().await.unwrap_err();
+        let err = env.publisher().snapshot().await.unwrap_err();
         let diagnostic = err.to_string();
         assert!(
             diagnostic.contains("feeds.min_items"),
@@ -919,14 +905,14 @@ mod tests {
     #[tokio::test]
     async fn hub_change_advances_snapshot_generation(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let before = env.state.publisher.snapshot().await.unwrap();
+        let before = env.publisher().snapshot().await.unwrap();
         let hub: HubUrl = parse_url("https://hub.example.test/");
 
         let generation = match mutate(&env, Some(&hub)).await {
             HubMutationOutcome::Changed { generation } => generation,
             HubMutationOutcome::Unchanged { .. } => panic!("absent hub must change"),
         };
-        let after = env.state.publisher.snapshot().await.unwrap();
+        let after = env.publisher().snapshot().await.unwrap();
 
         assert!(generation > before.generation);
         assert_eq!(after.generation, generation);
@@ -940,7 +926,7 @@ mod tests {
         inject_invalid_site_config(&env, SiteConfigKey::FeedsWebsubHubUrl, "not a hub URL")
             .await
             .expect("seed malformed hub");
-        let before = env.state.publisher.snapshot().await.unwrap().generation;
+        let before = env.publisher().snapshot().await.unwrap().generation;
 
         let generation = match mutate(&env, None).await {
             HubMutationOutcome::Changed { generation } => generation,
@@ -949,8 +935,7 @@ mod tests {
 
         assert!(generation > before);
         assert_eq!(
-            env.state
-                .site_config
+            env.site_config()
                 .get_raw(SiteConfigKey::FeedsWebsubHubUrl)
                 .await
                 .unwrap(),
@@ -971,8 +956,7 @@ mod tests {
             HubMutationOutcome::Changed { .. }
         ));
         assert_eq!(
-            env.state
-                .site_config
+            env.site_config()
                 .get_raw(SiteConfigKey::FeedsWebsubHubUrl)
                 .await
                 .unwrap(),
@@ -984,14 +968,13 @@ mod tests {
     #[tokio::test]
     async fn stale_generation_does_not_commit_cache(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let stale = env.state.publisher.snapshot().await.unwrap().generation;
+        let stale = env.publisher().snapshot().await.unwrap().generation;
         let hub: HubUrl = parse_url("https://hub.example.test/");
         let _ = mutate(&env, Some(&hub)).await;
-        let publisher = Arc::clone(&env.state.publisher);
+        let publisher = Arc::clone(&env.publisher());
         let row = cache_row();
         let outcome = confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move { publisher.commit_cache(transaction, stale, row).await })
                 })
@@ -1001,8 +984,7 @@ mod tests {
 
         assert_eq!(outcome, CacheCommitOutcome::StaleGeneration);
         assert!(
-            env.state
-                .feed_cache
+            env.feed_cache()
                 .get(&fp("/feed.rss"))
                 .await
                 .unwrap()
@@ -1016,10 +998,9 @@ mod tests {
         let env = backend.setup().await;
         let row = cache_row();
         let path = row.feed_path().clone();
-        let cache = Arc::clone(&env.state.feed_cache);
+        let cache = Arc::clone(&env.feed_cache());
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move { cache.upsert(transaction, row).await })
                 })
@@ -1028,7 +1009,7 @@ mod tests {
         );
         let hub: HubUrl = parse_url("https://hub.example.test/");
         let _ = mutate(&env, Some(&hub)).await;
-        assert!(env.state.feed_cache.get(&path).await.unwrap().is_none());
+        assert!(env.feed_cache().get(&path).await.unwrap().is_none());
     }
 
     #[apply(backends)]
@@ -1039,10 +1020,9 @@ mod tests {
         let _ = mutate(&env, Some(&hub)).await;
         let row = cache_row();
         let path = row.feed_path().clone();
-        let cache = Arc::clone(&env.state.feed_cache);
+        let cache = Arc::clone(&env.feed_cache());
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move { cache.upsert(transaction, row).await })
                 })
@@ -1050,7 +1030,7 @@ mod tests {
                 .expect("seed cache"),
         );
         let _ = mutate(&env, Some(&hub)).await;
-        assert!(env.state.feed_cache.get(&path).await.unwrap().is_some());
+        assert!(env.feed_cache().get(&path).await.unwrap().is_some());
     }
 
     #[apply(backends)]
@@ -1060,7 +1040,7 @@ mod tests {
         inject_invalid_site_config(&env, SiteConfigKey::FeedsWebsubHubUrl, "invalid A")
             .await
             .expect("seed invalid hub");
-        let snapshot = env.state.publisher.snapshot().await.unwrap();
+        let snapshot = env.publisher().snapshot().await.unwrap();
         let token = snapshot
             .malformed_hub()
             .expect("invalid row exposes repair token");
@@ -1069,10 +1049,9 @@ mod tests {
         inject_invalid_site_config(&env, SiteConfigKey::FeedsWebsubHubUrl, valid)
             .await
             .expect("concurrent valid replacement");
-        let publisher = Arc::clone(&env.state.publisher);
+        let publisher = Arc::clone(&env.publisher());
         let outcome = confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(
                         async move { publisher.repair_malformed_hub(transaction, token).await },
@@ -1087,16 +1066,12 @@ mod tests {
             HubMutationOutcome::Unchanged { generation: before }
         );
         assert_eq!(
-            env.state
-                .site_config
+            env.site_config()
                 .get_raw(SiteConfigKey::FeedsWebsubHubUrl)
                 .await
                 .unwrap(),
             Some(valid.to_owned())
         );
-        assert_eq!(
-            env.state.publisher.snapshot().await.unwrap().generation,
-            before
-        );
+        assert_eq!(env.publisher().snapshot().await.unwrap().generation, before);
     }
 }

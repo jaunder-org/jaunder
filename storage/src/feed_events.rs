@@ -1065,24 +1065,19 @@ mod tests {
     #[tokio::test]
     async fn dead_letters_page_stably_and_redrive_exact_ids_atomically(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let feeds = Arc::clone(&env.state.feed_events);
+        let feeds = Arc::clone(&env.feed_events());
         let ids = vec![
-            enqueue(&env.state.write_scope, Arc::clone(&feeds), fp("/feed.rss")).await,
+            enqueue(&env.write_scope(), Arc::clone(&feeds), fp("/feed.rss")).await,
+            enqueue(&env.write_scope(), Arc::clone(&feeds), fp("/~one/feed.rss")).await,
             enqueue(
-                &env.state.write_scope,
-                Arc::clone(&feeds),
-                fp("/~one/feed.rss"),
-            )
-            .await,
-            enqueue(
-                &env.state.write_scope,
+                &env.write_scope(),
                 Arc::clone(&feeds),
                 fp("/tags/one/feed.rss"),
             )
             .await,
         ];
         claim(
-            &env.state.write_scope,
+            &env.write_scope(),
             Arc::clone(&feeds),
             10,
             Duration::from_mins(5),
@@ -1091,7 +1086,7 @@ mod tests {
         let terminal = fixture_instant(1_000);
         for id in &ids {
             dead_letter_regeneration(
-                &env.state.write_scope,
+                &env.write_scope(),
                 Arc::clone(&feeds),
                 vec![*id],
                 "regeneration failure".to_owned(),
@@ -1100,26 +1095,21 @@ mod tests {
             .await;
         }
         let publication_id = enqueue(
-            &env.state.write_scope,
+            &env.write_scope(),
             Arc::clone(&feeds),
             fp("/~publication/feed.rss"),
         )
         .await;
         claim(
-            &env.state.write_scope,
+            &env.write_scope(),
             Arc::clone(&feeds),
             10,
             Duration::from_mins(5),
         )
         .await;
-        mark_regenerated(
-            &env.state.write_scope,
-            Arc::clone(&feeds),
-            vec![publication_id],
-        )
-        .await;
+        mark_regenerated(&env.write_scope(), Arc::clone(&feeds), vec![publication_id]).await;
         dead_letter_publication(
-            &env.state.write_scope,
+            &env.write_scope(),
             Arc::clone(&feeds),
             vec![publication_id],
             "publication failure".to_owned(),
@@ -1168,8 +1158,7 @@ mod tests {
 
         let duplicate = ids[0];
         let rejection = env
-            .state
-            .write_scope
+            .write_scope()
             .run(move |transaction| {
                 let feeds = Arc::clone(&feeds);
                 Box::pin(async move {
@@ -1185,23 +1174,21 @@ mod tests {
             crate::WriteScopeError::Operation(FeedEventRedriveError::Rejected(_))
         ));
         let after_rejection = env
-            .state
-            .feed_events
+            .feed_events()
             .dead_letters(FeedEventPhase::Regeneration, None, PageSize::default())
             .await
             .unwrap();
         assert_eq!(after_rejection.events.len(), ids.len());
 
         confirmed_redrive(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             vec![ids[0], ids[1]],
             terminal,
         )
         .await;
         let remaining = env
-            .state
-            .feed_events
+            .feed_events()
             .dead_letters(FeedEventPhase::Regeneration, None, PageSize::default())
             .await
             .unwrap();
@@ -1219,15 +1206,15 @@ mod tests {
             .unwrap();
         });
         confirmed_redrive(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             vec![publication_id],
             terminal,
         )
         .await;
         let redriven = claim(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             10,
             Duration::from_mins(5),
         )
@@ -1245,10 +1232,10 @@ mod tests {
     #[tokio::test]
     async fn redrive_rejects_expired_dead_letter_before_pruning(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let feeds = Arc::clone(&env.state.feed_events);
-        let id = enqueue(&env.state.write_scope, Arc::clone(&feeds), fp("/feed.rss")).await;
+        let feeds = Arc::clone(&env.feed_events());
+        let id = enqueue(&env.write_scope(), Arc::clone(&feeds), fp("/feed.rss")).await;
         claim(
-            &env.state.write_scope,
+            &env.write_scope(),
             Arc::clone(&feeds),
             1,
             Duration::from_mins(5),
@@ -1256,7 +1243,7 @@ mod tests {
         .await;
         let terminal = fixture_instant(1_000);
         dead_letter_regeneration(
-            &env.state.write_scope,
+            &env.write_scope(),
             Arc::clone(&feeds),
             vec![id],
             "expired regeneration failure".to_owned(),
@@ -1271,8 +1258,7 @@ mod tests {
         );
 
         let rejection = env
-            .state
-            .write_scope
+            .write_scope()
             .run(move |transaction| {
                 Box::pin(async move { feeds.redrive_dead_letters(transaction, &[id], now).await })
             })
@@ -1283,8 +1269,7 @@ mod tests {
             crate::WriteScopeError::Operation(FeedEventRedriveError::Rejected(_))
         ));
         let remaining = env
-            .state
-            .feed_events
+            .feed_events()
             .dead_letters(FeedEventPhase::Regeneration, None, PageSize::default())
             .await
             .unwrap();
@@ -1311,8 +1296,7 @@ mod tests {
             .unwrap();
         });
         let error = env
-            .state
-            .feed_events
+            .feed_events()
             .dead_letters(FeedEventPhase::Regeneration, None, PageSize::default())
             .await
             .expect_err("a corrupt terminal path must not produce an unstable short page");
@@ -1326,8 +1310,8 @@ mod tests {
     async fn enqueue_creates_pending_row(#[case] backend: Backend) {
         let env = backend.setup().await;
         let id = enqueue(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             fp("/feed.rss"),
         )
         .await;
@@ -1344,9 +1328,8 @@ mod tests {
             fp("/tags/t/feed.rss"),
         ];
         let expected: std::collections::HashSet<_> = paths.iter().cloned().collect();
-        let feed_events = Arc::clone(&env.state.feed_events);
-        env.state
-            .write_scope
+        let feed_events = Arc::clone(&env.feed_events());
+        env.write_scope()
             .run(move |transaction| {
                 Box::pin(async move { feed_events.enqueue_many(transaction, &paths).await })
             })
@@ -1354,8 +1337,8 @@ mod tests {
             .unwrap();
 
         let claimed = claim(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             10,
             Duration::from_mins(5),
         )
@@ -1373,9 +1356,8 @@ mod tests {
         // No dedupe: the drain groups by feed_path, so duplicate rows are
         // harmless — pin that enqueue_many does not silently collapse them.
         let paths = vec![fp("/feed.rss"), fp("/feed.rss")];
-        let feed_events = Arc::clone(&env.state.feed_events);
-        env.state
-            .write_scope
+        let feed_events = Arc::clone(&env.feed_events());
+        env.write_scope()
             .run(move |transaction| {
                 Box::pin(async move { feed_events.enqueue_many(transaction, &paths).await })
             })
@@ -1383,8 +1365,8 @@ mod tests {
             .unwrap();
 
         let claimed = claim(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             10,
             Duration::from_mins(5),
         )
@@ -1396,10 +1378,9 @@ mod tests {
     #[tokio::test]
     async fn enqueue_many_empty_input_is_a_no_op(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let feed_events = Arc::clone(&env.state.feed_events);
+        let feed_events = Arc::clone(&env.feed_events());
         let paths = Vec::new();
-        env.state
-            .write_scope
+        env.write_scope()
             .run(move |transaction| {
                 Box::pin(async move { feed_events.enqueue_many(transaction, &paths).await })
             })
@@ -1407,8 +1388,8 @@ mod tests {
             .unwrap();
 
         let claimed = claim(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             10,
             Duration::from_mins(5),
         )
@@ -1421,15 +1402,14 @@ mod tests {
     async fn claimable_count_counts_pending_ready_rows(#[case] backend: Backend) {
         let env = backend.setup().await;
         enqueue(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             fp("/feed.rss"),
         )
         .await;
 
         let count = env
-            .state
-            .feed_events
+            .feed_events()
             .claimable_count(Duration::from_mins(5))
             .await
             .unwrap();
@@ -1442,14 +1422,14 @@ mod tests {
     async fn claimable_count_ignores_delayed_retries(#[case] backend: Backend) {
         let env = backend.setup().await;
         let id = enqueue(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             fp("/feed.rss"),
         )
         .await;
         retry_regeneration(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             vec![id],
             "retry later".to_owned(),
             UtcInstant::from(
@@ -1462,8 +1442,7 @@ mod tests {
         .await;
 
         let count = env
-            .state
-            .feed_events
+            .feed_events()
             .claimable_count(Duration::from_mins(5))
             .await
             .unwrap();
@@ -1476,14 +1455,14 @@ mod tests {
     async fn claimable_count_ignores_live_claims(#[case] backend: Backend) {
         let env = backend.setup().await;
         enqueue(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             fp("/feed.rss"),
         )
         .await;
         let claimed = claim(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             10,
             Duration::from_mins(5),
         )
@@ -1491,8 +1470,7 @@ mod tests {
         assert_eq!(claimed.len(), 1);
 
         let count = env
-            .state
-            .feed_events
+            .feed_events()
             .claimable_count(Duration::from_mins(5))
             .await
             .unwrap();
@@ -1505,22 +1483,21 @@ mod tests {
     async fn claimable_count_counts_expired_claims(#[case] backend: Backend) {
         let env = backend.setup().await;
         enqueue(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             fp("/feed.rss"),
         )
         .await;
         claim(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             10,
             Duration::from_mins(5),
         )
         .await;
 
         let count = env
-            .state
-            .feed_events
+            .feed_events()
             .claimable_count(Duration::ZERO)
             .await
             .unwrap();
@@ -1540,8 +1517,8 @@ mod tests {
             .await
             .unwrap();
         enqueue(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             fp("/feed.rss"),
         )
         .await;
@@ -1549,10 +1526,10 @@ mod tests {
         // The claim skips-and-purges the corrupt row and returns only the valid
         // one — the batch is NOT failed (which would wedge the worker forever).
         // The batch-level report is redacted rather than retaining the bad value.
-        let feed_events = Arc::clone(&env.state.feed_events);
+        let feed_events = Arc::clone(&env.feed_events());
         let lease = Duration::from_mins(5);
         let (claimed, trace) = crate::helpers::swallowed_test::capture_async(
-            env.state.write_scope.run(move |transaction| {
+            env.write_scope().run(move |transaction| {
                 Box::pin(async move {
                     feed_events
                         .claim_pending_batch(transaction, 50, lease)
@@ -1595,8 +1572,8 @@ mod tests {
         // unrelated column into silent data loss — the queue would drain itself.
         let env = backend.setup().await;
         enqueue(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             fp("/feed.rss"),
         )
         .await;
@@ -1616,11 +1593,10 @@ mod tests {
             .await
             .unwrap();
 
-        let feed_events = Arc::clone(&env.state.feed_events);
+        let feed_events = Arc::clone(&env.feed_events());
         let lease = Duration::from_mins(5);
         let err = match env
-            .state
-            .write_scope
+            .write_scope()
             .run(move |transaction| {
                 Box::pin(async move {
                     feed_events
@@ -1677,8 +1653,8 @@ mod tests {
     ) {
         let env = backend.setup().await;
         enqueue(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             fp("/feed.rss"),
         )
         .await;
@@ -1688,11 +1664,10 @@ mod tests {
             .await
             .unwrap();
 
-        let feed_events = Arc::clone(&env.state.feed_events);
+        let feed_events = Arc::clone(&env.feed_events());
         let lease = Duration::from_mins(5);
         let err = match env
-            .state
-            .write_scope
+            .write_scope()
             .run(move |transaction| {
                 Box::pin(async move {
                     feed_events
@@ -1750,8 +1725,8 @@ mod tests {
             .await
             .unwrap();
         enqueue(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             fp("/feed.rss"),
         )
         .await;
@@ -1774,10 +1749,10 @@ mod tests {
             .await
             .unwrap();
 
-        let feed_events = Arc::clone(&env.state.feed_events);
+        let feed_events = Arc::clone(&env.feed_events());
         let lease = Duration::from_mins(5);
         let (claimed, trace) = crate::helpers::swallowed_test::capture_async(
-            env.state.write_scope.run(move |transaction| {
+            env.write_scope().run(move |transaction| {
                 Box::pin(async move {
                     feed_events
                         .claim_pending_batch(transaction, 50, lease)
@@ -1835,14 +1810,14 @@ mod tests {
     async fn claim_returns_eligible_pending_row(#[case] backend: Backend) {
         let env = backend.setup().await;
         enqueue(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             fp("/feed.rss"),
         )
         .await;
         let claimed = claim(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             10,
             Duration::from_mins(5),
         )
@@ -1857,21 +1832,21 @@ mod tests {
     async fn double_claim_returns_no_rows_within_lease(#[case] backend: Backend) {
         let env = backend.setup().await;
         enqueue(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             fp("/feed.rss"),
         )
         .await;
         let first = claim(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             10,
             Duration::from_mins(5),
         )
         .await;
         let second = claim(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             10,
             Duration::from_mins(5),
         )
@@ -1885,22 +1860,22 @@ mod tests {
     async fn lease_expired_rows_are_reclaimable(#[case] backend: Backend) {
         let env = backend.setup().await;
         enqueue(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             fp("/feed.rss"),
         )
         .await;
         let _first = claim(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             10,
             Duration::from_mins(5),
         )
         .await;
         // With a zero lease, the just-claimed row is immediately re-eligible.
         let second = claim(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             10,
             Duration::ZERO,
         )
@@ -1913,14 +1888,14 @@ mod tests {
     async fn mark_pinged_marks_done_and_removes_from_queue(#[case] backend: Backend) {
         let env = backend.setup().await;
         enqueue(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             fp("/feed.rss"),
         )
         .await;
         let claimed = claim(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             10,
             Duration::from_mins(5),
         )
@@ -1928,14 +1903,14 @@ mod tests {
         let ids: Vec<FeedEventId> = claimed.iter().map(|r| r.id).collect();
         let id = ids[0];
         mark_regenerated(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             ids.clone(),
         )
         .await;
         mark_pinged(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             ids,
             fixture_instant(500_000),
         )
@@ -1951,8 +1926,8 @@ mod tests {
         });
         assert_eq!(terminal_at, Some(fixture_instant(500_000)));
         let next = claim(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             10,
             Duration::from_mins(5),
         )
@@ -1965,14 +1940,14 @@ mod tests {
     async fn retry_regeneration_increments_attempts_and_reschedules(#[case] backend: Backend) {
         let env = backend.setup().await;
         let id = enqueue(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             fp("/feed.rss"),
         )
         .await;
         claim(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             10,
             Duration::from_mins(5),
         )
@@ -1984,8 +1959,8 @@ mod tests {
                 .expect("test instant remains representable"),
         );
         retry_regeneration(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             vec![id],
             "boom".to_owned(),
             future,
@@ -1993,8 +1968,8 @@ mod tests {
         .await;
         // Not eligible until `future`.
         let now = claim(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             10,
             Duration::from_mins(5),
         )
@@ -2007,14 +1982,14 @@ mod tests {
     async fn dead_letter_regeneration_marks_failed_terminal(#[case] backend: Backend) {
         let env = backend.setup().await;
         let id = enqueue(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             fp("/feed.rss"),
         )
         .await;
         dead_letter_regeneration(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             vec![id],
             "gave up".to_owned(),
             fixture_instant(600_000),
@@ -2032,8 +2007,8 @@ mod tests {
         assert_eq!(terminal_at, Some(fixture_instant(600_000)));
         // Failed rows are never eligible.
         let next = claim(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             10,
             Duration::from_mins(5),
         )
@@ -2045,17 +2020,18 @@ mod tests {
     #[tokio::test]
     async fn default_dead_letter_page_overfetches_fifty_one_rows(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let feeds = Arc::clone(&env.state.feed_events);
+        let feeds = Arc::clone(&env.feed_events());
+        let write_scope = env.write_scope();
         let ids = futures_util::future::join_all((0..51).map(|index| {
             enqueue(
-                &env.state.write_scope,
+                &write_scope,
                 Arc::clone(&feeds),
                 fp(&format!("/~pagination-{index}/feed.rss")),
             )
         }))
         .await;
         claim(
-            &env.state.write_scope,
+            &env.write_scope(),
             Arc::clone(&feeds),
             100,
             Duration::from_mins(5),
@@ -2064,7 +2040,7 @@ mod tests {
         let terminal = fixture_instant(700_000);
         for id in &ids {
             dead_letter_regeneration(
-                &env.state.write_scope,
+                &env.write_scope(),
                 Arc::clone(&feeds),
                 vec![*id],
                 "terminal".to_owned(),
@@ -2345,8 +2321,7 @@ mod tests {
         });
 
         assert_eq!(
-            env.state
-                .feed_events
+            env.feed_events()
                 .prune_terminal_events(now)
                 .await
                 .expect("prune terminal rows"),
@@ -2382,8 +2357,7 @@ mod tests {
         });
 
         assert_eq!(
-            env.state
-                .feed_events
+            env.feed_events()
                 .prune_terminal_events(now)
                 .await
                 .expect("drain terminal rows"),
@@ -2411,12 +2385,13 @@ mod tests {
         });
 
         let gate = Arc::new(PruneBatchGate::default());
-        env.state
-            .feed_events
+        let feed_events = env.feed_events();
+        feed_events
             .install_prune_batch_gate(Some(Arc::clone(&gate)))
             .await;
-        let feed_events = Arc::clone(&env.state.feed_events);
-        let cleanup = tokio::spawn(async move { feed_events.prune_terminal_events(now).await });
+        let cleanup_feed_events = Arc::clone(&feed_events);
+        let cleanup =
+            tokio::spawn(async move { cleanup_feed_events.prune_terminal_events(now).await });
 
         time::timeout(StdDuration::from_secs(2), gate.wait_for_batch())
             .await
@@ -2426,7 +2401,7 @@ mod tests {
             .execute("INSERT INTO feed_events (feed_url) VALUES ('/~writer/feed.rss')")
             .await
             .expect("independent writer commits between cleanup batches");
-        env.state.feed_events.install_prune_batch_gate(None).await;
+        feed_events.install_prune_batch_gate(None).await;
         gate.resume();
 
         assert_eq!(
@@ -2452,8 +2427,7 @@ mod tests {
         let env = backend.setup().await;
         env.base.pool().close().await;
         assert!(matches!(
-            env.state
-                .feed_events
+            env.feed_events()
                 .prune_terminal_events(UtcInstant::now())
                 .await,
             Err(FeedEventError::Db(SqlxError::PoolClosed))
@@ -2465,29 +2439,29 @@ mod tests {
     async fn empty_id_arrays_are_noops(#[case] backend: Backend) {
         let env = backend.setup().await;
         mark_regenerated(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             Vec::new(),
         )
         .await;
         mark_pinged(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             Vec::new(),
             UtcInstant::now(),
         )
         .await;
         retry_regeneration(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             Vec::new(),
             "x".to_owned(),
             UtcInstant::now(),
         )
         .await;
         dead_letter_regeneration(
-            &env.state.write_scope,
-            Arc::clone(&env.state.feed_events),
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
             Vec::new(),
             "x".to_owned(),
             UtcInstant::now(),

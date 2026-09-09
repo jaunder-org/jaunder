@@ -7,7 +7,7 @@ use std::sync::Arc;
 use common::ids::{SubscriptionId, UserId};
 use common::visibility;
 
-use crate::AppState;
+use crate::{SubscriptionStorage, WriteScope};
 
 /// Seed an active local subscription for fixture-only test setup.
 ///
@@ -15,19 +15,17 @@ use crate::AppState;
 ///
 /// If the local channel cannot be read or the subscription cannot be created.
 pub async fn seed_local_subscription(
-    state: &AppState,
+    subscriptions: Arc<dyn SubscriptionStorage>,
+    write_scope: WriteScope,
     author: UserId,
     subscriber: UserId,
 ) -> SubscriptionId {
-    let local = state
-        .subscriptions
+    let local = subscriptions
         .local_channel_id()
         .await
         .expect("local subscription fixture channel should exist");
     let subscriber = visibility::local_subscriber_identity(local, subscriber);
-    let subscriptions = Arc::clone(&state.subscriptions);
-    let outcome = state
-        .write_scope
+    let outcome = write_scope
         .run(move |transaction| {
             Box::pin(async move {
                 subscriptions
