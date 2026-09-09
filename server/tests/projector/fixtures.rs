@@ -3,7 +3,6 @@ use std::sync::Arc;
 use axum::{
     Router,
     body::Body,
-    extract::Extension,
     http::{Request, StatusCode, header},
     response::Response,
 };
@@ -41,11 +40,13 @@ pub(super) fn projector_app_with_dependencies(
     users: Arc<dyn UserStorage>,
     themes: Arc<dyn ThemeStorage>,
 ) -> Router {
-    let shell = jaunder::projector::Shell(TEST_SHELL.into());
-    jaunder::projector::register(Router::new(), shell)
-        .layer(Extension(posts))
-        .layer(Extension(users))
-        .layer(Extension(themes))
+    let projector = jaunder::projector::PublicProjector::new(
+        posts,
+        users,
+        themes,
+        jaunder::projector::Shell(TEST_SHELL.into()),
+    );
+    jaunder::projector::register(Router::new(), projector)
 }
 
 /// A site selection store whose read fails after the route's content query succeeds.

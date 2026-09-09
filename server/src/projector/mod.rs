@@ -21,8 +21,10 @@
 
 mod document;
 mod handlers;
+mod public_projector;
 mod shell;
 
 pub use document::document_presentation;
 pub use handlers::register;
+pub use public_projector::PublicProjector;
 pub use shell::Shell;
