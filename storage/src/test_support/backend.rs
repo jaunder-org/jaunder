@@ -19,9 +19,10 @@ use common::backup::BackupConfig;
 #[cfg(test)]
 use common::ids::RevisionId;
 use common::ids::{AudienceId, ChannelId, PostId, SubscriptionId, TagId, UserId};
-use common::media::{MaxFileSize, MediaRef, UserQuota};
-#[cfg(test)]
-use common::media::{MediaReferenceForm, MediaReferenceKind};
+use common::media::{
+    ContentHash, Filename, MaxFileSize, MediaRef, MediaReferenceForm, MediaReferenceKind,
+    MediaSource, UserQuota,
+};
 use common::registration::RegistrationPolicy;
 use common::tag::TagLabel;
 use common::tagged_url::BaseUrl;
@@ -656,6 +657,50 @@ impl TestEnv {
             .await
             .expect("read physical post audience rows")
         })
+    }
+
+    /// Reads a Post's current-subject physical media rows from this test-owned database.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the physical rows cannot be read.
+    pub async fn current_post_media(
+        &self,
+        post_id: PostId,
+    ) -> Vec<(MediaRef, MediaReferenceKind, MediaReferenceForm)> {
+        crate::with_closeable_pool!(self.base.pool(), pool, {
+            sqlx::query_as::<
+                _,
+                (
+                    MediaSource,
+                    ContentHash,
+                    Filename,
+                    MediaReferenceKind,
+                    MediaReferenceForm,
+                ),
+            >(
+                "SELECT source, sha256, filename, reference_kind, reference_form FROM post_media
+                 WHERE post_id = $1 AND subject_kind = 'current' AND revision_id = 0
+                 ORDER BY source, sha256, filename, reference_kind, reference_form",
+            )
+            .bind_storage(post_id)
+            .fetch_all(pool)
+            .await
+        })
+        .expect("read current post media rows")
+        .into_iter()
+        .map(|(source, sha256, filename, kind, form)| {
+            (
+                MediaRef {
+                    source,
+                    sha256,
+                    filename,
+                },
+                kind,
+                form,
+            )
+        })
+        .collect()
     }
     /// Executes deliberately raw fixture SQL against this test-owned database.
     ///

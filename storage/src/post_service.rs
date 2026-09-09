@@ -1053,8 +1053,8 @@ mod tests {
     #[cfg(feature = "test-utils")]
     use crate::test_support::mock_write_scope;
     use crate::test_support::{
-        Backend, SeedUser, backends, confirmed, fetch_post_media, fixture_post_media_ownership,
-        media_ref_for, media_url_for, seed_media, seed_users,
+        Backend, SeedUser, backends, confirmed, fixture_post_media_ownership, media_ref_for,
+        media_url_for, seed_media, seed_users,
     };
     #[cfg(feature = "test-utils")]
     use crate::{MockFeedEventStorage, MockPostStorage};
@@ -3144,7 +3144,7 @@ mod tests {
         assert_eq!(posts.len(), 1);
         assert_eq!(posts[0].post_id, first.post_id);
         assert_eq!(
-            fetch_post_media(&env.base, first.post_id).await,
+            env.current_post_media(first.post_id).await,
             vec![(
                 media_ref_for("original.jpg"),
                 MediaReferenceKind::Local,

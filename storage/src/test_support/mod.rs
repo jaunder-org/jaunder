@@ -41,8 +41,8 @@ pub(crate) use media::RawMediaFilename;
 #[cfg(any(test, feature = "test-utils"))]
 pub use media::fixture_post_media_ownership;
 pub use media::{
-    MEDIA_TEST_SHA256, fetch_post_media, media_ref_for, media_row_exists, media_url_for,
-    raw_media_filename_exists, rewrite_media_filename_in_backup, seed_media,
+    MEDIA_TEST_SHA256, media_ref_for, media_row_exists, media_url_for, raw_media_filename_exists,
+    rewrite_media_filename_in_backup, seed_media,
 };
 pub use post_service::{
     create_draft_via_service, create_post_via_service, update_post_body_via_service,

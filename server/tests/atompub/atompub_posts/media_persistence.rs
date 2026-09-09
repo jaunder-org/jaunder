@@ -6,7 +6,7 @@ use rstest_reuse::*;
 use tower::ServiceExt;
 
 use crate::helpers::{atompub_post_xml, create_user_and_session, make_app};
-use storage::test_support::{Backend, backends, fetch_post_media, media_ref_for, media_url_for};
+use storage::test_support::{Backend, backends, media_ref_for, media_url_for};
 
 use super::fixtures::{entry_xml, location_post_id};
 
@@ -40,7 +40,7 @@ async fn create_writes_the_entrys_media_rows(#[case] backend: Backend) {
     let post_id = PostId::from(location_post_id(&response));
 
     assert_eq!(
-        fetch_post_media(base, post_id).await,
+        env.current_post_media(post_id).await,
         vec![(
             media_ref_for("photo.jpg"),
             MediaReferenceKind::Local,

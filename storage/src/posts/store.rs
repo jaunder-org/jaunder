@@ -2153,9 +2153,8 @@ mod tests {
     use crate::test_support::{
         Backend, MEDIA_TEST_SHA256, RawPostRevision, SeedFeedCache, SeedRawPost, SeedUser,
         UpdateRawPost, backends, create_draft_via_service, create_post_via_service,
-        create_posts_confirmed, fetch_post_media, fp, media_ref_for, media_row_exists,
-        media_url_for, seed_media, seed_users, set_post_tags_confirmed,
-        update_post_body_via_service,
+        create_posts_confirmed, fp, media_ref_for, media_row_exists, media_url_for, seed_media,
+        seed_users, set_post_tags_confirmed, update_post_body_via_service,
     };
 
     use common::render::PostFormat;
@@ -2511,12 +2510,12 @@ mod tests {
         .expect("opposite media updates must not deadlock");
 
         assert_eq!(
-            fetch_post_media(&env.base, first_post).await[0].0,
+            env.current_post_media(first_post).await[0].0,
             media_ref_for("second-lock.jpg"),
             "the first post completed its reversed update"
         );
         assert_eq!(
-            fetch_post_media(&env.base, second_post).await[0].0,
+            env.current_post_media(second_post).await[0].0,
             media_ref_for("first-lock.jpg"),
             "the second post completed its reversed update"
         );
@@ -4587,7 +4586,7 @@ mod tests {
         .await;
 
         assert_eq!(
-            fetch_post_media(&env.base, post_id).await,
+            env.current_post_media(post_id).await,
             vec![(
                 media_ref_for("photo.jpg"),
                 MediaReferenceKind::Local,
@@ -4627,7 +4626,8 @@ mod tests {
         )
         .await;
 
-        let names: Vec<String> = fetch_post_media(&env.base, post_id)
+        let names: Vec<String> = env
+            .current_post_media(post_id)
             .await
             .into_iter()
             .map(|(media, _, _)| media.filename.to_string())
@@ -4662,7 +4662,7 @@ mod tests {
         )
         .await;
 
-        assert!(fetch_post_media(&env.base, post_id).await.is_empty());
+        assert!(env.current_post_media(post_id).await.is_empty());
     }
 
     #[apply(backends)]
@@ -4698,7 +4698,7 @@ mod tests {
         )
         .await;
 
-        let rows = fetch_post_media(&env.base, post_id).await;
+        let rows = env.current_post_media(post_id).await;
         assert_eq!(rows.len(), 1, "the removed reference is gone: {rows:?}");
         assert_eq!(
             rows[0],
@@ -4722,7 +4722,7 @@ mod tests {
         )
         .await;
 
-        assert!(fetch_post_media(&env.base, post_id).await.is_empty());
+        assert!(env.current_post_media(post_id).await.is_empty());
     }
 
     #[apply(backends)]
@@ -4748,7 +4748,7 @@ mod tests {
             parse_post_body(&body),
         )
         .await;
-        let before = fetch_post_media(&env.base, post_id).await;
+        let before = env.current_post_media(post_id).await;
         assert_eq!(
             before.len(),
             1,
@@ -4764,7 +4764,7 @@ mod tests {
         .await;
 
         assert_eq!(
-            fetch_post_media(&env.base, post_id).await,
+            env.current_post_media(post_id).await,
             before,
             "rows survive publication"
         );
@@ -4890,7 +4890,7 @@ mod tests {
         .await;
 
         assert_eq!(
-            fetch_post_media(&env.base, post_id).await.len(),
+            env.current_post_media(post_id).await.len(),
             2,
             "both persisted URL spellings retain their distinct exact forms"
         );

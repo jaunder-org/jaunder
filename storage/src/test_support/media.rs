@@ -1,7 +1,6 @@
 //! Media fixtures and inspection helpers: canonical media identities, seeded rows,
 //! backup mutation, and raw/current-reference assertions. Database provisioning and
 //! pool dispatch remain in [`super::backend`].
-use super::TestBase;
 use super::confirmed_for;
 #[cfg(any(test, feature = "test-utils"))]
 use crate::MockSiteConfigStorage;
@@ -16,11 +15,7 @@ use crate::{
 };
 
 use async_trait::async_trait;
-use common::ids::PostId;
-use common::media::{
-    Filename, MediaRef, MediaReference, MediaReferenceForm, MediaReferenceKind, MediaSource,
-    detect_content_type, url,
-};
+use common::media::{Filename, MediaRef, MediaReference, MediaSource, detect_content_type, url};
 #[cfg(any(test, feature = "test-utils"))]
 use common::site::{SiteIdentity, SiteTitle};
 use common::tagged_url::BaseUrl;
@@ -258,42 +253,6 @@ pub async fn media_row_exists(
         .await
         .expect("media lookup should succeed")
         .is_some()
-}
-
-/// A Post's current-subject `post_media` rows, ascending by media identity then
-/// origin. Revision subjects are inspected separately by history tests.
-///
-/// # Panics
-///
-/// If the query fails, or a stored column is not a valid media identity or reference.
-pub async fn fetch_post_media(
-    base: &TestBase,
-    post_id: PostId,
-) -> Vec<(MediaRef, MediaReferenceKind, MediaReferenceForm)> {
-    crate::with_closeable_pool!(base.pool(), pool, {
-        sqlx::query_as::<_, (String, String, String, String, String)>(
-            "SELECT source, sha256, filename, reference_kind, reference_form FROM post_media
-             WHERE post_id = $1 AND subject_kind = 'current' AND revision_id = 0
-             ORDER BY source, sha256, filename, reference_kind, reference_form",
-        )
-        .bind_storage(post_id)
-        .fetch_all(pool)
-        .await
-    })
-    .expect("post_media query should succeed")
-    .into_iter()
-    .map(|(source, sha256, filename, kind, form)| {
-        (
-            MediaRef {
-                source: source.parse().expect("valid media source"),
-                sha256: sha256.parse().expect("valid content hash"),
-                filename: filename.parse().expect("valid filename"),
-            },
-            kind.parse().expect("valid media reference kind"),
-            form.parse().expect("valid media reference form"),
-        )
-    })
-    .collect()
 }
 
 #[cfg(test)]
