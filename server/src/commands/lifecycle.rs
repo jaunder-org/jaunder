@@ -592,7 +592,7 @@ fn compose_server_router(
     instance_id: &InstanceId,
     mailer: Arc<dyn common::mailer::MailSender>,
     prod: bool,
-) -> Result<Router, axum::http::header::InvalidHeaderValue> {
+) -> Router {
     let storage_path = Arc::new(storage_path);
     let locks = Arc::new(MediaContentLocks::new(Arc::clone(&storage_path)));
     let (resolver, ownership) =
@@ -826,7 +826,7 @@ pub async fn prepare_server(
         &instance_id,
         mailer,
         prod,
-    )?;
+    );
 
     let listener = tokio::net::TcpListener::bind(bind).await?;
     let workers = BackgroundWorkers::start(worker_setup).await?;
@@ -1088,6 +1088,39 @@ mod tests {
     #[test]
     fn feed_worker_interval_is_10_seconds_without_capture() {
         assert_eq!(feed_worker_interval(false), Duration::from_secs(10));
+    }
+
+    #[test]
+    fn combined_context_provider_runs_each_provider_in_order() {
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let provider = |name| {
+            let calls = Arc::clone(&calls);
+            move || calls.lock().expect("record context provider").push(name)
+        };
+        let combined = combine_context_providers(
+            provider("accounts"),
+            provider("publication"),
+            provider("media configuration"),
+            provider("themes"),
+            provider("ownership"),
+            provider("publisher"),
+            provider("services"),
+        );
+
+        combined();
+
+        assert_eq!(
+            *calls.lock().expect("read context provider order"),
+            [
+                "accounts",
+                "publication",
+                "media configuration",
+                "themes",
+                "ownership",
+                "publisher",
+                "services",
+            ]
+        );
     }
 
     async fn background_worker_setup(

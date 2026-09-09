@@ -198,3 +198,146 @@ pub fn with_publisher_extensions(
         .layer(axum::Extension(sessions))
         .layer(axum::Extension(write_scope))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use leptos::prelude::{Owner, expect_context};
+    use storage::test_support::{Backend, noop_mailer};
+
+    #[tokio::test]
+    async fn storage_context_providers_publish_every_exact_handle() {
+        let env = Backend::Sqlite.setup().await;
+        let accounts = account_context_provider(
+            env.users(),
+            env.sessions(),
+            env.invites(),
+            env.email_verifications(),
+            env.password_resets(),
+        );
+        let publication = publication_context_provider(
+            env.posts(),
+            env.write_scope(),
+            env.subscriptions(),
+            env.audiences(),
+            env.feed_events(),
+        );
+        let media_configuration =
+            media_configuration_context_provider(env.media(), env.user_config(), env.site_config());
+        let themes = theme_context_provider(env.themes());
+        let owner = Owner::new();
+
+        owner.with(|| {
+            accounts();
+            publication();
+            media_configuration();
+            themes();
+
+            expect_context::<Arc<dyn UserStorage>>();
+            expect_context::<Arc<dyn SessionStorage>>();
+            expect_context::<Arc<dyn InviteStorage>>();
+            expect_context::<Arc<dyn EmailVerificationStorage>>();
+            expect_context::<Arc<dyn PasswordResetStorage>>();
+            expect_context::<Arc<dyn PostStorage>>();
+            expect_context::<WriteScope>();
+            expect_context::<Arc<dyn SubscriptionStorage>>();
+            expect_context::<Arc<dyn AudienceStorage>>();
+            expect_context::<Arc<dyn FeedEventStorage>>();
+            expect_context::<Arc<dyn MediaStorage>>();
+            expect_context::<Arc<dyn UserConfigStorage>>();
+            expect_context::<Arc<dyn SiteConfigStorage>>();
+            expect_context::<Arc<dyn ThemeStorage>>();
+        });
+    }
+
+    #[tokio::test]
+    async fn service_context_providers_publish_every_exact_service() {
+        let env = Backend::Sqlite.setup().await;
+        let storage_path = Arc::new(env.base.path().to_path_buf());
+        let content_locks = Arc::new(MediaContentLocks::new(Arc::clone(&storage_path)));
+        let resolver: Arc<dyn storage::MediaReferenceOwnershipResolver> =
+            Arc::new(crate::media_ownership::LiveMediaReferenceOwnershipResolver::new());
+        let ownership = PostMediaOwnership::new(
+            resolver.clone(),
+            env.base.instance_id().clone(),
+            env.site_config(),
+        );
+        let media_manager = Arc::new(MediaManager::new(
+            env.media(),
+            env.posts(),
+            env.site_config(),
+            env.write_scope(),
+            Arc::clone(&content_locks),
+            env.base.instance_id().clone(),
+            resolver,
+        ));
+        let theme_asset_manager = Arc::new(ThemeAssetManager::new(
+            env.themes(),
+            env.write_scope(),
+            storage_path,
+        ));
+        let theme_manager = Arc::new(ThemeManager::new(
+            env.themes(),
+            env.media(),
+            env.write_scope(),
+            Arc::clone(&content_locks),
+        ));
+        let theme_operation_coordinator = Arc::new(ThemeOperationCoordinator::new());
+        let mailer = noop_mailer();
+        let publisher = Arc::new(crate::publisher::PublisherService::new(
+            env.base.path().to_path_buf(),
+            env.publisher(),
+            env.write_scope(),
+        ));
+        let services = service_context_provider(
+            mailer.clone(),
+            Arc::clone(&content_locks),
+            Arc::clone(&media_manager),
+            Arc::clone(&theme_asset_manager),
+            Arc::clone(&theme_operation_coordinator),
+            Arc::clone(&theme_manager),
+            true,
+        );
+        let publisher_context = publisher_context_provider(Arc::clone(&publisher));
+        let ownership_context = post_media_ownership_context_provider(ownership);
+        let owner = Owner::new();
+
+        owner.with(|| {
+            services();
+            publisher_context();
+            ownership_context();
+
+            assert!(Arc::ptr_eq(
+                &expect_context::<Arc<dyn MailSender>>(),
+                &mailer,
+            ));
+            assert!(Arc::ptr_eq(
+                &expect_context::<Arc<MediaContentLocks>>(),
+                &content_locks,
+            ));
+            assert!(Arc::ptr_eq(
+                &expect_context::<Arc<MediaManager>>(),
+                &media_manager,
+            ));
+            assert!(Arc::ptr_eq(
+                &expect_context::<Arc<ThemeAssetManager>>(),
+                &theme_asset_manager,
+            ));
+            assert!(Arc::ptr_eq(
+                &expect_context::<Arc<ThemeOperationCoordinator>>(),
+                &theme_operation_coordinator,
+            ));
+            assert!(Arc::ptr_eq(
+                &expect_context::<Arc<ThemeManager>>(),
+                &theme_manager,
+            ));
+            assert!(expect_context::<web::auth::CookieSettings>().secure);
+            assert!(Arc::ptr_eq(
+                &expect_context::<Arc<crate::publisher::PublisherService>>(),
+                &publisher,
+            ));
+            expect_context::<Arc<dyn web::websub::WebsubPublisher>>();
+            expect_context::<PostMediaOwnership>();
+        });
+    }
+}

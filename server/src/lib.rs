@@ -111,23 +111,20 @@ where
 
 /// Completes a fully composed application router with the common page,
 /// observability, cookie, and instance-identity middleware.
-///
-/// # Errors
-///
-/// Returns an error when the persisted instance identity cannot form an HTTP header.
-pub fn create_router(
-    app: Router,
-    instance_id: &InstanceId,
-    secure_cookies: bool,
-) -> Result<Router, axum::http::header::InvalidHeaderValue> {
-    let instance_header = instance_id.to_string().parse::<HeaderValue>()?;
+pub fn create_router(app: Router, instance_id: &InstanceId, secure_cookies: bool) -> Router {
+    // A non-header-safe value would violate `InstanceId`'s canonical UUID invariant.
+    let instance_header = instance_id
+        .to_string()
+        .parse::<HeaderValue>()
+        .unwrap_or_else(|_| std::process::abort());
     let app = app.layer(axum::middleware::from_fn_with_state(
         secure_cookies,
         retire_session_cookie,
     ));
 
-    Ok(crate::observability::with_http_observability(app).layer(
-        axum::middleware::from_fn_with_state(instance_header, set_instance_header),
+    crate::observability::with_http_observability(app).layer(axum::middleware::from_fn_with_state(
+        instance_header,
+        set_instance_header,
     ))
 }
 

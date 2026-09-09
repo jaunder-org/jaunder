@@ -346,7 +346,6 @@ macro_rules! make_app {
             .layer(axum::Extension(sessions))
             .layer(axum::Extension(write_scope));
             jaunder::create_router(app, &instance_id, $secure_cookies)
-                .expect("canonical instance identity is an HTTP header")
         })
     };
 }
