@@ -74,7 +74,7 @@ impl LettreMailSender {
             .to_string()
             .parse::<common::mailbox::Mailbox>()
         else {
-            unreachable!("SmtpSender invariant guarantees common::Mailbox parseability"); // cov:ignore -- SmtpSender is validated through the same mailbox grammar.
+            unreachable!("SmtpSender invariant guarantees common::Mailbox parseability");
         };
         let sender: Mailbox = common_sender
             .to_string()
@@ -135,7 +135,7 @@ impl LettreMailSender {
         let from: Mailbox = match message.from.as_ref() {
             Some(addr) => {
                 let Ok(mailbox) = addr.to_string().parse::<Mailbox>() else {
-                    unreachable!("an Email always parses as a lettre Mailbox"); // cov:ignore -- Email's display form is guarded by the local lettre compatibility test.
+                    unreachable!("an Email always parses as a lettre Mailbox");
                 };
                 mailbox
             }
@@ -146,7 +146,7 @@ impl LettreMailSender {
 
         for to_addr in &message.to {
             let Ok(mailbox) = to_addr.to_string().parse::<Mailbox>() else {
-                unreachable!("an Email always parses as a lettre Mailbox"); // cov:ignore -- Email's display form is guarded by the local lettre compatibility test.
+                unreachable!("an Email always parses as a lettre Mailbox");
             };
             builder = builder.to(mailbox);
         }
@@ -161,7 +161,7 @@ impl LettreMailSender {
             // encodes. `from` is always set just above, and survives the header
             // round-trip lettre performs in `build()` (the guard again). `to` is
             // non-empty, checked at the top of this function.
-            unreachable!("from is set, to is non-empty, and a String body always encodes"); // cov:ignore -- all Message builder prerequisites are established above.
+            unreachable!("from is set, to is non-empty, and a String body always encodes");
         };
 
         Ok(email)
@@ -254,7 +254,7 @@ mod tests {
                  dropped? See #297",
             );
             let Ok(mailbox) = parsed else {
-                unreachable!("just asserted ok"); // cov:ignore -- test assertion above proves this pattern arm.
+                unreachable!("just asserted ok");
             };
 
             assert!(

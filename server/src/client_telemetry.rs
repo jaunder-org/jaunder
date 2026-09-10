@@ -161,7 +161,7 @@ impl ClientTelemetryLimiter {
             let user_id = state.ring[0];
             let should_evict = {
                 let Some(bucket) = state.buckets.get_mut(&user_id) else {
-                    unreachable!("ring entries always have buckets"); // cov:ignore -- private cleanup maintains the ring/map bijection.
+                    unreachable!("ring entries always have buckets");
                 };
                 bucket.refill(now);
                 bucket.tokens == BURST && now.duration_since(bucket.last_activity) > STALE

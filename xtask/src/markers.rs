@@ -3,11 +3,12 @@
 //! Two gates express exemptions this way, and they share exactly this primitive —
 //! "is there a `<token>` marker on this source line, and what reason does it give" —
 //! and nothing above it. The coverage gate ([`crate::coverage`]) hands in a line from
-//! an `llvm-cov` text report and honors `cov:ignore`; the ident-keyed XSS gates
+//! an `llvm-cov` text report and recognizes `cov:ignore`; the ident-keyed XSS gates
 //! ([`crate::steps::ident_gate`]) hand in a line from the file itself, located by a
-//! `syn` span, and honor `<gate-step>:allow`. Their vocabularies and their strictness
-//! differ deliberately — a bare `cov:ignore` is legal, a bare `html-sink:allow` is
-//! not — but *where a comment legally begins* must have one answer, tested once.
+//! `syn` span, and recognize `<gate-step>:allow`. This generic helper deliberately
+//! represents a bare marker as an empty suffix; consumers choose their own strictness.
+//! Coverage rejects an empty `cov:ignore` reason, as do the XSS gates. What they share
+//! is *where a comment legally begins*, tested once.
 //!
 //! That question is not trivial, which is why it is here rather than open-coded twice:
 //! a `//` inside a string, a char literal, a raw string, a `/* … */` block, or a doc
@@ -93,8 +94,9 @@ pub fn line_comment(src: &str) -> Option<&str> {
 
 /// The reason text of a `token` marker in `comment` (the text after `//`), or
 /// `None` when that comment carries no such marker. `Some("")` means the marker is
-/// present but **bare** — a distinction each gate prices for itself: coverage
-/// accepts a bare `cov:ignore`, the XSS gates fail one.
+/// present but **bare**. This is a generic lexical helper; each consumer enforces its
+/// own contract. In particular, coverage rejects a bare `cov:ignore` reason, and the
+/// XSS gates reject a bare allow marker.
 pub fn marker_in_comment<'a>(comment: &'a str, token: &str) -> Option<&'a str> {
     if !comment_marker_is(comment, token) {
         return None;

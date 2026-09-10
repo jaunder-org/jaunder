@@ -262,7 +262,7 @@ pub trait MediaDialect: Backend {
     async fn total_upload_bytes(pool: &Pool<Self>) -> Result<ByteSize>;
 
     /// Performs the portable conditional deletion under the dialect's media lock.
-    // cov:ignore-start — generic declaration header is attributed to backend monomorphizations.
+    // cov:ignore-start: generic async trait declaration coverage is attributed to the SQLite and PostgreSQL backend monomorphizations.
     async fn try_delete_media(
         conn: &mut Self::Connection,
         user_id: UserId,
@@ -284,7 +284,7 @@ pub trait MediaDialect: Backend {
         Self::Arguments: sqlx::IntoArguments<Self>,
     {
         // cov:ignore-stop
-        // cov:ignore
+        // cov:ignore: LLVM leaves the shared generic SQL body entry edge unmarked although the SQLite and PostgreSQL adapters exercise it.
         Self::lock_media_reference(conn, media).await?;
         let mut query = QueryBuilder::<Self>::new(String::new());
         crate::posts::media::push_media_reference_evidence_cte(&mut query, evidence);
@@ -322,7 +322,7 @@ pub trait MediaDialect: Backend {
             .fetch_optional(&mut *conn)
             .await?
             .is_some())
-    } // cov:ignore
+    } // cov:ignore: LLVM leaves the shared generic async closing edge unmarked after both backend adapters exercise the deletion behavior.
 
     /// Lists the authenticated owner's retained Post IDs after foreign evidence
     /// exemptions, in ascending order.
@@ -400,7 +400,7 @@ pub trait MediaDialect: Backend {
     }
 
     /// Executes the portable locked global reclaimability decision.
-    // cov:ignore-start — generic declaration header is attributed to backend monomorphizations.
+    // cov:ignore-start: generic async trait declaration coverage is attributed to the SQLite and PostgreSQL backend monomorphizations.
     async fn media_entry_is_reclaimable(
         conn: &mut Self::Connection,
         media: &MediaRef,
@@ -419,7 +419,7 @@ pub trait MediaDialect: Backend {
         Self::Arguments: sqlx::IntoArguments<Self>,
     {
         // cov:ignore-stop
-        // cov:ignore
+        // cov:ignore: LLVM leaves the shared generic SQL body entry edge unmarked although the SQLite and PostgreSQL adapters exercise it.
         Self::lock_media_reference(conn, media).await?;
         let mut query = QueryBuilder::<Self>::new(String::new());
         crate::posts::media::push_media_reference_evidence_cte(&mut query, evidence);
@@ -439,7 +439,7 @@ pub trait MediaDialect: Backend {
             .fetch_optional(&mut *conn)
             .await?
             .is_some())
-    } // cov:ignore
+    } // cov:ignore: LLVM leaves the shared generic async closing edge unmarked after both backend adapters exercise the reclaimability behavior.
 }
 
 /// Generic [`MediaStorage`] backed by any [`MediaDialect`] database.

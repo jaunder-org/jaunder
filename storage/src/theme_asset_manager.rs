@@ -394,10 +394,7 @@ impl ThemeAssetManager {
                 Self::sync_directory(staging).await?;
                 Ok(true)
             }
-            // cov:ignore-start
-            // Tokio's Linux rename replaces an existing destination atomically; this
-            // collision recovery is retained for platform parity where rename reports
-            // AlreadyExists, and cannot be exercised by the authoritative Linux run.
+            // cov:ignore-start: Tokio's Linux rename replaces an existing destination atomically, so this portable AlreadyExists recovery cannot execute on the authoritative host.
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                 let existing = fs::read(&path).await?;
                 fs::remove_file(&temporary).await?;
@@ -405,9 +402,7 @@ impl ThemeAssetManager {
                 Self::verify(&existing, &blob.digest).map(|()| false)
             }
             // cov:ignore-stop
-            // cov:ignore-start — after the missing-destination check, an unexpected
-            // rename failure requires an OS race or fault injection unavailable to the
-            // authoritative host coverage run.
+            // cov:ignore-start: after the missing-destination check, this rename failure needs a post-check OS race or host fault injection unavailable to authoritative coverage.
             Err(error) => Err(finish_install_failure(
                 error,
                 fs::remove_file(&temporary).await,
@@ -495,11 +490,7 @@ impl ThemeAssetManager {
             let mut second = match fs::read_dir(prefix_entry.path()).await {
                 Ok(entries) => entries,
                 Err(error) if error.kind() == io::ErrorKind::NotADirectory => continue,
-                // cov:ignore-start — after this directory has been enumerated, an
-                // unexpected read failure requires a concurrent filesystem race or
-                // host-level fault injection.
                 Err(error) => return Err(error.into()),
-                // cov:ignore-stop
             };
             while let Some(shard_entry) = second.next_entry().await? {
                 let shard_name = shard_entry.file_name();
@@ -510,11 +501,7 @@ impl ThemeAssetManager {
                 let mut files = match fs::read_dir(shard_entry.path()).await {
                     Ok(entries) => entries,
                     Err(error) if error.kind() == io::ErrorKind::NotADirectory => continue,
-                    // cov:ignore-start — after this shard has been enumerated, an
-                    // unexpected read failure requires a concurrent filesystem race or
-                    // host-level fault injection.
                     Err(error) => return Err(error.into()),
-                    // cov:ignore-stop
                 };
                 while let Some(file) = files.next_entry().await? {
                     if !file.file_type().await?.is_file() {
@@ -522,9 +509,11 @@ impl ThemeAssetManager {
                     }
                     let name = file.file_name();
                     let digest = name.to_string_lossy();
-                    if Self::is_canonical_digest_path(&prefix, &shard, &digest) {
-                        digests.push(digest.parse().map_err(|_| ThemeAssetError::InvalidDigest)?); // cov:ignore — canonical lowercase SHA-256 hex was already validated above, so the digest newtype parser cannot reject it.
-                    } // cov:ignore — the parser result's closure edge is compiler bookkeeping; the canonical digest path is exercised by reconciliation.
+                    let Some(digest) = Self::canonical_content_digest(&prefix, &shard, &digest)
+                    else {
+                        continue;
+                    };
+                    digests.push(digest);
                 }
             }
         }
@@ -578,6 +567,20 @@ impl ThemeAssetManager {
         } else {
             Err(ThemeAssetError::InvalidDigest)
         }
+    }
+
+    fn canonical_content_digest(
+        prefix: &str,
+        shard: &str,
+        digest: &str,
+    ) -> Option<ThemeContentDigest> {
+        if !Self::is_canonical_digest_path(prefix, shard, digest) {
+            return None;
+        }
+        let Ok(digest) = digest.parse() else {
+            unreachable!("a canonical content path is a valid theme digest");
+        };
+        Some(digest)
     }
 
     fn hex(bytes: &[u8]) -> String {
@@ -714,6 +717,7 @@ mod tests {
             .join(&digest.as_ref()[2..4]);
         fs::create_dir_all(&shard).expect("create canonical shard");
         fs::write(shard.join(digest.as_ref()), b"canonical content").expect("write content");
+        fs::write(shard.join("not-a-digest"), b"ignore").expect("write noncanonical digest");
         fs::write(root.join("not-a-prefix"), b"ignore").expect("write non-directory prefix");
         fs::create_dir_all(root.join("aa").join("not-a-shard")).expect("create invalid shard");
         assert_eq!(
@@ -1344,8 +1348,38 @@ mod tests {
 
         let path = manager.content_path(digest.as_ref());
         fs::remove_dir(&path).expect("replace directory with content path");
+
         fs::create_dir_all(&path).expect("create unlink target directory");
         assert!(manager.unlink_if_present(&digest).await.is_err());
+    }
+    // guard:no-backend — dangling directory symlinks deterministically exercise census errors.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn filesystem_census_reports_dangling_prefix_and_shard_symlinks() {
+        let fixture = TempDir::new().expect("create fixture");
+        let manager = ThemeAssetManager::new(
+            Arc::new(MockThemeStorage::new()),
+            mock_write_scope(),
+            Arc::new(fixture.path().to_path_buf()),
+        );
+        let themes = fixture.path().join("themes");
+        fs::create_dir_all(&themes).expect("create themes root");
+        std::os::unix::fs::symlink("missing-prefix", themes.join("ab"))
+            .expect("create dangling prefix symlink");
+        assert!(matches!(
+            manager.enumerate_content_digests().await,
+            Err(ThemeAssetError::Filesystem(error)) if error.kind() == io::ErrorKind::NotFound
+        ));
+        fs::remove_file(themes.join("ab")).expect("remove dangling prefix symlink");
+
+        let prefix = themes.join("ab");
+        fs::create_dir_all(&prefix).expect("create valid prefix directory");
+        std::os::unix::fs::symlink("missing-shard", prefix.join("cd"))
+            .expect("create dangling shard symlink");
+        assert!(matches!(
+            manager.enumerate_content_digests().await,
+            Err(ThemeAssetError::Filesystem(error)) if error.kind() == io::ErrorKind::NotFound
+        ));
     }
 
     // guard:no-backend — filesystem content validation is storage-independent.

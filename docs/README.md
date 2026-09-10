@@ -211,6 +211,7 @@ convention). See the Status column below for each ADR's current status.
 | [0182](adr/0182-jiff-time-model.md)                                    | Jiff time model                                                                                              | accepted   |
 | [0183](adr/0183-per-user-media-records-from-local-post-references.md)  | Per-user Media Records from local Post references                                                            | accepted   |
 | [0184](adr/0184-css-package-public-themes.md)                          | Custom public themes are scoped CSS packages                                                                 | accepted   |
+| [0185](adr/0185-reason-bearing-coverage-exceptions.md)                 | Reason-bearing Rust coverage exceptions                                                                      | accepted   |
 
 <!-- adr-table:end -->
 

@@ -414,7 +414,7 @@ pub fn num_newtype_derive(item: TokenStream) -> TokenStream {
 /// **Placement is enforced.** The fn must live in `web/src/<vertical>/api.rs`; a
 /// submodule is a compile error, because `(vertical, ident)` would stop being
 /// unique and two fns could silently derive one wire URL (#358).
-// cov:ignore-start — the only proc-macro-context code in this crate.
+// cov:ignore-start: proc_macro::Span::call_site().file() is available only during a live proc-macro expansion, which host unit tests cannot create
 // `Span::call_site().file()` panics outside a live expansion, so nothing in this
 // fn is reachable from `cargo test`. Every decision lives in `server_fn::expand` /
 // `::derive`, which take the path as a plain parameter and are unit-tested branch

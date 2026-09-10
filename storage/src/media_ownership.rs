@@ -130,13 +130,11 @@ impl PostWriteGate {
 }
 
 #[cfg(any(test, feature = "test-utils"))]
-// cov:ignore-start — test-only synchronization gate Default implementation has no production caller
 impl Default for PostWriteGate {
     fn default() -> Self {
         Self::new()
     }
 }
-// cov:ignore-stop
 
 /// Composition-root dependency for post content materialization.
 #[derive(Clone)]
@@ -257,4 +255,14 @@ pub async fn resolve_media_reference_ownership(
             ForeignEvidenceSink::new(instance_id.clone()),
         )
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PostWriteGate;
+
+    #[test]
+    fn post_write_gate_default_constructs_a_gate() {
+        let _gate = PostWriteGate::default();
+    }
 }

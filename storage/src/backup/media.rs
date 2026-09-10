@@ -101,14 +101,17 @@ fn mirror_media_entries(
                 previous_backup,
                 &child_relative_path,
             )?;
-        } else if metadata.is_file() {
-            copy_or_link_media_file(
-                &source_path,
-                &destination_path,
-                previous_backup,
-                &child_relative_path,
-            )?;
-        } // cov:ignore is_file arm's closing brace; llvm-cov leaves it unmarked though the arm's copy-success and `?`-failure paths are both tested
+            continue;
+        }
+        if !metadata.is_file() {
+            continue;
+        }
+        copy_or_link_media_file(
+            &source_path,
+            &destination_path,
+            previous_backup,
+            &child_relative_path,
+        )?;
     }
     Ok(())
 }
@@ -312,6 +315,26 @@ mod tests {
         let temp = TempDir::new()?;
         let destination = temp.path().join("nonexistent_parent").join("backup");
         assert_eq!(previous_directory_backup(&destination)?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn mirror_media_skips_non_regular_entries() -> Result<(), BackupError> {
+        let temp = TempDir::new()?;
+        let source = temp.path().join("source");
+        let destination = temp.path().join("destination");
+        fs::create_dir_all(&source)?;
+        let _listener =
+            std::os::unix::net::UnixListener::bind(source.join("sock")).expect("bind unix socket");
+        fs::write(source.join("real.txt"), "keep")?;
+
+        mirror_media_directory(&source, &destination, None)?;
+
+        assert_eq!(fs::read_to_string(destination.join("real.txt"))?, "keep");
+        assert!(
+            !destination.join("sock").exists(),
+            "a non-regular entry must not be mirrored"
+        );
         Ok(())
     }
 

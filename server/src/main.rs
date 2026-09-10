@@ -34,8 +34,8 @@ async fn main() -> anyhow::Result<()> {
             "FATAL: jaunder built with cheap-kdf (test-only password hashing); refusing to start"
         );
         std::process::exit(1);
-    } // cov:ignore process::exit(1) above diverges, so this closing brace is unreachable
-    // cov:ignore-start
+    } // cov:ignore: process::exit(1) diverges before this compiler-inserted closing edge.
+    // cov:ignore-start: Host test binaries exit at the cheap-KDF guard before CLI parsing can run.
     let cli = Cli::parse();
     run(cli).await
     // cov:ignore-stop
@@ -50,7 +50,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
     let Some(command) = cli.command else {
         // `jaunder` with no subcommand is not runnable — re-parse to trigger
         // clap's built-in help/usage, which prints and exits.
-        // cov:ignore-start
+        // cov:ignore-start: Clap prints help and exits the process instead of returning from this parse.
         Cli::parse_from(["jaunder", "--help"]);
         // cov:ignore-stop
         unreachable!("Cli::parse_from([\"jaunder\", \"--help\"]) prints help and exits the process")
@@ -85,6 +85,10 @@ mod tests {
     #[cfg(unix)]
     use std::os::unix::ffi::OsStringExt as _;
     use tempfile::TempDir;
+
+    fn child_diagnostic(output: &[u8]) -> String {
+        String::from_utf8_lossy(output).into_owned()
+    }
 
     fn test_storage_args(base: &TempDir) -> StorageArgs {
         StorageArgs {
@@ -282,18 +286,14 @@ mod tests {
             )
             .output()
             .expect("run isolated root-wiring test");
+        let stderr = child_diagnostic(&output.stderr);
+        let stdout = child_diagnostic(&output.stdout);
+        let success_message = format!("child status: {}; stderr: {stderr}", output.status);
+        let projection_message = format!("child did not complete root wiring: {stdout}");
+        assert!(output.status.success(), "{success_message}");
         assert!(
-            output.status.success(),
-            "child status: {}; stderr: {}",
-            output.status,
-            // The root-wiring contract requires child success; this is diagnostic-only.
-            String::from_utf8_lossy(&output.stderr) // cov:ignore
-        );
-        assert!(
-            String::from_utf8_lossy(&output.stdout).contains("MAIN_TEST_CHILD_COMPLETED"),
-            "child did not complete root wiring: {}",
-            // A successful child always emits the projection; this is diagnostic-only.
-            String::from_utf8_lossy(&output.stdout) // cov:ignore
+            stdout.contains("MAIN_TEST_CHILD_COMPLETED"),
+            "{projection_message}"
         );
     }
     #[cfg(unix)]
@@ -427,9 +427,7 @@ mod tests {
         });
 
         // Spawn-and-abort: this pins the dispatch arm, not the serve loop.
-        let task = tokio::spawn(async move {
-            let _ = run(cli).await;
-        }); // cov:ignore
+        let task = tokio::spawn(run(cli));
 
         // Wait a bit for it to start.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -531,9 +529,7 @@ mod tests {
             environment: jaunder::cli::DeploymentEnv::Dev,
         });
 
-        let task = tokio::spawn(async move {
-            let _ = run(cli).await;
-        }); // cov:ignore
+        let task = tokio::spawn(run(cli));
 
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         task.abort();
@@ -582,5 +578,10 @@ mod tests {
         }))
         .await
         .expect("restore dispatch should succeed");
+    }
+
+    #[test]
+    fn child_diagnostic_preserves_non_utf8_output() {
+        assert_eq!(child_diagnostic(b"child \xff"), "child �");
     }
 }

@@ -817,12 +817,15 @@ mod tests {
     }
     #[test]
     fn otlp_endpoint_prefers_jaunder_specific_setting() {
+        let preferred_fallback_must_not_run = || {
+            unreachable!("a valid preferred endpoint must not emit a fallback");
+        };
+
         assert_eq!(
             otel_exporter_otlp_endpoint(
                 Ok(Some("http://preferred:4317".to_owned())),
                 Ok(Some("http://fallback:4317".to_owned())),
-                // A warning here would violate the valid-preferred-value contract.
-                || unreachable!("a valid preferred endpoint must not emit a fallback"), // cov:ignore
+                preferred_fallback_must_not_run,
             )
             .as_deref(),
             Some("http://preferred:4317")
@@ -831,12 +834,15 @@ mod tests {
 
     #[test]
     fn otlp_endpoint_falls_back_to_standard_value() {
+        let standard_fallback_must_not_run = || {
+            unreachable!("a valid standard endpoint must not emit a fallback");
+        };
+
         assert_eq!(
             otel_exporter_otlp_endpoint(
                 Ok(None),
                 Ok(Some("http://fallback:4317".to_owned())),
-                // A warning here would violate the valid-fallback-value contract.
-                || unreachable!("a valid standard endpoint must not emit a fallback"), // cov:ignore
+                standard_fallback_must_not_run,
             )
             .as_deref(),
             Some("http://fallback:4317")

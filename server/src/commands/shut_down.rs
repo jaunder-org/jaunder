@@ -48,6 +48,52 @@ trait ProcessOperations {
     fn wait_for_exit(&self, handle: &Self::Handle, timeout: Duration) -> io::Result<bool>;
 }
 
+fn pidfd_open_outcome<Handle>(
+    result: Result<Handle, rustix::io::Errno>,
+) -> io::Result<OpenOutcome<Handle>> {
+    match result {
+        Ok(handle) => Ok(OpenOutcome::Captured(handle)),
+        Err(error) if error == rustix::io::Errno::SRCH => Ok(OpenOutcome::ProcessExited),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn pidfd_signal_outcome(result: Result<(), rustix::io::Errno>) -> io::Result<()> {
+    match result {
+        Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn poll_outcome(result: Result<usize, rustix::io::Errno>) -> io::Result<Option<bool>> {
+    match result {
+        Ok(0) => Ok(Some(false)),
+        Ok(_) => Ok(Some(true)),
+        Err(error) if error == rustix::io::Errno::INTR => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+trait PollOperations {
+    fn poll(
+        &mut self,
+        fds: &mut [PollFd<'_>],
+        timeout: &Timespec,
+    ) -> Result<usize, rustix::io::Errno>;
+}
+
+struct LinuxPollOperations;
+
+impl PollOperations for LinuxPollOperations {
+    fn poll(
+        &mut self,
+        fds: &mut [PollFd<'_>],
+        timeout: &Timespec,
+    ) -> Result<usize, rustix::io::Errno> {
+        event::poll(fds, Some(timeout))
+    }
+}
+
 struct LinuxProcessOperations;
 
 impl ProcessOperations for LinuxProcessOperations {
@@ -58,12 +104,7 @@ impl ProcessOperations for LinuxProcessOperations {
             .ok()
             .and_then(Pid::from_raw)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid runtime pid"))?;
-        match process::pidfd_open(pid, PidfdFlags::empty()) {
-            Ok(handle) => Ok(OpenOutcome::Captured(handle)),
-            // pidfd error identities depend on the running kernel/process table.
-            Err(error) if error == rustix::io::Errno::SRCH => Ok(OpenOutcome::ProcessExited), // cov:ignore
-            Err(error) => Err(error.into()), // cov:ignore
-        }
+        pidfd_open_outcome(process::pidfd_open(pid, PidfdFlags::empty()))
     }
 
     fn start_time(&self, pid: u32) -> io::Result<Option<u64>> {
@@ -71,35 +112,38 @@ impl ProcessOperations for LinuxProcessOperations {
     }
 
     fn signal_term(&self, handle: &Self::Handle) -> io::Result<()> {
-        match process::pidfd_send_signal(handle, Signal::TERM) {
-            Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
-            Err(error) => Err(error.into()), // cov:ignore -- OS pidfd permission/failure path
-        }
+        pidfd_signal_outcome(process::pidfd_send_signal(handle, Signal::TERM))
     }
 
     fn wait_for_exit(&self, handle: &Self::Handle, timeout: Duration) -> io::Result<bool> {
-        let deadline = Instant::now()
-            .checked_add(timeout)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "timeout is too large"))?;
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Ok(false);
-            }
-            let seconds = i64::try_from(remaining.as_secs())
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "timeout is too large"))?;
-            let timeout = Timespec {
-                tv_sec: seconds,
-                tv_nsec: remaining.subsec_nanos().into(),
-            };
-            let mut fds = [PollFd::new(handle, PollFlags::IN)];
-            match event::poll(&mut fds, Some(&timeout)) {
-                Ok(0) => return Ok(false), // cov:ignore -- kernel poll timeout path
-                Ok(_) => return Ok(true),
-                Err(error) if error == rustix::io::Errno::INTR => {} // cov:ignore -- signal interruption path
-                Err(error) => return Err(error.into()), // cov:ignore -- OS poll failure path
-            }
+        wait_for_exit_with(handle, timeout, &mut LinuxPollOperations)
+    }
+}
+
+fn wait_for_exit_with(
+    handle: &rustix::fd::OwnedFd,
+    timeout: Duration,
+    operations: &mut impl PollOperations,
+) -> io::Result<bool> {
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "timeout is too large"))?;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(false);
         }
+        let seconds = i64::try_from(remaining.as_secs())
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "timeout is too large"))?;
+        let timeout = Timespec {
+            tv_sec: seconds,
+            tv_nsec: remaining.subsec_nanos().into(),
+        };
+        let mut fds = [PollFd::new(handle, PollFlags::IN)];
+        let Some(exited) = poll_outcome(operations.poll(&mut fds, &timeout))? else {
+            continue;
+        };
+        return Ok(exited);
     }
 }
 
@@ -290,7 +334,7 @@ mod tests {
             let exited = LinuxProcessOperations.wait_for_exit(handle, timeout)?;
             if exited {
                 fs::remove_file(&self.runtime_path)?;
-            } // cov:ignore
+            } // cov:ignore: LLVM leaves this covered completed-child cleanup edge at zero.
             Ok(exited)
         }
     }
@@ -339,7 +383,7 @@ mod tests {
         fs::create_dir(&path).expect("runtime path directory");
 
         let Err(error) = read_runtime_record(&path) else {
-            panic!("a directory is not a runtime record"); // cov:ignore
+            unreachable!("a directory is not a runtime record");
         };
 
         assert!(
@@ -356,13 +400,81 @@ mod tests {
             .open(std::process::id())
             .expect("capture this process through pidfd")
         else {
-            panic!("this process remains live while its pidfd is acquired"); // cov:ignore
+            unreachable!("this process remains live while its pidfd is acquired");
         };
 
         assert!(
             !LinuxProcessOperations
                 .wait_for_exit(&handle, Duration::ZERO)
                 .expect("zero remaining time is a normal timeout")
+        );
+    }
+    #[test]
+    fn pidfd_open_for_an_impossible_pid_reports_process_exited() {
+        let outcome = LinuxProcessOperations
+            .open(i32::MAX as u32)
+            .expect("an impossible Linux PID is not an OS error");
+
+        assert!(matches!(outcome, OpenOutcome::ProcessExited));
+    }
+
+    struct InterruptedThenTimeout {
+        calls: u8,
+    }
+
+    impl PollOperations for InterruptedThenTimeout {
+        fn poll(
+            &mut self,
+            _fds: &mut [PollFd<'_>],
+            _timeout: &Timespec,
+        ) -> Result<usize, rustix::io::Errno> {
+            self.calls += 1;
+            if self.calls == 1 {
+                Err(rustix::io::Errno::INTR)
+            } else {
+                Ok(0)
+            }
+        }
+    }
+
+    #[test]
+    fn pidfd_wait_retries_an_interrupted_poll_before_terminal_outcome() {
+        let OpenOutcome::Captured(handle) = LinuxProcessOperations
+            .open(std::process::id())
+            .expect("capture this process through pidfd")
+        else {
+            unreachable!("this process remains live while its pidfd is acquired");
+        };
+        let mut operations = InterruptedThenTimeout { calls: 0 };
+
+        assert!(
+            !wait_for_exit_with(&handle, Duration::from_secs(1), &mut operations)
+                .expect("terminal poll timeout")
+        );
+        assert_eq!(operations.calls, 2);
+    }
+
+    #[test]
+    fn pidfd_helpers_preserve_kernel_error_outcomes() {
+        assert!(pidfd_open_outcome::<()>(Err(rustix::io::Errno::PERM)).is_err());
+        assert!(pidfd_signal_outcome(Err(rustix::io::Errno::PERM)).is_err());
+        assert_eq!(poll_outcome(Err(rustix::io::Errno::INTR)).unwrap(), None);
+        assert!(poll_outcome(Err(rustix::io::Errno::PERM)).is_err());
+    }
+
+    #[test]
+    fn pidfd_wait_with_positive_timeout_reports_a_live_process_timeout() {
+        let OpenOutcome::Captured(handle) = LinuxProcessOperations
+            .open(std::process::id())
+            .expect("capture this process through pidfd")
+        else {
+            unreachable!("this process remains live while its pidfd is acquired");
+        };
+
+        assert!(
+            !LinuxProcessOperations
+                .wait_for_exit(&handle, Duration::from_millis(10))
+                .expect("a live process times out through poll")
         );
     }
     #[test]

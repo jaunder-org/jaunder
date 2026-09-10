@@ -569,6 +569,19 @@ mod tests {
         "JAUNDER_ENV",
     ];
 
+    fn child_failure_diagnostic(stderr: &[u8]) -> String {
+        String::from_utf8_lossy(stderr).into_owned()
+    }
+
+    fn child_projection(stdout: Vec<u8>) -> String {
+        String::from_utf8(stdout)
+            .expect("child stdout is UTF-8")
+            .lines()
+            .find_map(|line| line.strip_prefix("CLI_TEST_PROJECTION="))
+            .expect("child emitted CLI projection")
+            .to_owned()
+    }
+
     fn parse_in_child(scenario: &str, environment: &[(&str, &str)]) -> String {
         let mut command =
             std::process::Command::new(std::env::current_exe().expect("test executable"));
@@ -586,18 +599,25 @@ mod tests {
         }
 
         let output = command.output().expect("spawn CLI parser child");
-        assert!(
-            output.status.success(),
-            "CLI parser child failed: {}",
-            // Parent tests require success; this expression is failure-only diagnostics.
-            String::from_utf8_lossy(&output.stderr) // cov:ignore
+        let stderr = child_failure_diagnostic(&output.stderr);
+        assert!(output.status.success(), "CLI parser child failed: {stderr}");
+        child_projection(output.stdout)
+    }
+
+    #[test]
+    fn child_failure_diagnostic_preserves_non_utf8_output() {
+        assert_eq!(
+            child_failure_diagnostic(b"parser \xff failed"),
+            "parser � failed"
         );
-        String::from_utf8(output.stdout)
-            .expect("child stdout is UTF-8")
-            .lines()
-            .find_map(|line| line.strip_prefix("CLI_TEST_PROJECTION="))
-            .expect("child emitted CLI projection")
-            .to_owned()
+    }
+
+    #[test]
+    fn child_projection_extracts_the_child_output() {
+        assert_eq!(
+            child_projection(b"noise\nCLI_TEST_PROJECTION=ready\n".to_vec()),
+            "ready"
+        );
     }
 
     #[test]
@@ -662,8 +682,7 @@ mod tests {
                 };
                 format!("db={}", storage.db)
             }
-            // The parent owns a closed scenario set; this arm indicates a broken harness.
-            _ => panic!("unknown CLI parser child scenario: {scenario}"), // cov:ignore
+            _ => unreachable!("parent owns the closed CLI parser child scenario set"),
         };
         println!("CLI_TEST_PROJECTION={projection}");
     }

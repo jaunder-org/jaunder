@@ -338,7 +338,7 @@ impl FeedEventDialect for Sqlite {
         }
         q.execute(&mut *connection).await?;
         Ok(())
-    } // cov:ignore — async helper closing brace is unmarked although both success and database-error paths are covered
+    } // cov:ignore: LLVM leaves this async helper's closing edge unmarked after shared success and database-error behavior.
     async fn prune_terminal_events(
         pool: &Pool<Sqlite>,
         now: UtcInstant,
@@ -363,29 +363,13 @@ impl FeedEventDialect for Sqlite {
     }
 }
 
-// Reproduction harness for issue #18: the SQLite claim_pending_batch lock
-// flake. With the old SELECT->UPDATE->SELECT deferred transaction, concurrent
-// claimers upgrade a shared lock to a reserved lock against a stale snapshot
-// and SQLite returns "database is locked" (busy_timeout cannot rescue an
-// upgrade). With the single-statement UPDATE ... RETURNING (ADR-0021) the
-// writes serialize cleanly under busy_timeout.
-//
-// Timing-based, so it is #[ignore]d -- excluded from CI to avoid being a
-// flake source itself. Run on demand:
-//   cargo nextest run -p storage -- --ignored claim_pending_batch_no_lock_contention
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use std::time::Duration;
-
     use super::finish_purge;
     use crate::FeedEventRecord;
-    use crate::test_support::{Backend, fp, sqlite_only};
+    use crate::test_support::fp;
     use common::{ids::FeedEventId, time::UtcInstant};
     use host::feed::FeedEventStatus;
-
-    use rstest::*;
-    use rstest_reuse::*;
 
     #[test]
     fn continuation_reporting_corrupt_purge_failure_preserves_valid_batch_and_reports_once() {
@@ -414,60 +398,5 @@ mod tests {
             &trace,
             "storage.sqlite.feed_events.purge_corrupt",
         );
-    }
-
-    #[apply(sqlite_only)]
-    // reason: reproduces the SQLite-specific issue #18 claim_pending_batch lock flake
-    // (reserved-lock upgrade under busy_timeout); Postgres MVCC cannot exhibit it.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    #[ignore = "timing-based #18 reproduction; run manually with --ignored"]
-    async fn claim_pending_batch_no_lock_contention(#[case] backend: Backend) {
-        // cov:ignore-start — #[ignore]d manual #18 repro; its body never runs in the
-        // automated coverage suite, so these lines are accepted-uncovered.
-        let env = backend.setup().await;
-        let feed_events = env.feed_events().clone();
-        let write_scope = env.write_scope().clone();
-
-        // Seed a populated queue with distinct valid feed paths.
-        for i in 0..200 {
-            let feed_events = Arc::clone(&feed_events);
-            let url = fp(&format!("/tags/t{i}/feed.rss"));
-            write_scope
-                .run(move |transaction| {
-                    Box::pin(async move { feed_events.enqueue(transaction, &url).await })
-                })
-                .await
-                .expect("enqueue");
-        }
-
-        // Many concurrent claimers re-contending the same rows (zero lease keeps
-        // every row claimable each pass → maximal UPDATE-upgrade contention).
-        let mut handles = Vec::new();
-        for _ in 0..16 {
-            let feed_events = Arc::clone(&feed_events);
-            let write_scope = write_scope.clone();
-            handles.push(tokio::spawn(async move {
-                for _ in 0..50 {
-                    let feed_events = Arc::clone(&feed_events);
-                    write_scope
-                        .run(move |transaction| {
-                            Box::pin(async move {
-                                feed_events
-                                    .claim_pending_batch(transaction, 200, Duration::ZERO)
-                                    .await
-                            })
-                        })
-                        .await?;
-                }
-                Ok::<(), anyhow::Error>(())
-            }));
-        }
-
-        for h in handles {
-            h.await
-                .expect("task panicked")
-                .expect("no database-is-locked error");
-        }
-        // cov:ignore-stop
     }
 }

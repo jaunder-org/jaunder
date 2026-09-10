@@ -1,8 +1,9 @@
-use jiff::ToSpan;
-use std::sync::Arc;
+use std::{io, sync::Arc};
 
 use crate::mailer::LettreMailSender;
 use anyhow::Context;
+use jiff::ToSpan;
+
 use common::display_name::DisplayName;
 use common::email::Email;
 use common::invite::InviteTtlHours;
@@ -51,6 +52,32 @@ async fn create_command_user(
     support::require_confirmed_mutation(outcome, "user creation")
 }
 
+trait PasswordPrompt {
+    fn prompt(&self, message: &str) -> io::Result<String>;
+}
+
+struct TerminalPasswordPrompt;
+
+impl PasswordPrompt for TerminalPasswordPrompt {
+    // cov:ignore-start: Authoritative host tests cannot supply interactive TTY input to invoke this terminal adapter.
+    fn prompt(&self, message: &str) -> io::Result<String> {
+        rpassword::prompt_password(message)
+    }
+    // cov:ignore-stop
+}
+
+fn interactive_password_with(
+    mut prompt: impl for<'prompt> FnMut(&'prompt str) -> io::Result<String>,
+) -> anyhow::Result<Password> {
+    let password = prompt("Password: ")?;
+    let confirmation = prompt("Confirm password: ")?;
+    if password != confirmation {
+        return Err(anyhow::anyhow!("passwords do not match"));
+    }
+    password
+        .parse::<Password>()
+        .map_err(|error| anyhow::anyhow!("{error}"))
+}
 /// Creates a new user with the injected user store and write capability.
 ///
 /// # Errors
@@ -64,17 +91,31 @@ pub async fn cmd_user_create(
     display_name: Option<&DisplayName>,
     is_operator: bool,
 ) -> anyhow::Result<()> {
+    cmd_user_create_with(
+        users,
+        write_scope,
+        username,
+        password,
+        display_name,
+        is_operator,
+        &TerminalPasswordPrompt,
+    )
+    .await
+}
+
+async fn cmd_user_create_with(
+    users: Arc<dyn UserStorage>,
+    write_scope: &WriteScope,
+    username: &Username,
+    password: Option<Password>,
+    display_name: Option<&DisplayName>,
+    is_operator: bool,
+    prompt: &impl PasswordPrompt,
+) -> anyhow::Result<()> {
     let password = if let Some(p) = password {
         p
     } else {
-        // cov:ignore-start
-        let p1 = rpassword::prompt_password("Password: ")?;
-        let p2 = rpassword::prompt_password("Confirm password: ")?;
-        if p1 != p2 {
-            return Err(anyhow::anyhow!("passwords do not match"));
-        }
-        p1.parse::<Password>().map_err(|e| anyhow::anyhow!("{e}"))?
-        // cov:ignore-stop
+        interactive_password_with(|message| prompt.prompt(message))?
     };
 
     let user_id = create_command_user(
@@ -256,15 +297,19 @@ async fn smtp_test_with(
 
 #[cfg(test)]
 mod tests {
-    use std::io;
-
     use super::*;
     use common::registration::RegistrationPolicy;
     use common::smtp_tls_mode::SmtpTlsMode;
     use common::test_support::{parse_email, parse_invite_ttl_hours};
     use host::config_key::SiteConfigKey;
-    use storage::StorageRuntimeConfig;
-    use storage::test_support::confirmed;
+    use std::io;
+
+    use rstest::*;
+    use rstest_reuse::*;
+    use storage::{
+        StorageRuntimeConfig,
+        test_support::{Backend, backends, confirmed},
+    };
     use tempfile::TempDir;
 
     use super::super::test_support::{assert_command_source, sqlite_storage_args};
@@ -523,5 +568,73 @@ mod tests {
                 "{policy:?} must reject before minting"
             );
         }
+    }
+
+    struct FixedPasswordPrompt;
+
+    impl PasswordPrompt for FixedPasswordPrompt {
+        fn prompt(&self, _message: &str) -> io::Result<String> {
+            Ok("password123".to_owned())
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn user_creation_with_prompt_uses_the_injected_prompt(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let users = env.users();
+        let write_scope = env.write_scope();
+        let username = "prompted-user".parse().expect("username");
+
+        cmd_user_create_with(
+            Arc::clone(&users),
+            &write_scope,
+            &username,
+            None,
+            None,
+            false,
+            &FixedPasswordPrompt,
+        )
+        .await
+        .expect("create user from injected password prompt");
+
+        let created = users
+            .get_user_by_username(&username)
+            .await
+            .expect("look up created user");
+        assert!(
+            created.is_some(),
+            "prompted user is observable through storage"
+        );
+    }
+
+    #[test]
+    fn interactive_password_requires_matching_valid_entries() {
+        let mut entries = ["password123", "password123"].into_iter();
+
+        let password = interactive_password_with(|_| {
+            Ok(entries
+                .next()
+                .expect("the helper asks for exactly two password entries")
+                .to_owned())
+        })
+        .expect("matching valid password");
+
+        assert_eq!(password.as_ref(), "password123");
+    }
+
+    #[test]
+    fn interactive_password_rejects_mismatched_entries() {
+        let mut entries = ["password123", "different123"].into_iter();
+
+        let error = interactive_password_with(|_| {
+            Ok(entries
+                .next()
+                .expect("the helper asks for exactly two password entries")
+                .to_owned())
+        })
+        .expect_err("mismatched entries must be rejected");
+
+        assert_eq!(error.to_string(), "passwords do not match");
     }
 }

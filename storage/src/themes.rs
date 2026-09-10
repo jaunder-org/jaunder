@@ -945,7 +945,7 @@ macro_rules! impl_theme_storage {
             }
             async fn expired_retained_content(&self, now_unix_seconds: i64) -> Result<Vec<(ThemeOwner, ThemeContentDigest)>, sqlx::Error> {
                 let rows: Vec<(String, String)> = sqlx::query_as("SELECT c.catalog_owner_key, c.digest FROM theme_retained_content_charges c JOIN theme_content_eligibility e ON e.digest = c.digest WHERE c.live_references = 0 AND e.live_references = 0 AND e.retained_until_unix_seconds <= $1 ORDER BY c.catalog_owner_key, c.digest").bind(now_unix_seconds).fetch_all(&self.pool).await?;
-                rows.into_iter().map(|(owner, digest)| Ok((theme_owner_from_key(&owner).ok_or(sqlx::Error::RowNotFound)?, digest.parse().map_err(|_| sqlx::Error::RowNotFound)?))).collect() // cov:ignore
+                rows.into_iter().map(decode_expired_retained_content_row).collect()
             }
         }
     }
@@ -1238,6 +1238,15 @@ fn theme_owner_from_key(key: &str) -> Option<ThemeOwner> {
             .map(UserId::from)
             .map(ThemeOwner::Author),
     }
+}
+
+fn decode_expired_retained_content_row(
+    (owner, digest): (String, String),
+) -> Result<(ThemeOwner, ThemeContentDigest), sqlx::Error> {
+    Ok((
+        theme_owner_from_key(&owner).ok_or(sqlx::Error::RowNotFound)?,
+        digest.parse().map_err(|_| sqlx::Error::RowNotFound)?,
+    ))
 }
 
 fn canonical_theme_name_key(name: &str) -> String {
@@ -2745,6 +2754,17 @@ mod tests {
         );
         assert_eq!(theme_owner_from_key("operator"), None);
         assert!(theme_digest_bytes("not-a-digest").is_err());
+    }
+
+    #[test]
+    fn expired_content_row_decoder_rejects_invalid_owner_and_digest() {
+        assert!(
+            decode_expired_retained_content_row(("operator".to_owned(), "a".repeat(64),)).is_err()
+        );
+        assert!(
+            decode_expired_retained_content_row(("site".to_owned(), "not-a-digest".to_owned(),))
+                .is_err()
+        );
     }
     #[test]
     fn column_conversion_rejects_partial_assets_and_author_ids_remain_exact() {

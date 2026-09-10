@@ -129,7 +129,6 @@ struct NoMediaOwnership;
 
 #[async_trait]
 impl MediaReferenceOwnershipResolver for NoMediaOwnership {
-    // cov:ignore-start — required test resolver trait method has no fixture caller
     async fn resolve(
         &self,
         _references: &[PersistedMediaReference],
@@ -139,7 +138,6 @@ impl MediaReferenceOwnershipResolver for NoMediaOwnership {
     ) -> MediaReferenceEvidence {
         foreign.finish()
     }
-    // cov:ignore-stop
 
     async fn resolve_local(
         &self,
@@ -257,13 +255,26 @@ pub async fn media_row_exists(
 
 #[cfg(test)]
 mod tests {
-    use super::{raw_media_filename_exists, seed_media};
+    use super::{NoMediaOwnership, raw_media_filename_exists, seed_media};
     use crate::DbConnectOptions;
     use crate::test_support::{Backend, SeedUser, backends, recorded_postgres_url, sqlite_url};
+    use crate::{InstanceId, resolve_media_reference_ownership};
 
     use rstest::*;
     use rstest_reuse::*;
 
+    // guard:no-backend — the test fixture resolver consumes only an in-memory capability sink.
+    #[tokio::test]
+    async fn no_media_ownership_returns_empty_foreign_evidence() {
+        let instance_id: InstanceId = "123e4567-e89b-12d3-a456-426614174000"
+            .parse()
+            .expect("canonical test instance ID");
+
+        let evidence =
+            resolve_media_reference_ownership(&NoMediaOwnership, &[], &instance_id, None).await;
+
+        assert!(evidence.references().is_empty());
+    }
     #[apply(backends)]
     #[tokio::test]
     async fn raw_media_filename_exists_reports_the_stored_existence_fact(#[case] backend: Backend) {

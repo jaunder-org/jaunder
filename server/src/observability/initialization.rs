@@ -91,13 +91,13 @@ mod tests {
             .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
             .output()
             .expect("run isolated diag-open test");
-        assert!(
-            output.status.success(),
+        let diagnostics = format!(
             "child status: {}; stdout: {}; stderr: {}",
             output.status,
-            String::from_utf8_lossy(&output.stdout), // cov:ignore
-            String::from_utf8_lossy(&output.stderr)  // cov:ignore
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
         );
+        assert!(output.status.success(), "{diagnostics}");
         let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
         assert_eq!(
             stderr.matches("server.observability.diag_log_open").count(),

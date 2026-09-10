@@ -63,8 +63,7 @@ impl WebSubClient for HttpWebSubClient {
         // the ADR-0063 §5 carve-out. `IntoUrl` is sealed and has no impl for our
         // newtype, so `post` needs the `&str` explicitly.
         let form = [("hub.mode", "publish"), ("hub.url", feed_url.as_ref())];
-        // cov:ignore-start -- HubUrl validates its serialized URL at construction,
-        // so this defensive parse failure is unreachable through the typed boundary.
+        // cov:ignore-start: HubUrl validates its serialized URL at construction, so this defensive reparse cannot fail through the typed boundary.
         let mut target = Url::parse(hub_url.as_ref()).map_err(|source| WebSubError::Retryable {
             reason: RetryableWebSubError::Transport(Box::new(source)),
             retry_after: None,
@@ -199,7 +198,10 @@ mod tests {
         sync::Arc,
         time::{Duration, SystemTime},
     };
-    use tokio::sync::Mutex;
+    use tokio::{
+        sync::{Mutex, oneshot},
+        task::JoinHandle,
+    };
 
     #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
     struct HubForm {
@@ -253,9 +255,37 @@ mod tests {
         builder.body(Body::empty()).expect("response is valid")
     }
 
+    struct TestHub {
+        addr: SocketAddr,
+        received: Arc<Mutex<Vec<(String, HubForm)>>>,
+        shutdown: oneshot::Sender<()>,
+        task: JoinHandle<std::io::Result<()>>,
+    }
+
+    impl TestHub {
+        async fn stop(self) {
+            self.shutdown
+                .send(())
+                .expect("test hub shutdown receiver remains live");
+            self.task
+                .await
+                .expect("test hub task joins")
+                .expect("test hub serves requests");
+        }
+
+        async fn abort_hanging(self) {
+            self.task.abort();
+            let error = self
+                .task
+                .await
+                .expect_err("aborted hanging hub task does not join");
+            assert!(error.is_cancelled(), "hanging hub task is cancelled");
+        }
+    }
+
     async fn spawn_hub(
         responses: impl IntoIterator<Item = (impl Into<String>, HubResponse)>,
-    ) -> (SocketAddr, Arc<Mutex<Vec<(String, HubForm)>>>) {
+    ) -> TestHub {
         let received = Arc::new(Mutex::new(Vec::new()));
         let state = HubState {
             received: received.clone(),
@@ -269,14 +299,20 @@ mod tests {
             .await
             .expect("test listener binds");
         let addr = listener.local_addr().expect("test listener has address");
-        tokio::spawn(async move {
+        let (shutdown, shutdown_requested) = oneshot::channel();
+        let task = tokio::spawn(async move {
             axum::serve(listener, app)
+                .with_graceful_shutdown(async move {
+                    let _ = shutdown_requested.await;
+                })
                 .await
-                // The test-owned server is aborted at test teardown, so its terminal
-                // result is not observable by the client scenario.
-                .expect("test hub serves requests"); // cov:ignore
-        }); // cov:ignore
-        (addr, received)
+        });
+        TestHub {
+            addr,
+            received,
+            shutdown,
+            task,
+        }
     }
 
     fn hub_at(addr: SocketAddr, path: &str) -> HubUrl {
@@ -293,10 +329,9 @@ mod tests {
                 retry_after,
                 reason,
             } => (retry_after, reason),
-            // cov:ignore-start — assertion helper's impossible variant in retryable-only tests
-            WebSubError::Terminal { reason } => {
-                panic!("expected retryable failure, got terminal {reason}")
-            } // cov:ignore-stop
+            WebSubError::Terminal { .. } => {
+                unreachable!("retryable helper receives only retryable failures")
+            }
         }
     }
 
@@ -334,15 +369,16 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        let (addr, _) = spawn_hub(responses).await;
+        let hub = spawn_hub(responses).await;
         let client = HttpWebSubClient::new();
 
         for status in 200..300 {
             client
-                .send_publish(&hub_at(addr, &format!("/{status}")), &feed_url())
+                .send_publish(&hub_at(hub.addr, &format!("/{status}")), &feed_url())
                 .await
                 .unwrap_or_else(|error| panic!("{status} must succeed: {error}"));
         }
+        hub.stop().await;
     }
 
     #[tokio::test]
@@ -357,12 +393,12 @@ mod tests {
                 HubResponse::status(StatusCode::from_u16(*status).expect("retryable status")),
             )
         });
-        let (addr, _) = spawn_hub(responses).await;
+        let hub = spawn_hub(responses).await;
         let client = HttpWebSubClient::new();
 
         for status in statuses {
             let error = client
-                .send_publish(&hub_at(addr, &format!("/{status}")), &feed_url())
+                .send_publish(&hub_at(hub.addr, &format!("/{status}")), &feed_url())
                 .await
                 .expect_err("retryable HTTP response");
             let (delay, reason) = retryable(error);
@@ -371,6 +407,7 @@ mod tests {
                 matches!(reason, RetryableWebSubError::Http { status: actual } if actual == status)
             );
         }
+        hub.stop().await;
     }
 
     #[tokio::test]
@@ -384,12 +421,12 @@ mod tests {
                 HubResponse::status(StatusCode::from_u16(*status).expect("terminal status")),
             )
         });
-        let (addr, _) = spawn_hub(responses).await;
+        let hub = spawn_hub(responses).await;
         let client = HttpWebSubClient::new();
 
         for status in statuses {
             let error = client
-                .send_publish(&hub_at(addr, &format!("/{status}")), &feed_url())
+                .send_publish(&hub_at(hub.addr, &format!("/{status}")), &feed_url())
                 .await
                 .expect_err("terminal HTTP response");
             assert!(matches!(
@@ -399,6 +436,7 @@ mod tests {
                 } if actual == status
             ));
         }
+        hub.stop().await;
     }
 
     #[tokio::test]
@@ -430,13 +468,13 @@ mod tests {
             ),
             ("/complete", HubResponse::status(StatusCode::NO_CONTENT)),
         ];
-        let (addr, received) = spawn_hub(responses).await;
+        let hub = spawn_hub(responses).await;
         HttpWebSubClient::new()
-            .send_publish(&hub_at(addr, "/start"), &feed_url())
+            .send_publish(&hub_at(hub.addr, "/start"), &feed_url())
             .await
             .expect("three preserving redirects succeed");
 
-        let received = received.lock().await.clone();
+        let received = hub.received.lock().await.clone();
         assert_eq!(
             received.iter().map(|(path, _)| path).collect::<Vec<_>>(),
             vec!["/start", "/first", "/second", "/complete"]
@@ -447,12 +485,13 @@ mod tests {
                 url: "https://example.com/feed.rss".into(),
             }
         }));
+        hub.stop().await;
     }
 
     async fn assert_rejected_redirect(start: &str, responses: Vec<(&'static str, HubResponse)>) {
-        let (addr, received) = spawn_hub(responses).await;
+        let hub = spawn_hub(responses).await;
         let error = HttpWebSubClient::new()
-            .send_publish(&hub_at(addr, start), &feed_url())
+            .send_publish(&hub_at(hub.addr, start), &feed_url())
             .await
             .expect_err("disallowed redirect is terminal");
         let expected_diagnostic = match start {
@@ -461,7 +500,7 @@ mod tests {
             "/non-http" => "non-HTTP(S) Location",
             "/loop" => "redirect loop",
             "/fourth" => "redirect limit",
-            _ => unreachable!("known redirect case"), // cov:ignore -- closed helper cases are declared immediately above.
+            _ => unreachable!("known redirect case"),
         };
         assert!(error.to_string().contains(expected_diagnostic));
         assert!(matches!(
@@ -499,10 +538,11 @@ mod tests {
             )
         ));
         assert_eq!(
-            received.lock().await.len(),
+            hub.received.lock().await.len(),
             if start == "/fourth" { 4 } else { 1 },
             "the client must not follow a rejected redirect"
         );
+        hub.stop().await;
     }
 
     #[tokio::test]
@@ -624,30 +664,31 @@ mod tests {
                 },
             ),
         ];
-        let (addr, _) = spawn_hub(responses).await;
+        let hub = spawn_hub(responses).await;
         let client = HttpWebSubClient::new();
 
         let (delay, _) = retryable(
             client
-                .send_publish(&hub_at(addr, "/delta"), &feed_url())
+                .send_publish(&hub_at(hub.addr, "/delta"), &feed_url())
                 .await
                 .expect_err("retryable delta response"),
         );
         assert_eq!(delay, Some(Duration::from_mins(2)));
         let (delay, _) = retryable(
             client
-                .send_publish(&hub_at(addr, "/delta-cap"), &feed_url())
+                .send_publish(&hub_at(hub.addr, "/delta-cap"), &feed_url())
                 .await
                 .expect_err("retryable capped delta response"),
         );
         assert_eq!(delay, Some(Duration::from_hours(24)));
         let (delay, _) = retryable(
             client
-                .send_publish(&hub_at(addr, "/date"), &feed_url())
+                .send_publish(&hub_at(hub.addr, "/date"), &feed_url())
                 .await
                 .expect_err("retryable date response"),
         );
         assert_eq!(delay, Some(Duration::from_hours(24)));
+        hub.stop().await;
     }
 
     #[tokio::test]
@@ -675,36 +716,68 @@ mod tests {
                 },
             ),
         ];
-        let (addr, _) = spawn_hub(responses).await;
+        let hub = spawn_hub(responses).await;
         let client = HttpWebSubClient::new();
 
         for path in ["/missing", "/invalid", "/past"] {
             let (delay, _) = retryable(
                 client
-                    .send_publish(&hub_at(addr, path), &feed_url())
+                    .send_publish(&hub_at(hub.addr, path), &feed_url())
                     .await
                     .expect_err("retryable response"),
             );
             assert_eq!(delay, None);
         }
+        hub.stop().await;
     }
 
-    async fn spawn_hanging_hub() -> SocketAddr {
-        let app = Router::new().fallback(post(|| async {
-            tokio::time::sleep(Duration::from_secs(30)).await;
-            StatusCode::ACCEPTED // cov:ignore timeout cancels this test-only handler first
-        }));
+    async fn delayed_accepted_response() -> StatusCode {
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        StatusCode::ACCEPTED
+    }
+
+    async fn spawn_hanging_hub() -> TestHub {
+        let app = Router::new().fallback(post(delayed_accepted_response));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("test listener binds");
         let addr = listener.local_addr().expect("test listener has address");
-        tokio::spawn(async move {
+        let (shutdown, shutdown_requested) = oneshot::channel();
+        let task = tokio::spawn(async move {
             axum::serve(listener, app)
+                .with_graceful_shutdown(async move {
+                    let _ = shutdown_requested.await;
+                })
                 .await
-                // The hanging server is intentionally cancelled after the client times out.
-                .expect("test hub serves requests"); // cov:ignore
-        }); // cov:ignore
-        addr
+        });
+        TestHub {
+            addr,
+            received: Arc::new(Mutex::new(Vec::new())),
+            shutdown,
+            task,
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn hanging_hub_handler_returns_accepted_after_its_delay() {
+        let hub = spawn_hanging_hub().await;
+        let response = tokio::spawn(
+            reqwest::Client::new()
+                .post(format!("http://{}/", hub.addr))
+                .send(),
+        );
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(30)).await;
+
+        assert_eq!(
+            response
+                .await
+                .expect("delayed response task joins")
+                .expect("delayed response succeeds")
+                .status(),
+            StatusCode::ACCEPTED
+        );
+        hub.stop().await;
     }
 
     #[tokio::test]
@@ -722,7 +795,7 @@ mod tests {
                 .expect_err("refused connection is retryable"),
         );
         let RetryableWebSubError::Transport(source) = reason else {
-            panic!("transport failure has typed transport reason"); // cov:ignore
+            unreachable!("transport failure has typed transport reason");
         };
         let source = source
             .downcast_ref::<reqwest::Error>()
@@ -732,16 +805,17 @@ mod tests {
         let hanging = spawn_hanging_hub().await;
         let (_, reason) = retryable(
             HttpWebSubClient::with_timeout(Duration::from_millis(100))
-                .send_publish(&hub_at(hanging, "/"), &feed_url())
+                .send_publish(&hub_at(hanging.addr, "/"), &feed_url())
                 .await
                 .expect_err("timeout is retryable"),
         );
         let RetryableWebSubError::Transport(source) = reason else {
-            panic!("timeout has typed transport reason"); // cov:ignore
+            unreachable!("timeout has typed transport reason");
         };
         let source = source
             .downcast_ref::<reqwest::Error>()
             .expect("typed reqwest source for timeout");
         assert!(source.is_timeout());
+        hanging.abort_hanging().await;
     }
 }

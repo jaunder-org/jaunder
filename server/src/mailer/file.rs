@@ -30,7 +30,7 @@ impl MailSender for FileMailSender {
             "body_text": message.body_text,
         });
         let Ok(mut line) = serde_json::to_string(&record) else {
-            unreachable!("serializing a json! of owned strings is infallible"); // cov:ignore -- this JSON value contains no fallible serializer.
+            unreachable!("serializing a json! of owned strings is infallible");
         };
         line.push('\n');
 
@@ -50,7 +50,7 @@ impl MailSender for FileMailSender {
         // This closure only does file I/O (each fallible step handled with `?`,
         // so it returns Err rather than panicking) and is awaited immediately
         // (never cancelled), so no input can drive this arm.
-        .map_err(|e| MailError::Send(Box::new(e)))? // cov:ignore
+        .map_err(|e| MailError::Send(Box::new(e)))? // cov:ignore: An immediately awaited non-panicking blocking task cannot yield JoinError without cancellation injection.
     }
 }
 

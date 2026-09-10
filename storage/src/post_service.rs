@@ -1077,18 +1077,15 @@ mod tests {
 
     #[async_trait::async_trait]
     impl crate::MediaReferenceOwnershipResolver for LocalOnlyResolver {
-        // cov:ignore-start — required test-resolver trait method is irrelevant to local-proof tests
         async fn resolve(
             &self,
             _references: &[crate::PersistedMediaReference],
-            instance_id: &crate::InstanceId,
+            _instance_id: &crate::InstanceId,
             _base_url: Option<&common::tagged_url::BaseUrl>,
             foreign: crate::ForeignEvidenceSink,
         ) -> crate::MediaReferenceEvidence {
-            let _ = instance_id;
             foreign.finish()
         }
-        // cov:ignore-stop
 
         async fn resolve_local(
             &self,
@@ -1104,6 +1101,20 @@ mod tests {
             }
             local.finish()
         }
+    }
+
+    // guard:no-backend — the resolver's empty foreign-evidence behavior needs no storage.
+    #[tokio::test]
+    async fn local_only_resolver_returns_empty_foreign_evidence() {
+        let instance_id = "123e4567-e89b-12d3-a456-426614174000"
+            .parse()
+            .expect("canonical test instance ID");
+
+        let evidence =
+            crate::resolve_media_reference_ownership(&LocalOnlyResolver, &[], &instance_id, None)
+                .await;
+
+        assert!(evidence.references().is_empty());
     }
 
     async fn create_media_record(

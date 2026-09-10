@@ -286,7 +286,7 @@ fn parse_opts(input: &DeriveInput) -> syn::Result<Opts> {
                     ))
                 }
             })?;
-        } // cov:ignore `?`-fall-through closing brace; executed by the secret unit tests but llvm-cov leaves the gap region unmarked
+        } // cov:ignore: llvm-cov omits this executed parse_nested_meta `?` fall-through closing brace
     }
     if serde && !secret {
         return Err(syn::Error::new_spanned(

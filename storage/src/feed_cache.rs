@@ -101,15 +101,11 @@ impl FeedCacheRow {
             });
         }
         let whole_seconds = representation_modified_at.value().as_second();
-        // Rebuilding an existing timestamp from its whole-second component is
-        // representable. The boundary fallback keeps this constructor total if
-        // that Jiff invariant ever changes.
+        // An existing timestamp's whole-second component is representable.
         let representation_modified_at =
-            UtcInstant::from(match Timestamp::from_second(whole_seconds) {
-                Ok(timestamp) => timestamp,
-                Err(_) if whole_seconds.is_negative() => Timestamp::MIN, // cov:ignore — Jiff reconstructing an existing whole-second timestamp cannot fail
-                Err(_) => Timestamp::MAX, // cov:ignore — Jiff reconstructing an existing whole-second timestamp cannot fail
-            });
+            UtcInstant::from(Timestamp::from_second(whole_seconds).unwrap_or_else(|_| {
+                unreachable!("existing timestamp whole seconds are representable")
+            }));
         Ok(Self {
             feed_path,
             representation,

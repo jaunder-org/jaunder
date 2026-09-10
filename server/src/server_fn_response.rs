@@ -39,7 +39,7 @@ pub(crate) async fn normalize(response: impl IntoResponse) -> Response {
 
     let (mut parts, body) = response.into_parts();
     let Ok(body) = body::to_bytes(body, limit).await else {
-        unreachable!("server_fn constructs error responses from in-memory bytes"); // cov:ignore -- exact-sized framework error bodies are in-memory and cannot exceed their own limit.
+        unreachable!("server_fn constructs error responses from in-memory bytes");
     };
     let status = WebError::server_fn_error_status(&body);
     let body = WebError::normalize_server_fn_error_body(body.clone()).unwrap_or(body);
@@ -52,7 +52,7 @@ pub(crate) async fn normalize(response: impl IntoResponse) -> Response {
         403 => (StatusCode::FORBIDDEN, false),
         // `WebError::server_fn_error_status` only returns `Some(400)`, `Some(403)`, or
         // `None`; the preceding `let Some` has already excluded `None`.
-        _ => return Response::from_parts(parts, Body::from(body)), // cov:ignore
+        _ => unreachable!("server function error status is limited to 400 or 403"),
     };
     parts.status = status;
     if remove_location {

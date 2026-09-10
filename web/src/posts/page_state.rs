@@ -252,10 +252,6 @@ impl ListingRoute {
     ///
     /// Returns a validation error for malformed route data or propagates the
     /// selected public listing endpoint's failure.
-    // Server-function client calls require the hydrated browser transport. The
-    // host suite exhaustively covers the validated route-to-endpoint matrix; the
-    // public listing browser flow covers this transport adapter.
-    // cov:ignore-start
     pub async fn destination(self) -> WebResult<(PublishedThemePresentation, Page<RenderedPost>)> {
         self.fetch_page(None, Some(PageSize::default()))
             .await
@@ -274,16 +270,26 @@ impl ListingRoute {
         limit: Option<PageSize>,
     ) -> WebResult<PublicPresentation<Page<RenderedPost>>> {
         match self.validate()? {
+            // cov:ignore-start: constructing and awaiting the generated server-function client requires the hydrated browser transport unavailable to authoritative host coverage.
             ValidatedListingRoute::Profile(username) => {
-                timeline::list_by_user(username, cursor, limit).await
+                let request = timeline::list_by_user(username, cursor, limit);
+                request.await
+                // cov:ignore-stop
             }
-            ValidatedListingRoute::SiteTag(tag) => timeline::list_by_tag(tag, cursor, limit).await,
+            // cov:ignore-start: constructing and awaiting the generated server-function client requires the hydrated browser transport unavailable to authoritative host coverage.
+            ValidatedListingRoute::SiteTag(tag) => {
+                let request = timeline::list_by_tag(tag, cursor, limit);
+                request.await
+                // cov:ignore-stop
+            }
+            // cov:ignore-start: constructing and awaiting the generated server-function client requires the hydrated browser transport unavailable to authoritative host coverage.
             ValidatedListingRoute::UserTag(username, tag) => {
-                timeline::list_by_user_and_tag(username, tag, cursor, limit).await
+                let request = timeline::list_by_user_and_tag(username, tag, cursor, limit);
+                request.await
+                // cov:ignore-stop
             }
         }
     }
-    // cov:ignore-stop
 }
 
 /// Validated endpoint selection for the public listing route matrix.
@@ -1064,6 +1070,17 @@ mod tests {
         assert_eq!(user_tag.subtitle(), "Posts by ~");
         assert_eq!(user_tag.feed_surface(), None);
         assert_eq!(user_tag.tag_context(), None);
+    }
+    #[tokio::test]
+    async fn malformed_listing_routes_fail_before_constructing_a_client_request() {
+        assert_eq!(
+            ListingRoute::Profile(None).fetch_page(None, None).await,
+            Err(WebError::validation("Invalid username"))
+        );
+        assert_eq!(
+            ListingRoute::SiteTag(None).destination().await,
+            Err(WebError::validation("Invalid tag"))
+        );
     }
     #[tokio::test]
     async fn permalink_destination_fetches_a_validated_route() {

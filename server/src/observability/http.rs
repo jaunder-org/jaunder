@@ -114,7 +114,7 @@ mod tests {
                     if req.extensions().get::<ExtractedTraceContext>().is_some() {
                         StatusCode::OK
                     } else {
-                        unreachable!("extract_trace_context always inserts ExtractedTraceContext"); // cov:ignore -- the test assertion branch executes only if its middleware contract fails.
+                        unreachable!("extract_trace_context always inserts ExtractedTraceContext");
                     }
                 }),
             )

@@ -51,7 +51,7 @@ fn media_link_entry(record: &MediaRecord, base: &BaseUrl, username: &Username) -
         let Ok(url) = path.parse() else {
             // Unreachable: a leading `/`, a hex digest, a validated `Username`, and a
             // percent-encoded filename — no whitespace or delimiter can survive.
-            unreachable!("the AtomPub media member path is a valid root-relative path"); // cov:ignore -- validated components and the literal prefix satisfy RootRelativeUrl.
+            unreachable!("the AtomPub media member path is a valid root-relative path");
         };
         url
     };
@@ -275,7 +275,7 @@ mod tests {
             map_delete_error(storage::DeleteMediaError::Internal(sqlx::Error::RowNotFound).into());
 
         let HandlerError::Internal(source) = error else {
-            panic!("storage deletion failures must stay typed at the handler boundary"); // cov:ignore -- the guarded test assertion branch runs only if the typed error contract fails.
+            unreachable!("storage deletion failures must stay typed at the handler boundary");
         };
         let delete = source
             .downcast_ref::<storage::DeleteMediaError>()

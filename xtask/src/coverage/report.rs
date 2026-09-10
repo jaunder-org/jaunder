@@ -1,5 +1,5 @@
 use crate::coverage::{FileCoverage, LineCov};
-use crate::markers::{comment_marker_is, line_comment};
+use crate::markers;
 use anyhow::{Result, bail};
 
 /// Parse `cargo llvm-cov report --text` output. A line is executable iff its
@@ -9,12 +9,14 @@ use anyhow::{Result, bail};
 /// Explicit exclusion markers, recognized ONLY inside a real trailing `//`
 /// comment (never inside a string/char literal), drop lines from the executable
 /// set:
-/// - line form `// cov:ignore` on an executable line drops that line;
-/// - block form `// cov:ignore-start` … `// cov:ignore-stop` drops every line
-///   between the markers (and the marker lines themselves).
+/// - line form `// cov:ignore: <specific reason>` drops that line;
+/// - block form `// cov:ignore-start: <specific reason>` …
+///   `// cov:ignore-stop` drops every line between the markers (and the marker
+///   lines themselves).
 ///
-/// Unbalanced block markers are a hard error: a nested `-start`, an unmatched
-/// `-start` at EOF, or a `-stop` with no open `-start` all fail loudly.
+/// Reasons are mandatory and non-empty. Legacy bare line/start forms, empty
+/// reasons, and reason-bearing stops are hard errors. Nested, unmatched, and
+/// stray block markers are likewise hard errors.
 pub fn parse_text_report(report: &str, repo_root: &str) -> Result<Vec<FileCoverage>> {
     let prefix = format!("{}/", repo_root.trim_end_matches('/'));
     let mut files: Vec<FileCoverage> = Vec::new();
@@ -50,9 +52,13 @@ pub fn parse_text_report(report: &str, repo_root: &str) -> Result<Vec<FileCovera
         // Marker detection runs on EVERY report line (executable or not) so a
         // marker sitting on a non-executable comment line is still honored, and
         // is matched only against the line's real trailing comment.
-        let comment = line_comment(text);
+        let comment = markers::line_comment(text);
+        let mut line_ignored = false;
         if let Some(c) = comment {
-            if comment_marker_is(c, "cov:ignore-start") {
+            if let Some(reason) = markers::marker_in_comment(c, "cov:ignore-start:") {
+                if reason.is_empty() {
+                    bail!("cov:ignore-start at line {lineno} requires a non-empty reason");
+                }
                 if let Some(start) = block_start {
                     bail!(
                         "nested cov:ignore-start at line {lineno} (a block is \
@@ -62,12 +68,33 @@ pub fn parse_text_report(report: &str, repo_root: &str) -> Result<Vec<FileCovera
                 block_start = Some(lineno);
                 continue; // the marker line itself is dropped
             }
-            if comment_marker_is(c, "cov:ignore-stop") {
+            if markers::comment_marker_is(c, "cov:ignore-start") {
+                bail!(
+                    "legacy cov:ignore-start at line {lineno}; use \
+                     cov:ignore-start: <specific reason>"
+                );
+            }
+            if let Some(suffix) = c.trim_start().strip_prefix("cov:ignore-stop")
+                && (suffix.is_empty()
+                    || suffix.starts_with(char::is_whitespace)
+                    || suffix.starts_with(':'))
+            {
+                if !suffix.is_empty() {
+                    bail!("noncanonical cov:ignore-stop at line {lineno}; it takes no reason");
+                }
                 if block_start.is_none() {
                     bail!("cov:ignore-stop at line {lineno} with no open cov:ignore-start");
                 }
                 block_start = None;
                 continue; // the marker line itself is dropped
+            }
+            if let Some(reason) = markers::marker_in_comment(c, "cov:ignore:") {
+                if reason.is_empty() {
+                    bail!("cov:ignore at line {lineno} requires a non-empty reason");
+                }
+                line_ignored = true;
+            } else if markers::comment_marker_is(c, "cov:ignore") {
+                bail!("legacy cov:ignore at line {lineno}; use cov:ignore: <specific reason>");
             }
         }
 
@@ -83,9 +110,7 @@ pub fn parse_text_report(report: &str, repo_root: &str) -> Result<Vec<FileCovera
         if count.is_empty() {
             continue; // non-executable
         }
-        if let Some(c) = comment
-            && comment_marker_is(c, "cov:ignore")
-        {
+        if line_ignored {
             continue; // line-form exclusion marker — drop from the executable set
         }
         let covered = !is_zero_count(count);
@@ -116,7 +141,7 @@ mod tests {
     2|    36|pub fn bar() {
     3|     0|    fail()
     4|  1.36k|    ok()
-    5|     0|    impossible() // cov:ignore
+    5|     0|    impossible() // cov:ignore: platform-only signal handler
 ";
 
     #[test]
@@ -126,7 +151,7 @@ mod tests {
         let f = &files[0];
         assert_eq!(f.path, "server/src/x.rs");
         // line 1 non-executable (blank count) → omitted; line 5 has a real
-        // trailing `// cov:ignore` comment → omitted.
+        // trailing reason-bearing `// cov:ignore: …` comment → omitted.
         assert_eq!(
             f.lines.iter().map(|l| l.line).collect::<Vec<_>>(),
             vec![2, 3, 4]
@@ -139,10 +164,10 @@ mod tests {
     }
 
     #[test]
-    fn line_marker_ignored_only_as_real_comment() {
+    fn reason_bearing_line_marker_is_accepted_only_as_a_real_comment() {
         let report = "\
 /repo/a.rs:
-    1|     0|    boom() // cov:ignore
+    1|     0|    boom() // cov:ignore: unavailable in host coverage
     2|     0|    kept()
 ";
         let files = parse_text_report(report, "/repo").unwrap();
@@ -152,12 +177,10 @@ mod tests {
     }
 
     #[test]
-    fn marker_in_string_literal_does_not_suppress() {
-        // The marker text lives inside a string literal, not a real comment —
-        // it must NOT drop the line (a bare `contains` would).
+    fn reason_bearing_marker_in_a_string_literal_does_not_suppress() {
         let report = "\
 /repo/a.rs:
-    1|     0|    let s = \"// cov:ignore\";
+    1|     0|    let marker = \"// cov:ignore: quoted prose\";
 ";
         let files = parse_text_report(report, "/repo").unwrap();
         let lines: Vec<u32> = files[0].lines.iter().map(|l| l.line).collect();
@@ -165,11 +188,11 @@ mod tests {
     }
 
     #[test]
-    fn block_drops_interior_lines() {
+    fn reason_bearing_block_drops_interior_lines() {
         let report = "\
 /repo/a.rs:
     1|    10|    before()
-    2|      |    // cov:ignore-start
+    2|      |    // cov:ignore-start: generated parser state
     3|     0|    skipped_one()
     4|     0|    skipped_two()
     5|      |    // cov:ignore-stop
@@ -183,10 +206,35 @@ mod tests {
     }
 
     #[test]
+    fn legacy_and_empty_line_and_start_markers_are_errors() {
+        for (marker, expected) in [
+            ("cov:ignore", "legacy cov:ignore"),
+            ("cov:ignore:   ", "requires a non-empty reason"),
+            ("cov:ignore-start", "legacy cov:ignore-start"),
+            ("cov:ignore-start:   ", "requires a non-empty reason"),
+        ] {
+            let report = format!("/repo/a.rs:\n    1|     0|    code() // {marker}\n");
+            let err = parse_text_report(&report, "/repo").unwrap_err();
+            assert!(err.to_string().contains(expected), "{err}");
+        }
+    }
+
+    #[test]
+    fn noncanonical_block_stop_is_an_error() {
+        let report = "\
+/repo/a.rs:
+    1|      |    // cov:ignore-start: compiler bookkeeping
+    2|      |    // cov:ignore-stop: no longer needed
+";
+        let err = parse_text_report(report, "/repo").unwrap_err();
+        assert!(err.to_string().contains("noncanonical"), "{err}");
+    }
+
+    #[test]
     fn unmatched_block_start_is_error() {
         let report = "\
 /repo/a.rs:
-    1|      |    // cov:ignore-start
+    1|      |    // cov:ignore-start: generated source
     2|     0|    never_closed()
 ";
         let err = parse_text_report(report, "/repo").unwrap_err();
@@ -211,9 +259,9 @@ mod tests {
     fn nested_block_is_error() {
         let report = "\
 /repo/a.rs:
-    1|      |    // cov:ignore-start
+    1|      |    // cov:ignore-start: generated source
     2|     0|    inner()
-    3|      |    // cov:ignore-start
+    3|      |    // cov:ignore-start: compiler bookkeeping
     4|      |    // cov:ignore-stop
 ";
         let err = parse_text_report(report, "/repo").unwrap_err();
@@ -236,12 +284,12 @@ mod tests {
 
     #[test]
     fn doc_comment_block_start_is_ignored() {
-        // A `/// cov:ignore-start` inside a doc comment must NOT open a block:
+        // A `/// cov:ignore-start: …` inside a doc comment must NOT open a block:
         // the following executable line is still measured, and there is no
         // spurious unmatched-`-start` error at EOF.
         let report = "\
 /repo/a.rs:
-    1|      |    /// cov:ignore-start
+    1|      |    /// cov:ignore-start: documentation is inert
     2|     0|    still_measured()
 ";
         let files = parse_text_report(report, "/repo").unwrap();
@@ -256,21 +304,11 @@ mod tests {
         let report = "\
 /repo/a.rs:
     1|     0|    do_work() // unlike the cov:ignore path
-    2|     0|    boom() // cov:ignore
+    2|     0|    boom() // cov:ignore: host cannot exercise this span
 ";
         let files = parse_text_report(report, "/repo").unwrap();
         let lines: Vec<u32> = files[0].lines.iter().map(|l| l.line).collect();
         assert_eq!(lines, vec![1]); // line 2 dropped (anchored marker), line 1 kept
-    }
-
-    #[test]
-    fn line_marker_with_trailing_note_is_dropped() {
-        let report = "\
-/repo/a.rs:
-    1|     0|    boom() // cov:ignore reason here
-";
-        let files = parse_text_report(report, "/repo").unwrap();
-        assert!(files[0].lines.is_empty()); // first token is the marker → dropped
     }
 
     #[test]
@@ -294,7 +332,7 @@ mod tests {
         // line 4's real `-stop` would `bail!` (no open block).
         let report = "\
 /repo/a.rs:
-    1|      |    // cov:ignore-start
+    1|      |    // cov:ignore-start: generated source
     2|     0|    dropped() // mentions cov:ignore-stop but not as a marker
     3|     0|    still_dropped()
     4|      |    // cov:ignore-stop

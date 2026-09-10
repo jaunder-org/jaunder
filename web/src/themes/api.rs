@@ -158,6 +158,26 @@ async fn owner(scope: OwnershipScope) -> Result<(common::ids::UserId, ThemeOwner
 }
 
 #[cfg(feature = "server")]
+async fn validate_custom_selection(
+    owner: ThemeOwner,
+    selection: Option<&PublicThemeSelection>,
+) -> Result<(), InternalError> {
+    let Some(PublicThemeSelection::Custom(theme_id)) = selection else {
+        return Ok(());
+    };
+    let themes = expect_context::<Arc<dyn ThemeStorage>>();
+    let published = themes
+        .list_themes(owner)
+        .await
+        .map_err(InternalError::storage)?
+        .into_iter()
+        .any(|entry| entry.id == *theme_id && entry.current_revision.is_some());
+    published
+        .then_some(())
+        .ok_or_else(|| InternalError::not_found("theme"))
+}
+
+#[cfg(feature = "server")]
 fn admission_error(error: ThemeOperationRejected) -> InternalError {
     match error {
         ThemeOperationRejected::RateLimited => {
@@ -169,13 +189,9 @@ fn admission_error(error: ThemeOperationRejected) -> InternalError {
     }
 }
 #[cfg(feature = "server")]
-// `multer::Error` is constructed only by Axum's streaming multipart decoder.
-// cov:ignore-start
 fn multipart_error(error: multer::Error) -> InternalError {
     InternalError::validation_source("invalid multipart theme import", error)
 }
-// cov:ignore-stop
-
 #[cfg(feature = "server")]
 fn catalog(entry: storage::ThemeCatalogEntry) -> CatalogEntry {
     CatalogEntry {
@@ -335,9 +351,8 @@ fn percent_encode_draft_asset_path(path: &str) -> String {
     encoded
 }
 
-// Storage error variants are projected defensively; backend-specific variants require an
-// actual database driver to construct and are exercised by the storage integration suite.
-// cov:ignore-start
+// Storage error variants are projected defensively; backend-specific unique-violation
+// variants require an actual database driver to construct.
 #[cfg(feature = "server")]
 fn create_storage_error(error: sqlx::Error) -> InternalError {
     match &error {
@@ -367,7 +382,6 @@ fn replace_draft_error(error: ReplaceDraftError) -> InternalError {
         ReplaceDraftError::Storage(error) => InternalError::storage(error),
     }
 }
-// cov:ignore-stop
 
 #[cfg(feature = "server")]
 fn theme_name(name: &str) -> Result<String, InternalError> {
@@ -527,7 +541,6 @@ pub async fn get_presentation(
         .await
         .map_err(InternalError::storage)?;
     // Header pools are represented separately on the wire; fixed bindings deliberately omit them.
-    // cov:ignore-start
     let shuffle_seed = match &header_binding {
         Some(storage::ThemeRoleBinding::HeaderPool { shuffle_seed, .. }) => Some(*shuffle_seed),
         _ => None,
@@ -536,7 +549,6 @@ pub async fn get_presentation(
         Some(storage::ThemeRoleBinding::HeaderPool { .. }) => None,
         binding => binding.map(binding_wire).transpose()?,
     };
-    // cov:ignore-stop
     let header_pool = themes
         .header_pool(owner, theme_id)
         .await
@@ -654,7 +666,6 @@ pub async fn import_zip(data: MultipartData) -> WebResult<MutationOutcome<Catalo
         .map_err(multipart_error)?
         .ok_or_else(|| InternalError::validation("missing theme ownership scope"))?;
     // Multipart field ordering is enforced at the Axum streaming boundary.
-    // cov:ignore-start
     if scope.name() != Some("scope") {
         return Err(InternalError::validation(
             "theme import fields must be scope, name, archive",
@@ -668,13 +679,11 @@ pub async fn import_zip(data: MultipartData) -> WebResult<MutationOutcome<Catalo
         "author" => ThemeOwner::Author(actor.user_id),
         _ => return Err(InternalError::validation("invalid theme ownership scope")),
     };
-    // cov:ignore-stop
     let name = multipart
         .next_field()
         .await
         .map_err(multipart_error)?
         .ok_or_else(|| InternalError::validation("missing theme name"))?;
-    // cov:ignore-start
     if name.name() != Some("name") {
         return Err(InternalError::validation(
             "theme import fields must be scope, name, archive",
@@ -691,7 +700,6 @@ pub async fn import_zip(data: MultipartData) -> WebResult<MutationOutcome<Catalo
             "theme import fields must be scope, name, archive",
         ));
     }
-    // cov:ignore-stop
     let limit = ThemePackageLimits::default().max_archive_bytes;
     let mut bytes = Vec::new();
     while let Some(chunk) = archive.chunk().await.map_err(multipart_error)? {
@@ -701,7 +709,6 @@ pub async fn import_zip(data: MultipartData) -> WebResult<MutationOutcome<Catalo
         bytes.extend_from_slice(&chunk);
     }
     drop(archive);
-    // cov:ignore-start
     if multipart
         .next_field()
         .await
@@ -712,7 +719,6 @@ pub async fn import_zip(data: MultipartData) -> WebResult<MutationOutcome<Catalo
             "theme import fields must be scope, name, archive",
         ));
     }
-    // cov:ignore-stop
     let draft = draft_from_archive(ThemeId::from(0), &bytes)?;
     let themes = expect_context::<Arc<dyn ThemeStorage>>();
     let write_scope = expect_context::<WriteScope>();
@@ -756,14 +762,12 @@ pub async fn import_css(
     if stylesheet.len() > ThemePackageLimits::default().max_file_bytes {
         return Err(InternalError::validation("theme stylesheet is too large"));
     }
-    let draft = draft_from_input(
-        ThemeId::from(0),
-        Draft {
-            manifest: plain_css_manifest(&name)?,
-            stylesheet,
-            assets: Vec::new(),
-        },
-    )?; // cov:ignore — successful import exercises validation; this is compiler `?` bookkeeping
+    let input = Draft {
+        manifest: plain_css_manifest(&name)?,
+        stylesheet,
+        assets: Vec::new(),
+    };
+    let draft = draft_from_input(ThemeId::from(0), input)?;
     let themes = expect_context::<Arc<dyn ThemeStorage>>();
     let write_scope = expect_context::<WriteScope>();
     let name_for_write = name.clone();
@@ -851,16 +855,12 @@ pub async fn export(scope: OwnershipScope, theme_id: ThemeId) -> WebResult<Expor
     let bytes = theme_package::export_theme_package(&draft.manifest, &draft.stylesheet, &assets)
         .map_err(InternalError::server)?;
     let filename = safe_filename(&entry.name);
-    // Response headers are observable only through the Axum HTTP adapter.
-    // cov:ignore-start
+    let content_disposition =
+        axum::http::HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
+            .map_err(InternalError::server)?;
     if let Some(options) = use_context::<ResponseOptions>() {
-        options.insert_header(
-            axum::http::header::CONTENT_DISPOSITION,
-            axum::http::HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
-                .map_err(InternalError::server)?,
-        );
+        options.insert_header(axum::http::header::CONTENT_DISPOSITION, content_disposition);
     }
-    // cov:ignore-stop
     Ok(ExportedPackage { filename, bytes })
 }
 
@@ -964,22 +964,7 @@ pub async fn select(
     selection: Option<PublicThemeSelection>,
 ) -> WebResult<MutationOutcome<()>> {
     let (_, owner) = owner(scope).await?;
-    if let Some(PublicThemeSelection::Custom(theme_id)) = selection {
-        let themes = expect_context::<Arc<dyn ThemeStorage>>();
-        // Selection validation is an owner-visible catalog read; the absence projection is
-        // covered by the HTTP authorization integration path.
-        // cov:ignore-start
-        if !themes
-            .list_themes(owner)
-            .await
-            .map_err(InternalError::storage)?
-            .into_iter()
-            .any(|entry| entry.id == theme_id && entry.current_revision.is_some())
-        {
-            return Err(InternalError::not_found("theme"));
-        }
-        // cov:ignore-stop
-    }
+    validate_custom_selection(owner, selection.as_ref()).await?;
     let themes = expect_context::<Arc<dyn ThemeStorage>>();
     let write_scope = expect_context::<WriteScope>();
     write_scope
@@ -1006,26 +991,18 @@ pub async fn replace_binding(
     let (actor, owner) = owner(scope).await?;
     ensure_owned(owner, theme_id).await?;
     let manager = expect_context::<Arc<ThemeManager>>();
+    let input = match input {
+        ThemeBindingInput::PackagedDefault => ThemeRoleInput::PackagedDefault,
+        ThemeBindingInput::ExplicitAbsent => ThemeRoleInput::ExplicitAbsent,
+        ThemeBindingInput::PackageAsset(path) => ThemeRoleInput::PackageAsset(path),
+        ThemeBindingInput::Media(media) => ThemeRoleInput::Media(MediaRef {
+            source: media.source,
+            sha256: media.sha256,
+            filename: media.filename,
+        }),
+    };
     manager
-        .replace_role(
-            actor,
-            owner,
-            theme_id,
-            role,
-            // The concrete manager tests exercise every storage role input. This is the
-            // server-function serialization boundary, which has no host-only caller.
-            // cov:ignore-start
-            match input {
-                ThemeBindingInput::PackagedDefault => ThemeRoleInput::PackagedDefault,
-                ThemeBindingInput::ExplicitAbsent => ThemeRoleInput::ExplicitAbsent,
-                ThemeBindingInput::PackageAsset(path) => ThemeRoleInput::PackageAsset(path),
-                ThemeBindingInput::Media(media) => ThemeRoleInput::Media(MediaRef {
-                    source: media.source,
-                    sha256: media.sha256,
-                    filename: media.filename,
-                }),
-            }, // cov:ignore-stop
-        )
+        .replace_role(actor, owner, theme_id, role, input)
         .await
         .map_err(manager_error)
 }
@@ -1364,6 +1341,25 @@ mod tests {
         );
         let draft_quota = replace_draft_error(ReplaceDraftError::QuotaExceeded);
         assert_validation(&draft_quota, "theme draft quota exceeded");
+        let create_internal =
+            create_storage_error(sqlx::Error::Io(std::io::Error::other("create failed")));
+        assert!(matches!(
+            project(create_internal.kind(), create_internal.public_message()),
+            WebError::Storage { .. }
+        ));
+        let theme_internal =
+            theme_storage_error(sqlx::Error::Io(std::io::Error::other("theme failed")));
+        assert!(matches!(
+            project(theme_internal.kind(), theme_internal.public_message()),
+            WebError::Storage { .. }
+        ));
+        let draft_internal = replace_draft_error(ReplaceDraftError::Storage(sqlx::Error::Io(
+            std::io::Error::other("draft failed"),
+        )));
+        assert!(matches!(
+            project(draft_internal.kind(), draft_internal.public_message()),
+            WebError::Storage { .. }
+        ));
         let publication = publication_error(ThemeAssetError::Storage(sqlx::Error::RowNotFound));
         assert_validation(&publication, "theme publication rejected");
     }
@@ -1644,57 +1640,33 @@ mod tests {
         drop(reactive_owner);
     }
 
-    // guard:no-backend — concrete manager over mock stores and write scope
+    // guard:no-backend — mock store rejects the selection before a write is opened
     #[tokio::test]
-    async fn replacing_a_packaged_default_binding_commits_owned_mutation() {
+    async fn selecting_an_unpublished_owned_theme_is_rejected_before_write() {
         let reactive_owner = Owner::new();
         reactive_owner.set();
         let theme_id = ThemeId::from(8_i64);
-        let existing = draft_from_input(
-            theme_id,
-            Draft {
-                manifest: plain_css_manifest("Ocean").unwrap(),
-                stylesheet: b".j-theme-root { color: blue; }".to_vec(),
-                assets: Vec::new(),
-            },
-        )
-        .unwrap();
         let mut themes = MockThemeStorage::new();
-        themes
-            .expect_get_draft()
-            .returning(move |_, _| Ok(Some(existing.clone())));
-        themes.expect_role_binding().returning(|_, _, _| Ok(None));
-        themes.expect_header_pool().returning(|_, _| Ok(Vec::new()));
-        themes
-            .expect_locked_media_references()
-            .returning(|_, _, _| Ok(Vec::new()));
-        themes
-            .expect_replace_role_binding()
-            .returning(|_, _, _| Ok(()));
-        let themes: Arc<dyn ThemeStorage> = Arc::new(themes);
-        let manager = ThemeManager::new(
-            Arc::clone(&themes),
-            Arc::new(MockMediaStorage::new()),
-            mock_write_scope(),
-            Arc::new(MediaContentLocks::new(Arc::new(std::env::temp_dir()))),
-        );
-        provide_context(auth_parts(UserId::from(7_i64), "author"));
-        provide_context(Arc::clone(&themes));
-        provide_context(Arc::new(manager));
+        themes.expect_list_themes().returning(move |_| {
+            Ok(vec![ThemeCatalogEntry {
+                id: theme_id,
+                owner: ThemeOwner::Author(UserId::from(7_i64)),
+                name: "Ocean".into(),
+                current_revision: None,
+            }])
+        });
+        provide_author_and_themes(themes);
 
-        let outcome = replace_binding(
+        let error = select(
             OwnershipScope::Author,
-            theme_id,
-            ThemeImageRole::Logo,
-            ThemeBindingInput::PackagedDefault,
+            Some(common::theme::PublicThemeSelection::Custom(theme_id)),
         )
         .await
-        .unwrap();
+        .expect_err("unpublished themes cannot be selected");
 
         drop(reactive_owner);
-        assert_eq!(outcome, common::MutationOutcome::Confirmed(()));
+        assert!(matches!(error, WebError::NotFound { .. }));
     }
-
     // guard:no-backend — concrete manager over mock stores and write scope
     #[tokio::test]
     async fn replacing_an_owned_header_pool_preserves_wire_inputs() {

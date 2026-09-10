@@ -924,18 +924,28 @@ mod tests {
 
     #[async_trait::async_trait]
     impl WebSubClient for UnexpectedWebSubClient {
-        // cov:ignore-start — this sentinel is required to remain uncalled; a call
-        // panics and fails the stale-finalization caller-boundary test.
         async fn send_publish(
             &self,
             _hub_url: &HubUrl,
             _feed_url: &FeedUrl,
         ) -> Result<(), crate::websub::WebSubError> {
-            panic!("stale finalization must stop before WebSub publication");
+            unreachable!("stale finalization must stop before WebSub publication");
         }
-        // cov:ignore-stop
     }
 
+    #[tokio::test]
+    #[should_panic(expected = "stale finalization must stop before WebSub publication")]
+    async fn unexpected_websub_client_panics_when_called() {
+        UnexpectedWebSubClient
+            .send_publish(
+                &"https://hub.example.test/".parse().expect("valid hub URL"),
+                &"https://example.test/feed.rss"
+                    .parse()
+                    .expect("valid feed URL"),
+            )
+            .await
+            .expect("unexpected client must panic before returning");
+    }
     async fn storage_backed_worker(
         backend: Backend,
         feed_cache: MockFeedCacheStorage,

@@ -698,15 +698,13 @@ mod tests {
 
         let Err(variable) = StorageRuntimeConfig::from_raw(Ok(None), Ok(None), Err(invalid()))
         else {
-            // Reaching this arm would mean invalid Unicode was accepted.
-            panic!("invalid password variable must fail"); // cov:ignore
+            unreachable!("invalid password variable must fail");
         };
         assert!(matches!(variable, PostgresPasswordError::Variable(_)));
         assert!(!variable.to_string().contains("secret"));
 
         let Err(file) = StorageRuntimeConfig::from_raw(Ok(None), Err(invalid()), Ok(None)) else {
-            // Reaching this arm would mean an invalid file variable was accepted.
-            panic!("invalid password-file variable must fail"); // cov:ignore
+            unreachable!("invalid password-file variable must fail");
         };
         assert!(matches!(file, PostgresPasswordError::FileVariable(_)));
         assert!(!file.to_string().contains("secret"));

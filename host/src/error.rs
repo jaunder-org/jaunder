@@ -194,9 +194,11 @@ pub fn report_swallowed(
         ErrorDisposition::Swallowed,
         TelemetryOrigin::Server,
     );
+    let error_kind = kind.as_metric_str();
+    let error_class = class.as_metric_str();
     tracing::warn!(
-        error.kind = kind.as_metric_str(), // cov:ignore
-        error.class = class.as_metric_str(), // cov:ignore
+        error.kind = error_kind,
+        error.class = error_class,
         error.disposition = "swallowed",
         telemetry.origin = "server",
         error.context = context,
@@ -630,10 +632,9 @@ mod tests {
             Ok(bytes.len())
         }
 
-        // cov:ignore-start
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
-        } // cov:ignore-stop
+        }
     }
 
     impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for SharedWriter {
@@ -642,6 +643,14 @@ mod tests {
         fn make_writer(&'writer self) -> Self::Writer {
             self.clone()
         }
+    }
+
+    #[test]
+    fn shared_writer_flushes() {
+        use std::io::Write;
+
+        let mut writer = SharedWriter(std::sync::Arc::new(std::sync::Mutex::new(Vec::new())));
+        writer.flush().expect("test writer flushes");
     }
     impl Error for SourceError {}
 
@@ -1021,17 +1030,17 @@ mod tests {
         assert!(event.contains("best_effort"), "event: {event}");
 
         let metrics = exporter.get_finished_metrics().expect("metrics");
-        let points: Vec<_> = metrics
+        let error_metrics: Vec<_> = metrics
             .iter()
             .flat_map(opentelemetry_sdk::metrics::data::ResourceMetrics::scope_metrics)
             .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
             .filter(|metric| metric.name() == "jaunder.errors")
-            .filter_map(|metric| match metric.data() {
-                AggregatedMetrics::U64(MetricData::Sum(sum)) => Some(sum),
-                _ => None, // cov:ignore
-            })
-            .flat_map(opentelemetry_sdk::metrics::data::Sum::data_points)
             .collect();
+        assert_eq!(error_metrics.len(), 1, "one error counter metric");
+        let AggregatedMetrics::U64(MetricData::Sum(sum)) = error_metrics[0].data() else {
+            unreachable!("error counter metric must export a U64 sum");
+        };
+        let points: Vec<_> = sum.data_points().collect();
         assert_eq!(points.len(), 1);
         let attrs: std::collections::BTreeSet<_> = points[0]
             .attributes()

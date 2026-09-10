@@ -328,7 +328,7 @@ impl BackgroundWorkers {
                     stop_worker_after_start_failure(scheduler, "server.backup.start_rollback")
                         .await;
                     // The await body is covered; LLVM assigns this closing edge a zero count.
-                } // cov:ignore
+                } // cov:ignore: LLVM leaves this covered await loop's closing edge at zero.
                 stop_worker_after_start_failure(
                     &mut maintenance,
                     "server.maintenance.start_rollback",
@@ -411,8 +411,7 @@ async fn prepare_saturation_metrics(
 async fn stop_worker_after_start_failure(worker: &mut ScheduledWorkerGuard, context: &'static str) {
     worker.stop();
     if let Err(error) = worker.shutdown().await {
-        // cov:ignore-start -- tokio-cron-scheduler 0.13 shutdown always returns Ok;
-        // retain reporting so a future fallible implementation does not hide cleanup failure.
+        // cov:ignore-start: tokio-cron-scheduler 0.13 shutdown always returns Ok, so this retained future-error report has no host path.
         error::report_swallowed(
             error::ErrorKind::Internal,
             error::ErrorClass::Transient,
@@ -847,6 +846,24 @@ pub async fn prepare_server(
     })
 }
 
+#[cfg(test)]
+async fn abort_after_ready_timeout<T>(command: &mut JoinHandle<T>) -> ! {
+    command.abort();
+    let _ = command.await;
+    panic!("cmd_serve must publish a ready runtime identity");
+}
+
+#[cfg(test)]
+async fn wait_for_ready_or_abort<T>(
+    timeout: Duration,
+    ready: impl Future<Output = ()>,
+    command: &mut JoinHandle<T>,
+) {
+    if tokio::time::timeout(timeout, ready).await.is_err() {
+        abort_after_ready_timeout(command).await;
+    }
+}
+
 /// Serves `router` on `listener`, draining in-flight requests when `shutdown`
 /// resolves, then returns. Runtime ownership remains with the caller so it can
 /// stop every background worker before releasing the storage-directory lock.
@@ -915,6 +932,47 @@ struct ShutdownSupervisor {
 impl ShutdownSupervisor {
     /// Installs the signal handlers synchronously, before returning the receiver
     /// that begins graceful shutdown on the first signal.
+    fn log_continued_shutdown_signal() {
+        tracing::info!("received SIGTERM while draining; continuing graceful shutdown");
+    }
+
+    fn log_forced_shutdown_signal() {
+        tracing::warn!("received SIGINT while draining; forcing immediate exit");
+    }
+
+    fn remove_runtime_identity(runtime_path: &Path) {
+        runtime_file::remove_runtime_file(runtime_path);
+    }
+
+    fn dispatch_shutdown_transition(
+        transition: ShutdownTransition,
+        signal_name: &str,
+        graceful_shutdown: &mut Option<tokio::sync::oneshot::Sender<()>>,
+        runtime_path: &Path,
+    ) -> bool {
+        match transition {
+            ShutdownTransition::BeginGracefulDrain => {
+                tracing::info!(
+                    signal = signal_name,
+                    "received shutdown signal; draining in-flight requests"
+                );
+                if let Some(tx) = graceful_shutdown.take() {
+                    let _ = tx.send(());
+                }
+                false
+            }
+            ShutdownTransition::ContinueGracefulDrain => {
+                Self::log_continued_shutdown_signal();
+                false
+            }
+            ShutdownTransition::ForceExitAndRemoveRuntimeIdentity => {
+                Self::log_forced_shutdown_signal();
+                Self::remove_runtime_identity(runtime_path);
+                true
+            }
+        }
+    }
+
     fn install(runtime_path: PathBuf) -> io::Result<(Receiver<()>, Self)> {
         use tokio::signal::unix::{SignalKind, signal};
 
@@ -922,9 +980,6 @@ impl ShutdownSupervisor {
         let mut sigterm = signal(SignalKind::terminate())?;
         let (tx, rx) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
-            // cov:ignore-start -- async signal wait-loop; the forced branch ends in
-            // process::exit and is unreachable by a survivable test. The synchronous
-            // setup above and serve_with_shutdown are host-covered by the signal tests.
             let mut state = ShutdownState::AwaitingSignal;
             let mut graceful_shutdown = Some(tx);
             loop {
@@ -932,30 +987,16 @@ impl ShutdownSupervisor {
                     _ = sigint.recv() => (ShutdownSignal::Sigint, "SIGINT"),
                     _ = sigterm.recv() => (ShutdownSignal::Sigterm, "SIGTERM"),
                 };
-                match shutdown_transition(state, signal) {
-                    ShutdownTransition::BeginGracefulDrain => {
-                        tracing::info!(
-                            signal = signal_name,
-                            "received shutdown signal; draining in-flight requests"
-                        );
-                        if let Some(tx) = graceful_shutdown.take() {
-                            let _ = tx.send(());
-                        }
-                        state = ShutdownState::Draining;
-                    }
-                    ShutdownTransition::ContinueGracefulDrain => {
-                        tracing::info!(
-                            "received SIGTERM while draining; continuing graceful shutdown"
-                        );
-                    }
-                    ShutdownTransition::ForceExitAndRemoveRuntimeIdentity => {
-                        tracing::warn!("received SIGINT while draining; forcing immediate exit");
-                        runtime_file::remove_runtime_file(&runtime_path);
-                        std::process::exit(0);
-                    }
+                if Self::dispatch_shutdown_transition(
+                    shutdown_transition(state, signal),
+                    signal_name,
+                    &mut graceful_shutdown,
+                    &runtime_path,
+                ) {
+                    std::process::exit(0); // cov:ignore: A forced second signal terminates the process, so this exact call cannot return in a survivable host test.
                 }
+                state = ShutdownState::Draining;
             }
-            // cov:ignore-stop
         });
         Ok((rx, Self { task: Some(task) }))
     }
@@ -967,8 +1008,8 @@ impl ShutdownSupervisor {
         task.abort();
         match task.await {
             Err(error) if error.is_cancelled() => {}
-            Ok(()) => {} // cov:ignore
-            // cov:ignore-start
+            Ok(()) => {} // cov:ignore: Aborting this task cannot produce a successful join under Tokio's cancellation contract.
+            // cov:ignore-start: After task abortion, a non-cancellation JoinError needs a runtime fault that the public signal seam cannot induce.
             Err(error) => error::report_swallowed(
                 error::ErrorKind::Internal,
                 error::ErrorClass::Transient,
@@ -1042,7 +1083,7 @@ pub async fn cmd_serve(
             saturation_shutdown,
             "server.metrics.shutdown",
         );
-    } // cov:ignore — LLVM assigns this completed shutdown branch's closing edge a zero count.
+    } // cov:ignore: LLVM leaves this covered completed shutdown branch's closing edge at zero.
     let (feed_shutdown, maintenance_shutdown, backup_shutdown) = workers.shutdown().await;
     merge_worker_shutdown(&mut serve_result, feed_shutdown, "server.feed.shutdown");
     merge_worker_shutdown(
@@ -1166,6 +1207,11 @@ mod tests {
             ),
             feed_interval,
         }
+    }
+
+    async fn abort_and_join<T>(task: &mut JoinHandle<T>) -> Result<T, tokio::task::JoinError> {
+        task.abort();
+        task.await
     }
 
     async fn shutdown_prepared_server(mut prepared: PreparedServer) {
@@ -1939,30 +1985,26 @@ mod tests {
         let mut command =
             tokio::spawn(async move { cmd_serve(&storage, bind, false, &telemetry, None).await });
 
-        if tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                let ready = fs::read(&runtime_path)
-                    .ok()
-                    .and_then(|contents| {
-                        serde_json::from_slice::<serde_json::Value>(&contents).ok()
-                    })
-                    .and_then(|runtime| runtime["port"].as_u64())
-                    .is_some_and(|port| port != 0);
-                if ready {
-                    break;
+        wait_for_ready_or_abort(
+            Duration::from_secs(5),
+            async {
+                loop {
+                    let ready = fs::read(&runtime_path)
+                        .ok()
+                        .and_then(|contents| {
+                            serde_json::from_slice::<serde_json::Value>(&contents).ok()
+                        })
+                        .and_then(|runtime| runtime["port"].as_u64())
+                        .is_some_and(|port| port != 0);
+                    if ready {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(1)).await;
                 }
-                tokio::time::sleep(Duration::from_millis(1)).await;
-            }
-        })
-        .await
-        .is_err()
-        {
-            // cov:ignore-start
-            command.abort();
-            let _ = command.await;
-            panic!("cmd_serve must publish a ready runtime identity");
-            // cov:ignore-stop
-        }
+            },
+            &mut command,
+        )
+        .await;
 
         nix::sys::signal::raise(nix::sys::signal::Signal::SIGTERM).expect("send SIGTERM");
 
@@ -1971,8 +2013,7 @@ mod tests {
                 .expect("cmd_serve task must not panic")
                 .expect("cmd_serve must gracefully shut down");
         } else {
-            command.abort();
-            let _ = command.await;
+            let _ = abort_and_join(&mut command).await;
             panic!("cmd_serve must complete after SIGTERM");
         }
         assert!(
@@ -1991,5 +2032,74 @@ mod tests {
     #[tokio::test]
     async fn sigint_drains_and_removes_runtime_file() {
         assert_signal_removes_runtime_file(nix::sys::signal::Signal::SIGINT).await;
+    }
+
+    #[tokio::test]
+    async fn abort_and_join_cancels_the_task() {
+        let mut task = tokio::spawn(std::future::pending::<()>());
+
+        let error = abort_and_join(&mut task)
+            .await
+            .expect_err("aborted task must report cancellation");
+
+        assert!(error.is_cancelled());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn continued_shutdown_signal_can_be_logged_directly() {
+        ShutdownSupervisor::log_continued_shutdown_signal();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn removing_runtime_identity_is_directly_testable() {
+        let temp = TempDir::new().expect("temp dir");
+        let path = temp.path().join("runtime.json");
+        fs::write(&path, "identity").expect("runtime identity");
+
+        ShutdownSupervisor::remove_runtime_identity(&path);
+
+        assert!(!path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn forced_shutdown_signal_can_be_logged_directly() {
+        ShutdownSupervisor::log_forced_shutdown_signal();
+    }
+    #[tokio::test]
+    async fn ready_publication_timeout_aborts_then_panics() {
+        let mut command = tokio::spawn(std::future::pending::<()>());
+        let timeout = tokio::spawn(async move {
+            wait_for_ready_or_abort(Duration::ZERO, std::future::pending::<()>(), &mut command)
+                .await;
+        });
+
+        let error = timeout.await.expect_err("timeout helper must panic");
+
+        assert!(error.is_panic());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn shutdown_dispatch_handles_continue_and_force_without_exiting() {
+        let (_sender, _receiver) = tokio::sync::oneshot::channel::<()>();
+        let mut graceful = None;
+        let temp = TempDir::new().expect("temp dir");
+        let path = temp.path().join("runtime.json");
+        fs::write(&path, "identity").expect("runtime identity");
+
+        assert!(!ShutdownSupervisor::dispatch_shutdown_transition(
+            ShutdownTransition::ContinueGracefulDrain,
+            "SIGTERM",
+            &mut graceful,
+            &path,
+        ));
+        assert!(ShutdownSupervisor::dispatch_shutdown_transition(
+            ShutdownTransition::ForceExitAndRemoveRuntimeIdentity,
+            "SIGINT",
+            &mut graceful,
+            &path,
+        ));
+        assert!(!path.exists());
     }
 }
