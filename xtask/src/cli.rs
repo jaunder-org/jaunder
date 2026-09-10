@@ -34,6 +34,13 @@ pub enum E2eBrowser {
     Firefox,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum E2eLocalBrowser {
+    Chromium,
+    Firefox,
+    Webkit,
+}
+
 impl E2eBackend {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
@@ -48,6 +55,16 @@ impl E2eBrowser {
         match self {
             E2eBrowser::Chromium => "chromium",
             E2eBrowser::Firefox => "firefox",
+        }
+    }
+}
+
+impl E2eLocalBrowser {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Chromium => "chromium",
+            Self::Firefox => "firefox",
+            Self::Webkit => "webkit",
         }
     }
 }
@@ -159,12 +176,16 @@ pub enum Command {
     /// server, start `jaunder serve` on an ephemeral port with the VM's capture
     /// env + a per-run temp DB, seed via the shared `devtool seed-e2e`, run
     /// Playwright against the discovered URL, and tear the server down on every
-    /// exit path. Normal mode runs Chromium ordinary/admin tests; visual update
-    /// mode builds release CSR and updates Chromium and Firefox baselines in
+    /// exit path. Normal mode runs the selected ordinary browser project; visual
+    /// update mode builds release CSR and updates Chromium and Firefox baselines in
     /// separate fresh lifecycles. Self-contained — no pre-existing server and no
     /// `:3000` conflict. Loads the same `playwright.config.ts` the CI VM loads.
     /// Host only.
     E2eLocal {
+        /// Run the selected ordinary Playwright browser project. Omit to preserve
+        /// the existing Chromium run.
+        #[arg(long, value_enum, conflicts_with = "update_visual_snapshots")]
+        browser: Option<E2eLocalBrowser>,
         /// A spec path or `file:line` filter passed through to Playwright as a
         /// positional arg (single-test runs).
         test: Option<String>,
@@ -667,9 +688,11 @@ mod tests {
         let cli = Cli::try_parse_from(["xtask", "e2e-local"]).unwrap();
         match cli.command {
             Command::E2eLocal {
+                browser,
                 test,
                 update_visual_snapshots,
             } => {
+                assert_eq!(browser, None);
                 assert_eq!(test, None);
                 assert!(!update_visual_snapshots);
             }
@@ -679,9 +702,11 @@ mod tests {
         let cli = Cli::try_parse_from(["xtask", "e2e-local", "auth-flow.spec.ts"]).unwrap();
         match cli.command {
             Command::E2eLocal {
+                browser,
                 test,
                 update_visual_snapshots,
             } => {
+                assert_eq!(browser, None);
                 assert_eq!(test.as_deref(), Some("auth-flow.spec.ts"));
                 assert!(!update_visual_snapshots);
             }
@@ -691,13 +716,32 @@ mod tests {
         let cli = Cli::try_parse_from(["xtask", "e2e-local", "--update-visual-snapshots"]).unwrap();
         match cli.command {
             Command::E2eLocal {
+                browser,
                 test,
                 update_visual_snapshots,
             } => {
+                assert_eq!(browser, None);
                 assert_eq!(test, None);
                 assert!(update_visual_snapshots);
             }
             _ => panic!("expected e2e-local visual update mode"),
+        }
+    }
+
+    #[test]
+    fn e2e_local_parses_each_browser_selection() {
+        for (argument, browser) in [
+            ("chromium", E2eLocalBrowser::Chromium),
+            ("firefox", E2eLocalBrowser::Firefox),
+            ("webkit", E2eLocalBrowser::Webkit),
+        ] {
+            let cli = Cli::try_parse_from(["xtask", "e2e-local", "--browser", argument]).unwrap();
+            match cli.command {
+                Command::E2eLocal {
+                    browser: selected, ..
+                } => assert_eq!(selected, Some(browser)),
+                _ => panic!("expected e2e-local"),
+            }
         }
     }
 
@@ -712,6 +756,18 @@ mod tests {
             ])
             .is_err()
         );
+
+        let Err(error) = Cli::try_parse_from([
+            "xtask",
+            "e2e-local",
+            "--update-visual-snapshots",
+            "--browser",
+            "webkit",
+        ]) else {
+            panic!("browser selection conflicts with visual snapshot updates");
+        };
+        assert!(error.to_string().contains("--browser"));
+        assert!(error.to_string().contains("--update-visual-snapshots"));
     }
 
     #[test]

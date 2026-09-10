@@ -255,13 +255,20 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             Ok(result)
         }
         Command::E2eLocal {
+            browser,
             test,
             update_visual_snapshots,
         } => {
             let sh = Shell::new()?;
             let start = Instant::now();
             let mut result = CommandResult::new("e2e-local");
-            steps::e2e_local::run(&sh, &mut result, test.as_deref(), update_visual_snapshots);
+            steps::e2e_local::run(
+                &sh,
+                &mut result,
+                browser,
+                test.as_deref(),
+                update_visual_snapshots,
+            );
             lifecycle::finalize(&mut result, start);
             Ok(result)
         }
