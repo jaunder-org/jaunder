@@ -8,10 +8,10 @@ Matrix: `matrix:docs/coverage/csr-e2e-matrix.md#authenticated-cockpit`
 
 ## Endpoint census
 
-| Endpoint                                | Status  | Surface                                                                                                   |
-| --------------------------------------- | ------- | --------------------------------------------------------------------------------------------------------- |
-| `endpoint:/api/timeline/list_home_feed` | Covered | Loads the signed-in author's personalized home feed after the shared session reconcile confirms identity. |
-| `endpoint:/api/tags/list`               | Covered | Powers the debounced tag autocomplete inside the inline composer that lives directly on `/app`.           |
+| Endpoint                                | Status  | Surface                                                                                                                   |
+| --------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `endpoint:/api/timeline/list_home_feed` | Covered | Loads `/app` in URL-selected Newest/Oldest order, with viewer visibility filtering and direction-preserving continuation. |
+| `endpoint:/api/tags/list`               | Covered | Powers the debounced tag autocomplete inside the inline composer that lives directly on `/app`.                           |
 
 `/app` is the directly-bookmarkable authenticated feed. It does not trust the
 advisory local marker by itself: the page waits for the shell's shared session

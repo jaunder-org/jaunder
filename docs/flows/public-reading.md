@@ -27,6 +27,10 @@ URL-only, so a bare `/app` never inherits a previous selection.
 | `endpoint:/api/timeline/list_by_user`        | Covered | Feeds the mounted user timeline matcher; it shares URL-selected order with the canonical `~username` links.                                 |
 | `endpoint:/api/posts/get`                    | Covered | Resolves the permalink page and upgrades it for the author when the same URL names a private or draft post they own.                        |
 
+The tag-browsing and authenticated-cockpit flow censuses own the other three
+ordered timeline endpoints: `list_by_tag`, `list_by_user_and_tag`, and
+`list_home_feed`.
+
 ## Canonical navigation and direct HTTP aliases
 
 Jaunder renders and the CSR navigates only the canonical

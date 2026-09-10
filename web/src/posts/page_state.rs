@@ -33,9 +33,7 @@ use common::revision_history::{
     RevisionHistoryAudience, RevisionHistoryDetail, RevisionHistoryTag,
 };
 use common::root_relative_url::RootRelativeUrl;
-1:     confirmed_created_post, create_post_json, create_session_for, create_user_and_session,
-    make_app, post_form, post_json, post_json_with_credentials, update_post_json,
-2: use common::seed::{
+use common::seed::{
     Page, PageCursor, PageSeed, PublicPresentation, RenderedPost, TimelineCursor, TimelineOrder,
     TimelinePageRequest,
 };

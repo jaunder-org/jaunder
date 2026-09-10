@@ -14,12 +14,8 @@ use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{
-1:     confirmed_created_post, create_post_json, create_session_for, create_user_and_session,
+    confirmed_created_post, create_post_json, create_session_for, create_user_and_session,
     make_app, post_form, post_json, post_json_with_credentials, update_post_json,
-2: use common::seed::{
-    Page, PageCursor, PageSeed, PublicPresentation, RenderedPost, TimelineCursor, TimelineOrder,
-    TimelinePageRequest,
-};
 };
 use storage::test_support::{
     Backend, SeedRawPost, SeedUser, SeededPost, backends, backends_matrix,
