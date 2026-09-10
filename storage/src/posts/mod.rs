@@ -30,6 +30,9 @@ pub use models::{
 };
 #[cfg(any(test, feature = "test-utils"))]
 pub use store::MockPostStorage;
-pub use store::{PostDialect, PostStorage, PostStore, fetch_post_record, list_by_tag_rows};
+pub use store::{
+    PostDialect, PostPermalinkAliasMatch, PostStorage, PostStore, fetch_post_record,
+    list_by_tag_rows,
+};
 pub use syndication::GoLivePost;
 pub use tags::{PostTag, TagRecord};

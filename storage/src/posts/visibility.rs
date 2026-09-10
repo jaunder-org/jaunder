@@ -2,7 +2,6 @@
 
 use sqlx::{Database, Encode, Executor, Result, Type};
 
-use crate::posts::models::PostRecord;
 use crate::posts::store::PostDialect;
 use crate::sql::QueryStorageExt;
 use common::ids::{AudienceId, ChannelId, PostId, UserId};
@@ -178,10 +177,10 @@ impl ResolutionBinds {
     /// resolved in SQL. The caller must have already bound everything to the left
     /// of the fragment, and must bind the query's trailing binds (e.g. `LIMIT`)
     /// afterward, at the index [`resolution_where`] returned.
-    pub(crate) fn bind_onto<'q, DB>(
+    pub(crate) fn bind_onto<'q, DB, O>(
         &'q self,
-        query: sqlx::query::QueryAs<'q, DB, PostRecord, DB::Arguments>,
-    ) -> sqlx::query::QueryAs<'q, DB, PostRecord, DB::Arguments>
+        query: sqlx::query::QueryAs<'q, DB, O, DB::Arguments>,
+    ) -> sqlx::query::QueryAs<'q, DB, O, DB::Arguments>
     where
         DB: Database,
         i64: Encode<'q, DB> + Type<DB>,

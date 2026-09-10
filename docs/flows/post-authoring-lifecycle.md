@@ -45,9 +45,11 @@ is still in the future, and hands schedule changes off to the existing editor.
 `/posts/:post_id/edit` loads the editable post preview and the current audience
 selection together, seeds the shared compose state from that result, and keeps
 the save controls branch-specific: drafts can stay drafts or publish, while live
-and scheduled posts only offer save. Publishing redirects to the canonical
-permalink. Unpublishing from a permalink page returns to `/drafts`. Deleting
-soft-deletes the post and leaves the success message in place.
+and scheduled posts only offer save. Publishing navigates within the CSR to the
+canonical `~`-prefixed permalink. Unpublishing from a permalink page returns to
+`/drafts`. Deleting soft-deletes the post and leaves the success message in
+place. The authoring flow never navigates to the inbound-only bare
+`/YYYY/MM/DD/slug` compatibility alias.
 
 `/history` is the owner-only entry point across active and Deleted Posts. It
 lists immutable snapshots newest-first and appends cursor pages through **Load
