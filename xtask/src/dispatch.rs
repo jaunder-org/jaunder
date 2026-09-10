@@ -6,10 +6,10 @@ use xshell::Shell;
 use crate::{
     adr, adr_readme, audit_wasm, census,
     cli::{
-        AdrCommand, Cli, Command, CoverageCommand, NixCommand, PrCommand, ServerFnCoverageCommand,
-        TracesCommand, WasmCoverageCommand,
+        AdrCommand, Cli, Command, CoverageCommand, NixCommand, PrCommand,
+        ProductionBaselineCommand, ServerFnCoverageCommand, TracesCommand, WasmCoverageCommand,
     },
-    coverage, gate, issue, lifecycle, nix_probe, pr,
+    coverage, gate, issue, lifecycle, nix_probe, pr, production_baseline,
     result::{CommandResult, Mode, StepResult},
     server_fn_coverage, steps, traces, wasm_coverage,
 };
@@ -24,6 +24,10 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
         );
     }
     match cli.command {
+        Command::ProductionBaseline(
+            command @ (ProductionBaselineCommand::Discover { .. }
+            | ProductionBaselineCommand::Accept { .. }),
+        ) => production_baseline::run(command),
         Command::Check { no_test } => {
             let policy = gate::execution_policy(&Command::Check { no_test });
             let sh = Shell::new()?;

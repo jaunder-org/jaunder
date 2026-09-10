@@ -1,0 +1,430 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jaunder.org/schemas/production-baseline/v1",
+  "title": "Jaunder production baseline evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "operation",
+    "outcome",
+    "harness",
+    "source",
+    "target",
+    "runtime",
+    "backups",
+    "lifecycle",
+    "checks",
+    "gaps",
+    "findings",
+    "failure_classes"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "operation": {
+      "enum": [
+        "discover",
+        "accept"
+      ]
+    },
+    "outcome": {
+      "$ref": "#/$defs/report_outcome"
+    },
+    "harness": {
+      "$ref": "#/$defs/harness"
+    },
+    "source": {
+      "$ref": "#/$defs/revision"
+    },
+    "target": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/revision"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "runtime": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/runtime"
+      }
+    },
+    "backups": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/backup"
+      }
+    },
+    "lifecycle": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/timed"
+      }
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/check"
+      }
+    },
+    "gaps": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/gap"
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    },
+    "failure_classes": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "product",
+          "harness",
+          "infrastructure"
+        ]
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "outcome": {
+            "const": "failed"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "failure_classes": {
+            "minItems": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "discover"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "target": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "accept"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "target": {
+            "$ref": "#/$defs/revision"
+          }
+        }
+      }
+    }
+  ],
+  "$comment": "Each revision's flake_ref is the immutable github:jaunder-org/jaunder/<commit> identity; serialized evidence validates the cross-field commit equality before publication.",
+  "$defs": {
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{40}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{64}$"
+    },
+    "report_outcome": {
+      "enum": [
+        "passed",
+        "failed"
+      ]
+    },
+    "timed_outcome": {
+      "enum": [
+        "passed",
+        "failed",
+        "skipped"
+      ]
+    },
+    "revision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commit",
+        "flake_ref"
+      ],
+      "properties": {
+        "commit": {
+          "$ref": "#/$defs/commit"
+        },
+        "flake_ref": {
+          "type": "string",
+          "pattern": "^github:jaunder-org/jaunder/[0-9a-fA-F]{40}$"
+        }
+      }
+    },
+    "manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "sha256"
+      ],
+      "properties": {
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "harness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commit",
+        "seeded_manifest",
+        "operation_manifest"
+      ],
+      "properties": {
+        "commit": {
+          "$ref": "#/$defs/commit"
+        },
+        "seeded_manifest": {
+          "$ref": "#/$defs/manifest"
+        },
+        "operation_manifest": {
+          "$ref": "#/$defs/manifest"
+        }
+      }
+    },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "installable",
+        "derivation",
+        "output_path",
+        "nar_hash",
+        "executable_sha256"
+      ],
+      "properties": {
+        "installable": {
+          "type": "string",
+          "minLength": 1
+        },
+        "derivation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "output_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "nar_hash": {
+          "type": "string",
+          "minLength": 1
+        },
+        "executable_sha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deployment_id",
+        "backend",
+        "revision",
+        "executable",
+        "exec_start",
+        "package"
+      ],
+      "properties": {
+        "deployment_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "backend": {
+          "enum": [
+            "sqlite",
+            "postgres"
+          ]
+        },
+        "revision": {
+          "$ref": "#/$defs/revision"
+        },
+        "executable": {
+          "type": "string",
+          "minLength": 1
+        },
+        "exec_start": {
+          "type": "string",
+          "minLength": 1
+        },
+        "package": {
+          "$ref": "#/$defs/package"
+        }
+      }
+    },
+    "backup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_backend",
+        "target_backend",
+        "format_version",
+        "source_schema_version",
+        "target_schema_version",
+        "sha256"
+      ],
+      "properties": {
+        "source_backend": {
+          "enum": [
+            "sqlite",
+            "postgres"
+          ]
+        },
+        "target_backend": {
+          "enum": [
+            "sqlite",
+            "postgres"
+          ]
+        },
+        "format_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "source_schema_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "target_schema_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "timed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "outcome",
+        "duration_ms"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "outcome": {
+          "$ref": "#/$defs/timed_outcome"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "check": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/timed"
+        },
+        {
+          "properties": {
+            "id": {
+              "enum": [
+                "browser-create",
+                "browser-read-only",
+                "atompub",
+                "feeds",
+                "service-restart",
+                "vm-reboot",
+                "upgrade",
+                "backup",
+                "restore-sqlite-sqlite",
+                "restore-sqlite-postgres",
+                "restore-postgres-sqlite",
+                "restore-postgres-postgres"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "gap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "rationale"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "disposition",
+        "rationale"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "disposition": {
+          "enum": [
+            "blocking",
+            "accepted",
+            "deferred"
+          ]
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

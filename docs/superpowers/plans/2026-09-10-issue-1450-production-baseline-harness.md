@@ -45,7 +45,7 @@ Out:
     CI lanes are the acceptance proof that the exact shared flow joined the
     ordinary matrix; then `devtool run -- cargo xtask check`.
 
-- [ ] Task 2: Define the command and durable evidence interfaces
+- [x] Task 2: Define the command and durable evidence interfaces
   - Contract: add `production-baseline discover --revision <sha>` and
     `production-baseline accept --source <sha> --target <sha>` under the
     existing xtask CLI/dispatch pattern. Produce a `ResolvedRevision` carrying a

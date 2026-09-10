@@ -23,6 +23,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Print the full Git commit embedded when this binary was built.
+    BuildCommit,
+
     /// Seed N posts for a user through the real storage path.
     SeedPosts {
         /// Database URL (`sqlite:...` or `postgres://...`) — the server's `--db`.
@@ -210,7 +213,16 @@ fn storage_runtime_config(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    run(Cli::parse()).await
+    let cli = Cli::parse();
+    if matches!(&cli.command, Commands::BuildCommit) {
+        println!(
+            r#"{{"commit":"{}","clean":{}}}"#,
+            env!("JAUNDER_BUILD_COMMIT"),
+            env!("JAUNDER_BUILD_DIRTY") == "0"
+        );
+        return Ok(());
+    }
+    run(cli).await
 }
 
 /// Dispatch the parsed subcommand to its handler. A flat match: each arm
@@ -220,6 +232,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
     let telemetry = telemetry_config();
     let _telemetry = host::telemetry::init_tracing(&telemetry);
     match cli.command {
+        Commands::BuildCommit => unreachable!("build-commit returns before telemetry setup"),
         Commands::SeedPosts {
             db,
             username,
