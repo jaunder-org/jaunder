@@ -131,9 +131,11 @@ fn reject_public_collisions_below(
     for entry in fs::read_dir(directory)
         .map_err(|error| BundleStageError(format!("reading {}: {error}", directory.display())))?
     {
+        // cov:ignore-start: A ReadDir item error requires concurrent filesystem mutation; rustix exposes no deterministic item-error injection seam.
         let entry = entry.map_err(|error| {
             BundleStageError(format!("reading {}: {error}", directory.display()))
-        })?; // cov:ignore: A ReadDir item error requires concurrent filesystem mutation; rustix exposes no deterministic item-error injection seam.
+        })?;
+        // cov:ignore-stop
         let path = entry.path();
         let child_relative = relative.join(entry.file_name());
         let file_type = entry
@@ -277,10 +279,6 @@ mod tests {
         copy_file, prepare_staging_with, reject_public_collisions, reject_public_collisions_below,
         stage_bundle, stage_public_tree, validate_shell,
     };
-
-    fn unexpected_stage() {
-        unreachable!("failure must stop before staging");
-    }
 
     fn shell(glue: &str, wasm: &str) -> String {
         format!(
@@ -464,7 +462,7 @@ mod tests {
                 ))
             },
             |_| unreachable!("remove failure must stop before creation"),
-            unexpected_stage,
+            || unreachable!("remove failure must stop before staging"),
         )
         .expect_err("remove failure");
         assert_eq!(
@@ -487,7 +485,7 @@ mod tests {
                     "create denied",
                 ))
             },
-            unexpected_stage,
+            || unreachable!("create failure must stop before staging"),
         )
         .expect_err("create failure");
         assert_eq!(
