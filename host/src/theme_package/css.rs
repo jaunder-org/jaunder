@@ -388,10 +388,6 @@ fn is_global_reference_property(property: &PropertyId<'_>) -> bool {
     )
 }
 
-fn is_reserved_anchor_property(property: &PropertyId<'_>) -> bool {
-    is_reserved_anchor_name(property.name())
-}
-
 fn is_reserved_anchor_name(name: &str) -> bool {
     name.eq_ignore_ascii_case("anchor-name")
 }
@@ -424,11 +420,6 @@ impl<'i> Visitor<'i> for AssetUrlVisitor<'_> {
 
     fn visit_property(&mut self, property: &mut Property<'i>) -> Result<(), Self::Error> {
         match property {
-            Property::Unparsed(unparsed) if is_reserved_anchor_property(&unparsed.property_id) => {
-                return Err(ThemePackageError::Css(
-                    "anchor-name is reserved for Jaunder trusted controls".into(),
-                ));
-            }
             Property::Unparsed(unparsed) if is_global_reference_property(&unparsed.property_id) => {
                 return Err(ThemePackageError::Css(
                     "custom-property token streams cannot hide global references".into(),
