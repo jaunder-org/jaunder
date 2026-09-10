@@ -48,7 +48,7 @@ reported in #1433 is resolved by the same change.
 - The trusted global region remains available for genuinely global warnings. It
   no longer presents Post-specific controls as global chrome.
 - This browser compatibility and trusted-overlay mechanism is recorded in
-  `docs/adr/0186-trusted-post-actions-use-css-anchors.md` and projected into
+  `docs/adr/drafts/trusted-post-actions-use-css-anchors.md` and projected into
   `docs/ARCHITECTURE.md`. It does not change Jaunder's domain vocabulary.
 
 ## Acceptance

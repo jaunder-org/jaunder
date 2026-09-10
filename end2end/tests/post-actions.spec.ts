@@ -14,6 +14,13 @@ test("owner Post Actions disclosures use native popover dismissal and focus", as
   await createPostViaApi(page, { body: "# Second actions probe\n\nSecond" });
   await goto(page, `/~${username}`, { timeout: firstNav });
 
+  // `goto` performs a fresh document entry; this must mount the portalled
+  // controls before any later in-app route remount.
+  const trustedActions = page.locator(".j-trusted-post-actions");
+  await expect(
+    trustedActions.getByRole("button", { name: "Actions" }),
+  ).toHaveCount(2);
+
   const triggers = page.getByRole("button", { name: "Actions" });
   await expect(triggers).toHaveCount(2);
   const firstTrigger = triggers.first();
@@ -44,9 +51,13 @@ test("owner Post Actions disclosures use native popover dismissal and focus", as
   await expect(firstTrigger).toBeFocused();
 
   await openPostActions(page);
-  await triggers.nth(1).click();
+  const secondTrigger = triggers.nth(1);
+  await secondTrigger.click();
   await expect(firstPopover).not.toBeVisible();
   await expect(page.locator(":popover-open")).toHaveCount(1);
+  // Closing the first native auto popover must not return focus to its invoker
+  // after the second trigger has opened its own disclosure.
+  await expect(secondTrigger).toBeFocused();
 
   await page.setViewportSize({ width: 375, height: 800 });
   await page.locator("article.j-post").nth(1).scrollIntoViewIfNeeded();

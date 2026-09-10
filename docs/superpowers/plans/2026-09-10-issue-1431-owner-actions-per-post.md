@@ -76,8 +76,8 @@ Out:
   - Contract: use only `anchor-name`, `position-anchor`, and `anchor()`; no
     geometry observers/listeners. Update the existing owner-flash/CLS and visual
     contracts rather than retaining selectors or prose for the global tray. Keep
-    the accepted ADR, architecture projection, Style Contract guidance, and
-    issue #1433 disposition consistent with the delivered behavior.
+    the proposed ADR draft, architecture projection, Style Contract guidance,
+    and issue #1433 disposition consistent with the delivered behavior.
   - Verification: focused `cargo xtask e2e-local` runs prove desktop and narrow
     Chromium placement; the new Firefox selector gives the same focused signal,
     and `devtool run -- cargo xtask e2e sqlite firefox` supplies the

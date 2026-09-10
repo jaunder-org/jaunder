@@ -62,7 +62,21 @@ fn stored_theme_package() -> anyhow::Result<Vec<u8>> {
   bottom: -100vh;
   left: -100vw;
   z-index: 2147483647;
-}"
+}
+.j-post * {
+  display: none !important;
+  position: fixed !important;
+  inset: 0 !important;
+  flex: 1 1 auto !important;
+  min-width: 100vw !important;
+  width: 0 !important;
+  max-width: 0 !important;
+  min-height: 100vh !important;
+  height: 0 !important;
+  max-height: 0 !important;
+  box-sizing: content-box !important;
+}
+"
                 .as_slice(),
         ),
         (

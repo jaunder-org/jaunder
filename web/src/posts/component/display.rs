@@ -96,26 +96,37 @@ fn focus_post_actions_trigger(trigger_id: &str) {
     }
 }
 
-/// Close a completed action's native popover before restoring its invoker focus.
-fn close_post_actions(popover_id: &str, trigger_id: &str) {
+/// Close a completed action's native popover. Its toggle handler restores the
+/// invoker focus after it observes the close.
+fn close_post_actions(popover_id: &str) {
     let popover = leptos::web_sys::window()
         .and_then(|window| window.document())
         .and_then(|document| document.get_element_by_id(popover_id));
     if let Some(popover) = popover {
         call_element_method(&popover, "hidePopover");
-        focus_post_actions_trigger(trigger_id);
     }
 }
 
 fn close_post_actions_on_confirmed<T>(
     settled: &Result<MutationOutcome<T>, WebError>,
     popover_id: &str,
-    trigger_id: &str,
 ) {
     if matches!(settled, Ok(MutationOutcome::Confirmed(_))) {
-        close_post_actions(popover_id, trigger_id);
+        close_post_actions(popover_id);
     }
 }
+/// Opening another auto popover closes the current one while focus remains on
+/// the newly invoked Actions trigger. Preserve that focus instead of restoring
+/// the trigger for the popover being closed.
+fn another_post_actions_trigger_is_focused(trigger_id: &str) -> bool {
+    leptos::web_sys::window()
+        .and_then(|window| window.document())
+        .and_then(|document| document.active_element())
+        .is_some_and(|active| {
+            active.id() != trigger_id && active.class_list().contains("j-post-action-trigger")
+        })
+}
+
 fn primary_post_action(
     is_draft: bool,
     post_id: PostId,
@@ -222,65 +233,87 @@ fn AnchoredPostActions(
         posts::render::post_action_anchor_name(post_id)
     );
     let expanded = RwSignal::new(false);
-    let trusted_actions = leptos::web_sys::window()
-        .and_then(|window| window.document())
-        .and_then(|document| document.get_element_by_id("j-trusted-post-actions"));
-    trusted_actions.map(move |mount| {
-        let render_actions = move || {
-            let primary_action =
-                primary_post_action(is_draft, post_id, publish_action, unpublish_action);
-            let actions = post_action_column(
-                &edit_url,
-                history_url.clone(),
-                primary_action,
-                delete_action,
-                post_id,
-            );
-            let toggle_popover_id = popover_id.clone();
-            let toggle_trigger_id = trigger_id.clone();
-            view! {
-                <div class="j-post-action-control" style=anchor_style.clone()>
-                    <button
-                        id=trigger_id.clone()
-                        type="button"
-                        class="j-btn j-post-action-trigger"
-                        aria-expanded=move || expanded.get().to_string()
-                        popovertarget=popover_id.clone()
-                    >
-                        "Actions"
-                    </button>
-                </div>
-                <div
-                    id=popover_id.clone()
-                    class="j-post-action-popover"
-                    popover="auto"
-                    role="group"
-                    aria-label="Post actions"
-                    on:toggle=move |_| {
-                        let is_open = leptos::web_sys::window()
-                            .and_then(|window| window.document())
-                            .and_then(|document| document.get_element_by_id(&toggle_popover_id))
-                            .is_some_and(|popover| {
-                                popover.matches(":popover-open").unwrap_or(false)
-                            });
-                        expanded.set(is_open);
-                        if !is_open {
-                            focus_post_actions_trigger(&toggle_trigger_id);
+    let trusted_actions = RwSignal::new(None);
+
+    // The target follows the themed surface in source order. Resolve it from an
+    // effect, after this route's DOM has mounted, rather than during child
+    // construction when a cold entry has not yet installed the sibling.
+    Effect::new(move |_| {
+        trusted_actions.set(
+            leptos::web_sys::window()
+                .and_then(|window| window.document())
+                .and_then(|document| document.get_element_by_id("j-trusted-post-actions")),
+        );
+    });
+
+    move || {
+        trusted_actions.get().map(|mount| {
+            let edit_url = edit_url.clone();
+            let history_url = history_url.clone();
+            let popover_id = popover_id.clone();
+            let trigger_id = trigger_id.clone();
+            let anchor_style = anchor_style.clone();
+            let render_actions = move || {
+                let primary_action =
+                    primary_post_action(is_draft, post_id, publish_action, unpublish_action);
+                let actions = post_action_column(
+                    &edit_url,
+                    history_url.clone(),
+                    primary_action,
+                    delete_action,
+                    post_id,
+                );
+                let toggle_popover_id = popover_id.clone();
+                let toggle_trigger_id = trigger_id.clone();
+                view! {
+                    <div class="j-post-action-control" style=anchor_style.clone()>
+                        <button
+                            id=trigger_id.clone()
+                            type="button"
+                            class="j-btn j-post-action-trigger"
+                            aria-expanded=move || expanded.get().to_string()
+                            popovertarget=popover_id.clone()
+                        >
+                            "Actions"
+                        </button>
+                    </div>
+                    <div
+                        id=popover_id.clone()
+                        class="j-post-action-popover"
+                        popover="auto"
+                        role="group"
+                        aria-label="Post actions"
+                        on:toggle=move |_| {
+                            let is_open = leptos::web_sys::window()
+                                .and_then(|window| window.document())
+                                .and_then(|document| {
+                                    document.get_element_by_id(&toggle_popover_id)
+                                })
+                                .is_some_and(|popover| {
+                                    popover.matches(":popover-open").unwrap_or(false)
+                                });
+                            expanded.set(is_open);
+                            if !is_open
+                                && !another_post_actions_trigger_is_focused(&toggle_trigger_id)
+                            {
+                                focus_post_actions_trigger(&toggle_trigger_id);
+                            }
                         }
-                    }
-                    style=anchor_style.clone()
-                >
-                    {actions}
-                </div>
-            }
-        };
-        Portal(
-            PortalProps::builder()
-                .mount(mount)
-                .children(ToChildren::to_children(render_actions))
-                .build(),
-        )
-    })
+                        style=anchor_style.clone()
+                    >
+                        {actions}
+                    </div>
+                }
+            };
+            Portal(
+                PortalProps::builder()
+                    .mount(mount)
+                    .children(ToChildren::to_children(render_actions))
+                    .build(),
+            )
+            .into_any()
+        })
+    }
 }
 
 #[component]
@@ -317,22 +350,18 @@ pub fn PostCard<'a>(
     let publish_action = ServerAction::<Publish>::new();
     let deleted = RwSignal::new(false);
     let popover_id = format!("j-post-actions-{}", i64::from(post_id));
-    let trigger_id = format!("j-post-actions-trigger-{}", i64::from(post_id));
 
     support::on_settled(move || delete_action.value().get(), {
         let popover_id = popover_id.clone();
-        let trigger_id = trigger_id.clone();
-        move |settled| close_post_actions_on_confirmed(&settled, &popover_id, &trigger_id)
+        move |settled| close_post_actions_on_confirmed(&settled, &popover_id)
     });
     support::on_settled(move || unpublish_action.value().get(), {
         let popover_id = popover_id.clone();
-        let trigger_id = trigger_id.clone();
-        move |settled| close_post_actions_on_confirmed(&settled, &popover_id, &trigger_id)
+        move |settled| close_post_actions_on_confirmed(&settled, &popover_id)
     });
     support::on_settled(move || publish_action.value().get(), {
         let popover_id = popover_id.clone();
-        let trigger_id = trigger_id.clone();
-        move |settled| close_post_actions_on_confirmed(&settled, &popover_id, &trigger_id)
+        move |settled| close_post_actions_on_confirmed(&settled, &popover_id)
     });
 
     support::on_settled(

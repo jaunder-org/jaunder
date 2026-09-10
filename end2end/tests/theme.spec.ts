@@ -19,7 +19,7 @@ test(
   { tag: ["@visual", "@accessibility"] },
   async ({ page }) => {
     const session = await seedUserViaTool("visualauthor", "visualpassword123");
-    await seedPostsViaTool("visualauthor", 1, "Visual Timeline Post");
+    await seedPostsViaTool("visualauthor", 2, "Visual Timeline Post");
     await applySeededSession(page.context(), session);
     await goto(page, "/"); // public projector home; goto() waits for the CSR mount
 
@@ -43,13 +43,17 @@ test(
     expect(probe.attrNames.some((n) => n.startsWith("attr:"))).toBe(false);
     expect(probe.accentInk).toBe("#3a2fc9");
 
-    const post = page
+    const posts = page
       .locator("article.j-post")
-      .filter({ hasText: "Visual Timeline Post 0" });
-    await expect(post).toBeVisible();
-    await expect(post).toContainText("Body for Visual Timeline Post 0");
-    await expect(post).toContainText("visualauthor");
-    await expect(page.getByRole("button", { name: "Actions" })).toBeVisible();
+      .filter({ hasText: "Visual Timeline Post" });
+    await expect(posts).toHaveCount(2);
+    const firstPost = posts.filter({ hasText: "Visual Timeline Post 0" });
+    const secondPost = posts.filter({ hasText: "Visual Timeline Post 1" });
+    await expect(firstPost).toContainText("Body for Visual Timeline Post 0");
+    await expect(secondPost).toContainText("Body for Visual Timeline Post 1");
+    await expect(firstPost).toContainText("visualauthor");
+    await expect(secondPost).toContainText("visualauthor");
+    await expect(page.getByRole("button", { name: "Actions" })).toHaveCount(2);
     await expectVisual(page, "public-timeline.png", {
       mask: [page.locator(".j-post-time")],
     });
@@ -75,6 +79,8 @@ test("a theme-hidden Post anchor recovers through Studio", async ({
         "link[data-jaunder-theme-stylesheet]",
       );
       const style = surface ? getComputedStyle(surface) : null;
+      const slot = document.querySelector(".j-post-actions-slot");
+      const slotStyle = slot ? getComputedStyle(slot) : null;
       return {
         dataTheme: root?.getAttribute("data-theme"),
         stylesheetHref: stylesheet?.getAttribute("href"),
@@ -85,6 +91,15 @@ test("a theme-hidden Post anchor recovers through Studio", async ({
         transform: style?.transform ?? "",
         filter: style?.filter ?? "",
         overflow: style?.overflow ?? "",
+        slotDisplay: slotStyle?.display ?? "",
+        slotPosition: slotStyle?.position ?? "",
+        slotBoxSizing: slotStyle?.boxSizing ?? "",
+        slotMinWidth: slotStyle?.minWidth ?? "",
+        slotWidth: slotStyle?.width ?? "",
+        slotMaxWidth: slotStyle?.maxWidth ?? "",
+        slotMinHeight: slotStyle?.minHeight ?? "",
+        slotHeight: slotStyle?.height ?? "",
+        slotMaxHeight: slotStyle?.maxHeight ?? "",
       };
     });
 
@@ -97,6 +112,15 @@ test("a theme-hidden Post anchor recovers through Studio", async ({
     expect(presentation.transform).not.toBe("none");
     expect(presentation.filter).not.toBe("none");
     expect(presentation.overflow).toBe("visible");
+    expect(presentation.slotDisplay).toBe("block");
+    expect(presentation.slotPosition).toBe("static");
+    expect(presentation.slotBoxSizing).toBe("border-box");
+    expect(presentation.slotMinWidth).toBe("72px");
+    expect(presentation.slotWidth).toBe("72px");
+    expect(presentation.slotMaxWidth).toBe("72px");
+    expect(presentation.slotMinHeight).toBe("32px");
+    expect(presentation.slotHeight).toBe("32px");
+    expect(presentation.slotMaxHeight).toBe("32px");
     await expect(target.locator('[data-jaunder-part="logo"]')).toBeVisible();
     await expect(
       target.locator('[data-jaunder-part="header-image"]'),

@@ -260,7 +260,7 @@ pub(crate) fn post_content(view: &PostView) -> Markup {
 fn post_action_slot(post_id: PostId) -> Markup {
     let anchor_name = post_action_anchor_name(post_id);
     let style = format!(
-        "display:block!important;box-sizing:border-box!important;flex:0 0 72px!important;width:72px!important;height:32px!important;anchor-name:{anchor_name}!important"
+        "all:initial!important;display:block!important;box-sizing:border-box!important;position:static!important;flex:0 0 72px!important;min-width:72px!important;max-width:72px!important;width:72px!important;min-height:32px!important;max-height:32px!important;height:32px!important;anchor-name:{anchor_name}!important"
     );
     Markup::new(html! {
         span
@@ -539,7 +539,7 @@ mod tests {
         );
         assert!(
             html.contains(
-                "class=\"j-post-actions-slot\" style=\"display:block!important;box-sizing:border-box!important;flex:0 0 72px!important;width:72px!important;height:32px!important;anchor-name:--j-post-actions-1!important\" aria-hidden=\"true\""
+                "class=\"j-post-actions-slot\" style=\"all:initial!important;display:block!important;box-sizing:border-box!important;position:static!important;flex:0 0 72px!important;min-width:72px!important;max-width:72px!important;width:72px!important;min-height:32px!important;max-height:32px!important;height:32px!important;anchor-name:--j-post-actions-1!important\" aria-hidden=\"true\""
             ),
             "the shared header must reserve the protected Actions footprint: {html}"
         );

@@ -134,11 +134,39 @@ fn owned_args(args: &[&str]) -> Vec<String> {
     args.iter().map(|arg| (*arg).to_owned()).collect()
 }
 
-fn ordinary_projects(browser: E2eLocalBrowser) -> &'static [&'static str] {
-    match browser {
-        E2eLocalBrowser::Chromium => &["chromium", "chromium-admin-site", "chromium-admin"],
-        E2eLocalBrowser::Firefox => &["firefox"],
-        E2eLocalBrowser::Webkit => &["webkit"],
+fn ordinary_projects(
+    browser: E2eLocalBrowser,
+    test_filter: Option<&str>,
+) -> &'static [&'static str] {
+    match (browser, test_filter.is_some()) {
+        // Preserve the omitted-selector Chromium command, including its existing
+        // dependency chain. A filtered run instead selects every Chromium project
+        // so a visual, ordinary, or serialized admin test can all be found by its
+        // positional Playwright filter.
+        (E2eLocalBrowser::Chromium, false) => {
+            &["chromium", "chromium-admin-site", "chromium-admin"]
+        }
+        (E2eLocalBrowser::Chromium, true) => &[
+            "chromium-visual",
+            "chromium",
+            "chromium-admin-site",
+            "chromium-admin",
+        ],
+        // Theme, admin-site, media, and invite tests are deliberately excluded
+        // from Firefox's ordinary project, but remain runnable through its visual
+        // and dependent projects when a local filter explicitly selects one.
+        (E2eLocalBrowser::Firefox, false) => &["firefox"],
+        (E2eLocalBrowser::Firefox, true) => &[
+            "firefox-visual",
+            "firefox",
+            "firefox-admin-site",
+            "firefox-admin",
+        ],
+        // WebKit likewise keeps its fast ordinary default. Its theme/admin
+        // project joins filtered runs, so file:line filters cannot silently skip
+        // the tests that `webkit` excludes.
+        (E2eLocalBrowser::Webkit, false) => &["webkit"],
+        (E2eLocalBrowser::Webkit, true) => &["webkit", "webkit-theme"],
     }
 }
 
@@ -147,16 +175,11 @@ fn ordinary_invocation(
     test_filter: Option<&str>,
 ) -> PlaywrightInvocation {
     let mut args = owned_args(&["test"]);
-    for project in ordinary_projects(browser) {
+    for project in ordinary_projects(browser, test_filter) {
         args.extend(["--project".to_owned(), (*project).to_owned()]);
     }
     if let Some(filter) = test_filter {
-        args.extend(owned_args(&[
-            "--no-deps",
-            "--pass-with-no-tests",
-            "--reporter=html,line",
-            filter,
-        ]));
+        args.extend(owned_args(&["--no-deps", "--reporter=html,line", filter]));
     } else {
         args.push("--reporter=html,line".to_owned());
     }
@@ -170,25 +193,6 @@ fn normal_invocations(
     browser: E2eLocalBrowser,
     test_filter: Option<&str>,
 ) -> Vec<PlaywrightInvocation> {
-    if browser == E2eLocalBrowser::Chromium
-        && let Some(filter) = test_filter
-    {
-        return vec![
-            PlaywrightInvocation {
-                label: "visual",
-                args: owned_args(&[
-                    "test",
-                    "--project",
-                    "chromium-visual",
-                    "--no-deps",
-                    "--pass-with-no-tests",
-                    "--reporter=html,line",
-                    filter,
-                ]),
-            },
-            ordinary_invocation(browser, Some(filter)),
-        ];
-    }
     vec![ordinary_invocation(browser, test_filter)]
 }
 
@@ -899,27 +903,87 @@ mod tests {
     }
 
     #[test]
-    fn selected_browsers_use_ordinary_projects_and_forward_filter() {
+    fn filtered_firefox_theme_run_selects_admin_site_project() {
+        let plan = e2e_local_plan(
+            Some(E2eLocalBrowser::Firefox),
+            Some("theme.spec.ts:63"),
+            false,
+        );
+        assert_eq!(
+            plan.lifecycles[0].invocations,
+            [PlaywrightInvocation {
+                label: "ordinary",
+                args: owned_args(&[
+                    "test",
+                    "--project",
+                    "firefox-visual",
+                    "--project",
+                    "firefox",
+                    "--project",
+                    "firefox-admin-site",
+                    "--project",
+                    "firefox-admin",
+                    "--no-deps",
+                    "--reporter=html,line",
+                    "theme.spec.ts:63",
+                ]),
+            }]
+        );
+    }
+
+    #[test]
+    fn filtered_webkit_theme_run_selects_theme_project() {
+        let plan = e2e_local_plan(
+            Some(E2eLocalBrowser::Webkit),
+            Some("theme.spec.ts:63"),
+            false,
+        );
+        assert!(
+            plan.lifecycles[0].invocations[0]
+                .args
+                .windows(2)
+                .any(|arguments| arguments == ["--project", "webkit-theme"])
+        );
+    }
+
+    #[test]
+    fn filtered_post_actions_run_includes_each_browser_ordinary_project() {
         for (browser, project) in [
             (E2eLocalBrowser::Chromium, "chromium"),
             (E2eLocalBrowser::Firefox, "firefox"),
             (E2eLocalBrowser::Webkit, "webkit"),
         ] {
-            let plan = e2e_local_plan(Some(browser), Some("auth-flow.spec.ts"), false);
-            let lifecycle = &plan.lifecycles[0];
-            assert_eq!(lifecycle.browser, project);
-            let ordinary = lifecycle
-                .invocations
-                .iter()
-                .find(|invocation| invocation.label == "ordinary")
-                .expect("ordinary Playwright invocation");
+            let plan = e2e_local_plan(Some(browser), Some("post-actions.spec.ts"), false);
+            let invocation = &plan.lifecycles[0].invocations[0];
             assert!(
-                ordinary
+                invocation
                     .args
                     .windows(2)
                     .any(|arguments| arguments == ["--project", project])
             );
-            assert_eq!(ordinary.args.last(), Some(&"auth-flow.spec.ts".to_owned()));
+            assert_eq!(
+                invocation.args.last(),
+                Some(&"post-actions.spec.ts".to_owned())
+            );
+        }
+    }
+
+    #[test]
+    fn filtered_runs_do_not_allow_vacuous_success() {
+        for browser in [
+            E2eLocalBrowser::Chromium,
+            E2eLocalBrowser::Firefox,
+            E2eLocalBrowser::Webkit,
+        ] {
+            let plan = e2e_local_plan(Some(browser), Some("unsupported.spec.ts"), false);
+            let invocation = &plan.lifecycles[0].invocations[0];
+            assert!(
+                !invocation
+                    .args
+                    .iter()
+                    .any(|argument| argument == "--pass-with-no-tests"),
+                "{browser:?} must let Playwright fail when no selected project matches"
+            );
         }
     }
 

@@ -157,11 +157,12 @@ those controls, but a theme that removes or clips a Post/header can remove their
 visual anchor; select **Studio** in `/themes` to recover the controls.
 
 Jaunder accepts standard declarations and CSS custom properties, subject to the
-same URL and global-name checks. Supported at-rules are top-level `@font-face`
-and `@keyframes`, plus nestable `@media`, `@supports`, and `@container`.
-`@import`, native nesting, unscopable selectors, external resources, and hidden
-font/keyframe references are rejected. Jaunder prefixes authored font-family and
-keyframe names to prevent collisions.
+same URL and global-name checks. `anchor-name` is reserved for Jaunder's trusted
+Post Actions controls and Theme Packages cannot declare it. Supported at-rules
+are top-level `@font-face` and `@keyframes`, plus nestable `@media`,
+`@supports`, and `@container`. `@import`, native nesting, unscopable selectors,
+external resources, and hidden font/keyframe references are rejected. Jaunder
+prefixes authored font-family and keyframe names to prevent collisions.
 
 ## Test a draft
 

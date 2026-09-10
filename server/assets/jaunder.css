@@ -844,8 +844,8 @@
  z-index: 1;
  top: anchor(top);
  left: anchor(left);
- width: anchor-size(width);
- height: anchor-size(height);
+ width: 72px;
+ height: 32px;
  pointer-events: auto;
 }
 

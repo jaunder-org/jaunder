@@ -795,7 +795,9 @@ test("draft lifecycle: create, view, edit, and publish", async ({
       true;
   });
   page.once("dialog", (dialog) => dialog.accept());
-  await (await openPostActions(page))
+  await (
+    await openPostActions(page)
+  )
     .getByRole("button", { name: "Publish" })
     .click();
   await expect(page.locator(".j-post-body")).toContainText(

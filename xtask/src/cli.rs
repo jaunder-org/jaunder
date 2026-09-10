@@ -746,6 +746,30 @@ mod tests {
     }
 
     #[test]
+    fn e2e_local_parses_firefox_admin_site_filter() {
+        let cli = Cli::try_parse_from([
+            "xtask",
+            "e2e-local",
+            "theme.spec.ts:63",
+            "--browser",
+            "firefox",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::E2eLocal {
+                browser,
+                test,
+                update_visual_snapshots,
+            } => {
+                assert_eq!(browser, Some(E2eLocalBrowser::Firefox));
+                assert_eq!(test.as_deref(), Some("theme.spec.ts:63"));
+                assert!(!update_visual_snapshots);
+            }
+            _ => panic!("expected filtered Firefox e2e-local"),
+        }
+    }
+
+    #[test]
     fn e2e_local_rejects_filter_with_visual_update_mode() {
         assert!(
             Cli::try_parse_from([
