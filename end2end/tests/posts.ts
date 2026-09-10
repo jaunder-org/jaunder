@@ -63,7 +63,9 @@ export async function createPostViaApi(
   page: Page,
   opts: {
     body: string;
+    format?: "markdown" | "org" | "html";
     tags?: string[];
+    audience?: "public" | "subscribers" | "private";
     publish?: boolean;
     slug?: string | null;
     publishAt?: string;
@@ -74,11 +76,14 @@ export async function createPostViaApi(
       data: {
         post: {
           body: opts.body,
-          format: "markdown",
+          format: opts.format ?? "markdown",
           slug_override: opts.slug ?? null,
           publish: opts.publish ?? true,
           ...(opts.publishAt ? { publish_at: opts.publishAt } : {}),
           ...(opts.tags ? { tags: opts.tags } : {}),
+          ...(opts.audience
+            ? { audience: { base: opts.audience, named: [] } }
+            : {}),
         },
       },
     }),
@@ -136,6 +141,7 @@ export async function composePost(
     slug?: string;
     publish: boolean;
     format?: PostFormatName;
+    audience?: "public" | "subscribers" | "private";
   },
 ): Promise<Locator> {
   return withTimedAction(page, "flow.compose_post", async () => {
@@ -149,6 +155,9 @@ export async function composePost(
     }
     if (opts.slug !== undefined) {
       await page.fill(SEL.postSlug, opts.slug);
+    }
+    if (opts.audience !== undefined) {
+      await page.selectOption("#audience-base", opts.audience);
     }
     await click(page, SEL.publishButton(opts.publish ? "true" : "false"));
     await waitForSelector(page, SEL.saveSummary);

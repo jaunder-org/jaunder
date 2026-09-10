@@ -373,7 +373,11 @@ test("Public post is visible to anonymous and appears in the feed; Subscribers p
   // runs. A throwing wait would skip both and report a bare timeout; an empty
   // body would make that second assertion pass vacuously (#794).
   const feedUrl = `${BASE_URL}/~${author.username}/feed.atom`;
-  const { body } = await fetchFeedSnapshot(page, feedUrl, "Public Broadcast");
+  const { body } = await fetchFeedSnapshot(
+    page.request,
+    feedUrl,
+    "Public Broadcast",
+  );
   expect(body, "feed contains the Public post").toContain("Public Broadcast");
   expect(body, "feed excludes the Subscribers-only post").not.toContain(
     "Feed Subscribers Only",

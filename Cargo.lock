@@ -5406,6 +5406,8 @@ dependencies = [
  "common",
  "host",
  "jiff",
+ "rstest",
+ "rstest_reuse",
  "serde",
  "serde_json",
  "storage",

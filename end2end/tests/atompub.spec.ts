@@ -1,19 +1,9 @@
-import type { Page } from "@playwright/test";
 import { goto, signInAsNewUser, click, BASE_URL } from "./helpers";
 // `test` comes from the shared fixtures, not @playwright/test, so this spec emits
 // an `e2e.test` span and its server-fn traffic (app-password minting, AtomPub
 // publishing over HTTP) is attributable to a named test (#681).
 import { test, expect } from "./fixtures";
-
-/// Mints an app password via the Sessions UI and returns the raw token.
-async function mintAppPassword(page: Page, label: string): Promise<string> {
-  await goto(page, "/sessions");
-  await page.fill("#app-password-label", label);
-  await click(page, '.j-app-passwords button:has-text("Create app password")');
-  const tokenEl = page.locator(".j-app-password-token code");
-  await tokenEl.waitFor({ state: "visible", timeout: 15_000 });
-  return ((await tokenEl.textContent()) ?? "").trim();
-}
+import { mintAppPassword } from "./sessions";
 
 /// A tiny valid 1x1 PNG.
 const PNG = Buffer.from([
