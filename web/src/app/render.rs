@@ -114,7 +114,7 @@ pub fn render_head(seed: &PageSeed, early_wasm_fetch_script: Option<&str>) -> Ma
                 .to_owned(),
         ),
         PageSeed::Profile { username, .. } => (format!("Posts by {username}"), String::new()),
-        PageSeed::SiteTimeline(_) => ("Jaunder".to_string(), String::new()),
+        PageSeed::SiteTimeline { .. } => ("Jaunder".to_string(), String::new()),
         PageSeed::SiteTag { tag, .. } => (format!("#{tag}"), String::new()),
         PageSeed::UserTag { username, tag, .. } => (format!("#{tag} by {username}"), String::new()),
     };
@@ -156,7 +156,7 @@ fn render_discovery(seed: &PageSeed) -> Markup {
     use common::feed::{FeedFormat, FeedSurface, canonicalize};
 
     let surface = match seed {
-        PageSeed::SiteTimeline(_) => Some(FeedSurface::Site),
+        PageSeed::SiteTimeline { .. } => Some(FeedSurface::Site),
         PageSeed::SiteTag { tag, .. } => Some(FeedSurface::SiteTag { tag: tag.clone() }),
         PageSeed::Profile { username, .. } => Some(FeedSurface::User {
             username: username.clone(),
@@ -209,7 +209,7 @@ fn feed_label(surface: &common::feed::FeedSurface) -> String {
 #[must_use]
 pub fn render_shell(presentation: &PublicPresentation<PageSeed>) -> Markup {
     let seed = &presentation.page;
-    let active_key = matches!(seed, PageSeed::SiteTimeline(_))
+    let active_key = matches!(seed, PageSeed::SiteTimeline { .. })
         .then_some("/")
         .and_then(crate::sidebar::active_key)
         .unwrap_or("");
@@ -285,7 +285,10 @@ mod tests {
     fn shell_places_each_decorative_role_once_without_replacing_site_identity() {
         let html = render_shell(&PublicPresentation {
             theme: custom_theme(),
-            page: PageSeed::SiteTimeline(one_post_page()),
+            page: PageSeed::SiteTimeline {
+                order: common::seed::TimelineOrder::Newest,
+                page: one_post_page(),
+            },
         })
         .into_string();
         assert_eq!(html.matches("data-jaunder-part=\"logo\"").count(), 1);
@@ -303,13 +306,18 @@ mod tests {
     fn discovery_links_carry_the_marker_per_surface() {
         // Site: three feed links, all marked, no RSD (#198 — the boot-time remover keys
         // on the marker, so every projector discovery <link> must carry it).
-        let site = render_discovery(&PageSeed::SiteTimeline(one_post_page())).into_string();
+        let site = render_discovery(&PageSeed::SiteTimeline {
+            order: common::seed::TimelineOrder::Newest,
+            page: one_post_page(),
+        })
+        .into_string();
         assert_eq!(site.matches(DISCOVERY_MARKER_ATTR).count(), 3, "{site}");
         assert_eq!(site.matches("rel=\"alternate\"").count(), 3, "{site}");
         assert!(!site.contains("EditURI"), "{site}");
         // Profile: three feed links + one RSD, all four marked.
         let profile = render_discovery(&PageSeed::Profile {
             username: parse_username("bob"),
+            order: common::seed::TimelineOrder::Newest,
             page: one_post_page(),
         })
         .into_string();
@@ -363,8 +371,14 @@ mod tests {
     fn host_supplied_early_fetch_script_precedes_stylesheets() {
         let starter =
             r#"<script>window.__jaunderWasmFetch = fetch("/pkg/wasm-hash.wasm");</script>"#;
-        let head =
-            render_head(&PageSeed::SiteTimeline(one_post_page()), Some(starter)).into_string();
+        let head = render_head(
+            &PageSeed::SiteTimeline {
+                order: common::seed::TimelineOrder::Newest,
+                page: one_post_page(),
+            },
+            Some(starter),
+        )
+        .into_string();
         let style = head
             .find(r#"<link rel="stylesheet" href="/style/jaunder.css">"#)
             .expect("base stylesheet");
@@ -396,12 +410,16 @@ mod tests {
     fn head_titles_cover_every_page_kind() {
         let cases = [
             (
-                PageSeed::SiteTimeline(one_post_page()),
+                PageSeed::SiteTimeline {
+                    order: common::seed::TimelineOrder::Newest,
+                    page: one_post_page(),
+                },
                 "<title>Jaunder</title>",
             ),
             (
                 PageSeed::Profile {
                     username: parse_username("bob"),
+                    order: common::seed::TimelineOrder::Newest,
                     page: one_post_page(),
                 },
                 "<title>Posts by bob</title>",
@@ -409,6 +427,7 @@ mod tests {
             (
                 PageSeed::SiteTag {
                     tag: "rust".parse().unwrap(),
+                    order: common::seed::TimelineOrder::Newest,
                     page: one_post_page(),
                 },
                 "<title>#rust</title>",
@@ -417,6 +436,7 @@ mod tests {
                 PageSeed::UserTag {
                     username: parse_username("bob"),
                     tag: "rust".parse().unwrap(),
+                    order: common::seed::TimelineOrder::Newest,
                     page: one_post_page(),
                 },
                 "<title>#rust by bob</title>",
@@ -434,7 +454,10 @@ mod tests {
             theme: common::theme::PublishedThemePresentation::built_in(
                 common::theme::Theme::Studio,
             ),
-            page: PageSeed::SiteTimeline(one_post_page()),
+            page: PageSeed::SiteTimeline {
+                order: common::seed::TimelineOrder::Newest,
+                page: one_post_page(),
+            },
         })
         .into_string();
         assert_eq!(
@@ -492,7 +515,10 @@ mod tests {
             theme: common::theme::PublishedThemePresentation::built_in(
                 common::theme::Theme::Studio,
             ),
-            page: PageSeed::SiteTimeline(one_post_page()),
+            page: PageSeed::SiteTimeline {
+                order: common::seed::TimelineOrder::Newest,
+                page: one_post_page(),
+            },
         })
         .into_string();
         assert!(
@@ -506,6 +532,7 @@ mod tests {
             ),
             page: PageSeed::Profile {
                 username: parse_username("bob"),
+                order: common::seed::TimelineOrder::Newest,
                 page: one_post_page(),
             },
         })

@@ -12,7 +12,7 @@ use leptos::task::spawn_local;
 use leptos_router::components::Redirect;
 
 use common::pagination::PageSize;
-use common::seed::{Page, PageCursor, RenderedPost};
+use common::seed::{Page, RenderedPost, TimelineCursor};
 
 use super::state::{NoIdentity, TimelinePaint, TimelineState};
 use crate::error::WebResult;
@@ -23,8 +23,8 @@ use crate::taglist::TagCtx;
 /// it. `fetch` is the page's list fn (`list_local_timeline` / `list_home_feed`).
 pub fn spawn_load_more<F, Fut>(state: TimelineState, fetch: F)
 where
-    F: FnOnce(Option<PageCursor>, Option<PageSize>) -> Fut + 'static,
-    Fut: Future<Output = WebResult<Page<RenderedPost>>> + 'static,
+    F: FnOnce(Option<TimelineCursor>, Option<PageSize>) -> Fut + 'static,
+    Fut: Future<Output = WebResult<Page<RenderedPost, TimelineCursor>>> + 'static,
 {
     // The guard, the cursor read, and the result fold are all host-tested on
     // `TimelineState` (#671); what cannot run on the host — and so all that is left
@@ -47,7 +47,7 @@ pub fn wire_timeline_destination(
     destination: Resource<
         WebResult<(
             common::theme::PublishedThemePresentation,
-            Page<RenderedPost>,
+            Page<RenderedPost, TimelineCursor>,
         )>,
     >,
     presentation: crate::app::ThemePresentationCoordinator,

@@ -1,10 +1,11 @@
 use axum::{
     Router,
-    extract::{Extension, OriginalUri, Path},
+    extract::{Extension, OriginalUri, Path, Query},
     http::{HeaderMap, StatusCode},
     response::Response,
     routing::get,
 };
+use common::seed::TimelineOrder;
 use common::tag::Tag;
 use common::username::Username;
 use common::{permalink_route::PermalinkRoute, slug::Slug, time::PermalinkDate};
@@ -46,6 +47,21 @@ where
 /// tuple-shape failures are extractor errors. This private adapter applies ADR-0063 §4 at the
 /// route boundary, so no raw permalink components enter handler logic.
 struct PermalinkPath(Option<PermalinkRoute>);
+
+/// URL parser shared by every projected web timeline. Unknown tokens deliberately
+/// select the canonical Newest representation rather than failing a public page.
+#[derive(Deserialize)]
+struct TimelineQuery {
+    order: Option<String>,
+}
+
+impl TimelineQuery {
+    fn order(self) -> TimelineOrder {
+        self.order
+            .and_then(|order| order.parse().ok())
+            .unwrap_or_default()
+    }
+}
 
 impl<'de> Deserialize<'de> for PermalinkPath {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -115,9 +131,10 @@ async fn permalink(
 async fn site_timeline(
     Extension(projector): Extension<PublicProjector>,
     headers: HeaderMap,
+    Query(query): Query<TimelineQuery>,
 ) -> Response {
     projector
-        .project(PublicProjection::SiteTimeline, &headers)
+        .project(PublicProjection::SiteTimeline(query.order()), &headers)
         .await
 }
 
@@ -125,32 +142,27 @@ async fn profile(
     Extension(projector): Extension<PublicProjector>,
     headers: HeaderMap,
     Path(username): Path<SoftPath<Username>>,
+    Query(query): Query<TimelineQuery>,
 ) -> Response {
     let Some(username) = username.into() else {
         return projector.shell_response();
     };
     projector
-        .project(PublicProjection::Profile(username), &headers)
+        .project(PublicProjection::Profile(username, query.order()), &headers)
         .await
 }
 
 async fn site_tag(
     Extension(projector): Extension<PublicProjector>,
     headers: HeaderMap,
-    // malformed segment is parsed *inside* the handler and falls back to the SPA
-    // shell (client-rendered 404) below — a typed extractor would reject it with a
-    // 400 *before* the handler runs. This is the deliberate projector-vs-atompub
-    // boundary split (ADR-0063 §4): atompub handlers are typed (400-on-malformed
-    // API); the public projector serves the shell. Mirrors the `permalink` handler.
     Path(tag): Path<SoftPath<Tag>>,
+    Query(query): Query<TimelineQuery>,
 ) -> Response {
-    // `Tag::from_str` lowercases, so the projected heading and the client render
-    // coincide. An unparseable tag is never public content — let the client route it.
     let Some(tag) = tag.into() else {
         return projector.shell_response();
     };
     projector
-        .project(PublicProjection::SiteTag(tag), &headers)
+        .project(PublicProjection::SiteTag(tag, query.order()), &headers)
         .await
 }
 
@@ -158,11 +170,19 @@ async fn user_tag(
     Extension(projector): Extension<PublicProjector>,
     headers: HeaderMap,
     Path((username, tag)): Path<(SoftPath<Username>, SoftPath<Tag>)>,
+    Query(query): Query<TimelineQuery>,
 ) -> Response {
     let (Some(username), Some(tag)) = (username.into(), tag.into()) else {
         return projector.shell_response();
     };
     projector
-        .project(PublicProjection::UserTag { username, tag }, &headers)
+        .project(
+            PublicProjection::UserTag {
+                username,
+                tag,
+                order: query.order(),
+            },
+            &headers,
+        )
         .await
 }

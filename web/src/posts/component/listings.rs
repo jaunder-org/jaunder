@@ -1,5 +1,5 @@
 use leptos::prelude::*;
-use leptos_router::hooks::use_params_map;
+use leptos_router::hooks::{use_params_map, use_query_map};
 
 use crate::feed_discovery::{FeedDiscovery, RsdDiscovery};
 use crate::posts::ListingRoute;
@@ -86,7 +86,9 @@ fn PublicListingPage(route: Memo<ListingRoute>) -> impl IntoView {
 #[component]
 pub fn UserTimelinePage() -> impl IntoView {
     let params = use_params_map();
+    let query = use_query_map();
     let route = Memo::new(move |_| {
+        let order = ListingRoute::parse_order(query.get().get("order").as_deref());
         ListingRoute::Profile(
             params
                 .get()
@@ -94,6 +96,7 @@ pub fn UserTimelinePage() -> impl IntoView {
                 .unwrap_or_default()
                 .strip_prefix('~')
                 .and_then(|value| value.parse::<Username>().ok()),
+            order,
         )
     });
     view! { <PublicListingPage route /> }
@@ -103,12 +106,15 @@ pub fn UserTimelinePage() -> impl IntoView {
 #[component]
 pub fn SiteTagPage() -> impl IntoView {
     let params = use_params_map();
+    let query = use_query_map();
     let route = Memo::new(move |_| {
+        let order = ListingRoute::parse_order(query.get().get("order").as_deref());
         ListingRoute::SiteTag(
             params
                 .get()
                 .get("tag")
                 .and_then(|value| value.parse::<Tag>().ok()),
+            order,
         )
     });
     view! { <PublicListingPage route /> }
@@ -118,6 +124,7 @@ pub fn SiteTagPage() -> impl IntoView {
 #[component]
 pub fn UserTagPage() -> impl IntoView {
     let params = use_params_map();
+    let query = use_query_map();
     let route = Memo::new(move |_| {
         let params = params.get();
         let username = params
@@ -128,7 +135,8 @@ pub fn UserTagPage() -> impl IntoView {
         let tag = params
             .get("tag")
             .and_then(|value| value.parse::<Tag>().ok());
-        ListingRoute::UserTag(username, tag)
+        let order = ListingRoute::parse_order(query.get().get("order").as_deref());
+        ListingRoute::UserTag(username, tag, order)
     });
     view! { <PublicListingPage route /> }
 }

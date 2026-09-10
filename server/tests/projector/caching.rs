@@ -133,3 +133,37 @@ async fn projected_response_is_publicly_cacheable(#[case] backend: Backend) {
         "projected response must be publicly cacheable, got: {cache_control}"
     );
 }
+
+#[apply(backends)]
+#[tokio::test]
+async fn timeline_order_urls_produce_distinct_cacheable_representations(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    seed_published_post(env.users(), env.posts(), env.write_scope()).await;
+
+    let newest = projector_app(env.posts(), env.users(), env.themes())
+        .oneshot(get("/"))
+        .await
+        .expect("newest request");
+    let newest_etag = newest.headers().get(header::ETAG).cloned();
+    let newest_body = axum::body::to_bytes(newest.into_body(), usize::MAX)
+        .await
+        .expect("newest body");
+
+    let oldest = projector_app(env.posts(), env.users(), env.themes())
+        .oneshot(get("/?order=oldest"))
+        .await
+        .expect("oldest request");
+    let oldest_etag = oldest.headers().get(header::ETAG).cloned();
+    let oldest_body = axum::body::to_bytes(oldest.into_body(), usize::MAX)
+        .await
+        .expect("oldest body");
+
+    assert_ne!(
+        newest_body, oldest_body,
+        "the seed binds the complete URL order"
+    );
+    assert_ne!(
+        newest_etag, oldest_etag,
+        "ordered variants must not share an ETag"
+    );
+}

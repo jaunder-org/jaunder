@@ -733,16 +733,17 @@ heavier payload to consumers of the lighter one — and structural overlap alone
 does not justify it; the discriminator is whether the code converts between
 them.
 
-**Timelines paginate by keyset cursor, not offset**
-([ADR-0004](adr/0004-pagination-strategy.md)). `PostCursor`
-(`storage/src/posts/cursors.rs` — `created_at` + `post_id`, for stable ordering)
-and `CollectionCursor` (`updated_at` + `post_id`, for the editor-facing
-collection) are the storage-side cursors; the wire carries an opaque
-`PageCursor`, and a listing returns `next_cursor` exactly when another page
-exists (`web/src/posts/api.rs:117,425`). `PageSize`
-(`common/src/pagination.rs:29`) is clamped 1..=50 with a default of 50. The
-offset type `PageOffset` (`:62`) exists only for the media listing, where the
-reader may skip.
+**Web Post timelines paginate by order-bound keyset cursor, not offset**
+([ADR-0004](adr/0004-pagination-strategy.md),
+[web Post timeline ordering](adr/drafts/web-post-timeline-ordering.md)). Their
+opaque `PostCursor` (`storage/src/posts/cursors.rs`) carries publication time
+plus stable Post ID and the selected Newest/Oldest direction; the query uses the
+same pair descending for Newest and ascending for Oldest. A listing returns
+`next_cursor` exactly when another page exists (`web/src/posts/api.rs:117,425`).
+`CollectionCursor` (`updated_at` + `post_id`) remains separate for the
+editor-facing AtomPub Collection. `PageSize` (`common/src/pagination.rs:29`) is
+clamped 1..=50 with a default of 50. The offset type `PageOffset` (`:62`) exists
+only for the media listing, where the reader may skip.
 
 ### Committed direction
 
@@ -1338,6 +1339,16 @@ on boot, drops the projector-painted `#app` container, and mounts over; client
 navigation continues through the `#[server]` data API. Reactive components
 render their anonymous DOM through the same pure functions the projector uses,
 so the CSR mount causes no reflow: flash-free by coincidence, not markup twins.
+
+All public and authenticated web Post timelines share one URL-addressed ordering
+contract
+([web Post timeline ordering](adr/drafts/web-post-timeline-ordering.md)): Newest
+is canonical with no parameter, while `order=oldest` selects the reverse
+publication-time/Post-ID order. Public projector operations resolve that order
+from the URL and embed matching seed state, so a direct Oldest load is
+projector-painted in Oldest order and remains coincident through CSR mount. The
+choice is never viewer state; complete URLs distinguish cacheable
+representations.
 
 Public presentation carries one server-resolved `Theme` with its page seed in
 `PublicPresentation<PageSeed>`. Aggregate routes use the typed site setting; an

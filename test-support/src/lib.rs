@@ -1849,7 +1849,7 @@ mod seed_tests {
     //! end-to-end by the e2e matrix, which drives `test-support` against both
     //! `SQLite` and `Postgres` ({sqlite,postgres}×{chromium,firefox}).
     use super::*;
-    use storage::test_support;
+    use storage::{PublishedPageRequest, test_support};
 
     #[tokio::test]
     async fn seeds_public_published_posts_visible_to_a_non_author() {
@@ -1881,8 +1881,11 @@ mod seed_tests {
         let page = posts
             .list_published_by_user(
                 &user.username,
-                None,
-                common::test_support::parse_row_limit("10"),
+                PublishedPageRequest {
+                    cursor: None,
+                    order: common::seed::TimelineOrder::Newest,
+                    limit: common::test_support::parse_row_limit("10"),
+                },
                 &common::visibility::ViewerIdentity::Anonymous,
                 common::time::UtcInstant::now(),
             )

@@ -30,8 +30,11 @@ pub(super) async fn anon_by_tag(
     posts
         .list_posts_by_tag(
             tag,
-            None,
-            parse_row_limit(limit),
+            storage::PublishedPageRequest {
+                cursor: None,
+                order: common::seed::TimelineOrder::Newest,
+                limit: parse_row_limit(limit),
+            },
             &ViewerIdentity::Anonymous,
             common::time::UtcInstant::now(),
         )
@@ -45,8 +48,11 @@ pub(super) async fn anon_published(
 ) -> Vec<storage::PostRecord> {
     posts
         .list_published(
-            None,
-            parse_row_limit(limit),
+            storage::PublishedPageRequest {
+                cursor: None,
+                order: common::seed::TimelineOrder::Newest,
+                limit: parse_row_limit(limit),
+            },
             &ViewerIdentity::Anonymous,
             common::time::UtcInstant::now(),
         )

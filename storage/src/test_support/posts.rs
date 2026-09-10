@@ -735,8 +735,11 @@ mod tests {
             .posts()
             .list_published_by_user(
                 &author.username,
-                None,
-                parse_row_limit("50"),
+                crate::PublishedPageRequest {
+                    cursor: None,
+                    order: common::seed::TimelineOrder::Newest,
+                    limit: parse_row_limit("50"),
+                },
                 &ViewerIdentity::Anonymous,
                 UtcInstant::now(),
             )

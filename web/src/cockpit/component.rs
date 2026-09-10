@@ -6,6 +6,7 @@
 //! `/login`.
 
 use common::pagination::PageSize;
+use common::seed::{TimelineOrder, TimelinePageRequest};
 use leptos::prelude::*;
 
 use super::CockpitState;
@@ -35,7 +36,11 @@ pub fn CockpitPage() -> impl IntoView {
         move || invalidator.track(),
         move || async move {
             super::resolve_initial_page(session.reconcile.await, || {
-                timeline::list_home_feed(None, Some(PageSize::default()))
+                timeline::list_home_feed(TimelinePageRequest {
+                    order: TimelineOrder::Newest,
+                    cursor: None,
+                    limit: Some(PageSize::default()),
+                })
             })
             .await
         },
@@ -54,7 +59,13 @@ pub fn CockpitPage() -> impl IntoView {
     });
 
     let on_load_more = Callback::new(move |()| {
-        timeline::spawn_load_more(state.timeline, timeline::list_home_feed);
+        timeline::spawn_load_more(state.timeline, move |cursor, limit| {
+            timeline::list_home_feed(TimelinePageRequest {
+                order: TimelineOrder::Newest,
+                cursor,
+                limit,
+            })
+        });
     });
 
     let read_username = move || state.username.get();

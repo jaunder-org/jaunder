@@ -9,7 +9,7 @@ use std::future::Future;
 
 use leptos::prelude::*;
 
-use common::seed::{Page, RenderedPost};
+use common::seed::{Page, RenderedPost, TimelineCursor};
 use common::username::Username;
 
 use crate::auth::SessionUser;
@@ -19,7 +19,7 @@ use crate::timeline::TimelineState;
 /// One resolved cockpit load: the session-confirmed viewer paired with the feed page
 /// fetched for them, or `None` when the session resolved to nobody — anonymous or
 /// expired (ADR-0044 D6), which the page turns into the `/login` bounce.
-pub type CockpitLoad = Option<(Username, Page<RenderedPost>)>;
+pub type CockpitLoad = Option<(Username, Page<RenderedPost, TimelineCursor>)>;
 
 /// Resolve the cockpit's initial payload: gate the feed fetch on the session's
 /// server-confirmed reconcile, and pair the page with the identity that reconcile
@@ -40,7 +40,7 @@ pub async fn resolve_initial_page<F, Fut>(
 ) -> WebResult<CockpitLoad>
 where
     F: FnOnce() -> Fut,
-    Fut: Future<Output = WebResult<Page<RenderedPost>>>,
+    Fut: Future<Output = WebResult<Page<RenderedPost, TimelineCursor>>>,
 {
     match reconcile {
         Ok(Some(user)) => fetch_feed().await.map(|page| Some((user.username, page))),
@@ -113,7 +113,7 @@ mod tests {
         }
     }
 
-    fn page() -> Page<RenderedPost> {
+    fn page() -> Page<RenderedPost, TimelineCursor> {
         Page {
             posts: vec![sample_summary()],
             next_cursor: None,
@@ -130,7 +130,7 @@ mod tests {
     /// running.
     fn recording_fetch(
         fetched: &Cell<bool>,
-    ) -> impl FnOnce() -> Ready<WebResult<Page<RenderedPost>>> + '_ {
+    ) -> impl FnOnce() -> Ready<WebResult<Page<RenderedPost, TimelineCursor>>> + '_ {
         move || {
             fetched.set(true);
             ready(Ok(page()))

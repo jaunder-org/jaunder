@@ -11,7 +11,8 @@ use crate::InstanceId;
 use crate::backend::Backend;
 use crate::media_ownership::ProvenLocalMediaRefs;
 use crate::posts::cursors::{
-    CollectionCursor, PostCursor, PostRevisionCursor, ScheduledPostCursor,
+    CollectionCursor, DraftPostCursor, PostRevisionCursor, PublishedPageRequest,
+    ScheduledPostCursor,
 };
 use crate::posts::errors::{CreatePostError, ListByTagError, TaggingError, UpdatePostError};
 use crate::posts::lifecycle;
@@ -59,7 +60,7 @@ use host::{
 //
 // Cursor (de)serialization plus the effectful read/tag helpers shared by
 // `web`'s `#[server]` bodies and the `server` crate's public projector. They
-// take `&dyn PostStorage`/`PostRecord`/`PostCursor` — storage abstractions the
+// take `&dyn PostStorage`/`PostRecord`/`PublishedPageRequest` — storage abstractions the
 // `host` floor cannot name — so they home here in `storage`, returning
 // `host::error::InternalError` where fallible.
 // ---------------------------------------------------------------------------
@@ -341,37 +342,25 @@ pub trait PostStorage: Send + Sync {
         now: UtcInstant,
     ) -> Result<PostMutation, UpdatePostError>;
 
-    /// Lists published posts for a specific user, ordered by creation date,
+    /// Lists published posts for a specific user in the requested publication chronology,
     /// applying the viewer-resolution filter. See ADR-0020.
     ///
     /// `now` gates scheduled posts (`published_at > now`) off this public
     /// surface until their time.
-    ///
-    /// The explicit `'a` on the `cursor` reference exists so
-    /// `mockall::automock` can mock this trait: automock cannot synthesize a
-    /// lifetime for a reference nested inside a generic (here
-    /// `Option<&PostCursor>`), so we name it. Behaviour is identical to
-    /// lifetime elision — the annotation is purely to satisfy the macro
-    /// (ref #245).
+    // Explicit `'a` for `mockall::automock` — see `list_published_by_user`.
     async fn list_published_by_user<'a>(
         &self,
         username: &Username,
-        cursor: Option<&'a PostCursor>,
-        limit: RowLimit,
+        page: PublishedPageRequest<'a>,
         viewer: &ViewerIdentity,
         now: UtcInstant,
     ) -> Result<Vec<PostRecord>>;
 
-    /// Lists all published posts across the entire site, applying the
-    /// viewer-resolution filter. See ADR-0020.
-    ///
-    /// `now` gates scheduled posts (`published_at > now`) off this public
-    /// surface until their time.
-    // Explicit `'a` for `mockall::automock` — see `list_published_by_user`.
+    /// Lists all published posts across the entire site in the requested
+    /// publication chronology, applying the viewer-resolution filter.
     async fn list_published<'a>(
         &self,
-        cursor: Option<&'a PostCursor>,
-        limit: RowLimit,
+        page: PublishedPageRequest<'a>,
         viewer: &ViewerIdentity,
         now: UtcInstant,
     ) -> Result<Vec<PostRecord>>;
@@ -387,7 +376,7 @@ pub trait PostStorage: Send + Sync {
     async fn list_drafts_by_user<'a>(
         &self,
         user_id: UserId,
-        cursor: Option<&'a PostCursor>,
+        cursor: Option<&'a DraftPostCursor>,
         limit: RowLimit,
         now: UtcInstant,
     ) -> Result<Vec<PostRecord>>;
@@ -447,33 +436,22 @@ pub trait PostStorage: Send + Sync {
         desired: &[TagLabel],
     ) -> Result<(), TaggingError>;
 
-    /// Lists published posts that carry a specific tag, applying the
-    /// viewer-resolution filter. See ADR-0020.
-    ///
-    /// `now` gates scheduled posts (`published_at > now`) off this public
-    /// surface until their time.
-    // Explicit `'a` for `mockall::automock` — see `list_published_by_user`.
+    /// Lists published posts carrying a tag in the requested publication chronology.
     async fn list_posts_by_tag<'a>(
         &self,
         tag_slug: &Tag,
-        cursor: Option<&'a PostCursor>,
-        limit: RowLimit,
+        page: PublishedPageRequest<'a>,
         viewer: &ViewerIdentity,
         now: UtcInstant,
     ) -> Result<Vec<PostRecord>, ListByTagError>;
 
-    /// Lists published posts for a specific user that carry a specific tag,
-    /// applying the viewer-resolution filter. See ADR-0020.
-    ///
-    /// `now` gates scheduled posts (`published_at > now`) off this public
-    /// surface until their time.
-    // Explicit `'a` for `mockall::automock` — see `list_published_by_user`.
+    /// Lists published posts for a user carrying a tag in the requested
+    /// publication chronology.
     async fn list_user_posts_by_tag<'a>(
         &self,
         user_id: UserId,
         tag_slug: &Tag,
-        cursor: Option<&'a PostCursor>,
-        limit: RowLimit,
+        page: PublishedPageRequest<'a>,
         viewer: &ViewerIdentity,
         now: UtcInstant,
     ) -> Result<Vec<PostRecord>, ListByTagError>;
@@ -1585,12 +1563,26 @@ where
     async fn list_published_by_user<'a>(
         &self,
         username: &Username,
-        cursor: Option<&'a PostCursor>,
-        limit: RowLimit,
+        page: PublishedPageRequest<'a>,
         viewer: &ViewerIdentity,
         now: UtcInstant,
     ) -> Result<Vec<PostRecord>> {
+        let PublishedPageRequest {
+            cursor,
+            order,
+            limit,
+        } = page;
         let tags = DB::TAGS_SUBQUERY;
+        let (cursor_clause, order_by) = match order {
+            common::seed::TimelineOrder::Newest => (
+                "p.published_at < $2 OR (p.published_at = $3 AND p.post_id < $4)",
+                "p.published_at DESC, p.post_id DESC",
+            ),
+            common::seed::TimelineOrder::Oldest => (
+                "p.published_at > $2 OR (p.published_at = $3 AND p.post_id > $4)",
+                "p.published_at ASC, p.post_id ASC",
+            ),
+        };
         let rows = if let Some(cursor) = cursor {
             // Binds: $1 username, $2/$3 cursor, $4 post_id, $5 now, then the
             // resolution fragment from $6 — 3 or 5 placeholders depending on the
@@ -1605,15 +1597,15 @@ where
                    AND p.published_at IS NOT NULL
                    AND p.published_at <= $5
                    AND p.deleted_at IS NULL
-                   AND (p.created_at < $2 OR (p.created_at = $3 AND p.post_id < $4))
+                   AND ({cursor_clause})
                    AND {resolution}
-                 ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT ${limit_idx}",
+                 ORDER BY {order_by}
+                 LIMIT ${limit_idx}"
             );
             let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
                 .bind_storage(username)
-                .bind_storage(cursor.created_at)
-                .bind_storage(cursor.created_at)
+                .bind_storage(cursor.published_at)
+                .bind_storage(cursor.published_at)
                 .bind_storage(cursor.post_id)
                 .bind_storage(now);
             binds
@@ -1635,8 +1627,8 @@ where
                    AND p.published_at <= $2
                    AND p.deleted_at IS NULL
                    AND {resolution}
-                 ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT ${limit_idx}",
+                 ORDER BY {order_by}
+                 LIMIT ${limit_idx}"
             );
             let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
                 .bind_storage(username)
@@ -1657,12 +1649,26 @@ where
     )]
     async fn list_published<'a>(
         &self,
-        cursor: Option<&'a PostCursor>,
-        limit: RowLimit,
+        page: PublishedPageRequest<'a>,
         viewer: &ViewerIdentity,
         now: UtcInstant,
     ) -> Result<Vec<PostRecord>> {
+        let PublishedPageRequest {
+            cursor,
+            order,
+            limit,
+        } = page;
         let tags = DB::TAGS_SUBQUERY;
+        let (cursor_clause, order_by) = match order {
+            common::seed::TimelineOrder::Newest => (
+                "p.published_at < $1 OR (p.published_at = $2 AND p.post_id < $3)",
+                "p.published_at DESC, p.post_id DESC",
+            ),
+            common::seed::TimelineOrder::Oldest => (
+                "p.published_at > $1 OR (p.published_at = $2 AND p.post_id > $3)",
+                "p.published_at ASC, p.post_id ASC",
+            ),
+        };
         let rows = if let Some(cursor) = cursor {
             // Binds: $1/$2 cursor, $3 post_id, $4 now, then the variant-sized
             // resolution fragment from $5 and the limit at `limit_idx`.
@@ -1675,14 +1681,14 @@ where
                  WHERE p.published_at IS NOT NULL
                    AND p.published_at <= $4
                    AND p.deleted_at IS NULL
-                   AND (p.created_at < $1 OR (p.created_at = $2 AND p.post_id < $3))
+                   AND ({cursor_clause})
                    AND {resolution}
-                 ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT ${limit_idx}",
+                 ORDER BY {order_by}
+                 LIMIT ${limit_idx}"
             );
             let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
-                .bind_storage(cursor.created_at)
-                .bind_storage(cursor.created_at)
+                .bind_storage(cursor.published_at)
+                .bind_storage(cursor.published_at)
                 .bind_storage(cursor.post_id)
                 .bind_storage(now);
             binds
@@ -1703,8 +1709,8 @@ where
                    AND p.published_at <= $1
                    AND p.deleted_at IS NULL
                    AND {resolution}
-                 ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT ${limit_idx}",
+                 ORDER BY {order_by}
+                 LIMIT ${limit_idx}"
             );
             let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql)).bind_storage(now);
             binds
@@ -1724,7 +1730,7 @@ where
     async fn list_drafts_by_user<'a>(
         &self,
         user_id: UserId,
-        cursor: Option<&'a PostCursor>,
+        cursor: Option<&'a DraftPostCursor>,
         limit: RowLimit,
         now: UtcInstant,
     ) -> Result<Vec<PostRecord>> {
@@ -1896,36 +1902,40 @@ where
         DB::set_post_tags(transaction, post_id, user_id, desired).await
     }
 
-    #[tracing::instrument(
-        name = "storage.posts.list_posts_by_tag",
-        skip(self),
-        fields(db.system = DB::DB_SYSTEM)
-    )]
+    #[tracing::instrument(name = "storage.posts.list_posts_by_tag", skip(self), fields(db.system = DB::DB_SYSTEM))]
     async fn list_posts_by_tag<'a>(
         &self,
         tag_slug: &Tag,
-        cursor: Option<&'a PostCursor>,
-        limit: RowLimit,
+        page: PublishedPageRequest<'a>,
         viewer: &ViewerIdentity,
         now: UtcInstant,
     ) -> Result<Vec<PostRecord>, ListByTagError> {
+        let PublishedPageRequest {
+            cursor,
+            order,
+            limit,
+        } = page;
         let tag_exists = sqlx::query_scalar::<_, Exists>(tags::TAG_EXISTS_SQL)
             .bind_storage(tag_slug)
             .fetch_one(&self.pool)
             .await?
             .into_bool();
-
         if !tag_exists {
             return Err(ListByTagError::TagNotFound);
         }
-
+        let (cursor_clause, order_by) = match order {
+            common::seed::TimelineOrder::Newest => (
+                "p.published_at < $2 OR (p.published_at = $3 AND p.post_id < $4)",
+                "p.published_at DESC, p.post_id DESC",
+            ),
+            common::seed::TimelineOrder::Oldest => (
+                "p.published_at > $2 OR (p.published_at = $3 AND p.post_id > $4)",
+                "p.published_at ASC, p.post_id ASC",
+            ),
+        };
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
-            // Binds: $1 tag, $2/$3 cursor, $4 post_id, $5 now, then the
-            // variant-sized resolution fragment from $6 and the limit at
-            // the returned `limit_idx`.
             let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 6);
-            // `published_at <= $5` hides scheduled (future-dated) posts.
             let sql = format!(
                 "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
                  FROM posts p
@@ -1936,15 +1946,15 @@ where
                    AND p.published_at IS NOT NULL
                    AND p.published_at <= $5
                    AND p.deleted_at IS NULL
-                   AND (p.created_at < $2 OR (p.created_at = $3 AND p.post_id < $4))
+                   AND ({cursor_clause})
                    AND {resolution}
-                 ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT ${limit_idx}",
+                 ORDER BY {order_by}
+                 LIMIT ${limit_idx}"
             );
             let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
                 .bind_storage(tag_slug)
-                .bind_storage(cursor.created_at)
-                .bind_storage(cursor.created_at)
+                .bind_storage(cursor.published_at)
+                .bind_storage(cursor.published_at)
                 .bind_storage(cursor.post_id)
                 .bind_storage(now);
             binds
@@ -1953,10 +1963,7 @@ where
                 .fetch_all(&self.pool)
                 .await?
         } else {
-            // Binds: $1 tag, $2 now, then the variant-sized resolution fragment
-            // from $3 and the limit at the returned `limit_idx`.
             let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 3);
-            // `published_at <= $2` hides scheduled (future-dated) posts.
             let sql = format!(
                 "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
                  FROM posts p
@@ -1968,8 +1975,8 @@ where
                    AND p.published_at <= $2
                    AND p.deleted_at IS NULL
                    AND {resolution}
-                 ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT ${limit_idx}",
+                 ORDER BY {order_by}
+                 LIMIT ${limit_idx}"
             );
             let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
                 .bind_storage(tag_slug)
@@ -1980,41 +1987,44 @@ where
                 .fetch_all(&self.pool)
                 .await?
         };
-
         Ok(rows)
     }
 
-    #[tracing::instrument(
-        name = "storage.posts.list_user_posts_by_tag",
-        skip(self),
-        fields(db.system = DB::DB_SYSTEM)
-    )]
+    #[tracing::instrument(name = "storage.posts.list_user_posts_by_tag", skip(self), fields(db.system = DB::DB_SYSTEM))]
     async fn list_user_posts_by_tag<'a>(
         &self,
         user_id: UserId,
         tag_slug: &Tag,
-        cursor: Option<&'a PostCursor>,
-        limit: RowLimit,
+        page: PublishedPageRequest<'a>,
         viewer: &ViewerIdentity,
         now: UtcInstant,
     ) -> Result<Vec<PostRecord>, ListByTagError> {
+        let PublishedPageRequest {
+            cursor,
+            order,
+            limit,
+        } = page;
         let tag_exists = sqlx::query_scalar::<_, Exists>(tags::TAG_EXISTS_SQL)
             .bind_storage(tag_slug)
             .fetch_one(&self.pool)
             .await?
             .into_bool();
-
         if !tag_exists {
             return Err(ListByTagError::TagNotFound);
         }
-
+        let (cursor_clause, order_by) = match order {
+            common::seed::TimelineOrder::Newest => (
+                "p.published_at < $3 OR (p.published_at = $4 AND p.post_id < $5)",
+                "p.published_at DESC, p.post_id DESC",
+            ),
+            common::seed::TimelineOrder::Oldest => (
+                "p.published_at > $3 OR (p.published_at = $4 AND p.post_id > $5)",
+                "p.published_at ASC, p.post_id ASC",
+            ),
+        };
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
-            // Binds: $1 user_id, $2 tag, $3/$4 cursor, $5 post_id, $6 now, then
-            // the variant-sized resolution fragment from $7 and the limit at
-            // the returned `limit_idx`.
             let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 7);
-            // `published_at <= $6` hides scheduled (future-dated) posts.
             let sql = format!(
                 "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
                  FROM posts p
@@ -2026,16 +2036,16 @@ where
                    AND p.published_at IS NOT NULL
                    AND p.published_at <= $6
                    AND p.deleted_at IS NULL
-                   AND (p.created_at < $3 OR (p.created_at = $4 AND p.post_id < $5))
+                   AND ({cursor_clause})
                    AND {resolution}
-                 ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT ${limit_idx}",
+                 ORDER BY {order_by}
+                 LIMIT ${limit_idx}"
             );
             let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
                 .bind_storage(user_id)
                 .bind_storage(tag_slug)
-                .bind_storage(cursor.created_at)
-                .bind_storage(cursor.created_at)
+                .bind_storage(cursor.published_at)
+                .bind_storage(cursor.published_at)
                 .bind_storage(cursor.post_id)
                 .bind_storage(now);
             binds
@@ -2044,10 +2054,7 @@ where
                 .fetch_all(&self.pool)
                 .await?
         } else {
-            // Binds: $1 user_id, $2 tag, $3 now, then the variant-sized
-            // resolution fragment from $4 and the limit at `limit_idx`.
             let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 4);
-            // `published_at <= $3` hides scheduled (future-dated) posts.
             let sql = format!(
                 "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
                  FROM posts p
@@ -2060,8 +2067,8 @@ where
                    AND p.published_at <= $3
                    AND p.deleted_at IS NULL
                    AND {resolution}
-                 ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT ${limit_idx}",
+                 ORDER BY {order_by}
+                 LIMIT ${limit_idx}"
             );
             let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
                 .bind_storage(user_id)
@@ -2073,7 +2080,6 @@ where
                 .fetch_all(&self.pool)
                 .await?
         };
-
         Ok(rows)
     }
 
@@ -5240,8 +5246,11 @@ mod tests {
         let result = env
             .posts()
             .list_published(
-                None,
-                parse_row_limit("10"),
+                PublishedPageRequest {
+                    cursor: None,
+                    order: common::seed::TimelineOrder::Newest,
+                    limit: parse_row_limit("10"),
+                },
                 &ViewerIdentity::Anonymous,
                 UtcInstant::now(),
             )

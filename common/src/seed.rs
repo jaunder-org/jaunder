@@ -97,15 +97,47 @@ pub struct PageCursor {
     pub post_id: PostId,
 }
 
+/// Viewer-selected chronology for a web Post timeline.
+///
+/// This is deliberately a closed wire enum: a continuation cursor is meaningful
+/// only with the direction that produced it.
+#[macros::text_enum(
+    error = InvalidTimelineOrder,
+    message = "timeline order must be \"newest\" or \"oldest\""
+)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[strum(serialize_all = "snake_case")]
+pub enum TimelineOrder {
+    #[default]
+    Newest,
+    Oldest,
+}
+
+/// The `(published_at, post_id, order)` keyset pair a web Post timeline hands back.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TimelineCursor {
+    pub published_at: UtcInstant,
+    pub post_id: PostId,
+    pub order: TimelineOrder,
+}
+
+/// Cohesive wire input for one web Post timeline page.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TimelinePageRequest {
+    pub order: TimelineOrder,
+    pub cursor: Option<TimelineCursor>,
+    pub limit: Option<crate::pagination::PageSize>,
+}
+
 /// A cursor-paginated page of rows.
 ///
-/// The envelope is shared by listing endpoints, while each endpoint retains its
-/// own row type and the specialized logic that derives its cursor.
+/// The envelope is shared by listing endpoints. `Cursor` defaults to
+/// [`PageCursor`] so every excluded listing preserves its existing wire shape.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Page<Row> {
+pub struct Page<Row, Cursor = PageCursor> {
     pub posts: Vec<Row>,
     /// Where the next page starts; `None` on the last page.
-    pub next_cursor: Option<PageCursor>,
+    pub next_cursor: Option<Cursor>,
     pub has_more: bool,
 }
 
@@ -148,19 +180,25 @@ pub struct PublicPresentation<Page> {
 /// components get it from the route params today.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PageSeed {
-    SiteTimeline(Page<RenderedPost>),
+    SiteTimeline {
+        order: TimelineOrder,
+        page: Page<RenderedPost, TimelineCursor>,
+    },
     Profile {
         username: Username,
-        page: Page<RenderedPost>,
+        order: TimelineOrder,
+        page: Page<RenderedPost, TimelineCursor>,
     },
     SiteTag {
         tag: Tag,
-        page: Page<RenderedPost>,
+        order: TimelineOrder,
+        page: Page<RenderedPost, TimelineCursor>,
     },
     UserTag {
         username: Username,
         tag: Tag,
-        page: Page<RenderedPost>,
+        order: TimelineOrder,
+        page: Page<RenderedPost, TimelineCursor>,
     },
     Permalink(AuthoredPost),
 }
@@ -215,7 +253,7 @@ mod tests {
         assert!(deserialized.is_draft());
     }
 
-    fn page(next_cursor: Option<PageCursor>) -> Page<RenderedPost> {
+    fn timeline_page(next_cursor: Option<TimelineCursor>) -> Page<RenderedPost, TimelineCursor> {
         Page {
             posts: Vec::new(),
             has_more: next_cursor.is_some(),
@@ -223,19 +261,20 @@ mod tests {
         }
     }
 
-    /// The cursor is wire data (#569): both shapes the server emits (a last page,
-    /// and a page with more behind it) must survive the projector's seed blob.
+    /// Timeline cursors retain both the publication key and their direction across
+    /// the projector seed boundary.
     #[test]
     fn timeline_page_round_trips_with_and_without_a_cursor() {
         for original in [
-            page(None),
-            page(Some(PageCursor {
-                created_at: instant(),
+            timeline_page(None),
+            timeline_page(Some(TimelineCursor {
+                published_at: instant(),
                 post_id: PostId::from(7),
+                order: TimelineOrder::Oldest,
             })),
         ] {
             let json = serde_json::to_string(&original).unwrap();
-            let back: Page<RenderedPost> = serde_json::from_str(&json).unwrap();
+            let back: Page<RenderedPost, TimelineCursor> = serde_json::from_str(&json).unwrap();
             assert_eq!(back, original);
         }
     }
@@ -260,12 +299,19 @@ mod tests {
     fn public_presentation_serializes_the_server_resolved_theme_with_the_page() {
         let presentation = PublicPresentation {
             theme: crate::theme::PublishedThemePresentation::built_in(crate::theme::Theme::Reader),
-            page: PageSeed::SiteTimeline(page(None)),
+            page: PageSeed::SiteTimeline {
+                order: TimelineOrder::Newest,
+                page: Page {
+                    posts: vec![],
+                    next_cursor: None,
+                    has_more: false,
+                },
+            },
         };
 
         assert_eq!(
             serde_json::to_string(&presentation).unwrap(),
-            r#"{"theme":{"identity":{"kind":"built_in","value":"reader"},"revision":null,"stylesheet_url":"/style/jaunder-themes.css","logo_url":null,"header_url":null},"page":{"SiteTimeline":{"posts":[],"next_cursor":null,"has_more":false}}}"#
+            r#"{"theme":{"identity":{"kind":"built_in","value":"reader"},"revision":null,"stylesheet_url":"/style/jaunder-themes.css","logo_url":null,"header_url":null},"page":{"SiteTimeline":{"order":"newest","page":{"posts":[],"next_cursor":null,"has_more":false}}}}"#
         );
     }
 }

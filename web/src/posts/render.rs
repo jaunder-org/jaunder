@@ -74,7 +74,7 @@ pub(crate) fn body_with_logo(seed: &PageSeed, logo: &Markup, header: &Markup) ->
             (header)
             div class="j-scroll" { div class="j-page" { (permalink_article(&authored.post)) } }
         }),
-        PageSeed::SiteTimeline(page) => render_timeline_page(
+        PageSeed::SiteTimeline { page, .. } => render_timeline_page(
             &render::masthead(logo),
             header,
             &page.posts,
@@ -82,7 +82,7 @@ pub(crate) fn body_with_logo(seed: &PageSeed, logo: &Markup, header: &Markup) ->
             &TagCtx::SiteWide,
             "No posts yet.",
         ),
-        PageSeed::Profile { username, page } => render_timeline_page(
+        PageSeed::Profile { username, page, .. } => render_timeline_page(
             &topbar::render(
                 &format!("Posts by {username}"),
                 Some("User timeline"),
@@ -95,7 +95,7 @@ pub(crate) fn body_with_logo(seed: &PageSeed, logo: &Markup, header: &Markup) ->
             &TagCtx::ForUser(username.clone()),
             "No posts yet.",
         ),
-        PageSeed::SiteTag { tag, page } => render_timeline_page(
+        PageSeed::SiteTag { tag, page, .. } => render_timeline_page(
             &topbar::render(
                 &format!("#{tag}"),
                 Some("Posts on this instance"),
@@ -112,6 +112,7 @@ pub(crate) fn body_with_logo(seed: &PageSeed, logo: &Markup, header: &Markup) ->
             username,
             tag,
             page,
+            ..
         } => render_timeline_page(
             &topbar::render(
                 &format!("#{tag}"),
@@ -365,8 +366,7 @@ pub(crate) mod test_fixtures {
             tags: vec![],
         }
     }
-
-    pub(crate) fn one_post_page() -> Page<RenderedPost> {
+    pub(crate) fn one_post_page() -> Page<RenderedPost, common::seed::TimelineCursor> {
         Page {
             posts: vec![sample_summary()],
             next_cursor: None,
@@ -541,6 +541,7 @@ mod tests {
         };
         let html = body(&PageSeed::Profile {
             username: parse_username("bob"),
+            order: common::seed::TimelineOrder::Newest,
             page,
         })
         .into_string();
@@ -556,7 +557,11 @@ mod tests {
             next_cursor: None,
             has_more: false,
         };
-        let html = body(&PageSeed::SiteTimeline(page)).into_string();
+        let html = body(&PageSeed::SiteTimeline {
+            order: common::seed::TimelineOrder::Newest,
+            page,
+        })
+        .into_string();
         assert!(html.contains("No posts yet."), "{html}");
     }
 
@@ -564,6 +569,7 @@ mod tests {
     fn body_covers_tag_page_headings() {
         let site = body(&PageSeed::SiteTag {
             tag: "rust".parse().unwrap(),
+            order: common::seed::TimelineOrder::Newest,
             page: one_post_page(),
         })
         .into_string();
@@ -579,6 +585,7 @@ mod tests {
         let user = body(&PageSeed::UserTag {
             username: parse_username("bob"),
             tag: "rust".parse().unwrap(),
+            order: common::seed::TimelineOrder::Newest,
             page: one_post_page(),
         })
         .into_string();
@@ -604,7 +611,11 @@ mod tests {
 
     #[test]
     fn home_local_body_has_topbar_hero_signin_and_posts() {
-        let html = body(&PageSeed::SiteTimeline(one_post_page())).into_string();
+        let html = body(&PageSeed::SiteTimeline {
+            order: common::seed::TimelineOrder::Newest,
+            page: one_post_page(),
+        })
+        .into_string();
         assert!(html.contains("<h1>jaunder.local</h1>"), "{html}");
         assert!(
             html.contains("<a href=\"/login\" class=\"j-btn j-anon-only\">Sign in</a>"),
@@ -628,19 +639,31 @@ mod tests {
     fn load_more_button_rendered_only_when_has_more() {
         let mut page = one_post_page();
         page.has_more = true;
-        let with = body(&PageSeed::SiteTimeline(page)).into_string();
+        let with = body(&PageSeed::SiteTimeline {
+            order: common::seed::TimelineOrder::Newest,
+            page,
+        })
+        .into_string();
         assert!(
             with.contains("<button data-jaunder-part=\"continuation\">Load more</button>"),
             "{with}"
         );
 
-        let without = body(&PageSeed::SiteTimeline(one_post_page())).into_string();
+        let without = body(&PageSeed::SiteTimeline {
+            order: common::seed::TimelineOrder::Newest,
+            page: one_post_page(),
+        })
+        .into_string();
         assert!(!without.contains("Load more"), "{without}");
     }
 
     #[test]
     fn style_contract_hooks_preserve_route_presence_and_post_landmarks() {
-        let timeline = body(&PageSeed::SiteTimeline(one_post_page())).into_string();
+        let timeline = body(&PageSeed::SiteTimeline {
+            order: common::seed::TimelineOrder::Newest,
+            page: one_post_page(),
+        })
+        .into_string();
         for hook in [
             "masthead",
             "site-title",
@@ -697,12 +720,14 @@ mod tests {
         };
         let profile = body(&PageSeed::Profile {
             username: parse_username("bob"),
+            order: common::seed::TimelineOrder::Newest,
             page: empty.clone(),
         })
         .into_string();
         assert!(profile.contains("<p>No posts yet.</p>"), "{profile}");
         let tag = body(&PageSeed::SiteTag {
             tag: "rust".parse().unwrap(),
+            order: common::seed::TimelineOrder::Newest,
             page: empty,
         })
         .into_string();

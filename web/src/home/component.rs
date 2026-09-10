@@ -8,7 +8,6 @@ use leptos::prelude::*;
 use crate::feed_discovery::FeedDiscovery;
 use crate::reactive::Invalidator;
 use crate::timeline::{self, TimelineGate, TimelineState};
-use common::seed::PageSeed;
 use common::{feed::FeedSurface, pagination::PageSize};
 
 #[component]
@@ -21,16 +20,12 @@ pub fn HomePage() -> impl IntoView {
     // enhanced public front page (#181, ADR-0044 D10) rather than swapping to a
     // personalized feed (a content swap can't be flash-free; the projector paints
     // anonymous-only bytes). The personalized Feed lives at the `/app` cockpit.
-    // Adopt the seed as the initial state so first paint shows content, no swap.
-    // No URL guard is needed (unlike the tag/profile pages): the `SiteTimeline`
-    // variant itself identifies `/`, so a seed carried over from another route
-    // cannot match.
-    state.adopt_seed(
-        match leptos::prelude::use_context::<Option<PageSeed>>().flatten() {
-            Some(PageSeed::SiteTimeline(page)) => Some(page),
-            _ => None,
-        },
+    // The seed determines both the adopted page and the request order. A
+    // mismatched seed falls back to the route's default newest-first state.
+    let (order, seed) = super::site_timeline_seed(
+        leptos::prelude::use_context::<Option<common::seed::PageSeed>>().flatten(),
     );
+    state.adopt_seed(seed);
 
     let invalidator = Invalidator::new();
     let on_mutate = Callback::new(move |()| invalidator.notify());
@@ -42,19 +37,27 @@ pub fn HomePage() -> impl IntoView {
     let initial_page = client::reactive::resource(
         move || invalidator.track(),
         move || async move {
-            timeline::list_local_timeline(None, Some(PageSize::default()))
-                .await
-                .map(super::site_destination)
+            timeline::list_local_timeline(common::seed::TimelinePageRequest {
+                order,
+                cursor: None,
+                limit: Some(PageSize::default()),
+            })
+            .await
+            .map(super::site_destination)
         },
     );
     timeline::wire_timeline_destination(state, initial_page, presentation);
 
     let on_load_more = Callback::new(move |()| {
         timeline::spawn_load_more(state, move |cursor, limit| async move {
-            timeline::list_local_timeline(cursor, limit)
-                .await
-                .map(super::site_destination)
-                .map(|(_, page)| page)
+            timeline::list_local_timeline(common::seed::TimelinePageRequest {
+                order,
+                cursor,
+                limit,
+            })
+            .await
+            .map(super::site_destination)
+            .map(|(_, page)| page)
         });
     });
 

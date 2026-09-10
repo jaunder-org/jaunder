@@ -1092,15 +1092,17 @@ pub async fn preview(scope: OwnershipScope, theme_id: ThemeId) -> WebResult<Them
     let viewer = common::visibility::ViewerIdentity::Anonymous;
     let (page, route) = match owner {
         ThemeOwner::Site => (
-            common::seed::PageSeed::SiteTimeline(
-                crate::timeline::fetch_local_timeline(
+            common::seed::PageSeed::SiteTimeline {
+                order: common::seed::TimelineOrder::Newest,
+                page: crate::timeline::fetch_local_timeline(
                     expect_context::<Arc<dyn PostStorage>>().as_ref(),
                     &viewer,
                     None,
+                    common::seed::TimelineOrder::Newest,
                     None,
                 )
                 .await?,
-            ),
+            },
             common::theme::PublicThemeRoute::site(),
         ),
         ThemeOwner::Author(user_id) => {
@@ -1112,11 +1114,13 @@ pub async fn preview(scope: OwnershipScope, theme_id: ThemeId) -> WebResult<Them
             (
                 common::seed::PageSeed::Profile {
                     username: user.username.clone(),
+                    order: common::seed::TimelineOrder::Newest,
                     page: crate::timeline::fetch_user_posts(
                         expect_context::<Arc<dyn PostStorage>>().as_ref(),
                         &viewer,
                         &user.username,
                         None,
+                        common::seed::TimelineOrder::Newest,
                         None,
                     )
                     .await?,

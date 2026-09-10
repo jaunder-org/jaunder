@@ -4,10 +4,11 @@
 //! only.
 //!
 //! The `#[server]` listing fns live in the `api` leaf and their host-only storage
-//! queries in `server` — the vertical owns both so that `(vertical, ident)` is a
-//! key the compiler enforces (#714). Public listing responses carry
-//! `PublicPresentation<Page<RenderedPost>>`; the private home feed retains
-//! `Page<RenderedPost>`. Both wire types are defined in `common::seed`.
+//! helpers in `server`. Publication order is carried through the cursor type, so
+//! pages from opposite directions cannot mix at the type boundary. Public listing
+//! responses carry `PublicPresentation<Page<RenderedPost, TimelineCursor>>`; the
+//! private home feed retains `Page<RenderedPost, TimelineCursor>`. Both wire types
+//! are defined in `common::seed`.
 //! Alongside them sit the pure host-tested `state` and `render` leaves and the
 //! wasm-only reactive `component`. `state` holds the reactive
 //! `TimelineState` signal bundle as well as the pure value model (#671) — both

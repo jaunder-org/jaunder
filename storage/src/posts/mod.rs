@@ -11,9 +11,9 @@ pub(crate) mod tags;
 pub(crate) mod visibility;
 
 pub use cursors::{
-    CollectionCursor, PostCursor, PostRevisionCursor, ScheduledPostCursor, keyset_cursor,
-    scheduled_keyset_cursor, to_post_cursor, to_scheduled_post_cursor, wire_cursor,
-    wire_scheduled_cursor,
+    CollectionCursor, DraftPostCursor, PostCursor, PostRevisionCursor, PublishedPageRequest,
+    ScheduledPostCursor, keyset_cursor, scheduled_keyset_cursor, timeline_keyset_cursor,
+    to_post_cursor, to_scheduled_post_cursor, wire_cursor, wire_scheduled_cursor,
 };
 pub use errors::{CreatePostError, ListByTagError, TaggingError, UpdatePostError};
 pub use media::{
