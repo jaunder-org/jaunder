@@ -30,7 +30,7 @@ Out:
     absent, ambiguous, private, subscriber-only, draft, future, and Deleted
     Posts with
     `devtool run -- cargo xtask test-local -- -p storage permalink_alias`.
-- [ ] Task 2: Add the server-owned alias route and exact redirect response.
+- [x] Task 2: Add the server-owned alias route and exact redirect response.
   - Contract: valid `GET /YYYY/MM/DD/slug` consumes the storage resolution;
     `Unique` returns `302` plus canonical same-origin `Location`, the untouched
     raw query, and `Cache-Control: no-store`; `Missing`, `Ambiguous`, and parse

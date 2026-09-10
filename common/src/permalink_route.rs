@@ -37,6 +37,20 @@ impl PermalinkRoute {
             slug,
         })
     }
+
+    /// Returns this typed route's canonical root-relative path.
+    #[must_use]
+    pub fn canonical_path(&self) -> String {
+        let date = self.date.value();
+        format!(
+            "/~{}/{:04}/{:02}/{:02}/{}",
+            self.username,
+            date.year(),
+            date.month(),
+            date.day(),
+            self.slug.as_ref()
+        )
+    }
 }
 
 #[cfg(test)]
