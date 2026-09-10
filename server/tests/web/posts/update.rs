@@ -12,8 +12,8 @@ use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{
-    confirmed_mutation, create_post_json, create_user_and_session, make_app, post_form, post_json,
-    update_post_json,
+    confirmed_created_post, confirmed_mutation, create_post_json, create_user_and_session,
+    make_app, post_form, post_json, update_post_json,
 };
 use storage::test_support::{Backend, backends, backends_matrix};
 
@@ -59,7 +59,7 @@ async fn update_post_updates_draft_content_and_slug(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created = confirmed_mutation::<SavedPost>(&body);
+    let created = confirmed_created_post(&body);
     let post_id = created.post_id;
 
     // Title embedded as # heading; slug_override takes precedence over the derived slug
@@ -122,7 +122,7 @@ async fn update_post_freezes_slug_when_published(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created = confirmed_mutation::<SavedPost>(&body);
+    let created = confirmed_created_post(&body);
     let post_id = created.post_id;
     let original_slug = created.slug.clone();
 
@@ -170,7 +170,7 @@ async fn update_post_publishes_draft(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created = confirmed_mutation::<SavedPost>(&body);
+    let created = confirmed_created_post(&body);
     assert!(created.published_at.is_none());
     let post_id = created.post_id;
 
@@ -221,7 +221,7 @@ async fn update_post_rejects_non_author(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created = confirmed_mutation::<SavedPost>(&body);
+    let created = confirmed_created_post(&body);
 
     let (status, body) = update_post_json(
         app.clone(),
@@ -274,7 +274,7 @@ async fn update_post_rejects(
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created = confirmed_mutation::<SavedPost>(&body);
+    let created = confirmed_created_post(&body);
 
     let (status, body) = post_json(
         app.clone(),
@@ -347,7 +347,7 @@ async fn update_post_returns_not_found_for_deleted_post(#[case] backend: Backend
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created = confirmed_mutation::<SavedPost>(&body);
+    let created = confirmed_created_post(&body);
 
     let posts = Arc::clone(&env.posts());
     env.write_scope()
@@ -404,7 +404,7 @@ async fn publish_post_publishes_draft_and_returns_permalink(#[case] backend: Bac
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created = confirmed_mutation::<SavedPost>(&body);
+    let created = confirmed_created_post(&body);
     assert!(created.published_at.is_none());
 
     let (status, body) = publish_post_form(app.clone(), created.post_id, Some(&cookie)).await;
@@ -459,7 +459,7 @@ async fn publish_post_rejects_non_author(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created = confirmed_mutation::<SavedPost>(&body);
+    let created = confirmed_created_post(&body);
 
     let (status, body) =
         publish_post_form(app.clone(), created.post_id, Some(&stranger_cookie)).await;
@@ -494,7 +494,7 @@ async fn publish_post_returns_not_found_for_missing_or_deleted_posts(#[case] bac
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created = confirmed_mutation::<SavedPost>(&body);
+    let created = confirmed_created_post(&body);
     let posts = Arc::clone(&env.posts());
     env.write_scope()
         .run(move |transaction| {
@@ -554,7 +554,7 @@ async fn delete_post_soft_deletes_post(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created = confirmed_mutation::<SavedPost>(&body);
+    let created = confirmed_created_post(&body);
 
     let (status, body) = delete_post_form(app.clone(), created.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
@@ -601,7 +601,7 @@ async fn delete_post_rejects_non_author(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created = confirmed_mutation::<SavedPost>(&body);
+    let created = confirmed_created_post(&body);
 
     let (status, body) =
         delete_post_form(app.clone(), created.post_id, Some(&stranger_cookie)).await;
@@ -632,7 +632,7 @@ async fn delete_post_rejects_unauthenticated(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created = confirmed_mutation::<SavedPost>(&body);
+    let created = confirmed_created_post(&body);
 
     let (status, body) = delete_post_form(app.clone(), created.post_id, None).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
@@ -662,7 +662,7 @@ async fn delete_post_returns_not_found_for_already_deleted_post(#[case] backend:
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created = confirmed_mutation::<SavedPost>(&body);
+    let created = confirmed_created_post(&body);
 
     let (status, body) = delete_post_form(app.clone(), created.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "first delete body: {body}");
@@ -704,7 +704,7 @@ async fn deleted_post_excluded_from_timelines_and_returns_404_at_permalink(
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created = confirmed_mutation::<SavedPost>(&body);
+    let created = confirmed_created_post(&body);
     let permalink = String::from(created.permalink);
 
     // Presence before deletion proves the exclusions below are the delete's doing.
@@ -772,7 +772,7 @@ async fn unpublish_post_reverts_published_post_to_draft(#[case] backend: Backend
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created = confirmed_mutation::<SavedPost>(&body);
+    let created = confirmed_created_post(&body);
     assert!(created.published_at.is_some(), "should be published");
 
     let (status, body) = unpublish_post_form(app.clone(), created.post_id, Some(&cookie)).await;
@@ -828,7 +828,7 @@ async fn unpublish_post_returns_the_draft_permalink(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let draft = confirmed_mutation::<SavedPost>(&body);
+    let draft = confirmed_created_post(&body);
     assert!(draft.published_at.is_none(), "should start as a draft");
 
     // `publish` stamps `now`, so the backdate has to come through `update`'s
@@ -908,7 +908,7 @@ async fn unpublish_post_rejects_non_author(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created = confirmed_mutation::<SavedPost>(&body);
+    let created = confirmed_created_post(&body);
 
     let (status, body) =
         unpublish_post_form(app.clone(), created.post_id, Some(&other_cookie)).await;
@@ -934,7 +934,7 @@ async fn update_post_applies_tag_set_diff(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created = confirmed_mutation::<SavedPost>(&body);
+    let created = confirmed_created_post(&body);
 
     // Update: replace old-tag with new-tag, keep rust.
     let (status, body) = update_post_json(
@@ -983,7 +983,7 @@ async fn update_post_rejects_over_limit_tags_without_mutating_post_or_tags(
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created = confirmed_mutation::<SavedPost>(&body);
+    let created = confirmed_created_post(&body);
 
     let original = env
         .posts()
@@ -1061,7 +1061,7 @@ async fn update_post_with_tags_unset_leaves_existing_tags_alone(#[case] backend:
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created = confirmed_mutation::<SavedPost>(&body);
+    let created = confirmed_created_post(&body);
 
     // `None` leaves the existing tag set unchanged.
     let (status, body) = update_post_json(
@@ -1117,7 +1117,7 @@ async fn update_org_header_applies_tags_and_rejects_mismatched_bookkeeping(
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created = confirmed_mutation::<SavedPost>(&body);
+    let created = confirmed_created_post(&body);
 
     let org_body = format!(
         "#+TITLE: Canonical title\n#+KEYWORDS: org-tag, other\n#+PROPERTY: JAUNDER_STATUS draft\n#+PROPERTY: JAUNDER_ID {}\n\nUpdated body",
@@ -1224,7 +1224,7 @@ async fn update_org_uses_header_lifecycle_when_publish_is_omitted(#[case] backen
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created = confirmed_mutation::<SavedPost>(&body);
+    let created = confirmed_created_post(&body);
     let (status, body) = update_post_json(
         app.clone(),
         created.post_id,
@@ -1267,7 +1267,7 @@ async fn update_org_without_any_lifecycle_unpublishes_post(#[case] backend: Back
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created = confirmed_mutation::<SavedPost>(&body);
+    let created = confirmed_created_post(&body);
     assert!(
         created.published_at.is_some(),
         "fixture must start published"
@@ -1310,7 +1310,7 @@ async fn update_non_org_requires_publish_presence(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created = confirmed_mutation::<SavedPost>(&body);
+    let created = confirmed_created_post(&body);
     let payload = serde_json::json!({
         "post_id": created.post_id,
         "post": {
@@ -1350,7 +1350,7 @@ async fn update_org_current_sync_succeeds_and_stale_sync_preserves_post(#[case] 
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created = confirmed_mutation::<SavedPost>(&body);
+    let created = confirmed_created_post(&body);
     let before = env
         .posts()
         .get_post_by_id(

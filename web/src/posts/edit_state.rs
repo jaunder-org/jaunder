@@ -33,6 +33,19 @@ pub fn loaded_publication(
     }
 }
 
+/// Returns the scheduled publication instant, if the server's fetch snapshot
+/// classified the authored post as scheduled.
+#[must_use]
+pub fn scheduled_publication_at(
+    published_at: Option<UtcInstant>,
+    fetched_at: UtcInstant,
+) -> Option<UtcInstant> {
+    match loaded_publication(published_at, fetched_at) {
+        LoadedPublication::Scheduled(at) => Some(at),
+        LoadedPublication::Draft | LoadedPublication::Live => None,
+    }
+}
+
 /// A scheduled editor's local display value and exact original UTC instant.
 ///
 /// The original remains authoritative until the author edits the control. This
@@ -245,6 +258,25 @@ mod tests {
         assert_eq!(
             loaded_publication(Some(instant("2026-08-13T11:59:59Z")), fetched_at),
             LoadedPublication::Live,
+        );
+    }
+
+    #[test]
+    fn scheduled_publication_uses_the_fetch_snapshot_and_only_returns_future_instants() {
+        let fetched_at = instant("2026-09-10T12:00:00Z");
+        let scheduled_at = instant("2026-09-10T12:00:01Z");
+        let later_browser_clock = instant("2026-09-10T12:00:02Z");
+
+        assert_eq!(scheduled_publication_at(None, fetched_at), None);
+        assert_eq!(
+            scheduled_publication_at(Some(fetched_at), fetched_at),
+            None,
+            "an instant due at fetch time is already live",
+        );
+        assert!(scheduled_at.value() < later_browser_clock.value());
+        assert_eq!(
+            scheduled_publication_at(Some(scheduled_at), fetched_at),
+            Some(scheduled_at)
         );
     }
     #[test]

@@ -26,8 +26,8 @@ pub use atompub::{
     atompub_put_xml, atompub_upload, atompub_xml,
 };
 pub use http::{
-    ForeignReferenceResolver, MultipartFile, TestHttpResponse, body_string, confirmed_mutation,
-    get_asset, post_form, post_form_with_bearer, post_form_with_credentials,
+    ForeignReferenceResolver, MultipartFile, TestHttpResponse, body_string, confirmed_created_post,
+    confirmed_mutation, get_asset, post_form, post_form_with_bearer, post_form_with_credentials,
     post_form_with_secure_flag, post_json, post_json_with_credentials, post_multipart,
     post_password_reset_form_with_dependencies, post_password_reset_request_with_dependencies,
     post_server_fn, post_server_fn_request_fixture,

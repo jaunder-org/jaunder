@@ -718,11 +718,20 @@ the transaction that produced them
 only (`UnpublishedPost`, `web/src/posts/api.rs:103`), plus the rendered form
 (`RenderedPost`, `common/src/seed.rs:39`), plus the authored source
 (`AuthoredPost`, `:108`, which _nests_ a `RenderedPost` and adds `PostBody` +
-`PostFormat`). One type, `SavedPost` (`web/src/posts/api.rs:78`), serves all
-four post mutations. Merging two types is viable only _within_ a tier — a
-cross-tier union ships the heavier payload to consumers of the lighter one — and
-structural overlap alone does not justify it; the discriminator is whether the
-code converts between them.
+`PostFormat`). `SavedPost` (`web/src/posts/api.rs`) remains the shared
+identity/publication core. Update, publish, and unpublish return it directly;
+create returns `ClassifiedSavedPost`, which nests that core and adds only the
+server request-clock publication classification needed by the creation result
+([classified save response](adr/drafts/classified-saved-post-for-creation.md)).
+This amends ADR-0097's former one-type-for-four-mutations statement while
+retaining its content-oriented naming and shared-core-plus-extension rule.
+`AuthoredPostSnapshot` applies the same extension rule to reads: it nests
+`AuthoredPost` and adds the server fetch instant used by the editor and
+permalink to classify lifecycle state without consulting a browser clock.
+Merging two types is viable only _within_ a tier — a cross-tier union ships the
+heavier payload to consumers of the lighter one — and structural overlap alone
+does not justify it; the discriminator is whether the code converts between
+them.
 
 **Timelines paginate by keyset cursor, not offset**
 ([ADR-0004](adr/0004-pagination-strategy.md)). `PostCursor`
@@ -2584,9 +2593,14 @@ time-domain type uses its native Jiff range: `Date` spans `-009999-01-01`
 through `9999-12-31`, while `Timestamp` spans `-009999-01-02T01:59:59Z` through
 `9999-12-30T22:00:00.999999999Z`; an older out-of-range value fails at the
 decode or restore boundary that reaches it, without a preflight scan. IANA TZDB
-is always bundled. HTML datetime-local retains browser-normalizing, non-strict
-conversion for gaps; strict local-time seams, including Org, retain earlier-fold
-selection and reject gaps. These retain the domain boundary established by
+is always bundled. The draft publish-at `datetime-local` seam retains
+browser-normalizing, non-strict conversion for gaps. The Scheduled Post editor
+and full new-Post control use strict conversion: nonexistent gap times are
+rejected, while ambiguous folds choose the earlier instant. The new-Post
+control's separate Date and Time Apply boundary is recorded by the
+[strict new-Post local publication time decision](adr/drafts/strict-new-post-local-publication-time.md).
+Other strict local-time seams, including Org, retain the same earlier-fold and
+gap-rejection policy. These retain the domain boundary established by
 [ADR-0072](adr/0072-timestamps-cross-boundary-as-utcinstant.md) and the
 storage-wide `UtcInstant` seam established by
 [ADR-0153](adr/0153-storage-owned-instants.md).

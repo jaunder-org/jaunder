@@ -7,8 +7,8 @@ use crate::forms::{self, Field, ValidatedBareInput, ValidatedTextarea};
 use crate::media::MediaUpload;
 use crate::posts;
 use crate::posts::{
-    ComposeState, Create, InvalidSchedule, LoadedPublication, NamedAudienceState, SavedPost,
-    ScheduledEditState,
+    ClassifiedSavedPost, ComposeState, Create, CreatePublication, InvalidSchedule,
+    LoadedPublication, NamedAudienceState, ScheduledEditState,
 };
 use crate::tags::TagInput;
 use crate::topbar::Topbar;
@@ -17,6 +17,7 @@ use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::render::PostFormat;
 use common::slug::Slug;
+use common::time::{self, UtcInstant};
 use common::username::Username;
 
 use super::audience::AudiencePickerWithState;
@@ -101,6 +102,43 @@ pub fn ComposerFields(
     }
 }
 
+/// Provisional publication-time inputs for the full new-Post composer.
+///
+/// The committed wire value remains on [`ComposeState`]; these fields exist only while
+/// the author is choosing a replacement, so neither an incomplete selection nor a
+/// cancelled change can leak into a create request.
+#[derive(Clone, Copy)]
+pub(super) struct CreationSchedule {
+    disclosed: RwSignal<bool>,
+    date: RwSignal<String>,
+    time: RwSignal<String>,
+    scheduled: RwSignal<bool>,
+    error: RwSignal<Option<String>>,
+}
+
+impl CreationSchedule {
+    fn new() -> Self {
+        Self {
+            disclosed: RwSignal::new(false),
+            date: RwSignal::new(String::new()),
+            time: RwSignal::new(String::new()),
+            scheduled: RwSignal::new(false),
+            error: RwSignal::new(None),
+        }
+    }
+
+    fn restore_committed(self, committed: &str) {
+        let (date, time) = committed.split_once('T').unwrap_or(("", ""));
+        self.date.set(date.to_owned());
+        self.time.set(time.to_owned());
+        self.error.set(None);
+    }
+
+    fn is_editing(self) -> bool {
+        self.disclosed.get()
+    }
+}
+
 /// The new-post composer. Renders in one of two shapes over a single
 /// [`ComposeState`]: a compact inline row, or the full compose page.
 ///
@@ -111,7 +149,7 @@ pub fn ComposerFields(
 pub fn PostCreateForm(
     compact: bool,
     #[prop(optional)] username: Option<Username>,
-    #[prop(into)] on_success: Callback<SavedPost>,
+    #[prop(into)] on_success: Callback<ClassifiedSavedPost>,
     #[prop(optional)] on_mutation: Option<Callback<bool>>,
     #[prop(default = 6)] rows: u32,
     #[prop(default = "What\u{2019}s on your mind?")] placeholder: &'static str,
@@ -240,6 +278,7 @@ fn FullComposer(
 ) -> impl IntoView {
     let slug_field = Field::<Slug>::optional();
     let named = audience::load_named_audiences();
+    let schedule = CreationSchedule::new();
     // The one-call form gate also carries the named-audience load decision: a
     // failed or unresolved picker cannot dispatch as though an empty list had
     // loaded. The callback repeats the pure guard so direct invocation cannot
@@ -249,6 +288,7 @@ fn FullComposer(
         Signal::derive(move || {
             !slug_field.is_valid()
                 || !state.summary_field.is_valid()
+                || schedule.is_editing()
                 || state.audience.with(|selection| {
                     named.with(|state| state.selection_for_submit(selection).is_none())
                 })
@@ -284,12 +324,14 @@ fn FullComposer(
                     publication=LoadedPublication::Draft
                     scheduled=None
                     schedule_error=Signal::derive(|| None::<InvalidSchedule>)
+                    creation_schedule=Some(schedule)
                     named=named
                 />
                 <MediaSection />
                 <div style="margin-top:auto;display:flex;align-items:center;gap:8px">
-                    <PostSaveActions
-                        publication=LoadedPublication::Draft
+                    <CreationPostActions
+                        publish_at=state.publish_at
+                        scheduled=schedule.scheduled
                         disabled=submit_disabled
                         on_save=dispatch
                     />
@@ -309,7 +351,7 @@ fn CreateErrorFlash(action: ServerAction<Create>) -> impl IntoView {
             action
                 .value()
                 .get()
-                .and_then(|result: Result<MutationOutcome<SavedPost>, WebError>| match result {
+                .and_then(|result: Result<MutationOutcome<ClassifiedSavedPost>, WebError>| match result {
                     Ok(MutationOutcome::Confirmed(_)) => None,
                     Ok(MutationOutcome::CommitIndeterminate(_)) => {
                         Some(
@@ -333,14 +375,15 @@ fn CreateErrorFlash(action: ServerAction<Create>) -> impl IntoView {
 pub fn InlineComposer(username: Username, on_publish: Callback<()>) -> impl IntoView {
     let flash: RwSignal<Option<(String, String)>> = RwSignal::new(None);
 
-    let on_success = Callback::new(move |created: SavedPost| {
+    let on_success = Callback::new(move |created: ClassifiedSavedPost| {
         use leptos_dom::helpers::set_timeout;
         use std::time::Duration;
-        let url = created.permalink.to_string();
-        let msg = if created.published_at.is_some() {
-            "Post published!".to_string()
-        } else {
-            "Draft saved!".to_string()
+        let url = created.post.permalink.to_string();
+        let msg = match created.publication {
+            CreatePublication::Draft => "Draft saved!".to_string(),
+            CreatePublication::Published | CreatePublication::Scheduled => {
+                "Post published!".to_string()
+            }
         };
         flash.set(Some((url, msg)));
         set_timeout(move || flash.set(None), Duration::from_secs(30));
@@ -386,7 +429,7 @@ pub fn CreatePostPage() -> impl IntoView {
     // Server-confirmed gate: await the shared session reconcile (an expired cookie
     // must not show the create form) (#591).
     let session = auth::use_session();
-    let last_result: RwSignal<Option<SavedPost>> = RwSignal::new(None);
+    let last_result: RwSignal<Option<ClassifiedSavedPost>> = RwSignal::new(None);
 
     view! {
         <Topbar title="New post" sub="Long-form" />
@@ -405,34 +448,7 @@ pub fn CreatePostPage() -> impl IntoView {
                                     last_result.set(Some(created));
                                 })
                             />
-                            {move || {
-                                last_result
-                                    .get()
-                                    .map(|created| {
-                                        let message = if created.published_at.is_some() {
-                                            "Post published."
-                                        } else {
-                                            "Draft saved."
-                                        };
-                                        let slug_value = created.slug.to_string();
-                                        let slug_for_attr = slug_value.clone();
-                                        view! {
-                                            <div class="j-save-summary">
-                                                <p class="success">{message}</p>
-                                                <p data-test="slug-value" data-slug=slug_for_attr>
-                                                    "Slug: "
-                                                    {slug_value}
-                                                </p>
-                                                <a
-                                                    data-test="permalink-link"
-                                                    href=created.permalink.to_string()
-                                                >
-                                                    "View post"
-                                                </a>
-                                            </div>
-                                        }
-                                    })
-                            }}
+                            <CreateResultSummary result=last_result />
                         }
                             .into_any()
                     }
@@ -453,6 +469,42 @@ pub fn CreatePostPage() -> impl IntoView {
                 }
             })}
         </Suspense>
+    }
+}
+
+/// The confirmed create result shown below the routed full composer.
+///
+/// This is intentionally separate from [`CreatePostPage`]: it owns the publication
+/// outcome wording and the stable post-navigation test hooks, while the page owns
+/// authentication reconciliation and form presentation.
+#[component]
+fn CreateResultSummary(result: RwSignal<Option<ClassifiedSavedPost>>) -> impl IntoView {
+    view! {
+        {move || {
+            result
+                .get()
+                .map(|created| {
+                    let message = match created.publication {
+                        CreatePublication::Scheduled => "Post scheduled.",
+                        CreatePublication::Published => "Post published.",
+                        CreatePublication::Draft => "Draft saved.",
+                    };
+                    let slug_value = created.post.slug.to_string();
+                    let slug_for_attr = slug_value.clone();
+                    view! {
+                        <div class="j-save-summary">
+                            <p class="success">{message}</p>
+                            <p data-test="slug-value" data-slug=slug_for_attr>
+                                "Slug: "
+                                {slug_value}
+                            </p>
+                            <a data-test="permalink-link" href=created.post.permalink.to_string()>
+                                "View post"
+                            </a>
+                        </div>
+                    }
+                })
+        }}
     }
 }
 
@@ -514,6 +566,77 @@ pub(super) fn PostSaveActions(
     }
 }
 
+/// Full-composer creation controls, whose primary action reflects a committed schedule.
+#[component]
+fn CreationPostActions(
+    /// The committed value distinguishes Draft from either publication state; reset clears it.
+    publish_at: RwSignal<String>,
+    /// Future-versus-already-due classification fixed when the value was applied.
+    scheduled: RwSignal<bool>,
+    disabled: Signal<bool>,
+    on_save: Callback<bool>,
+) -> impl IntoView {
+    view! {
+        {move || match (!publish_at.get().is_empty(), scheduled.get()) {
+            (true, true) => {
+                view! {
+                    <button
+                        class="j-btn is-primary"
+                        type="button"
+                        name="publish"
+                        value="true"
+                        prop:disabled=move || disabled.get()
+                        on:click=move |_| on_save.run(true)
+                    >
+                        "Schedule"
+                    </button>
+                }
+                    .into_any()
+            }
+            (true, false) => {
+                view! {
+                    <button
+                        class="j-btn is-primary"
+                        type="button"
+                        name="publish"
+                        value="true"
+                        prop:disabled=move || disabled.get()
+                        on:click=move |_| on_save.run(true)
+                    >
+                        "Publish"
+                    </button>
+                }
+                    .into_any()
+            }
+            (false, _) => {
+                view! {
+                    <button
+                        class="j-btn"
+                        type="button"
+                        name="publish"
+                        value="false"
+                        prop:disabled=move || disabled.get()
+                        on:click=move |_| on_save.run(false)
+                    >
+                        "Save draft"
+                    </button>
+                    <button
+                        class="j-btn is-primary"
+                        type="button"
+                        name="publish"
+                        value="true"
+                        prop:disabled=move || disabled.get()
+                        on:click=move |_| on_save.run(true)
+                    >
+                        "Publish"
+                    </button>
+                }
+                    .into_any()
+            }
+        }}
+    }
+}
+
 /// Draft-only slug override control shared by the full composer and editor.
 ///
 /// The control is deliberately slug-specific: ADR-0065's generic labelled
@@ -553,6 +676,8 @@ pub(super) fn ComposeOptions(
     publication: LoadedPublication,
     scheduled: Option<ScheduledEditState>,
     schedule_error: Signal<Option<InvalidSchedule>>,
+    /// Present only for the full new-Post composer, whose time choice is provisional.
+    creation_schedule: Option<CreationSchedule>,
     /// The named-audience load shared by the picker and the action gate.
     named: RwSignal<NamedAudienceState>,
 ) -> impl IntoView {
@@ -565,7 +690,22 @@ pub(super) fn ComposeOptions(
                 LoadedPublication::Draft => {
                     view! {
                         <SlugOverrideInput slug_field=slug_field />
-                        <ScheduleControl state=state scheduled=None schedule_error=schedule_error />
+                        {match creation_schedule {
+                            Some(schedule) => {
+                                view! { <CreationScheduleControl state=state schedule=schedule /> }
+                                    .into_any()
+                            }
+                            None => {
+                                view! {
+                                    <ScheduleControl
+                                        state=state
+                                        scheduled=None
+                                        schedule_error=schedule_error
+                                    />
+                                }
+                                    .into_any()
+                            }
+                        }}
                     }
                         .into_any()
                 }
@@ -597,6 +737,112 @@ pub(super) fn ComposeOptions(
             </div>
             <FormatToggle format=state.format style="margin-top:10px" />
         </div>
+    }
+}
+
+/// The inline schedule disclosure used only by the full new-Post composer.
+#[component]
+fn CreationScheduleControl(state: ComposeState, schedule: CreationSchedule) -> impl IntoView {
+    let open = move |_| {
+        schedule.restore_committed(&state.publish_at.get());
+        schedule.disclosed.set(true);
+    };
+    let clear = move |_| {
+        state.publish_at.set(String::new());
+        schedule.scheduled.set(false);
+        schedule.error.set(None);
+    };
+    view! {
+        <div style="margin-top:10px">
+            {move || {
+                if schedule.disclosed.get() {
+                    view! { <CreationScheduleEditor state=state schedule=schedule /> }.into_any()
+                } else if state.publish_at.get().is_empty() {
+                    view! {
+                        <button class="j-btn" type="button" on:click=open>
+                            "Set publication time…"
+                        </button>
+                    }
+                        .into_any()
+                } else {
+                    let value = state.publish_at.get().replace('T', " ");
+                    view! {
+                        <p>{format!("Publication time: {value} local time")}</p>
+                        <button class="j-btn" type="button" on:click=open>
+                            "Change publication time…"
+                        </button>
+                        <button class="j-btn" type="button" on:click=clear>
+                            "Clear schedule"
+                        </button>
+                    }
+                        .into_any()
+                }
+            }}
+        </div>
+    }
+}
+
+/// The provisional date/time editor for a new Post's creation-only schedule.
+#[component]
+fn CreationScheduleEditor(state: ComposeState, schedule: CreationSchedule) -> impl IntoView {
+    let cancel = move |_| {
+        schedule.restore_committed(&state.publish_at.get());
+        schedule.disclosed.set(false);
+    };
+    let apply = move |_| {
+        let value = format!("{}T{}", schedule.date.get(), schedule.time.get());
+        if let Some(at) = time::strict_utc_instant_from_local(&value) {
+            schedule
+                .scheduled
+                .set(at.value() > UtcInstant::now().value());
+            state.publish_at.set(value);
+            schedule.error.set(None);
+            schedule.disclosed.set(false);
+        } else {
+            schedule
+                .error
+                .set(Some("Enter a valid local date and time.".to_owned()));
+        }
+    };
+    view! {
+        <p>"Publication time uses your browser's local timezone."</p>
+        <label class="j-field-label">
+            "Date"
+            <input
+                type="date"
+                name="publish_date"
+                class="j-field-val"
+                prop:value=schedule.date
+                on:input=move |ev| {
+                    let date = event_target_value(&ev);
+                    schedule.date.set(date.clone());
+                    if !date.is_empty() && schedule.time.get().is_empty() {
+                        schedule.time.set("00:00".to_owned());
+                    }
+                    schedule.error.set(None);
+                }
+            />
+        </label>
+        <label class="j-field-label">
+            "Time"
+            <input
+                type="time"
+                name="publish_time"
+                class="j-field-val"
+                prop:value=schedule.time
+                on:input=move |ev| {
+                    schedule.time.set(event_target_value(&ev));
+                    schedule.error.set(None);
+                }
+            />
+        </label>
+        {move || schedule.error.get().map(|error| view! { <p class="error">{error}</p> })}
+        <button class="j-btn" type="button" on:click=apply>
+            "Apply"
+        </button>
+        <button class="j-btn" type="button" on:click=cancel>
+            "Cancel"
+        </button>
     }
 }
 

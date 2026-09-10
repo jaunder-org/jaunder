@@ -22,6 +22,10 @@ pub fn confirmed_mutation<T: serde::de::DeserializeOwned>(body: &str) -> T {
     confirmed_for(outcome, "integration test backend")
 }
 
+pub fn confirmed_created_post(body: &str) -> web::posts::SavedPost {
+    confirmed_mutation::<web::posts::ClassifiedSavedPost>(body).post
+}
+
 /// Read a response body fully and decode it as UTF-8.
 pub async fn body_string(response: axum::response::Response) -> String {
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)

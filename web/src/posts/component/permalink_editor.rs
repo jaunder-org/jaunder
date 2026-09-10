@@ -15,6 +15,7 @@ use common::post_body::PostBody;
 use common::root_relative_url::RootRelativeUrl;
 use common::seed::{AuthoredPost, PageSeed};
 use common::slug::Slug;
+use common::time::{self, UtcInstant};
 use common::{MutationOutcome, permalink_route::PermalinkRoute};
 
 use super::audience;
@@ -90,6 +91,25 @@ fn permalink_unpublish_callback(refetch: RwSignal<u32>) -> Callback<SavedPost> {
     })
 }
 
+/// Server-classified publication notice for an author-visible Scheduled Post.
+#[component]
+fn ScheduledNotice(at: Option<UtcInstant>) -> impl IntoView {
+    view! {
+        {move || {
+            at.map(|at| {
+                view! {
+                    <p class="success">
+                        {format!(
+                            "Scheduled for {} local time",
+                            time::local_datetime_from_utc(at).replace('T', " "),
+                        )}
+                    </p>
+                }
+            })
+        }}
+    }
+}
+
 #[component]
 pub fn PostPage() -> impl IntoView {
     let presentation = crate::app::theme_presentation();
@@ -149,24 +169,35 @@ pub fn PostPage() -> impl IntoView {
                     Ok((fetched_theme, fetched)) => {
                         match presentation.adopt(fetched_theme).await {
                             Ok(crate::app::ThemeAdoption::Applied) => {
+                                let scheduled_at = posts::scheduled_publication_at(
+                                    fetched.post.post.published_at,
+                                    fetched.fetched_at,
+                                );
                                 let banner = fetched
+                                    .post
                                     .post
                                     .is_draft()
                                     .then_some("Draft - visible only to you".to_string());
-                                let tag_context = TagCtx::ForUser(fetched.post.username.clone());
+                                let tag_context = TagCtx::ForUser(
+                                    fetched.post.post.username.clone(),
+                                );
                                 // Both bound before the `view!`: the props are borrows
                                 // now, so an inline temporary would be dropped inside
                                 // the macro expansion (E0716).
                                 view! {
-                                    <Topbar title=format!("Post by {}", fetched.post.username) />
+                                    <Topbar title=format!(
+                                        "Post by {}",
+                                        fetched.post.post.username,
+                                    ) />
                                     {move || {
                                         crate::app::render_theme_header(&theme.get())
                                             .inject_into(leptos::html::div().class("j-contents"))
                                     }}
                                     <div class="j-scroll">
                                         <div class="j-page">
+                                            <ScheduledNotice at=scheduled_at />
                                             <PostCard
-                                                post=&fetched.post
+                                                post=&fetched.post.post
                                                 banner=banner.as_deref()
                                                 tag_context=&tag_context
                                                 on_unpublish=on_unpublish
@@ -339,6 +370,7 @@ fn EditPostForm(
                     publication=loaded_publication
                     scheduled=scheduled
                     schedule_error=schedule_error
+                    creation_schedule=None
                     named=named
                 />
                 <MediaSection />

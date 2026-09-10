@@ -63,7 +63,7 @@ pub use page_state::{
 pub use compose_state::{ComposeState, PublicationIntent, publication_from_local, submit_gate};
 pub use edit_state::{
     EditPublicationState, InvalidSchedule, LoadedPublication, ScheduledEditState, edit_submit_gate,
-    loaded_publication,
+    loaded_publication, scheduled_publication_at,
 };
 
 // The typed edit-route constructor is pure and host-tested in `render`, but
@@ -73,13 +73,14 @@ pub use render::edit_post_url;
 // The API surface — re-exported so external call sites and the server-fn
 // registrar keep the stable `crate::posts::…` paths despite living in `api.rs`.
 pub use api::{
-    Create, CurrentPostHistory, Delete, EditPostPreview, Get, GetAudienceSelection,
-    GetDefaultAudienceSelection, GetPostHistory, GetPreview, GetRevisionHistoryDetail, ListDrafts,
-    ListHistory, ListScheduled, PostInputs, PostRevisionHistory, Publish, RevisionHistoryCursor,
-    RevisionHistoryMetadata, RevisionHistoryPage, RevisionLifecycle, SavedPost, Unpublish,
-    UnpublishedPost, Update, create, delete, get, get_audience_selection,
-    get_default_audience_selection, get_post_history, get_preview, get_revision_history_detail,
-    list_drafts, list_history, list_scheduled, publish, unpublish, update,
+    AuthoredPostSnapshot, ClassifiedSavedPost, Create, CreatePublication, CurrentPostHistory,
+    Delete, Get, GetAudienceSelection, GetDefaultAudienceSelection, GetPostHistory, GetPreview,
+    GetRevisionHistoryDetail, ListDrafts, ListHistory, ListScheduled, PostInputs,
+    PostRevisionHistory, Publish, RevisionHistoryCursor, RevisionHistoryMetadata,
+    RevisionHistoryPage, RevisionLifecycle, SavedPost, Unpublish, UnpublishedPost, Update, create,
+    delete, get, get_audience_selection, get_default_audience_selection, get_post_history,
+    get_preview, get_revision_history_detail, list_drafts, list_history, list_scheduled, publish,
+    unpublish, update,
 };
 
 // Re-exported for the `server` crate's public projector, which maps the fetched

@@ -3,13 +3,14 @@ use common::render::PostFormat;
 use common::test_support::parse_post_body;
 use common::visibility::{AudienceBase, AudienceSelection};
 use server_fn::ServerFn;
-use web::posts::{PostInputs, SavedPost};
+use web::posts::PostInputs;
 
 use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{
-    confirmed_mutation, create_post_json, create_user_and_session, make_app, post_form, post_json,
+    confirmed_created_post, create_post_json, create_user_and_session, make_app, post_form,
+    post_json,
 };
 use storage::test_support::{Backend, backends};
 use storage::{SessionStorage, UserStorage, WriteScope};
@@ -92,7 +93,7 @@ async fn post_audience_selection_returns_public_for_new_post(#[case] backend: Ba
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = confirmed_mutation(&body);
+    let created = confirmed_created_post(&body);
 
     let (status, body) = post_form(
         app.clone(),
@@ -146,7 +147,7 @@ async fn post_audience_selection_rejects_non_owner(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = confirmed_mutation(&body);
+    let created = confirmed_created_post(&body);
 
     // A different user must not learn another author's targeting.
     let (status, body) = post_form(

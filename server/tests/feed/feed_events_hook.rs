@@ -14,11 +14,11 @@ use rstest_reuse::*;
 use tower::ServiceExt;
 
 use crate::helpers::{
-    atompub, atompub_post_xml, atompub_put_xml, confirmed_mutation, create_post_json,
+    atompub, atompub_post_xml, atompub_put_xml, confirmed_created_post, create_post_json,
     create_user_and_session, make_app, post_form, update_post_json,
 };
 use storage::test_support::{Backend, backends, backends_matrix};
-use web::posts::{PostInputs, SavedPost};
+use web::posts::PostInputs;
 
 async fn claim_pending(
     feed_events: std::sync::Arc<dyn storage::FeedEventStorage>,
@@ -40,7 +40,7 @@ async fn claim_pending(
 }
 
 fn confirmed_post_id(response: &str) -> i64 {
-    i64::from(confirmed_mutation::<SavedPost>(response).post_id)
+    i64::from(confirmed_created_post(response).post_id)
 }
 
 async fn use_public_default(
