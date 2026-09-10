@@ -399,5 +399,4 @@ mod tests {
             "storage.sqlite.feed_events.purge_corrupt",
         );
     }
-
 }

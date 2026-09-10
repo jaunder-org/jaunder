@@ -578,12 +578,15 @@ mod tests {
     async fn user_creation_with_prompt_uses_the_injected_prompt() {
         let temp = TempDir::new().expect("temp dir");
         let storage_args = sqlite_storage_args(&temp);
-        storage::open_database(&storage_args.db, &StorageRuntimeConfig::default())
+        let factory = storage::open_database(&storage_args.db, &StorageRuntimeConfig::default())
             .await
             .expect("open database");
+        let users = factory.users();
+        let write_scope = factory.write_scope();
 
         cmd_user_create_with(
-            &storage_args,
+            users,
+            &write_scope,
             &"prompted-user".parse().expect("username"),
             None,
             None,

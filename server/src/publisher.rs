@@ -267,9 +267,7 @@ mod tests {
     use sqlx::Error;
     use storage::{
         FeedCacheRow, FeedWindowMutation, MockPublisherStorage, PublisherStorageError,
-        test_support::{
-            Backend, backends, mock_write_scope_with_commit_acknowledgement_loss,
-        },
+        test_support::{Backend, backends, mock_write_scope_with_commit_acknowledgement_loss},
     };
 
     fn cache_row() -> FeedCacheRow {
@@ -384,8 +382,7 @@ mod tests {
     async fn mutation_rejects_indeterminate_commit_acknowledgements(#[case] backend: Backend) {
         let env = backend.setup().await;
         let generation = env
-            .state
-            .publisher
+            .publisher()
             .snapshot()
             .await
             .expect("snapshot")
@@ -430,8 +427,7 @@ mod tests {
     async fn cache_commit_rejects_indeterminate_acknowledgements(#[case] backend: Backend) {
         let env = backend.setup().await;
         let generation = env
-            .state
-            .publisher
+            .publisher()
             .snapshot()
             .await
             .expect("snapshot")

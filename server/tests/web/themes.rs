@@ -12,7 +12,7 @@ use host::theme_package::{ThemePackageLimits, export_theme_package, validate_the
 use rstest::*;
 use rstest_reuse::*;
 use server_fn::ServerFn;
-use storage::test_support::{Backend, TestEnv, backends, confirmed_for, seed_media};
+use storage::test_support::{Backend, backends, confirmed_for, seed_media};
 use storage::{ThemeManager, ThemeOwner, ThemePoolInput as StorageThemePoolInput};
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -241,13 +241,24 @@ async fn theme_catalog_enforces_authentication_and_scope(#[case] backend: Backen
 #[apply(backends)]
 #[tokio::test]
 async fn duplicate_theme_names_are_user_facing_for_create_and_rename(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let owner = create_user_and_session(&state).await;
-    let first =
-        create_author_theme(&state, &owner.cookie(), "Paper", "body { color: navy; }").await;
+    let env = backend.setup().await;
+    let owner = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let storage = TempDir::new().expect("temporary storage");
+    let first = create_author_theme(
+        make_app!(&env, &storage),
+        &owner.cookie(),
+        "Paper",
+        "body { color: navy; }",
+    )
+    .await;
 
     let (status, body) = post_server_fn(
-        &state,
+        make_app!(&env, &storage),
         &web::themes::Create {
             scope: OwnershipScope::Author,
             name: "Paper".into(),
@@ -259,10 +270,15 @@ async fn duplicate_theme_names_are_user_facing_for_create_and_rename(#[case] bac
     assert_ne!(status, StatusCode::OK, "duplicate create must be rejected");
     assert!(body.contains("already exists"), "body: {body}");
 
-    let second =
-        create_author_theme(&state, &owner.cookie(), "Ink", "body { color: black; }").await;
+    let second = create_author_theme(
+        make_app!(&env, &storage),
+        &owner.cookie(),
+        "Ink",
+        "body { color: black; }",
+    )
+    .await;
     let (status, body) = post_server_fn(
-        &state,
+        make_app!(&env, &storage),
         &web::themes::Rename {
             scope: OwnershipScope::Author,
             theme_id: second.id,
@@ -485,8 +501,13 @@ async fn theme_import_zip_creates_drafts_and_rejects_invalid_packages(#[case] ba
 #[apply(backends)]
 #[tokio::test]
 async fn theme_import_zip_rejects_out_of_order_and_extra_fields(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let owner = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let owner = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let storage = TempDir::new().expect("temporary storage");
     let valid_archive = archive("body { color: green; }");
     let cases = [
@@ -506,7 +527,7 @@ async fn theme_import_zip_rejects_out_of_order_and_extra_fields(#[case] backend:
     ];
 
     for body in cases {
-        let response = multipart_response(&state, &storage, body, &owner.cookie()).await;
+        let response = multipart_response(make_app!(&env, &storage), body, &owner.cookie()).await;
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert!(
             body_string(response)
@@ -520,14 +541,19 @@ async fn theme_import_zip_rejects_out_of_order_and_extra_fields(#[case] backend:
 #[apply(backends)]
 #[tokio::test]
 async fn theme_import_zip_rejects_truncated_multipart_framing(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let owner = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let owner = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let storage = TempDir::new().expect("temporary storage");
     let body =
         b"------jaunder-theme-test-boundary\r\nContent-Disposition: form-data; name=\"scope\"\r\n\r\nauthor"
             .to_vec();
 
-    let response = multipart_response(&state, &storage, body, &owner.cookie()).await;
+    let response = multipart_response(make_app!(&env, &storage), body, &owner.cookie()).await;
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     assert!(
         body_string(response)
@@ -726,12 +752,16 @@ async fn theme_import_css_and_presentation_are_owner_private(#[case] backend: Ba
 async fn theme_binding_inputs_persist_and_project_through_server_functions(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let owner = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let owner = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let storage = TempDir::new().expect("temporary storage");
     let imported = multipart_response(
-        &state,
-        &storage,
+        make_app!(&env, &storage),
         multipart_body(
             "author",
             "Bindings",
@@ -748,7 +778,13 @@ async fn theme_binding_inputs_persist_and_project_through_server_functions(
             .expect("binding theme import outcome JSON"),
         "binding theme import",
     );
-    let media = seed_media(&state, owner.user_id, "logo.png").await;
+    let media = seed_media(
+        std::sync::Arc::clone(&env.media()),
+        env.write_scope(),
+        owner.user_id,
+        "logo.png",
+    )
+    .await;
 
     let inputs = [
         ThemeBindingInput::PackagedDefault,
@@ -763,7 +799,7 @@ async fn theme_binding_inputs_persist_and_project_through_server_functions(
 
     for input in inputs {
         let (status, body) = post_server_fn(
-            &state,
+            make_app!(&env, &storage),
             &web::themes::ReplaceBinding {
                 scope: OwnershipScope::Author,
                 theme_id: theme.id,
@@ -781,7 +817,7 @@ async fn theme_binding_inputs_persist_and_project_through_server_functions(
         );
 
         let (status, body) = post_server_fn(
-            &state,
+            make_app!(&env, &storage),
             &web::themes::GetPresentation {
                 scope: OwnershipScope::Author,
                 theme_id: theme.id,
@@ -796,7 +832,7 @@ async fn theme_binding_inputs_persist_and_project_through_server_functions(
     }
 
     let (status, body) = post_server_fn(
-        &state,
+        make_app!(&env, &storage),
         &web::themes::List {
             scope: OwnershipScope::Author,
         },
@@ -813,18 +849,33 @@ async fn theme_binding_inputs_persist_and_project_through_server_functions(
 #[apply(backends)]
 #[tokio::test]
 async fn theme_presentation_projects_a_seeded_header_pool(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let owner = create_user_and_session(&state).await;
-    let theme =
-        create_author_theme(&state, &owner.cookie(), "Pooled", "body { color: orange; }").await;
-    let media = seed_media(&state, owner.user_id, "header.png").await;
+    let env = backend.setup().await;
+    let owner = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let storage = TempDir::new().expect("temporary storage");
+    let theme = create_author_theme(
+        make_app!(&env, &storage),
+        &owner.cookie(),
+        "Pooled",
+        "body { color: orange; }",
+    )
+    .await;
+    let media = seed_media(
+        std::sync::Arc::clone(&env.media()),
+        env.write_scope(),
+        owner.user_id,
+        "header.png",
+    )
+    .await;
     let manager = ThemeManager::new(
-        Arc::clone(&state.themes),
-        Arc::clone(&state.media),
-        state.write_scope.clone(),
-        Arc::new(storage::MediaContentLocks::new(Arc::new(
-            base.path().to_path_buf(),
-        ))),
+        std::sync::Arc::clone(&env.themes()),
+        std::sync::Arc::clone(&env.media()),
+        env.write_scope(),
+        Arc::new(env.media_content_locks()),
     );
     let shuffle_seed = [7; 32];
     confirmed_for(
@@ -840,11 +891,9 @@ async fn theme_presentation_projects_a_seeded_header_pool(#[case] backend: Backe
             .expect("seed header-pool state"),
         "header-pool seed",
     );
-    let storage = TempDir::new().expect("temporary storage");
 
     let response = server_fn_response(
-        &state,
-        &storage,
+        make_app!(&env, &storage),
         &web::themes::GetPresentation {
             scope: OwnershipScope::Author,
             theme_id: theme.id,
