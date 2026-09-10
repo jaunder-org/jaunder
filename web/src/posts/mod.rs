@@ -62,8 +62,8 @@ pub use page_state::{
 // wasm-only component.
 pub use compose_state::{ComposeState, PublicationIntent, publication_from_local, submit_gate};
 pub use edit_state::{
-    EditPublicationState, InvalidSchedule, LoadedPublication, ScheduledEditState, edit_submit_gate,
-    loaded_publication, scheduled_publication_at,
+    EditLifecycleState, EditPublicationState, InvalidSchedule, LoadedPublication,
+    PublicationTimeEditState, edit_submit_gate, loaded_publication, scheduled_publication_at,
 };
 
 // The typed edit-route constructor is pure and host-tested in `render`, but
