@@ -760,14 +760,24 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn hanging_hub_handler_returns_accepted_after_its_delay() {
-        let response = tokio::spawn(delayed_accepted_response());
+        let hub = spawn_hanging_hub().await;
+        let response = tokio::spawn(
+            reqwest::Client::new()
+                .post(format!("http://{}/", hub.addr))
+                .send(),
+        );
         tokio::task::yield_now().await;
         tokio::time::advance(Duration::from_secs(30)).await;
 
         assert_eq!(
-            response.await.expect("delayed response task joins"),
+            response
+                .await
+                .expect("delayed response task joins")
+                .expect("delayed response succeeds")
+                .status(),
             StatusCode::ACCEPTED
         );
+        hub.stop().await;
     }
 
     #[tokio::test]
