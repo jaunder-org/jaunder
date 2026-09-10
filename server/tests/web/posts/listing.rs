@@ -9,14 +9,14 @@ use common::time::UtcInstant;
 use jiff::ToSpan;
 use server_fn::ServerFn;
 use storage::PostFormat;
-use web::posts::{PostInputs, SavedPost, UnpublishedPost};
+use web::posts::{PostInputs, UnpublishedPost};
 
 use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{
-    confirmed_mutation, create_post_json, create_session_for, create_user_and_session, make_app,
-    post_form, post_json,
+    confirmed_created_post, create_post_json, create_session_for, create_user_and_session,
+    make_app, post_form, post_json,
 };
 use storage::test_support::{Backend, SeedRawPost, SeedUser, backends, backends_matrix};
 
@@ -79,7 +79,7 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] 
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let first_draft: SavedPost = confirmed_mutation(&body);
+    let first_draft = confirmed_created_post(&body);
 
     let (status, body) = create_post_json(
         app.clone(),
@@ -91,7 +91,7 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] 
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let second_draft: SavedPost = confirmed_mutation(&body);
+    let second_draft = confirmed_created_post(&body);
 
     let (status, body) = create_post_json(
         app.clone(),
@@ -666,7 +666,7 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let deleted: SavedPost = confirmed_mutation(&body);
+    let deleted = confirmed_created_post(&body);
     let posts = Arc::clone(&env.posts());
     env.write_scope()
         .run(move |transaction| {
@@ -840,7 +840,7 @@ async fn list_user_posts_carries_tags_per_post(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = confirmed_mutation(&body);
+    let created = confirmed_created_post(&body);
 
     // Apply two tags via the storage layer (the create_post tags param lands
     // in tags.5; here we just verify the timeline surface threads them
@@ -929,7 +929,7 @@ async fn list_posts_by_tag_returns_matching_posts_from_all_users(#[case] backend
             )
             .await;
             assert_eq!(status, StatusCode::OK, "create body: {body}");
-            confirmed_mutation::<SavedPost>(&body)
+            confirmed_created_post(&body)
         }
     };
 

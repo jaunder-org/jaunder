@@ -1541,25 +1541,76 @@ test.describe("new post publication time", () => {
       testInfo,
       12_000,
     );
+    const title = "Creation Schedule";
+    const body = "body for a scheduled creation";
     const page = await registeredPage("/posts/new");
-    await page.fill(
-      SEL.postBody,
-      "# Creation Schedule\n\nbody for a scheduled creation",
-    );
+    await page.fill(SEL.postBody, `# ${title}\n\n${body}`);
 
     await page.getByRole("button", { name: "Set publication time…" }).click();
+    await expect(page.locator(SEL.publishButton("true"))).toBeDisabled();
+    await expect(page.locator(SEL.publishButton("false"))).toBeDisabled();
+    await page.getByRole("button", { name: "Apply" }).click();
+    await expect(page.locator(SEL.error)).toContainText(
+      "Enter a valid local date and time.",
+    );
+    await expect(page.locator(SEL.publishButton("true"))).toBeDisabled();
+    await expect(page.locator(SEL.publishButton("false"))).toBeDisabled();
+
     await page.locator('input[name="publish_date"]').fill("2999-01-01");
     await expect(page.locator('input[name="publish_time"]')).toHaveValue(
       "00:00",
     );
+    await page.locator('input[name="publish_time"]').fill("");
+    await page.getByRole("button", { name: "Apply" }).click();
+    await expect(page.locator(SEL.error)).toContainText(
+      "Enter a valid local date and time.",
+    );
     await expect(page.locator(SEL.publishButton("true"))).toBeDisabled();
     await expect(page.locator(SEL.publishButton("false"))).toBeDisabled();
-    await page.getByRole("button", { name: "Apply" }).click();
+    await page.getByRole("button", { name: "Cancel" }).click();
+    await expect(
+      page.getByRole("button", { name: "Set publication time…" }),
+    ).toBeVisible();
+    await expect(page.locator(SEL.publishButton("true"))).toBeEnabled();
+    await expect(page.locator(SEL.publishButton("false"))).toBeEnabled();
 
+    await page.getByRole("button", { name: "Set publication time…" }).click();
+    await page.getByRole("button", { name: "Cancel" }).click();
+    await expect(
+      page.getByRole("button", { name: "Set publication time…" }),
+    ).toBeVisible();
+
+    await applyPublicationTime(page, "2999-01-01T00:00");
     await expect(page.locator(SEL.publishButton("false"))).toHaveCount(0);
     await expect(page.locator(SEL.publishButton("true"))).toHaveText(
       "Schedule",
     );
+
+    await page
+      .getByRole("button", { name: "Change publication time…" })
+      .click();
+    await page.locator('input[name="publish_date"]').fill("2999-02-03");
+    await page.getByRole("button", { name: "Cancel" }).click();
+    await expect(page.locator(".j-compose-aside")).toContainText(
+      "Publication time: 2999-01-01 00:00 local time",
+    );
+
+    await page
+      .getByRole("button", { name: "Change publication time…" })
+      .click();
+    await page.locator('input[name="publish_date"]').fill("2999-02-03");
+    await page.getByRole("button", { name: "Apply" }).click();
+    await expect(page.locator(".j-compose-aside")).toContainText(
+      "Publication time: 2999-02-03 00:00 local time",
+    );
+    await page.getByRole("button", { name: "Clear schedule" }).click();
+    await expect(
+      page.getByRole("button", { name: "Set publication time…" }),
+    ).toBeVisible();
+    await expect(page.locator(SEL.publishButton("false"))).toBeEnabled();
+    await expect(page.locator(SEL.publishButton("true"))).toBeEnabled();
+
+    await applyPublicationTime(page, "2999-01-01T00:00");
     await click(page, SEL.publishButton("true"));
     await waitForSelector(page, SEL.saveSummary);
 
@@ -1578,13 +1629,27 @@ test.describe("new post publication time", () => {
       "Scheduled for 2999-01-01 00:00 local time",
     );
 
+    const authorPath = new URL(permalink!, BASE_URL).pathname.split("/")[1]!;
     const guestContext = await tracedContext({ timezoneId: "UTC" });
     try {
-      const guestPage = await guestContext.newPage();
-      await goto(guestPage, permalink!, { timeout: firstNavigationTimeoutMs });
-      await expect(guestPage.locator("body")).not.toContainText(
-        "body for a scheduled creation",
+      const guestPostPage = await guestContext.newPage();
+      await goto(guestPostPage, permalink!, {
+        timeout: firstNavigationTimeoutMs,
+      });
+      await expect(guestPostPage.locator("body")).not.toContainText(body);
+
+      const guestListingPage = await guestContext.newPage();
+      await goto(guestListingPage, "/", { timeout: firstNavigationTimeoutMs });
+      await expect(guestListingPage.locator("body")).not.toContainText(title);
+
+      const feed = await guestListingPage.request.get(
+        `${BASE_URL}/${authorPath}/feed.atom`,
       );
+      expect(feed.status(), "author feed responds").toBe(200);
+      expect(
+        await feed.text(),
+        "scheduled post is absent from author feed",
+      ).not.toContain(title);
     } finally {
       await guestContext.close();
     }
@@ -1710,6 +1775,51 @@ test("scheduled management page opens editor for reschedule and pullback", async
 });
 test.describe("scheduled editor local time", () => {
   test.use({ timezoneId: "America/New_York" });
+  test("creation converts New York wall time and retains a committed backdate", async ({
+    registeredPage,
+  }) => {
+    const page = await registeredPage("/posts/new");
+    await page.fill(SEL.postBody, "# New York Scheduled\n\nscheduled body");
+    await applyPublicationTime(page, "2999-01-01T09:00");
+
+    const createResponse = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === "/api/posts/create" &&
+        response.request().method() === "POST",
+    );
+    await click(page, SEL.publishButton("true"));
+    const created = (await createResponse).json() as Promise<{
+      Confirmed: { post: { published_at: string } };
+    }>;
+    await expect(page.locator(SEL.saveSummary)).toContainText(
+      "Post scheduled.",
+    );
+    expect((await created).Confirmed.post.published_at).toBe(
+      "2999-01-01T14:00:00Z",
+    );
+
+    await page.fill(SEL.postBody, "# New York Backdate\n\nbackdated body");
+    await applyPublicationTime(page, "2020-01-01T09:00");
+    await expect(page.locator(SEL.publishButton("true"))).toHaveText("Publish");
+    await click(page, SEL.publishButton("true"));
+    await expect(page.locator(SEL.saveSummary)).toContainText(
+      "Post published.",
+    );
+
+    await page.fill(SEL.postBody, "# New York Gap\nngap body");
+    await page.getByRole("button", { name: "Set publication time…" }).click();
+    await page.locator('input[name="publish_date"]').fill("2027-03-14");
+    await page.locator('input[name="publish_time"]').fill("02:30");
+    await page.getByRole("button", { name: "Apply" }).click();
+    await expect(page.locator(SEL.error)).toContainText(
+      "Enter a valid local date and time.",
+    );
+    await expect(page.locator(SEL.publishButton("true"))).toBeDisabled();
+    await expect(page.locator(SEL.publishButton("false"))).toBeDisabled();
+    await expect(page.locator(SEL.saveSummary)).toContainText(
+      "Post published.",
+    );
+  });
 
   test("saving an untouched repeated local time preserves its exact instant", async ({
     registeredPage,

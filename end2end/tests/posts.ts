@@ -80,11 +80,11 @@ export async function createPostViaApi(
   ).toBeTruthy();
   return confirmedMutation(
     (await res.json()) as MutationOutcome<{
-      post_id: number;
-      permalink: string;
+      post: { post_id: number; permalink: string };
+      publication: "draft" | "published" | "scheduled";
     }>,
     "posts::create",
-  );
+  ).post;
 }
 
 /** Open the full composer through the authenticated sidebar's Compose link.

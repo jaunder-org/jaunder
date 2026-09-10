@@ -46,8 +46,8 @@ use crate::taglist::TagCtx;
 use crate::timeline;
 
 use crate::posts::{
-    CurrentPostHistory, RevisionHistoryCursor, RevisionHistoryMetadata, RevisionHistoryPage,
-    RevisionLifecycle, SavedPost, UnpublishedPost,
+    CreatedPost, CurrentPostHistory, RevisionHistoryCursor, RevisionHistoryMetadata,
+    RevisionHistoryPage, RevisionLifecycle, SavedPost, UnpublishedPost,
 };
 
 /// Resolution state for the named audiences offered by the post editor.
@@ -336,11 +336,11 @@ where
 /// only a confirmed post may drive success UI or reset the composer.
 #[must_use]
 pub fn notify_create_settlement(
-    outcome: MutationOutcome<SavedPost>,
+    outcome: MutationOutcome<CreatedPost>,
     on_mutation: Option<Callback<bool>>,
-    on_success: Callback<SavedPost>,
+    on_success: Callback<CreatedPost>,
 ) -> bool {
-    let published = outcome.value().published_at.is_some();
+    let published = outcome.value().post.published_at.is_some();
     if let Some(on_mutation) = on_mutation {
         on_mutation.run(published);
     }
@@ -1183,6 +1183,16 @@ mod tests {
             permalink: parse_root_relative_url("/~alice/2026/01/02/hello"),
         }
     }
+    fn created_post(published_at: Option<UtcInstant>) -> CreatedPost {
+        CreatedPost {
+            post: saved_post(published_at),
+            publication: if published_at.is_some() {
+                crate::posts::CreatePublication::Published
+            } else {
+                crate::posts::CreatePublication::Draft
+            },
+        }
+    }
 
     #[test]
     fn create_settlement_classifies_published_and_draft_outcomes() {
@@ -1197,22 +1207,22 @@ mod tests {
             let published_at = "2026-01-02T00:00:00Z".parse().expect("a real instant");
 
             assert!(notify_create_settlement(
-                MutationOutcome::Confirmed(saved_post(Some(published_at))),
+                MutationOutcome::Confirmed(created_post(Some(published_at))),
                 Some(on_mutation),
                 on_success,
             ));
             assert!(!notify_create_settlement(
-                MutationOutcome::CommitIndeterminate(saved_post(Some(published_at))),
+                MutationOutcome::CommitIndeterminate(created_post(Some(published_at))),
                 Some(on_mutation),
                 on_success,
             ));
             assert!(notify_create_settlement(
-                MutationOutcome::Confirmed(saved_post(None)),
+                MutationOutcome::Confirmed(created_post(None)),
                 Some(on_mutation),
                 on_success,
             ));
             assert!(!notify_create_settlement(
-                MutationOutcome::CommitIndeterminate(saved_post(None)),
+                MutationOutcome::CommitIndeterminate(created_post(None)),
                 Some(on_mutation),
                 on_success,
             ));

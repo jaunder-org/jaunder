@@ -240,11 +240,9 @@ fn unpublished_post_from_record(post: PostRecord) -> UnpublishedPost {
 
 /// The saved post's identity, publication state, and where to find it.
 ///
-/// One type for all four post-mutating endpoints ([`create`], [`update`],
-/// [`publish`], [`unpublish`]): they answer the same question — what the post is
-/// now — so a caller that handles one handles all of them. `published_at` is the
-/// draft/published discriminant every consumer reads (never the instant itself),
-/// which is why it stays `Option` even on the paths that always publish.
+/// One type for the update, publish, and unpublish endpoints: they answer the
+/// same question — what the post is now — so a caller that handles one handles
+/// all of them.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SavedPost {
     pub post_id: PostId,
@@ -253,6 +251,38 @@ pub struct SavedPost {
     /// Canonical permalink, always present — for a draft it is the created_at-based
     /// URL the permalink view renders for the author.
     pub permalink: RootRelativeUrl,
+}
+
+/// The server's publication classification at the creation request clock.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum CreatePublication {
+    Draft,
+    Published,
+    Scheduled,
+}
+
+/// A confirmed post creation, including the request-clock-relative publication outcome.
+///
+/// This deliberately belongs only to [`create`]. Update, publish, and unpublish
+/// callers observe their settled `SavedPost` without receiving incidental
+/// request-clock metadata.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CreatedPost {
+    pub post: SavedPost,
+    pub publication: CreatePublication,
+}
+
+#[cfg(any(feature = "server", test))]
+#[must_use]
+fn create_publication(
+    published_at: Option<UtcInstant>,
+    request_clock: UtcInstant,
+) -> CreatePublication {
+    match published_at {
+        None => CreatePublication::Draft,
+        Some(at) if at.value() > request_clock.value() => CreatePublication::Scheduled,
+        Some(_) => CreatePublication::Published,
+    }
 }
 
 /// The author-only payload used to seed the Post editor.
@@ -468,12 +498,12 @@ impl PostInputs {
 /// Creates a post for the authenticated user.
 ///
 /// `publish_at` is an optional UTC instant supplied by the compose form's
-/// datetime control, carried as a [`UtcInstant`] (serde-transparent over an
+/// publication controls, carried as a [`UtcInstant`] (serde-transparent over an
 /// RFC 3339 wire string; expressible in the `#[server]` signature on both the
-/// server and the wasm client). The browser converts the author's local
-/// `datetime-local` value to UTC before sending.
+/// server and the wasm client). The browser converts the author's committed
+/// local Date and Time fields to UTC before sending.
 #[macros::server(input = Json, skip_all)]
-pub async fn create(post: PostInputs) -> WebResult<MutationOutcome<SavedPost>> {
+pub async fn create(post: PostInputs) -> WebResult<MutationOutcome<CreatedPost>> {
     let request_clock = UtcInstant::now();
     let PostInputs {
         body,
@@ -589,11 +619,17 @@ pub async fn create(post: PostInputs) -> WebResult<MutationOutcome<SavedPost>> {
     )
     .await?;
 
-    let outcome = outcome.map(|record| SavedPost {
-        post_id: record.post_id,
-        slug: record.slug.clone(),
-        published_at: record.published_at,
-        permalink: record.permalink(),
+    let outcome = outcome.map(|record| {
+        let post = SavedPost {
+            post_id: record.post_id,
+            slug: record.slug.clone(),
+            published_at: record.published_at,
+            permalink: record.permalink(),
+        };
+        CreatedPost {
+            publication: create_publication(post.published_at, request_clock),
+            post,
+        }
     });
     if matches!(&outcome, MutationOutcome::Confirmed(_)) {
         metrics::post(metrics::PostEvent::Created);
@@ -1084,6 +1120,29 @@ mod tests {
         // Swapping the field to an absolute URL is rejected at decode.
         let absolute = json.replace("/~alice/2026/01/01/hello", "https://evil.example/x");
         assert!(serde_json::from_str::<SavedPost>(&absolute).is_err());
+    }
+    #[test]
+    fn create_publication_uses_the_request_clock_at_the_due_boundary() {
+        use super::{CreatePublication, create_publication};
+        use common::test_support::parse_utc_instant;
+
+        let request_clock = parse_utc_instant("2026-09-10T12:00:00Z");
+        assert_eq!(
+            create_publication(None, request_clock),
+            CreatePublication::Draft,
+        );
+        assert_eq!(
+            create_publication(Some(request_clock), request_clock),
+            CreatePublication::Published,
+            "due exactly at request receipt is published, not scheduled",
+        );
+        assert_eq!(
+            create_publication(
+                Some(parse_utc_instant("2026-09-10T12:00:00.000000001Z")),
+                request_clock,
+            ),
+            CreatePublication::Scheduled,
+        );
     }
 
     // The drafts wire nests the identity/publication quartet under `post` rather than

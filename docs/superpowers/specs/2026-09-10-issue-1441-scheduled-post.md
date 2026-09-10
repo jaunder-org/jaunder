@@ -55,8 +55,10 @@ author-visible result identifies that state clearly.
 - Scheduled visibility remains the ADR-0027 invariant: the author can inspect
   the Post, but public pages and Syndication Feeds omit it until its publication
   instant.
-- No new domain term or architectural decision is introduced. The existing
-  Draft, Scheduled Post, and live Post states remain derived from
+- One narrow architectural decision is introduced: the new-Post Apply boundary
+  rejects nonexistent local times rather than silently normalizing them
+  ([decision draft](../../adr/drafts/strict-new-post-local-publication-time.md)).
+  The existing Draft, Scheduled Post, and live Post states remain derived from
   `published_at`.
 
 ## Acceptance

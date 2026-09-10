@@ -7,14 +7,15 @@ use common::test_support::{parse_audience_name, parse_post_body};
 use jiff::ToSpan;
 use server_fn::ServerFn;
 use storage::{AudienceStorage, PostFormat, PostStorage, WriteScope};
-use web::posts::{EditPostPreview, PostInputs, SavedPost};
+use web::posts::EditPostPreview;
+use web::posts::PostInputs;
 
 use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{
-    confirmed_mutation, create_post_json, create_session_for, create_user_and_session, make_app,
-    post_form, post_json_with_credentials, update_post_json,
+    confirmed_created_post, create_post_json, create_session_for, create_user_and_session,
+    make_app, post_form, post_json_with_credentials, update_post_json,
 };
 use storage::test_support::{
     Backend, SeedRawPost, SeedUser, SeededPost, backends, backends_matrix,
@@ -181,7 +182,7 @@ async fn get_post_returns_draft_to_author_only(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created = confirmed_mutation::<SavedPost>(&body);
+    let created = confirmed_created_post(&body);
     let record = env
         .posts()
         .get_post_by_id(
@@ -276,7 +277,7 @@ async fn get_post_preview_shows_draft_to_author_only(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created = confirmed_mutation::<SavedPost>(&body);
+    let created = confirmed_created_post(&body);
 
     let before = common::time::UtcInstant::now();
     let (status, body) =
@@ -324,7 +325,7 @@ async fn get_post_hides_drafts_from_guests(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created = confirmed_mutation::<SavedPost>(&body);
+    let created = confirmed_created_post(&body);
     let record = env
         .posts()
         .get_post_by_id(

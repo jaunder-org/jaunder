@@ -2584,9 +2584,14 @@ time-domain type uses its native Jiff range: `Date` spans `-009999-01-01`
 through `9999-12-31`, while `Timestamp` spans `-009999-01-02T01:59:59Z` through
 `9999-12-30T22:00:00.999999999Z`; an older out-of-range value fails at the
 decode or restore boundary that reaches it, without a preflight scan. IANA TZDB
-is always bundled. HTML datetime-local retains browser-normalizing, non-strict
-conversion for gaps; strict local-time seams, including Org, retain earlier-fold
-selection and reject gaps. These retain the domain boundary established by
+is always bundled. Existing HTML datetime-local controls retain
+browser-normalizing, non-strict conversion for gaps. The full new-Post control
+instead commits separate Date and Time fields through a strict conversion:
+nonexistent gap times are rejected, while ambiguous folds choose the earlier
+instant
+([strict new-Post local publication time](adr/drafts/strict-new-post-local-publication-time.md)).
+Other strict local-time seams, including Org, retain earlier-fold selection and
+gap rejection. These retain the domain boundary established by
 [ADR-0072](adr/0072-timestamps-cross-boundary-as-utcinstant.md) and the
 storage-wide `UtcInstant` seam established by
 [ADR-0153](adr/0153-storage-owned-instants.md).

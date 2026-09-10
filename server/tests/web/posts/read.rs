@@ -3,12 +3,12 @@ use common::render::PostFormat;
 use common::seed::{AuthoredPost, PublicPresentation};
 use common::tag::TagLabel;
 use common::test_support::parse_post_body;
-use web::posts::{PostInputs, SavedPost};
+use web::posts::PostInputs;
 
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{confirmed_mutation, create_post_json, create_user_and_session, make_app};
+use crate::helpers::{confirmed_created_post, create_post_json, create_user_and_session, make_app};
 use storage::test_support::{Backend, backends};
 
 use super::fixtures::get_post_form;
@@ -43,7 +43,7 @@ async fn get_post_returns_published_post(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created = confirmed_mutation::<SavedPost>(&body);
+    let created = confirmed_created_post(&body);
 
     let record = env
         .posts()
@@ -140,7 +140,7 @@ async fn get_post_carries_tags(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created = confirmed_mutation::<SavedPost>(&body);
+    let created = confirmed_created_post(&body);
 
     storage::test_support::set_post_tags_confirmed(
         &env.write_scope(),

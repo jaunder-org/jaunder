@@ -7,8 +7,8 @@ use crate::forms::{self, Field, ValidatedBareInput, ValidatedTextarea};
 use crate::media::MediaUpload;
 use crate::posts;
 use crate::posts::{
-    ComposeState, Create, InvalidSchedule, LoadedPublication, NamedAudienceState, SavedPost,
-    ScheduledEditState,
+    ComposeState, Create, CreatePublication, CreatedPost, InvalidSchedule, LoadedPublication,
+    NamedAudienceState, ScheduledEditState,
 };
 use crate::tags::TagInput;
 use crate::topbar::Topbar;
@@ -134,14 +134,8 @@ impl CreationSchedule {
         self.error.set(None);
     }
 
-    fn has_unapplied_changes(self, committed: &str) -> bool {
-        self.disclosed.get() && {
-            let value = match (self.date.get().as_str(), self.time.get().as_str()) {
-                ("", "") => String::new(),
-                (date, time) => format!("{date}T{time}"),
-            };
-            value != committed
-        }
+    fn is_editing(self) -> bool {
+        self.disclosed.get()
     }
 }
 
@@ -155,7 +149,7 @@ impl CreationSchedule {
 pub fn PostCreateForm(
     compact: bool,
     #[prop(optional)] username: Option<Username>,
-    #[prop(into)] on_success: Callback<SavedPost>,
+    #[prop(into)] on_success: Callback<CreatedPost>,
     #[prop(optional)] on_mutation: Option<Callback<bool>>,
     #[prop(default = 6)] rows: u32,
     #[prop(default = "What\u{2019}s on your mind?")] placeholder: &'static str,
@@ -294,7 +288,7 @@ fn FullComposer(
         Signal::derive(move || {
             !slug_field.is_valid()
                 || !state.summary_field.is_valid()
-                || schedule.has_unapplied_changes(&state.publish_at.get())
+                || schedule.is_editing()
                 || state.audience.with(|selection| {
                     named.with(|state| state.selection_for_submit(selection).is_none())
                 })
@@ -357,7 +351,7 @@ fn CreateErrorFlash(action: ServerAction<Create>) -> impl IntoView {
             action
                 .value()
                 .get()
-                .and_then(|result: Result<MutationOutcome<SavedPost>, WebError>| match result {
+                .and_then(|result: Result<MutationOutcome<CreatedPost>, WebError>| match result {
                     Ok(MutationOutcome::Confirmed(_)) => None,
                     Ok(MutationOutcome::CommitIndeterminate(_)) => {
                         Some(
@@ -381,14 +375,15 @@ fn CreateErrorFlash(action: ServerAction<Create>) -> impl IntoView {
 pub fn InlineComposer(username: Username, on_publish: Callback<()>) -> impl IntoView {
     let flash: RwSignal<Option<(String, String)>> = RwSignal::new(None);
 
-    let on_success = Callback::new(move |created: SavedPost| {
+    let on_success = Callback::new(move |created: CreatedPost| {
         use leptos_dom::helpers::set_timeout;
         use std::time::Duration;
-        let url = created.permalink.to_string();
-        let msg = if created.published_at.is_some() {
-            "Post published!".to_string()
-        } else {
-            "Draft saved!".to_string()
+        let url = created.post.permalink.to_string();
+        let msg = match created.publication {
+            CreatePublication::Draft => "Draft saved!".to_string(),
+            CreatePublication::Published | CreatePublication::Scheduled => {
+                "Post published!".to_string()
+            }
         };
         flash.set(Some((url, msg)));
         set_timeout(move || flash.set(None), Duration::from_secs(30));
@@ -434,7 +429,7 @@ pub fn CreatePostPage() -> impl IntoView {
     // Server-confirmed gate: await the shared session reconcile (an expired cookie
     // must not show the create form) (#591).
     let session = auth::use_session();
-    let last_result: RwSignal<Option<SavedPost>> = RwSignal::new(None);
+    let last_result: RwSignal<Option<CreatedPost>> = RwSignal::new(None);
 
     view! {
         <Topbar title="New post" sub="Long-form" />
@@ -483,18 +478,18 @@ pub fn CreatePostPage() -> impl IntoView {
 /// outcome wording and the stable post-navigation test hooks, while the page owns
 /// authentication reconciliation and form presentation.
 #[component]
-fn CreateResultSummary(result: RwSignal<Option<SavedPost>>) -> impl IntoView {
+fn CreateResultSummary(result: RwSignal<Option<CreatedPost>>) -> impl IntoView {
     view! {
         {move || {
             result
                 .get()
                 .map(|created| {
-                    let message = match created.published_at {
-                        Some(at) if at.value() > UtcInstant::now().value() => "Post scheduled.",
-                        Some(_) => "Post published.",
-                        None => "Draft saved.",
+                    let message = match created.publication {
+                        CreatePublication::Scheduled => "Post scheduled.",
+                        CreatePublication::Published => "Post published.",
+                        CreatePublication::Draft => "Draft saved.",
                     };
-                    let slug_value = created.slug.to_string();
+                    let slug_value = created.post.slug.to_string();
                     let slug_for_attr = slug_value.clone();
                     view! {
                         <div class="j-save-summary">
@@ -503,7 +498,7 @@ fn CreateResultSummary(result: RwSignal<Option<SavedPost>>) -> impl IntoView {
                                 "Slug: "
                                 {slug_value}
                             </p>
-                            <a data-test="permalink-link" href=created.permalink.to_string()>
+                            <a data-test="permalink-link" href=created.post.permalink.to_string()>
                                 "View post"
                             </a>
                         </div>

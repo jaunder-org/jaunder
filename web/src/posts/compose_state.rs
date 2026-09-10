@@ -215,7 +215,9 @@ pub fn submit_gate(
     // disabled, and `a_blocked_gate_dispatches_nothing` pins exactly that. A second such
     // arm in a form is the defect this helper exists to prevent.
     let on_click = Callback::new(move |publish: bool| {
-        if let Some(body) = body.parsed() {
+        if !also_blocked.get()
+            && let Some(body) = body.parsed()
+        {
             on_submit.run((body, publish));
         }
     });
@@ -368,24 +370,25 @@ mod tests {
         });
     }
 
-    /// A click that should be impossible runs nothing — and, crucially, the two
-    /// conditions are the same one: disabled iff there is no payload.
+    /// A direct callback invocation obeys every disabled predicate, not only body parsing.
     #[test]
     fn a_blocked_gate_dispatches_nothing() {
         Owner::new().with(|| {
             let body = Field::<PostBody>::new();
+            body.set_value("real text");
+            let blocked = RwSignal::new(true);
             let ran = RwSignal::new(0_u32);
             let (disabled, on_click) = submit_gate(
                 body,
-                Signal::derive(|| false),
+                Signal::derive(move || blocked.get()),
                 Callback::new(move |_: (PostBody, bool)| ran.update(|n| *n += 1)),
             );
 
             on_click.run(true);
-            assert_eq!(ran.get(), 0, "an unparseable body dispatches nothing");
+            assert_eq!(ran.get(), 0, "a caller-blocked control dispatches nothing");
             assert!(disabled.get(), "and the control reporting that is disabled");
 
-            body.set_value("real text");
+            blocked.set(false);
             on_click.run(true);
             assert_eq!(ran.get(), 1);
             assert!(!disabled.get());

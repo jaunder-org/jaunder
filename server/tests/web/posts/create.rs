@@ -6,13 +6,14 @@ use common::visibility::{AudienceBase, AudienceSelection};
 use jiff::ToSpan;
 use server_fn::ServerFn;
 use storage::{AudienceStorage, PostFormat, WriteScope};
-use web::posts::{PostInputs, SavedPost};
+use web::posts::PostInputs;
 
 use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{
-    confirmed_mutation, create_post_json, create_user_and_session, make_app, post_form, post_json,
+    confirmed_created_post, create_post_json, create_user_and_session, make_app, post_form,
+    post_json,
 };
 use storage::test_support::{Backend, backends, backends_matrix, confirmed_for};
 
@@ -61,7 +62,7 @@ async fn create_post_persists_rendered_published_post(#[case] backend: Backend) 
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let created: SavedPost = confirmed_mutation(&body);
+    let created = confirmed_created_post(&body);
     assert_eq!(created.slug, "hello-world");
     assert!(created.published_at.is_some());
 
@@ -151,7 +152,7 @@ async fn create_post_retries_slug_conflicts_for_same_user_and_date(#[case] backe
     .await;
 
     assert_eq!(second_status, StatusCode::OK, "body: {second_body}");
-    let created: SavedPost = confirmed_mutation(&second_body);
+    let created = confirmed_created_post(&second_body);
     assert_eq!(created.slug, "repeated-title-2");
 }
 
@@ -180,7 +181,7 @@ async fn create_post_accepts_slug_override_and_saves_draft(#[case] backend: Back
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let created: SavedPost = confirmed_mutation(&body);
+    let created = confirmed_created_post(&body);
     assert_eq!(created.slug, "custom-slug");
     assert!(created.published_at.is_none());
     // A draft carries its canonical (created_at-based) permalink; the permalink
@@ -233,7 +234,7 @@ async fn create_post_accepts_titleless_body(#[case] backend: Backend) {
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let created: SavedPost = confirmed_mutation(&body);
+    let created = confirmed_created_post(&body);
     assert_eq!(created.slug, "titleless-note");
     let record = env
         .posts()
@@ -278,7 +279,7 @@ async fn create_post_extracts_markdown_heading_title(#[case] backend: Backend) {
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let created: SavedPost = confirmed_mutation(&body);
+    let created = confirmed_created_post(&body);
     assert_eq!(created.slug, "extracted-title");
     let record = env
         .posts()
@@ -384,7 +385,7 @@ async fn create_post_with_future_publish_at_is_scheduled(#[case] backend: Backen
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let created: SavedPost = confirmed_mutation(&body);
+    let created = confirmed_created_post(&body);
 
     let record = env
         .posts()
@@ -442,7 +443,7 @@ async fn create_post_publish_without_publish_at_is_live_now(#[case] backend: Bac
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let created: SavedPost = confirmed_mutation(&body);
+    let created = confirmed_created_post(&body);
 
     let record = env
         .posts()
@@ -502,7 +503,7 @@ async fn create_post_applies_tags_from_param(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = confirmed_mutation(&body);
+    let created = confirmed_created_post(&body);
 
     let stored_tags = env
         .posts()
@@ -549,7 +550,7 @@ async fn create_org_header_merges_structured_metadata_and_stores_canonical_body(
     Some(&cookie),)
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = confirmed_mutation(&body);
+    let created = confirmed_created_post(&body);
     let record = env
         .posts()
         .get_post_by_id(
@@ -603,7 +604,7 @@ async fn create_org_uses_header_lifecycle_when_publish_is_omitted(#[case] backen
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = confirmed_mutation(&body);
+    let created = confirmed_created_post(&body);
     assert!(
         created.published_at.is_some(),
         "an omitted transport lifecycle must leave the valid Org header effective"
@@ -629,7 +630,7 @@ async fn create_org_without_any_lifecycle_stays_draft(#[case] backend: Backend) 
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = confirmed_mutation(&body);
+    let created = confirmed_created_post(&body);
     assert!(
         created.published_at.is_none(),
         "absent transport and Org lifecycle state must create a draft"
@@ -708,7 +709,7 @@ async fn create_org_header_named_audience_is_author_scoped_and_opaque(#[case] ba
     };
     let (status, body) = create_post_json(app.clone(), post(owned), Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = confirmed_mutation(&body);
+    let created = confirmed_created_post(&body);
     let (status, body) = post_form(
         app.clone(),
         <web::posts::GetAudienceSelection as ServerFn>::PATH,
@@ -784,7 +785,7 @@ async fn create_org_publish_now_overrides_header_draft(#[case] backend: Backend)
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = confirmed_mutation(&body);
+    let created = confirmed_created_post(&body);
     assert!(
         created.published_at.is_some(),
         "structured publish-now wins over header draft"

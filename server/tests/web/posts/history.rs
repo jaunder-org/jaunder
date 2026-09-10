@@ -5,10 +5,10 @@ use rstest::*;
 use rstest_reuse::*;
 use server_fn::ServerFn;
 use storage::test_support::{Backend, backends};
-use web::posts::{PostInputs, PostRevisionHistory, RevisionHistoryPage, SavedPost};
+use web::posts::{PostInputs, PostRevisionHistory, RevisionHistoryPage};
 
 use crate::helpers::{
-    confirmed_mutation, create_post_json, create_user_and_session, make_app, post_json,
+    confirmed_created_post, create_post_json, create_user_and_session, make_app, post_json,
     update_post_json,
 };
 
@@ -116,7 +116,7 @@ async fn revision_history_http_exposes_page_current_and_detail_fields(#[case] ba
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let post: SavedPost = confirmed_mutation(&body);
+    let post = confirmed_created_post(&body);
     let (status, body) = update_post_json(
         app.clone(),
         post.post_id,
@@ -205,7 +205,7 @@ async fn revision_history_http_hides_foreign_missing_and_mismatched_resources(
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let post: SavedPost = confirmed_mutation(&body);
+    let post = confirmed_created_post(&body);
     let (status, body) = update_post_json(
         app.clone(),
         post.post_id,
