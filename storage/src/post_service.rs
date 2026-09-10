@@ -10,7 +10,7 @@ use std::sync::Arc;
 use thiserror::Error;
 
 use crate::{
-    CreatePostError, CreatePostInput, FeedEventStorage, MediaContentLocks,
+    CreatePostError, CreatePostInput, CreatedPost, FeedEventStorage, MediaContentLocks,
     PostBookkeepingExpectation, PostFormat, PostMediaOwnership, PostMutation, PostRecord,
     PostStorage, PublishUpdate, UpdatePostError, UpdatePostInput, WriteScope, WriteScopeError,
     WriteTransaction,
@@ -25,7 +25,6 @@ use common::slug::{InvalidSlug, Slug};
 use common::time::UtcInstant;
 use common::visibility::AudienceTarget;
 use host::feed;
-#[cfg(any(test, feature = "test-utils"))]
 use host::metrics::{self, IdempotencyEvent};
 
 // ---------------------------------------------------------------------------
@@ -65,6 +64,21 @@ fn map_create_post_scope_error(error: WriteScopeError<CreatePostError>) -> Creat
     match error {
         WriteScopeError::Operation(error) => error,
         WriteScopeError::Begin(error) => CreatePostError::Internal(error),
+    }
+}
+/// Emits creation telemetry only after commit confirmation, then removes the
+/// service-only expiry evidence from the public mutation outcome.
+fn finish_post_creation(outcome: MutationOutcome<CreatedPost>) -> MutationOutcome<PostRecord> {
+    match outcome {
+        MutationOutcome::Confirmed(created) => {
+            if created.idempotency_key_expired {
+                metrics::idempotency(IdempotencyEvent::Expired);
+            }
+            MutationOutcome::Confirmed(created.record)
+        }
+        MutationOutcome::CommitIndeterminate(created) => {
+            MutationOutcome::CommitIndeterminate(created.record)
+        }
     }
 }
 
@@ -216,17 +230,7 @@ pub async fn create_rendered_post(
         })
         .await
         .map_err(map_create_post_scope_error)?;
-    match outcome {
-        MutationOutcome::Confirmed(created) => {
-            if created.idempotency_key_expired {
-                metrics::idempotency(IdempotencyEvent::Expired);
-            }
-            Ok(MutationOutcome::Confirmed(created.record))
-        }
-        MutationOutcome::CommitIndeterminate(created) => {
-            Ok(MutationOutcome::CommitIndeterminate(created.record))
-        }
-    }
+    Ok(finish_post_creation(outcome))
 }
 
 /// Creates a rendered post after resolving its rendered media references into
@@ -292,7 +296,7 @@ pub async fn create_rendered_post_with_media_ownership(
         })
         .await
         .map_err(map_create_post_scope_error)?;
-    Ok(outcome.map(|created| created.record))
+    Ok(finish_post_creation(outcome))
 }
 
 /// Renders `body` per `format` and assembles the [`CreatePostInput`] without
@@ -1054,8 +1058,8 @@ mod tests {
     #[cfg(feature = "test-utils")]
     use crate::test_support::mock_write_scope;
     use crate::test_support::{
-        Backend, SeedUser, backends, confirmed, fixture_post_media_ownership, media_ref_for,
-        media_url_for, seed_media, seed_users,
+        Backend, SeedUser, TestEnv, backends, confirmed, fixture_post_media_ownership,
+        media_ref_for, media_url_for, seed_media, seed_users,
     };
     #[cfg(feature = "test-utils")]
     use crate::{MockFeedEventStorage, MockPostStorage};
@@ -1068,6 +1072,10 @@ mod tests {
     #[cfg(feature = "test-utils")]
     use common::test_support::{parse_tag, parse_tag_label};
     use jiff::ToSpan;
+    use opentelemetry_sdk::metrics::{
+        InMemoryMetricExporter, PeriodicReader, SdkMeterProvider,
+        data::{AggregatedMetrics, MetricData},
+    };
     #[cfg(feature = "test-utils")]
     use sqlx::Error as SqlxError;
 
@@ -3081,6 +3089,156 @@ mod tests {
 
     fn parse_idempotency_key(key: &str) -> IdempotencyKey {
         key.parse().unwrap()
+    }
+    fn expired_idempotency_count(
+        exporter: &InMemoryMetricExporter,
+        provider: &SdkMeterProvider,
+    ) -> u64 {
+        provider.force_flush().expect("flush idempotency metrics");
+        exporter
+            .get_finished_metrics()
+            .expect("idempotency metrics")
+            .iter()
+            .flat_map(opentelemetry_sdk::metrics::data::ResourceMetrics::scope_metrics)
+            .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+            .filter(|metric| metric.name() == "jaunder.atompub.idempotency_keys")
+            .filter_map(|metric| match metric.data() {
+                AggregatedMetrics::U64(MetricData::Sum(sum)) => Some(sum),
+                _ => None,
+            })
+            .flat_map(opentelemetry_sdk::metrics::data::Sum::data_points)
+            .filter(|point| {
+                point.attributes().any(|attribute| {
+                    attribute.key.as_str() == "event" && attribute.value.to_string() == "expired"
+                })
+            })
+            .map(opentelemetry_sdk::metrics::data::SumDataPoint::value)
+            .max()
+            .unwrap_or(0)
+    }
+
+    async fn perform_owned_creation_at(
+        env: &TestEnv,
+        ownership: &PostMediaOwnership,
+        write_scope: &WriteScope,
+        now: UtcInstant,
+        user_id: UserId,
+        body: &str,
+        key: &IdempotencyKey,
+    ) -> MutationOutcome<PostRecord> {
+        perform_post_creation_with_media_ownership(
+            write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&env.posts()),
+            Arc::clone(&env.feed_events()),
+            ownership,
+            now,
+            creation_with_key(user_id, parse_post_body(body), Some(key)),
+        )
+        .await
+        .expect("production post creation")
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn production_creation_reports_only_confirmed_idempotency_expiry(
+        #[case] backend: Backend,
+    ) {
+        // The meter provider is process-global, so this one scenario observes all
+        // three outcome classes before any idempotency emitter is initialized.
+        let exporter = InMemoryMetricExporter::default();
+        let provider = SdkMeterProvider::builder()
+            .with_reader(PeriodicReader::builder(exporter.clone()).build())
+            .build();
+        opentelemetry::global::set_meter_provider(provider.clone());
+
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(Arc::clone(&env.users()), env.write_scope())
+            .await
+            .user_id;
+        let ownership = PostMediaOwnership::new(
+            Arc::new(LocalOnlyResolver),
+            env.base.instance_id().clone(),
+            Arc::clone(&env.site_config()),
+        );
+        let created_at: UtcInstant = "2026-08-31T12:00:00Z".parse().expect("fixed instant");
+        let cutoff = UtcInstant::from(
+            created_at
+                .value()
+                .checked_add(1.hour())
+                .expect("test instant remains representable"),
+        );
+        let confirmed_key = parse_idempotency_key("confirmed-expiry");
+
+        confirmed(
+            perform_owned_creation_at(
+                &env,
+                &ownership,
+                &env.write_scope(),
+                created_at,
+                user_id,
+                "confirmed original",
+                &confirmed_key,
+            )
+            .await,
+        );
+        assert_eq!(
+            expired_idempotency_count(&exporter, &provider),
+            0,
+            "a confirmed non-expiry must not emit expired telemetry"
+        );
+
+        confirmed(
+            perform_owned_creation_at(
+                &env,
+                &ownership,
+                &env.write_scope(),
+                cutoff,
+                user_id,
+                "confirmed replacement",
+                &confirmed_key,
+            )
+            .await,
+        );
+        assert_eq!(
+            expired_idempotency_count(&exporter, &provider),
+            1,
+            "a confirmed expiry must emit exactly once"
+        );
+
+        let indeterminate_key = parse_idempotency_key("indeterminate-expiry");
+        confirmed(
+            perform_owned_creation_at(
+                &env,
+                &ownership,
+                &env.write_scope(),
+                created_at,
+                user_id,
+                "indeterminate original",
+                &indeterminate_key,
+            )
+            .await,
+        );
+        let indeterminate_scope = env
+            .write_scope()
+            .with_commit_acknowledgement_loss_after_commit_for_test();
+        let outcome = perform_owned_creation_at(
+            &env,
+            &ownership,
+            &indeterminate_scope,
+            cutoff,
+            user_id,
+            "indeterminate replacement",
+            &indeterminate_key,
+        )
+        .await;
+        assert!(matches!(outcome, MutationOutcome::CommitIndeterminate(_)));
+        assert_eq!(
+            expired_idempotency_count(&exporter, &provider),
+            1,
+            "commit-indeterminate expiry must not emit confirmed telemetry"
+        );
     }
 
     #[apply(backends)]

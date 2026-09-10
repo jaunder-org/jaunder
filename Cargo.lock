@@ -5133,6 +5133,8 @@ dependencies = [
  "log",
  "macros",
  "mockall",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "rand 0.10.2",
  "rstest",
  "rstest_reuse",
