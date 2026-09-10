@@ -75,7 +75,7 @@ fn verify_with(
 ) -> Result<bool, PasswordError> {
     match operation(password, hash) {
         Ok(()) => Ok(true),
-        Err(argon2::password_hash::Error::Password) => Ok(false),
+        Err(argon2::password_hash::Error::PasswordInvalid) => Ok(false),
         Err(error) => Err(PasswordError::VerificationFailed(error)),
     }
 }
@@ -84,12 +84,10 @@ type HashOperation = fn(&Password) -> Result<String, argon2::password_hash::Erro
 type VerifyOperation = fn(&Password, &str) -> Result<(), argon2::password_hash::Error>;
 
 fn hash_operation(password: &Password) -> Result<String, argon2::password_hash::Error> {
-    use argon2::{
-        PasswordHasher,
-        password_hash::{SaltString, rand_core::OsRng},
-    };
+    use argon2::PasswordHasher;
 
-    let salt = SaltString::generate(&mut OsRng);
+    // `hash_password` obtains a fresh random salt through password-hash's
+    // getrandom-backed implementation for every invocation.
 
     // Production uses the crate defaults (m=19456, t=2). Under `cheap-kdf`
     // (test builds only) use the minimum memory cost so the suite is not
@@ -106,7 +104,7 @@ fn hash_operation(password: &Password) -> Result<String, argon2::password_hash::
     let hasher = argon2::Argon2::default();
 
     hasher
-        .hash_password(password.0.as_bytes(), &salt)
+        .hash_password(password.0.as_bytes())
         .map(|hash| hash.to_string())
 }
 
@@ -130,15 +128,11 @@ mod tests {
 
     #[test]
     fn production_params_verify_regardless_of_feature() {
-        use argon2::{
-            Argon2, PasswordHasher,
-            password_hash::{SaltString, rand_core::OsRng},
-        };
+        use argon2::{Argon2, PasswordHasher};
 
         let password: Password = "password123".parse().expect("valid password");
-        let salt = SaltString::generate(&mut OsRng);
         let production_hash = Argon2::default()
-            .hash_password(password.as_ref().as_bytes(), &salt)
+            .hash_password(password.as_ref().as_bytes())
             .expect("default parameters hash")
             .to_string();
 

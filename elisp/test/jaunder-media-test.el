@@ -27,7 +27,7 @@ Lets the warning tests assert on emitted warnings without touching the real
      (cl-letf (((symbol-function 'display-warning)
                 (lambda (type message &optional level &rest _)
                   (push (list type message level) jaunder-test--warnings))))
-              ,@body)
+       ,@body)
      (nreverse jaunder-test--warnings)))
 
 (ert-deftest jaunder-media-content-type-is-deterministic ()
@@ -85,11 +85,11 @@ Lets the warning tests assert on emitted warnings without touching the real
              (lambda ()
                '((:type "file" :path "opaque" :raw-link "file:opaque"
                         :file "/resolved/document.pdf")))))
-           (should
-            (equal (jaunder--collect-media-links)
-                   '((:raw-link "file:opaque"
-                                :content-type "application/pdf"
-                                :path "/resolved/document.pdf"))))))
+    (should
+     (equal (jaunder--collect-media-links)
+            '((:raw-link "file:opaque"
+                         :content-type "application/pdf"
+                         :path "/resolved/document.pdf"))))))
 
 (ert-deftest jaunder-localize-media-aggregates-preflight-failures-before-upload ()
   (let* ((dir (make-temp-file "jt-preflight-" t))
@@ -109,21 +109,21 @@ Lets the warning tests assert on emitted warnings without touching the real
                     ((symbol-function 'jaunder--upload-media)
                      (lambda (&rest _)
                        (setq upload-calls (1+ upload-calls)))))
-                   (with-temp-buffer
-                     (insert (format "#+TITLE: T\n\n[[file:%s]] [[file:%s]] [[file:%s]]\n"
-                                     missing directory unreadable))
-                     (org-mode)
-                     (let* ((body (jaunder-entry-body (jaunder--org->atom)))
-                            (err (should-error (jaunder--localize-media body)
-                                               :type 'error))
-                            (message (error-message-string err)))
-                       (should
-                        (string-prefix-p
-                         "jaunder: media file(s) missing, unreadable, or not regular: "
-                         message))
-                       (dolist (path (list missing directory unreadable))
-                         (should (string-match-p (regexp-quote path) message)))
-                       (should (= upload-calls 0))))))
+            (with-temp-buffer
+              (insert (format "#+TITLE: T\n\n[[file:%s]] [[file:%s]] [[file:%s]]\n"
+                              missing directory unreadable))
+              (org-mode)
+              (let* ((body (jaunder-entry-body (jaunder--org->atom)))
+                     (err (should-error (jaunder--localize-media body)
+                                        :type 'error))
+                     (message (error-message-string err)))
+                (should
+                 (string-prefix-p
+                  "jaunder: media file(s) missing, unreadable, or not regular: "
+                  message))
+                (dolist (path (list missing directory unreadable))
+                  (should (string-match-p (regexp-quote path) message)))
+                (should (= upload-calls 0))))))
       (delete-directory dir t))))
 
 (ert-deftest jaunder-media-substitute-single-and-desc ()
@@ -154,8 +154,8 @@ Lets the warning tests assert on emitted warnings without touching the real
 (ert-deftest jaunder-upload-media-errors-on-non-2xx ()
   (cl-letf (((symbol-function 'jaunder--http-request)
              (lambda (&rest _) '(:status 500 :body "boom"))))
-           (let ((jaunder--active-blog '(:base-url "http://x" :username "alice")))
-             (should-error (jaunder--upload-media "/tmp/x.png" "image/png") :type 'error))))
+    (let ((jaunder--active-blog '(:base-url "http://x" :username "alice")))
+      (should-error (jaunder--upload-media "/tmp/x.png" "image/png") :type 'error))))
 
 (ert-deftest jaunder-media-link-p-qualifies-file-and-attachment-types ()
   ;; Local-path link type is the eligibility boundary; media type and filesystem
@@ -189,50 +189,50 @@ Lets the warning tests assert on emitted warnings without touching the real
                        (if (equal path pdf)
                            "https://h/media/document.pdf"
                          "https://h/media/recording.flac"))))
-                   (with-temp-buffer
-                     (setq default-directory dir)
-                     (org-mode)
-                     (insert
-                      (format
-                       (concat "#+TITLE: T\n\n"
-                               "[[file:document.pdf][download]] and "
-                               "[[file:document.pdf][again]]\n"
-                               "* Audio\n:PROPERTIES:\n:DIR: %s\n:END:\n\n"
-                               "[[attachment:recording.flac][listen]]\n")
-                       attach-dir))
-                     (let* ((body (jaunder-entry-body (jaunder--org->atom)))
-                            (before (buffer-string))
-                            (out (jaunder--localize-media body)))
-                       (should (= (length calls) 2))
-                       (should (member (list pdf "application/pdf") calls))
-                       (should (member (list flac "audio/flac") calls))
-                       (should
-                        (string-match-p
-                         (regexp-quote "[[https://h/media/document.pdf][download]]")
-                         out))
-                       (should
-                        (string-match-p
-                         (regexp-quote "[[https://h/media/document.pdf][again]]")
-                         out))
-                       (should
-                        (string-match-p
-                         (regexp-quote "[[https://h/media/recording.flac][listen]]")
-                         out))
-                       (should-not (string-match-p "file:document\\.pdf" out))
-                       (should-not (string-match-p "attachment:recording\\.flac" out))
-                       (should (equal (buffer-string) before))))))
+            (with-temp-buffer
+              (setq default-directory dir)
+              (org-mode)
+              (insert
+               (format
+                (concat "#+TITLE: T\n\n"
+                        "[[file:document.pdf][download]] and "
+                        "[[file:document.pdf][again]]\n"
+                        "* Audio\n:PROPERTIES:\n:DIR: %s\n:END:\n\n"
+                        "[[attachment:recording.flac][listen]]\n")
+                attach-dir))
+              (let* ((body (jaunder-entry-body (jaunder--org->atom)))
+                     (before (buffer-string))
+                     (out (jaunder--localize-media body)))
+                (should (= (length calls) 2))
+                (should (member (list pdf "application/pdf") calls))
+                (should (member (list flac "audio/flac") calls))
+                (should
+                 (string-match-p
+                  (regexp-quote "[[https://h/media/document.pdf][download]]")
+                  out))
+                (should
+                 (string-match-p
+                  (regexp-quote "[[https://h/media/document.pdf][again]]")
+                  out))
+                (should
+                 (string-match-p
+                  (regexp-quote "[[https://h/media/recording.flac][listen]]")
+                  out))
+                (should-not (string-match-p "file:document\\.pdf" out))
+                (should-not (string-match-p "attachment:recording\\.flac" out))
+                (should (equal (buffer-string) before))))))
       (delete-directory dir t))))
 
 (ert-deftest jaunder-localize-media-no-candidates-is-noop ()
   (let (called)
     (cl-letf (((symbol-function 'jaunder--upload-media)
                (lambda (&rest _) (setq called t) "u")))
-             (with-temp-buffer
-               (insert "#+TITLE: T\n\nJust prose, [[https://x/y.png]] absolute.\n")
-               (org-mode)
-               (let ((body (jaunder-entry-body (jaunder--org->atom))))
-                 (should (equal (jaunder--localize-media body) body))
-                 (should-not called))))))
+      (with-temp-buffer
+        (insert "#+TITLE: T\n\nJust prose, [[https://x/y.png]] absolute.\n")
+        (org-mode)
+        (let ((body (jaunder-entry-body (jaunder--org->atom))))
+          (should (equal (jaunder--localize-media body) body))
+          (should-not called))))))
 
 ;;; #206 — untracked-media warning
 
@@ -241,45 +241,45 @@ Lets the warning tests assert on emitted warnings without touching the real
   (cl-letf (((symbol-function 'jaunder--git-toplevel) (lambda (_dir) "/repo"))
             ((symbol-function 'jaunder--git-tracked-p)
              (lambda (_top path) (equal path "/repo/a.png"))))
-           (let ((warnings (jaunder-test--capturing-warnings
-                            (jaunder--warn-untracked-media
-                             (list (list :path "/repo/a.png")
-                                   (list :path "/repo/b.png"))))))
-             (should (= (length warnings) 1))
-             (should (eq (nth 0 (car warnings)) 'jaunder))
-             (should (string-prefix-p "jaunder: " (nth 1 (car warnings))))
-             (should (string-match-p "/repo/b.png" (nth 1 (car warnings)))))))
+    (let ((warnings (jaunder-test--capturing-warnings
+                     (jaunder--warn-untracked-media
+                      (list (list :path "/repo/a.png")
+                            (list :path "/repo/b.png"))))))
+      (should (= (length warnings) 1))
+      (should (eq (nth 0 (car warnings)) 'jaunder))
+      (should (string-prefix-p "jaunder: " (nth 1 (car warnings))))
+      (should (string-match-p "/repo/b.png" (nth 1 (car warnings)))))))
 
 (ert-deftest jaunder-warn-untracked-media-all-tracked ()
   ;; AC-206d
   (cl-letf (((symbol-function 'jaunder--git-toplevel) (lambda (_dir) "/repo"))
             ((symbol-function 'jaunder--git-tracked-p) (lambda (_top _path) t)))
-           (should-not (jaunder-test--capturing-warnings
-                        (jaunder--warn-untracked-media (list (list :path "/repo/a.png")))))))
+    (should-not (jaunder-test--capturing-warnings
+                 (jaunder--warn-untracked-media (list (list :path "/repo/a.png")))))))
 
 (ert-deftest jaunder-warn-untracked-media-skips-non-repo ()
   ;; AC-206e: no repo (or no git) → skip entirely.
   (cl-letf (((symbol-function 'jaunder--git-toplevel) (lambda (_dir) nil)))
-           (should-not (jaunder-test--capturing-warnings
-                        (jaunder--warn-untracked-media (list (list :path "/x/a.png")))))))
+    (should-not (jaunder-test--capturing-warnings
+                 (jaunder--warn-untracked-media (list (list :path "/x/a.png")))))))
 
 (ert-deftest jaunder-warn-untracked-media-suppressed ()
   ;; AC-206f
   (cl-letf (((symbol-function 'jaunder--git-toplevel) (lambda (_dir) "/repo"))
             ((symbol-function 'jaunder--git-tracked-p) (lambda (_top _path) nil)))
-           (let ((jaunder-warn-untracked-media nil))
-             (should-not (jaunder-test--capturing-warnings
-                          (jaunder--warn-untracked-media (list (list :path "/repo/a.png"))))))))
+    (let ((jaunder-warn-untracked-media nil))
+      (should-not (jaunder-test--capturing-warnings
+                   (jaunder--warn-untracked-media (list (list :path "/repo/a.png"))))))))
 
 (ert-deftest jaunder-warn-untracked-media-dedups ()
   ;; AC-206g: the same untracked path referenced twice warns once.
   (cl-letf (((symbol-function 'jaunder--git-toplevel) (lambda (_dir) "/repo"))
             ((symbol-function 'jaunder--git-tracked-p) (lambda (_top _path) nil)))
-           (let ((warnings (jaunder-test--capturing-warnings
-                            (jaunder--warn-untracked-media
-                             (list (list :path "/repo/a.png")
-                                   (list :path "/repo/a.png"))))))
-             (should (= (length warnings) 1)))))
+    (let ((warnings (jaunder-test--capturing-warnings
+                     (jaunder--warn-untracked-media
+                      (list (list :path "/repo/a.png")
+                            (list :path "/repo/a.png"))))))
+      (should (= (length warnings) 1)))))
 
 (ert-deftest jaunder-git-tracked-p-real-repo ()
   ;; AC-206b/c deterministic: pin git's actual exit code for gitignored and
@@ -331,8 +331,8 @@ Lets the warning tests assert on emitted warnings without touching the real
                  (push args arguments)
                  (if (equal (nth 4 args) "rev-parse") 0 1)))
               ((symbol-function 'buffer-string) (lambda () "/repo\n")))
-             (should (equal (jaunder--git-toplevel "/repo/subdir") "/repo"))
-             (should-not (jaunder--git-tracked-p "/repo" "/repo/missing.png"))
-             (should (= (length arguments) 2)))))
+      (should (equal (jaunder--git-toplevel "/repo/subdir") "/repo"))
+      (should-not (jaunder--git-tracked-p "/repo" "/repo/missing.png"))
+      (should (= (length arguments) 2)))))
 
 ;;; jaunder-media-test.el ends here

@@ -7,7 +7,7 @@
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
-use croner::Cron;
+use croner::parser::{CronParser, Seconds};
 use macros::{NumNewtype, StrNewtype};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -104,9 +104,10 @@ impl FromStr for BackupSchedule {
         let trimmed = s.trim();
         // Parse only to validate; the six-field (seconds-required) source string is what
         // we store, so an admin's expression round-trips verbatim (minus surrounding space).
-        Cron::new(trimmed)
-            .with_seconds_required()
-            .parse()
+        CronParser::builder()
+            .seconds(Seconds::Required)
+            .build()
+            .parse(trimmed)
             .map_err(|error| {
                 InvalidBackupSchedule(
                     // server-fn-wire-arg-error:allow Croner detail is useful only to the submitting backup operator

@@ -260,14 +260,19 @@ function mountToSettledMs(
 
   const firstActionAfterMount = actions
     .filter((action) => action.startedMs >= mountedMs)
-    .reduce<
-      number | null
-    >((earliest, action) => (earliest === null || action.startedMs < earliest ? action.startedMs : earliest), null);
+    .reduce<number | null>(
+      (earliest, action) =>
+        earliest === null || action.startedMs < earliest
+          ? action.startedMs
+          : earliest,
+      null,
+    );
   const boundary = [firstActionAfterMount, nextNavigationStartedMs]
     .filter((value): value is number => value !== null)
-    .reduce<
-      number | null
-    >((lowest, value) => (lowest === null || value < lowest ? value : lowest), null);
+    .reduce<number | null>(
+      (lowest, value) => (lowest === null || value < lowest ? value : lowest),
+      null,
+    );
 
   const settledMs = requests
     .filter(
@@ -276,9 +281,11 @@ function mountToSettledMs(
         request.endedMs > mountedMs &&
         (boundary === null || request.startedMs < boundary),
     )
-    .reduce<
-      number | null
-    >((latest, request) => (latest === null || request.endedMs > latest ? request.endedMs : latest), null);
+    .reduce<number | null>(
+      (latest, request) =>
+        latest === null || request.endedMs > latest ? request.endedMs : latest,
+      null,
+    );
 
   return settledMs === null ? null : settledMs - mountedMs;
 }

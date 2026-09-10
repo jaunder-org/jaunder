@@ -3,6 +3,7 @@
 use std::{
     fs,
     fs::File,
+    io::Read,
     path::{Path, PathBuf},
 };
 
@@ -157,7 +158,14 @@ fn files_have_same_content(left: &Path, right: &Path) -> Result<bool, BackupErro
 fn file_sha256(path: &Path) -> Result<[u8; 32], BackupError> {
     let mut file = File::open(path)?;
     let mut hasher = Sha256::new();
-    std::io::copy(&mut file, &mut hasher)?;
+    let mut buffer = [0_u8; 16 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
     Ok(hasher.finalize().into())
 }
 

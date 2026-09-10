@@ -70,10 +70,10 @@
                (lambda (_file)
                  (setq calls (1+ calls))
                  '(:base-url "https://a" :username "a"))))
-             (should (eq (jaunder--call-with-blog "/home/me/blog/post.org"
-                                                  (lambda () 'result))
-                         'result))
-             (should (= calls 1)))))
+      (should (eq (jaunder--call-with-blog "/home/me/blog/post.org"
+                                           (lambda () 'result))
+                  'result))
+      (should (= calls 1)))))
 
 (ert-deftest jaunder-active-accessors-error-without-active-blog ()
   ;; Outside `jaunder--call-with-blog' the accessors must signal, so a transport

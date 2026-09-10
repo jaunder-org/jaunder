@@ -75,12 +75,12 @@
                (lambda (_verb _url &rest args)
                  (setq captured (plist-get args :headers))
                  '(:status 201 :body ""))))
-             (let ((jaunder--active-blog '(:base-url "http://x" :username "alice")))
-               (jaunder--http-request "POST" "http://x/media" (list 'file "/tmp/a.png")
-                                      "image/png" (list (cons "Slug" "a.png"))))
-             (should (equal (cdr (assoc "Slug" captured)) "a.png"))
-             (should (equal (cdr (assoc "Content-Type" captured)) "image/png"))
-             (should (assoc "Authorization" captured)))))
+      (let ((jaunder--active-blog '(:base-url "http://x" :username "alice")))
+        (jaunder--http-request "POST" "http://x/media" (list 'file "/tmp/a.png")
+                               "image/png" (list (cons "Slug" "a.png"))))
+      (should (equal (cdr (assoc "Slug" captured)) "a.png"))
+      (should (equal (cdr (assoc "Content-Type" captured)) "image/png"))
+      (should (assoc "Authorization" captured)))))
 
 (ert-deftest jaunder-curl-header-value-escapes-quotes-and-backslashes ()
   ;; plz 0.9.1 wraps each header value in double quotes inside a curl --config
@@ -96,14 +96,14 @@
   "An auth-source match without a usable secret cannot make an anonymous request."
   (let ((jaunder--active-blog '(:base-url "https://blog" :username "alice")))
     (cl-letf (((symbol-function 'auth-source-search) (lambda (&rest _) nil)))
-             (should-error (jaunder--auth-secret) :type 'error))))
+      (should-error (jaunder--auth-secret) :type 'error))))
 
 (ert-deftest jaunder-auth-secret-returns-a-literal-auth-source-secret ()
   "A literal auth-source secret is returned unchanged for request authentication."
   (let ((jaunder--active-blog '(:base-url "https://blog" :username "alice")))
     (cl-letf (((symbol-function 'auth-source-search)
                (lambda (&rest _) (list '(:secret "literal-token")))))
-             (should (equal (jaunder--auth-secret) "literal-token")))))
+      (should (equal (jaunder--auth-secret) "literal-token")))))
 
 (ert-deftest jaunder-http-request-resignals-transport-failure-without-response ()
   "A transport failure without an HTTP response remains distinguishable to retry."
@@ -113,7 +113,7 @@
                (lambda (&rest _)
                  (signal 'plz-curl-error
                          (list "offline" (make-plz-error :message "offline"))))))
-             (should-error (jaunder--http-request "GET" "https://blog/posts")
-                           :type 'plz-error))))
+      (should-error (jaunder--http-request "GET" "https://blog/posts")
+                    :type 'plz-error))))
 
 ;;; jaunder-transport-test.el ends here

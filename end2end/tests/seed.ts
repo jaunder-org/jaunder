@@ -120,9 +120,7 @@ export async function applySeededSession(
     lower.find((a) => a.startsWith("samesite="))?.slice("samesite=".length) ??
     "lax";
   const sameSite = (rawSameSite[0].toUpperCase() + rawSameSite.slice(1)) as
-    | "Strict"
-    | "Lax"
-    | "None";
+    "Strict" | "Lax" | "None";
   // `addCookies` rejects `url` combined with `domain`/`path`, and the server's
   // header carries no Domain — so the origin's hostname is spelled here.
   const domain = new URL(BASE_URL).hostname;

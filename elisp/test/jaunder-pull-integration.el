@@ -129,13 +129,13 @@
                                                                    (lambda (&rest _) (error "unexpected Member I/O")))
                                                                   ((symbol-function 'jaunder--pull-media-get)
                                                                    (lambda (&rest _) (error "unexpected media I/O"))))
-                                                                 (let ((blocked (jaunder--pull-member root member)))
-                                                                   (should (eq (jaunder-pull-result-status blocked) 'blocked))
-                                                                   (should (equal (jaunder-pull-result-path blocked) path))
-                                                                   (should (equal (with-temp-buffer
-                                                                                    (insert-file-contents path)
-                                                                                    (buffer-string))
-                                                                                  bytes)))))))))
+                                                          (let ((blocked (jaunder--pull-member root member)))
+                                                            (should (eq (jaunder-pull-result-status blocked) 'blocked))
+                                                            (should (equal (jaunder-pull-result-path blocked) path))
+                                                            (should (equal (with-temp-buffer
+                                                                             (insert-file-contents path)
+                                                                             (buffer-string))
+                                                                           bytes)))))))))
        (delete-directory root t)))))
 
 (ert-deftest jaunder-pull-localizes-media-retries-reuses-and-republishes ()
@@ -159,110 +159,110 @@
                  (media-upload-statuses nil)
                  (install-attempts 0))
              (cl-letf
-              (((symbol-function 'jaunder--pull-media-get)
-                (lambda (&rest arguments)
-                  (when (equal (car arguments) counted-url)
-                    (setq gets (1+ gets)))
-                  (apply real-get arguments)))
-               ((symbol-function 'jaunder--install-pulled-bytes)
-                (lambda (path bytes)
-                  (setq install-attempts (1+ install-attempts))
-                  (if (= install-attempts 1)
-                      (error "injected final Post install failure")
-                    (funcall real-install path bytes)))))
-              (jaunder--call-with-blog root (lambda () (let* ((media-url (jaunder--upload-media image "image/png"))
-                                                              (first
-                                                               (jaunder-pull-integration--create-server-only-member
-                                                                root (format "[[%s]]" media-url)))
-                                                              (hash
-                                                               (progn
-                                                                 (string-match
-                                                                  "/media/\\(?:upload\\|cached\\)/[0-9a-f]\\{2\\}/[0-9a-f]\\{2\\}/\\([0-9a-f]\\{64\\}\\)/"
-                                                                  media-url)
-                                                                 (match-string 1 media-url)))
-                                                              (copy (expand-file-name
-                                                                     (concat "local-media/" hash "/source image.png") root)))
-                                                         (setq counted-url media-url)
-                                                         (let ((failure (should-error (jaunder--pull-member root first))))
-                                                           (should (equal (error-message-string failure)
-                                                                          "injected final Post install failure")))
-                                                         (should-not
-                                                          (file-exists-p
-                                                           (expand-file-name
-                                                            (concat (jaunder-inventory-member-slug first) ".org") root)))
-                                                         (should (equal (with-temp-buffer
-                                                                          (insert-file-contents-literally copy)
-                                                                          (buffer-string))
-                                                                        source-bytes))
-                                                         (should (= gets 1))
-                                                         (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
-                                                                  (jaunder-reconcile root))
-                                                         (let* ((path (expand-file-name
-                                                                       (concat (jaunder-inventory-member-slug first) ".org")
-                                                                       root))
-                                                                (before (with-temp-buffer
-                                                                          (insert-file-contents-literally copy)
-                                                                          (buffer-string)))
-                                                                (native-body
-                                                                 (concat "[[file:local-media/" hash
-                                                                         "/source%20image.png]]")))
-                                                           (should (file-exists-p path))
-                                                           (should (= gets 1))
-                                                           (should (equal
-                                                                    (with-temp-buffer
-                                                                      (insert-file-contents path)
-                                                                      (org-mode)
-                                                                      (jaunder-entry-body
-                                                                       (jaunder--org->atom)))
-                                                                    native-body))
-                                                           (let ((buffer (find-file-noselect path)))
-                                                             (unwind-protect
-                                                                 (with-current-buffer buffer
-                                                                   (cl-letf
-                                                                    (((symbol-function 'jaunder--http-request)
-                                                                      (lambda (method url &rest arguments)
-                                                                        (let ((response
-                                                                               (apply real-http method url arguments)))
-                                                                          (when (string-match-p "/media\\'" url)
-                                                                            (push (plist-get response :status)
-                                                                                  media-upload-statuses))
-                                                                          response))))
-                                                                    (jaunder-publish)))
-                                                               (when (buffer-live-p buffer)
-                                                                 (with-current-buffer buffer (set-buffer-modified-p nil))
-                                                                 (kill-buffer buffer))))
-                                                           (should (equal media-upload-statuses '(200)))
-                                                           (should (equal
-                                                                    (with-temp-buffer
-                                                                      (insert-file-contents path)
-                                                                      (org-mode)
-                                                                      (jaunder-entry-body
-                                                                       (jaunder--org->atom)))
-                                                                    native-body))
-                                                           (should (equal before
-                                                                          (with-temp-buffer
-                                                                            (insert-file-contents-literally copy)
-                                                                            (buffer-string)))))
-                                                         ;; Republish must store the authoritative server URL,
-                                                         ;; never the durable local preview path, in Member body.
-                                                         (let ((republished
-                                                                (jaunder--http-request
-                                                                 "GET"
-                                                                 (jaunder-inventory-member-edit-uri first))))
-                                                           (should (eq (plist-get republished :status) 200))
-                                                           (should (string-match-p
-                                                                    (regexp-quote media-url)
-                                                                    (plist-get republished :body)))
-                                                           (should-not (string-match-p
-                                                                        "local-media/"
-                                                                        (plist-get republished :body))))
-                                                         (let ((second
+                 (((symbol-function 'jaunder--pull-media-get)
+                   (lambda (&rest arguments)
+                     (when (equal (car arguments) counted-url)
+                       (setq gets (1+ gets)))
+                     (apply real-get arguments)))
+                  ((symbol-function 'jaunder--install-pulled-bytes)
+                   (lambda (path bytes)
+                     (setq install-attempts (1+ install-attempts))
+                     (if (= install-attempts 1)
+                         (error "injected final Post install failure")
+                       (funcall real-install path bytes)))))
+               (jaunder--call-with-blog root (lambda () (let* ((media-url (jaunder--upload-media image "image/png"))
+                                                               (first
                                                                 (jaunder-pull-integration--create-server-only-member
-                                                                 root (format "[[%s]]" media-url))))
-                                                           (should (eq (jaunder-pull-result-status
-                                                                        (jaunder--pull-member root second))
-                                                                       'pulled))
-                                                           (should (= gets 1)))))))))
+                                                                 root (format "[[%s]]" media-url)))
+                                                               (hash
+                                                                (progn
+                                                                  (string-match
+                                                                   "/media/\\(?:upload\\|cached\\)/[0-9a-f]\\{2\\}/[0-9a-f]\\{2\\}/\\([0-9a-f]\\{64\\}\\)/"
+                                                                   media-url)
+                                                                  (match-string 1 media-url)))
+                                                               (copy (expand-file-name
+                                                                      (concat "local-media/" hash "/source image.png") root)))
+                                                          (setq counted-url media-url)
+                                                          (let ((failure (should-error (jaunder--pull-member root first))))
+                                                            (should (equal (error-message-string failure)
+                                                                           "injected final Post install failure")))
+                                                          (should-not
+                                                           (file-exists-p
+                                                            (expand-file-name
+                                                             (concat (jaunder-inventory-member-slug first) ".org") root)))
+                                                          (should (equal (with-temp-buffer
+                                                                           (insert-file-contents-literally copy)
+                                                                           (buffer-string))
+                                                                         source-bytes))
+                                                          (should (= gets 1))
+                                                          (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
+                                                            (jaunder-reconcile root))
+                                                          (let* ((path (expand-file-name
+                                                                        (concat (jaunder-inventory-member-slug first) ".org")
+                                                                        root))
+                                                                 (before (with-temp-buffer
+                                                                           (insert-file-contents-literally copy)
+                                                                           (buffer-string)))
+                                                                 (native-body
+                                                                  (concat "[[file:local-media/" hash
+                                                                          "/source%20image.png]]")))
+                                                            (should (file-exists-p path))
+                                                            (should (= gets 1))
+                                                            (should (equal
+                                                                     (with-temp-buffer
+                                                                       (insert-file-contents path)
+                                                                       (org-mode)
+                                                                       (jaunder-entry-body
+                                                                        (jaunder--org->atom)))
+                                                                     native-body))
+                                                            (let ((buffer (find-file-noselect path)))
+                                                              (unwind-protect
+                                                                  (with-current-buffer buffer
+                                                                    (cl-letf
+                                                                        (((symbol-function 'jaunder--http-request)
+                                                                          (lambda (method url &rest arguments)
+                                                                            (let ((response
+                                                                                   (apply real-http method url arguments)))
+                                                                              (when (string-match-p "/media\\'" url)
+                                                                                (push (plist-get response :status)
+                                                                                      media-upload-statuses))
+                                                                              response))))
+                                                                      (jaunder-publish)))
+                                                                (when (buffer-live-p buffer)
+                                                                  (with-current-buffer buffer (set-buffer-modified-p nil))
+                                                                  (kill-buffer buffer))))
+                                                            (should (equal media-upload-statuses '(200)))
+                                                            (should (equal
+                                                                     (with-temp-buffer
+                                                                       (insert-file-contents path)
+                                                                       (org-mode)
+                                                                       (jaunder-entry-body
+                                                                        (jaunder--org->atom)))
+                                                                     native-body))
+                                                            (should (equal before
+                                                                           (with-temp-buffer
+                                                                             (insert-file-contents-literally copy)
+                                                                             (buffer-string)))))
+                                                          ;; Republish must store the authoritative server URL,
+                                                          ;; never the durable local preview path, in Member body.
+                                                          (let ((republished
+                                                                 (jaunder--http-request
+                                                                  "GET"
+                                                                  (jaunder-inventory-member-edit-uri first))))
+                                                            (should (eq (plist-get republished :status) 200))
+                                                            (should (string-match-p
+                                                                     (regexp-quote media-url)
+                                                                     (plist-get republished :body)))
+                                                            (should-not (string-match-p
+                                                                         "local-media/"
+                                                                         (plist-get republished :body))))
+                                                          (let ((second
+                                                                 (jaunder-pull-integration--create-server-only-member
+                                                                  root (format "[[%s]]" media-url))))
+                                                            (should (eq (jaunder-pull-result-status
+                                                                         (jaunder--pull-member root second))
+                                                                        'pulled))
+                                                            (should (= gets 1)))))))))
        (delete-directory root t)))))
 
 (ert-deftest jaunder-pull-local-media-preview-survives-isolated-server-shutdown ()

@@ -20,6 +20,7 @@ use tracing_subscriber::registry::LookupSpan;
 enum FallbackKind {
     DiagLogOpen,
     PanicDiagWrite,
+    TraceParent,
 }
 
 impl FallbackKind {
@@ -32,6 +33,10 @@ impl FallbackKind {
             Self::PanicDiagWrite => (
                 "server.observability.panic_diag_write",
                 "diagnostic write failed",
+            ),
+            Self::TraceParent => (
+                "server.observability.trace_parent",
+                "request trace parent assignment failed",
             ),
         }
     }
@@ -104,6 +109,10 @@ fn fallback(kind: FallbackKind) {
         return;
     }
     let _ = write_fallback(io::stderr().lock(), kind);
+}
+
+pub(super) fn report_trace_parent_failure() {
+    fallback(FallbackKind::TraceParent);
 }
 
 fn open_diag_file(path: &Path) -> Result<File> {
@@ -369,6 +378,12 @@ mod tests {
                 FallbackKind::DiagLogOpen,
             );
         });
+    }
+
+    #[test]
+    fn trace_parent_failure_uses_nonrecursive_fixed_fallback() {
+        let ((), output) = capture_fallbacks(report_trace_parent_failure);
+        assert_fixed_fallback(&output, FallbackKind::TraceParent);
     }
 
     #[test]

@@ -52,8 +52,10 @@ fn make_request_span(request: &Request) -> Span {
         version = ?request.version(),
         headers = ?request.headers(),
     );
-    if let Some(parent) = request.extensions().get::<ExtractedTraceContext>() {
-        span.set_parent(parent.0.clone());
+    if let Some(parent) = request.extensions().get::<ExtractedTraceContext>()
+        && span.set_parent(parent.0.clone()).is_err()
+    {
+        super::diagnostics::report_trace_parent_failure();
     }
     span
 }

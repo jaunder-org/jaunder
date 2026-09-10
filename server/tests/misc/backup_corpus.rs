@@ -380,7 +380,17 @@ fn normalized_digest(root: &Path) -> Result<String, BackupCorpusError> {
         hasher.update((content.len() as u64).to_be_bytes());
         hasher.update(content);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(lowercase_hex(&hasher.finalize()))
+}
+
+fn lowercase_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        encoded.push(HEX[usize::from(byte >> 4)] as char);
+        encoded.push(HEX[usize::from(byte & 0x0f)] as char);
+    }
+    encoded
 }
 
 fn collect_regular_files(

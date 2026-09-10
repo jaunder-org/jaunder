@@ -104,7 +104,7 @@
                                 (jaunder-inventory-member-slug preview-member))))
                 (should preview-member)
                 (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
-                         (jaunder-reconcile root))
+                  (jaunder-reconcile root))
                 (let* ((inventory (jaunder--inventory-for-root root))
                        (match (cl-find id (jaunder-inventory-matched inventory)
                                        :key (lambda (item)

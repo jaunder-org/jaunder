@@ -115,9 +115,11 @@ e2ePanicGate = backend: ''
 # `globalTimeout` expired first it would kill the VM outright and take every
 # diagnostic with it — the exact failure #123/#49 built this path to avoid.
 # The difference is the boot + seed + copy allowance; measured overhead is
-# ~40 s, so 180 s is ~4x headroom.
-e2ePlaywrightTimeout = 1020;
-e2eGlobalTimeout = 1200;
+# ~40 s, so 180 s is ~4x headroom. Firefox 151 completes the 258-test suite in
+# 12.5 min alone but exhausted 17 min under the full validation matrix, so the
+# inner budget allows 25 min for that supported concurrent execution path.
+e2ePlaywrightTimeout = 1500;
+e2eGlobalTimeout = 1680;
 
 # #123/#49: run Playwright capturing its exit (NOT machine.succeed, which
 # would abort before we copy diagnostics), stream its line-reporter output
@@ -270,12 +272,12 @@ mkE2eCheck =
         }
       else if backend == "postgres" then
         {
-          package = pkgs.postgresql_16;
+          package = pkgs.postgresql_18;
           jaunderDb = "postgres://jaunder:testpassword@127.0.0.1/jaunder";
           nodeConfig = lib: {
             services.postgresql = {
               enable = true;
-              package = pkgs.postgresql_16;
+              package = pkgs.postgresql_18;
               authentication = ''
                 local all all trust
                 host all all 0.0.0.0/0 trust
@@ -339,10 +341,9 @@ mkE2eCheck =
     name = checkName;
 
     # Cap the test-driver budget (default is 3600 s) so a boot/infra hang
-    # fails near 20 min instead of burning the full hour. See issue #130.
+    # fails near 28 min instead of burning the full hour. See issue #130.
     # This is the OUTER budget: `e2ePlaywrightTimeout` above expires first
-    # and is the one sized against the test run itself (~10.6 min for the
-    # slowest single-browser combo, so ~1.6x headroom).
+    # and is sized against the slowest supported concurrent validation path.
     globalTimeout =
       assert e2ePlaywrightTimeout < e2eGlobalTimeout;
       e2eGlobalTimeout;
@@ -986,7 +987,7 @@ coverage = craneLib.mkCargoDerivation (
       # storage/src/postgres/* gets instrumented coverage. The
       # throwaway cluster needs initdb/pg_ctl/psql available inside
       # the build sandbox.
-      pkgs.postgresql_16
+      pkgs.postgresql_18
     ];
     buildPhaseCargoCommand = ''
       export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}:''${LD_LIBRARY_PATH:-}"

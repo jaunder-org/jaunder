@@ -174,11 +174,11 @@
     (dolist (case cases)
       (pcase-let ((`(,label ,source ,expected) case))
         (ert-info ((format "publication-time projection case: %s" label))
-                  (should
-                   (equal
-                    (jaunder-entry-published
-                     (jaunder-test--entry source))
-                    expected)))))))
+          (should
+           (equal
+            (jaunder-entry-published
+             (jaunder-test--entry source))
+            expected)))))))
 
 (ert-deftest jaunder-ensure-date-tz-captures-when-unset-and-preserves ()
   (with-temp-buffer

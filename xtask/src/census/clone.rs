@@ -173,7 +173,7 @@ fn typescript_function_shapes(path: &str, source: &str) -> Result<Vec<String>, C
     let ParserReturn {
         program,
         diagnostics,
-        panicked,
+        fatal_error,
         ..
     } = Parser::new(
         &allocator,
@@ -183,7 +183,7 @@ fn typescript_function_shapes(path: &str, source: &str) -> Result<Vec<String>, C
             .expect("TypeScript language has a parser mode"),
     )
     .parse();
-    if panicked || !diagnostics.is_empty() {
+    if fatal_error || !diagnostics.is_empty() {
         return Err(diagnostics
             .iter()
             .map(|error| format!("{error:?}"))

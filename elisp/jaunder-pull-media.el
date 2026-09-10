@@ -19,13 +19,13 @@
 (require 'jaunder-warn)
 (cl-defstruct (jaunder-pull-media-reference
                (:constructor jaunder--make-pull-media-reference))
-              "One immutable local-media acquisition and its native replacements."
-              url hash leaf target replacements)
+  "One immutable local-media acquisition and its native replacements."
+  url hash leaf target replacements)
 
 (cl-defstruct (jaunder-pull-media-plan
                (:constructor jaunder--make-pull-media-plan))
-              "Immutable localization plan for one native body."
-              format body references)
+  "Immutable localization plan for one native body."
+  format body references)
 
 (defun jaunder--pull-media-control-character-p (character)
   "Return non-nil when CHARACTER is a Unicode control character."
@@ -392,7 +392,7 @@ only `jaunder--pull-media-markdown-reference' touches that compatibility seam."
            ((member type '("link" "image"))
             (puthash (cmark-Node-destination node) t destinations))
            ((member type '("paragraph" "heading" "code_block" "html_block"))
-            (when-let ((sourcepos (cmark-Node-sourcepos node)))
+            (when-let* ((sourcepos (cmark-Node-sourcepos node)))
               (let* ((raw-start
                       (jaunder--pull-media-markdown-sourcepos-offset
                        sourcepos starts nil))
@@ -814,7 +814,7 @@ Quoted attribute values may contain `>'; only an unquoted delimiter ends a tag."
                              (or (nth 2 replacement) ""))))
                        (list
                         (nth 0 replacement) (nth 1 replacement)
-                        (if-let ((label (nth 3 replacement)))
+                        (if-let* ((label (nth 3 replacement)))
                             (format "[%s](%s)" label target)
                           target))))
                    (jaunder-pull-media-reference-replacements reference)))

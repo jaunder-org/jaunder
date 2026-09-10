@@ -946,10 +946,9 @@ Spec AC13–AC17, AC20.
       `ff_median(segment) − chr_median(segment)`, over the firefox−chromium
       `bootTotalMs` gap. Shares sum to 100% by construction. A segment where
       firefox is _faster_ contributes negatively and is shown as such, never
-      dropped.
-
-      **A residual above 1% of the gap halts the analysis** — the segments close
-      exactly, so a residual is a data defect to investigate, not a finding to report.
+      dropped. **A residual above 1% of the gap halts the analysis** — the
+      segments close exactly, so a residual is a data defect to investigate, not
+      a finding to report.
 
 - [x] **Step 3: Report the frame skew** (AC14): median
       `commitToMountMs − bootTotalMs` per engine, cold and warm. Stated
@@ -974,16 +973,13 @@ breaking it is visible.**
 
 - [x] **Step 4: Apply the pre-registered rules** (AC15) — **write the diagnosis
       before composing any narrative**, so the rules decide rather than the
-      prose:
-
-      *Diagnosis* (deciding set, must agree across cold and warm): a segment
-      **dominates** iff its share is ≥40% of the gap **and** ≥1.5× the next largest;
-      otherwise **distributed**.
-
-      *Disposition:* **actionable** (dominant segment + a named lever → file an issue) ·
-      **intrinsic** (distributed *and* every segment holding ≥5% of chromium's
-      `bootTotalMs` has a ratio within ±20% of the overall ratio **computed from this
-      corpus** — not #792's suite-level 1.47×) · **unresolved** (anything else, named
+      prose: _Diagnosis_ (deciding set, must agree across cold and warm): a
+      segment **dominates** iff its share is ≥40% of the gap **and** ≥1.5× the
+      next largest; otherwise **distributed**. _Disposition:_ **actionable**
+      (dominant segment + a named lever → file an issue) · **intrinsic**
+      (distributed _and_ every segment holding ≥5% of chromium's `bootTotalMs`
+      has a ratio within ±20% of the overall ratio **computed from this corpus**
+      — not #792's suite-level 1.47×) · **unresolved** (anything else, named
       explicitly with a proposed next step).
 
 - [x] **Step 5: Quantify the observer effect** (AC16): post-fix chromium

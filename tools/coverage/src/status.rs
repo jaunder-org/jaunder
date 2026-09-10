@@ -3,10 +3,9 @@
 use std::collections::BTreeSet;
 
 use anyhow::{Context, Result, bail};
-use quick_xml::Reader;
-use quick_xml::encoding::Decoder;
 use quick_xml::events::Event;
 use quick_xml::events::attributes::Attributes;
+use quick_xml::{Reader, XmlVersion};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 pub const COVERAGE_STATUS_VERSION: u32 = 1;
@@ -180,15 +179,17 @@ struct JunitTestcase {
 }
 
 impl JunitTestcase {
-    fn new(attributes: Attributes<'_>, decoder: Decoder) -> Result<Self> {
+    fn new(attributes: Attributes<'_>) -> Result<Self> {
         let mut classname = None;
         let mut name = None;
         for attribute in attributes {
             let attribute = attribute?;
-            let value = attribute.decode_and_unescape_value(decoder)?.into_owned();
+            let value = attribute
+                .normalized_value(XmlVersion::Implicit1_0)?
+                .into_owned();
             match attribute.key.as_ref() {
-                b"classname" => classname = Some(value),
-                b"name" => name = Some(value),
+                "classname" => classname = Some(value),
+                "name" => name = Some(value),
                 _ => {}
             }
         }
@@ -212,33 +213,30 @@ pub fn parse_junit_census(input: &str) -> Result<TestCensus> {
 
     loop {
         match reader.read_event_into(&mut buffer)? {
-            Event::Start(event) if event.name().as_ref() == b"testcase" => {
+            Event::Start(event) if event.name().as_ref() == "testcase" => {
                 if testcase.is_some() {
                     bail!("nested testcase");
                 }
-                testcase = Some(JunitTestcase::new(event.attributes(), reader.decoder())?);
+                testcase = Some(JunitTestcase::new(event.attributes())?);
             }
-            Event::Empty(event) if event.name().as_ref() == b"testcase" => {
-                finish_junit_testcase(
-                    &mut census,
-                    JunitTestcase::new(event.attributes(), reader.decoder())?,
-                )?;
+            Event::Empty(event) if event.name().as_ref() == "testcase" => {
+                finish_junit_testcase(&mut census, JunitTestcase::new(event.attributes())?)?;
             }
-            Event::Start(event) | Event::Empty(event) if event.name().as_ref() == b"skipped" => {
+            Event::Start(event) | Event::Empty(event) if event.name().as_ref() == "skipped" => {
                 testcase
                     .as_mut()
                     .context("skipped outside testcase")?
                     .ignored = true;
             }
             Event::Start(event) | Event::Empty(event)
-                if matches!(event.name().as_ref(), b"failure" | b"error") =>
+                if matches!(event.name().as_ref(), "failure" | "error") =>
             {
                 testcase
                     .as_mut()
                     .context("failure outside testcase")?
                     .failed = true;
             }
-            Event::End(event) if event.name().as_ref() == b"testcase" => {
+            Event::End(event) if event.name().as_ref() == "testcase" => {
                 finish_junit_testcase(
                     &mut census,
                     testcase.take().context("testcase end without start")?,

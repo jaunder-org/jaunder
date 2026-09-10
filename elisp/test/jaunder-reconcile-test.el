@@ -134,10 +134,10 @@
     (cl-letf (((symbol-function 'jaunder--http-request)
                (lambda (_method url &rest _)
                  (list :status 200 :body (cdr (assoc url responses))))))
-             (let ((jaunder--active-blog '(:base-url "https://example.test" :username "alice")))
-               (should (equal (mapcar #'jaunder-inventory-member-id
-                                      (jaunder--fetch-collection-members))
-                              '("1" "2")))))
+      (let ((jaunder--active-blog '(:base-url "https://example.test" :username "alice")))
+        (should (equal (mapcar #'jaunder-inventory-member-id
+                               (jaunder--fetch-collection-members))
+                       '("1" "2")))))
     (setcdr (assoc "page-2" responses)
             (jaunder-reconcile-test--page
              (list (jaunder-reconcile-test--entry "2" "two"))
@@ -145,15 +145,15 @@
     (cl-letf (((symbol-function 'jaunder--http-request)
                (lambda (_method url &rest _)
                  (list :status 200 :body (cdr (assoc url responses))))))
-             (let ((jaunder--active-blog '(:base-url "https://example.test" :username "alice")))
-               (should-error (jaunder--fetch-collection-members))))))
+      (let ((jaunder--active-blog '(:base-url "https://example.test" :username "alice")))
+        (should-error (jaunder--fetch-collection-members))))))
 
 (ert-deftest jaunder-inventory-pagination-rejects-non-2xx-without-result ()
   ;; A failing page is fatal; callers cannot accidentally join an earlier prefix.
   (cl-letf (((symbol-function 'jaunder--http-request)
              (lambda (&rest _) '(:status 503 :body "unavailable"))))
-           (let ((jaunder--active-blog '(:base-url "https://example.test" :username "alice")))
-             (should-error (jaunder--fetch-collection-members)))))
+    (let ((jaunder--active-blog '(:base-url "https://example.test" :username "alice")))
+      (should-error (jaunder--fetch-collection-members)))))
 
 (ert-deftest jaunder-inventory-pagination-rejects-duplicate-server-id ()
   ;; One Post ID must appear once across all Collection pages.
@@ -166,8 +166,8 @@
                                   (list (jaunder-reconcile-test--entry "1" "one")) "next")
                                (jaunder-reconcile-test--page
                                 (list (jaunder-reconcile-test--entry "1" "two"))))))))
-             (let ((jaunder--active-blog '(:base-url "https://example.test" :username "alice")))
-               (should-error (jaunder--fetch-collection-members))))))
+      (let ((jaunder--active-blog '(:base-url "https://example.test" :username "alice")))
+        (should-error (jaunder--fetch-collection-members))))))
 
 (ert-deftest jaunder-inventory-scans-and-joins-complete-root-fixture ()
   ;; One real root proves sorted discovery, every local class, conflicts, and
@@ -442,15 +442,15 @@
         (cl-letf (((symbol-function 'jaunder--inventory-for-root) (lambda (_) inventory))
                   ((symbol-function 'jaunder--pull-member)
                    (lambda (_ member) (push member pulled))))
-                 (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) nil)))
-                          (jaunder-reconcile root))
-                 (let ((rendered (with-current-buffer "*Jaunder Reconcile*" (buffer-string))))
-                   (should-not pulled)
-                   (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
-                            (jaunder-reconcile root))
-                   (should (equal (nreverse pulled) (list first second)))
-                   (with-current-buffer "*Jaunder Reconcile*"
-                     (should (equal (buffer-string) rendered)))))
+          (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) nil)))
+            (jaunder-reconcile root))
+          (let ((rendered (with-current-buffer "*Jaunder Reconcile*" (buffer-string))))
+            (should-not pulled)
+            (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
+              (jaunder-reconcile root))
+            (should (equal (nreverse pulled) (list first second)))
+            (with-current-buffer "*Jaunder Reconcile*"
+              (should (equal (buffer-string) rendered)))))
       (delete-directory root t))))
 
 (ert-deftest jaunder-reconcile-keeps-valid-markers-when-mtime-is-unreadable ()
@@ -469,15 +469,15 @@
                     "#+PROPERTY: JAUNDER_SYNCED_AT 2026-08-25T12:00:00Z\n"))
           (cl-letf (((symbol-function 'file-attributes)
                      (lambda (&rest _) (error "unreadable mtime"))))
-                   (let ((markers (jaunder--reconcile-local-markers local)))
-                     (should (equal (list (nth 0 markers) (nth 1 markers))
-                                    '("\"old\"" "2026-08-25T12:00:00Z")))
-                     (should (eq (jaunder-reconcile-row-reason
-                                  (jaunder--classify-match match outcome
-                                                           (nth 0 markers)
-                                                           (nth 1 markers)
-                                                           (nth 2 markers)))
-                                 'file-mtime-unreadable)))))
+            (let ((markers (jaunder--reconcile-local-markers local)))
+              (should (equal (list (nth 0 markers) (nth 1 markers))
+                             '("\"old\"" "2026-08-25T12:00:00Z")))
+              (should (eq (jaunder-reconcile-row-reason
+                           (jaunder--classify-match match outcome
+                                                    (nth 0 markers)
+                                                    (nth 1 markers)
+                                                    (nth 2 markers)))
+                          'file-mtime-unreadable)))))
       (delete-directory root t))))
 
 (ert-deftest jaunder-reconcile-missing-local-file-clears-all-marker-inputs ()
@@ -505,8 +505,8 @@
                            (list root (jaunder--active-base-url)
                                  (jaunder--active-username)))
                      (jaunder--make-inventory))))
-                 (jaunder-reconcile descendant)
-                 (should (equal observed (list child "https://child.test" "child"))))
+          (jaunder-reconcile descendant)
+          (should (equal observed (list child "https://child.test" "child"))))
       (delete-directory parent t))))
 
 (ert-deftest jaunder-reconcile-preserves-inventory-only-classes-and-conflict-details ()
@@ -537,7 +537,7 @@
   "Malformed collection wire data and one Member fetch failure stay explicit."
   (cl-letf (((symbol-function 'libxml-parse-xml-region)
              (lambda (&rest _) (error "malformed"))))
-           (should-error (jaunder--parse-collection-xml "<feed>")))
+    (should-error (jaunder--parse-collection-xml "<feed>")))
   (should-error (jaunder--parse-collection-page "<not xml" "https://h/posts"))
   (should-error
    (jaunder--parse-collection-page
@@ -545,7 +545,7 @@
   (let ((member (jaunder-reconcile-test--member "1" "one")))
     (cl-letf (((symbol-function 'jaunder--http-request)
                (lambda (&rest _) (error "offline"))))
-             (should (plist-get (jaunder--reconcile-member-outcome member) :error)))))
+      (should (plist-get (jaunder--reconcile-member-outcome member) :error)))))
 
 (ert-deftest jaunder-reconcile-offers-server-only-members-for-pull ()
   "Accepting the preview pulls every server-only member then refreshes its report."
@@ -565,9 +565,9 @@
                   ((symbol-function 'jaunder--pull-member)
                    (lambda (destination candidate)
                      (push (list destination candidate) pulled))))
-                 (should (eq (jaunder-reconcile root) report))
-                 (should (equal pulled (list (list root member))))
-                 (should (= renders 2)))
+          (should (eq (jaunder-reconcile root) report))
+          (should (equal pulled (list (list root member))))
+          (should (= renders 2)))
       (delete-directory root t))))
 
 
@@ -589,7 +589,7 @@
                   ((symbol-function 'jaunder--render-reconcile-report)
                    (lambda (_) (get-buffer-create " *jr-interactive*")))
                   ((symbol-function 'display-buffer) (lambda (&rest _) nil)))
-                 (should (eq (call-interactively #'jaunder-reconcile) report)))
+          (should (eq (call-interactively #'jaunder-reconcile) report)))
       (delete-directory root t))))
 (provide 'jaunder-reconcile-test)
 ;;; jaunder-reconcile-test.el ends here

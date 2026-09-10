@@ -62,8 +62,8 @@
     (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) (setq prompted t)))
               ((symbol-function 'jaunder--http-request)
                (lambda (&rest _) (setq requested t))))
-             (with-temp-buffer
-               (should-error (jaunder-delete-post))))
+      (with-temp-buffer
+        (should-error (jaunder-delete-post))))
     (should-not prompted)
     (should-not requested)))
 
@@ -84,7 +84,7 @@
                                               (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) (setq prompted t)))
                                                         ((symbol-function 'jaunder--http-request)
                                                          (lambda (&rest _) (setq requested t))))
-                                                       (should-error (jaunder-delete-post)))
+                                                (should-error (jaunder-delete-post)))
                                               (should-not prompted)
                                               (should-not requested)
                                               (jaunder-delete-test--assert-post-preserved path buffer contents)))))
@@ -97,7 +97,7 @@
                                             (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) nil))
                                                       ((symbol-function 'jaunder--http-request)
                                                        (lambda (&rest _) (setq requested t))))
-                                                     (jaunder-delete-post))
+                                              (jaunder-delete-post))
                                             (should-not requested)
                                             (jaunder-delete-test--assert-post-preserved path buffer contents))))
 
@@ -109,7 +109,7 @@
                                             (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
                                                       ((symbol-function 'jaunder--http-request)
                                                        (lambda (&rest args) (setq request args) '(:status 204))))
-                                                     (jaunder-delete-post))
+                                              (jaunder-delete-post))
                                             (should (equal request
                                                            '("DELETE" "https://example.test/atompub/alice/posts/7"
                                                              nil nil (("If-Match" . "\"etag\"")))))
@@ -124,10 +124,10 @@
                                               (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
                                                         ((symbol-function 'jaunder--http-request)
                                                          (lambda (&rest _) (list :status status))))
-                                                       (let ((err (should-error (jaunder-delete-post))))
-                                                         (should (equal (error-message-string err)
-                                                                        (format "jaunder: delete failed (HTTP %s)" status))))
-                                                       (jaunder-delete-test--assert-post-preserved path buffer contents))))))
+                                                (let ((err (should-error (jaunder-delete-post))))
+                                                  (should (equal (error-message-string err)
+                                                                 (format "jaunder: delete failed (HTTP %s)" status))))
+                                                (jaunder-delete-test--assert-post-preserved path buffer contents))))))
 
 (ert-deftest jaunder-delete-post-preserves-local-post-on-transport-failure ()
   "The original transport condition is surfaced while local state is retained."
@@ -136,9 +136,9 @@
                                             (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
                                                       ((symbol-function 'jaunder--http-request)
                                                        (lambda (&rest _) (error "offline"))))
-                                                     (let ((err (should-error (jaunder-delete-post))))
-                                                       (should (equal (error-message-string err) "offline"))
-                                                       (should (equal err '(error "offline")))))
+                                              (let ((err (should-error (jaunder-delete-post))))
+                                                (should (equal (error-message-string err) "offline"))
+                                                (should (equal err '(error "offline")))))
                                             (jaunder-delete-test--assert-post-preserved path buffer contents))))
 
 (provide 'jaunder-delete-test)

@@ -102,12 +102,7 @@ unversioned raw traces are legacy, never current instrument loss.
 // Export appended by `csr-bundle` to generated jaunder.js.
 export async function initMeasured(
   moduleOrPath?:
-    | string
-    | Request
-    | URL
-    | Response
-    | BufferSource
-    | WebAssembly.Module,
+    string | Request | URL | Response | BufferSource | WebAssembly.Module,
 ): Promise<WebAssembly.Exports>;
 
 // Current navigation summary additions/replacements.

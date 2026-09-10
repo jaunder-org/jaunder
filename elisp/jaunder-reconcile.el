@@ -22,28 +22,28 @@
 
 (cl-defstruct (jaunder-inventory-member
                (:constructor jaunder--make-inventory-member))
-              "One Post advertised by an AtomPub Collection."
-              id slug edit-uri)
+  "One Post advertised by an AtomPub Collection."
+  id slug edit-uri)
 
 (cl-defstruct (jaunder-inventory-local
                (:constructor jaunder--make-inventory-local))
-              "One root-level local Org file."
-              path id)
+  "One root-level local Org file."
+  path id)
 
 (cl-defstruct (jaunder-inventory-match
                (:constructor jaunder--make-inventory-match))
-              "A unique local/server pair with the same Post ID."
-              local member)
+  "A unique local/server pair with the same Post ID."
+  local member)
 
 (cl-defstruct (jaunder-inventory-conflict
                (:constructor jaunder--make-inventory-conflict))
-              "A connected set of inventory inputs requiring human resolution."
-              kinds locals members)
+  "A connected set of inventory inputs requiring human resolution."
+  kinds locals members)
 
 (cl-defstruct (jaunder-inventory
                (:constructor jaunder--make-inventory))
-              "The exhaustive partition of one root and one Collection."
-              local-drafts server-only matched orphans conflicts)
+  "The exhaustive partition of one root and one Collection."
+  local-drafts server-only matched orphans conflicts)
 
 
 (defun jaunder--inventory-error (invariant)
@@ -93,7 +93,7 @@
          (id (jaunder--collection-edit-id href collection-url))
          (slug-node (jaunder--single-element (jaunder--direct-elements entry 'slug)
                                              "Member must have exactly one j:slug"))
-         (slug (dom-text slug-node)))
+         (slug (dom-inner-text slug-node)))
     (unless id
       (jaunder--inventory-error "Member edit URI must name a decimal Post ID"))
     (unless (and (stringp slug) (not (string= slug "")))
@@ -382,13 +382,13 @@ returned."
                               (jaunder--fetch-collection-members)))))
 (cl-defstruct (jaunder-reconcile-row
                (:constructor jaunder--make-reconcile-row))
-              "One immutable classification in a reconciliation report."
-              state local member reason detail conflict)
+  "One immutable classification in a reconciliation report."
+  state local member reason detail conflict)
 
 (cl-defstruct (jaunder-reconcile-report
                (:constructor jaunder--make-reconcile-report))
-              "The complete reconciliation result for one configured root."
-              root inventory rows)
+  "The complete reconciliation result for one configured root."
+  root inventory rows)
 
 (defconst jaunder--reconcile-state-order
   '(unchanged server-ahead local-ahead conflict unclassifiable

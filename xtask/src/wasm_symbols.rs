@@ -57,7 +57,7 @@ pub fn function_sizes(wasm: &[u8]) -> Result<Vec<FunctionSize>> {
             }
             Payload::CodeSectionEntry(body) => {
                 let range = body.range();
-                bodies.push((range.end - range.start) as u64);
+                bodies.push(range.end - range.start);
             }
             Payload::CustomSection(c) if c.name() == "name" => {
                 let reader = wasmparser::NameSectionReader::new(wasmparser::BinaryReader::new(

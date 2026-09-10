@@ -182,10 +182,10 @@ fn endpoint_uses_in_file(file: &str, source: &str) -> Result<Vec<EndpointUse>> {
     let ParserReturn {
         program,
         diagnostics,
-        panicked,
+        fatal_error,
         ..
     } = Parser::new(&allocator, source, source_type).parse();
-    if panicked || !diagnostics.is_empty() {
+    if fatal_error || !diagnostics.is_empty() {
         let rendered = diagnostics
             .iter()
             .map(|error| format!("{error:?}"))

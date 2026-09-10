@@ -137,7 +137,7 @@
                (lambda (_state) (push "bind" events)))
               ((symbol-function 'jaunder-test--server-down)
                (lambda (_state) (push "down" events))))
-             (should (jaunder-coverage--run-populations root)))
+      (should (jaunder-coverage--run-populations root)))
     (should (equal (nreverse events)
                    '("-test\\.el\\'" ("ert" nil) "-integration\\.el\\'"
                      "up" "bind" ("ert" :new) "down")))))
@@ -157,7 +157,7 @@
                  ((symbol-function 'require)
                   (lambda (feature &rest _args)
                     (push (list "require" feature) events))))
-                (jaunder-coverage--load-production root))
+         (jaunder-coverage--load-production root))
        (should (equal (nreverse events)
                       '("handlers" "files" ("require" jaunder)
                         ("require" jaunder-alpha) ("require" jaunder))))))))
