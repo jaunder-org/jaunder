@@ -4,10 +4,7 @@ use std::collections::BTreeMap;
 
 use common::theme;
 use lightningcss::{
-    properties::{
-        Property, PropertyId, animation::AnimationName, custom::CustomPropertyName,
-        font::FontFamily,
-    },
+    properties::{Property, PropertyId, animation::AnimationName, font::FontFamily},
     rules::{CssRule, font_face::FontFaceProperty, keyframes::KeyframesName},
     selector::{Combinator, Component, Selector, SelectorList},
     stylesheet::{ParserOptions, PrinterOptions, StyleSheet},
@@ -391,6 +388,10 @@ fn is_global_reference_property(property: &PropertyId<'_>) -> bool {
     )
 }
 
+fn is_reserved_anchor_name(name: &str) -> bool {
+    name.eq_ignore_ascii_case("anchor-name")
+}
+
 struct AssetUrlVisitor<'a> {
     asset_urls: &'a BTreeMap<String, String>,
     fonts: &'a BTreeMap<String, String>,
@@ -424,8 +425,10 @@ impl<'i> Visitor<'i> for AssetUrlVisitor<'_> {
                     "custom-property token streams cannot hide global references".into(),
                 ));
             }
-            Property::Custom(custom) if !matches!(custom.name, CustomPropertyName::Custom(_)) => {
-                unreachable!("lightningcss produces custom property variants only for custom names")
+            Property::Custom(custom) if is_reserved_anchor_name(custom.name.as_ref()) => {
+                return Err(ThemePackageError::Css(
+                    "anchor-name is reserved for Jaunder trusted controls".into(),
+                ));
             }
             Property::FontFamily(families) => rewrite_font_families(families, self.fonts)?,
             Property::Font(font) => rewrite_font_families(&mut font.family, self.fonts)?,
@@ -682,6 +685,27 @@ mod tests {
             "{css}"
         );
         assert!(!css.contains("assets/logo.webp"), "{css}");
+    }
+
+    #[test]
+    fn rejects_reserved_anchor_name_declarations() {
+        for css in [
+            ".a { anchor-name: --j-post-actions-42 }",
+            ".a { anchor-name: var(--theme-anchor) }",
+            ".a { AnChOr-NaMe: --theme-anchor }",
+            r".a { a\6e chor-name: --theme-anchor }",
+        ] {
+            assert!(matches!(
+                compile(css, &BTreeMap::new()),
+                Err(ThemePackageError::Css(message))
+                    if message == "anchor-name is reserved for Jaunder trusted controls"
+            ));
+        }
+    }
+
+    #[test]
+    fn accepts_similarly_named_custom_property() {
+        assert!(compile(".a { --anchor-name: --theme-anchor }", &BTreeMap::new()).is_ok());
     }
 
     #[test]

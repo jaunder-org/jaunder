@@ -59,11 +59,11 @@ test("owner: pre-paint auth marks html.authed and / stays the enhanced public ti
   await expect(page.locator('main a[href="/login"]')).toBeHidden();
   await expect(page.locator('main a[href="/register"]')).toBeHidden();
 
-  // The owner's own post gains the client-side action column (D4) — its Edit
-  // affordance is absent from the anonymous seed data (is_author = false).
-  await expect(
-    page.locator('.j-post-acts a[href$="/edit"]').first(),
-  ).toBeVisible({ timeout: slowBrowserTimeoutMs(testInfo, 10_000) });
+  // The owner's own Post gains the client-side Actions disclosure (D4); it is
+  // absent from the anonymous seed data (`is_author = false`).
+  await expect(page.locator(".j-post-action-trigger").first()).toBeVisible({
+    timeout: slowBrowserTimeoutMs(testInfo, 10_000),
+  });
 
   // Authed sidebar chrome is present (footer logout + an authed-only nav link).
   await expect(page.locator(".j-sb-foot a[href='/logout']")).toBeVisible();

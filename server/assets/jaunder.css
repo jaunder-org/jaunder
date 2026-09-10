@@ -126,9 +126,14 @@
  color: var(--ink);
 }
 
+.j-trusted-post-actions {
+ display: contents;
+ pointer-events: none;
+}
+
 .j-trusted-chrome {
  position: absolute;
- z-index: 1;
+ z-index: 2;
  top: 0;
  right: 0;
  display: none;
@@ -197,14 +202,13 @@
  font-weight: 600;
 }
 
-.j-trusted-chrome:has(.j-warn-banner, .j-post-action-tray) {
+.j-trusted-chrome:has(.j-warn-banner) {
  display: flex;
 }
 
 .j-trusted-chrome:has(.j-warn-banner) {
  left: 0;
 }
-
 .j-trusted-chrome>* {
  pointer-events: auto;
 }
@@ -328,6 +332,7 @@
 }
 
 
+
 .j-nav {
  display: flex;
  flex-direction: column;
@@ -357,6 +362,7 @@
  border-radius: 4px;
  flex-shrink: 0;
 }
+
 
 
 /* ─── sidebar footer ─── */
@@ -831,36 +837,46 @@
  color: var(--accent-ink);
 }
 
-/* ─── post actions column ─── */
+/* ─── trusted Post Actions disclosures ─── */
 
-.j-trusted-chrome .j-post-action-tray {
- display: flex;
- align-items: center;
- gap: 8px;
- padding: 6px 10px;
+.j-post-action-control {
+ position: absolute;
+ z-index: 1;
+ top: anchor(top);
+ left: anchor(left);
+ width: 72px;
+ height: 32px;
+ pointer-events: auto;
+}
+
+.j-post-action-trigger {
+ width: 100%;
+ height: 100%;
+}
+
+.j-post-action-popover {
+ pointer-events: auto;
+ position: absolute;
+ top: anchor(bottom);
+ right: calc(100vw - anchor(right));
+ margin: 4px 0 0;
+ inline-size: max-content;
+ max-inline-size: calc(100vw - 16px);
+ max-block-size: calc(100dvh - 16px);
+ overflow: auto;
+ overflow-wrap: anywhere;
+ padding: 6px;
  border: 1px var(--border-style) var(--line);
  border-radius: var(--radius-sm);
  background: var(--surface-alt);
-}
-
-.j-post-action-tray-title {
- margin: 0;
- font-size: var(--fs-meta);
- font-weight: 600;
- white-space: nowrap;
-}
-
-.j-trusted-chrome .j-post-acts {
- flex-direction: row;
- align-items: center;
+ box-shadow: 0 4px 12px rgb(0 0 0 / 8%);
 }
 
 .j-post-acts {
  display: flex;
  flex-direction: column;
- align-items: flex-end;
+ align-items: stretch;
  gap: 6px;
- flex-shrink: 0;
 }
 
 .j-post-plink {

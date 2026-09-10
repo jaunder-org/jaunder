@@ -8,7 +8,7 @@
  * Page-agnostic: a per-page CLS check supplies a {@link MountShiftProbe} (its `url`,
  * the `targets` to measure, an optional post-mount assertion, and a `tolerancePx`)
  * and calls {@link expectNoShiftAcrossMount}. The first concrete use is the
- * authed-owner own-post action column (`authed-cls.spec.ts`).
+ * authed-owner trusted Actions trigger (`authed-cls.spec.ts`).
  */
 import { expect, type Locator, type Page } from "@playwright/test";
 import { BASE_URL } from "./helpers";
@@ -29,7 +29,7 @@ export interface MountShiftProbe {
   targets: (page: Page) => ShiftTarget[];
   /**
    * Optional: assert the mount actually decorated the measured content (so a green
-   * result can't be a no-op) — e.g. the owner action column appeared. Runs after
+   * result can't be a no-op) — e.g. the owner Actions trigger appeared. Runs after
    * the mount, before the after-sample.
    */
   afterMount?: (page: Page) => Promise<void>;

@@ -47,6 +47,16 @@ pub fn edit_post_url(post_id: PostId) -> RootRelativeUrl {
     url
 }
 
+/// Names the CSS anchor reserved for a Post's trusted Actions control.
+///
+/// This is shared by the projected markup and the wasm enhancement so a
+/// control can associate with its viewer-independent slot without a second
+/// Post-identity convention.
+#[must_use]
+pub fn post_action_anchor_name(post_id: PostId) -> String {
+    format!("--j-post-actions-{post_id}")
+}
+
 /// The `<main class="j-main">` inner content for a route — mirrors each reactive
 /// page's markup (Topbar + wrappers + posts + load-more) so the seeded first paint
 /// coincides. Split from [`crate::app::render_shell`] so the permalink Suspense
@@ -125,6 +135,7 @@ pub(crate) fn body_with_logo(seed: &PageSeed, logo: &Markup, header: &Markup) ->
 pub(crate) fn permalink_article(post: &RenderedPost) -> Markup {
     let ctx = TagCtx::ForUser(post.username.clone());
     render_post_article(&PostView {
+        post_id: post.post_id,
         username: &post.username,
         title: post.title.as_ref(),
         banner: None,
@@ -145,6 +156,7 @@ fn render_posts(posts: &[RenderedPost], tag_ctx: &TagCtx) -> Markup {
         @for post in posts {
             @let time = format_post_time(post.display_time());
             (render_post_article(&PostView {
+                post_id: post.post_id,
                 username: &post.username,
                 title: post.title.as_ref(),
                 banner: None,
@@ -162,6 +174,7 @@ fn render_posts(posts: &[RenderedPost], tag_ctx: &TagCtx) -> Markup {
 /// The fields needed to render one post, borrowed from a `RenderedPost`. `time`
 /// is already formatted (see [`format_post_time`]).
 pub(crate) struct PostView<'a> {
+    pub post_id: PostId,
     pub username: &'a Username,
     pub title: Option<&'a PostTitle>,
     pub banner: Option<&'a str>,
@@ -184,9 +197,9 @@ pub(crate) fn render_post_article(view: &PostView) -> Markup {
     })
 }
 
-/// The inner HTML of `<article class="j-post">` for the **anonymous** layout:
-/// avatar + the content column, with no author-action slot. Mirrors
-/// `PostDisplay`'s children when no `children` are passed.
+/// The inner HTML of `<article class="j-post">`: avatar + the content column.
+/// It includes the viewer-independent Actions footprint in the shared header,
+/// so anonymous and owner markup reserve the same geometry.
 #[must_use]
 pub(crate) fn post_inner(view: &PostView) -> Markup {
     Markup::new(html! {
@@ -198,13 +211,10 @@ pub(crate) fn post_inner(view: &PostView) -> Markup {
 }
 
 /// The inner HTML of the post's content column (`<div class="j-post-content">`):
-/// header, title, optional draft banner, summary, body, footer. Shared by the
-/// anonymous [`post_inner`] and the reactive author layout, which slots
-/// this into the same content `<div>` via `inner_html` and overlays the reactive
-/// action column as a sibling. It is deliberately **viewer-independent** (#181,
-/// ADR-0044 D4): the owner's own-post content column must be byte-identical to the
-/// projector's anonymous paint, so the timestamp always stays in the header and
-/// the action column is purely additive — never a content change.
+/// header, title, optional draft banner, summary, body, footer, and the protected
+/// viewer-independent Actions footprint. `PostDisplay` injects this unchanged
+/// into its article, so the projected paint and reactive re-render stay
+/// byte-identical (ADR-0044).
 #[must_use]
 pub(crate) fn post_content(view: &PostView) -> Markup {
     Markup::new(html! {
@@ -213,6 +223,7 @@ pub(crate) fn post_content(view: &PostView) -> Markup {
             span class="j-post-handle" data-jaunder-part="author-handle" { "@" (view.username) }
             span class="j-spacer" {}
             time class="j-post-time" data-jaunder-part="published-time" { (view.time) }
+            (post_action_slot(view.post_id))
         }
         @if let Some(title) = view.title {
             h2 class="j-post-title" data-jaunder-part="post-title" {
@@ -237,6 +248,26 @@ pub(crate) fn post_content(view: &PostView) -> Markup {
             (taglist::render(view.tags, view.tag_ctx))
             span class="j-spacer" {}
         }
+    })
+}
+
+/// The viewer-independent, in-flow footprint for a trusted Post Actions control.
+///
+/// Theme Package CSS is scoped below the article, so its broad descendant rules
+/// could otherwise remove or resize this association. Inline important
+/// declarations keep the slot's box and CSS anchor Jaunder-owned while still
+/// letting a theme arrange the surrounding header.
+fn post_action_slot(post_id: PostId) -> Markup {
+    let anchor_name = post_action_anchor_name(post_id);
+    let style = format!(
+        "all:initial!important;display:block!important;box-sizing:border-box!important;position:static!important;flex:0 0 72px!important;min-width:72px!important;max-width:72px!important;width:72px!important;min-height:32px!important;max-height:32px!important;height:32px!important;anchor-name:{anchor_name}!important"
+    );
+    Markup::new(html! {
+        span
+            class="j-post-actions-slot"
+            style=(style)
+            aria-hidden="true"
+        {}
     })
 }
 
@@ -358,6 +389,18 @@ mod tests {
     }
 
     #[test]
+    fn post_action_anchor_name_is_stable_and_unique_per_post() {
+        assert_eq!(
+            post_action_anchor_name(PostId::from(7)),
+            "--j-post-actions-7"
+        );
+        assert_ne!(
+            post_action_anchor_name(PostId::from(7)),
+            post_action_anchor_name(PostId::from(8))
+        );
+    }
+
+    #[test]
     fn format_post_time_canonicalizes_offset_to_utc() {
         // A non-UTC offset is canonicalized to UTC before formatting: 15:45-05:00
         // is 20:45Z.
@@ -382,6 +425,7 @@ mod tests {
         let author = parse_username("alice");
         let body = common::test_support::rendered_html("<p>b</p>");
         let view = PostView {
+            post_id: PostId::from(7),
             username: &author,
             title: Some(&title),
             banner: None,
@@ -483,6 +527,22 @@ mod tests {
         .into_string();
         assert!(user.contains("<h1>#rust</h1>"), "{user}");
         assert!(user.contains("Posts by ~bob"), "{user}");
+    }
+
+    #[test]
+    fn post_header_has_one_protected_viewer_independent_action_slot() {
+        let html = body(&PageSeed::SiteTimeline(one_post_page())).into_string();
+        assert_eq!(
+            html.matches("class=\"j-post-actions-slot\"").count(),
+            1,
+            "{html}"
+        );
+        assert!(
+            html.contains(
+                "class=\"j-post-actions-slot\" style=\"all:initial!important;display:block!important;box-sizing:border-box!important;position:static!important;flex:0 0 72px!important;min-width:72px!important;max-width:72px!important;width:72px!important;min-height:32px!important;max-height:32px!important;height:32px!important;anchor-name:--j-post-actions-1!important\" aria-hidden=\"true\""
+            ),
+            "the shared header must reserve the protected Actions footprint: {html}"
+        );
     }
 
     #[test]
@@ -620,12 +680,13 @@ mod tests {
     #[test]
     fn post_content_always_shows_the_header_time() {
         // Viewer-independent (#181, ADR-0044 D4): the timestamp stays in the header
-        // for every viewer, so the owner's own-post content column coincides with
-        // the projector's anonymous paint (the action column is purely additive).
+        // for every viewer, so the owner's own Post content coincides with the
+        // projector's anonymous paint (the Actions disclosure is purely additive).
         let ctx = TagCtx::SiteWide;
         let author = parse_username("bob");
         let body = common::test_support::rendered_html("<p>b</p>");
         let view = PostView {
+            post_id: PostId::from(7),
             username: &author,
             title: None,
             banner: None,
@@ -650,6 +711,7 @@ mod tests {
         let body = common::test_support::rendered_html("<p>b</p>");
         let title = parse_post_title("Draft title");
         let view = PostView {
+            post_id: PostId::from(7),
             username: &author,
             title: Some(&title),
             banner: None,
@@ -680,6 +742,7 @@ mod tests {
         let body = common::test_support::rendered_html("<p>b</p>");
         let summary = parse_post_summary("An excerpt");
         let view = PostView {
+            post_id: PostId::from(7),
             username: &author,
             title: None,
             banner: Some("Draft - visible only to you"),
@@ -710,6 +773,7 @@ mod tests {
         let body = common::test_support::rendered_html("<p>b</p>");
         let title = parse_post_title("T");
         let view = PostView {
+            post_id: PostId::from(7),
             username: &author,
             title: Some(&title),
             banner: None,

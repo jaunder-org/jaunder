@@ -37,6 +37,7 @@ use self::process::{CollectorGuard, CollectorStartError};
 use anyhow::Context;
 use xshell::{Shell, cmd};
 
+use crate::cli::E2eLocalBrowser;
 use crate::result::{CommandResult, StepResult};
 use crate::steps::host_server::{
     HostArtifactConfig, HostArtifacts, HostServerSession, ServerSessionConfig, ServerStartPhase,
@@ -133,52 +134,66 @@ fn owned_args(args: &[&str]) -> Vec<String> {
     args.iter().map(|arg| (*arg).to_owned()).collect()
 }
 
-fn normal_invocations(test_filter: Option<&str>) -> Vec<PlaywrightInvocation> {
-    match test_filter {
-        None => vec![PlaywrightInvocation {
-            label: "ordinary",
-            args: owned_args(&[
-                "test",
-                "--project",
-                "chromium",
-                "--project",
-                "chromium-admin-site",
-                "--project",
-                "chromium-admin",
-                "--reporter=html,line",
-            ]),
-        }],
-        Some(filter) => vec![
-            PlaywrightInvocation {
-                label: "visual",
-                args: owned_args(&[
-                    "test",
-                    "--project",
-                    "chromium-visual",
-                    "--no-deps",
-                    "--pass-with-no-tests",
-                    "--reporter=html,line",
-                    filter,
-                ]),
-            },
-            PlaywrightInvocation {
-                label: "ordinary",
-                args: owned_args(&[
-                    "test",
-                    "--project",
-                    "chromium",
-                    "--project",
-                    "chromium-admin-site",
-                    "--project",
-                    "chromium-admin",
-                    "--no-deps",
-                    "--pass-with-no-tests",
-                    "--reporter=html,line",
-                    filter,
-                ]),
-            },
+fn ordinary_projects(
+    browser: E2eLocalBrowser,
+    test_filter: Option<&str>,
+) -> &'static [&'static str] {
+    match (browser, test_filter.is_some()) {
+        // Preserve the omitted-selector Chromium command, including its existing
+        // dependency chain. A filtered run instead selects every Chromium project
+        // so a visual, ordinary, or serialized admin test can all be found by its
+        // positional Playwright filter.
+        (E2eLocalBrowser::Chromium, false) => {
+            &["chromium", "chromium-admin-site", "chromium-admin"]
+        }
+        (E2eLocalBrowser::Chromium, true) => &[
+            "chromium-visual",
+            "chromium",
+            "chromium-admin-site",
+            "chromium-admin",
         ],
+        // Theme, admin-site, media, and invite tests are deliberately excluded
+        // from Firefox's ordinary project, but remain runnable through its visual
+        // and dependent projects when a local filter explicitly selects one.
+        (E2eLocalBrowser::Firefox, false) => &["firefox"],
+        (E2eLocalBrowser::Firefox, true) => &[
+            "firefox-visual",
+            "firefox",
+            "firefox-admin-site",
+            "firefox-admin",
+        ],
+        // WebKit likewise keeps its fast ordinary default. Its theme/admin
+        // project joins filtered runs, so file:line filters cannot silently skip
+        // the tests that `webkit` excludes.
+        (E2eLocalBrowser::Webkit, false) => &["webkit"],
+        (E2eLocalBrowser::Webkit, true) => &["webkit", "webkit-theme"],
     }
+}
+
+fn ordinary_invocation(
+    browser: E2eLocalBrowser,
+    test_filter: Option<&str>,
+) -> PlaywrightInvocation {
+    let mut args = owned_args(&["test"]);
+    for project in ordinary_projects(browser, test_filter) {
+        args.extend(["--project".to_owned(), (*project).to_owned()]);
+    }
+    if let Some(filter) = test_filter {
+        args.extend(owned_args(&["--no-deps", "--reporter=html,line", filter]));
+    } else {
+        args.push("--reporter=html,line".to_owned());
+    }
+    PlaywrightInvocation {
+        label: "ordinary",
+        args,
+    }
+}
+
+fn normal_invocations(
+    browser: E2eLocalBrowser,
+    test_filter: Option<&str>,
+) -> Vec<PlaywrightInvocation> {
+    vec![ordinary_invocation(browser, test_filter)]
 }
 
 fn resolve_e2e_env(
@@ -226,7 +241,11 @@ fn resolve_e2e_env_for_run(
     }
 }
 
-fn e2e_local_plan(test_filter: Option<&str>, update_visual_snapshots: bool) -> E2eLocalPlan {
+fn e2e_local_plan(
+    browser: Option<E2eLocalBrowser>,
+    test_filter: Option<&str>,
+    update_visual_snapshots: bool,
+) -> E2eLocalPlan {
     if update_visual_snapshots {
         E2eLocalPlan {
             release_csr: true,
@@ -250,12 +269,13 @@ fn e2e_local_plan(test_filter: Option<&str>, update_visual_snapshots: bool) -> E
                 .collect(),
         }
     } else {
+        let browser = browser.unwrap_or(E2eLocalBrowser::Chromium);
         E2eLocalPlan {
             release_csr: false,
             update_visual_snapshots: false,
             lifecycles: vec![BrowserLifecycle {
-                browser: "chromium",
-                invocations: normal_invocations(test_filter),
+                browser: browser.as_str(),
+                invocations: normal_invocations(browser, test_filter),
             }],
         }
     }
@@ -809,6 +829,7 @@ fn run_lifecycle(
 pub fn run(
     sh: &Shell,
     result: &mut CommandResult,
+    browser: Option<E2eLocalBrowser>,
     test_filter: Option<&str>,
     update_visual_snapshots: bool,
 ) {
@@ -826,7 +847,7 @@ pub fn run(
     ) else {
         return;
     };
-    let plan = e2e_local_plan(test_filter, update_visual_snapshots);
+    let plan = e2e_local_plan(browser, test_filter, update_visual_snapshots);
     let Some(artifacts) =
         HostArtifacts::prepare(sh, result, HostArtifactConfig::e2e_local(plan.release_csr))
     else {
@@ -844,7 +865,7 @@ mod tests {
 
     #[test]
     fn visual_updates_keep_independent_browser_lifecycles() {
-        let plan = e2e_local_plan(None, true);
+        let plan = e2e_local_plan(None, None, true);
         assert!(plan.release_csr);
         assert_eq!(
             plan.lifecycles
@@ -853,6 +874,117 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["chromium", "firefox"]
         );
+    }
+
+    #[test]
+    fn omitted_browser_preserves_chromium_plan() {
+        let plan = e2e_local_plan(None, None, false);
+        assert!(!plan.release_csr);
+        assert!(!plan.update_visual_snapshots);
+        assert_eq!(plan.lifecycles.len(), 1);
+        let lifecycle = &plan.lifecycles[0];
+        assert_eq!(lifecycle.browser, "chromium");
+        assert_eq!(
+            lifecycle.invocations,
+            [PlaywrightInvocation {
+                label: "ordinary",
+                args: owned_args(&[
+                    "test",
+                    "--project",
+                    "chromium",
+                    "--project",
+                    "chromium-admin-site",
+                    "--project",
+                    "chromium-admin",
+                    "--reporter=html,line",
+                ]),
+            }]
+        );
+    }
+
+    #[test]
+    fn filtered_firefox_theme_run_selects_admin_site_project() {
+        let plan = e2e_local_plan(
+            Some(E2eLocalBrowser::Firefox),
+            Some("theme.spec.ts:63"),
+            false,
+        );
+        assert_eq!(
+            plan.lifecycles[0].invocations,
+            [PlaywrightInvocation {
+                label: "ordinary",
+                args: owned_args(&[
+                    "test",
+                    "--project",
+                    "firefox-visual",
+                    "--project",
+                    "firefox",
+                    "--project",
+                    "firefox-admin-site",
+                    "--project",
+                    "firefox-admin",
+                    "--no-deps",
+                    "--reporter=html,line",
+                    "theme.spec.ts:63",
+                ]),
+            }]
+        );
+    }
+
+    #[test]
+    fn filtered_webkit_theme_run_selects_theme_project() {
+        let plan = e2e_local_plan(
+            Some(E2eLocalBrowser::Webkit),
+            Some("theme.spec.ts:63"),
+            false,
+        );
+        assert!(
+            plan.lifecycles[0].invocations[0]
+                .args
+                .windows(2)
+                .any(|arguments| arguments == ["--project", "webkit-theme"])
+        );
+    }
+
+    #[test]
+    fn filtered_post_actions_run_includes_each_browser_ordinary_project() {
+        for (browser, project) in [
+            (E2eLocalBrowser::Chromium, "chromium"),
+            (E2eLocalBrowser::Firefox, "firefox"),
+            (E2eLocalBrowser::Webkit, "webkit"),
+        ] {
+            let plan = e2e_local_plan(Some(browser), Some("post-actions.spec.ts"), false);
+            let invocation = &plan.lifecycles[0].invocations[0];
+            assert!(
+                invocation
+                    .args
+                    .windows(2)
+                    .any(|arguments| arguments == ["--project", project])
+            );
+            assert_eq!(
+                invocation.args.last(),
+                Some(&"post-actions.spec.ts".to_owned())
+            );
+        }
+    }
+
+    #[test]
+    fn filtered_runs_do_not_allow_vacuous_success() {
+        for browser in [
+            E2eLocalBrowser::Chromium,
+            E2eLocalBrowser::Firefox,
+            E2eLocalBrowser::Webkit,
+        ] {
+            let plan = e2e_local_plan(Some(browser), Some("unsupported.spec.ts"), false);
+            let invocation = &plan.lifecycles[0].invocations[0];
+            assert!(
+                !invocation
+                    .args
+                    .iter()
+                    .any(|argument| argument == "--pass-with-no-tests"),
+                "{browser:?} must let Playwright fail when no selected project matches"
+            );
+        }
     }
 
     #[test]

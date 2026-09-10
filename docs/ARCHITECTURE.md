@@ -1338,25 +1338,29 @@ theme changes that representation.
 
 ### Custom public themes
 
-The custom-theme architecture is governed by the proposed
+The custom-theme architecture is governed by the accepted
 [`css-package-public-themes` ADR](adr/0184-css-package-public-themes.md).
 
 Public markup exposes a versioned semantic Style Contract shared by built-in and
 custom themes; accessible source order and exact concept hooks are stable while
 incidental wrappers are not. Custom CSS is scoped inside an unthemeable
-paint-containment/low-stacking boundary, with authenticated owner mutation
-controls in a sibling trusted-chrome stacking context above it. A Theme Package
-contains a closed manifest, one parser-validated stylesheet, and allowlisted
-local WOFF2 or raster-image assets. Bounded import and transformation reject
-unsafe archives, unscopable CSS, global-name collisions, external resources, and
-executable content. Publication uses raw full SHA-256 content hashes for
-immutable same-origin CSS/assets and separate non-circular framed hashes for
-source-package and revision identity. Publishing advances the stable Theme ID,
-so a selected theme adopts its new revision without a second selection mutation
-while prior bytes remain unchanged. Issued content remains addressable while
-live and through the one-year asset lifetime plus five-minute HTML freshness
-window after its last reference is detached; collection requires both no live
-reference and the elapsed deadline.
+paint-containment/low-stacking boundary. The root then places the dedicated
+`#j-trusted-post-actions` sibling after that theme surface and before the
+warning-only `#j-trusted-chrome` sibling; minimal Portal transport mounts
+authenticated Post controls into the former, outside the Style Contract.
+
+One compact Actions button appears over a protected, in-flow slot in the header
+of the Post it controls. The viewer-independent slot reserves the button
+footprint; Jaunder-owned inline-important declarations protect its own principal
+box, size, and unique anchor association from direct Theme Package rules. CSS
+Anchor Positioning tethers the trusted button to that slot and its trusted menu
+to the button without JavaScript geometry tracking. A theme that removes or
+clips the Post/header ancestor indirectly removes the visual anchor; switching
+that public presentation to Studio is the supported recovery path. This
+authenticated mutation surface requires Chromium 125+, Firefox 147+ (including
+ESR 153+), or Safari/iOS 26+; anonymous reading remains independent of CSS
+anchor support
+([draft decision](adr/drafts/trusted-post-actions-use-css-anchors.md)).
 
 The operator and each author own separate custom-theme catalogs. An effective
 public selection is either a built-in `Theme` or an owner-valid custom Theme ID;

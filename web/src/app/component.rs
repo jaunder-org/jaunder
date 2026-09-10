@@ -356,10 +356,6 @@ fn AppShell() -> impl IntoView {
             {move || {
                 if common::theme::is_public_presentation_path(&location.pathname.get()) {
                     view! {
-                        <div id="j-trusted-chrome" class="j-trusted-chrome">
-                            <BackupBanner />
-                            <SiteBaseUrlBanner />
-                        </div>
                         <div class="j-theme-clip" data-jaunder-theme-clip>
                             <div
                                 class="j-shell"
@@ -373,6 +369,11 @@ fn AppShell() -> impl IntoView {
                                     </main>
                                 </div>
                             </div>
+                        </div>
+                        <div id="j-trusted-post-actions" class="j-trusted-post-actions"></div>
+                        <div id="j-trusted-chrome" class="j-trusted-chrome">
+                            <BackupBanner />
+                            <SiteBaseUrlBanner />
                         </div>
                     }
                         .into_any()
@@ -388,6 +389,7 @@ fn AppShell() -> impl IntoView {
                                 </main>
                             </div>
                         </div>
+                        <div id="j-trusted-post-actions" class="j-trusted-post-actions"></div>
                     }
                         .into_any()
                 }

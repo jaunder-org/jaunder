@@ -1,7 +1,7 @@
 import { test, expect } from "./fixtures";
 import { goto, signInAsNewUser } from "./helpers";
-import { navigateInApp } from "./navigate";
 import {
+  applySeededSession,
   resetThemeViaTool,
   seedPostsViaTool,
   seedThemeViaTool,
@@ -18,8 +18,9 @@ test(
   "issue #22: .j-root keeps a real data-theme after CSR mount",
   { tag: ["@visual", "@accessibility"] },
   async ({ page }) => {
-    await seedUserViaTool("visualauthor", "visualpassword123");
-    await seedPostsViaTool("visualauthor", 1, "Visual Timeline Post");
+    const session = await seedUserViaTool("visualauthor", "visualpassword123");
+    await seedPostsViaTool("visualauthor", 2, "Visual Timeline Post");
+    await applySeededSession(page.context(), session);
     await goto(page, "/"); // public projector home; goto() waits for the CSR mount
 
     const probe = await page.evaluate(() => {
@@ -42,12 +43,17 @@ test(
     expect(probe.attrNames.some((n) => n.startsWith("attr:"))).toBe(false);
     expect(probe.accentInk).toBe("#3a2fc9");
 
-    const post = page
+    const posts = page
       .locator("article.j-post")
-      .filter({ hasText: "Visual Timeline Post 0" });
-    await expect(post).toBeVisible();
-    await expect(post).toContainText("Body for Visual Timeline Post 0");
-    await expect(post).toContainText("visualauthor");
+      .filter({ hasText: "Visual Timeline Post" });
+    await expect(posts).toHaveCount(2);
+    const firstPost = posts.filter({ hasText: "Visual Timeline Post 0" });
+    const secondPost = posts.filter({ hasText: "Visual Timeline Post 1" });
+    await expect(firstPost).toContainText("Body for Visual Timeline Post 0");
+    await expect(secondPost).toContainText("Body for Visual Timeline Post 1");
+    await expect(firstPost).toContainText("visualauthor");
+    await expect(secondPost).toContainText("visualauthor");
+    await expect(page.getByRole("button", { name: "Actions" })).toHaveCount(2);
     await expectVisual(page, "public-timeline.png", {
       mask: [page.locator(".j-post-time")],
     });
@@ -55,9 +61,10 @@ test(
   },
 );
 
-test("published custom author theme survives cold load and in-app navigation", async ({
+test("a theme-hidden Post anchor recovers through Studio", async ({
   page,
   tracedContext,
+  firstNav,
 }) => {
   const username = await signInAsNewUser(page);
   await seedPostsViaTool(username, 1, "Visual Theme Navigation");
@@ -72,6 +79,8 @@ test("published custom author theme survives cold load and in-app navigation", a
         "link[data-jaunder-theme-stylesheet]",
       );
       const style = surface ? getComputedStyle(surface) : null;
+      const slot = document.querySelector(".j-post-actions-slot");
+      const slotStyle = slot ? getComputedStyle(slot) : null;
       return {
         dataTheme: root?.getAttribute("data-theme"),
         stylesheetHref: stylesheet?.getAttribute("href"),
@@ -82,6 +91,15 @@ test("published custom author theme survives cold load and in-app navigation", a
         transform: style?.transform ?? "",
         filter: style?.filter ?? "",
         overflow: style?.overflow ?? "",
+        slotDisplay: slotStyle?.display ?? "",
+        slotPosition: slotStyle?.position ?? "",
+        slotBoxSizing: slotStyle?.boxSizing ?? "",
+        slotMinWidth: slotStyle?.minWidth ?? "",
+        slotWidth: slotStyle?.width ?? "",
+        slotMaxWidth: slotStyle?.maxWidth ?? "",
+        slotMinHeight: slotStyle?.minHeight ?? "",
+        slotHeight: slotStyle?.height ?? "",
+        slotMaxHeight: slotStyle?.maxHeight ?? "",
       };
     });
 
@@ -94,6 +112,15 @@ test("published custom author theme survives cold load and in-app navigation", a
     expect(presentation.transform).not.toBe("none");
     expect(presentation.filter).not.toBe("none");
     expect(presentation.overflow).toBe("visible");
+    expect(presentation.slotDisplay).toBe("block");
+    expect(presentation.slotPosition).toBe("static");
+    expect(presentation.slotBoxSizing).toBe("border-box");
+    expect(presentation.slotMinWidth).toBe("72px");
+    expect(presentation.slotWidth).toBe("72px");
+    expect(presentation.slotMaxWidth).toBe("72px");
+    expect(presentation.slotMinHeight).toBe("32px");
+    expect(presentation.slotHeight).toBe("32px");
+    expect(presentation.slotMaxHeight).toBe("32px");
     await expect(target.locator('[data-jaunder-part="logo"]')).toBeVisible();
     await expect(
       target.locator('[data-jaunder-part="header-image"]'),
@@ -104,9 +131,14 @@ test("published custom author theme survives cold load and in-app navigation", a
     await seedThemeViaTool(username);
     await goto(page, `/~${username}`);
     await expectCustomPresentation();
-    const trustedEdit = page.getByRole("link", { name: "Edit" }).first();
-    await expect(trustedEdit).toBeVisible();
-    await trustedEdit.click({ trial: true });
+
+    // The fixture deliberately moves every Post outside the viewport. Its CSS is
+    // scoped to the theme surface, so it cannot directly restyle the trusted
+    // sibling; it can only make the Post slot's visual anchor unavailable.
+    const trustedActions = page
+      .getByRole("button", { name: "Actions" })
+      .first();
+    await expect(trustedActions).not.toBeInViewport();
 
     const anonymousContext = await tracedContext();
     try {
@@ -114,29 +146,40 @@ test("published custom author theme survives cold load and in-app navigation", a
       await goto(anonymousPage, `/~${username}`);
       await expectCustomPresentation(anonymousPage);
       await expect(
-        anonymousPage.locator(".j-trusted-chrome .j-post-action-tray"),
-      ).toHaveCount(0);
+        anonymousPage.locator(".j-trusted-post-actions"),
+      ).toBeEmpty();
     } finally {
       await anonymousContext.close();
     }
 
-    await navigateInApp(
-      page,
-      () =>
-        page.evaluate(() => {
-          history.pushState({}, "", "/");
-          window.dispatchEvent(new PopStateEvent("popstate"));
-        }),
-      { url: "/", ready: '.j-root[data-theme="studio"]' },
-    );
-    await expect(page.locator(".j-topbar h1")).toHaveText("jaunder.local");
-    await expect(
-      page.locator("link[data-jaunder-theme-stylesheet]"),
-    ).toHaveCount(0);
-    await expect(page.locator('[data-jaunder-part="logo"]')).toHaveCount(0);
-    await expect(
-      page.locator('[data-jaunder-part="header-image"]'),
-    ).toHaveCount(0);
+    // The destructive theme covers its own public sidebar, so recovery starts
+    // from a fresh `/themes` entry in the same authenticated browser context.
+    // `/themes` is always Studio and remains reachable by URL.
+    const recoveryPage = await page.context().newPage();
+    try {
+      await goto(recoveryPage, "/themes", { timeout: firstNav });
+      const publicSelection = recoveryPage.getByLabel("Public selection");
+      await publicSelection.selectOption("studio");
+      await expect(publicSelection).toHaveValue("studio");
+    } finally {
+      await recoveryPage.close();
+    }
+
+    const recoveredPage = await page.context().newPage();
+    try {
+      await goto(recoveredPage, `/~${username}`, { timeout: firstNav });
+      await expect(recoveredPage.locator(".j-root")).toHaveAttribute(
+        "data-theme",
+        "studio",
+      );
+      const recoveredActions = recoveredPage
+        .getByRole("button", { name: "Actions" })
+        .first();
+      await expect(recoveredActions).toBeVisible();
+      await recoveredActions.click({ trial: true });
+    } finally {
+      await recoveredPage.close();
+    }
   } finally {
     await resetThemeViaTool(username);
   }

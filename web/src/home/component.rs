@@ -38,7 +38,7 @@ pub fn HomePage() -> impl IntoView {
     // The Local timeline is identical for every viewer, so the fetch is
     // viewer-independent — no `current_user()` gate and no mode swap (#181, D10).
     // Re-fetch after a committed mutation so the owner's own edits/deletes,
-    // performed via the client-side action column, reflect immediately.
+    // performed through the client-side Actions disclosure, reflect immediately.
     let initial_page = client::reactive::resource(
         move || invalidator.track(),
         move || async move {
@@ -63,8 +63,8 @@ pub fn HomePage() -> impl IntoView {
     // (ADR-0041 §2) — no `view!` twin to drift. The anon-only CTA lives inside it,
     // hidden for the authed owner via `j-anon-only` + `html.authed` (ADR-0044),
     // and shown for the anonymous visitor. Single-mode Local (#181, D10): `/` is
-    // always the enhanced public timeline; the owner's own posts gain the
-    // client-side action column reactively via `TimelineRows`/`PostCard`.
+    // always the enhanced public timeline; the owner's own Posts gain a
+    // client-side Actions disclosure reactively via `TimelineRows`/`PostCard`.
     let theme = crate::app::public_theme();
 
     view! {

@@ -30,6 +30,7 @@ import {
   FORMAT_PROBE_BODY,
   openEditor,
   openComposerFromSidebar,
+  openPostActions,
 } from "./posts";
 import { navigateInApp } from "./navigate";
 import { allowSecondBoot } from "./bootBudget";
@@ -775,11 +776,13 @@ test("draft lifecycle: create, view, edit, and publish", async ({
     { timeout: bodyRenderTimeoutMs },
   );
   // #23/#24: the draft's PostCard offers Publish, never Unpublish (AC2).
-  const draftActs = page.locator(".j-post-acts");
-  await expect(draftActs.locator('button:has-text("Publish")')).toBeVisible();
-  await expect(draftActs.locator('button:has-text("Unpublish")')).toHaveCount(
-    0,
-  );
+  const draftActs = await openPostActions(page);
+  await expect(
+    draftActs.getByRole("button", { name: "Publish" }),
+  ).toBeVisible();
+  await expect(
+    draftActs.getByRole("button", { name: "Unpublish" }),
+  ).toHaveCount(0);
 
   const guestContext = await tracedContext();
   const guestPage = await guestContext.newPage();
@@ -803,7 +806,11 @@ test("draft lifecycle: create, view, edit, and publish", async ({
       true;
   });
   page.once("dialog", (dialog) => dialog.accept());
-  await page.locator('.j-post-acts button:has-text("Publish")').click();
+  await (
+    await openPostActions(page)
+  )
+    .getByRole("button", { name: "Publish" })
+    .click();
   await expect(page.locator(".j-post-body")).toContainText(
     "edited draft body",
     {
@@ -960,11 +967,12 @@ test("authenticated user can delete a published post", async ({
   });
   await expect(page.locator("article h1")).toHaveText("Post To Delete");
 
-  // Delete button should be visible for the author
-  await expect(page.locator('button:has-text("Delete")')).toBeVisible();
+  // Delete button should be visible for the author.
+  const actions = await openPostActions(page);
+  await expect(actions.getByRole("button", { name: "Delete" })).toBeVisible();
 
   page.once("dialog", (dialog) => dialog.accept());
-  await click(page, 'button:has-text("Delete")');
+  await click(page, '.j-post-action-popover button:has-text("Delete")');
   await waitForSelector(page, ".success");
   await expect(page.locator(".success")).toContainText("Post deleted.");
 
@@ -1002,7 +1010,9 @@ test("unpublishing follows the moved draft permalink and replaces history", asyn
     url: publishedPermalink!,
     ready: "article.j-post",
   });
-  await expect(page.locator('button:has-text("Unpublish")')).toBeVisible();
+  await expect(
+    (await openPostActions(page)).getByRole("button", { name: "Unpublish" }),
+  ).toBeVisible();
 
   // The server recomputes the canonical permalink after clearing `published_at`.
   // Keeping the author on that Post must replace the now-abandoned URL without
@@ -1011,11 +1021,13 @@ test("unpublishing follows the moved draft permalink and replaces history", asyn
     (window as Window & { __jaunderNoReload?: boolean }).__jaunderNoReload =
       true;
   });
-  await click(page, 'button:has-text("Unpublish")');
+  await click(page, '.j-post-action-popover button:has-text("Unpublish")');
   await page.waitForURL((url) => url.pathname !== publishedPermalink);
   expect(new URL(page.url()).pathname).toMatch(/\/unpublish-me$/);
   await expect(page.getByText("Draft - visible only to you")).toBeVisible();
-  await expect(page.locator('button:has-text("Publish")')).toBeVisible();
+  await expect(
+    (await openPostActions(page)).getByRole("button", { name: "Publish" }),
+  ).toBeVisible();
   expect(
     await page.evaluate(
       () =>
@@ -1042,16 +1054,20 @@ test("same-permalink unpublish refetches the Post in place", async ({
     url: permalink!,
     ready: "article.j-post",
   });
-  await expect(page.locator('button:has-text("Unpublish")')).toBeVisible();
+  await expect(
+    (await openPostActions(page)).getByRole("button", { name: "Unpublish" }),
+  ).toBeVisible();
 
   await page.evaluate(() => {
     (window as Window & { __jaunderNoReload?: boolean }).__jaunderNoReload =
       true;
   });
-  await click(page, 'button:has-text("Unpublish")');
+  await click(page, '.j-post-action-popover button:has-text("Unpublish")');
   await expect(page).toHaveURL(new RegExp(`${permalink}$`));
   await expect(page.getByText("Draft - visible only to you")).toBeVisible();
-  await expect(page.locator('button:has-text("Publish")')).toBeVisible();
+  await expect(
+    (await openPostActions(page)).getByRole("button", { name: "Publish" }),
+  ).toBeVisible();
   expect(
     await page.evaluate(
       () =>
@@ -1522,9 +1538,9 @@ test("authenticated user can delete a draft from the drafts page", async ({
   });
   await expect(page.locator("body")).toContainText("Draft To Delete");
 
-  // Delete the draft
+  // Delete the draft.
   page.once("dialog", (dialog) => dialog.accept());
-  await click(page, 'button:has-text("Delete")');
+  await click(page, '.j-draft-row button:has-text("Delete")');
   await waitForSelector(page, ".success");
   await expect(page.locator(".success")).toContainText("Draft deleted.");
   await expect(page.locator("body")).not.toContainText("Draft To Delete");

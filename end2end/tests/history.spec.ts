@@ -3,7 +3,7 @@ import { expect, setTestBudget, test } from "./fixtures";
 import { BASE_URL, click, goto, waitForSelector } from "./helpers";
 import { navigateInApp } from "./navigate";
 import { withTimedAction } from "./actions";
-import { createPostViaApi } from "./posts";
+import { createPostViaApi, openPostActions } from "./posts";
 import { applySeededSession } from "./seed";
 
 const REVISION_PAGE_SIZE = 50;
@@ -66,10 +66,10 @@ test("owner inspects paginated immutable history and a Deleted Post", async ({
   );
 
   await goto(page, created.permalink, { timeout: firstNav });
-  await waitForSelector(page, '[data-test="post-history-link"]');
+  const actions = await openPostActions(page);
   await navigateInApp(
     page,
-    () => click(page, '[data-test="post-history-link"]'),
+    () => actions.getByRole("link", { name: "History" }).click(),
     {
       url: `/posts/${created.post_id}/history`,
       ready: '[data-test="post-history-page"] [data-test="history-current"]',
