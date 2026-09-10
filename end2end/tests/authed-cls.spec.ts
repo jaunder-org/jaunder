@@ -1,10 +1,9 @@
 /**
  * #202 — empirical layout-shift (CLS) assertion for the authed-owner flash.
- *
- * The own-post action tray is deliberately outside the custom-theme surface:
+ * The trusted owner Actions disclosure is outside the custom-theme surface:
  * ownership is unknown at the anonymous projector paint, and public custom CSS
- * must not control author actions. The trusted overlay is additive and must not
- * move the post content when it appears after mount.
+ * must not control author actions. Its trigger fills the viewer-independent
+ * slot without moving the post content after mount.
  *
  * Deterministic by construction via the shared `expectNoShiftAcrossMount` helper
  * (holds the wasm to freeze first paint; gates on fonts, mount, and consecutive
@@ -16,7 +15,7 @@ import { signInAsNewUser } from "./helpers";
 import { createPostViaApi } from "./posts";
 import { expectNoShiftAcrossMount } from "./layout-shift";
 
-test("authed owner: own-post action column is additive (no content shift)", async ({
+test("authed owner: Actions trigger is additive (no content shift)", async ({
   page,
 }, testInfo) => {
   // signInAsNewUser (not the registeredPage fixture) so we get the username to
@@ -43,11 +42,7 @@ test("authed owner: own-post action column is additive (no content shift)", asyn
       { name: "post-body", locator: ownPost(p).locator(".j-post-body") },
     ],
     afterMount: async (p) => {
-      await expect(
-        p.locator(
-          `.j-trusted-chrome .j-post-action-tray[aria-label="Actions for @${username}"] .j-post-acts`,
-        ),
-      ).toBeVisible({
+      await expect(p.locator(".j-post-action-trigger")).toBeVisible({
         timeout: slowBrowserTimeoutMs(testInfo, 10_000),
       });
     },

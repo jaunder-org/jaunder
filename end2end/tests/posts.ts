@@ -87,6 +87,19 @@ export async function createPostViaApi(
   );
 }
 
+/** Open the sole trusted Actions disclosure for the current Post view. */
+export async function openPostActions(page: Page): Promise<Locator> {
+  const trigger = page.locator(".j-post-action-trigger").first();
+  await trigger.waitFor();
+  const popoverId = await trigger.getAttribute("popovertarget");
+  expect(popoverId, "Actions trigger has no controlled popover").toBeTruthy();
+  const popover = page.locator(`#${popoverId!}`);
+  if (await popover.isVisible()) return popover;
+  await click(page, ".j-post-action-trigger");
+  await expect(popover).toBeVisible();
+  return popover;
+}
+
 /** Open the full composer through the authenticated sidebar's Compose link.
  *
  * This is the ordinary in-app route to a composer reached after the initial
@@ -166,8 +179,8 @@ export async function followPermalink(
  *  off the PostCard's Edit affordance — the established route. Assumes the page
  *  is already showing the post (see [`followPermalink`]). */
 export async function openEditor(page: Page): Promise<string> {
-  const editLink = page.locator('.j-post-acts a:has-text("Edit")');
-  await editLink.waitFor();
+  const actions = await openPostActions(page);
+  const editLink = actions.getByRole("link", { name: "Edit" });
   const postId = (await editLink.getAttribute("href"))!.match(
     /\/posts\/(\d+)\/edit/,
   )![1];

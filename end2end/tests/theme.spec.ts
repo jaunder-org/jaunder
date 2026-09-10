@@ -1,7 +1,7 @@
 import { test, expect } from "./fixtures";
 import { goto, signInAsNewUser } from "./helpers";
-import { navigateInApp } from "./navigate";
 import {
+  applySeededSession,
   resetThemeViaTool,
   seedPostsViaTool,
   seedThemeViaTool,
@@ -18,8 +18,9 @@ test(
   "issue #22: .j-root keeps a real data-theme after CSR mount",
   { tag: ["@visual", "@accessibility"] },
   async ({ page }) => {
-    await seedUserViaTool("visualauthor", "visualpassword123");
+    const session = await seedUserViaTool("visualauthor", "visualpassword123");
     await seedPostsViaTool("visualauthor", 1, "Visual Timeline Post");
+    await applySeededSession(page.context(), session);
     await goto(page, "/"); // public projector home; goto() waits for the CSR mount
 
     const probe = await page.evaluate(() => {
@@ -48,6 +49,7 @@ test(
     await expect(post).toBeVisible();
     await expect(post).toContainText("Body for Visual Timeline Post 0");
     await expect(post).toContainText("visualauthor");
+    await expect(page.getByRole("button", { name: "Actions" })).toBeVisible();
     await expectVisual(page, "public-timeline.png", {
       mask: [page.locator(".j-post-time")],
     });
@@ -55,9 +57,10 @@ test(
   },
 );
 
-test("published custom author theme survives cold load and in-app navigation", async ({
+test("a theme-hidden Post anchor recovers through Studio", async ({
   page,
   tracedContext,
+  firstNav,
 }) => {
   const username = await signInAsNewUser(page);
   await seedPostsViaTool(username, 1, "Visual Theme Navigation");
@@ -104,9 +107,14 @@ test("published custom author theme survives cold load and in-app navigation", a
     await seedThemeViaTool(username);
     await goto(page, `/~${username}`);
     await expectCustomPresentation();
-    const trustedEdit = page.getByRole("link", { name: "Edit" }).first();
-    await expect(trustedEdit).toBeVisible();
-    await trustedEdit.click({ trial: true });
+
+    // The fixture deliberately moves every Post outside the viewport. Its CSS is
+    // scoped to the theme surface, so it cannot directly restyle the trusted
+    // sibling; it can only make the Post slot's visual anchor unavailable.
+    const trustedActions = page
+      .getByRole("button", { name: "Actions" })
+      .first();
+    await expect(trustedActions).not.toBeInViewport();
 
     const anonymousContext = await tracedContext();
     try {
@@ -114,29 +122,40 @@ test("published custom author theme survives cold load and in-app navigation", a
       await goto(anonymousPage, `/~${username}`);
       await expectCustomPresentation(anonymousPage);
       await expect(
-        anonymousPage.locator(".j-trusted-chrome .j-post-action-tray"),
-      ).toHaveCount(0);
+        anonymousPage.locator(".j-trusted-post-actions"),
+      ).toBeEmpty();
     } finally {
       await anonymousContext.close();
     }
 
-    await navigateInApp(
-      page,
-      () =>
-        page.evaluate(() => {
-          history.pushState({}, "", "/");
-          window.dispatchEvent(new PopStateEvent("popstate"));
-        }),
-      { url: "/", ready: '.j-root[data-theme="studio"]' },
-    );
-    await expect(page.locator(".j-topbar h1")).toHaveText("jaunder.local");
-    await expect(
-      page.locator("link[data-jaunder-theme-stylesheet]"),
-    ).toHaveCount(0);
-    await expect(page.locator('[data-jaunder-part="logo"]')).toHaveCount(0);
-    await expect(
-      page.locator('[data-jaunder-part="header-image"]'),
-    ).toHaveCount(0);
+    // The destructive theme covers its own public sidebar, so recovery starts
+    // from a fresh `/themes` entry in the same authenticated browser context.
+    // `/themes` is always Studio and remains reachable by URL.
+    const recoveryPage = await page.context().newPage();
+    try {
+      await goto(recoveryPage, "/themes", { timeout: firstNav });
+      const publicSelection = recoveryPage.getByLabel("Public selection");
+      await publicSelection.selectOption("studio");
+      await expect(publicSelection).toHaveValue("studio");
+    } finally {
+      await recoveryPage.close();
+    }
+
+    const recoveredPage = await page.context().newPage();
+    try {
+      await goto(recoveredPage, `/~${username}`, { timeout: firstNav });
+      await expect(recoveredPage.locator(".j-root")).toHaveAttribute(
+        "data-theme",
+        "studio",
+      );
+      const recoveredActions = recoveredPage
+        .getByRole("button", { name: "Actions" })
+        .first();
+      await expect(recoveredActions).toBeVisible();
+      await recoveredActions.click({ trial: true });
+    } finally {
+      await recoveredPage.close();
+    }
   } finally {
     await resetThemeViaTool(username);
   }

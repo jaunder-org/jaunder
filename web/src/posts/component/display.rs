@@ -24,10 +24,10 @@ pub fn PostDisplay<'a>(
     /// Linking context for the tag chips in the footer; defaults to site-wide.
     #[prop(default = &TagCtx::SiteWide)]
     tag_context: &'a TagCtx,
-    #[prop(optional)] has_owner_actions: bool,
 ) -> impl IntoView + use<> {
     let time_label = posts::render::format_post_time(post.display_time());
     let view = posts::render::PostView {
+        post_id: post.post_id,
         username: &post.username,
         title: post.title.as_ref(),
         banner,
@@ -40,34 +40,21 @@ pub fn PostDisplay<'a>(
     };
     let inner = posts::render::post_inner(&view);
     let article_id = format!("j-post-{}", i64::from(post.post_id));
-    if has_owner_actions {
-        view! {
-            <article id=article_id.clone() class="j-post" data-jaunder-part="post">
-                {inner.inject_into(leptos::html::div().class("j-contents"))}
-                <span
-                    class="j-post-actions-anchor"
-                    data-jaunder-owner-actions-for=article_id.clone()
-                    aria-hidden="true"
-                ></span>
-            </article>
-        }
+    inner
+        .inject_into(
+            leptos::html::article()
+                .id(article_id)
+                .class("j-post")
+                .attr("data-jaunder-part", "post"),
+        )
         .into_any()
-    } else {
-        inner
-            .inject_into(
-                leptos::html::article()
-                    .id(article_id)
-                    .class("j-post")
-                    .attr("data-jaunder-part", "post"),
-            )
-            .into_any()
-    }
 }
 
 /// `true` when the shared session's username equals `author` (#181/#591): the
-/// client-side signal that the viewer owns this post, so its action column shows
-/// even though the anonymous seed data has `is_author = false`. `false` on the host
-/// build / outside the provider (no context) — the affordance is wasm-only chrome.
+/// client-side signal that the viewer owns this Post, so its Actions disclosure
+/// shows even though the anonymous seed data has `is_author = false`. `false` on
+/// the host build / outside the provider (no context) — the affordance is wasm-only
+/// chrome.
 /// Uses `use_context` (not `use_session`) so the host build yields `None`→`false`
 /// rather than panicking; reads untracked to match the original non-reactive read.
 fn marker_matches(author: &Username) -> bool {
@@ -88,6 +75,45 @@ fn dispatch_after_confirm(message: &str, context: ClientErrorContext, dispatch: 
             let source_kind = error.source_kind();
             telemetry::report_swallowed(telemetry::error_kind(source_kind), context, source_kind);
         }
+    }
+}
+
+fn call_element_method(element: &leptos::web_sys::Element, method: &str) {
+    use wasm_bindgen::{JsCast, JsValue};
+
+    let _ = js_sys::Reflect::get(element, &JsValue::from_str(method))
+        .ok()
+        .and_then(|value| value.dyn_into::<js_sys::Function>().ok())
+        .and_then(|method| method.call0(element).ok());
+}
+
+fn focus_post_actions_trigger(trigger_id: &str) {
+    let trigger = leptos::web_sys::window()
+        .and_then(|window| window.document())
+        .and_then(|document| document.get_element_by_id(trigger_id));
+    if let Some(trigger) = trigger {
+        call_element_method(&trigger, "focus");
+    }
+}
+
+/// Close a completed action's native popover before restoring its invoker focus.
+fn close_post_actions(popover_id: &str, trigger_id: &str) {
+    let popover = leptos::web_sys::window()
+        .and_then(|window| window.document())
+        .and_then(|document| document.get_element_by_id(popover_id));
+    if let Some(popover) = popover {
+        call_element_method(&popover, "hidePopover");
+        focus_post_actions_trigger(trigger_id);
+    }
+}
+
+fn close_post_actions_on_confirmed<T>(
+    settled: &Result<MutationOutcome<T>, WebError>,
+    popover_id: &str,
+    trigger_id: &str,
+) {
+    if matches!(settled, Ok(MutationOutcome::Confirmed(_))) {
+        close_post_actions(popover_id, trigger_id);
     }
 }
 fn primary_post_action(
@@ -144,52 +170,43 @@ fn mutation_feedback<T>(
 }
 
 fn post_action_column(
-    is_author: bool,
-    edit_url: RootRelativeUrl,
+    edit_url: &RootRelativeUrl,
     history_url: String,
     primary_action: AnyView,
     delete_action: ServerAction<Delete>,
     post_id: PostId,
-) -> Option<AnyView> {
-    is_author.then(move || {
-        view! {
-            <div
-                class="j-post-acts"
-                data-jaunder-owner-controls
-                aria-label="Post actions"
-                aria-controls=format!("j-post-{}", i64::from(post_id))
+) -> AnyView {
+    view! {
+        <div class="j-post-acts" data-jaunder-owner-controls>
+            <a class="j-btn" href=edit_url.to_string()>
+                "Edit"
+            </a>
+            <a class="j-btn" data-test="post-history-link" href=history_url>
+                "History"
+            </a>
+            {primary_action}
+            <button
+                type="button"
+                class="j-btn is-danger"
+                on:click=move |_| {
+                    dispatch_after_confirm(
+                        "Delete this post?",
+                        ClientErrorContext::DeleteConfirm,
+                        || {
+                            delete_action.dispatch(Delete { post_id });
+                        },
+                    );
+                }
             >
-                <a class="j-btn" href=edit_url.to_string()>
-                    "Edit"
-                </a>
-                <a class="j-btn" data-test="post-history-link" href=history_url>
-                    "History"
-                </a>
-                {primary_action}
-                <button
-                    type="button"
-                    class="j-btn is-danger"
-                    on:click=move |_| {
-                        dispatch_after_confirm(
-                            "Delete this post?",
-                            ClientErrorContext::DeleteConfirm,
-                            || {
-                                delete_action.dispatch(Delete { post_id });
-                            },
-                        );
-                    }
-                >
-                    "Delete"
-                </button>
-            </div>
-        }
-        .into_any()
-    })
+                "Delete"
+            </button>
+        </div>
+    }
+    .into_any()
 }
 
 #[component]
-fn TrustedPostActions(
-    author: Username,
+fn AnchoredPostActions(
     is_draft: bool,
     edit_url: RootRelativeUrl,
     history_url: String,
@@ -198,31 +215,63 @@ fn TrustedPostActions(
     unpublish_action: ServerAction<Unpublish>,
     post_id: PostId,
 ) -> impl IntoView {
-    let article_id = format!("j-post-{}", i64::from(post_id));
-    let trusted_chrome = leptos::web_sys::window()
+    let popover_id = format!("j-post-actions-{}", i64::from(post_id));
+    let trigger_id = format!("j-post-actions-trigger-{}", i64::from(post_id));
+    let anchor_style = format!(
+        "position-anchor:{}",
+        posts::render::post_action_anchor_name(post_id)
+    );
+    let expanded = RwSignal::new(false);
+    let trusted_actions = leptos::web_sys::window()
         .and_then(|window| window.document())
-        .and_then(|document| document.get_element_by_id("j-trusted-chrome"));
-    trusted_chrome.map(move |mount| {
+        .and_then(|document| document.get_element_by_id("j-trusted-post-actions"));
+    trusted_actions.map(move |mount| {
         let render_actions = move || {
             let primary_action =
                 primary_post_action(is_draft, post_id, publish_action, unpublish_action);
             let actions = post_action_column(
-                true,
-                edit_url.clone(),
+                &edit_url,
                 history_url.clone(),
                 primary_action,
                 delete_action,
                 post_id,
             );
+            let toggle_popover_id = popover_id.clone();
+            let toggle_trigger_id = trigger_id.clone();
             view! {
-                <section
-                    class="j-post-action-tray"
-                    aria-label=format!("Actions for @{author}")
-                    aria-controls=article_id.clone()
+                <div class="j-post-action-control" style=anchor_style.clone()>
+                    <button
+                        id=trigger_id.clone()
+                        type="button"
+                        class="j-btn j-post-action-trigger"
+                        aria-expanded=move || expanded.get().to_string()
+                        popovertarget=popover_id.clone()
+                    >
+                        "Actions"
+                    </button>
+                </div>
+                <div
+                    id=popover_id.clone()
+                    class="j-post-action-popover"
+                    popover="auto"
+                    role="group"
+                    aria-label="Post actions"
+                    on:toggle=move |_| {
+                        let is_open = leptos::web_sys::window()
+                            .and_then(|window| window.document())
+                            .and_then(|document| document.get_element_by_id(&toggle_popover_id))
+                            .is_some_and(|popover| {
+                                popover.matches(":popover-open").unwrap_or(false)
+                            });
+                        expanded.set(is_open);
+                        if !is_open {
+                            focus_post_actions_trigger(&toggle_trigger_id);
+                        }
+                    }
+                    style=anchor_style.clone()
                 >
-                    <p class="j-post-action-tray-title">"Actions for @" {author.to_string()}</p>
                     {actions}
-                </section>
+                </div>
             }
         };
         Portal(
@@ -251,10 +300,10 @@ pub fn PostCard<'a>(
     on_publish: Option<Callback<()>>,
 ) -> impl IntoView + use<> {
     // The seed/anonymous data has `is_author = false` (the projector paints
-    // anonymous-only), so on the Local timeline the owner's own posts would show no
-    // action column. Decide it client-side from the auth marker (#181, ADR-0044 D4)
-    // so the affordance appears synchronously at mount. The server still authorizes
-    // the actual edit/delete by session — the marker only gates visibility.
+    // anonymous-only), so on the Local timeline the owner's own Posts would show no
+    // Actions disclosure. Decide it client-side from the auth marker (#181, ADR-0044
+    // D4) so the affordance appears synchronously at mount. The server still
+    // authorizes the actual edit/delete by session — the marker only gates visibility.
     let is_author = post.is_author || marker_matches(&post.username);
     let post_id = post.post_id;
     // A draft rendered at its permalink gets a Publish affordance instead of
@@ -267,6 +316,24 @@ pub fn PostCard<'a>(
     let unpublish_action = ServerAction::<Unpublish>::new();
     let publish_action = ServerAction::<Publish>::new();
     let deleted = RwSignal::new(false);
+    let popover_id = format!("j-post-actions-{}", i64::from(post_id));
+    let trigger_id = format!("j-post-actions-trigger-{}", i64::from(post_id));
+
+    support::on_settled(move || delete_action.value().get(), {
+        let popover_id = popover_id.clone();
+        let trigger_id = trigger_id.clone();
+        move |settled| close_post_actions_on_confirmed(&settled, &popover_id, &trigger_id)
+    });
+    support::on_settled(move || unpublish_action.value().get(), {
+        let popover_id = popover_id.clone();
+        let trigger_id = trigger_id.clone();
+        move |settled| close_post_actions_on_confirmed(&settled, &popover_id, &trigger_id)
+    });
+    support::on_settled(move || publish_action.value().get(), {
+        let popover_id = popover_id.clone();
+        let trigger_id = trigger_id.clone();
+        move |settled| close_post_actions_on_confirmed(&settled, &popover_id, &trigger_id)
+    });
 
     support::on_settled(
         move || delete_action.value().get(),
@@ -292,8 +359,7 @@ pub fn PostCard<'a>(
 
     let trusted_actions = is_author.then(|| {
         view! {
-            <TrustedPostActions
-                author=post.username.clone()
+            <AnchoredPostActions
                 is_draft
                 edit_url=edit_url.clone()
                 history_url=history_url.clone()
@@ -342,7 +408,7 @@ pub fn PostCard<'a>(
                     )
                 })
         }}
-        <PostDisplay post=post banner=banner tag_context=tag_context has_owner_actions=is_author />
+        <PostDisplay post=post banner=banner tag_context=tag_context />
         {trusted_actions}
     }
 }

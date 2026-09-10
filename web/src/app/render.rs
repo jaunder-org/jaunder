@@ -202,8 +202,9 @@ fn feed_label(surface: &common::feed::FeedSurface) -> String {
 /// layout the reactive `App`/`AppShell` produces for an anonymous viewer (the
 /// sidebar, the main region, and the per-route `<main>` content), so removing
 /// `#app` and mounting the CSR app on boot causes no reflow. The authed extras
-/// (footer avatar, authed nav, action columns) layer on top reactively once
-/// `current_user` resolves (that is #181, and needs no coincidence).
+/// (footer avatar, authed nav, trusted Actions disclosures) layer on top
+/// reactively once `current_user` resolves (that is #181, and needs no
+/// coincidence).
 /// `BackupBanner` renders nothing for an anonymous viewer, so it is omitted here.
 #[must_use]
 pub fn render_shell(presentation: &PublicPresentation<PageSeed>) -> Markup {
@@ -214,7 +215,6 @@ pub fn render_shell(presentation: &PublicPresentation<PageSeed>) -> Markup {
         .unwrap_or("");
     Markup::new(html! {
         div class="j-root" data-theme=(presentation.theme.data_theme()) {
-            div id="j-trusted-chrome" class="j-trusted-chrome" {}
             div class="j-theme-clip" data-jaunder-theme-clip {
                 div class="j-shell" data-jaunder-theme-surface data-jaunder-style-contract=(theme::STYLE_CONTRACT_VERSION) {
                     aside class="j-sidebar" { (crate::sidebar::render_sidebar(active_key)) }
@@ -229,6 +229,8 @@ pub fn render_shell(presentation: &PublicPresentation<PageSeed>) -> Markup {
                     }
                 }
             }
+            div id="j-trusted-post-actions" class="j-trusted-post-actions" {}
+            div id="j-trusted-chrome" class="j-trusted-chrome" {}
         }
     })
 }
@@ -453,17 +455,35 @@ mod tests {
         );
         assert!(
             html.starts_with(
-                "<div class=\"j-root\" data-theme=\"studio\"><div id=\"j-trusted-chrome\" class=\"j-trusted-chrome\"></div>\
-                 <div class=\"j-theme-clip\" data-jaunder-theme-clip><div class=\"j-shell\" \
-                 data-jaunder-theme-surface data-jaunder-style-contract=\"1\"><aside class=\"j-sidebar\">"
+                "<div class=\"j-root\" data-theme=\"studio\"><div class=\"j-theme-clip\" \
+                 data-jaunder-theme-clip><div class=\"j-shell\" data-jaunder-theme-surface \
+                 data-jaunder-style-contract=\"1\"><aside class=\"j-sidebar\">"
             ),
             "{html}"
         );
+        let theme_surface = html
+            .find("data-jaunder-theme-surface")
+            .expect("theme surface");
+        let trusted_actions = html
+            .find("id=\"j-trusted-post-actions\"")
+            .expect("trusted post actions");
+        let trusted_chrome = html
+            .find("id=\"j-trusted-chrome\"")
+            .expect("trusted chrome");
         assert!(
-            html.contains("</aside><div class=\"j-main-region\"><main class=\"j-main\" data-jaunder-part=\"main\">"),
+            theme_surface < trusted_actions,
+            "trusted controls must follow their themed anchors: {html}"
+        );
+        assert!(
+            trusted_actions < trusted_chrome,
+            "global warning chrome must remain independent of Post actions: {html}"
+        );
+        assert!(
+            html.ends_with(
+                "</main></div></div></div><div id=\"j-trusted-post-actions\" class=\"j-trusted-post-actions\"></div><div id=\"j-trusted-chrome\" class=\"j-trusted-chrome\"></div></div>"
+            ),
             "{html}"
         );
-        assert!(html.ends_with("</main></div></div></div></div>"), "{html}");
     }
 
     #[test]
