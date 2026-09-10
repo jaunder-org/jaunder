@@ -1645,10 +1645,13 @@ redundant client-side decode.
 
 The current population is `LoginRequest`, `RegistrationRequest`,
 `CreateInviteRequest`, `ConfirmPasswordResetRequest`, `RenameAudienceRequest`,
-`AudienceMembershipRequest`, and `DeleteMediaRequest`. Audience add/remove share
-`AudienceMembershipRequest` because their fields and member identity coincide;
-ordinary and forced media deletion share `DeleteMediaRequest`, differing only in
-its `force` value.
+`AudienceMembershipRequest`, `DeleteMediaRequest`, and `TimelinePageRequest`.
+Audience add/remove share `AudienceMembershipRequest` because their fields and
+member identity coincide; ordinary and forced media deletion share
+`DeleteMediaRequest`, differing only in its `force` value. Every web Post
+timeline shares `TimelinePageRequest` because order, its order-bound
+continuation cursor, and page size describe one pagination operation; route
+targets such as User and tag remain separate direct parameters.
 
 This is a semantic boundary rule, not an arity rule. The remaining `ActionForm`s
 each carry one domain value: audience create/delete, email and password-reset
@@ -1656,9 +1659,9 @@ requests, post publish/delete, and subscription subscribe/unsubscribe. Other
 multi-argument server fns keep direct parameters for independent settings
 (`backup::update_settings`, `profile::update`, `site::update_identity`),
 independent lookup/filter/pagination dimensions (`media::list_mine`,
-`posts::get`, `posts::list_drafts`, `tags::list`, and the `timeline::list_*`
-family), or a separate target plus an already-aggregate payload
-(`posts::update`). `posts::create` already takes `PostInputs`, and
+`posts::get`, `posts::list_drafts`, and `tags::list`), or a separate target plus
+an already-aggregate payload (`posts::update` and the targeted
+`timeline::list_*` functions). `posts::create` already takes `PostInputs`, and
 `media::upload` takes `MultipartData`. No static check guesses cohesion.
 
 The same migration extends `proffered-secret` without weakening its directional
