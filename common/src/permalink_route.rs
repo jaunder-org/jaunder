@@ -42,16 +42,25 @@ impl PermalinkRoute {
     /// Returns this typed route's canonical root-relative path.
     #[must_use]
     pub fn canonical_path(&self) -> RootRelativeUrl {
-        let date = self.date.value();
-        RootRelativeUrl::from_trusted_path(format!(
-            "/~{}/{:04}/{:02}/{:02}/{}",
-            self.username,
-            date.year(),
-            date.month(),
-            date.day(),
-            self.slug.as_ref()
-        ))
+        canonical_permalink_path(&self.username, self.date, &self.slug)
     }
+}
+
+/// Formats canonical Post permalink components without taking ownership.
+#[must_use]
+pub fn canonical_permalink_path(
+    username: &Username,
+    date: PermalinkDate,
+    slug: &Slug,
+) -> RootRelativeUrl {
+    let date = date.value();
+    RootRelativeUrl::from_trusted_path(format!(
+        "/~{username}/{:04}/{:02}/{:02}/{}",
+        date.year(),
+        date.month(),
+        date.day(),
+        slug.as_ref()
+    ))
 }
 
 #[cfg(test)]
