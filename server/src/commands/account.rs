@@ -297,15 +297,19 @@ async fn smtp_test_with(
 
 #[cfg(test)]
 mod tests {
-    use std::io;
-
     use super::*;
     use common::registration::RegistrationPolicy;
     use common::smtp_tls_mode::SmtpTlsMode;
     use common::test_support::{parse_email, parse_invite_ttl_hours};
     use host::config_key::SiteConfigKey;
-    use storage::StorageRuntimeConfig;
-    use storage::test_support::confirmed;
+    use std::io;
+
+    use rstest::*;
+    use rstest_reuse::*;
+    use storage::{
+        StorageRuntimeConfig,
+        test_support::{Backend, backends, confirmed},
+    };
     use tempfile::TempDir;
 
     use super::super::test_support::{assert_command_source, sqlite_storage_args};
@@ -574,20 +578,18 @@ mod tests {
         }
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn user_creation_with_prompt_uses_the_injected_prompt() {
-        let temp = TempDir::new().expect("temp dir");
-        let storage_args = sqlite_storage_args(&temp);
-        let factory = storage::open_database(&storage_args.db, &StorageRuntimeConfig::default())
-            .await
-            .expect("open database");
-        let users = factory.users();
-        let write_scope = factory.write_scope();
+    async fn user_creation_with_prompt_uses_the_injected_prompt(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let users = env.users();
+        let write_scope = env.write_scope();
+        let username = "prompted-user".parse().expect("username");
 
         cmd_user_create_with(
-            users,
+            Arc::clone(&users),
             &write_scope,
-            &"prompted-user".parse().expect("username"),
+            &username,
             None,
             None,
             false,
@@ -595,6 +597,15 @@ mod tests {
         )
         .await
         .expect("create user from injected password prompt");
+
+        let created = users
+            .get_user_by_username(&username)
+            .await
+            .expect("look up created user");
+        assert!(
+            created.is_some(),
+            "prompted user is observable through storage"
+        );
     }
 
     #[test]

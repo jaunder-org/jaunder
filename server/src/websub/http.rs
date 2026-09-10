@@ -272,6 +272,15 @@ mod tests {
                 .expect("test hub task joins")
                 .expect("test hub serves requests");
         }
+
+        async fn abort_hanging(self) {
+            self.task.abort();
+            let error = self
+                .task
+                .await
+                .expect_err("aborted hanging hub task does not join");
+            assert!(error.is_cancelled(), "hanging hub task is cancelled");
+        }
     }
 
     async fn spawn_hub(
@@ -797,6 +806,6 @@ mod tests {
             .downcast_ref::<reqwest::Error>()
             .expect("typed reqwest source for timeout");
         assert!(source.is_timeout());
-        hanging.stop().await;
+        hanging.abort_hanging().await;
     }
 }
