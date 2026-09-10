@@ -722,7 +722,7 @@ only (`UnpublishedPost`, `web/src/posts/api.rs:103`), plus the rendered form
 identity/publication core. Update, publish, and unpublish return it directly;
 create returns `ClassifiedSavedPost`, which nests that core and adds only the
 server request-clock publication classification needed by the creation result
-([classified save response](adr/drafts/classified-saved-post-for-creation.md)).
+([classified save response](adr/0186-classified-saved-post-for-creation.md)).
 This amends ADR-0097's former one-type-for-four-mutations statement while
 retaining its content-oriented naming and shared-core-plus-extension rule.
 `AuthoredPostSnapshot` applies the same extension rule to reads: it nests
@@ -2598,7 +2598,7 @@ browser-normalizing, non-strict conversion for gaps. The Scheduled Post editor
 and full new-Post control use strict conversion: nonexistent gap times are
 rejected, while ambiguous folds choose the earlier instant. The new-Post
 control's separate Date and Time Apply boundary is recorded by the
-[strict new-Post local publication time decision](adr/drafts/strict-new-post-local-publication-time.md).
+[strict new-Post local publication time decision](adr/0187-strict-new-post-local-publication-time.md).
 Other strict local-time seams, including Org, retain the same earlier-fold and
 gap-rejection policy. These retain the domain boundary established by
 [ADR-0072](adr/0072-timestamps-cross-boundary-as-utcinstant.md) and the

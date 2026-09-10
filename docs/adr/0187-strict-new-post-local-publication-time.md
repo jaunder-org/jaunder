@@ -1,6 +1,6 @@
-# ADR-DRAFT: New-Post publication time rejects nonexistent local times
+# ADR-0187: New-Post publication time rejects nonexistent local times
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-10
 - Issue: [#1441](https://github.com/jaunder-org/jaunder/issues/1441)
 
@@ -9,7 +9,7 @@
 The full new-Post composer previously used one native `datetime-local` input.
 That control can display a partially edited date while exposing an empty value
 to JavaScript, which let the Publish action mistake an incomplete schedule for
-“publish now.” [ADR-0182](../0182-jiff-time-model.md) retained browser-style gap
+“publish now.” [ADR-0182](0182-jiff-time-model.md) retained browser-style gap
 normalization for that HTML datetime-local seam.
 
 The replacement creation control exposes separate Date and Time fields behind an

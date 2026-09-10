@@ -1,14 +1,14 @@
-# ADR-DRAFT: Creation returns a classified Saved Post extension
+# ADR-0186: Creation returns a classified Saved Post extension
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-10
 - Issue: [#1441](https://github.com/jaunder-org/jaunder/issues/1441)
 
 ## Context
 
-[ADR-0097](../0097-post-dto-content-weight-axis.md) requires Post wire types to
-be named for the content weight they carry and records one `SavedPost` response
-for create, update, publish, and unpublish. That shared response identifies the
+[ADR-0097](0097-post-dto-content-weight-axis.md) requires Post wire types to be
+named for the content weight they carry and records one `SavedPost` response for
+create, update, publish, and unpublish. That shared response identifies the
 saved Post and carries `published_at`, but it does not carry the server clock
 against which a future publication instant was classified.
 
