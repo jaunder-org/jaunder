@@ -607,7 +607,11 @@ mod tests {
 
     #[test]
     fn post_header_has_one_protected_viewer_independent_action_slot() {
-        let html = body(&PageSeed::SiteTimeline(one_post_page())).into_string();
+        let html = body(&PageSeed::SiteTimeline {
+            order: common::seed::TimelineOrder::Newest,
+            page: one_post_page(),
+        })
+        .into_string();
         assert_eq!(
             html.matches("class=\"j-post-actions-slot\"").count(),
             1,
