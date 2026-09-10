@@ -96,10 +96,7 @@ pub(super) fn shell_response(shell: &Shell) -> Response {
 ///
 /// The route was decoded before this point, so encoding its canonical path exactly
 /// once keeps Unicode slugs valid in `Location`; the already-valid URI query stays raw.
-pub(super) fn permalink_alias_redirect(
-    route: &PermalinkRoute,
-    query: Option<&str>,
-) -> Result<Response, axum::http::header::InvalidHeaderValue> {
+pub(super) fn permalink_alias_redirect(route: &PermalinkRoute, query: Option<&str>) -> Response {
     const PATH_ENCODE_SET: &AsciiSet = &percent_encoding::NON_ALPHANUMERIC
         .remove(b'-')
         .remove(b'.')
@@ -113,15 +110,17 @@ pub(super) fn permalink_alias_redirect(
         location.push('?');
         location.push_str(query);
     }
-    let location = HeaderValue::from_str(&location)?;
-    Ok((
+    let Ok(location) = HeaderValue::from_str(&location) else {
+        unreachable!("percent-encoded path and parsed URI query form a valid header value");
+    };
+    (
         StatusCode::FOUND,
         [
             (header::LOCATION, location),
             (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
         ],
     )
-        .into_response())
+        .into_response()
 }
 
 #[cfg(test)]

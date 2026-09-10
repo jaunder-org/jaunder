@@ -129,13 +129,7 @@ impl PublicProjector {
             date,
             slug,
         };
-        match document::permalink_alias_redirect(&route, query) {
-            Ok(response) => response,
-            Err(error) => Self::boundary_response(
-                InternalError::server(error),
-                "server.projector.permalink_alias",
-            ),
-        }
+        document::permalink_alias_redirect(&route, query)
     }
 
     async fn permalink(&self, route: PermalinkRoute) -> ProjectionResult {

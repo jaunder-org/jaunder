@@ -57,17 +57,15 @@ impl<'de> Deserialize<'de> for PermalinkPath {
     }
 }
 
-/// Parse exactly four raw alias segments so invalid percent-decoded UTF-8 reaches the
-/// projector's indistinguishable shell miss rather than axum's extractor rejection.
+/// Parse the router-matched four raw alias segments so invalid percent-decoded UTF-8
+/// reaches the projector's indistinguishable shell miss rather than axum's extractor
+/// rejection.
 fn parse_permalink_alias_path(path: &str) -> Option<(PermalinkDate, Slug)> {
     let mut segments = path.strip_prefix('/')?.split('/');
     let year = percent_decode_str(segments.next()?).decode_utf8().ok()?;
     let month = percent_decode_str(segments.next()?).decode_utf8().ok()?;
     let day = percent_decode_str(segments.next()?).decode_utf8().ok()?;
     let slug = percent_decode_str(segments.next()?).decode_utf8().ok()?;
-    if segments.next().is_some() {
-        return None;
-    }
 
     if year.len() != 4
         || month.len() != 2
