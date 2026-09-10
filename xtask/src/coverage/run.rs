@@ -197,7 +197,8 @@ fn failure_report(verdict: &gate::Verdict, crap_fails: &[crap::CrapFail]) -> Str
     if !verdict.failures.is_empty() {
         s.push_str(
             "\n  → add a test covering these lines, or mark accepted-uncovered with a trailing\
-             \n    `// cov:ignore` (single line) or a `// cov:ignore-start` / `// cov:ignore-stop` block.",
+             \n    `// cov:ignore: <specific reason>` (single line) or\
+             \n    `// cov:ignore-start: <specific reason>` … `// cov:ignore-stop` block.",
         );
     }
     if !verdict.guard_violations.is_empty() {
@@ -290,7 +291,12 @@ mod tests {
         assert!(r.contains("a.rs:10: let x = bar()?;"), "{r}"); // text trimmed
         assert!(r.contains("c.rs:3: view! { <div/> }"), "{r}");
         assert!(r.contains("b.rs::big crap=42.00"), "{r}");
-        assert!(r.contains("cov:ignore"), "uncovered guidance: {r}");
+        assert!(
+            r.contains("cov:ignore: <specific reason>")
+                && r.contains("cov:ignore-start: <specific reason>")
+                && r.contains("cov:ignore-stop"),
+            "uncovered guidance: {r}"
+        );
         assert!(r.contains("crap:allow"), "crap guidance: {r}");
         assert!(r.contains("revisit the exemption"), "guard guidance: {r}");
     }
