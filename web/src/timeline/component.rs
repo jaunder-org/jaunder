@@ -12,7 +12,7 @@ use leptos::task::spawn_local;
 use leptos_router::components::Redirect;
 
 use common::pagination::PageSize;
-use common::seed::{Page, RenderedPost, TimelineCursor};
+use common::seed::{Page, RenderedPost, TimelineCursor, TimelineOrder};
 
 use super::state::{NoIdentity, TimelinePaint, TimelineState};
 use crate::error::WebResult;
@@ -77,6 +77,8 @@ pub fn TimelineGate(
     state: TimelineState,
     on_mutate: Callback<()>,
     on_load_more: Callback<()>,
+    order: Signal<TimelineOrder>,
+    on_order_change: Callback<TimelineOrder>,
     /// Row context for each `PostCard`'s tag chips, and the page's route-derived
     /// identity in one: `None` means the URL segment has not resolved to a user, so
     /// no rows are painted. Defaults to site-wide, which four of five pages want.
@@ -123,6 +125,8 @@ pub fn TimelineGate(
                         state=state
                         on_mutate=on_mutate
                         on_load_more=on_load_more
+                        order=order
+                        on_order_change=on_order_change
                         tag_context=tag_context
                         empty_text=empty_text
                     />
@@ -146,6 +150,8 @@ pub fn TimelineRows(
     state: TimelineState,
     on_mutate: Callback<()>,
     on_load_more: Callback<()>,
+    order: Signal<TimelineOrder>,
+    on_order_change: Callback<TimelineOrder>,
     /// Tag-chip linking context for each row's `PostCard`. Defaults to
     /// `SiteWide` (the site/cockpit timelines); the user timeline passes
     /// `ForUser` so chips also render the "· here" per-author link.
@@ -159,8 +165,19 @@ pub fn TimelineRows(
     let read_rows = move || state.rows.get();
     let read_has_more = move || state.has_more.get();
     let read_in_flight = move || state.status.get().is_in_flight();
+    let change_order = move |event| {
+        on_order_change.run(
+            event_target_value(&event)
+                .parse::<TimelineOrder>()
+                .unwrap_or_default(),
+        );
+    };
     view! {
-        <div class="j-scroll">
+        <div class="j-scroll" on:change=change_order>
+            {move || {
+                super::render::order_control(order.get())
+                    .inject_into(leptos::html::div().class("j-contents"))
+            }}
             <div data-jaunder-part="post-list">
                 {move || {
                     let rows = read_rows();

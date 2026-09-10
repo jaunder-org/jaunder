@@ -4,6 +4,7 @@
 //! destination theme and page must commit together when CSR navigation resolves.
 
 use common::{
+    root_relative_url::RootRelativeUrl,
     seed::{Page, PageSeed, PublicPresentation, RenderedPost, TimelineCursor, TimelineOrder},
     theme::PublishedThemePresentation,
 };
@@ -18,6 +19,16 @@ pub fn site_destination(
     Page<RenderedPost, TimelineCursor>,
 ) {
     (presentation.theme, presentation.page)
+}
+
+/// The home timeline's fixed bare route, kept in the host-compiled navigation
+/// seam so the wasm component only wires it to router navigation.
+#[must_use]
+pub fn site_timeline_base_url() -> RootRelativeUrl {
+    let Ok(url) = "/".parse() else {
+        unreachable!("home route is root-relative");
+    };
+    url
 }
 
 /// Selects the matching projector page and its order for the public home timeline.

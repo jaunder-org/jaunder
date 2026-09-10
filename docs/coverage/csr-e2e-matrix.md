@@ -69,11 +69,18 @@ checks authenticated shell state after the CSR mount.
 
 ### Public reading
 
-**Paths and entry points:** `/`, the mounted `/:username` matcher with canonical
-`/~:username` entry, `/~:username/:year/:month/:day/:slug`, and post links.
+**Paths and entry points:** `/` and `/?order=oldest`, the mounted `/:username`
+matcher with canonical `/~:username` entry, its `order` query,
+`/~:username/:year/:month/:day/:slug`, and post links.
 
-**Evidence:** [`end2end/tests/posts.spec.ts`](../../end2end/tests/posts.spec.ts)
-creates posts and asserts timelines, permalinks, deletion, and author timelines;
+**Evidence:**
+[`end2end/tests/timeline-order.spec.ts`](../../end2end/tests/timeline-order.spec.ts)
+proves the labelled URL-driven order control, deterministic visible
+Newest/Oldest ordering, projector-seeded public Oldest first paint through CSR
+mount, unknown-query fallback, history restoration, and non-persistence on a
+bare authenticated feed URL.
+[`end2end/tests/posts.spec.ts`](../../end2end/tests/posts.spec.ts) creates posts
+and asserts timelines, permalinks, deletion, and author timelines;
 [`end2end/tests/unicode-slug.spec.ts`](../../end2end/tests/unicode-slug.spec.ts)
 exercises encoded permalink paths; and
 [`end2end/tests/theme.spec.ts`](../../end2end/tests/theme.spec.ts) proves
@@ -81,9 +88,13 @@ viewer-independent site and author presentation precedence across public routes.
 
 ### Authenticated cockpit
 
-**Paths and entry points:** `/app`; authenticated shell navigation.
+**Paths and entry points:** `/app` and `/app?order=oldest`; authenticated shell
+navigation.
 
 **Evidence:**
+[`end2end/tests/timeline-order.spec.ts`](../../end2end/tests/timeline-order.spec.ts)
+proves the shared labelled control is URL-driven on the home feed and a bare
+`/app` does not retain an earlier Oldest choice.
 [`end2end/tests/authed-flash.spec.ts`](../../end2end/tests/authed-flash.spec.ts)
 asserts the anonymous bounce and authenticated cockpit content;
 [`end2end/tests/posts.spec.ts`](../../end2end/tests/posts.spec.ts) asserts the
@@ -197,10 +208,14 @@ asserts reset token/error and client validation behavior.
 
 ### Tag browsing
 
-**Paths and entry points:** `/tags/:tag`, the mounted `/:username/tags/:tag`
-matcher with canonical `/~:username/tags/:tag` entry, and post tag chips.
+**Paths and entry points:** `/tags/:tag`, `/tags/:tag?order=oldest`, the mounted
+`/:username/tags/:tag` matcher with canonical `/~:username/tags/:tag` entry and
+its `order` query, and post tag chips.
 
-**Evidence:** [`end2end/tests/posts.spec.ts`](../../end2end/tests/posts.spec.ts)
+**Evidence:**
+[`end2end/tests/timeline-order.spec.ts`](../../end2end/tests/timeline-order.spec.ts)
+proves the shared labelled control and visible Newest/Oldest order on both tag
+surfaces. [`end2end/tests/posts.spec.ts`](../../end2end/tests/posts.spec.ts)
 asserts site and per-user tag listings, empty tags, and tag-edit transitions.
 [`end2end/tests/timeline-cls.spec.ts`](../../end2end/tests/timeline-cls.spec.ts)
 measures both tag-route timeline presentations, while

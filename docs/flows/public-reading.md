@@ -6,19 +6,26 @@ Matrix: `matrix:docs/coverage/csr-e2e-matrix.md#public-reading`
 
 - `route:/`
 - `route:/:username`
+- `route:/tags/:tag`
+- `route:/:username/tags/:tag`
 - `route:/~:username/:year/:month/:day/:slug`
 
 `/YYYY/MM/DD/slug` is intentionally absent from the mounted route declarations.
 It is an inbound-only HTTP compatibility alias, not a CSR route or a link
 target.
 
+The four public timelines take one URL-only order state: a bare URL means Newest
+and `?order=oldest` means Oldest. Unknown values fall back to Newest. The same
+control is also present on the authenticated `/app` home feed; it is likewise
+URL-only, so a bare `/app` never inherits a previous selection.
+
 ## Endpoint census
 
-| Endpoint                                     | Status  | Surface                                                                                                              |
-| -------------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------- |
-| `endpoint:/api/timeline/list_local_timeline` | Covered | Feeds the site-wide `/` timeline, including load-more and same-route refresh after owner-side mutations.             |
-| `endpoint:/api/timeline/list_by_user`        | Covered | Feeds the mounted user timeline matcher; rendered links stay canonical with the `~username` form.                    |
-| `endpoint:/api/posts/get`                    | Covered | Resolves the permalink page and upgrades it for the author when the same URL names a private or draft post they own. |
+| Endpoint                                     | Status  | Surface                                                                                                                                     |
+| -------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `endpoint:/api/timeline/list_local_timeline` | Covered | Feeds the site-wide `/` timeline, including URL-selected Newest/Oldest order, load-more, and same-route refresh after owner-side mutations. |
+| `endpoint:/api/timeline/list_by_user`        | Covered | Feeds the mounted user timeline matcher; it shares URL-selected order with the canonical `~username` links.                                 |
+| `endpoint:/api/posts/get`                    | Covered | Resolves the permalink page and upgrades it for the author when the same URL names a private or draft post they own.                        |
 
 ## Canonical navigation and direct HTTP aliases
 
@@ -36,12 +43,14 @@ compatibility route outside the CSR, preserving ADR-0076's `~`-only navigation
 rule.
 
 `/` is always the enhanced public local timeline, even for the signed-in owner.
-The projector seed is adopted for first paint, then the CSR timeline keeps
-paging and refresh in place without swapping the route to `/app`.
+The projector seeds the requested URL order for first paint; the CSR timeline
+adopts that seed, keeps the selection through mount, and continues paging in the
+same direction without swapping the route to `/app`.
 
 The mounted user matcher renders a public profile timeline with canonical
 `~username` links, feed discovery, and an optional subscription control for
-eligible viewers. The read path stays visibility-filtered: a viewer only gets
+eligible viewers. The site tag and per-user tag timelines use the same order
+query contract. The read path stays visibility-filtered: a viewer only gets
 posts they are allowed to see.
 
 The permalink page reuses the server-painted post body as its first-paint

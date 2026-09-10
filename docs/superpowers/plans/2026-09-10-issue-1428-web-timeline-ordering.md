@@ -57,7 +57,7 @@ Out:
     public-flow inventory checks remain unchanged or are updated only for the
     new timeline request contract.
 
-- [ ] Task 2: Deliver one URL-driven Order control across every web Post
+- [x] Task 2: Deliver one URL-driven Order control across every web Post
       timeline
   - Depends on: Task 1's request, seed, route-order, storage, and projector
     contracts.

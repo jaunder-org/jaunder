@@ -218,6 +218,23 @@ impl ListingRoute {
         }
     }
 
+    /// The route's bare canonical path, without query state.
+    #[must_use]
+    pub fn timeline_base_url(&self) -> RootRelativeUrl {
+        let path = match self {
+            Self::Profile(Some(username), _) => format!("/~{username}"),
+            Self::SiteTag(Some(tag), _) => format!("/tags/{tag}"),
+            Self::UserTag(Some(username), Some(tag), _) => format!("/~{username}/tags/{tag}"),
+            Self::Profile(None, _) | Self::UserTag(None, _, _) => "/".to_owned(),
+            Self::UserTag(Some(username), None, _) => format!("/~{username}/tags"),
+            Self::SiteTag(None, _) => "/tags".to_owned(),
+        };
+        let Ok(url) = RootRelativeUrl::try_from(path) else {
+            unreachable!("typed listing route values are path-safe");
+        };
+        url
+    }
+
     /// Adopt only a projector page whose kind and every typed route value match.
     #[must_use]
     pub fn seeded_page(
@@ -1096,6 +1113,24 @@ mod tests {
         assert_eq!(user_tag.user_chrome(), None);
         assert_eq!(user_tag.tag_context(), Some(TagCtx::ForUser(alice())));
         assert_eq!(user_tag.empty_text(), "No posts with this tag yet.");
+    }
+
+    #[test]
+    fn listing_routes_build_their_bare_canonical_paths() {
+        let profile =
+            ListingRoute::Profile(Some(alice()), TimelineOrder::Oldest).timeline_base_url();
+        let profile: &str = profile.as_ref();
+        assert_eq!(profile, "/~alice");
+
+        let site_tag =
+            ListingRoute::SiteTag(Some(rust()), TimelineOrder::Oldest).timeline_base_url();
+        let site_tag: &str = site_tag.as_ref();
+        assert_eq!(site_tag, "/tags/rust");
+
+        let user_tag = ListingRoute::UserTag(Some(alice()), Some(rust()), TimelineOrder::Oldest)
+            .timeline_base_url();
+        let user_tag: &str = user_tag.as_ref();
+        assert_eq!(user_tag, "/~alice/tags/rust");
     }
 
     #[test]

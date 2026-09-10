@@ -9,12 +9,23 @@ use std::future::Future;
 
 use leptos::prelude::*;
 
+use common::root_relative_url::RootRelativeUrl;
 use common::seed::{Page, RenderedPost, TimelineCursor};
 use common::username::Username;
 
 use crate::auth::SessionUser;
 use crate::error::WebResult;
 use crate::timeline::TimelineState;
+
+/// The cockpit timeline's fixed bare route, constructed in this host-compiled
+/// state seam rather than in the wasm page wiring.
+#[must_use]
+pub fn cockpit_timeline_base_url() -> RootRelativeUrl {
+    let Ok(url) = "/app".parse() else {
+        unreachable!("cockpit route is root-relative");
+    };
+    url
+}
 
 /// One resolved cockpit load: the session-confirmed viewer paired with the feed page
 /// fetched for them, or `None` when the session resolved to nobody — anonymous or

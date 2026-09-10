@@ -3,29 +3,41 @@
 //! `inner_html` (coincidence with the projector, ADR-0041) + the reactive
 //! `crate::timeline` rows. No cfgs of its own (wasm-only via its `mod` line).
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use common::{feed::FeedSurface, pagination::PageSize, seed::TimelineOrder};
 use leptos::prelude::*;
+use leptos_router::NavigateOptions;
+use leptos_router::hooks::{use_navigate, use_query_map};
 
 use crate::feed_discovery::FeedDiscovery;
 use crate::reactive::Invalidator;
 use crate::timeline::{self, TimelineGate, TimelineState};
-use common::{feed::FeedSurface, pagination::PageSize};
 
 #[component]
 pub fn HomePage() -> impl IntoView {
     let presentation = crate::app::theme_presentation();
     let state = TimelineState::default();
+    let query = use_query_map();
+    let order = Memo::new(move |_| {
+        query
+            .get()
+            .get("order")
+            .and_then(|value| value.parse::<TimelineOrder>().ok())
+            .unwrap_or_default()
+    });
 
     // Public projector seed (#178/#179): `/` is the anonymous site (Local) timeline
     // for EVERYONE, including the authenticated owner — the owner stays on this
     // enhanced public front page (#181, ADR-0044 D10) rather than swapping to a
     // personalized feed (a content swap can't be flash-free; the projector paints
     // anonymous-only bytes). The personalized Feed lives at the `/app` cockpit.
-    // The seed determines both the adopted page and the request order. A
-    // mismatched seed falls back to the route's default newest-first state.
-    let (order, seed) = super::site_timeline_seed(
+    let (seed_order, seed) = super::site_timeline_seed(
         leptos::prelude::use_context::<Option<common::seed::PageSeed>>().flatten(),
     );
-    state.adopt_seed(seed);
+    if seed_order == order.get_untracked() {
+        state.adopt_seed(seed);
+    }
 
     let invalidator = Invalidator::new();
     let on_mutate = Callback::new(move |()| invalidator.notify());
@@ -34,9 +46,15 @@ pub fn HomePage() -> impl IntoView {
     // viewer-independent — no `current_user()` gate and no mode swap (#181, D10).
     // Re-fetch after a committed mutation so the owner's own edits/deletes,
     // performed through the client-side Actions disclosure, reflect immediately.
-    let initial_page = client::reactive::resource(
-        move || invalidator.track(),
-        move || async move {
+    let first_destination = AtomicBool::new(true);
+    let initial_page = Resource::new(
+        move || {
+            if !first_destination.swap(false, Ordering::Relaxed) {
+                state.begin_replacement();
+            }
+            (order.get(), invalidator.track())
+        },
+        move |(order, _)| async move {
             timeline::list_local_timeline(common::seed::TimelinePageRequest {
                 order,
                 cursor: None,
@@ -49,6 +67,7 @@ pub fn HomePage() -> impl IntoView {
     timeline::wire_timeline_destination(state, initial_page, presentation);
 
     let on_load_more = Callback::new(move |()| {
+        let order = order.get_untracked();
         timeline::spawn_load_more(state, move |cursor, limit| async move {
             timeline::list_local_timeline(common::seed::TimelinePageRequest {
                 order,
@@ -59,6 +78,14 @@ pub fn HomePage() -> impl IntoView {
             .map(super::site_destination)
             .map(|(_, page)| page)
         });
+    });
+    let navigate = use_navigate();
+    let route_base = super::site_timeline_base_url();
+    let on_order_change = Callback::new(move |order| {
+        navigate(
+            &timeline::order_url(&route_base, order),
+            NavigateOptions::default(),
+        );
     });
 
     // The masthead (topbar + anon Sign-in/Register links + hero) is the shared
@@ -76,7 +103,13 @@ pub fn HomePage() -> impl IntoView {
         // masthead + rows together. The gate keeps that subtree alive across
         // `Loading → Rows` rather than rebuilding it, which matters here because it
         // is projector-coincident markup (ADR-0041 §2).
-        <TimelineGate state=state on_mutate=on_mutate on_load_more=on_load_more>
+        <TimelineGate
+            state=state
+            on_mutate=on_mutate
+            on_load_more=on_load_more
+            order=Signal::derive(move || order.get())
+            on_order_change=on_order_change
+        >
             {move || {
                 super::render::masthead(&crate::app::render_theme_logo(&theme.get()))
                     .inject_into(leptos::html::div().class("j-contents"))

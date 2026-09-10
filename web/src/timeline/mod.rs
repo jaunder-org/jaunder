@@ -26,6 +26,7 @@ mod server;
 
 pub(crate) mod render;
 mod state;
+pub use render::order_url;
 pub use state::{
     LoadMoreClaim, LoadStatus, NoIdentity, TimelineGeneration, TimelinePaint, TimelineState,
 };

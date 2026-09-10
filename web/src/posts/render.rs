@@ -74,15 +74,20 @@ pub(crate) fn body_with_logo(seed: &PageSeed, logo: &Markup, header: &Markup) ->
             (header)
             div class="j-scroll" { div class="j-page" { (permalink_article(&authored.post)) } }
         }),
-        PageSeed::SiteTimeline { page, .. } => render_timeline_page(
+        PageSeed::SiteTimeline { order, page } => render_timeline_page(
             &render::masthead(logo),
             header,
+            *order,
             &page.posts,
             page.has_more,
             &TagCtx::SiteWide,
             "No posts yet.",
         ),
-        PageSeed::Profile { username, page, .. } => render_timeline_page(
+        PageSeed::Profile {
+            username,
+            order,
+            page,
+        } => render_timeline_page(
             &topbar::render(
                 &format!("Posts by {username}"),
                 Some("User timeline"),
@@ -90,12 +95,13 @@ pub(crate) fn body_with_logo(seed: &PageSeed, logo: &Markup, header: &Markup) ->
                 logo,
             ),
             header,
+            *order,
             &page.posts,
             page.has_more,
             &TagCtx::ForUser(username.clone()),
             "No posts yet.",
         ),
-        PageSeed::SiteTag { tag, page, .. } => render_timeline_page(
+        PageSeed::SiteTag { tag, order, page } => render_timeline_page(
             &topbar::render(
                 &format!("#{tag}"),
                 Some("Posts on this instance"),
@@ -103,6 +109,7 @@ pub(crate) fn body_with_logo(seed: &PageSeed, logo: &Markup, header: &Markup) ->
                 logo,
             ),
             header,
+            *order,
             &page.posts,
             page.has_more,
             &TagCtx::SiteWide,
@@ -111,8 +118,8 @@ pub(crate) fn body_with_logo(seed: &PageSeed, logo: &Markup, header: &Markup) ->
         PageSeed::UserTag {
             username,
             tag,
+            order,
             page,
-            ..
         } => render_timeline_page(
             &topbar::render(
                 &format!("#{tag}"),
@@ -121,6 +128,7 @@ pub(crate) fn body_with_logo(seed: &PageSeed, logo: &Markup, header: &Markup) ->
                 logo,
             ),
             header,
+            *order,
             &page.posts,
             page.has_more,
             &TagCtx::ForUser(username.clone()),
@@ -281,15 +289,16 @@ fn post_action_slot(post_id: PostId) -> Markup {
 }
 
 /// A timeline page's `<main>` content: the given leading `chrome` (a `Topbar`, or
-/// home's masthead), then a bare `j-scroll` holding either the empty placeholder
-/// or the posts followed by the load-more button — the same flush, wrapper-free
-/// structure the shared `TimelineRows` renders, so the projector paint and the
-/// reactive `HomePage` / `UserTimelinePage` / `SiteTagPage` / `UserTagPage`
-/// coincide (the anonymous `SubscribeButton` renders nothing).
+/// home's masthead), then a bare `j-scroll` holding the pure order control
+/// immediately above either the empty placeholder or post list and load-more
+/// button — the same structure the shared `TimelineRows` renders, so projector
+/// paint and the reactive `HomePage` / `UserTimelinePage` / `SiteTagPage` /
+/// `UserTagPage` coincide (the anonymous `SubscribeButton` renders nothing).
 #[must_use]
 fn render_timeline_page(
     chrome: &Markup,
     header: &Markup,
+    order: common::seed::TimelineOrder,
     posts: &[RenderedPost],
     has_more: bool,
     tag_ctx: &TagCtx,
@@ -299,6 +308,7 @@ fn render_timeline_page(
         (chrome)
         (header)
         div class="j-scroll" {
+            (crate::timeline::render::order_control(order))
             div data-jaunder-part="post-list" {
                 @if posts.is_empty() {
                     p { (empty_text) }
@@ -573,11 +583,13 @@ mod tests {
             page: one_post_page(),
         })
         .into_string();
-        // Tag pages render the public masthead, then a bare j-scroll > post list.
+        // Tag pages use the same pure order-control bytes immediately above the list.
         assert!(site.contains("<h1>#rust</h1>"), "{site}");
         assert!(site.contains("Posts on this instance"), "{site}");
         assert!(
-            site.contains("<div class=\"j-scroll\"><div data-jaunder-part=\"post-list\"><article class=\"j-post\" data-jaunder-part=\"post\">"),
+            site.contains(
+                "<div data-jaunder-part=\"timeline-order\"><label for=\"timeline-order-select\">Order</label><select id=\"timeline-order-select\"><option value=\"newest\" selected>Newest</option><option value=\"oldest\">Oldest</option></select></div><div data-jaunder-part=\"post-list\"><article class=\"j-post\" data-jaunder-part=\"post\">"
+            ),
             "{site}"
         );
         assert!(site.contains("First"), "expected post rendered: {site}");
@@ -628,9 +640,11 @@ mod tests {
             "{html}"
         );
         assert!(html.contains("<div class=\"j-hero\">"), "{html}");
-        // Posts sit inside the semantic post list for the home page.
+        // The shared pure order control immediately precedes the semantic post list.
         assert!(
-            html.contains("<div class=\"j-scroll\"><div data-jaunder-part=\"post-list\"><article class=\"j-post\" data-jaunder-part=\"post\">"),
+            html.contains(
+                "<div data-jaunder-part=\"timeline-order\"><label for=\"timeline-order-select\">Order</label><select id=\"timeline-order-select\"><option value=\"newest\" selected>Newest</option><option value=\"oldest\">Oldest</option></select></div><div data-jaunder-part=\"post-list\"><article class=\"j-post\" data-jaunder-part=\"post\">"
+            ),
             "{html}"
         );
     }
@@ -667,7 +681,7 @@ mod tests {
         for hook in [
             "masthead",
             "site-title",
-            "post-list",
+            "timeline-order",
             "post",
             "post-header",
             "author-name",

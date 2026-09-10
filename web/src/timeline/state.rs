@@ -149,6 +149,14 @@ impl TimelineState {
         self.generation.get_untracked()
     }
 
+    /// Begin a first-page replacement. This revokes in-flight continuations and
+    /// clears their cursor before the replacement request is constructed, so an
+    /// order change cannot append an old page or request page two of a new order.
+    pub fn begin_replacement(&self) {
+        let _ = self.advance_generation();
+        self.clear_to(LoadStatus::NeverLoaded);
+    }
+
     /// Adopt a page's rows + cursor — a projector seed or a fresh fetch —
     /// replacing what's shown and settling to idle.
     ///
@@ -474,6 +482,34 @@ mod tests {
                 state.begin_load_more().is_some(),
                 "a failed page remains retryable"
             );
+        });
+    }
+
+    #[test]
+    fn replacement_resets_pagination_and_rejects_the_previous_order_append() {
+        Owner::new().with(|| {
+            let state = TimelineState::default();
+            state.adopt(page_with(
+                vec![sample_summary()],
+                Some(cursor(instant(), 7)),
+                true,
+            ));
+            let old_order = state
+                .begin_load_more()
+                .expect("the seeded order has a continuation");
+
+            state.begin_replacement();
+            assert!(state.rows.get().is_empty());
+            assert_eq!(state.cursor.get(), None);
+            assert!(!state.has_more.get());
+            assert_eq!(state.status.get(), LoadStatus::NeverLoaded);
+
+            state.append(
+                old_order,
+                Ok(page_with(vec![sample_summary()], None, false)),
+            );
+            assert!(state.rows.get().is_empty(), "stale rows cannot reappear");
+            assert_eq!(state.status.get(), LoadStatus::NeverLoaded);
         });
     }
 

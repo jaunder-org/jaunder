@@ -10,7 +10,7 @@ mod state;
 // Exported rather than `pub(crate)`: the wasm-only `component` is the only caller, so
 // a crate-internal item would read as dead code on the host build, where that leaf is
 // compiled out.
-pub use state::{CockpitLoad, CockpitState, resolve_initial_page};
+pub use state::{CockpitLoad, CockpitState, cockpit_timeline_base_url, resolve_initial_page};
 
 #[cfg(target_arch = "wasm32")]
 mod component;

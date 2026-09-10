@@ -8,6 +8,8 @@
 use common::pagination::PageSize;
 use common::seed::{TimelineOrder, TimelinePageRequest};
 use leptos::prelude::*;
+use leptos_router::NavigateOptions;
+use leptos_router::hooks::{use_navigate, use_query_map};
 
 use super::CockpitState;
 use crate::posts::InlineComposer;
@@ -21,6 +23,14 @@ pub fn CockpitPage() -> impl IntoView {
     // (#306, ADR-0083); this body keeps only the `Effect` and the `view!`.
     let state = CockpitState::default();
 
+    let query = use_query_map();
+    let order = Memo::new(move |_| {
+        query
+            .get()
+            .get("order")
+            .and_then(|value| value.parse::<TimelineOrder>().ok())
+            .unwrap_or_default()
+    });
     let invalidator = Invalidator::new();
     let on_mutate = Callback::new(move |()| invalidator.notify());
 
@@ -32,12 +42,15 @@ pub fn CockpitPage() -> impl IntoView {
     // the reconcile itself is keyed on pathname, so this reuses it rather than
     // re-hitting the server for identity on every publish (#591).
     let session = crate::auth::use_session();
-    let initial_page = client::reactive::resource(
-        move || invalidator.track(),
-        move || async move {
+    let initial_page = Resource::new(
+        move || {
+            state.timeline.begin_replacement();
+            (order.get(), invalidator.track())
+        },
+        move |(order, _)| async move {
             super::resolve_initial_page(session.reconcile.await, || {
                 timeline::list_home_feed(TimelinePageRequest {
-                    order: TimelineOrder::Newest,
+                    order,
                     cursor: None,
                     limit: Some(PageSize::default()),
                 })
@@ -59,13 +72,22 @@ pub fn CockpitPage() -> impl IntoView {
     });
 
     let on_load_more = Callback::new(move |()| {
+        let order = order.get_untracked();
         timeline::spawn_load_more(state.timeline, move |cursor, limit| {
             timeline::list_home_feed(TimelinePageRequest {
-                order: TimelineOrder::Newest,
+                order,
                 cursor,
                 limit,
             })
         });
+    });
+    let navigate = use_navigate();
+    let route_base = super::cockpit_timeline_base_url();
+    let on_order_change = Callback::new(move |order| {
+        navigate(
+            &timeline::order_url(&route_base, order),
+            NavigateOptions::default(),
+        );
     });
 
     let read_username = move || state.username.get();
@@ -79,6 +101,8 @@ pub fn CockpitPage() -> impl IntoView {
             state=state.timeline
             on_mutate=on_mutate
             on_load_more=on_load_more
+            order=Signal::derive(move || order.get())
+            on_order_change=on_order_change
             no_identity=NoIdentity::Redirect("/login")
         >
             {move || match read_username() {
