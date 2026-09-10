@@ -214,6 +214,7 @@ convention). See the Status column below for each ADR's current status.
 | [0185](adr/0185-reason-bearing-coverage-exceptions.md)                 | Reason-bearing Rust coverage exceptions                                                                      | accepted   |
 | [0186](adr/0186-classified-saved-post-for-creation.md)                 | Creation returns a classified Saved Post extension                                                           | accepted   |
 | [0187](adr/0187-strict-new-post-local-publication-time.md)             | New-Post publication time rejects nonexistent local times                                                    | accepted   |
+| [0188](adr/0188-trusted-post-actions-use-css-anchors.md)               | Trusted Post Actions Use CSS Anchor Positioning                                                              | accepted   |
 
 <!-- adr-table:end -->
 
