@@ -322,6 +322,7 @@ pub(crate) mod test_fixtures {
             post: RenderedPost {
                 post_id: PostId::from(7),
                 username: parse_username("alice"),
+                display_name: None,
                 title: Some(common::test_support::parse_post_title("Hello & <World>")),
                 summary: None,
                 slug: "hello".parse().unwrap(),
@@ -344,6 +345,7 @@ pub(crate) mod test_fixtures {
         RenderedPost {
             post_id: PostId::from(1),
             username: parse_username("bob"),
+            display_name: None,
             title: Some(common::test_support::parse_post_title("First")),
             summary: Some(parse_post_summary("An excerpt")),
             slug: "first".parse().unwrap(),

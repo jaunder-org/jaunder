@@ -138,6 +138,7 @@ mod tests {
     #[test]
     fn scheduled_cursor_rejects_row_without_publish_time() {
         let post = PostRecord {
+            author_display_name: None,
             post_id: PostId::from(1),
             user_id: UserId::from(1),
             author_username: parse_username("author"),

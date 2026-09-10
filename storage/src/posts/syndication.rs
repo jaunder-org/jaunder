@@ -143,7 +143,7 @@ fn window_sql<DB: PostDialect>(
        AND p.published_at <= $1
        AND {resolution}
 )
- SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+ SELECT p.post_id, p.user_id, u.username, u.display_name, p.title, p.slug, p.body, p.format, p.rendered_html,
         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
         {tags} AS tags
  FROM ranked r
@@ -164,7 +164,7 @@ fn window_sql<DB: PostDialect>(
        AND u.username = $2
        AND {resolution}
 )
- SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+ SELECT p.post_id, p.user_id, u.username, u.display_name, p.title, p.slug, p.body, p.format, p.rendered_html,
         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
         {tags} AS tags
  FROM ranked r
@@ -186,7 +186,7 @@ fn window_sql<DB: PostDialect>(
        AND t.tag_slug = $2
        AND {resolution}
 )
- SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+ SELECT p.post_id, p.user_id, u.username, u.display_name, p.title, p.slug, p.body, p.format, p.rendered_html,
         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
         {tags} AS tags
  FROM ranked r
@@ -210,7 +210,7 @@ fn window_sql<DB: PostDialect>(
        AND t.tag_slug = $3
        AND {resolution}
 )
- SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+ SELECT p.post_id, p.user_id, u.username, u.display_name, p.title, p.slug, p.body, p.format, p.rendered_html,
         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
         {tags} AS tags
  FROM ranked r
@@ -243,7 +243,7 @@ where
     // the feed fan-out needs.
     let tags = DB::TAGS_SUBQUERY;
     let sql = format!(
-        "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+        "SELECT p.post_id, p.user_id, u.username, u.display_name, p.title, p.slug, p.body, p.format, p.rendered_html,
                     p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
                     {tags} AS tags
              FROM posts p

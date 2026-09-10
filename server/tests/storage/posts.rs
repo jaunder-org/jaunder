@@ -96,10 +96,11 @@ macro_rules! create_posts {
 #[tokio::test]
 async fn post_create_and_get_by_id_works(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let user_id = SeedUser::new()
+    let user = SeedUser::new()
+        .display_name("Ada Lovelace")
         .seed(env.users(), env.write_scope())
-        .await
-        .user_id;
+        .await;
+    let user_id = user.user_id;
 
     let post = SeedRawPost::new(user_id)
         .draft()
@@ -114,6 +115,8 @@ async fn post_create_and_get_by_id_works(#[case] backend: Backend) {
         .unwrap();
     assert_eq!(record.post_id, post.post_id);
     assert_eq!(record.user_id, user_id);
+    assert_eq!(record.author_username, user.username);
+    assert_eq!(record.author_display_name.as_deref(), Some("Ada Lovelace"));
     assert_eq!(record.title, Some(post.title));
     assert_eq!(record.slug, post.slug);
     assert_eq!(record.format, PostFormat::Markdown);

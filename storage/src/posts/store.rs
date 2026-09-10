@@ -836,7 +836,7 @@ where
         let (post_id, idempotency_key_expired) =
             lifecycle::write_post_in_tx::<DB>(connection, input, now).await?;
         let sql = format!(
-            "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format,
+            "SELECT p.post_id, p.user_id, u.username, u.display_name, p.title, p.slug, p.body, p.format,
                     p.rendered_html, p.created_at, p.updated_at, p.published_at, p.deleted_at,
                     p.summary, {tags} AS tags
              FROM posts p JOIN users u ON p.user_id = u.user_id WHERE p.post_id = $1",
@@ -864,7 +864,7 @@ where
             lifecycle::write_post_in_tx::<DB>(connection, input, now).await?;
         DB::materialize_proven_local_media(connection, input.user_id, local_media).await?;
         let sql = format!(
-            "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format,
+            "SELECT p.post_id, p.user_id, u.username, u.display_name, p.title, p.slug, p.body, p.format,
                     p.rendered_html, p.created_at, p.updated_at, p.published_at, p.deleted_at,
                     p.summary, {tags} AS tags
              FROM posts p JOIN users u ON p.user_id = u.user_id WHERE p.post_id = $1",
@@ -982,7 +982,7 @@ where
     ) -> Result<Option<PostRecord>> {
         let (resolution, binds, _) = visibility::resolution_where(viewer, 2);
         let sql = format!(
-            "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+            "SELECT p.post_id, p.user_id, u.username, u.display_name, p.title, p.slug, p.body, p.format, p.rendered_html,
                     p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
                     {tags} AS tags
              FROM posts p
@@ -1322,7 +1322,7 @@ where
         let (resolution, binds, _) = visibility::resolution_where(viewer, 5);
         // `published_at <= $4` hides scheduled (future-dated) posts until due.
         let sql = format!(
-            "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+            "SELECT p.post_id, p.user_id, u.username, u.display_name, p.title, p.slug, p.body, p.format, p.rendered_html,
                     p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
                     {tags} AS tags
              FROM posts p
@@ -1361,7 +1361,7 @@ where
         let date_clause = DB::PERMALINK_DATE_CLAUSE;
         let date_text = PermalinkDateText::from(date);
         let sql = format!(
-            "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+            "SELECT p.post_id, p.user_id, u.username, u.display_name, p.title, p.slug, p.body, p.format, p.rendered_html,
                     p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
                     {tags} AS tags
              FROM posts p
@@ -1521,7 +1521,7 @@ where
             let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 6);
             // `published_at <= $5` hides scheduled (future-dated) posts.
             let sql = format!(
-                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                "SELECT p.post_id, p.user_id, u.username, u.display_name, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
                         {tags} AS tags
                  FROM posts p
@@ -1552,7 +1552,7 @@ where
             let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 3);
             // `published_at <= $2` hides scheduled (future-dated) posts.
             let sql = format!(
-                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                "SELECT p.post_id, p.user_id, u.username, u.display_name, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
                         {tags} AS tags
                  FROM posts p
@@ -1596,7 +1596,7 @@ where
             let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 5);
             // `published_at <= $4` hides scheduled (future-dated) posts.
             let sql = format!(
-                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                "SELECT p.post_id, p.user_id, u.username, u.display_name, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
                         {tags} AS tags
                  FROM posts p
@@ -1625,7 +1625,7 @@ where
             let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 2);
             // `published_at <= $1` hides scheduled (future-dated) posts.
             let sql = format!(
-                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                "SELECT p.post_id, p.user_id, u.username, u.display_name, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
                         {tags} AS tags
                  FROM posts p
@@ -1664,7 +1664,7 @@ where
             // `published_at IS NULL OR published_at > $5` surfaces both true
             // drafts and scheduled (future-dated) posts to the author.
             let sql = format!(
-                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                "SELECT p.post_id, p.user_id, u.username, u.display_name, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
                         {tags} AS tags
                  FROM posts p
@@ -1689,7 +1689,7 @@ where
             // `published_at IS NULL OR published_at > $2` surfaces both true
             // drafts and scheduled (future-dated) posts to the author.
             let sql = format!(
-                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                "SELECT p.post_id, p.user_id, u.username, u.display_name, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
                         {tags} AS tags
                  FROM posts p
@@ -1725,7 +1725,7 @@ where
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
             let sql = format!(
-                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                "SELECT p.post_id, p.user_id, u.username, u.display_name, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
                         {tags} AS tags
                  FROM posts p
@@ -1749,7 +1749,7 @@ where
                 .await?
         } else {
             let sql = format!(
-                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                "SELECT p.post_id, p.user_id, u.username, u.display_name, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
                         {tags} AS tags
                  FROM posts p
@@ -1785,7 +1785,7 @@ where
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
             let sql = format!(
-                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                "SELECT p.post_id, p.user_id, u.username, u.display_name, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
                         {tags} AS tags
                  FROM posts p
@@ -1805,7 +1805,7 @@ where
                 .await?
         } else {
             let sql = format!(
-                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                "SELECT p.post_id, p.user_id, u.username, u.display_name, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
                         {tags} AS tags
                  FROM posts p
@@ -1870,7 +1870,7 @@ where
             let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 6);
             // `published_at <= $5` hides scheduled (future-dated) posts.
             let sql = format!(
-                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                "SELECT p.post_id, p.user_id, u.username, u.display_name, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
                         {tags} AS tags
                  FROM posts p
@@ -1903,7 +1903,7 @@ where
             let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 3);
             // `published_at <= $2` hides scheduled (future-dated) posts.
             let sql = format!(
-                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                "SELECT p.post_id, p.user_id, u.username, u.display_name, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
                         {tags} AS tags
                  FROM posts p
@@ -1963,7 +1963,7 @@ where
             let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 7);
             // `published_at <= $6` hides scheduled (future-dated) posts.
             let sql = format!(
-                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                "SELECT p.post_id, p.user_id, u.username, u.display_name, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
                         {tags} AS tags
                  FROM posts p
@@ -1998,7 +1998,7 @@ where
             let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 4);
             // `published_at <= $3` hides scheduled (future-dated) posts.
             let sql = format!(
-                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                "SELECT p.post_id, p.user_id, u.username, u.display_name, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
                         {tags} AS tags
                  FROM posts p

@@ -2,7 +2,8 @@ use common::{
     ids::{AudienceId, PostId, UserId},
     tag::{Tag, TagLabel},
     test_support::{
-        parse_audience_name, parse_etag, parse_post_body, parse_row_limit, permalink_date,
+        parse_audience_name, parse_display_name, parse_etag, parse_post_body, parse_row_limit,
+        permalink_date,
     },
     time::UtcInstant,
     username::Username,
@@ -16,8 +17,8 @@ use storage::test_support::{
 };
 use storage::{
     AudienceStorage, FeedEventStorage, GoLivePost, ListByTagError, PostBookkeepingExpectation,
-    PostCursor, PostFormat, PostRecord, PostStorage, RenderedPostContent, WriteScope,
-    create_rendered_post,
+    PostCursor, PostFormat, PostRecord, PostStorage, ProfileUpdate, RenderedPostContent,
+    WriteScope, create_rendered_post,
 };
 
 use rstest::*;
@@ -935,6 +936,48 @@ async fn list_published_by_user_returns_only_user_posts(#[case] backend: Backend
     let bob_posts = anon_published_by_user(Arc::clone(&env.posts()), &bob.username, "10").await;
     assert_eq!(bob_posts.len(), 1);
     assert_eq!(bob_posts[0].user_id, bob_id);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn list_published_by_user_uses_current_display_name(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let user = SeedUser::new()
+        .display_name("Old Name")
+        .seed(env.users(), env.write_scope())
+        .await;
+    let post = SeedRawPost::new(user.user_id)
+        .seed(env.posts(), env.write_scope())
+        .await;
+    let users = Arc::clone(&env.users());
+    let user_id = user.user_id;
+    let new_display_name = parse_display_name("New Name");
+    let outcome = env
+        .write_scope()
+        .run(move |transaction| {
+            Box::pin(async move {
+                users
+                    .update_profile(
+                        transaction,
+                        user_id,
+                        &ProfileUpdate {
+                            display_name: Some(&new_display_name),
+                            bio: None,
+                        },
+                    )
+                    .await
+            })
+        })
+        .await
+        .expect("profile update should succeed");
+    confirmed(outcome, "profile update");
+
+    let posts = anon_published_by_user(Arc::clone(&env.posts()), &user.username, "10").await;
+    let listed = posts
+        .iter()
+        .find(|listed| listed.post_id == post.post_id)
+        .expect("existing post should remain listed");
+    assert_eq!(listed.author_display_name.as_deref(), Some("New Name"));
 }
 
 #[apply(backends)]

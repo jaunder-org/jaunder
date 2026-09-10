@@ -724,6 +724,7 @@ mod etag_tests {
     fn base_post() -> PostRecord {
         let t = parse_utc_instant("1970-01-12T13:46:40Z");
         PostRecord {
+            author_display_name: None,
             post_id: PostId::from(1),
             user_id: UserId::from(1),
             author_username: "alice".parse().expect("parse username"),

@@ -37,6 +37,7 @@ pub fn authored_post(post: PostRecord, is_author: bool) -> AuthoredPost {
     let PostRecord {
         post_id,
         author_username,
+        author_display_name,
         title,
         slug,
         body,
@@ -52,6 +53,7 @@ pub fn authored_post(post: PostRecord, is_author: bool) -> AuthoredPost {
         post: RenderedPost {
             post_id,
             username: author_username,
+            display_name: author_display_name,
             title,
             summary,
             slug,
@@ -101,7 +103,9 @@ mod tests {
     #[test]
     fn authored_post_carries_summary_and_source() {
         use crate::posts::server::authored_post;
-        use common::test_support::{parse_post_body, parse_post_summary, parse_username};
+        use common::test_support::{
+            parse_display_name, parse_post_body, parse_post_summary, parse_username,
+        };
         use common::{
             ids::{PostId, UserId},
             slug::Slug,
@@ -115,6 +119,7 @@ mod tests {
 
         let authored = authored_post(
             PostRecord {
+                author_display_name: Some(parse_display_name("Ada Lovelace")),
                 post_id: PostId::from(1),
                 user_id: UserId::from(2),
                 author_username,
@@ -137,6 +142,10 @@ mod tests {
         assert_eq!(
             authored.post.summary,
             Some(parse_post_summary("the summary"))
+        );
+        assert_eq!(
+            authored.post.display_name,
+            Some(parse_display_name("Ada Lovelace"))
         );
         assert_eq!(authored.body, "body");
         assert_eq!(authored.format, PostFormat::Markdown);
@@ -166,6 +175,7 @@ mod tests {
 
         let authored = authored_post(
             PostRecord {
+                author_display_name: None,
                 post_id: PostId::from(1),
                 user_id: UserId::from(2),
                 author_username,
@@ -220,6 +230,7 @@ mod tests {
 
         let built = rendered_post(
             PostRecord {
+                author_display_name: None,
                 post_id: PostId::from(1),
                 user_id: UserId::from(2),
                 author_username,
