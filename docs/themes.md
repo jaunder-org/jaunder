@@ -150,7 +150,11 @@ The stable hooks are:
 
 The contract guarantees these concepts, landmarks, route presence, cardinality,
 and accessible source order. It does not guarantee wrapper depth or incidental
-sibling positions.
+sibling positions. Owner-only Post Actions controls are not Style Contract
+content: Jaunder mounts them in a trusted sibling outside this surface, tethered
+to a protected Post-header slot. Theme CSS cannot directly style or suppress
+those controls, but a theme that removes or clips a Post/header can remove their
+visual anchor; select **Studio** in `/themes` to recover the controls.
 
 Jaunder accepts standard declarations and CSS custom properties, subject to the
 same URL and global-name checks. Supported at-rules are top-level `@font-face`
@@ -179,7 +183,9 @@ Before publication, check at least:
   behavior;
 - configured logo/header defaults and every explicit header-pool entry;
 - a fresh signed-out browser context after publication;
-- that Studio remains visually unchanged and owner controls remain reachable.
+- that Studio remains visually unchanged and that theme Post/header layout keeps
+  owner Actions controls visibly anchored; if it removes or clips that ancestor,
+  selecting Studio remains the supported recovery.
 
 A header pool is deterministic for a route and the current theme state. Use
 **Shuffle assignments** to deliberately remap routes; it is not per-request
