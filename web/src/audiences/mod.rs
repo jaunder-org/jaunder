@@ -17,6 +17,7 @@
 mod api;
 #[cfg(target_arch = "wasm32")]
 mod component;
+mod input_state;
 mod model;
 #[cfg(feature = "server")]
 mod server;
@@ -28,4 +29,5 @@ pub use api::{
 };
 #[cfg(target_arch = "wasm32")]
 pub use component::AudiencesPage;
+pub use input_state::{AudienceEditorState, CreateDraftState, delete_invalidates_list};
 pub use model::{SubscriberSummary, Summary};

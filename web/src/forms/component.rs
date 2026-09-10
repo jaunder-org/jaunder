@@ -26,10 +26,30 @@ where
     S::Error: Send + Sync + 'static,
     F: Fn() -> Option<S> + Send + Sync + 'static,
 {
+    server_action_submit_with(action, request, |_| {})
+}
+
+/// [`server_action_submit`] with a callback that observes the exact dispatched input.
+///
+/// The request constructor also drives the reactive validity gate and may run many times.
+/// `on_dispatch` runs exactly once, immediately before the accepted input is dispatched.
+pub fn server_action_submit_with<S, F, O>(
+    action: ServerAction<S>,
+    request: F,
+    on_dispatch: O,
+) -> (Signal<bool>, impl Fn(leptos::ev::SubmitEvent))
+where
+    S: ServerFn + Send + Sync + Clone + 'static,
+    S::Output: Send + Sync + 'static,
+    S::Error: Send + Sync + 'static,
+    F: Fn() -> Option<S> + Send + Sync + 'static,
+    O: Fn(&S) + Send + Sync + 'static,
+{
     let (disabled, dispatch) = super::submit_gate::request_submit_gate(
         action.pending().into(),
         Callback::new(move |()| request()),
         Callback::new(move |input| {
+            on_dispatch(&input);
             action.dispatch(input);
         }),
     );
