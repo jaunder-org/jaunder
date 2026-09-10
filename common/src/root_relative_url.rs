@@ -32,9 +32,10 @@ pub struct InvalidRootRelativeUrl;
 impl RootRelativeUrl {
     /// Constructs a root-relative URL from a crate-owned path whose validity is
     /// established alongside its declaration.
-    pub(crate) fn from_trusted_path(path: &str) -> Self {
-        debug_assert!(Self::is_valid(path));
-        Self(path.to_owned())
+    pub(crate) fn from_trusted_path(path: impl Into<String>) -> Self {
+        let path = path.into();
+        debug_assert!(Self::is_valid(&path));
+        Self(path)
     }
 
     fn is_valid(path: &str) -> bool {

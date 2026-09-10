@@ -107,15 +107,12 @@ impl PostRecord {
             .to_datetime(self.published_at.unwrap_or(self.created_at).value())
             .date()
             .into();
-        let route = PermalinkRoute {
+        PermalinkRoute {
             username: self.author_username.clone(),
             date,
             slug: self.slug.clone(),
-        };
-        let Ok(url) = route.canonical_path().parse::<RootRelativeUrl>() else {
-            unreachable!("permalink() builds a valid root-relative path");
-        };
-        url
+        }
+        .canonical_path()
     }
 
     /// Generates a fallback summary from the post's first non-blank body line.

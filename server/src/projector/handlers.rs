@@ -1,13 +1,14 @@
 use axum::{
     Router,
     extract::{Extension, OriginalUri, Path},
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
     response::Response,
     routing::get,
 };
 use common::tag::Tag;
 use common::username::Username;
 use common::{permalink_route::PermalinkRoute, slug::Slug, time::PermalinkDate};
+use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Deserializer};
 
 use crate::soft_path::SoftPath;
@@ -30,7 +31,10 @@ where
         .route("/", get(site_timeline))
         .route("/~{username}", get(profile))
         .route("/~{username}/{year}/{month}/{day}/{slug}", get(permalink))
-        .route("/{year}/{month}/{day}/{slug}", get(permalink_alias))
+        .route(
+            "/{year}/{month}/{day}/{slug}",
+            get(permalink_alias).head(permalink_alias_head),
+        )
         .route("/tags/{tag}", get(site_tag))
         .route("/~{username}/tags/{tag}", get(user_tag))
         .layer(Extension(projector))
@@ -53,31 +57,41 @@ impl<'de> Deserialize<'de> for PermalinkPath {
     }
 }
 
-/// A decoded User-omitting permalink path, parsed as one soft route value.
-struct PermalinkAliasPath(Option<(PermalinkDate, Slug)>);
-
-impl<'de> Deserialize<'de> for PermalinkAliasPath {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let (year, month, day, slug) =
-            <(String, String, String, String)>::deserialize(deserializer)?;
-        let year = year.parse().ok();
-        let month = month.parse().ok();
-        let day = day.parse().ok();
-        let route = year
-            .zip(month)
-            .zip(day)
-            .and_then(|((year, month), day)| PermalinkDate::from_ymd(year, month, day))
-            .zip(slug.parse().ok());
-        Ok(Self(route))
+/// Parse exactly four raw alias segments so invalid percent-decoded UTF-8 reaches the
+/// projector's indistinguishable shell miss rather than axum's extractor rejection.
+fn parse_permalink_alias_path(path: &str) -> Option<(PermalinkDate, Slug)> {
+    let mut segments = path.strip_prefix('/')?.split('/');
+    let year = percent_decode_str(segments.next()?).decode_utf8().ok()?;
+    let month = percent_decode_str(segments.next()?).decode_utf8().ok()?;
+    let day = percent_decode_str(segments.next()?).decode_utf8().ok()?;
+    let slug = percent_decode_str(segments.next()?).decode_utf8().ok()?;
+    if segments.next().is_some() {
+        return None;
     }
+
+    if year.len() != 4
+        || month.len() != 2
+        || day.len() != 2
+        || !year.bytes().all(|byte| byte.is_ascii_digit())
+        || !month.bytes().all(|byte| byte.is_ascii_digit())
+        || !day.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+
+    let date = PermalinkDate::from_ymd(year.parse().ok()?, month.parse().ok()?, day.parse().ok()?)?;
+    Some((date, slug.parse().ok()?))
+}
+
+async fn permalink_alias_head() -> StatusCode {
+    StatusCode::METHOD_NOT_ALLOWED
 }
 
 async fn permalink_alias(
     Extension(projector): Extension<PublicProjector>,
     OriginalUri(uri): OriginalUri,
-    Path(PermalinkAliasPath(route)): Path<PermalinkAliasPath>,
 ) -> Response {
-    let Some((date, slug)) = route else {
+    let Some((date, slug)) = parse_permalink_alias_path(uri.path()) else {
         return projector.shell_response();
     };
     projector

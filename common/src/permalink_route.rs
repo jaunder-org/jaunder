@@ -1,5 +1,6 @@
 use std::str::FromStr;
 
+use crate::root_relative_url::RootRelativeUrl;
 use crate::slug::Slug;
 use crate::time::PermalinkDate;
 use crate::username::Username;
@@ -40,16 +41,16 @@ impl PermalinkRoute {
 
     /// Returns this typed route's canonical root-relative path.
     #[must_use]
-    pub fn canonical_path(&self) -> String {
+    pub fn canonical_path(&self) -> RootRelativeUrl {
         let date = self.date.value();
-        format!(
+        RootRelativeUrl::from_trusted_path(format!(
             "/~{}/{:04}/{:02}/{:02}/{}",
             self.username,
             date.year(),
             date.month(),
             date.day(),
             self.slug.as_ref()
-        )
+        ))
     }
 }
 

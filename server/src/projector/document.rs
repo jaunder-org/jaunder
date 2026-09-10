@@ -107,7 +107,8 @@ pub(super) fn permalink_alias_redirect(
         .remove(b'~')
         .remove(b'/');
 
-    let mut location = utf8_percent_encode(&route.canonical_path(), PATH_ENCODE_SET).to_string();
+    let canonical_path = route.canonical_path();
+    let mut location = utf8_percent_encode(canonical_path.as_ref(), PATH_ENCODE_SET).to_string();
     if let Some(query) = query {
         location.push('?');
         location.push_str(query);

@@ -1,4 +1,7 @@
-use axum::http::{StatusCode, header};
+use axum::{
+    body::Body,
+    http::{Method, Request, StatusCode, header},
+};
 use jiff::tz::Offset;
 use tower::ServiceExt;
 
@@ -246,7 +249,7 @@ async fn permalink_alias_redirects_with_raw_query_and_no_store(#[case] backend: 
     let env = backend.setup().await;
     let (username, year, month, day, slug, ..) =
         seed_published_post(env.users(), env.posts(), env.write_scope()).await;
-    let alias = format!("/{year}/{month}/{day}/{slug}?utm=%2f&utm=&tag=one&tag=two");
+    let alias = format!("/{year:04}/{month:02}/{day:02}/{slug}?utm=%2f&utm=&tag=one&tag=two");
 
     let response = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get(&alias))
@@ -278,7 +281,7 @@ async fn permalink_alias_redirect_without_query_has_no_delimiter(#[case] backend
     let env = backend.setup().await;
     let (username, year, month, day, slug, ..) =
         seed_published_post(env.users(), env.posts(), env.write_scope()).await;
-    let alias = format!("/{year}/{month}/{day}/{slug}");
+    let alias = format!("/{year:04}/{month:02}/{day:02}/{slug}");
 
     let response = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get(&alias))
@@ -295,6 +298,55 @@ async fn permalink_alias_redirect_without_query_has_no_delimiter(#[case] backend
         format!("/~{username}/{year:04}/{month:02}/{day:02}/{slug}")
     );
     assert!(!location.contains('?'), "absent query stays absent");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn permalink_alias_head_is_not_redirect_or_resolution(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let (_, year, month, day, slug, ..) =
+        seed_published_post(env.users(), env.posts(), env.write_scope()).await;
+    let alias = format!("/{year:04}/{month:02}/{day:02}/{slug}");
+    let app = projector_app(env.posts(), env.users(), env.themes());
+    env.base.close_pool().await;
+
+    for method in [Method::HEAD, Method::POST] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method.clone())
+                    .uri(&alias)
+                    .body(Body::empty())
+                    .expect("non-GET request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert!(
+            response.headers().get(header::LOCATION).is_none(),
+            "{method} never redirects"
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read response body");
+        assert!(body.is_empty(), "{method} rejection has no body");
+    }
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn permalink_alias_strict_dates_and_invalid_utf8_serve_shell(#[case] backend: Backend) {
+    let env = backend.setup().await;
+
+    for path in ["/2026/7/12/slug", "/+2026/07/12/slug", "/2026/07/12/%FF"] {
+        let response = projector_app(env.posts(), env.users(), env.themes())
+            .oneshot(get(path))
+            .await
+            .expect("request");
+        assert_shell_miss(response).await;
+    }
 }
 
 #[apply(backends)]
@@ -328,11 +380,11 @@ async fn permalink_alias_misses_remain_indistinguishable(#[case] backend: Backen
     let day = u32::try_from(date.day()).expect("day fits u32");
 
     for path in [
-        format!("/{year}/{month}/{day}/missing-alias"),
-        format!("/{year}/{month}/{day}/ambiguous-alias"),
-        format!("/{year}/{month}/{day}/hidden-alias"),
-        format!("/{year}/{month}/{day}/-malformed"),
-        "/not-a-year/1/2/slug".to_owned(),
+        format!("/{year:04}/{month:02}/{day:02}/missing-alias"),
+        format!("/{year:04}/{month:02}/{day:02}/ambiguous-alias"),
+        format!("/{year:04}/{month:02}/{day:02}/hidden-alias"),
+        format!("/{year:04}/{month:02}/{day:02}/-malformed"),
+        "/not-a-year/01/02/slug".to_owned(),
     ] {
         let response = projector_app(env.posts(), env.users(), env.themes())
             .oneshot(get(&path))
@@ -357,7 +409,7 @@ async fn permalink_alias_inactive_post_serves_shell(#[case] backend: Backend) {
         .to_datetime(scheduled.published_at.expect("scheduled").value())
         .date();
     let path = format!(
-        "/{}/{}/{}/scheduled-alias",
+        "/{:04}/{:02}/{:02}/scheduled-alias",
         i32::from(date.year()),
         u32::try_from(date.month()).expect("month fits u32"),
         u32::try_from(date.day()).expect("day fits u32")
@@ -383,7 +435,7 @@ async fn permalink_alias_encodes_unicode_slug_in_location(#[case] backend: Backe
         .to_datetime(post.published_at.expect("published").value())
         .date();
     let path = format!(
-        "/{}/{}/{}/café",
+        "/{:04}/{:02}/{:02}/café",
         i32::from(date.year()),
         u32::try_from(date.month()).expect("month fits u32"),
         u32::try_from(date.day()).expect("day fits u32")
@@ -421,7 +473,7 @@ async fn permalink_alias_storage_failure_reports_boundary_once(#[case] backend: 
 
     let (response, event) = crate::assert_error_signal!(
         async {
-            app.oneshot(get(&format!("/{year}/{month}/{day}/{slug}")))
+            app.oneshot(get(&format!("/{year:04}/{month:02}/{day:02}/{slug}")))
                 .await
                 .expect("request")
         },
