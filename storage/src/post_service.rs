@@ -25,6 +25,7 @@ use common::slug::{InvalidSlug, Slug};
 use common::time::UtcInstant;
 use common::visibility::AudienceTarget;
 use host::feed;
+#[cfg(any(test, feature = "test-utils"))]
 use host::metrics::{self, IdempotencyEvent};
 
 // ---------------------------------------------------------------------------
