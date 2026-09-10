@@ -944,6 +944,35 @@ impl ShutdownSupervisor {
         runtime_file::remove_runtime_file(runtime_path);
     }
 
+    fn dispatch_shutdown_transition(
+        transition: ShutdownTransition,
+        signal_name: &str,
+        graceful_shutdown: &mut Option<tokio::sync::oneshot::Sender<()>>,
+        runtime_path: &Path,
+    ) -> bool {
+        match transition {
+            ShutdownTransition::BeginGracefulDrain => {
+                tracing::info!(
+                    signal = signal_name,
+                    "received shutdown signal; draining in-flight requests"
+                );
+                if let Some(tx) = graceful_shutdown.take() {
+                    let _ = tx.send(());
+                }
+                false
+            }
+            ShutdownTransition::ContinueGracefulDrain => {
+                Self::log_continued_shutdown_signal();
+                false
+            }
+            ShutdownTransition::ForceExitAndRemoveRuntimeIdentity => {
+                Self::log_forced_shutdown_signal();
+                Self::remove_runtime_identity(runtime_path);
+                true
+            }
+        }
+    }
+
     fn install(runtime_path: PathBuf) -> io::Result<(Receiver<()>, Self)> {
         use tokio::signal::unix::{SignalKind, signal};
 
@@ -958,26 +987,15 @@ impl ShutdownSupervisor {
                     _ = sigint.recv() => (ShutdownSignal::Sigint, "SIGINT"),
                     _ = sigterm.recv() => (ShutdownSignal::Sigterm, "SIGTERM"),
                 };
-                match shutdown_transition(state, signal) {
-                    ShutdownTransition::BeginGracefulDrain => {
-                        tracing::info!(
-                            signal = signal_name,
-                            "received shutdown signal; draining in-flight requests"
-                        );
-                        if let Some(tx) = graceful_shutdown.take() {
-                            let _ = tx.send(());
-                        }
-                        state = ShutdownState::Draining;
-                    }
-                    ShutdownTransition::ContinueGracefulDrain => {
-                        Self::log_continued_shutdown_signal();
-                    }
-                    ShutdownTransition::ForceExitAndRemoveRuntimeIdentity => {
-                        Self::log_forced_shutdown_signal();
-                        Self::remove_runtime_identity(&runtime_path);
-                        std::process::exit(0); // cov:ignore: A forced second signal terminates the process, so this exact call cannot return in a survivable host test.
-                    }
+                if Self::dispatch_shutdown_transition(
+                    shutdown_transition(state, signal),
+                    signal_name,
+                    &mut graceful_shutdown,
+                    &runtime_path,
+                ) {
+                    std::process::exit(0); // cov:ignore: A forced second signal terminates the process, so this exact call cannot return in a survivable host test.
                 }
+                state = ShutdownState::Draining;
             }
         });
         Ok((rx, Self { task: Some(task) }))
@@ -2051,21 +2069,37 @@ mod tests {
     }
     #[tokio::test]
     async fn ready_publication_timeout_aborts_then_panics() {
-        let (_sender, receiver) = tokio::sync::oneshot::channel::<()>();
         let mut command = tokio::spawn(std::future::pending::<()>());
         let timeout = tokio::spawn(async move {
-            wait_for_ready_or_abort(
-                Duration::ZERO,
-                async move {
-                    let _ = receiver.await;
-                },
-                &mut command,
-            )
-            .await;
+            wait_for_ready_or_abort(Duration::ZERO, std::future::pending::<()>(), &mut command)
+                .await;
         });
 
         let error = timeout.await.expect_err("timeout helper must panic");
 
         assert!(error.is_panic());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn shutdown_dispatch_handles_continue_and_force_without_exiting() {
+        let (_sender, _receiver) = tokio::sync::oneshot::channel::<()>();
+        let mut graceful = None;
+        let temp = TempDir::new().expect("temp dir");
+        let path = temp.path().join("runtime.json");
+        fs::write(&path, "identity").expect("runtime identity");
+
+        assert!(!ShutdownSupervisor::dispatch_shutdown_transition(
+            ShutdownTransition::ContinueGracefulDrain,
+            "SIGTERM",
+            &mut graceful,
+            &path,
+        ));
+        assert!(ShutdownSupervisor::dispatch_shutdown_transition(
+            ShutdownTransition::ForceExitAndRemoveRuntimeIdentity,
+            "SIGINT",
+            &mut graceful,
+            &path,
+        ));
+        assert!(!path.exists());
     }
 }

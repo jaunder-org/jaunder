@@ -42,7 +42,7 @@ fn media_content_root(media_path: &Path) -> Result<&Path, BackupError> {
     })
 }
 
-fn mirror_theme_directory(
+fn mirror_themes(
     content_root: &Path,
     destination_root: &Path,
     previous_backup: Option<&Path>,
@@ -166,12 +166,8 @@ async fn export_directory_backup(
         previous_backup.as_deref(),
     )?;
     let content_root = media_content_root(options.media_path)?;
-    let previous_theme_backup = previous_backup.as_deref();
-    mirror_theme_directory(
-        content_root,
-        options.destination_path,
-        previous_theme_backup,
-    )?;
+    let prev = previous_backup.as_deref();
+    mirror_themes(content_root, options.destination_path, prev)?;
     format::write_manifest(options.destination_path, &manifest)?;
     Ok(manifest)
 }
@@ -407,7 +403,7 @@ mod tests {
         fs::create_dir_all(content_root.join("themes"))?;
         fs::write(content_root.join("themes").join("theme.css"), "body {}")?;
 
-        super::mirror_theme_directory(&content_root, &destination, None)?;
+        super::mirror_themes(&content_root, &destination, None)?;
 
         assert_eq!(
             fs::read_to_string(destination.join("themes").join("theme.css"))?,

@@ -133,7 +133,7 @@ fn reject_public_collisions_below(
     {
         let entry = entry.map_err(|error| {
             BundleStageError(format!("reading {}: {error}", directory.display()))
-        })?;
+        })?; // cov:ignore: A ReadDir item error requires concurrent filesystem mutation; rustix exposes no deterministic item-error injection seam.
         let path = entry.path();
         let child_relative = relative.join(entry.file_name());
         let file_type = entry
@@ -265,14 +265,22 @@ fn copy_tree(src: &Path, dst: &Path) -> Result<(), BundleStageError> {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, fs, io, path::Path};
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        fs, io,
+        path::{Path, PathBuf},
+    };
 
     use csr_bundle::{Asset, Manifest, Representation, Role};
 
     use super::{
-        prepare_staging_with, reject_public_collisions, stage_bundle, stage_public_tree,
-        validate_shell,
+        copy_file, prepare_staging_with, reject_public_collisions, reject_public_collisions_below,
+        stage_bundle, stage_public_tree, validate_shell,
     };
+
+    fn unexpected_stage() {
+        unreachable!("failure must stop before staging");
+    }
 
     fn shell(glue: &str, wasm: &str) -> String {
         format!(
@@ -455,8 +463,8 @@ mod tests {
                     "remove denied",
                 ))
             },
-            |_| Ok(()),
-            || unreachable!("remove failure must stop"),
+            |_| unreachable!("remove failure must stop before creation"),
+            unexpected_stage,
         )
         .expect_err("remove failure");
         assert_eq!(
@@ -479,7 +487,7 @@ mod tests {
                     "create denied",
                 ))
             },
-            || unreachable!("create failure must stop"),
+            unexpected_stage,
         )
         .expect_err("create failure");
         assert_eq!(
@@ -514,5 +522,88 @@ mod tests {
                 error.to_string().contains("missing") || error.to_string().contains("exactly one")
             );
         }
+
+        let shell_with_unique_urls = shell("/pkg/glue.js", "/pkg/module.wasm");
+        for required in [
+            "performance.mark",
+            "initMeasured(window.__jaunderWasmFetch ?? __jaunderWasmUrl)",
+        ] {
+            let incomplete = shell_with_unique_urls.replacen(required, "", 1);
+            let error = validate_shell(&incomplete, "/pkg/glue.js", "/pkg/module.wasm")
+                .expect_err("unique URLs do not excuse a missing required shell marker");
+            assert!(error.to_string().contains("missing"));
+        }
+    }
+    #[test]
+    fn staging_reports_missing_tree_and_public_collision() {
+        let manifest = Manifest {
+            version: csr_bundle::VERSION,
+            assets: Vec::new(),
+        };
+        let missing = Path::new("/definitely-missing-jaunder-public-tree");
+        let error = reject_public_collisions_below(missing, Path::new(""), &BTreeSet::new())
+            .expect_err("missing tree");
+        assert!(error.to_string().contains("reading"));
+
+        let bundle = tempfile::tempdir().expect("bundle");
+        let site = tempfile::tempdir().expect("site");
+        fs::write(bundle.path().join("index.html"), "shell").expect("shell");
+        let error = stage_bundle(bundle.path(), site.path(), bundle.path(), &manifest)
+            .expect_err("public shell collision");
+        assert!(error.to_string().contains("overwrites"));
+    }
+
+    #[test]
+    fn staging_reports_copy_and_invalid_staged_bundle_failures() {
+        let destination = tempfile::tempdir().expect("destination");
+        let error = copy_file(
+            Path::new("/definitely-missing-jaunder-staging-source"),
+            &destination.path().join("copied"),
+        )
+        .expect_err("missing source copy");
+        assert!(error.to_string().contains("copying"));
+
+        let bundle = tempfile::tempdir().expect("bundle");
+        let site = tempfile::tempdir().expect("site");
+        let public = tempfile::tempdir().expect("public");
+        let manifest = write_bundle(bundle.path());
+        let glue = manifest.role(Role::Glue).expect("glue role");
+        fs::write(bundle.path().join(&glue.path), "mutated").expect("mutate verified source");
+        let error = stage_bundle(bundle.path(), site.path(), public.path(), &manifest)
+            .expect_err("invalid staged bundle");
+        assert!(error.to_string().contains("invalid staged bundle"));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn public_collision_rejection_reports_non_utf8_asset_path() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let public = tempfile::tempdir().expect("public");
+        let non_utf8 = PathBuf::from(std::ffi::OsString::from_vec(vec![0xff]));
+        fs::write(public.path().join(&non_utf8), "asset").expect("write non-UTF8 asset");
+
+        let error = reject_public_collisions_below(public.path(), Path::new(""), &BTreeSet::new())
+            .expect_err("non-UTF8 public asset must be rejected");
+
+        assert!(error.to_string().contains("public asset path is not UTF-8"));
+    }
+    #[test]
+    fn staging_propagates_missing_declared_representation_copy_failure() {
+        let bundle = tempfile::tempdir().expect("bundle");
+        let site = tempfile::tempdir().expect("site");
+        let public = tempfile::tempdir().expect("public");
+        let mut manifest = write_bundle(bundle.path());
+        manifest.assets[0].representations.insert(
+            "missing".into(),
+            Representation {
+                path: "pkg/absent.js".into(),
+                sha256: csr_bundle::digest(b"absent"),
+            },
+        );
+
+        let error = stage_bundle(bundle.path(), site.path(), public.path(), &manifest)
+            .expect_err("missing declared representation must fail staging");
+
+        assert!(error.to_string().contains("copying"));
     }
 }
