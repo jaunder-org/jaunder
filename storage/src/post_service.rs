@@ -3102,9 +3102,11 @@ mod tests {
             .flat_map(opentelemetry_sdk::metrics::data::ResourceMetrics::scope_metrics)
             .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
             .filter(|metric| metric.name() == "jaunder.atompub.idempotency_keys")
-            .filter_map(|metric| match metric.data() {
-                AggregatedMetrics::U64(MetricData::Sum(sum)) => Some(sum),
-                _ => None,
+            .map(|metric| {
+                let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
+                    unreachable!("idempotency counter metric must export a U64 sum");
+                };
+                sum
             })
             .flat_map(opentelemetry_sdk::metrics::data::Sum::data_points)
             .filter(|point| {
