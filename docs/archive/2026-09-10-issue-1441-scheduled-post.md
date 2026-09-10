@@ -57,7 +57,7 @@ author-visible result identifies that state clearly.
   instant.
 - One narrow architectural decision is introduced: the new-Post Apply boundary
   rejects nonexistent local times rather than silently normalizing them
-  ([decision draft](../../adr/drafts/strict-new-post-local-publication-time.md)).
+  ([decision draft](../../adr/0187-strict-new-post-local-publication-time.md)).
   The existing Draft, Scheduled Post, and live Post states remain derived from
   `published_at`.
 
