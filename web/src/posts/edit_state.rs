@@ -262,11 +262,17 @@ mod tests {
     }
 
     #[test]
-    fn scheduled_publication_uses_the_fetch_snapshot_not_a_later_browser_clock() {
+    fn scheduled_publication_uses_the_fetch_snapshot_and_only_returns_future_instants() {
         let fetched_at = instant("2026-09-10T12:00:00Z");
         let scheduled_at = instant("2026-09-10T12:00:01Z");
         let later_browser_clock = instant("2026-09-10T12:00:02Z");
 
+        assert_eq!(scheduled_publication_at(None, fetched_at), None);
+        assert_eq!(
+            scheduled_publication_at(Some(fetched_at), fetched_at),
+            None,
+            "an instant due at fetch time is already live",
+        );
         assert!(scheduled_at.value() < later_browser_clock.value());
         assert_eq!(
             scheduled_publication_at(Some(scheduled_at), fetched_at),
