@@ -80,7 +80,7 @@
          (synced (jaunder--buffer-property "JAUNDER_SYNCED")))
      (should synced)
      (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
-              (jaunder-delete-post))
+       (jaunder-delete-post))
      (should-not (buffer-live-p buf))
      (should-not (file-exists-p path))
      (should (eq (plist-get
@@ -96,9 +96,9 @@
    (let ((path (buffer-file-name))
          (before (buffer-string)))
      (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
-              (let ((err (should-error (jaunder-delete-post))))
-                (should (equal (error-message-string err)
-                               "jaunder: delete failed (HTTP 412)"))))
+       (let ((err (should-error (jaunder-delete-post))))
+         (should (equal (error-message-string err)
+                        "jaunder: delete failed (HTTP 412)"))))
      (should (buffer-live-p buf))
      (should (file-exists-p path))
      (should (equal (with-temp-buffer

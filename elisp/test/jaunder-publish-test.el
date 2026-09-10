@@ -25,7 +25,7 @@ Lets the warning tests assert on emitted warnings without touching the real
      (cl-letf (((symbol-function 'display-warning)
                 (lambda (type message &optional level &rest _)
                   (push (list type message level) jaunder-test--warnings))))
-              ,@body)
+       ,@body)
      (nreverse jaunder-test--warnings)))
 
 ;;; publish validation + Location->id + force-draft
@@ -157,18 +157,18 @@ Lets the warning tests assert on emitted warnings without touching the real
               ((symbol-function 'jaunder--git-tracked-p) (lambda (_top _path) nil))
               ((symbol-function 'jaunder--fetch-service-features)
                (lambda (_base) '("slug"))))
-             (let* ((jaunder-warn-zone-mismatch nil)
-                    (msgs (mapcar
-                           (lambda (w) (nth 1 w))
-                           (jaunder-test--capturing-warnings
-                            (jaunder--warn-zone-mismatch "America/New_York")
-                            (jaunder--warn-untracked-media
-                             (list (list :path "/repo/a.png")))
-                            (jaunder--warn-missing-format-media-type "https://blog")))))
-               (should (= (length msgs) 2))
-               (should-not (seq-find (lambda (m) (string-match-p "timezone" m)) msgs))
-               (should (seq-find (lambda (m) (string-match-p "not tracked" m)) msgs))
-               (should (seq-find (lambda (m) (string-match-p "format-media-type" m)) msgs))))))
+      (let* ((jaunder-warn-zone-mismatch nil)
+             (msgs (mapcar
+                    (lambda (w) (nth 1 w))
+                    (jaunder-test--capturing-warnings
+                     (jaunder--warn-zone-mismatch "America/New_York")
+                     (jaunder--warn-untracked-media
+                      (list (list :path "/repo/a.png")))
+                     (jaunder--warn-missing-format-media-type "https://blog")))))
+        (should (= (length msgs) 2))
+        (should-not (seq-find (lambda (m) (string-match-p "timezone" m)) msgs))
+        (should (seq-find (lambda (m) (string-match-p "not tracked" m)) msgs))
+        (should (seq-find (lambda (m) (string-match-p "format-media-type" m)) msgs))))))
 
 (ert-deftest jaunder-publish-request-identical-with-warnings ()
   ;; AC-S1: the publish request/return is byte-identical whether the warnings
@@ -189,29 +189,29 @@ Lets the warning tests assert on emitted warnings without touching the real
                      (when (member method '("POST" "PUT"))
                        (setq captured body))
                      (jaunder-test--response 201 nil ""))))
-                 (cl-flet ((do-publish ()
-                             (with-temp-buffer
-                               (org-mode)
-                               (insert (concat "#+TITLE: T\n"
-                                               "#+PROPERTY: JAUNDER_DATE_TZ America/New_York\n"
-                                               "\nBody.\n"))
-                               (set-visited-file-name file nil t)
-                               (setq captured nil)
-                               (jaunder-publish)
-                               (set-buffer-modified-p nil)
-                               captured)))
-                          ;; All three warnings WANT to fire here (recorded zone differs,
-                          ;; service doc lacks the feature).
-                          (let ((body-enabled (let ((jaunder--service-doc-cache nil))
-                                                (do-publish)))
-                                (body-suppressed
-                                 (let ((jaunder-warn-zone-mismatch nil)
-                                       (jaunder-warn-untracked-media nil)
-                                       (jaunder-warn-missing-format-media-type nil)
-                                       (jaunder--service-doc-cache nil))
-                                   (do-publish))))
-                            (should (stringp body-enabled))
-                            (should (equal body-enabled body-suppressed)))))
+          (cl-flet ((do-publish ()
+                      (with-temp-buffer
+                        (org-mode)
+                        (insert (concat "#+TITLE: T\n"
+                                        "#+PROPERTY: JAUNDER_DATE_TZ America/New_York\n"
+                                        "\nBody.\n"))
+                        (set-visited-file-name file nil t)
+                        (setq captured nil)
+                        (jaunder-publish)
+                        (set-buffer-modified-p nil)
+                        captured)))
+            ;; All three warnings WANT to fire here (recorded zone differs,
+            ;; service doc lacks the feature).
+            (let ((body-enabled (let ((jaunder--service-doc-cache nil))
+                                  (do-publish)))
+                  (body-suppressed
+                   (let ((jaunder-warn-zone-mismatch nil)
+                         (jaunder-warn-untracked-media nil)
+                         (jaunder-warn-missing-format-media-type nil)
+                         (jaunder--service-doc-cache nil))
+                     (do-publish))))
+              (should (stringp body-enabled))
+              (should (equal body-enabled body-suppressed)))))
       (delete-directory dir t))))
 
 ;;; #79 — create idempotency key + auto-retry
@@ -236,11 +236,11 @@ Lets the warning tests assert on emitted warnings without touching the real
                  (if (= calls 1)
                      '(:status 503 :body "")
                    '(:status 201 :body "ok")))))
-             (let ((resp (jaunder--create-with-retry "http://x/posts" "<xml/>")))
-               (should (= (plist-get resp :status) 201))
-               (should (= calls 2))
-               (should (equal (nth 0 keys) (nth 1 keys)))
-               (should (> (length (nth 0 keys)) 0))))))
+      (let ((resp (jaunder--create-with-retry "http://x/posts" "<xml/>")))
+        (should (= (plist-get resp :status) 201))
+        (should (= calls 2))
+        (should (equal (nth 0 keys) (nth 1 keys)))
+        (should (> (length (nth 0 keys)) 0))))))
 
 (ert-deftest jaunder-create-retry-does-not-retry-4xx ()
   ;; AC-C3: a 4xx returns immediately, no retry.
@@ -250,9 +250,9 @@ Lets the warning tests assert on emitted warnings without touching the real
                (lambda (&rest _)
                  (setq calls (1+ calls))
                  '(:status 400 :body ""))))
-             (let ((resp (jaunder--create-with-retry "http://x/posts" "<xml/>")))
-               (should (= (plist-get resp :status) 400))
-               (should (= calls 1))))))
+      (let ((resp (jaunder--create-with-retry "http://x/posts" "<xml/>")))
+        (should (= (plist-get resp :status) 400))
+        (should (= calls 1))))))
 
 (ert-deftest jaunder-create-retry-exhausts-on-transport-error ()
   ;; AC-C5: after 3 transport failures the publish errors. The stub signals a
@@ -264,8 +264,8 @@ Lets the warning tests assert on emitted warnings without touching the real
                (lambda (&rest _)
                  (setq calls (1+ calls))
                  (signal 'plz-curl-error (list "Curl error" (make-plz-error))))))
-             (should-error (jaunder--create-with-retry "http://x/posts" "<xml/>"))
-             (should (= calls 3)))))
+      (should-error (jaunder--create-with-retry "http://x/posts" "<xml/>"))
+      (should (= calls 3)))))
 
 (ert-deftest jaunder-create-retry-does-not-retry-a-config-error ()
   ;; #945: a non-transport error (e.g. no auth-source entry) cannot succeed on
@@ -277,9 +277,9 @@ Lets the warning tests assert on emitted warnings without touching the real
                (lambda (&rest _)
                  (setq calls (1+ calls))
                  (error "jaunder: no auth-source entry for a@b"))))
-             (should-error (jaunder--create-with-retry "http://x/posts" "<xml/>"))
-             (should (= calls 1))
-             (should (= sleeps 0)))))
+      (should-error (jaunder--create-with-retry "http://x/posts" "<xml/>"))
+      (should (= calls 1))
+      (should (= sleeps 0)))))
 
 (ert-deftest jaunder-publish-commands-require-visiting-file ()
   "Interactive publish must not silently manufacture request context."
@@ -298,44 +298,44 @@ Lets the warning tests assert on emitted warnings without touching the real
          created)
     (unwind-protect
         (cl-letf
-         (((symbol-function 'read-string) (lambda (&rest _) "Prompted Post"))
-          ((symbol-function 'completing-read)
-           (lambda (prompt collection &rest _)
-             (cond
-              ((string-prefix-p "Tag" prompt)
-               (push collection tag-collections)
-               (pop tag-answers))
-              ((string-prefix-p "Status" prompt) "published")
-              (t (error "unexpected prompt: %s" prompt)))))
-          ((symbol-function 'jaunder--http-request)
-           (lambda (method url &rest _)
-             (should (equal method "GET"))
-             (should (equal url "https://blog/atompub/service"))
-             (list
-              :status 200
-              :body
-              (concat
-               "<app:service xmlns:app=\"http://www.w3.org/2007/app\""
-               " xmlns:atom=\"http://www.w3.org/2005/Atom\">"
-               "<app:workspace>"
-               "<app:collection href=\"https://blog/atompub/alice/posts\">"
-               "<app:accept>application/atom+xml;type=entry</app:accept>"
-               "<app:categories><atom:category term=\"rust\"/>"
-               "<atom:category term=\"emacs\"/></app:categories>"
-               "</app:collection>"
-               "<app:collection href=\"https://blog/atompub/alice/media\">"
-               "<app:accept>image/*</app:accept>"
-               "<app:categories><atom:category term=\"ignored\"/></app:categories>"
-               "</app:collection></app:workspace></app:service>")))))
-         (jaunder-new-post nil)
-         (setq created (current-buffer))
-         (should (equal (jaunder--buffer-keyword "TITLE") "Prompted Post"))
-         (should (equal (jaunder--buffer-keyword "KEYWORDS") "Rust, emacs"))
-         (should (equal (jaunder--buffer-property "JAUNDER_STATUS") "published"))
-         (should-not (jaunder--buffer-property "JAUNDER_FORMAT"))
-         (should (= (length tag-collections) 4))
-         (dolist (collection tag-collections)
-           (should (equal collection '("rust" "emacs")))))
+            (((symbol-function 'read-string) (lambda (&rest _) "Prompted Post"))
+             ((symbol-function 'completing-read)
+              (lambda (prompt collection &rest _)
+                (cond
+                 ((string-prefix-p "Tag" prompt)
+                  (push collection tag-collections)
+                  (pop tag-answers))
+                 ((string-prefix-p "Status" prompt) "published")
+                 (t (error "unexpected prompt: %s" prompt)))))
+             ((symbol-function 'jaunder--http-request)
+              (lambda (method url &rest _)
+                (should (equal method "GET"))
+                (should (equal url "https://blog/atompub/service"))
+                (list
+                 :status 200
+                 :body
+                 (concat
+                  "<app:service xmlns:app=\"http://www.w3.org/2007/app\""
+                  " xmlns:atom=\"http://www.w3.org/2005/Atom\">"
+                  "<app:workspace>"
+                  "<app:collection href=\"https://blog/atompub/alice/posts\">"
+                  "<app:accept>application/atom+xml;type=entry</app:accept>"
+                  "<app:categories><atom:category term=\"rust\"/>"
+                  "<atom:category term=\"emacs\"/></app:categories>"
+                  "</app:collection>"
+                  "<app:collection href=\"https://blog/atompub/alice/media\">"
+                  "<app:accept>image/*</app:accept>"
+                  "<app:categories><atom:category term=\"ignored\"/></app:categories>"
+                  "</app:collection></app:workspace></app:service>")))))
+          (jaunder-new-post nil)
+          (setq created (current-buffer))
+          (should (equal (jaunder--buffer-keyword "TITLE") "Prompted Post"))
+          (should (equal (jaunder--buffer-keyword "KEYWORDS") "Rust, emacs"))
+          (should (equal (jaunder--buffer-property "JAUNDER_STATUS") "published"))
+          (should-not (jaunder--buffer-property "JAUNDER_FORMAT"))
+          (should (= (length tag-collections) 4))
+          (dolist (collection tag-collections)
+            (should (equal collection '("rust" "emacs")))))
       (when (buffer-live-p created) (kill-buffer created))
       (delete-directory root t))))
 
@@ -347,25 +347,25 @@ Lets the warning tests assert on emitted warnings without touching the real
          (default-directory root))
     (unwind-protect
         (cl-letf
-         (((symbol-function 'read-string) (lambda (&rest _) "Cancelled"))
-          ((symbol-function 'completing-read)
-           (lambda (prompt &rest _)
-             (cond
-              ((string-prefix-p "Tag" prompt) "")
-              ((string-prefix-p "Status" prompt) (signal 'quit nil))
-              (t (error "unexpected prompt: %s" prompt)))))
-          ((symbol-function 'jaunder--http-request)
-           (lambda (&rest _)
-             '(:status 200
-                       :body
-                       "<service><workspace><collection><accept>application/atom+xml;type=entry</accept></collection></workspace></service>"))))
-         (should
-          (eq (condition-case nil
-                  (jaunder-new-post nil)
-                (quit 'cancelled))
-              'cancelled))
-         (should-not
-          (directory-files root nil "\\`draft-[^.]+\\.org\\'")))
+            (((symbol-function 'read-string) (lambda (&rest _) "Cancelled"))
+             ((symbol-function 'completing-read)
+              (lambda (prompt &rest _)
+                (cond
+                 ((string-prefix-p "Tag" prompt) "")
+                 ((string-prefix-p "Status" prompt) (signal 'quit nil))
+                 (t (error "unexpected prompt: %s" prompt)))))
+             ((symbol-function 'jaunder--http-request)
+              (lambda (&rest _)
+                '(:status 200
+                          :body
+                          "<service><workspace><collection><accept>application/atom+xml;type=entry</accept></collection></workspace></service>"))))
+          (should
+           (eq (condition-case nil
+                   (jaunder-new-post nil)
+                 (quit 'cancelled))
+               'cancelled))
+          (should-not
+           (directory-files root nil "\\`draft-[^.]+\\.org\\'")))
       (delete-directory root t))))
 
 (ert-deftest jaunder-new-post-aborts-when-selected-blog-disappears ()
@@ -377,14 +377,14 @@ Lets the warning tests assert on emitted warnings without touching the real
          (default-directory other))
     (unwind-protect
         (cl-letf
-         (((symbol-function 'completing-read)
-           (lambda (prompt &rest _)
-             (should (string-prefix-p "Blog" prompt))
-             (setq jaunder-blogs nil)
-             root)))
-         (should-error (jaunder-new-post nil) :type 'error)
-         (should-not
-          (directory-files root nil "\\`draft-[^.]+\\.org\\'")))
+            (((symbol-function 'completing-read)
+              (lambda (prompt &rest _)
+                (should (string-prefix-p "Blog" prompt))
+                (setq jaunder-blogs nil)
+                root)))
+          (should-error (jaunder-new-post nil) :type 'error)
+          (should-not
+           (directory-files root nil "\\`draft-[^.]+\\.org\\'")))
       (delete-directory root t)
       (delete-directory other t))))
 
@@ -398,24 +398,24 @@ Lets the warning tests assert on emitted warnings without touching the real
          created)
     (unwind-protect
         (cl-letf
-         (((symbol-function 'read-string) (lambda (&rest _) ""))
-          ((symbol-function 'completing-read)
-           (lambda (prompt &rest _)
-             (cond
-              ((string-prefix-p "Tag" prompt) "")
-              ((string-prefix-p "Status" prompt) "draft")
-              (t (error "unexpected prompt: %s" prompt)))))
-          ((symbol-function 'jaunder--http-request)
-           (lambda (&rest _) (error "unexpected server request")))
-          ((symbol-function 'message)
-           (lambda (format-string &rest args)
-             (push (apply #'format format-string args) messages))))
-         (jaunder-new-post nil)
-         (setq created (current-buffer))
-         (should
-          (cl-some
-           (lambda (text) (string-match-p "malformed :base-url" text))
-           messages)))
+            (((symbol-function 'read-string) (lambda (&rest _) ""))
+             ((symbol-function 'completing-read)
+              (lambda (prompt &rest _)
+                (cond
+                 ((string-prefix-p "Tag" prompt) "")
+                 ((string-prefix-p "Status" prompt) "draft")
+                 (t (error "unexpected prompt: %s" prompt)))))
+             ((symbol-function 'jaunder--http-request)
+              (lambda (&rest _) (error "unexpected server request")))
+             ((symbol-function 'message)
+              (lambda (format-string &rest args)
+                (push (apply #'format format-string args) messages))))
+          (jaunder-new-post nil)
+          (setq created (current-buffer))
+          (should
+           (cl-some
+            (lambda (text) (string-match-p "malformed :base-url" text))
+            messages)))
       (when (buffer-live-p created) (kill-buffer created))
       (delete-directory root t))))
 
@@ -430,34 +430,34 @@ Lets the warning tests assert on emitted warnings without touching the real
          created)
     (unwind-protect
         (cl-letf
-         (((symbol-function 'read-string) (lambda (&rest _) ""))
-          ((symbol-function 'completing-read)
-           (lambda (prompt &rest _)
-             (cond
-              ((string-prefix-p "Tag" prompt) (pop tag-answers))
-              ((string-prefix-p "Status" prompt) "draft")
-              (t (error "unexpected prompt: %s" prompt)))))
-          ((symbol-function 'jaunder--http-request)
-           (lambda (&rest _)
-             '(:status 200
-                       :body
-                       "<service><workspace><collection><accept>application/atom+xml;type=entry</accept><categories><category term=\"bad tag\"/></categories></collection></workspace></service>")))
-          ((symbol-function 'message)
-           (lambda (format-string &rest args)
-             (push (apply #'format format-string args) messages))))
-         (jaunder-new-post nil)
-         (setq created (current-buffer))
-         (should (equal (jaunder--buffer-keyword "KEYWORDS") "NewTag"))
-         (should
-          (cl-some
-           (lambda (text)
-             (string-match-p "Tag completion unavailable" text))
-           messages))
-         (should
-          (cl-some
-           (lambda (text)
-             (string-match-p "Tag must match" text))
-           messages)))
+            (((symbol-function 'read-string) (lambda (&rest _) ""))
+             ((symbol-function 'completing-read)
+              (lambda (prompt &rest _)
+                (cond
+                 ((string-prefix-p "Tag" prompt) (pop tag-answers))
+                 ((string-prefix-p "Status" prompt) "draft")
+                 (t (error "unexpected prompt: %s" prompt)))))
+             ((symbol-function 'jaunder--http-request)
+              (lambda (&rest _)
+                '(:status 200
+                          :body
+                          "<service><workspace><collection><accept>application/atom+xml;type=entry</accept><categories><category term=\"bad tag\"/></categories></collection></workspace></service>")))
+             ((symbol-function 'message)
+              (lambda (format-string &rest args)
+                (push (apply #'format format-string args) messages))))
+          (jaunder-new-post nil)
+          (setq created (current-buffer))
+          (should (equal (jaunder--buffer-keyword "KEYWORDS") "NewTag"))
+          (should
+           (cl-some
+            (lambda (text)
+              (string-match-p "Tag completion unavailable" text))
+            messages))
+          (should
+           (cl-some
+            (lambda (text)
+              (string-match-p "Tag must match" text))
+            messages)))
       (when (buffer-live-p created) (kill-buffer created))
       (delete-directory root t))))
 
@@ -476,35 +476,35 @@ Lets the warning tests assert on emitted warnings without touching the real
          created)
     (unwind-protect
         (cl-letf
-         (((symbol-function 'read-string) (lambda (&rest _) ""))
-          ((symbol-function 'completing-read)
-           (lambda (prompt &rest _)
-             (cond
-              ((string-prefix-p "Tag" prompt) "")
-              ((string-prefix-p "Status" prompt) "scheduled")
-              (t (error "unexpected prompt: %s" prompt)))))
-          ((symbol-function 'jaunder--http-request)
-           (lambda (&rest _)
-             '(:status 200
-                       :body
-                       "<service><workspace><collection><accept>application/atom+xml;type=entry</accept></collection></workspace></service>")))
-          ((symbol-function 'current-time) (lambda () now))
-          ((symbol-function 'org-read-date)
-           (lambda (&rest _)
-             (cl-incf date-prompts)
-             (should-not
-              (directory-files root nil "\\`draft-[^.]+\\.org\\'"))
-             (let ((answer (pop date-answers)))
-               (if (eq answer 'invalid)
-                   (error "invalid date")
-                 answer)))))
-         (jaunder-new-post nil)
-         (setq created (current-buffer))
-         (should (= date-prompts 5))
-         (should
-          (equal
-           (jaunder--buffer-keyword "DATE")
-           (format-time-string "[%Y-%m-%d %a %H:%M]" future))))
+            (((symbol-function 'read-string) (lambda (&rest _) ""))
+             ((symbol-function 'completing-read)
+              (lambda (prompt &rest _)
+                (cond
+                 ((string-prefix-p "Tag" prompt) "")
+                 ((string-prefix-p "Status" prompt) "scheduled")
+                 (t (error "unexpected prompt: %s" prompt)))))
+             ((symbol-function 'jaunder--http-request)
+              (lambda (&rest _)
+                '(:status 200
+                          :body
+                          "<service><workspace><collection><accept>application/atom+xml;type=entry</accept></collection></workspace></service>")))
+             ((symbol-function 'current-time) (lambda () now))
+             ((symbol-function 'org-read-date)
+              (lambda (&rest _)
+                (cl-incf date-prompts)
+                (should-not
+                 (directory-files root nil "\\`draft-[^.]+\\.org\\'"))
+                (let ((answer (pop date-answers)))
+                  (if (eq answer 'invalid)
+                      (error "invalid date")
+                    answer)))))
+          (jaunder-new-post nil)
+          (setq created (current-buffer))
+          (should (= date-prompts 5))
+          (should
+           (equal
+            (jaunder--buffer-keyword "DATE")
+            (format-time-string "[%Y-%m-%d %a %H:%M]" future))))
       (when (buffer-live-p created) (kill-buffer created))
       (delete-directory root t))))
 
@@ -517,18 +517,18 @@ Lets the warning tests assert on emitted warnings without touching the real
          created)
     (unwind-protect
         (cl-letf
-         (((symbol-function 'read-string)
-           (lambda (&rest _) (error "unexpected title prompt")))
-          ((symbol-function 'completing-read)
-           (lambda (&rest _) (error "unexpected completion prompt")))
-          ((symbol-function 'jaunder--http-request)
-           (lambda (&rest _) (error "unexpected server request"))))
-         (jaunder-new-post '(4))
-         (setq created (current-buffer))
-         (should (equal (jaunder--buffer-keyword "TITLE") ""))
-         (should (equal (jaunder--buffer-keyword "KEYWORDS") ""))
-         (should (equal (jaunder--buffer-property "JAUNDER_STATUS") "draft"))
-         (should (= (point) (point-max))))
+            (((symbol-function 'read-string)
+              (lambda (&rest _) (error "unexpected title prompt")))
+             ((symbol-function 'completing-read)
+              (lambda (&rest _) (error "unexpected completion prompt")))
+             ((symbol-function 'jaunder--http-request)
+              (lambda (&rest _) (error "unexpected server request"))))
+          (jaunder-new-post '(4))
+          (setq created (current-buffer))
+          (should (equal (jaunder--buffer-keyword "TITLE") ""))
+          (should (equal (jaunder--buffer-keyword "KEYWORDS") ""))
+          (should (equal (jaunder--buffer-property "JAUNDER_STATUS") "draft"))
+          (should (= (point) (point-max))))
       (when (buffer-live-p created) (kill-buffer created))
       (delete-directory root t))))
 
@@ -541,17 +541,17 @@ Lets the warning tests assert on emitted warnings without touching the real
          (default-directory other))
     (unwind-protect
         (cl-letf
-         (((symbol-function 'read-string)
-           (lambda (&rest _) (error "unexpected title prompt")))
-          ((symbol-function 'completing-read)
-           (lambda (&rest _) (error "unexpected completion prompt")))
-          ((symbol-function 'jaunder--http-request)
-           (lambda (&rest _) (error "unexpected server request"))))
-         (should-error (jaunder-new-post '(4)) :type 'user-error)
-         (should-not
-          (directory-files root nil "\\`draft-[^.]+\\.org\\'"))
-         (should-not
-          (directory-files other nil "\\`draft-[^.]+\\.org\\'")))
+            (((symbol-function 'read-string)
+              (lambda (&rest _) (error "unexpected title prompt")))
+             ((symbol-function 'completing-read)
+              (lambda (&rest _) (error "unexpected completion prompt")))
+             ((symbol-function 'jaunder--http-request)
+              (lambda (&rest _) (error "unexpected server request"))))
+          (should-error (jaunder-new-post '(4)) :type 'user-error)
+          (should-not
+           (directory-files root nil "\\`draft-[^.]+\\.org\\'"))
+          (should-not
+           (directory-files other nil "\\`draft-[^.]+\\.org\\'")))
       (delete-directory root t)
       (delete-directory other t))))
 
@@ -563,16 +563,16 @@ Lets the warning tests assert on emitted warnings without touching the real
          created)
     (unwind-protect
         (cl-letf
-         (((symbol-function 'read-string)
-           (lambda (&rest _) (error "unexpected title prompt")))
-          ((symbol-function 'completing-read)
-           (lambda (&rest _) (error "unexpected completion prompt")))
-          ((symbol-function 'jaunder--http-request)
-           (lambda (&rest _) (error "unexpected server request"))))
-         (jaunder-new-post '(4))
-         (setq created (current-buffer))
-         (should
-          (equal (file-name-directory (buffer-file-name)) root)))
+            (((symbol-function 'read-string)
+              (lambda (&rest _) (error "unexpected title prompt")))
+             ((symbol-function 'completing-read)
+              (lambda (&rest _) (error "unexpected completion prompt")))
+             ((symbol-function 'jaunder--http-request)
+              (lambda (&rest _) (error "unexpected server request"))))
+          (jaunder-new-post '(4))
+          (setq created (current-buffer))
+          (should
+           (equal (file-name-directory (buffer-file-name)) root)))
       (when (buffer-live-p created) (kill-buffer created))
       (delete-directory root t))))
 
@@ -598,10 +598,10 @@ Lets the warning tests assert on emitted warnings without touching the real
                    (lambda (&rest _) '(:status 503)))
                   ((symbol-function 'format-time-string)
                    (lambda (&rest _) "20260829T000000")))
-                 (jaunder-new-post)
-                 (should (equal selected (file-name-as-directory root)))
-                 (should (equal (buffer-file-name)
-                                (expand-file-name "draft-20260829T000000.org" root))))
+          (jaunder-new-post)
+          (should (equal selected (file-name-as-directory root)))
+          (should (equal (buffer-file-name)
+                         (expand-file-name "draft-20260829T000000.org" root))))
       (when (buffer-file-name) (kill-buffer (current-buffer)))
       (delete-directory root t)
       (delete-directory other t))))
@@ -622,10 +622,10 @@ Lets the warning tests assert on emitted warnings without touching the real
                       (t (error "unexpected prompt: %s" prompt)))))
                   ((symbol-function 'format-time-string)
                    (lambda (&rest _) "20260829T000001")))
-                 (jaunder-new-post)
-                 (setq created (current-buffer))
-                 (should (equal (buffer-file-name)
-                                (expand-file-name "draft-20260829T000001.org" root))))
+          (jaunder-new-post)
+          (setq created (current-buffer))
+          (should (equal (buffer-file-name)
+                         (expand-file-name "draft-20260829T000001.org" root))))
       (when (buffer-live-p created) (kill-buffer created))
       (delete-directory root t))))
 

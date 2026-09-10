@@ -75,7 +75,7 @@ categories are returned; categories from other Collections are ignored."
           (lambda (collection)
             (cl-some
              (lambda (accept)
-               (equal (string-trim (dom-text accept))
+               (equal (string-trim (dom-inner-text accept))
                       jaunder--entry-content-type))
              (dom-by-tag collection 'accept)))
           (dom-by-tag dom 'collection))))

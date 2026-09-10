@@ -67,16 +67,16 @@ elapsed time."
     (cl-letf (((symbol-function 'jaunder-test--server-up)
                (lambda () (setq calls (1+ calls))
                  (if (< calls 3) (error "boot failed") 'ok))))
-             (should (eq 'ok (jaunder-test--server-up-retrying 3)))
-             (should (= calls 3)))))
+      (should (eq 'ok (jaunder-test--server-up-retrying 3)))
+      (should (= calls 3)))))
 
 (ert-deftest jaunder-test--server-up-retrying-gives-up-after-attempts ()
   "Re-signals the last error once ATTEMPTS boots have all failed."
   (let ((calls 0))
     (cl-letf (((symbol-function 'jaunder-test--server-up)
                (lambda () (setq calls (1+ calls)) (error "boot failed"))))
-             (should-error (jaunder-test--server-up-retrying 2))
-             (should (= calls 2)))))
+      (should-error (jaunder-test--server-up-retrying 2))
+      (should (= calls 2)))))
 
 (provide 'jaunder-wait-test)
 ;;; jaunder-wait-test.el ends here

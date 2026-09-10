@@ -469,18 +469,18 @@
                                           (member "--location" plz-curl-default-args)))
                      (make-plz-response :status 200 :headers '((etag . "\"x\""))
                                         :body (string-as-unibyte "\0\377bytes")))))
-                 (let ((response (jaunder--pull-media-get "https://example.test/media" destination)))
-                   (should (equal (car captured) 'get))
-                   (should (equal (cadr captured) "https://example.test/media"))
-                   (should (eq (plist-get (nth 2 captured) :as) 'response))
-                   (should-not (plist-get (nth 2 captured) :decode))
-                   (should-not (nth 3 captured))
-                   (should (equal (plist-get response :status) 200))
-                   (should (equal (with-temp-buffer
-                                    (set-buffer-multibyte nil)
-                                    (insert-file-contents-literally destination)
-                                    (buffer-string))
-                                  (string-as-unibyte "\0\377bytes")))))
+          (let ((response (jaunder--pull-media-get "https://example.test/media" destination)))
+            (should (equal (car captured) 'get))
+            (should (equal (cadr captured) "https://example.test/media"))
+            (should (eq (plist-get (nth 2 captured) :as) 'response))
+            (should-not (plist-get (nth 2 captured) :decode))
+            (should-not (nth 3 captured))
+            (should (equal (plist-get response :status) 200))
+            (should (equal (with-temp-buffer
+                             (set-buffer-multibyte nil)
+                             (insert-file-contents-literally destination)
+                             (buffer-string))
+                           (string-as-unibyte "\0\377bytes")))))
       (delete-file destination)))
   (let ((destination (make-temp-file "jaunder-media-")))
     (unwind-protect
@@ -490,7 +490,7 @@
                            (lambda (&rest _)
                              (signal 'plz-curl-error
                                      (list (make-plz-error :message "offline"))))))
-                         (jaunder--pull-media-get "https://example.test/media" destination))
+                  (jaunder--pull-media-get "https://example.test/media" destination))
                 :type 'plz-curl-error)))
           (should
            (equal
@@ -508,9 +508,9 @@
                              (list (make-plz-error
                                     :response (make-plz-response
                                                :status 302 :headers nil :body "")))))))
-                 (should (= 302 (plist-get
-                                 (jaunder--pull-media-get "https://example.test/media" destination)
-                                 :status))))
+          (should (= 302 (plist-get
+                          (jaunder--pull-media-get "https://example.test/media" destination)
+                          :status))))
       (when (file-exists-p destination) (delete-file destination)))))
 
 (ert-deftest jaunder-pull-media-materialization-rejects-response-trust-failures ()
@@ -550,7 +550,7 @@
                                                                    :headers (mapcar (lambda (header)
                                                                                       (cons (car header) (format (cdr header) hash)))
                                                                                     (plist-get metadata :headers))))))
-                                                         (jaunder--pull-media-materialize root jaunder-pull-media-test--instance plan))
+                                                  (jaunder--pull-media-materialize root jaunder-pull-media-test--instance plan))
                                               (error (setq message (error-message-string err))))
                                             (should (equal message expected)))))))
 
@@ -570,9 +570,9 @@
                                                                            (jaunder-pull-media-test--response
                                                                             jaunder-pull-media-test--instance expected)
                                                                            :headers)))))
-                                                       (jaunder--pull-media-materialize
-                                                        root jaunder-pull-media-test--instance
-                                                        (jaunder-pull-media-test--materialization-plan expected "a.bin")))
+                                                (jaunder--pull-media-materialize
+                                                 root jaunder-pull-media-test--instance
+                                                 (jaunder-pull-media-test--materialization-plan expected "a.bin")))
                                             (error (setq message (error-message-string err))))
                                           (should (equal message (nth 2 case)))))))
 
@@ -585,9 +585,9 @@
                                           (jaunder-pull-media-test--write-bytes target bytes)
                                           (cl-letf (((symbol-function 'jaunder--pull-media-get)
                                                      (lambda (&rest _) (error "must not fetch verified copy"))))
-                                                   (jaunder--pull-media-materialize
-                                                    root jaunder-pull-media-test--instance
-                                                    (jaunder-pull-media-test--materialization-plan hash "a.bin")))))))
+                                            (jaunder--pull-media-materialize
+                                             root jaunder-pull-media-test--instance
+                                             (jaunder-pull-media-test--materialization-plan hash "a.bin")))))))
 
 (ert-deftest jaunder-pull-media-materialization-rejects-corrupt-existing-copy-and-unsafe-paths ()
   (let* ((bytes (string-as-unibyte "expected"))
@@ -632,9 +632,9 @@
                                                              (jaunder-pull-media-test--response
                                                               jaunder-pull-media-test--instance
                                                               (if (= calls 1) hash-a hash-b)))))
-                                                         (jaunder--pull-media-materialize
-                                                          root jaunder-pull-media-test--instance
-                                                          (jaunder-pull-media-test--materialization-plan hash-a "a.bin" references))))))
+                                                  (jaunder--pull-media-materialize
+                                                   root jaunder-pull-media-test--instance
+                                                   (jaunder-pull-media-test--materialization-plan hash-a "a.bin" references))))))
                                           (should (equal (error-message-string failure)
                                                          "jaunder pull media: downloaded bytes disagree with URL hash"))
                                           (should (= calls 2))
@@ -662,13 +662,13 @@
                                                            (format "jaunder pull media: non-directory path component: %s" path))))))
     (jaunder-pull-media-test--with-root root
                                         (cl-letf (((symbol-function 'file-writable-p) (lambda (&rest _) nil)))
-                                                 (let ((failure (should-error
-                                                                 (jaunder--pull-media-materialize
-                                                                  root jaunder-pull-media-test--instance
-                                                                  (jaunder-pull-media-test--materialization-plan hash "a.bin")))))
-                                                   (should (equal (error-message-string failure)
-                                                                  (format "jaunder pull media: unwritable directory: %s"
-                                                                          (directory-file-name root)))))))))
+                                          (let ((failure (should-error
+                                                          (jaunder--pull-media-materialize
+                                                           root jaunder-pull-media-test--instance
+                                                           (jaunder-pull-media-test--materialization-plan hash "a.bin")))))
+                                            (should (equal (error-message-string failure)
+                                                           (format "jaunder pull media: unwritable directory: %s"
+                                                                   (directory-file-name root)))))))))
 
 (ert-deftest jaunder-pull-media-materialization-never-overwrites-a-verified-install-race ()
   (let* ((bytes (string-as-unibyte "race winner"))
@@ -685,10 +685,10 @@
                                                        ;; Model another process winning the atomic no-overwrite race.
                                                        (jaunder-pull-media-test--write-bytes to bytes)
                                                        (signal 'file-already-exists '("already installed")))))
-                                                   (jaunder--pull-media-materialize
-                                                    root jaunder-pull-media-test--instance
-                                                    (jaunder-pull-media-test--materialization-plan hash "a.bin"))
-                                                   (should (jaunder--pull-media-verified-file-p target hash)))))))
+                                            (jaunder--pull-media-materialize
+                                             root jaunder-pull-media-test--instance
+                                             (jaunder-pull-media-test--materialization-plan hash "a.bin"))
+                                            (should (jaunder--pull-media-verified-file-p target hash)))))))
 
 (ert-deftest jaunder-pull-media-revalidates-parents-immediately-before-install ()
   ;; A digest directory can be swapped after staging; the final mutation must
@@ -714,15 +714,15 @@
                                                                (delete-directory digest t)
                                                                (make-symbolic-link outside digest)))
                                                            (funcall real-target configured-root planned-hash leaf))))
-                                                       (let ((failure
-                                                              (should-error
-                                                               (jaunder--pull-media-materialize
-                                                                root jaunder-pull-media-test--instance
-                                                                (jaunder-pull-media-test--materialization-plan hash "a.bin")))))
-                                                         (should (equal (error-message-string failure)
-                                                                        (format "jaunder pull media: refusing symlink directory: %s"
-                                                                                (expand-file-name
-                                                                                 (concat "local-media/" hash) root))))))
+                                                (let ((failure
+                                                       (should-error
+                                                        (jaunder--pull-media-materialize
+                                                         root jaunder-pull-media-test--instance
+                                                         (jaunder-pull-media-test--materialization-plan hash "a.bin")))))
+                                                  (should (equal (error-message-string failure)
+                                                                 (format "jaunder pull media: refusing symlink directory: %s"
+                                                                         (expand-file-name
+                                                                          (concat "local-media/" hash) root))))))
                                             (delete-directory outside t))))))
 
 (ert-deftest jaunder-pull-media-cleanup-warning-preserves-primary-acquisition-error ()
@@ -743,13 +743,13 @@
                                                     ((symbol-function 'jaunder--warn)
                                                      (lambda (format-string &rest args)
                                                        (setq warning (apply #'format format-string args)))))
-                                                   (condition-case err
-                                                       (jaunder--pull-media-materialize
-                                                        root jaunder-pull-media-test--instance
-                                                        (jaunder-pull-media-test--materialization-plan hash "a.bin"))
-                                                     (error (setq primary (error-message-string err))))
-                                                   (should (equal primary "primary acquisition failure"))
-                                                   (should (string-match-p "could not remove pulled-media temporary" warning)))))))
+                                            (condition-case err
+                                                (jaunder--pull-media-materialize
+                                                 root jaunder-pull-media-test--instance
+                                                 (jaunder-pull-media-test--materialization-plan hash "a.bin"))
+                                              (error (setq primary (error-message-string err))))
+                                            (should (equal primary "primary acquisition failure"))
+                                            (should (string-match-p "could not remove pulled-media temporary" warning)))))))
 
 (ert-deftest jaunder-pull-media-materialization-keeps-installed-copy-and-cleans-temporaries ()
   (let* ((bytes-a (string-as-unibyte "first"))
@@ -779,10 +779,10 @@
                                                                (if (= rename-calls 2)
                                                                    (signal 'file-error '("install race"))
                                                                  (funcall original-rename from to nil)))))
-                                                           (jaunder--pull-media-materialize
-                                                            root jaunder-pull-media-test--instance
-                                                            (jaunder-pull-media-test--materialization-plan
-                                                             hash-a "a.bin" references))))))
+                                                    (jaunder--pull-media-materialize
+                                                     root jaunder-pull-media-test--instance
+                                                     (jaunder-pull-media-test--materialization-plan
+                                                      hash-a "a.bin" references))))))
                                             (should (equal (error-message-string failure) "install race")))
                                           (should (= rename-calls 2))
                                           (should (or (file-exists-p (expand-file-name (format "local-media/%s/a.bin" hash-a) root))
@@ -951,8 +951,8 @@
                                                        (jaunder-pull-media-test--write-bytes temporary bytes)
                                                        (jaunder-pull-media-test--response
                                                         jaunder-pull-media-test--instance hash))))
-                                                   (should-error
-                                                    (jaunder--pull-media-materialize root jaunder-pull-media-test--instance plan))))
+                                            (should-error
+                                             (jaunder--pull-media-materialize root jaunder-pull-media-test--instance plan))))
                                         (let ((target (expand-file-name "winner.bin" root)))
                                           (cl-letf (((symbol-function 'jaunder--pull-media-target-path)
                                                      (lambda (&rest _) target))
@@ -965,6 +965,6 @@
                                                      (lambda (_from destination &optional _ok)
                                                        (jaunder-pull-media-test--write-bytes destination bytes)
                                                        (signal 'file-error '("race")))))
-                                                   (jaunder--pull-media-materialize root jaunder-pull-media-test--instance plan)
-                                                   (should (jaunder--pull-media-verified-file-p target hash)))))))
+                                            (jaunder--pull-media-materialize root jaunder-pull-media-test--instance plan)
+                                            (should (jaunder--pull-media-verified-file-p target hash)))))))
 ;;; jaunder-pull-media-test.el ends here

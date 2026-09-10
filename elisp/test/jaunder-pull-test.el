@@ -277,22 +277,22 @@
                        (if (eq failure 'install) (error "install")
                          (write-region bytes nil destination nil 'silent)
                          (jaunder--make-pull-result :status 'pulled :path destination)))))
-                   (if failure
-                       (should-error (jaunder--pull-member root (jaunder-pull-test--member)))
-                     (should (eq (jaunder-pull-result-status
-                                  (jaunder--pull-member root (jaunder-pull-test--member)))
-                                 'pulled))
-                     (should (string-suffix-p "\n\nLocal body"
-                                              (with-temp-buffer
-                                                (insert-file-contents path)
-                                                (buffer-string)))))
-                   (should-not (and failure (file-exists-p path)))
-                   (should (equal (nreverse trace)
-                                  (pcase failure
-                                    ('plan '(plan))
-                                    ('materialize '(plan materialize))
-                                    ('apply '(plan materialize apply))
-                                    (_ '(plan materialize apply install))))))
+            (if failure
+                (should-error (jaunder--pull-member root (jaunder-pull-test--member)))
+              (should (eq (jaunder-pull-result-status
+                           (jaunder--pull-member root (jaunder-pull-test--member)))
+                          'pulled))
+              (should (string-suffix-p "\n\nLocal body"
+                                       (with-temp-buffer
+                                         (insert-file-contents path)
+                                         (buffer-string)))))
+            (should-not (and failure (file-exists-p path)))
+            (should (equal (nreverse trace)
+                           (pcase failure
+                             ('plan '(plan))
+                             ('materialize '(plan materialize))
+                             ('apply '(plan materialize apply))
+                             (_ '(plan materialize apply install))))))
         (delete-directory root t)))))
 
 (ert-deftest jaunder-pull-member-requires-one-canonical-instance-header ()
@@ -340,17 +340,17 @@
                          (error "final install")
                        (write-region bytes nil destination nil 'silent)
                        (jaunder--make-pull-result :status 'pulled :path destination)))))
-                 (should-error (jaunder--pull-member root (jaunder-pull-test--member)))
-                 (should-not (file-exists-p path))
-                 (should (eq (jaunder-pull-result-status
-                              (jaunder--pull-member root (jaunder-pull-test--member)))
-                             'pulled))
-                 (should (= materializations 2))
-                 (should (= member-gets 2))
-                 (should (string-suffix-p "\n\nLocalized"
-                                          (with-temp-buffer
-                                            (insert-file-contents path)
-                                            (buffer-string)))))
+          (should-error (jaunder--pull-member root (jaunder-pull-test--member)))
+          (should-not (file-exists-p path))
+          (should (eq (jaunder-pull-result-status
+                       (jaunder--pull-member root (jaunder-pull-test--member)))
+                      'pulled))
+          (should (= materializations 2))
+          (should (= member-gets 2))
+          (should (string-suffix-p "\n\nLocalized"
+                                   (with-temp-buffer
+                                     (insert-file-contents path)
+                                     (buffer-string)))))
       (delete-directory root t))))
 
 (ert-deftest jaunder-pull-member-propagates-materializer-acquisition-error-exactly ()
@@ -380,13 +380,13 @@
                   ((symbol-function 'jaunder--pull-media-plan) (lambda (&rest _) plan))
                   ((symbol-function 'jaunder--pull-media-get)
                    (lambda (&rest _) (error "acquisition failed exactly"))))
-                 (condition-case err
-                     (jaunder--pull-member root (jaunder-pull-test--member))
-                   (error (setq observed (error-message-string err))))
-                 (should (equal observed "acquisition failed exactly"))
-                 (should (= member-gets 1))
-                 (should-not (file-exists-p path))
-                 (should-not (directory-files-recursively root "\\.jaunder-media-" nil)))
+          (condition-case err
+              (jaunder--pull-member root (jaunder-pull-test--member))
+            (error (setq observed (error-message-string err))))
+          (should (equal observed "acquisition failed exactly"))
+          (should (= member-gets 1))
+          (should-not (file-exists-p path))
+          (should-not (directory-files-recursively root "\\.jaunder-media-" nil)))
       (delete-directory root t))))
 
 (defun jaunder-pull-test--member (&optional id slug)
@@ -421,15 +421,15 @@
           (write-region "winner" nil path nil 'silent)
           (cl-letf (((symbol-function 'jaunder--http-request)
                      (lambda (&rest _) (setq calls (1+ calls)))))
-                   (let ((result (jaunder--pull-member root
-                                                       (jaunder-pull-test--member))))
-                     (should (eq (jaunder-pull-result-status result) 'blocked))
-                     (should (equal (jaunder-pull-result-path result) path))
-                     (should (= calls 0))
-                     (should (equal (with-temp-buffer
-                                      (insert-file-contents path)
-                                      (buffer-string))
-                                    "winner")))))
+            (let ((result (jaunder--pull-member root
+                                                (jaunder-pull-test--member))))
+              (should (eq (jaunder-pull-result-status result) 'blocked))
+              (should (equal (jaunder-pull-result-path result) path))
+              (should (= calls 0))
+              (should (equal (with-temp-buffer
+                               (insert-file-contents path)
+                               (buffer-string))
+                             "winner")))))
       (delete-directory root t))))
 
 (ert-deftest jaunder-pull-member-gets-d1-uri-and-installs-exact-file ()
@@ -455,19 +455,19 @@
                    (lambda () jaunder-pull-test--captured-at))
                   ((symbol-function 'jaunder--current-zone-name)
                    (lambda () "UTC")))
-                 (let ((result (jaunder--pull-member root
-                                                     (jaunder-pull-test--member))))
-                   (should (eq (jaunder-pull-result-status result) 'pulled))
-                   (should (equal (jaunder-pull-result-path result) path))
-                   (should (equal requested
-                                  '("GET" "https://h/atompub/alice/posts/42"
-                                    "https://h" "alice")))
-                   (should (file-exists-p path))
-                   (should (string-suffix-p "\n\nBody"
-                                            (with-temp-buffer
-                                              (insert-file-contents path)
-                                              (buffer-string))))
-                   (should-not (jaunder-pull-test--temp-artifacts root))))
+          (let ((result (jaunder--pull-member root
+                                              (jaunder-pull-test--member))))
+            (should (eq (jaunder-pull-result-status result) 'pulled))
+            (should (equal (jaunder-pull-result-path result) path))
+            (should (equal requested
+                           '("GET" "https://h/atompub/alice/posts/42"
+                             "https://h" "alice")))
+            (should (file-exists-p path))
+            (should (string-suffix-p "\n\nBody"
+                                     (with-temp-buffer
+                                       (insert-file-contents path)
+                                       (buffer-string))))
+            (should-not (jaunder-pull-test--temp-artifacts root))))
       (delete-directory root t))))
 
 (ert-deftest jaunder-pull-install-writes-utf-8-unix-despite-ambient-coding ()
@@ -506,10 +506,10 @@
                              :headers '(("etag" . "\"sha256-test\"")
                                         ("x-jaunder-instance" . "12345678-1234-1234-1234-123456789abc"))
                              :body response))))
-                   (should-error (jaunder--pull-member root
-                                                       (jaunder-pull-test--member)))
-                   (should (null (directory-files root nil "\\.org\\'" t)))
-                   (should-not (jaunder-pull-test--temp-artifacts root)))
+            (should-error (jaunder--pull-member root
+                                                (jaunder-pull-test--member)))
+            (should (null (directory-files root nil "\\.org\\'" t)))
+            (should-not (jaunder-pull-test--temp-artifacts root)))
         (delete-directory root t)))))
 
 (ert-deftest jaunder-pull-member-failures-leave-root-unchanged ()
@@ -547,10 +547,10 @@
                        (if (eq failure 'install)
                            (error "install")
                          (apply real-link args)))))
-                   (should-error (jaunder--pull-member root
-                                                       (jaunder-pull-test--member)))
-                   (should (null (directory-files root nil "\\.org\\'" t)))
-                   (should-not (jaunder-pull-test--temp-artifacts root)))
+            (should-error (jaunder--pull-member root
+                                                (jaunder-pull-test--member)))
+            (should (null (directory-files root nil "\\.org\\'" t)))
+            (should-not (jaunder-pull-test--temp-artifacts root)))
         (delete-directory root t)))))
 
 (ert-deftest jaunder-pull-member-race-preserves-winner-and-blocks ()
@@ -573,22 +573,22 @@
                    (lambda (_temp destination &optional _ok)
                      (funcall real-write "winner" nil destination nil 'silent)
                      (signal 'file-already-exists (list destination)))))
-                 (let ((result (jaunder--pull-member root
-                                                     (jaunder-pull-test--member))))
-                   (should (eq (jaunder-pull-result-status result) 'blocked))
-                   (should (equal (jaunder-pull-result-path result) path))
-                   (should (equal (with-temp-buffer
-                                    (insert-file-contents path)
-                                    (buffer-string))
-                                  "winner"))
-                   (should-not (jaunder-pull-test--temp-artifacts root))))
+          (let ((result (jaunder--pull-member root
+                                              (jaunder-pull-test--member))))
+            (should (eq (jaunder-pull-result-status result) 'blocked))
+            (should (equal (jaunder-pull-result-path result) path))
+            (should (equal (with-temp-buffer
+                             (insert-file-contents path)
+                             (buffer-string))
+                           "winner"))
+            (should-not (jaunder-pull-test--temp-artifacts root))))
       (delete-directory root t))))
 (ert-deftest jaunder-pull-rejects-invalid-private-boundary-inputs ()
   "Validate malformed wire values at each independently callable pull boundary."
   (should-error (jaunder--pull-at-most-one '((summary . ("a" "b")))
                                            'summary "summary"))
   (cl-letf (((symbol-function 'date-to-time) (lambda (_) (error "parser"))))
-           (should-error (jaunder--pull-rfc-3339-time "2026-01-01T00:00:00Z")))
+    (should-error (jaunder--pull-rfc-3339-time "2026-01-01T00:00:00Z")))
   (should-error (jaunder--pull-content-format '(content ((type . "video/mp4")))))
   (should-error (jaunder--pull-content-body '(content nil "body") 'unsupported))
   (should-error (jaunder--parse-pulled-member
@@ -649,15 +649,15 @@
           (cl-letf (((symbol-function 'add-name-to-file)
                      (lambda (&rest _)
                        (signal 'file-error '("link failed")))))
-                   (should-error (jaunder--install-pulled-bytes path "body")
-                                 :type 'file-error))
+            (should-error (jaunder--install-pulled-bytes path "body")
+                          :type 'file-error))
           (cl-letf (((symbol-function 'add-name-to-file)
                      (lambda (&rest _)
                        (with-temp-file path (insert "winner"))
                        (signal 'file-error '("link failed")))))
-                   (should (eq (jaunder-pull-result-status
-                                (jaunder--install-pulled-bytes path "body"))
-                               'blocked))))
+            (should (eq (jaunder-pull-result-status
+                         (jaunder--install-pulled-bytes path "body"))
+                        'blocked))))
       (delete-directory root t))))
 
 

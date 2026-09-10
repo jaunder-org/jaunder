@@ -149,7 +149,7 @@ KIND is `text' or `xhtml'."
 (defun jaunder--pull-content-body (content kind)
   "Return native source body from CONTENT projected according to KIND."
   (pcase kind
-    ('text (or (dom-text content) ""))
+    ('text (or (dom-inner-text content) ""))
     ('xhtml
      (mapconcat #'jaunder--serialize-xhtml-node
                 (dom-children (jaunder--pull-xhtml-wrapper content)) ""))
@@ -162,8 +162,8 @@ KIND is `text' or `xhtml'."
             (split-string value "\n" nil))))
 
 (cl-defstruct (jaunder-pulled-member (:constructor jaunder--make-pulled-member))
-              "Validated Member data shared by rendering and pull localization."
-              org-prefix org format body)
+  "Validated Member data shared by rendering and pull localization."
+  org-prefix org format body)
 
 (defun jaunder--parse-pulled-member (entry-xml etag captured-at zone)
   "Parse Member ENTRY-XML once into exact Org bytes and native source fields.
@@ -247,8 +247,8 @@ as `jaunder--atom->org'.  This function performs no network or filesystem I/O."
 
 
 (cl-defstruct (jaunder-pull-result (:constructor jaunder--make-pull-result))
-              "Outcome of one D3-facing server-only pull."
-              status path)
+  "Outcome of one D3-facing server-only pull."
+  status path)
 
 (defun jaunder--pull-destination (root slug)
   "Return exact direct-child Org destination under ROOT for SLUG."

@@ -945,8 +945,7 @@ export async function attachTraceCapture(
         return await page.evaluate(
           ({ resourceLimit, longTaskLimit }) => {
             const navigation = performance.getEntriesByType("navigation")[0] as
-              | PerformanceNavigationTiming
-              | undefined;
+              PerformanceNavigationTiming | undefined;
             const resources = performance.getEntriesByType(
               "resource",
             ) as PerformanceResourceTiming[];

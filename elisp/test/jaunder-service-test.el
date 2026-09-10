@@ -25,7 +25,7 @@ Lets the warning tests assert on emitted warnings without touching the real
      (cl-letf (((symbol-function 'display-warning)
                 (lambda (type message &optional level &rest _)
                   (push (list type message level) jaunder-test--warnings))))
-              ,@body)
+       ,@body)
      (nreverse jaunder-test--warnings)))
 
 ;;; #216 — missing-format-media-type warning
@@ -69,59 +69,59 @@ Lets the warning tests assert on emitted warnings without touching the real
   (let ((jaunder--service-doc-cache nil))
     (cl-letf (((symbol-function 'jaunder--fetch-service-features)
                (lambda (_base) '("slug"))))
-             (let ((warnings (jaunder-test--capturing-warnings
-                              (jaunder--warn-missing-format-media-type "https://blog"))))
-               (should (= (length warnings) 1))
-               (should (eq (nth 0 (car warnings)) 'jaunder))
-               (should (string-prefix-p "jaunder: " (nth 1 (car warnings))))
-               (should (string-match-p "format-media-type" (nth 1 (car warnings))))
-               (should (string-match-p "https://blog" (nth 1 (car warnings))))))))
+      (let ((warnings (jaunder-test--capturing-warnings
+                       (jaunder--warn-missing-format-media-type "https://blog"))))
+        (should (= (length warnings) 1))
+        (should (eq (nth 0 (car warnings)) 'jaunder))
+        (should (string-prefix-p "jaunder: " (nth 1 (car warnings))))
+        (should (string-match-p "format-media-type" (nth 1 (car warnings))))
+        (should (string-match-p "https://blog" (nth 1 (car warnings))))))))
 
 (ert-deftest jaunder-warn-missing-fmt-caches-once-per-blog ()
   ;; AC-216b: a second publish neither re-warns nor re-fetches.
   (let ((jaunder--service-doc-cache nil) (fetches 0))
     (cl-letf (((symbol-function 'jaunder--fetch-service-features)
                (lambda (_base) (cl-incf fetches) '("slug"))))
-             (let ((first (jaunder-test--capturing-warnings
-                           (jaunder--warn-missing-format-media-type "https://blog")))
-                   (second (jaunder-test--capturing-warnings
-                            (jaunder--warn-missing-format-media-type "https://blog"))))
-               (should (= (length first) 1))
-               (should (null second))
-               (should (= fetches 1))))))
+      (let ((first (jaunder-test--capturing-warnings
+                    (jaunder--warn-missing-format-media-type "https://blog")))
+            (second (jaunder-test--capturing-warnings
+                     (jaunder--warn-missing-format-media-type "https://blog"))))
+        (should (= (length first) 1))
+        (should (null second))
+        (should (= fetches 1))))))
 
 (ert-deftest jaunder-warn-missing-fmt-silent-when-present ()
   ;; AC-216c
   (let ((jaunder--service-doc-cache nil))
     (cl-letf (((symbol-function 'jaunder--fetch-service-features)
                (lambda (_base) '("format-media-type" "slug"))))
-             (should-not (jaunder-test--capturing-warnings
-                          (jaunder--warn-missing-format-media-type "https://blog"))))))
+      (should-not (jaunder-test--capturing-warnings
+                   (jaunder--warn-missing-format-media-type "https://blog"))))))
 
 (ert-deftest jaunder-warn-missing-fmt-unknown-not-cached ()
   ;; AC-216d: unknown → no warning and no cache entry (a later publish retries).
   (let ((jaunder--service-doc-cache nil))
     (cl-letf (((symbol-function 'jaunder--fetch-service-features)
                (lambda (_base) 'unknown)))
-             (should-not (jaunder-test--capturing-warnings
-                          (jaunder--warn-missing-format-media-type "https://blog")))
-             (should-not (assoc "https://blog" jaunder--service-doc-cache)))))
+      (should-not (jaunder-test--capturing-warnings
+                   (jaunder--warn-missing-format-media-type "https://blog")))
+      (should-not (assoc "https://blog" jaunder--service-doc-cache)))))
 
 (ert-deftest jaunder-fetch-service-features-catches-signal ()
   ;; AC-216d seam: a transport signal becomes `unknown', never propagates.
   (cl-letf (((symbol-function 'jaunder--http-request)
              (lambda (&rest _) (error "boom"))))
-           (should (eq (jaunder--fetch-service-features "https://blog") 'unknown))))
+    (should (eq (jaunder--fetch-service-features "https://blog") 'unknown))))
 
 (ert-deftest jaunder-warn-missing-fmt-suppressed ()
   ;; AC-216f: disabled → no fetch, no warning.
   (let ((jaunder--service-doc-cache nil) (fetches 0))
     (cl-letf (((symbol-function 'jaunder--fetch-service-features)
                (lambda (_base) (cl-incf fetches) '("slug"))))
-             (let ((jaunder-warn-missing-format-media-type nil))
-               (should-not (jaunder-test--capturing-warnings
-                            (jaunder--warn-missing-format-media-type "https://blog")))
-               (should (= fetches 0))))))
+      (let ((jaunder-warn-missing-format-media-type nil))
+        (should-not (jaunder-test--capturing-warnings
+                     (jaunder--warn-missing-format-media-type "https://blog")))
+        (should (= fetches 0))))))
 
 ;;; Review follow-ups
 
@@ -136,6 +136,6 @@ Lets the warning tests assert on emitted warnings without touching the real
   ;; AC-216d: a 4xx/5xx status → unknown (never a "feature absent").
   (cl-letf (((symbol-function 'jaunder--http-request)
              (lambda (&rest _) (jaunder-test--response 404 nil "nope"))))
-           (should (eq (jaunder--fetch-service-features "https://blog") 'unknown))))
+    (should (eq (jaunder--fetch-service-features "https://blog") 'unknown))))
 
 ;;; jaunder-service-test.el ends here

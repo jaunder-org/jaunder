@@ -19,7 +19,7 @@ Lets the warning tests assert on emitted warnings without touching the real
      (cl-letf (((symbol-function 'display-warning)
                 (lambda (type message &optional level &rest _)
                   (push (list type message level) jaunder-test--warnings))))
-              ,@body)
+       ,@body)
      (nreverse jaunder-test--warnings)))
 
 ;;; offset parsing / zone resolution
@@ -74,14 +74,14 @@ Lets the warning tests assert on emitted warnings without touching the real
   "A configured IANA zone outranks the host localtime link."
   (cl-letf (((symbol-function 'getenv)
              (lambda (name) (and (equal name "TZ") "America/Chicago"))))
-           (should (equal (jaunder--current-zone-name) "America/Chicago"))))
+    (should (equal (jaunder--current-zone-name) "America/Chicago"))))
 
 (ert-deftest jaunder-current-zone-name-reads-localtime-zoneinfo-link ()
   "Without TZ, retain the named zone exposed by /etc/localtime."
   (cl-letf (((symbol-function 'getenv) (lambda (_name) nil))
             ((symbol-function 'file-symlink-p)
              (lambda (_path) "/usr/share/zoneinfo/Europe/Paris")))
-           (should (equal (jaunder--current-zone-name) "Europe/Paris"))))
+    (should (equal (jaunder--current-zone-name) "Europe/Paris"))))
 
 ;;; #217 — zone-mismatch warning
 
@@ -95,43 +95,43 @@ Lets the warning tests assert on emitted warnings without touching the real
   ;; AC-217a: recorded IANA zone differs from the machine's current zone.
   (cl-letf (((symbol-function 'jaunder--current-zone-name)
              (lambda () "Europe/London")))
-           (let ((warnings (jaunder-test--capturing-warnings
-                            (jaunder--warn-zone-mismatch "America/New_York"))))
-             (should (= (length warnings) 1))
-             (pcase-let ((`(,type ,message ,level) (car warnings)))
-               (should (eq type 'jaunder))
-               (should (eq level :warning))
-               (should (string-prefix-p "jaunder: " message))
-               (should (string-match-p "America/New_York" message))
-               (should (string-match-p "Europe/London" message))))))
+    (let ((warnings (jaunder-test--capturing-warnings
+                     (jaunder--warn-zone-mismatch "America/New_York"))))
+      (should (= (length warnings) 1))
+      (pcase-let ((`(,type ,message ,level) (car warnings)))
+        (should (eq type 'jaunder))
+        (should (eq level :warning))
+        (should (string-prefix-p "jaunder: " message))
+        (should (string-match-p "America/New_York" message))
+        (should (string-match-p "Europe/London" message))))))
 
 (ert-deftest jaunder-warn-zone-mismatch-silent-when-unset ()
   ;; AC-217b: no recorded zone yet (captured this publish) → nothing to warn about.
   (cl-letf (((symbol-function 'jaunder--current-zone-name)
              (lambda () "Europe/London")))
-           (should-not (jaunder-test--capturing-warnings
-                        (jaunder--warn-zone-mismatch nil)))))
+    (should-not (jaunder-test--capturing-warnings
+                 (jaunder--warn-zone-mismatch nil)))))
 
 (ert-deftest jaunder-warn-zone-mismatch-silent-when-equal ()
   ;; AC-217c (IANA): recorded == current.
   (cl-letf (((symbol-function 'jaunder--current-zone-name)
              (lambda () "America/New_York")))
-           (should-not (jaunder-test--capturing-warnings
-                        (jaunder--warn-zone-mismatch "America/New_York")))))
+    (should-not (jaunder-test--capturing-warnings
+                 (jaunder--warn-zone-mismatch "America/New_York")))))
 
 (ert-deftest jaunder-warn-zone-mismatch-silent-both-offsets ()
   ;; AC-217c (offset): two numeric offsets differ only across DST on one machine.
   (cl-letf (((symbol-function 'jaunder--current-zone-name)
              (lambda () "-0400")))
-           (should-not (jaunder-test--capturing-warnings
-                        (jaunder--warn-zone-mismatch "-0500")))))
+    (should-not (jaunder-test--capturing-warnings
+                 (jaunder--warn-zone-mismatch "-0500")))))
 
 (ert-deftest jaunder-warn-zone-mismatch-suppressed ()
   ;; AC-217d: the defcustom silences it even on a real difference.
   (cl-letf (((symbol-function 'jaunder--current-zone-name)
              (lambda () "Europe/London")))
-           (let ((jaunder-warn-zone-mismatch nil))
-             (should-not (jaunder-test--capturing-warnings
-                          (jaunder--warn-zone-mismatch "America/New_York"))))))
+    (let ((jaunder-warn-zone-mismatch nil))
+      (should-not (jaunder-test--capturing-warnings
+                   (jaunder--warn-zone-mismatch "America/New_York"))))))
 
 ;;; jaunder-datetime-test.el ends here
