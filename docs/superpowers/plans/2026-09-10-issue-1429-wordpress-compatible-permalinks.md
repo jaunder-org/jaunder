@@ -39,7 +39,7 @@ Out:
   - Verification: backend-parametric projector integration tests cover status,
     Location, query ordering/repetition/empty values, no-query output, no-store,
     all miss classes, privacy, ambiguity, Unicode path encoding, and failure.
-- [ ] Task 3: Prove the compatibility entry through the browser and reconcile
+- [x] Task 3: Prove the compatibility entry through the browser and reconcile
       public documentation.
   - Contract: the browser performs one cold entry through the HTTP alias and
     lands on the canonical `~username` route; no client route or emitted link
