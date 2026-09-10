@@ -15,6 +15,7 @@ use common::post_body::PostBody;
 use common::root_relative_url::RootRelativeUrl;
 use common::seed::{AuthoredPost, PageSeed};
 use common::slug::Slug;
+use common::time::{self, UtcInstant};
 use common::{MutationOutcome, permalink_route::PermalinkRoute};
 
 use super::audience;
@@ -90,6 +91,26 @@ fn permalink_unpublish_callback(refetch: RwSignal<u32>) -> Callback<SavedPost> {
     })
 }
 
+/// Browser-local publication notice for an author-visible Scheduled Post.
+#[component]
+fn ScheduledNotice(at: Option<UtcInstant>) -> impl IntoView {
+    view! {
+        {move || {
+            at.filter(|at| at.value() > UtcInstant::now().value())
+                .map(|at| {
+                    view! {
+                        <p class="success">
+                            {format!(
+                                "Scheduled for {} local time",
+                                time::local_datetime_from_utc(at).replace('T', " "),
+                            )}
+                        </p>
+                    }
+                })
+        }}
+    }
+}
+
 #[component]
 pub fn PostPage() -> impl IntoView {
     let presentation = crate::app::theme_presentation();
@@ -149,6 +170,7 @@ pub fn PostPage() -> impl IntoView {
                     Ok((fetched_theme, fetched)) => {
                         match presentation.adopt(fetched_theme).await {
                             Ok(crate::app::ThemeAdoption::Applied) => {
+                                let scheduled_at = fetched.post.published_at;
                                 let banner = fetched
                                     .post
                                     .is_draft()
@@ -165,6 +187,7 @@ pub fn PostPage() -> impl IntoView {
                                     }}
                                     <div class="j-scroll">
                                         <div class="j-page">
+                                            <ScheduledNotice at=scheduled_at />
                                             <PostCard
                                                 post=&fetched.post
                                                 banner=banner.as_deref()
@@ -339,6 +362,7 @@ fn EditPostForm(
                     publication=loaded_publication
                     scheduled=scheduled
                     schedule_error=schedule_error
+                    creation_schedule=None
                     named=named
                 />
                 <MediaSection />

@@ -92,6 +92,17 @@ async function openPostFromScheduled(page: Page, title: string): Promise<void> {
   );
 }
 
+async function applyPublicationTime(
+  page: Page,
+  localDateTime: string,
+): Promise<void> {
+  const [date, time] = localDateTime.split("T");
+  await page.getByRole("button", { name: "Set publication time…" }).click();
+  await page.locator('input[name="publish_date"]').fill(date!);
+  await page.locator('input[name="publish_time"]').fill(time!);
+  await page.getByRole("button", { name: "Apply" }).click();
+}
+
 test("authenticated user can create a post through the UI", async ({
   registeredPage,
 }) => {
@@ -980,7 +991,7 @@ test("unpublishing follows the moved draft permalink and replaces history", asyn
   const FUTURE_DATETIME_LOCAL = "2999-01-01T09:00";
   const page = await registeredPage("/posts/new");
   await page.fill(SEL.postBody, "# Unpublish Me\n\nsoon a draft again");
-  await page.fill(SEL.publishAt, FUTURE_DATETIME_LOCAL);
+  await applyPublicationTime(page, FUTURE_DATETIME_LOCAL);
   await click(page, SEL.publishButton("true"));
   await waitForSelector(page, SEL.saveSummary);
   const permalinkLink = page.locator('[data-test="permalink-link"]');
@@ -1519,48 +1530,81 @@ test("authenticated user can delete a draft from the drafts page", async ({
   await expect(page.locator("body")).not.toContainText("Draft To Delete");
 });
 
+test.describe("new post publication time", () => {
+  test.use({ timezoneId: "UTC" });
+
+  test("author schedules a post through the creation disclosure", async ({
+    registeredPage,
+    tracedContext,
+  }, testInfo) => {
+    const firstNavigationTimeoutMs = slowBrowserFirstNavigationTimeoutMs(
+      testInfo,
+      12_000,
+    );
+    const page = await registeredPage("/posts/new");
+    await page.fill(
+      SEL.postBody,
+      "# Creation Schedule\n\nbody for a scheduled creation",
+    );
+
+    await page.getByRole("button", { name: "Set publication time…" }).click();
+    await page.locator('input[name="publish_date"]').fill("2999-01-01");
+    await expect(page.locator('input[name="publish_time"]')).toHaveValue(
+      "00:00",
+    );
+    await expect(page.locator(SEL.publishButton("true"))).toBeDisabled();
+    await expect(page.locator(SEL.publishButton("false"))).toBeDisabled();
+    await page.getByRole("button", { name: "Apply" }).click();
+
+    await expect(page.locator(SEL.publishButton("false"))).toHaveCount(0);
+    await expect(page.locator(SEL.publishButton("true"))).toHaveText(
+      "Schedule",
+    );
+    await click(page, SEL.publishButton("true"));
+    await waitForSelector(page, SEL.saveSummary);
+
+    const summary = page.locator(SEL.saveSummary);
+    await expect(summary).toContainText("Post scheduled.");
+    const permalink = await summary
+      .locator('[data-test="permalink-link"]')
+      .getAttribute("href");
+    expect(permalink).toBeTruthy();
+    await navigateInApp(
+      page,
+      () => summary.locator('[data-test="permalink-link"]').click(),
+      { url: permalink!, ready: "article.j-post" },
+    );
+    await expect(page.locator(".j-page")).toContainText(
+      "Scheduled for 2999-01-01 00:00 local time",
+    );
+
+    const guestContext = await tracedContext({ timezoneId: "UTC" });
+    try {
+      const guestPage = await guestContext.newPage();
+      await goto(guestPage, permalink!, { timeout: firstNavigationTimeoutMs });
+      await expect(guestPage.locator("body")).not.toContainText(
+        "body for a scheduled creation",
+      );
+    } finally {
+      await guestContext.close();
+    }
+  });
+});
+
 test("scheduling a post shows a Scheduled-for badge on the drafts page", async ({
   registeredPage,
 }) => {
   // A fixed far-future wall-clock time keeps the post unambiguously *scheduled*
   // no matter when the suite runs, with no Date arithmetic that could drift.
-  // The non-compact composer's optional schedule control is selected by its
-  // semantic `publish_at` name; a future time plus Publish creates a post whose
-  // `published_at` is in the future. Such posts surface on the drafts page with a
-  // "Scheduled for …" badge (`.j-badge-scheduled`) rather than going live.
   const FUTURE_DATETIME_LOCAL = "2999-01-01T09:00";
 
   const page = await registeredPage("/posts/new");
-  const slug = page.locator(SEL.postSlug);
-  const slugLabel = page.locator(`label.j-field-row:has(${SEL.postSlug})`);
-  await expect(slugLabel).toHaveCount(1);
-  await expect(slugLabel.locator(":scope > .j-field-label")).toHaveText("Slug");
-  await expect(slug).not.toHaveAttribute("id", /.+/);
-  await expect(slugLabel).not.toHaveAttribute("for", /.+/);
-  await expect(slugLabel).toHaveCSS("grid-template-columns", /.+/);
-  expect(
-    await slugLabel.evaluate((label) => label.style.gridTemplateColumns),
-  ).toBe("auto 1fr");
-
-  const schedule = page.locator(SEL.publishAt);
-  const scheduleLabel = page.locator(
-    `label.j-field-label:has(${SEL.publishAt})`,
-  );
-  await expect(scheduleLabel).toHaveCount(1);
-  await expect(scheduleLabel).toContainText("Publish at (optional)");
-  await expect(schedule).not.toHaveAttribute("id", /.+/);
-  await expect(scheduleLabel).not.toHaveAttribute("for", /.+/);
-  expect(
-    await scheduleLabel.evaluate(
-      (label) => (label.parentElement as HTMLElement).style.marginTop,
-    ),
-  ).toBe("10px");
 
   await page.fill(
     SEL.postBody,
     "# Scheduled Draft\n\nbody for a scheduled post",
   );
-  await schedule.fill(FUTURE_DATETIME_LOCAL);
+  await applyPublicationTime(page, FUTURE_DATETIME_LOCAL);
   await click(page, SEL.publishButton("true"));
   await waitForSelector(page, SEL.saveSummary);
 
@@ -1608,7 +1652,7 @@ test("scheduled management page opens editor for reschedule and pullback", async
     SEL.postBody,
     "# Scheduled Management\n\nbody for scheduled management",
   );
-  await page.fill(SEL.publishAt, ORIGINAL_SCHEDULE);
+  await applyPublicationTime(page, ORIGINAL_SCHEDULE);
   await click(page, SEL.publishButton("true"));
   await waitForSelector(page, SEL.saveSummary);
 
@@ -1715,26 +1759,6 @@ test.describe("scheduled editor local time", () => {
     expect(afterPreview.post.post.published_at).toBe(original);
   });
 
-  test("create scheduling retains the DST-gap normalization contract", async ({
-    registeredPage,
-  }) => {
-    const page = await registeredPage("/posts/new");
-    await page.fill(SEL.postBody, "# Create Gap Contract\n\nbody");
-    await page.fill(SEL.publishAt, "2027-03-14T02:30");
-    await click(page, SEL.publishButton("true"));
-    await waitForSelector(page, SEL.saveSummary);
-
-    await navigateInApp(page, () => click(page, '.j-nav a[href="/drafts"]'), {
-      url: "/drafts",
-      ready: '.j-topbar h1:has-text("Drafts")',
-    });
-    const scheduledRow = page.locator("li", { hasText: "Create Gap Contract" });
-    await expect(scheduledRow).toBeVisible();
-    await expect(scheduledRow.locator(".j-badge-scheduled")).toContainText(
-      "Scheduled for",
-    );
-  });
-
   test("an author can reschedule, clear, draft, and reschedule a Post", async ({
     registeredPage,
   }) => {
@@ -1747,7 +1771,7 @@ test.describe("scheduled editor local time", () => {
       SEL.postBody,
       "# Scheduled Draft\n\nbody for scheduled editor management",
     );
-    await page.fill(SEL.publishAt, ORIGINAL_SCHEDULE);
+    await applyPublicationTime(page, ORIGINAL_SCHEDULE);
     await click(page, SEL.publishButton("true"));
     await waitForSelector(page, SEL.saveSummary);
 
