@@ -1,15 +1,15 @@
-use common::ids::{ChannelId, SubscriptionId};
+use std::sync::Arc;
+
 use common::tag::Tag;
 use common::test_support::parse_row_limit;
-use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::ViewerIdentity;
 use host::password::Password;
-use sqlx::{AssertSqlSafe, SqlitePool};
-use storage::{AppState, DbConnectOptions};
+use sqlx::SqlitePool;
+use storage::DbConnectOptions;
 use tempfile::TempDir;
 
-use storage::test_support::{Backend, TestEnv, sqlite_url};
+use storage::test_support::sqlite_url;
 
 // ── Anonymous-viewer listing helpers ─────────────────────────────────────────
 //
@@ -23,12 +23,11 @@ use storage::test_support::{Backend, TestEnv, sqlite_url};
 // an *error* call the store directly, and that difference is the point — a call that
 // goes through a helper is one that expects rows.
 pub(super) async fn anon_by_tag(
-    state: &AppState,
+    posts: Arc<dyn storage::PostStorage>,
     tag: &Tag,
     limit: &str,
 ) -> Vec<storage::PostRecord> {
-    state
-        .posts
+    posts
         .list_posts_by_tag(
             tag,
             None,
@@ -40,9 +39,11 @@ pub(super) async fn anon_by_tag(
         .expect("list_posts_by_tag failed")
 }
 
-pub(super) async fn anon_published(state: &AppState, limit: &str) -> Vec<storage::PostRecord> {
-    state
-        .posts
+pub(super) async fn anon_published(
+    posts: Arc<dyn storage::PostStorage>,
+    limit: &str,
+) -> Vec<storage::PostRecord> {
+    posts
         .list_published(
             None,
             parse_row_limit(limit),
@@ -67,86 +68,10 @@ pub(super) async fn open_pool(base: &TempDir) -> SqlitePool {
     pool
 }
 
-// These fixed lookups deliberately avoid `ChannelStorage::local_channel_id`,
-// which is what their callers are asserting independently.
-pub(super) async fn local_channel_id(backend: Backend, env: &TestEnv) -> ChannelId {
-    channel_id_by_fixed_name(
-        backend,
-        env,
-        "SELECT channel_id FROM channels WHERE name = 'local'",
-    )
-    .await
-}
-
-pub(super) async fn activitypub_channel_id(backend: Backend, env: &TestEnv) -> ChannelId {
-    channel_id_by_fixed_name(
-        backend,
-        env,
-        "SELECT channel_id FROM channels WHERE name = 'activitypub'",
-    )
-    .await
-}
-
-async fn channel_id_by_fixed_name(backend: Backend, env: &TestEnv, sql: &'static str) -> ChannelId {
-    match backend {
-        Backend::Sqlite => sqlx::query_scalar::<_, ChannelId>(sql)
-            .fetch_one(&open_pool(&env.base).await)
-            .await
-            .unwrap(),
-        Backend::Postgres => sqlx::query_scalar::<_, ChannelId>(sql)
-            .fetch_one(env.base.pool().postgres())
-            .await
-            .unwrap(),
-    }
-}
-
 pub(super) fn username(s: &str) -> Username {
     s.parse().unwrap()
 }
 
 pub(super) fn password(s: &str) -> Password {
     s.parse().unwrap()
-}
-
-// Run unrestricted fixture SQL at this sole shared test helper boundary. Callers
-// use this only to set up persistence states unavailable through public stores.
-pub(super) async fn raw_exec(backend: Backend, env: &TestEnv, sql: &str) {
-    let result = match backend {
-        Backend::Sqlite => sqlx::query(AssertSqlSafe(sql))
-            .execute(&open_pool(&env.base).await)
-            .await
-            .map(|_| ()),
-        Backend::Postgres => sqlx::query(AssertSqlSafe(sql))
-            .execute(env.base.pool().postgres())
-            .await
-            .map(|_| ()),
-    };
-    result.unwrap_or_else(|e| panic!("raw exec failed: {e}\nSQL: {sql}"));
-}
-
-pub(super) async fn update_subscription_created_at(
-    backend: Backend,
-    env: &TestEnv,
-    subscription_id: SubscriptionId,
-    created_at: UtcInstant,
-) {
-    let result = match backend {
-        Backend::Sqlite => {
-            sqlx::query("UPDATE subscriptions SET created_at = $1 WHERE subscription_id = $2")
-                .bind(created_at)
-                .bind(subscription_id)
-                .execute(&open_pool(&env.base).await)
-                .await
-                .map(|_| ())
-        }
-        Backend::Postgres => {
-            sqlx::query("UPDATE subscriptions SET created_at = $1 WHERE subscription_id = $2")
-                .bind(created_at)
-                .bind(subscription_id)
-                .execute(env.base.pool().postgres())
-                .await
-                .map(|_| ())
-        }
-    };
-    result.unwrap_or_else(|e| panic!("subscription created_at update failed: {e}"));
 }

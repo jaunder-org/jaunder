@@ -16,10 +16,11 @@ use storage::test_support::{
     Backend, SeedUser, backends, confirmed_for, media_row_exists, seed_users,
 };
 use storage::{
-    AppState, CreateMediaError, ForeignEvidenceSink, MediaContentLocks, MediaDeleteMode,
+    CreateMediaError, FeedEventStorage, ForeignEvidenceSink, MediaContentLocks, MediaDeleteMode,
     MediaManager, MediaRecord, MediaReferenceEvidence, MediaReferenceOwnershipResolver,
-    PostBookkeepingExpectation, PostCreation, PostFormat, PostMediaOwnership, PostWriteGate,
-    ReclaimUnlinkGate, TryDeleteOutcome, perform_post_creation_with_media_ownership,
+    MediaStorage, PostBookkeepingExpectation, PostCreation, PostFormat, PostMediaOwnership,
+    PostStorage, PostWriteGate, ReclaimUnlinkGate, TryDeleteOutcome, UserStorage, WriteScope,
+    perform_post_creation_with_media_ownership,
 };
 
 struct LocalMediaResolver;
@@ -51,17 +52,19 @@ impl MediaReferenceOwnershipResolver for LocalMediaResolver {
 }
 
 async fn create_post_with_media(
-    state: &Arc<AppState>,
+    write_scope: &WriteScope,
     locks: &MediaContentLocks,
+    posts: Arc<dyn PostStorage>,
+    feed_events: Arc<dyn FeedEventStorage>,
     ownership: &PostMediaOwnership,
     user_id: UserId,
     media_url: &str,
 ) {
     let outcome = perform_post_creation_with_media_ownership(
-        &state.write_scope,
+        write_scope,
         locks,
-        Arc::clone(&state.posts),
-        Arc::clone(&state.feed_events),
+        posts,
+        feed_events,
         ownership,
         UtcInstant::now(),
         PostCreation {
@@ -85,19 +88,30 @@ async fn create_post_with_media(
 }
 
 fn spawn_post_with_media(
-    state: Arc<AppState>,
+    write_scope: WriteScope,
     locks: Arc<MediaContentLocks>,
+    posts: Arc<dyn PostStorage>,
+    feed_events: Arc<dyn FeedEventStorage>,
     ownership: PostMediaOwnership,
     user_id: UserId,
     media_url: String,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        create_post_with_media(&state, &locks, &ownership, user_id, &media_url).await;
+        create_post_with_media(
+            &write_scope,
+            &locks,
+            posts,
+            feed_events,
+            &ownership,
+            user_id,
+            &media_url,
+        )
+        .await;
     })
 }
 
 async fn assert_post_writer_won(
-    state: &Arc<AppState>,
+    media_store: Arc<dyn MediaStorage>,
     manager: &MediaManager,
     write_gate: &PostWriteGate,
     writer: tokio::task::JoinHandle<()>,
@@ -120,11 +134,11 @@ async fn assert_post_writer_won(
         TryDeleteOutcome::Deleted
     );
     assert!(
-        media_row_exists(state, author, media).await,
+        media_row_exists(Arc::clone(&media_store), author, media).await,
         "writer observed its source and materialized an independent Media Record"
     );
     assert!(
-        !media_row_exists(state, source_owner, media).await,
+        !media_row_exists(media_store, source_owner, media).await,
         "source-owner deletion removes only its own Media Record"
     );
 }
@@ -137,9 +151,13 @@ fn spawn_media_removal(
     tokio::spawn(async move { manager.delete_media(source_owner, &media, false).await })
 }
 
-async fn assert_post_writer_lost(state: &Arc<AppState>, author: UserId, media: &MediaRef) {
+async fn assert_post_writer_lost(
+    media_store: Arc<dyn MediaStorage>,
+    author: UserId,
+    media: &MediaRef,
+) {
     assert!(
-        !media_row_exists(state, author, media).await,
+        !media_row_exists(media_store, author, media).await,
         "writer succeeds with a broken link when removal won"
     );
 }
@@ -160,10 +178,18 @@ async fn upload_race_media(manager: &MediaManager, source_owner: UserId) -> Medi
         filename: uploaded.value().filename.clone(),
     }
 }
-async fn create_media(state: &AppState, record: MediaRecord) {
-    let media = state.media.clone();
-    let outcome = state
-        .write_scope
+
+async fn seed_race_users(users: Arc<dyn UserStorage>, write_scope: WriteScope) -> (UserId, UserId) {
+    let source_owner = SeedUser::new()
+        .seed(Arc::clone(&users), write_scope.clone())
+        .await
+        .user_id;
+    let author = SeedUser::new().seed(users, write_scope).await.user_id;
+    (source_owner, author)
+}
+
+async fn create_media(write_scope: &WriteScope, media: Arc<dyn MediaStorage>, record: MediaRecord) {
+    let outcome = write_scope
         .run(move |transaction| {
             Box::pin(async move { media.create_media(transaction, &record).await })
         })
@@ -196,8 +222,10 @@ fn make_media_record(
 #[tokio::test]
 async fn create_and_get_media(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
     let sha256 =
         parse_content_hash("abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234");
     let created_at = "2026-08-26T12:34:56.789012Z"
@@ -205,10 +233,10 @@ async fn create_and_get_media(#[case] backend: Backend) {
         .expect("valid microsecond instant");
     let mut record = make_media_record(user_id, &sha256, "test.jpg", MediaSource::Upload);
     record.created_at = created_at;
-    create_media(state, record).await;
+    create_media(&env.write_scope(), Arc::clone(&env.media()), record).await;
 
-    let fetched = state
-        .media
+    let fetched = env
+        .media()
         .get_media(
             user_id,
             &sha256,
@@ -226,8 +254,8 @@ async fn create_and_get_media(#[case] backend: Backend) {
     assert_eq!(fetched.size_bytes, parse_byte_size("12345"));
     assert_eq!(fetched.created_at, created_at);
 
-    let listed = state
-        .media
+    let listed = env
+        .media()
         .list_media(user_id, None, parse_row_limit("10"), parse_page_offset("0"))
         .await
         .unwrap();
@@ -239,8 +267,10 @@ async fn create_and_get_media(#[case] backend: Backend) {
 #[tokio::test]
 async fn media_source_url_round_trips_through_the_typed_column(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
     let sha256 =
         parse_content_hash("beef1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234");
@@ -251,10 +281,10 @@ async fn media_source_url_round_trips_through_the_typed_column(#[case] backend: 
     // text as typed (#675).
     record.source_url = Some(parse_url("https://Example.COM:443/x.png"));
 
-    create_media(state, record).await;
+    create_media(&env.write_scope(), Arc::clone(&env.media()), record).await;
 
-    let fetched = state
-        .media
+    let fetched = env
+        .media()
         .get_media(
             user_id,
             &sha256,
@@ -279,8 +309,10 @@ async fn media_row_with_an_invalid_source_url_fails_to_decode(#[case] backend: B
     // or future-buggy writer is exactly the threat, and it is inserted by raw SQL here
     // because the type makes it unconstructible in Rust.
     let env = backend.setup().await;
-    let state = &env.state;
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
     let insert = storage::with_closeable_pool!(env.base.pool(), pool, {
         query(
@@ -296,8 +328,8 @@ async fn media_row_with_an_invalid_source_url_fails_to_decode(#[case] backend: B
     });
     insert.expect("raw insert should succeed — the database has no opinion on the text");
 
-    let fetched = state
-        .media
+    let fetched = env
+        .media()
         .get_media(
             user_id,
             &parse_content_hash("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
@@ -315,13 +347,15 @@ async fn media_row_with_an_invalid_source_url_fails_to_decode(#[case] backend: B
 #[tokio::test]
 async fn list_media_skips_rows_that_fail_to_decode(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
     // A valid record via the normal (validating) path.
     let good_sha = "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234";
     let record = make_media_record(user_id, good_sha, "good.jpg", MediaSource::Upload);
-    create_media(state, record).await;
+    create_media(&env.write_scope(), Arc::clone(&env.media()), record).await;
 
     // A row whose `filename` column is a non-canonical value, inserted directly to
     // bypass the validating `create_media` (the `Filename` type makes an un-sanitized
@@ -342,8 +376,8 @@ async fn list_media_skips_rows_that_fail_to_decode(#[case] backend: Backend) {
 
     // list_media returns the decodable row and silently skips the corrupt one, rather
     // than failing the whole query (which would hide the user's valid media too).
-    let listed = state
-        .media
+    let listed = env
+        .media()
         .list_media(user_id, None, parse_row_limit("10"), parse_page_offset("0"))
         .await
         .unwrap();
@@ -356,8 +390,8 @@ async fn list_media_skips_rows_that_fail_to_decode(#[case] backend: Backend) {
 
     // A direct lookup of the corrupt row still surfaces the decode error (single-row
     // lookups stay strict — only the list path degrades gracefully).
-    let direct = state
-        .media
+    let direct = env
+        .media()
         .find_by_hash(
             &parse_content_hash("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
             &MediaSource::Upload,
@@ -373,15 +407,17 @@ async fn list_media_skips_rows_that_fail_to_decode(#[case] backend: Backend) {
 #[tokio::test]
 async fn duplicate_media_returns_already_exists(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
     let sha256 = "bbbb1234bbbb1234bbbb1234bbbb1234bbbb1234bbbb1234bbbb1234bbbb1234".to_string();
     let record = make_media_record(user_id, &sha256, "dup.jpg", MediaSource::Upload);
-    create_media(state, record.clone()).await;
-    let media = state.media.clone();
-    let err = state
-        .write_scope
+    create_media(&env.write_scope(), Arc::clone(&env.media()), record.clone()).await;
+    let media = env.media();
+    let err = env
+        .write_scope()
         .run(move |transaction| {
             Box::pin(async move { media.create_media(transaction, &record).await })
         })
@@ -400,14 +436,16 @@ async fn duplicate_media_returns_already_exists(#[case] backend: Backend) {
 #[tokio::test]
 async fn delete_media_removes_record(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
     let sha256 =
         parse_content_hash("cccc1234cccc1234cccc1234cccc1234cccc1234cccc1234cccc1234cccc1234");
     let record = make_media_record(user_id, &sha256, "del.jpg", MediaSource::Upload);
-    create_media(state, record).await;
-    let media = state.media.clone();
+    create_media(&env.write_scope(), Arc::clone(&env.media()), record).await;
+    let media = env.media();
     let media_ref = MediaRef {
         source: MediaSource::Upload,
         sha256: sha256.clone(),
@@ -415,8 +453,8 @@ async fn delete_media_removes_record(#[case] backend: Backend) {
     };
     let instance_id = env.base.instance_id().clone();
     let evidence = MediaReferenceEvidence::new(instance_id.clone());
-    let outcome = state
-        .write_scope
+    let outcome = env
+        .write_scope()
         .run(move |transaction| {
             Box::pin(async move {
                 media
@@ -436,8 +474,8 @@ async fn delete_media_removes_record(#[case] backend: Backend) {
     let outcome = confirmed_for(outcome, "media deletion");
     assert_eq!(outcome, TryDeleteOutcome::Deleted);
 
-    let fetched = state
-        .media
+    let fetched = env
+        .media()
         .get_media(
             user_id,
             &sha256,
@@ -453,12 +491,14 @@ async fn delete_media_removes_record(#[case] backend: Backend) {
 #[tokio::test]
 async fn delete_nonexistent_returns_missing(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
     let sha256 =
         parse_content_hash("dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234");
-    let media = state.media.clone();
+    let media = env.media();
     let media_ref = MediaRef {
         source: MediaSource::Upload,
         sha256,
@@ -466,8 +506,8 @@ async fn delete_nonexistent_returns_missing(#[case] backend: Backend) {
     };
     let instance_id = env.base.instance_id().clone();
     let evidence = MediaReferenceEvidence::new(instance_id.clone());
-    let outcome = state
-        .write_scope
+    let outcome = env
+        .write_scope()
         .run(move |transaction| {
             Box::pin(async move {
                 media
@@ -494,31 +534,33 @@ async fn delete_nonexistent_returns_missing(#[case] backend: Backend) {
 #[tokio::test]
 async fn list_media_returns_records_for_user(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let [user_a, user_b] = seed_users(state).await;
+    let [user_a, user_b] = seed_users(env.users(), env.write_scope()).await;
 
     let sha1 = "eeee1234eeee1234eeee1234eeee1234eeee1234eeee1234eeee1234eeee1234".to_string();
     let sha2 = "ffff1234ffff1234ffff1234ffff1234ffff1234ffff1234ffff1234ffff1234".to_string();
     let sha3 = "9999123499991234999912349999123499991234999912349999123499991234".to_string();
 
     create_media(
-        state,
+        &env.write_scope(),
+        Arc::clone(&env.media()),
         make_media_record(user_a, &sha1, "a1.jpg", MediaSource::Upload),
     )
     .await;
     create_media(
-        state,
+        &env.write_scope(),
+        Arc::clone(&env.media()),
         make_media_record(user_a, &sha2, "a2.jpg", MediaSource::Upload),
     )
     .await;
     create_media(
-        state,
+        &env.write_scope(),
+        Arc::clone(&env.media()),
         make_media_record(user_b, &sha3, "b1.jpg", MediaSource::Upload),
     )
     .await;
 
-    let results = state
-        .media
+    let results = env
+        .media()
         .list_media(user_a, None, parse_row_limit("10"), parse_page_offset("0"))
         .await
         .unwrap();
@@ -530,25 +572,29 @@ async fn list_media_returns_records_for_user(#[case] backend: Backend) {
 #[tokio::test]
 async fn list_media_filtered_by_source(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
     let sha_up = "8888123488881234888812348888123488881234888812348888123488881234".to_string();
     let sha_ca = "7777123477771234777712347777123477771234777712347777123477771234".to_string();
 
     create_media(
-        state,
+        &env.write_scope(),
+        Arc::clone(&env.media()),
         make_media_record(user_id, &sha_up, "up.jpg", MediaSource::Upload),
     )
     .await;
     create_media(
-        state,
+        &env.write_scope(),
+        Arc::clone(&env.media()),
         make_media_record(user_id, &sha_ca, "ca.jpg", MediaSource::Cached),
     )
     .await;
 
-    let uploads = state
-        .media
+    let uploads = env
+        .media()
         .list_media(
             user_id,
             Some(&MediaSource::Upload),
@@ -560,8 +606,8 @@ async fn list_media_filtered_by_source(#[case] backend: Backend) {
     assert_eq!(uploads.len(), 1);
     assert_eq!(uploads[0].source, MediaSource::Upload);
 
-    let cached = state
-        .media
+    let cached = env
+        .media()
         .list_media(
             user_id,
             Some(&MediaSource::Cached),
@@ -578,10 +624,12 @@ async fn list_media_filtered_by_source(#[case] backend: Backend) {
 #[tokio::test]
 async fn get_user_upload_usage_returns_zero_initially(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
-    let usage = state.media.get_user_upload_usage(user_id).await.unwrap();
+    let usage = env.media().get_user_upload_usage(user_id).await.unwrap();
     assert_eq!(usage, parse_byte_size("0"));
 }
 
@@ -589,21 +637,23 @@ async fn get_user_upload_usage_returns_zero_initially(#[case] backend: Backend) 
 #[tokio::test]
 async fn get_user_upload_usage_sums_uploads_only(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
     let sha_up = "6666123466661234666612346666123466661234666612346666123466661234".to_string();
     let sha_ca = "5555123455551234555512345555123455551234555512345555123455551234".to_string();
 
     let mut upload = make_media_record(user_id, &sha_up, "upload.jpg", MediaSource::Upload);
     upload.size_bytes = parse_byte_size("1000");
-    create_media(state, upload).await;
+    create_media(&env.write_scope(), Arc::clone(&env.media()), upload).await;
 
     let mut cached = make_media_record(user_id, &sha_ca, "cached.jpg", MediaSource::Cached);
     cached.size_bytes = parse_byte_size("9999");
-    create_media(state, cached).await;
+    create_media(&env.write_scope(), Arc::clone(&env.media()), cached).await;
 
-    let usage = state.media.get_user_upload_usage(user_id).await.unwrap();
+    let usage = env.media().get_user_upload_usage(user_id).await.unwrap();
     assert_eq!(
         usage,
         parse_byte_size("1000"),
@@ -615,16 +665,18 @@ async fn get_user_upload_usage_sums_uploads_only(#[case] backend: Backend) {
 #[tokio::test]
 async fn find_by_hash_returns_any_match(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
     let sha256 =
         parse_content_hash("4444123444441234444412344444123444441234444412344444123444441234");
     let record = make_media_record(user_id, &sha256, "find.jpg", MediaSource::Upload);
-    create_media(state, record).await;
+    create_media(&env.write_scope(), Arc::clone(&env.media()), record).await;
 
-    let found = state
-        .media
+    let found = env
+        .media()
         .find_by_hash(&sha256, &MediaSource::Upload)
         .await
         .unwrap();
@@ -634,17 +686,16 @@ async fn find_by_hash_returns_any_match(#[case] backend: Backend) {
 
 async fn serialized_post_write_and_removal(backend: Backend, reclaim: bool, writer_first: bool) {
     let env = backend.setup().await;
-    let source_owner = SeedUser::new().seed(&env.state).await.user_id;
-    let author = SeedUser::new().seed(&env.state).await.user_id;
+    let (source_owner, author) = seed_race_users(Arc::clone(&env.users()), env.write_scope()).await;
     let locks = Arc::new(MediaContentLocks::new(Arc::new(
         env.base.path().to_path_buf(),
     )));
     let reclaim_gate = Arc::new(ReclaimUnlinkGate::new());
     let manager = MediaManager::new(
-        Arc::clone(&env.state.media),
-        Arc::clone(&env.state.posts),
-        Arc::clone(&env.state.site_config),
-        env.state.write_scope.clone(),
+        Arc::clone(&env.media()),
+        Arc::clone(&env.posts()),
+        Arc::clone(&env.site_config()),
+        env.write_scope(),
         Arc::clone(&locks),
         env.base.instance_id().clone(),
         Arc::new(LocalMediaResolver),
@@ -661,19 +712,21 @@ async fn serialized_post_write_and_removal(backend: Backend, reclaim: bool, writ
     let ownership = PostMediaOwnership::new(
         Arc::new(LocalMediaResolver),
         env.base.instance_id().clone(),
-        Arc::clone(&env.state.site_config),
+        Arc::clone(&env.site_config()),
     )
     .with_post_write_gate_for_test(Arc::clone(&write_gate));
     if writer_first {
         let writer = spawn_post_with_media(
-            Arc::clone(&env.state),
+            env.write_scope(),
             Arc::clone(&locks),
+            Arc::clone(&env.posts()),
+            Arc::clone(&env.feed_events()),
             ownership.clone(),
             author,
             media_url.clone(),
         );
         assert_post_writer_won(
-            &env.state,
+            Arc::clone(&env.media()),
             &manager,
             &write_gate,
             writer,
@@ -687,8 +740,10 @@ async fn serialized_post_write_and_removal(backend: Backend, reclaim: bool, writ
         if reclaim {
             reclaim_gate.wait_until_unlink().await;
             let writer = spawn_post_with_media(
-                Arc::clone(&env.state),
+                env.write_scope(),
                 Arc::clone(&locks),
+                Arc::clone(&env.posts()),
+                Arc::clone(&env.feed_events()),
                 ownership.clone(),
                 author,
                 media_url.clone(),
@@ -707,8 +762,10 @@ async fn serialized_post_write_and_removal(backend: Backend, reclaim: bool, writ
                 .expect("removal task joins")
                 .expect("source deletion");
             let writer = spawn_post_with_media(
-                Arc::clone(&env.state),
+                env.write_scope(),
                 Arc::clone(&locks),
+                Arc::clone(&env.posts()),
+                Arc::clone(&env.feed_events()),
                 ownership.clone(),
                 author,
                 media_url.clone(),
@@ -717,7 +774,7 @@ async fn serialized_post_write_and_removal(backend: Backend, reclaim: bool, writ
             write_gate.release();
             writer.await.expect("writer task joins");
         }
-        assert_post_writer_lost(&env.state, author, &media).await;
+        assert_post_writer_lost(Arc::clone(&env.media()), author, &media).await;
     }
 }
 

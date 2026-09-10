@@ -1,8 +1,8 @@
 //! Feed-cache fixture builder that keeps stored representation metadata derived from its path.
 
 use super::confirmed_for;
-use crate::AppState;
 use crate::feed_cache::FeedCacheRow;
+use crate::{FeedCacheStorage, WriteScope};
 
 use common::{etag::ETag, feed::FeedFormat, test_support::parse_etag, time::UtcInstant};
 use host::{
@@ -118,12 +118,14 @@ impl SeedFeedCache {
     /// # Panics
     ///
     /// If the fixture write fails or does not receive a confirmed commit.
-    pub async fn seed(self, state: &AppState) -> FeedCacheRow {
+    pub async fn seed(
+        self,
+        feed_cache: Arc<dyn FeedCacheStorage>,
+        write_scope: WriteScope,
+    ) -> FeedCacheRow {
         let row = self.build();
         let returned = row.clone();
-        let feed_cache = Arc::clone(&state.feed_cache);
-        let outcome = state
-            .write_scope
+        let outcome = write_scope
             .run(move |transaction| {
                 Box::pin(async move { feed_cache.upsert(transaction, row).await })
             })
@@ -280,12 +282,7 @@ mod tests {
 
         assert_eq!(row.feed_path(), &feed_path);
         assert!(
-            env.state
-                .feed_cache
-                .get(&feed_path)
-                .await
-                .unwrap()
-                .is_none(),
+            env.feed_cache().get(&feed_path).await.unwrap().is_none(),
             "build must not write to storage"
         );
     }
@@ -301,11 +298,10 @@ mod tests {
         let seeded = SeedFeedCache::new(feed_path.clone())
             .representation_modified_at(persisted_at)
             .generated_at(persisted_at)
-            .seed(&env.state)
+            .seed(env.feed_cache().clone(), env.write_scope().clone())
             .await;
         let stored = env
-            .state
-            .feed_cache
+            .feed_cache()
             .get(&feed_path)
             .await
             .unwrap()

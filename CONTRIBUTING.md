@@ -274,8 +274,11 @@ browser behavior but does not contribute wasm lines to the host coverage
 denominator.
 
 For tests requiring a database, use the shared harness: `#[apply(backends)]`
-with `backend.setup().await`, which returns a `TestEnv { state, base }` carrying
-a fully migrated `AppState` (ADR-0033). Do **not** hand-roll a pool.
+with `backend.setup().await`, which returns a `TestEnv` owning a private
+`StorageFactory` plus the backend-specific `TestBase`. Request only the exact
+storage handles or `WriteScope` the test needs from `TestEnv`; use `base` only
+for backend lifecycle or deliberately backend-level assertions (ADR-0033). Do
+**not** hand-roll a pool.
 
 **Never `sqlite::memory:`.** It fails twice over. Each _connection_ to
 `sqlite::memory:` gets its own separate database, so a multi-connection
@@ -1429,16 +1432,18 @@ nix build .#checks.x86_64-linux.elisp-coverage-producer
   `thiserror`.
 - Use `sqlx` unique violation checks (`is_unique_violation()`) to handle
   "already exists" errors gracefully.
-- In web server functions, retrieve the per-trait handle you need
-  (`expect_context::<Arc<dyn UserStorage>>()`), never the whole `AppState`
-  bundle — `AppState` (in the `storage` crate) belongs to the composition root.
+- In web server functions, retrieve the exact per-trait handle you need
+  (`expect_context::<Arc<dyn UserStorage>>()`); no heterogeneous application
+  state bundle crosses a runtime seam.
 - **Dependency injection / composition-root invariant (see
   [ADR-0016](docs/adr/0016-dependency-injection-and-appstate.md)):** No type may
   be both (a) a heterogeneous dependency holder and (b) passed beyond the
   composition root. Declare a component's dependencies as constructor parameters
-  on the component that uses them — do not add a field to a shared bundle to
-  make a dependency reachable. How the wiring is actually built is in
-  [Dependency injection and AppState](docs/ARCHITECTURE.md#dependency-injection-and-appstate).
+  on the component that uses them — do not introduce a shared bundle to make a
+  dependency reachable. `StorageFactory` stays at composition roots and mints
+  exact storage handles and `WriteScope` values; it is never injected into a
+  subsystem. How the wiring is built is in
+  [Dependency injection and composition roots](docs/ARCHITECTURE.md#dependency-injection-and-composition-roots).
 - The web framework is Leptos in CSR (client-side-rendering) mode (ADR-0040);
   the wasm bundle is built by `cargo xtask build-csr` and served by
   `jaunder serve` (no cargo-leptos).

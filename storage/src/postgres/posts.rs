@@ -566,8 +566,8 @@ impl PostDialect for Postgres {
 #[cfg(test)]
 mod tests {
     use crate::test_support::{
-        Backend, SeedUser, count_post_revisions, create_post_via_service, media_ref_for,
-        media_url_for, set_post_tags_confirmed,
+        Backend, SeedUser, create_post_via_service, media_ref_for, media_url_for,
+        set_post_tags_confirmed,
     };
     use common::test_support::{parse_post_body, parse_tag_label};
     use std::{sync::Arc, time::Duration};
@@ -579,10 +579,18 @@ mod tests {
     #[tokio::test]
     async fn postgres_tag_revision_capture_waits_for_current_media_lock() {
         let env = Backend::Postgres.setup().await;
-        let user = SeedUser::new().seed(&env.state).await.user_id;
+        let user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         let media = media_ref_for("tag-revision-lock.jpg");
         let post = create_post_via_service(
-            &env.state,
+            env.posts().clone(),
+            env.feed_events().clone(),
+            env.write_scope().clone(),
             user,
             parse_post_body(&format!(
                 "<img src=\"{}\">",
@@ -596,8 +604,8 @@ mod tests {
             .lock_media_reference_for_write(&media)
             .await
             .expect("take the current media lock");
-        let posts = Arc::clone(&env.state.posts);
-        let write_scope = env.state.write_scope.clone();
+        let posts = Arc::clone(&env.posts());
+        let write_scope = env.write_scope().clone();
         let mut tag_update = tokio::spawn(async move {
             set_post_tags_confirmed(
                 &write_scope,
@@ -624,7 +632,7 @@ mod tests {
             .expect("tag update task panicked")
             .expect("tag update failed after lock release");
         assert_eq!(
-            count_post_revisions(&env, post)
+            env.count_post_revisions(post)
                 .await
                 .expect("count captured revisions"),
             1,

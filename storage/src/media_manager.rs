@@ -1062,8 +1062,14 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let posts = env.state.posts.clone();
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let posts = env.posts().clone();
         let (started_tx, started_rx) = tokio::sync::oneshot::channel();
         let (release_tx, release_rx) = tokio::sync::oneshot::channel();
         let (completed_tx, completed_rx) = tokio::sync::oneshot::channel();
@@ -1076,10 +1082,10 @@ mod tests {
             env.base.path().to_path_buf(),
         )));
         let manager = Arc::new(MediaManager::new(
-            env.state.media.clone(),
+            env.media().clone(),
             posts,
-            env.state.site_config.clone(),
-            env.state.write_scope.clone(),
+            env.site_config().clone(),
+            env.write_scope().clone(),
             Arc::clone(&content_locks),
             env.base.instance_id().clone(),
             resolver,
@@ -1547,12 +1553,18 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         let manager = Arc::new(MediaManager::new(
-            env.state.media.clone(),
-            env.state.posts.clone(),
-            env.state.site_config.clone(),
-            env.state.write_scope.clone(),
+            env.media().clone(),
+            env.posts().clone(),
+            env.site_config().clone(),
+            env.write_scope().clone(),
             Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
@@ -1595,10 +1607,9 @@ mod tests {
         admitted_rx
             .await
             .expect("upload reaches its content stream");
-        let site_config = Arc::clone(&env.state.site_config);
+        let site_config = Arc::clone(&env.site_config());
         crate::test_support::confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         site_config
@@ -1616,8 +1627,7 @@ mod tests {
             .expect("admitted upload completes");
         let first_media = upload_ref(&first);
         let usage_after_first = env
-            .state
-            .media
+            .media()
             .get_user_upload_usage(user_id)
             .await
             .expect("read first upload usage");
@@ -1635,10 +1645,9 @@ mod tests {
             err.downcast_ref::<MediaError>(),
             Some(MediaError::UploadsDisabled)
         ));
-        assert!(media_row_exists(&env.state, user_id, &first_media).await);
+        assert!(media_row_exists(env.media().clone(), user_id, &first_media).await);
         assert_eq!(
-            env.state
-                .media
+            env.media()
                 .get_user_upload_usage(user_id)
                 .await
                 .expect("read rejected upload usage"),
@@ -1659,7 +1668,13 @@ mod tests {
     #[tokio::test]
     async fn admitted_upload_reads_capability_once(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         let enabled = Arc::new(AtomicBool::new(true));
         let policy_at_entry = Arc::clone(&enabled);
         let mut site_config = crate::MockSiteConfigStorage::new();
@@ -1676,10 +1691,10 @@ mod tests {
             .times(1)
             .return_once(|| Ok(UserQuota::default()));
         let manager = MediaManager::new(
-            env.state.media.clone(),
-            env.state.posts.clone(),
+            env.media().clone(),
+            env.posts().clone(),
             Arc::new(site_config),
-            env.state.write_scope.clone(),
+            env.write_scope().clone(),
             Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
@@ -2327,12 +2342,18 @@ mod tests {
     #[tokio::test]
     async fn upload_bytes_is_content_addressed_and_idempotent(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         let manager = MediaManager::new(
-            env.state.media.clone(),
-            env.state.posts.clone(),
-            env.state.site_config.clone(),
-            env.state.write_scope.clone(),
+            env.media().clone(),
+            env.posts().clone(),
+            env.site_config().clone(),
+            env.write_scope().clone(),
             Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
@@ -2383,13 +2404,18 @@ mod tests {
     #[tokio::test]
     async fn upload_bytes_retains_new_file_when_commit_is_indeterminate(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         let manager = MediaManager::new(
-            env.state.media.clone(),
-            env.state.posts.clone(),
-            env.state.site_config.clone(),
-            env.state
-                .write_scope
+            env.media().clone(),
+            env.posts().clone(),
+            env.site_config().clone(),
+            env.write_scope()
                 .with_commit_acknowledgement_loss_after_commit_for_test(),
             Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
@@ -2423,12 +2449,18 @@ mod tests {
             .setup()
             .media_limits("5".parse().unwrap(), UserQuota::default())
             .await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         let manager = MediaManager::new(
-            env.state.media.clone(),
-            env.state.posts.clone(),
-            env.state.site_config.clone(),
-            env.state.write_scope.clone(),
+            env.media().clone(),
+            env.posts().clone(),
+            env.site_config().clone(),
+            env.write_scope().clone(),
             Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
@@ -2458,12 +2490,18 @@ mod tests {
         // unit test before — it was e2e-only. Drive it with an in-memory chunk stream so
         // the byte-stream branch stays covered.
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         let manager = MediaManager::new(
-            env.state.media.clone(),
-            env.state.posts.clone(),
-            env.state.site_config.clone(),
-            env.state.write_scope.clone(),
+            env.media().clone(),
+            env.posts().clone(),
+            env.site_config().clone(),
+            env.write_scope().clone(),
             Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
@@ -2505,12 +2543,18 @@ mod tests {
     #[tokio::test]
     async fn delete_media_reclaims_unreferenced_file_and_quota(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         let manager = MediaManager::new(
-            env.state.media.clone(),
-            env.state.posts.clone(),
-            env.state.site_config.clone(),
-            env.state.write_scope.clone(),
+            env.media().clone(),
+            env.posts().clone(),
+            env.site_config().clone(),
+            env.write_scope().clone(),
             Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
@@ -2540,13 +2584,9 @@ mod tests {
             MutationOutcome::Confirmed(TryDeleteOutcome::Deleted)
         );
 
-        assert!(!media_row_exists(&env.state, user_id, &media).await);
+        assert!(!media_row_exists(env.media().clone(), user_id, &media).await);
         assert_eq!(
-            env.state
-                .media
-                .get_user_upload_usage(user_id)
-                .await
-                .unwrap(),
+            env.media().get_user_upload_usage(user_id).await.unwrap(),
             parse_byte_size("0")
         );
         assert!(!file_path.exists(), "unreferenced delete reclaims the path");
@@ -2556,14 +2596,20 @@ mod tests {
     #[tokio::test]
     async fn reclaim_guard_stays_live_until_manager_finishes_unlink(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         let gate = Arc::new(ReclaimUnlinkGate::new());
         let manager = Arc::new(
             MediaManager::new(
-                env.state.media.clone(),
-                env.state.posts.clone(),
-                env.state.site_config.clone(),
-                env.state.write_scope.clone(),
+                env.media().clone(),
+                env.posts().clone(),
+                env.site_config().clone(),
+                env.write_scope().clone(),
                 Arc::new(MediaContentLocks::new(Arc::new(
                     env.base.path().to_path_buf(),
                 ))),
@@ -2610,12 +2656,18 @@ mod tests {
     #[tokio::test]
     async fn delete_media_retains_file_when_commit_is_indeterminate(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         let confirmed_manager = MediaManager::new(
-            env.state.media.clone(),
-            env.state.posts.clone(),
-            env.state.site_config.clone(),
-            env.state.write_scope.clone(),
+            env.media().clone(),
+            env.posts().clone(),
+            env.site_config().clone(),
+            env.write_scope().clone(),
             Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
@@ -2634,11 +2686,10 @@ mod tests {
         let media = upload_ref(&uploaded);
         let file_path = stored_path(env.base.path(), &media);
         let manager = MediaManager::new(
-            env.state.media.clone(),
-            env.state.posts.clone(),
-            env.state.site_config.clone(),
-            env.state
-                .write_scope
+            env.media().clone(),
+            env.posts().clone(),
+            env.site_config().clone(),
+            env.write_scope()
                 .with_commit_acknowledgement_loss_after_commit_for_test(),
             Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
@@ -2666,13 +2717,25 @@ mod tests {
     #[tokio::test]
     async fn delete_media_missing_owner_retains_file(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let owner = SeedUser::new().seed(&env.state).await.user_id;
-        let other_user = SeedUser::new().seed(&env.state).await.user_id;
+        let owner = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let other_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         let manager = MediaManager::new(
-            env.state.media.clone(),
-            env.state.posts.clone(),
-            env.state.site_config.clone(),
-            env.state.write_scope.clone(),
+            env.media().clone(),
+            env.posts().clone(),
+            env.site_config().clone(),
+            env.write_scope().clone(),
             Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
@@ -2703,19 +2766,25 @@ mod tests {
             file_path.exists(),
             "a missing-owner delete must retain the media bytes"
         );
-        assert!(media_row_exists(&env.state, owner, &media).await);
+        assert!(media_row_exists(env.media().clone(), owner, &media).await);
     }
 
     #[apply(backends)]
     #[tokio::test]
     async fn delete_media_reclaim_failure_preserves_confirmed_outcome(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         let manager = MediaManager::new(
-            env.state.media.clone(),
-            env.state.posts.clone(),
-            env.state.site_config.clone(),
-            env.state.write_scope.clone(),
+            env.media().clone(),
+            env.posts().clone(),
+            env.site_config().clone(),
+            env.write_scope().clone(),
             Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
@@ -2753,12 +2822,18 @@ mod tests {
     #[tokio::test]
     async fn delete_media_force_can_break_owner_retained_history(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         let manager = MediaManager::new(
-            env.state.media.clone(),
-            env.state.posts.clone(),
-            env.state.site_config.clone(),
-            env.state.write_scope.clone(),
+            env.media().clone(),
+            env.posts().clone(),
+            env.site_config().clone(),
+            env.write_scope().clone(),
             Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
@@ -2778,7 +2853,9 @@ mod tests {
         let media = upload_ref(&uploaded);
         let file_path = stored_path(env.base.path(), &media);
         create_post_via_service(
-            &env.state,
+            env.posts().clone(),
+            env.feed_events().clone(),
+            env.write_scope().clone(),
             user_id,
             parse_post_body(&format!("<img src=\"{}\">", uploaded.value().url)),
         )
@@ -2792,7 +2869,7 @@ mod tests {
                 .into_outcome(),
             MutationOutcome::Confirmed(TryDeleteOutcome::Deleted)
         );
-        assert!(!media_row_exists(&env.state, user_id, &media).await);
+        assert!(!media_row_exists(env.media().clone(), user_id, &media).await);
         assert!(
             file_path.exists(),
             "reclamation remains conservative while retained history names the bytes"
@@ -2803,13 +2880,25 @@ mod tests {
     #[tokio::test]
     async fn delete_media_keeps_shared_path_until_last_row_is_deleted(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let first_user = SeedUser::new().seed(&env.state).await.user_id;
-        let second_user = SeedUser::new().seed(&env.state).await.user_id;
+        let first_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let second_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         let manager = MediaManager::new(
-            env.state.media.clone(),
-            env.state.posts.clone(),
-            env.state.site_config.clone(),
-            env.state.write_scope.clone(),
+            env.media().clone(),
+            env.posts().clone(),
+            env.site_config().clone(),
+            env.write_scope().clone(),
             Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
@@ -2844,8 +2933,8 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(!media_row_exists(&env.state, first_user, &media).await);
-        assert!(media_row_exists(&env.state, second_user, &media).await);
+        assert!(!media_row_exists(env.media().clone(), first_user, &media).await);
+        assert!(media_row_exists(env.media().clone(), second_user, &media).await);
         assert!(file_path.exists(), "remaining media row retains the file");
 
         manager
@@ -2862,12 +2951,18 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         let manager = MediaManager::new(
-            env.state.media.clone(),
-            env.state.posts.clone(),
-            env.state.site_config.clone(),
-            env.state.write_scope.clone(),
+            env.media().clone(),
+            env.posts().clone(),
+            env.site_config().clone(),
+            env.write_scope().clone(),
             Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
@@ -2908,26 +3003,38 @@ mod tests {
             second_path.exists(),
             "different filename entry for the same hash remains served"
         );
-        assert!(media_row_exists(&env.state, user_id, &second_media).await);
+        assert!(media_row_exists(env.media().clone(), user_id, &second_media).await);
     }
     #[apply(backends)]
     #[tokio::test]
     async fn theme_binding_blocks_guarded_media_delete_and_is_reported(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let actor = SeedUser::new().seed(&env.state).await.user_id;
-        let media = seed_media(&env.state, actor, "theme-logo.png").await;
+        let actor = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let media = seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            actor,
+            "theme-logo.png",
+        )
+        .await;
         let compiled = compiled_theme_fixture();
         let theme_id = create_site_theme(
-            Arc::clone(&env.state.themes),
-            env.state.write_scope.clone(),
+            Arc::clone(&env.themes()),
+            env.write_scope().clone(),
             &compiled,
         )
         .await;
         let locks = Arc::new(env.media_content_locks());
         let themes = ThemeManager::new(
-            Arc::clone(&env.state.themes),
-            Arc::clone(&env.state.media),
-            env.state.write_scope.clone(),
+            Arc::clone(&env.themes()),
+            Arc::clone(&env.media()),
+            env.write_scope().clone(),
             Arc::clone(&locks),
         );
         assert!(matches!(
@@ -2944,10 +3051,10 @@ mod tests {
             MutationOutcome::Confirmed(())
         ));
         let manager = MediaManager::new(
-            Arc::clone(&env.state.media),
-            Arc::clone(&env.state.posts),
-            Arc::clone(&env.state.site_config),
-            env.state.write_scope.clone(),
+            Arc::clone(&env.media()),
+            Arc::clone(&env.posts()),
+            Arc::clone(&env.site_config()),
+            env.write_scope().clone(),
             locks,
             env.base.instance_id().clone(),
             no_foreign_resolver(),
@@ -2959,7 +3066,7 @@ mod tests {
             MutationOutcome::Confirmed(TryDeleteOutcome::GlobalSafety)
         ));
         assert_eq!(refused.referenced_theme_bindings(), 1);
-        assert!(media_row_exists(&env.state, actor, &media).await);
+        assert!(media_row_exists(env.media().clone(), actor, &media).await);
 
         let force_refused = manager.delete_media(actor, &media, true).await.unwrap();
         assert!(matches!(
@@ -2967,7 +3074,7 @@ mod tests {
             MutationOutcome::Confirmed(TryDeleteOutcome::GlobalSafety)
         ));
         assert_eq!(force_refused.referenced_theme_bindings(), 1);
-        assert!(media_row_exists(&env.state, actor, &media).await);
+        assert!(media_row_exists(env.media().clone(), actor, &media).await);
 
         assert!(matches!(
             themes
@@ -2997,20 +3104,32 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let actor = SeedUser::new().seed(&env.state).await.user_id;
-        let media = seed_media(&env.state, actor, "theme-race.png").await;
+        let actor = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let media = seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            actor,
+            "theme-race.png",
+        )
+        .await;
         let compiled = compiled_theme_fixture();
         let theme_id = create_site_theme(
-            Arc::clone(&env.state.themes),
-            env.state.write_scope.clone(),
+            Arc::clone(&env.themes()),
+            env.write_scope().clone(),
             &compiled,
         )
         .await;
         let locks = Arc::new(env.media_content_locks());
         let themes = ThemeManager::new(
-            Arc::clone(&env.state.themes),
-            Arc::clone(&env.state.media),
-            env.state.write_scope.clone(),
+            Arc::clone(&env.themes()),
+            Arc::clone(&env.media()),
+            env.write_scope().clone(),
             Arc::clone(&locks),
         );
         confirmed(
@@ -3026,10 +3145,10 @@ mod tests {
                 .expect("bind theme media"),
         );
         let manager = MediaManager::new(
-            Arc::clone(&env.state.media),
-            Arc::clone(&env.state.posts),
-            Arc::clone(&env.state.site_config),
-            env.state.write_scope.clone(),
+            Arc::clone(&env.media()),
+            Arc::clone(&env.posts()),
+            Arc::clone(&env.site_config()),
+            env.write_scope().clone(),
             locks,
             env.base.instance_id().clone(),
             no_foreign_resolver(),
@@ -3047,8 +3166,7 @@ mod tests {
         );
         assert!(removal.is_ok(), "fixed-role removal must complete");
         assert!(matches!(
-            env.state
-                .themes
+            env.themes()
                 .role_binding(ThemeOwner::Site, theme_id, ThemeImageRole::Logo)
                 .await
                 .expect("read role binding"),
@@ -3062,7 +3180,7 @@ mod tests {
             deletion.outcome(),
             MutationOutcome::Confirmed(TryDeleteOutcome::Deleted | TryDeleteOutcome::GlobalSafety)
         ));
-        if media_row_exists(&env.state, actor, &media).await {
+        if media_row_exists(env.media().clone(), actor, &media).await {
             assert!(matches!(
                 manager
                     .delete_media(actor, &media, false)
@@ -3072,6 +3190,6 @@ mod tests {
                 MutationOutcome::Confirmed(TryDeleteOutcome::Deleted)
             ));
         }
-        assert!(!media_row_exists(&env.state, actor, &media).await);
+        assert!(!media_row_exists(env.media().clone(), actor, &media).await);
     }
 }

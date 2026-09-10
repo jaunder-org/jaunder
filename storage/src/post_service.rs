@@ -159,7 +159,7 @@ async fn enqueue_lifecycle_feed_paths(
     Ok(())
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "test-support"))]
 /// Renders `body` according to `format` and creates the post through one caller-owned
 /// write scope.
 ///
@@ -450,7 +450,7 @@ pub struct PostUpdate<'a> {
     pub expectations: PostBookkeepingExpectation,
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "test-support"))]
 /// Validates inputs, computes the slug, renders the body, and atomically
 /// updates the post via storage.
 ///
@@ -856,7 +856,7 @@ pub struct PostCreation<'a> {
     pub expectations: PostBookkeepingExpectation,
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "test-support"))]
 /// Validates inputs, computes the slug, renders the body, and atomically
 /// creates the post in storage, retrying on slug collision.
 ///
@@ -882,7 +882,7 @@ pub async fn perform_post_creation(
     .await
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "test-support"))]
 /// Performs post creation against one explicit request clock.
 ///
 /// `AtomPub` supplies its request clock so an Idempotency Key mapping and its
@@ -1053,8 +1053,8 @@ mod tests {
     #[cfg(feature = "test-utils")]
     use crate::test_support::mock_write_scope;
     use crate::test_support::{
-        Backend, SeedUser, backends, confirmed, fetch_post_media, fixture_post_media_ownership,
-        media_ref_for, media_url_for, seed_media, seed_users,
+        Backend, SeedUser, backends, confirmed, fixture_post_media_ownership, media_ref_for,
+        media_url_for, seed_media, seed_users,
     };
     #[cfg(feature = "test-utils")]
     use crate::{MockFeedEventStorage, MockPostStorage};
@@ -1105,10 +1105,12 @@ mod tests {
         }
     }
 
-    async fn create_media_record(state: &Arc<crate::AppState>, record: MediaRecord) {
-        let media = Arc::clone(&state.media);
-        let outcome = state
-            .write_scope
+    async fn create_media_record(
+        media: Arc<dyn crate::MediaStorage>,
+        write_scope: crate::WriteScope,
+        record: MediaRecord,
+    ) {
+        let outcome = write_scope
             .run(move |transaction| {
                 Box::pin(async move { media.create_media(transaction, &record).await })
             })
@@ -1151,15 +1153,20 @@ mod tests {
     #[tokio::test]
     async fn test_perform_post_creation_success(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let seeded_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         let user_id = seeded_user.user_id;
 
-        let storage = Arc::clone(&env.state.posts);
+        let storage = Arc::clone(&env.posts());
         let record = perform_post_creation(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             PostCreation {
                 user_id,
                 body: parse_post_body("Hello, world!"),
@@ -1191,20 +1198,25 @@ mod tests {
     #[tokio::test]
     async fn test_perform_post_creation_returns_a_private_post(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let seeded_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         let user_id = seeded_user.user_id;
 
-        let storage = Arc::clone(&env.state.posts);
+        let storage = Arc::clone(&env.posts());
         // No audience target at all: the post is visible to its author and to
         // nobody else. Every other create test targets Public, so this is the
         // only one that can observe that the post-create re-read resolves *as
         // the author* rather than incidentally as an anonymous reader.
         let title = parse_post_title("Private Note");
         let record = perform_post_creation(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             PostCreation {
                 user_id,
                 body: parse_post_body("Private note."),
@@ -1245,18 +1257,23 @@ mod tests {
     #[tokio::test]
     async fn test_perform_post_creation_uses_explicit_title(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let seeded_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         let user_id = seeded_user.user_id;
 
-        let storage = Arc::clone(&env.state.posts);
+        let storage = Arc::clone(&env.posts());
         // The body has no heading, so any title must come from the explicit arg,
         // which also seeds the slug.
         let title = parse_post_title("Explicit Title");
         let record = perform_post_creation(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             PostCreation {
                 user_id,
                 body: parse_post_body("Body without a heading."),
@@ -1284,19 +1301,24 @@ mod tests {
     #[tokio::test]
     async fn test_perform_post_creation_slug_override(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let seeded_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         let user_id = seeded_user.user_id;
 
-        let storage = Arc::clone(&env.state.posts);
+        let storage = Arc::clone(&env.posts());
         // The override arrives already validated as a `Slug` (the wire/CLI boundary
         // parses it); an invalid override cannot reach this layer — that rejection
         // lives at the boundary (web `field_error` + the serde bridge).
         let slug: Slug = parse_slug("my-custom-slug");
         let record = perform_post_creation(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             PostCreation {
                 user_id,
                 body: parse_post_body("Hello, world!"),
@@ -1370,7 +1392,12 @@ mod tests {
     #[tokio::test]
     async fn feed_enqueue_failure_rolls_back_the_created_post(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let seeded_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         let mut feed_events = crate::MockFeedEventStorage::new();
         feed_events
             .expect_enqueue_many()
@@ -1381,12 +1408,12 @@ mod tests {
         let ownership = PostMediaOwnership::new(
             Arc::new(LocalOnlyResolver),
             env.base.instance_id().clone(),
-            Arc::clone(&env.state.site_config),
+            Arc::clone(&env.site_config()),
         );
         let error = perform_post_creation_with_media_ownership(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
-            Arc::clone(&env.state.posts),
+            Arc::clone(&env.posts()),
             feed_events,
             &ownership,
             now,
@@ -1409,8 +1436,7 @@ mod tests {
         .expect_err("feed enqueue fails after the post insert");
         assert!(matches!(error, PerformCreationError::Storage(_)));
         assert!(
-            env.state
-                .posts
+            env.posts()
                 .list_collection_by_user(seeded_user.user_id, None, parse_row_limit("10"))
                 .await
                 .expect("post collection loads")
@@ -1424,20 +1450,31 @@ mod tests {
     #[tokio::test]
     async fn lifecycle_services_enqueue_only_changed_public_transitions(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user = SeedUser::new().seed(&env.state).await;
-        let post = SeedPost::new(user.user_id).seed(&env.state).await;
+        let user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
+        let post = SeedPost::new(user.user_id)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                std::sync::Arc::clone(&env.feed_events()),
+                env.write_scope().clone(),
+            )
+            .await;
         let mut feed_events = MockFeedEventStorage::new();
         feed_events
             .expect_enqueue_many()
             .times(3)
             .returning(|_, _| Ok(()));
         let feed_events: Arc<dyn FeedEventStorage> = Arc::new(feed_events);
-        let storage: Arc<dyn PostStorage> = Arc::clone(&env.state.posts) as Arc<dyn PostStorage>;
+        let storage: Arc<dyn PostStorage> = Arc::clone(&env.posts()) as Arc<dyn PostStorage>;
         let now = UtcInstant::now();
 
         confirmed(
             unpublish_post(
-                &env.state.write_scope,
+                &env.write_scope(),
                 Arc::clone(&storage),
                 Arc::clone(&feed_events),
                 post.post_id,
@@ -1449,7 +1486,7 @@ mod tests {
         );
         confirmed(
             unpublish_post(
-                &env.state.write_scope,
+                &env.write_scope(),
                 Arc::clone(&storage),
                 Arc::clone(&feed_events),
                 post.post_id,
@@ -1461,7 +1498,7 @@ mod tests {
         );
         confirmed(
             publish_post(
-                &env.state.write_scope,
+                &env.write_scope(),
                 Arc::clone(&storage),
                 Arc::clone(&feed_events),
                 post.post_id,
@@ -1473,7 +1510,7 @@ mod tests {
         );
         confirmed(
             publish_post(
-                &env.state.write_scope,
+                &env.write_scope(),
                 Arc::clone(&storage),
                 Arc::clone(&feed_events),
                 post.post_id,
@@ -1485,7 +1522,7 @@ mod tests {
         );
         confirmed(
             soft_delete_post(
-                &env.state.write_scope,
+                &env.write_scope(),
                 storage,
                 feed_events,
                 post.post_id,
@@ -1502,20 +1539,29 @@ mod tests {
     #[tokio::test]
     async fn lifecycle_services_skip_nonpublic_transitions(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user = SeedUser::new().seed(&env.state).await;
+        let user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         let post = SeedPost::new(user.user_id)
             .audiences(vec![AudienceTarget::Subscribers])
-            .seed(&env.state)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                std::sync::Arc::clone(&env.feed_events()),
+                env.write_scope().clone(),
+            )
             .await;
         let mut feed_events = MockFeedEventStorage::new();
         feed_events.expect_enqueue_many().times(0);
         let feed_events: Arc<dyn FeedEventStorage> = Arc::new(feed_events);
-        let storage: Arc<dyn PostStorage> = Arc::clone(&env.state.posts) as Arc<dyn PostStorage>;
+        let storage: Arc<dyn PostStorage> = Arc::clone(&env.posts()) as Arc<dyn PostStorage>;
         let now = UtcInstant::now();
 
         confirmed(
             unpublish_post(
-                &env.state.write_scope,
+                &env.write_scope(),
                 Arc::clone(&storage),
                 Arc::clone(&feed_events),
                 post.post_id,
@@ -1527,7 +1573,7 @@ mod tests {
         );
         confirmed(
             publish_post(
-                &env.state.write_scope,
+                &env.write_scope(),
                 Arc::clone(&storage),
                 Arc::clone(&feed_events),
                 post.post_id,
@@ -1539,7 +1585,7 @@ mod tests {
         );
         confirmed(
             soft_delete_post(
-                &env.state.write_scope,
+                &env.write_scope(),
                 storage,
                 feed_events,
                 post.post_id,
@@ -1556,16 +1602,27 @@ mod tests {
     #[tokio::test]
     async fn lifecycle_enqueue_failure_rolls_back_the_post_transition(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user = SeedUser::new().seed(&env.state).await;
-        let post = SeedPost::new(user.user_id).seed(&env.state).await;
+        let user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
+        let post = SeedPost::new(user.user_id)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                std::sync::Arc::clone(&env.feed_events()),
+                env.write_scope().clone(),
+            )
+            .await;
         let mut feed_events = MockFeedEventStorage::new();
         feed_events
             .expect_enqueue_many()
             .times(1)
             .returning(|_, _| Err(crate::FeedEventError::Db(sqlx::Error::RowNotFound)));
         let error = unpublish_post(
-            &env.state.write_scope,
-            Arc::clone(&env.state.posts) as Arc<dyn PostStorage>,
+            &env.write_scope(),
+            Arc::clone(&env.posts()) as Arc<dyn PostStorage>,
             Arc::new(feed_events),
             post.post_id,
             user.user_id,
@@ -1575,8 +1632,7 @@ mod tests {
         .expect_err("feed enqueue fails after lifecycle mutation");
         assert!(matches!(error, PerformUpdateError::Storage(_)));
         let retained = env
-            .state
-            .posts
+            .posts()
             .get_post_by_id(
                 post.post_id,
                 &common::visibility::ViewerIdentity::local(user.user_id),
@@ -1597,7 +1653,12 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let user = SeedUser::new().seed(&env.state).await;
+        let user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         let now: UtcInstant = "2042-07-01T12:00:00Z".parse().unwrap();
         let future = UtcInstant::from(
             now.value()
@@ -1617,7 +1678,7 @@ mod tests {
             ))
             .audiences(vec![AudienceTarget::Public])
             .tags(["rust"])
-            .seed(&env.state)
+            .seed(env.posts().clone(), env.write_scope().clone())
             .await;
         let mut feed_events = MockFeedEventStorage::new();
         feed_events
@@ -1670,9 +1731,9 @@ mod tests {
         ] {
             confirmed(
                 perform_post_update(
-                    &env.state.write_scope,
+                    &env.write_scope(),
                     &env.media_content_locks(),
-                    Arc::clone(&env.state.posts),
+                    Arc::clone(&env.posts()),
                     Arc::clone(&feed_events),
                     input,
                 )
@@ -1687,18 +1748,26 @@ mod tests {
     #[tokio::test]
     async fn update_preserves_tags_without_a_transport_preread(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user = SeedUser::new().seed(&env.state).await;
+        let user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         let post = crate::test_support::SeedRawPost::new(user.user_id)
             .tags(["rust"])
-            .seed(&env.state)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
             .await;
 
         confirmed(
             perform_post_update(
-                &env.state.write_scope,
+                &env.write_scope(),
                 &env.media_content_locks(),
-                Arc::clone(&env.state.posts),
-                Arc::clone(&env.state.feed_events),
+                Arc::clone(&env.posts()),
+                Arc::clone(&env.feed_events()),
                 PostUpdate {
                     post_id: post.post_id,
                     editor_user_id: user.user_id,
@@ -1719,8 +1788,7 @@ mod tests {
         );
 
         let record = env
-            .state
-            .posts
+            .posts()
             .get_post_by_id(
                 post.post_id,
                 &common::visibility::ViewerIdentity::local(user.user_id),
@@ -1745,7 +1813,12 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let seeded_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         let expected_tag_slugs = [parse_tag("old"), parse_tag("shared"), parse_tag("new")];
         let expected_feed_paths =
             feed::affected_feed_urls(&seeded_user.username, expected_tag_slugs.iter());
@@ -1757,18 +1830,21 @@ mod tests {
         let feed_events: Arc<dyn FeedEventStorage> = Arc::new(feed_events);
         let post = crate::test_support::SeedRawPost::new(seeded_user.user_id)
             .tags(["old", "shared"])
-            .seed(&env.state)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
             .await;
 
         let ownership = PostMediaOwnership::new(
             Arc::new(LocalOnlyResolver),
             env.base.instance_id().clone(),
-            Arc::clone(&env.state.site_config),
+            Arc::clone(&env.site_config()),
         );
         let error = perform_post_update_with_media_ownership(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
-            Arc::clone(&env.state.posts),
+            Arc::clone(&env.posts()),
             feed_events,
             &ownership,
             PostUpdate {
@@ -1791,8 +1867,7 @@ mod tests {
         assert!(matches!(error, PerformUpdateError::Storage(_)));
 
         let post = env
-            .state
-            .posts
+            .posts()
             .get_post_by_id(
                 post.post_id,
                 &common::visibility::ViewerIdentity::local(seeded_user.user_id),
@@ -1816,15 +1891,20 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let seeded_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         let user_id = seeded_user.user_id;
 
-        let storage = Arc::clone(&env.state.posts);
+        let storage = Arc::clone(&env.posts());
         let record = perform_post_creation(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             PostCreation {
                 user_id,
                 body: parse_post_body("!!!"),
@@ -1853,15 +1933,20 @@ mod tests {
     #[tokio::test]
     async fn test_perform_post_creation_unicode_title_preserves_slug(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let seeded_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         let user_id = seeded_user.user_id;
 
-        let storage = Arc::clone(&env.state.posts);
+        let storage = Arc::clone(&env.posts());
         let record = perform_post_creation(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             PostCreation {
                 user_id,
                 body: parse_post_body("# 日本語\n\nbody"),
@@ -1913,16 +1998,21 @@ mod tests {
     #[tokio::test]
     async fn test_perform_post_creation_slug_conflict_retries(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let seeded_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         let user_id = seeded_user.user_id;
 
-        let storage = Arc::clone(&env.state.posts);
+        let storage = Arc::clone(&env.posts());
 
         let r1 = perform_post_creation(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             PostCreation {
                 user_id,
                 body: parse_post_body("Hello, world!"),
@@ -1942,10 +2032,10 @@ mod tests {
         .unwrap();
 
         let r2 = perform_post_creation(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             PostCreation {
                 user_id,
                 body: parse_post_body("Hello, world!"),
@@ -1965,10 +2055,10 @@ mod tests {
         .unwrap();
 
         let r3 = perform_post_creation(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             PostCreation {
                 user_id,
                 body: parse_post_body("Hello, world!"),
@@ -1998,7 +2088,7 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let storage = Arc::clone(&env.state.posts);
+        let storage = Arc::clone(&env.posts());
         let expected = parse_slug("expected");
         let expected_second = parse_slug("expected-2");
 
@@ -2017,12 +2107,18 @@ mod tests {
             expectations,
         };
 
-        let first_free_user = SeedUser::new().seed(&env.state).await.user_id;
+        let first_free_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         let first_free = perform_post_creation(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             create(
                 first_free_user,
                 PostBookkeepingExpectation {
@@ -2036,13 +2132,19 @@ mod tests {
         let first_free = confirmed(first_free);
         assert_eq!(first_free.slug, expected);
 
-        let earlier_free_user = SeedUser::new().seed(&env.state).await.user_id;
+        let earlier_free_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         assert!(matches!(
             perform_post_creation(
-                &env.state.write_scope,
+                &env.write_scope(),
                 &env.media_content_locks(),
                 Arc::clone(&storage),
-                Arc::clone(&env.state.feed_events),
+                Arc::clone(&env.feed_events()),
                 create(
                     earlier_free_user,
                     PostBookkeepingExpectation {
@@ -2062,12 +2164,18 @@ mod tests {
                 .is_empty()
         );
 
-        let conflict_before_expected_user = SeedUser::new().seed(&env.state).await.user_id;
+        let conflict_before_expected_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         perform_post_creation(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             create(
                 conflict_before_expected_user,
                 PostBookkeepingExpectation::default(),
@@ -2076,10 +2184,10 @@ mod tests {
         .await
         .unwrap();
         let collision_winner = perform_post_creation(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             create(
                 conflict_before_expected_user,
                 PostBookkeepingExpectation {
@@ -2093,12 +2201,18 @@ mod tests {
         let collision_winner = confirmed(collision_winner);
         assert_eq!(collision_winner.slug, expected_second);
 
-        let occupied_expected_user = SeedUser::new().seed(&env.state).await.user_id;
+        let occupied_expected_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         perform_post_creation(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             create(
                 occupied_expected_user,
                 PostBookkeepingExpectation::default(),
@@ -2109,15 +2223,15 @@ mod tests {
         let ownership = PostMediaOwnership::new(
             Arc::new(LocalOnlyResolver),
             env.base.instance_id().clone(),
-            Arc::clone(&env.state.site_config),
+            Arc::clone(&env.site_config()),
         );
 
         assert!(matches!(
             perform_post_creation_with_media_ownership(
-                &env.state.write_scope,
+                &env.write_scope(),
                 &env.media_content_locks(),
                 Arc::clone(&storage),
-                Arc::clone(&env.state.feed_events),
+                Arc::clone(&env.feed_events()),
                 &ownership,
                 UtcInstant::now(),
                 create(
@@ -2149,7 +2263,7 @@ mod tests {
         use common::time::UtcInstant;
 
         let env = backend.setup().await;
-        let storage = Arc::clone(&env.state.posts);
+        let storage = Arc::clone(&env.posts());
 
         let create = |user_id, expectations| PostCreation {
             user_id,
@@ -2166,13 +2280,19 @@ mod tests {
             expectations,
         };
 
-        let format_user = SeedUser::new().seed(&env.state).await.user_id;
+        let format_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         assert!(matches!(
             perform_post_creation(
-                &env.state.write_scope,
+                &env.write_scope(),
                 &env.media_content_locks(),
                 Arc::clone(&storage),
-                Arc::clone(&env.state.feed_events),
+                Arc::clone(&env.feed_events()),
                 create(
                     format_user,
                     PostBookkeepingExpectation {
@@ -2192,13 +2312,19 @@ mod tests {
                 .is_empty()
         );
 
-        let publication_user = SeedUser::new().seed(&env.state).await.user_id;
+        let publication_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         assert!(matches!(
             perform_post_creation(
-                &env.state.write_scope,
+                &env.write_scope(),
                 &env.media_content_locks(),
                 Arc::clone(&storage),
-                Arc::clone(&env.state.feed_events),
+                Arc::clone(&env.feed_events()),
                 create(
                     publication_user,
                     PostBookkeepingExpectation {
@@ -2223,16 +2349,27 @@ mod tests {
     #[tokio::test]
     async fn bookkeeping_update_uses_final_draft_or_published_slug(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let storage = Arc::clone(&env.state.posts);
-        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let storage = Arc::clone(&env.posts());
+        let seeded_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         let user_id = seeded_user.user_id;
 
         let draft = crate::test_support::SeedRawPost::new(user_id)
             .draft()
-            .seed(&env.state)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
             .await;
         let published = crate::test_support::SeedRawPost::new(user_id)
-            .seed(&env.state)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
             .await;
         let changed_slug = parse_slug("changed-slug");
         let update = |post_id, expected_slug| PostUpdate {
@@ -2254,10 +2391,10 @@ mod tests {
         };
 
         let updated_draft = perform_post_update(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             update(draft.post_id, changed_slug.clone()),
         )
         .await
@@ -2265,10 +2402,10 @@ mod tests {
         assert_eq!(confirmed(updated_draft).slug, changed_slug);
 
         let updated_published = perform_post_update(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             update(published.post_id, published.slug.clone()),
         )
         .await
@@ -2282,20 +2419,28 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let storage = Arc::clone(&env.state.posts);
-        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let storage = Arc::clone(&env.posts());
+        let seeded_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         let user_id = seeded_user.user_id;
 
         let draft = crate::test_support::SeedRawPost::new(user_id)
             .draft()
-            .seed(&env.state)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
             .await;
         let clock: UtcInstant = "2042-07-01T12:00:00Z".parse().unwrap();
         let record = perform_post_update(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             PostUpdate {
                 post_id: draft.post_id,
                 editor_user_id: user_id,
@@ -2322,13 +2467,21 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let storage = Arc::clone(&env.state.posts);
-        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let storage = Arc::clone(&env.posts());
+        let seeded_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         let user_id = seeded_user.user_id;
 
         let post = crate::test_support::SeedRawPost::new(user_id)
             .draft()
-            .seed(&env.state)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
             .await;
         let viewer = common::visibility::ViewerIdentity::local(user_id);
         let original = storage
@@ -2359,10 +2512,10 @@ mod tests {
 
         assert!(matches!(
             perform_post_update(
-                &env.state.write_scope,
+                &env.write_scope(),
                 &env.media_content_locks(),
                 Arc::clone(&storage),
-                Arc::clone(&env.state.feed_events),
+                Arc::clone(&env.feed_events()),
                 update(PostBookkeepingExpectation {
                     post_id: Some(PostId::from(999_999)),
                     ..Default::default()
@@ -2373,10 +2526,10 @@ mod tests {
         ));
         assert!(matches!(
             perform_post_update(
-                &env.state.write_scope,
+                &env.write_scope(),
                 &env.media_content_locks(),
                 Arc::clone(&storage),
-                Arc::clone(&env.state.feed_events),
+                Arc::clone(&env.feed_events()),
                 update(PostBookkeepingExpectation {
                     format: Some(PostFormat::Html),
                     ..Default::default()
@@ -2387,10 +2540,10 @@ mod tests {
         ));
         assert!(matches!(
             perform_post_update(
-                &env.state.write_scope,
+                &env.write_scope(),
                 &env.media_content_locks(),
                 Arc::clone(&storage),
-                Arc::clone(&env.state.feed_events),
+                Arc::clone(&env.feed_events()),
                 update(PostBookkeepingExpectation {
                     published_at: Some(Some("2026-08-26T12:00:00Z".parse().unwrap())),
                     ..Default::default()
@@ -2401,10 +2554,10 @@ mod tests {
         ));
         assert!(matches!(
             perform_post_update(
-                &env.state.write_scope,
+                &env.write_scope(),
                 &env.media_content_locks(),
                 Arc::clone(&storage),
-                Arc::clone(&env.state.feed_events),
+                Arc::clone(&env.feed_events()),
                 update(PostBookkeepingExpectation {
                     content_etag: Some(host::etag::sha256_of(b"stale")),
                     ..Default::default()
@@ -2432,16 +2585,21 @@ mod tests {
     #[tokio::test]
     async fn test_perform_post_creation_slug_exhaustion(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let seeded_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         let user_id = seeded_user.user_id;
 
-        let storage = Arc::clone(&env.state.posts);
+        let storage = Arc::clone(&env.posts());
 
         let r1 = perform_post_creation(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             PostCreation {
                 user_id,
                 body: parse_post_body("Hello, world!"),
@@ -2461,10 +2619,10 @@ mod tests {
         .unwrap();
 
         let r2 = perform_post_creation(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             PostCreation {
                 user_id,
                 body: parse_post_body("Hello, world!"),
@@ -2487,10 +2645,10 @@ mod tests {
         assert_eq!(confirmed(r2).slug, "hello-world-2");
 
         let err = perform_post_creation_at(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             UtcInstant::now(),
             PostCreation {
                 user_id,
@@ -2514,13 +2672,13 @@ mod tests {
         let ownership = PostMediaOwnership::new(
             Arc::new(LocalOnlyResolver),
             env.base.instance_id().clone(),
-            Arc::clone(&env.state.site_config),
+            Arc::clone(&env.site_config()),
         );
         let err = perform_post_creation_with_media_ownership(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             &ownership,
             UtcInstant::now(),
             PostCreation {
@@ -2547,17 +2705,22 @@ mod tests {
     #[tokio::test]
     async fn test_perform_post_creation_canonicalizes_org_body(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let seeded_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         let user_id = seeded_user.user_id;
 
-        let storage = Arc::clone(&env.state.posts);
+        let storage = Arc::clone(&env.posts());
         // Title is derived from the original body's #+TITLE:, then the stored body is
         // canonicalized: the #+TITLE: line is stripped while #+FOO: and content stay.
         let record = perform_post_creation(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             PostCreation {
                 user_id,
                 body: parse_post_body("#+TITLE: Hi\n#+FOO: x\n\nHello"),
@@ -2591,17 +2754,22 @@ mod tests {
     #[tokio::test]
     async fn test_perform_post_update_canonicalizes_org_body(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let seeded_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         let user_id = seeded_user.user_id;
 
-        let storage = Arc::clone(&env.state.posts);
+        let storage = Arc::clone(&env.posts());
         // Canonicalization runs on the update path too: a re-saved Org body has its
         // #+TITLE: stripped while an unrecognized #+FOO: and the content survive.
         let created = perform_post_creation(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             PostCreation {
                 user_id,
                 body: parse_post_body("#+TITLE: First\n\noriginal"),
@@ -2622,10 +2790,10 @@ mod tests {
         let created = confirmed(created);
 
         let record = perform_post_update(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             PostUpdate {
                 post_id: created.post_id,
                 editor_user_id: user_id,
@@ -2663,10 +2831,15 @@ mod tests {
     #[tokio::test]
     async fn perform_post_creation_rejects_title_only_org_body(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let seeded_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         let user_id = seeded_user.user_id;
 
-        let storage = Arc::clone(&env.state.posts);
+        let storage = Arc::clone(&env.posts());
 
         // ADR-0024 canonicalization treats a leading `* heading` as the title *source*
         // and strips it, so this body leaves nothing to store (#811 decision 2).
@@ -2686,10 +2859,10 @@ mod tests {
         };
 
         let err = perform_post_creation(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             creation("* My Title\n", PostFormat::Org),
         )
         .await
@@ -2699,10 +2872,10 @@ mod tests {
         // The discriminator: the same bytes are ordinary content in Markdown, so the
         // rejection is Org's title-stripping and not the `PostBody` parse.
         perform_post_creation(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             creation("* My Title\n", PostFormat::Markdown),
         )
         .await
@@ -2713,18 +2886,23 @@ mod tests {
     #[tokio::test]
     async fn perform_post_update_rejects_title_only_org_body(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let seeded_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         let user_id = seeded_user.user_id;
 
-        let storage = Arc::clone(&env.state.posts);
+        let storage = Arc::clone(&env.posts());
 
         // The update path rejects it too — editing a post down to nothing but its title
         // is the same nonsense as creating one that way.
         let created = perform_post_creation(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             PostCreation {
                 user_id,
                 body: parse_post_body("* My Title\n\nreal content"),
@@ -2745,10 +2923,10 @@ mod tests {
         let created = confirmed(created);
 
         let err = perform_post_update(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             PostUpdate {
                 post_id: created.post_id,
                 editor_user_id: user_id,
@@ -2773,18 +2951,23 @@ mod tests {
     #[tokio::test]
     async fn test_perform_post_creation_markdown_body_keeps_its_heading(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let seeded_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         let user_id = seeded_user.user_id;
 
-        let storage = Arc::clone(&env.state.posts);
+        let storage = Arc::clone(&env.posts());
         // Every format canonicalizes (#811); what distinguishes them is that only Org
         // treats its title source as a *header* and strips it. A Markdown `# H1` is
         // content and survives. Whitespace is canonicalized for both, hence the newline.
         let record = perform_post_creation(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             PostCreation {
                 user_id,
                 body: parse_post_body("# H1\n\nBody text"),
@@ -2811,18 +2994,23 @@ mod tests {
     #[tokio::test]
     async fn test_perform_post_creation_org_title_rendered_once(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let seeded_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         let user_id = seeded_user.user_id;
 
-        let storage = Arc::clone(&env.state.posts);
+        let storage = Arc::clone(&env.posts());
         // Double-title regression: the title text from the #+TITLE: line must not
         // survive into the stored body (hence rendered_html), so the page chrome's
         // title is the only place it appears. record.title still carries it.
         let record = perform_post_creation(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             PostCreation {
                 user_id,
                 body: parse_post_body("#+TITLE: Distinct Headline\n\nParagraph body"),
@@ -2887,19 +3075,36 @@ mod tests {
     #[tokio::test]
     async fn perform_post_creation_dedups_on_idempotency_key(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let seeded_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         let user_id = seeded_user.user_id;
 
-        let storage = Arc::clone(&env.state.posts);
+        let storage = Arc::clone(&env.posts());
         let key = parse_idempotency_key("k");
-        seed_media(&env.state, user_id, "original.jpg").await;
-        seed_media(&env.state, user_id, "attempted.jpg").await;
+        seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            user_id,
+            "original.jpg",
+        )
+        .await;
+        seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            user_id,
+            "attempted.jpg",
+        )
+        .await;
 
         let first = perform_post_creation(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             creation_with_key(
                 user_id,
                 parse_post_body(&format!("<img src=\"{}\">", media_url_for("original.jpg"))),
@@ -2919,10 +3124,10 @@ mod tests {
         );
         replay.audiences = vec![AudienceTarget::Subscribers];
         let err = perform_post_creation(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             replay,
         )
         .await
@@ -2939,7 +3144,7 @@ mod tests {
         assert_eq!(posts.len(), 1);
         assert_eq!(posts[0].post_id, first.post_id);
         assert_eq!(
-            fetch_post_media(&env.base, first.post_id).await,
+            env.current_post_media(first.post_id).await,
             vec![(
                 media_ref_for("original.jpg"),
                 MediaReferenceKind::Local,
@@ -2998,16 +3203,21 @@ mod tests {
     #[tokio::test]
     async fn perform_post_creation_sanitizes_stored_rendered_html(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let seeded_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         let user_id = seeded_user.user_id;
 
-        let storage = Arc::clone(&env.state.posts);
+        let storage = Arc::clone(&env.posts());
 
         let record = perform_post_creation(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             creation_with_key(
                 user_id,
                 parse_post_body(
@@ -3038,18 +3248,23 @@ mod tests {
     #[tokio::test]
     async fn post_id_for_idempotency_key_maps(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let seeded_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         let user_id = seeded_user.user_id;
 
-        let storage = Arc::clone(&env.state.posts);
+        let storage = Arc::clone(&env.posts());
         let key = parse_idempotency_key("k");
         let missing_key = parse_idempotency_key("unknown");
 
         let record = perform_post_creation(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             creation_with_key(user_id, parse_post_body("Body"), Some(&key)),
         )
         .await
@@ -3075,8 +3290,14 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let storage = Arc::clone(&env.state.posts);
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let storage = Arc::clone(&env.posts());
         let key = parse_idempotency_key("indeterminate-commit-key");
         let created_at: UtcInstant = "2026-08-31T12:00:00Z".parse().expect("fixed instant");
         let cutoff = UtcInstant::from(
@@ -3088,10 +3309,10 @@ mod tests {
 
         confirmed(
             perform_post_creation_at(
-                &env.state.write_scope,
+                &env.write_scope(),
                 &env.media_content_locks(),
                 Arc::clone(&storage),
-                Arc::clone(&env.state.feed_events),
+                Arc::clone(&env.feed_events()),
                 created_at,
                 creation_with_key(user_id, parse_post_body("original body"), Some(&key)),
             )
@@ -3100,12 +3321,11 @@ mod tests {
         );
 
         let outcome = create_rendered_post(
-            &env.state
-                .write_scope
+            &env.write_scope()
                 .with_commit_acknowledgement_loss_after_commit_for_test(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             RenderedPostContent {
                 user_id,
                 title: None,
@@ -3171,8 +3391,14 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let storage = Arc::clone(&env.state.posts);
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let storage = Arc::clone(&env.posts());
         let key = parse_idempotency_key("retained-key");
         let created_at: UtcInstant = "2026-08-31T12:00:00Z".parse().expect("fixed instant");
         let cutoff = UtcInstant::from(
@@ -3184,10 +3410,10 @@ mod tests {
 
         let first = confirmed(
             perform_post_creation_at(
-                &env.state.write_scope,
+                &env.write_scope(),
                 &env.media_content_locks(),
                 Arc::clone(&storage),
-                Arc::clone(&env.state.feed_events),
+                Arc::clone(&env.feed_events()),
                 created_at,
                 creation_with_key(user_id, parse_post_body("first body"), Some(&key)),
             )
@@ -3229,10 +3455,10 @@ mod tests {
 
         let replacement = confirmed(
             perform_post_creation_at(
-                &env.state.write_scope,
+                &env.write_scope(),
                 &env.media_content_locks(),
                 Arc::clone(&storage),
-                Arc::clone(&env.state.feed_events),
+                Arc::clone(&env.feed_events()),
                 cutoff,
                 creation_with_key(user_id, parse_post_body("replacement body"), Some(&key)),
             )
@@ -3287,8 +3513,14 @@ mod tests {
     #[tokio::test]
     async fn concurrent_exact_cutoff_reuse_creates_one_replacement(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let storage = Arc::clone(&env.state.posts);
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let storage = Arc::clone(&env.posts());
         let key = parse_idempotency_key("concurrent-retained-key");
         let created_at: UtcInstant = "2026-08-31T12:00:00Z".parse().expect("fixed instant");
         let cutoff = UtcInstant::from(
@@ -3300,10 +3532,10 @@ mod tests {
 
         let original = confirmed(
             perform_post_creation_at(
-                &env.state.write_scope,
+                &env.write_scope(),
                 &env.media_content_locks(),
                 Arc::clone(&storage),
-                Arc::clone(&env.state.feed_events),
+                Arc::clone(&env.feed_events()),
                 created_at,
                 creation_with_key(user_id, parse_post_body("original"), Some(&key)),
             )
@@ -3312,20 +3544,22 @@ mod tests {
         );
 
         let first_locks = env.media_content_locks();
+        let first_write_scope = env.write_scope();
         let second_locks = env.media_content_locks();
+        let second_write_scope = env.write_scope();
         let first_attempt = perform_post_creation_at(
-            &env.state.write_scope,
+            &first_write_scope,
             &first_locks,
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             cutoff,
             creation_with_key(user_id, parse_post_body("replacement one"), Some(&key)),
         );
         let second_attempt = perform_post_creation_at(
-            &env.state.write_scope,
+            &second_write_scope,
             &second_locks,
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             cutoff,
             creation_with_key(user_id, parse_post_body("replacement two"), Some(&key)),
         );
@@ -3373,26 +3607,38 @@ mod tests {
     #[tokio::test]
     async fn idempotency_key_is_per_user(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_a = SeedUser::new().seed(&env.state).await.user_id;
-        let user_b = SeedUser::new().seed(&env.state).await.user_id;
-        let storage = Arc::clone(&env.state.posts);
+        let user_a = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let user_b = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let storage = Arc::clone(&env.posts());
         let key = parse_idempotency_key("k");
 
         // The same key string from two users creates two independent posts.
         let post_a = perform_post_creation(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             creation_with_key(user_a, parse_post_body("A body"), Some(&key)),
         )
         .await
         .unwrap();
         let post_b = perform_post_creation(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
             Arc::clone(&storage),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.feed_events()),
             creation_with_key(user_b, parse_post_body("B body"), Some(&key)),
         )
         .await
@@ -3586,7 +3832,11 @@ mod tests {
     #[tokio::test]
     async fn qualifying_local_reference_copies_the_canonical_source(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let mut users = seed_users::<4>(&env.state).await;
+        let mut users = seed_users::<4>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
         users.sort();
         let [lowest_user, canonical_user, tied_user, author] = users;
         let media = media_ref_for("materialized.jpg");
@@ -3609,20 +3859,30 @@ mod tests {
         later_lowest_user.user_id = lowest_user;
         later_lowest_user.size_bytes = parse_byte_size("5");
         later_lowest_user.created_at = later;
-        create_media_record(&env.state, canonical.clone()).await;
-        create_media_record(&env.state, tied).await;
-        create_media_record(&env.state, later_lowest_user).await;
+        create_media_record(
+            env.media().clone(),
+            env.write_scope().clone(),
+            canonical.clone(),
+        )
+        .await;
+        create_media_record(env.media().clone(), env.write_scope().clone(), tied).await;
+        create_media_record(
+            env.media().clone(),
+            env.write_scope().clone(),
+            later_lowest_user,
+        )
+        .await;
 
         let ownership = PostMediaOwnership::new(
             Arc::new(LocalOnlyResolver),
             env.base.instance_id().clone(),
-            Arc::clone(&env.state.site_config),
+            Arc::clone(&env.site_config()),
         );
         let outcome = perform_post_creation_with_media_ownership(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
-            Arc::clone(&env.state.posts),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.posts()),
+            Arc::clone(&env.feed_events()),
             &ownership,
             UtcInstant::now(),
             PostCreation {
@@ -3648,8 +3908,7 @@ mod tests {
         let _ = confirmed(outcome);
 
         let copied = env
-            .state
-            .media
+            .media()
             .get_media(author, &media.sha256, &media.filename, &media.source)
             .await
             .expect("lookup succeeds")
@@ -3666,22 +3925,32 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let [source_user, author] = seed_users::<2>(&env.state).await;
-        let media = seed_media(&env.state, source_user, "unproven.jpg").await;
+        let [source_user, author] = seed_users::<2>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
+        let media = seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            source_user,
+            "unproven.jpg",
+        )
+        .await;
         let ownership = PostMediaOwnership::new(
             Arc::new(LocalOnlyResolver),
             env.base.instance_id().clone(),
-            Arc::clone(&env.state.site_config),
+            Arc::clone(&env.site_config()),
         );
         for reference in [
             format!("https://foreign.test{}", media_url_for("unproven.jpg")),
             format!("//foreign.test{}", media_url_for("unproven.jpg")),
         ] {
             perform_post_creation_with_media_ownership(
-                &env.state.write_scope,
+                &env.write_scope(),
                 &env.media_content_locks(),
-                Arc::clone(&env.state.posts),
-                Arc::clone(&env.state.feed_events),
+                Arc::clone(&env.posts()),
+                Arc::clone(&env.feed_events()),
                 &ownership,
                 UtcInstant::now(),
                 PostCreation {
@@ -3703,8 +3972,7 @@ mod tests {
             .expect("unproven reference does not reject post write");
         }
         assert!(
-            env.state
-                .media
+            env.media()
                 .get_media(author, &media.sha256, &media.filename, &media.source)
                 .await
                 .expect("lookup succeeds")
@@ -3715,18 +3983,24 @@ mod tests {
     #[tokio::test]
     async fn missing_source_leaves_local_reference_post_write_successful(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let author = SeedUser::new().seed(&env.state).await.user_id;
+        let author = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         let media = media_ref_for("absent-source.jpg");
         let ownership = PostMediaOwnership::new(
             Arc::new(LocalOnlyResolver),
             env.base.instance_id().clone(),
-            Arc::clone(&env.state.site_config),
+            Arc::clone(&env.site_config()),
         );
         let outcome = perform_post_creation_with_media_ownership(
-            &env.state.write_scope,
+            &env.write_scope(),
             &env.media_content_locks(),
-            Arc::clone(&env.state.posts),
-            Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.posts()),
+            Arc::clone(&env.feed_events()),
             &ownership,
             UtcInstant::now(),
             PostCreation {
@@ -3751,8 +4025,7 @@ mod tests {
         .expect("missing source does not fail Post write");
         let _ = confirmed(outcome);
         assert!(
-            env.state
-                .media
+            env.media()
                 .get_media(author, &media.sha256, &media.filename, &media.source)
                 .await
                 .expect("lookup succeeds")
@@ -3763,14 +4036,24 @@ mod tests {
     #[tokio::test]
     async fn content_update_materializes_author_record(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let [source_user, author] = seed_users::<2>(&env.state).await;
-        let media = seed_media(&env.state, source_user, "updated.jpg").await;
+        let [source_user, author] = seed_users::<2>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
+        let media = seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            source_user,
+            "updated.jpg",
+        )
+        .await;
         let post = confirmed(
             perform_post_creation(
-                &env.state.write_scope,
+                &env.write_scope(),
                 &env.media_content_locks(),
-                Arc::clone(&env.state.posts),
-                Arc::clone(&env.state.feed_events),
+                Arc::clone(&env.posts()),
+                Arc::clone(&env.feed_events()),
                 PostCreation {
                     user_id: author,
                     body: parse_post_body("Draft without media."),
@@ -3792,14 +4075,14 @@ mod tests {
         let ownership = PostMediaOwnership::new(
             Arc::new(LocalOnlyResolver),
             env.base.instance_id().clone(),
-            Arc::clone(&env.state.site_config),
+            Arc::clone(&env.site_config()),
         );
         confirmed(
             perform_post_update_with_media_ownership(
-                &env.state.write_scope,
+                &env.write_scope(),
                 &env.media_content_locks(),
-                Arc::clone(&env.state.posts),
-                Arc::clone(&env.state.feed_events),
+                Arc::clone(&env.posts()),
+                Arc::clone(&env.feed_events()),
                 &ownership,
                 PostUpdate {
                     post_id: post.post_id,
@@ -3823,8 +4106,7 @@ mod tests {
             .expect("content update succeeds"),
         );
         assert!(
-            env.state
-                .media
+            env.media()
                 .get_media(author, &media.sha256, &media.filename, &media.source)
                 .await
                 .expect("lookup succeeds")
@@ -3837,14 +4119,24 @@ mod tests {
     #[tokio::test]
     async fn publication_only_update_does_not_materialize_author_record(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let [source_user, author] = seed_users::<2>(&env.state).await;
-        let media = seed_media(&env.state, source_user, "publish-only.jpg").await;
+        let [source_user, author] = seed_users::<2>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
+        let media = seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            source_user,
+            "publish-only.jpg",
+        )
+        .await;
         let post = confirmed(
             perform_post_creation(
-                &env.state.write_scope,
+                &env.write_scope(),
                 &env.media_content_locks(),
-                Arc::clone(&env.state.posts),
-                Arc::clone(&env.state.feed_events),
+                Arc::clone(&env.posts()),
+                Arc::clone(&env.feed_events()),
                 PostCreation {
                     user_id: author,
                     body: parse_post_body(&format!(
@@ -3868,9 +4160,9 @@ mod tests {
         );
         confirmed(
             publish_post(
-                &env.state.write_scope,
-                Arc::clone(&env.state.posts),
-                Arc::clone(&env.state.feed_events),
+                &env.write_scope(),
+                Arc::clone(&env.posts()),
+                Arc::clone(&env.feed_events()),
                 post.post_id,
                 author,
                 UtcInstant::now(),
@@ -3879,8 +4171,7 @@ mod tests {
             .expect("publication succeeds"),
         );
         assert!(
-            env.state
-                .media
+            env.media()
                 .get_media(author, &media.sha256, &media.filename, &media.source)
                 .await
                 .expect("lookup succeeds")
@@ -3895,19 +4186,29 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let [source_user, author] = seed_users::<2>(&env.state).await;
-        let media = seed_media(&env.state, source_user, "retained.jpg").await;
+        let [source_user, author] = seed_users::<2>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
+        let media = seed_media(
+            std::sync::Arc::clone(&env.media()),
+            env.write_scope().clone(),
+            source_user,
+            "retained.jpg",
+        )
+        .await;
         let ownership = PostMediaOwnership::new(
             Arc::new(LocalOnlyResolver),
             env.base.instance_id().clone(),
-            Arc::clone(&env.state.site_config),
+            Arc::clone(&env.site_config()),
         );
         let post = confirmed(
             perform_post_creation_with_media_ownership(
-                &env.state.write_scope,
+                &env.write_scope(),
                 &env.media_content_locks(),
-                Arc::clone(&env.state.posts),
-                Arc::clone(&env.state.feed_events),
+                Arc::clone(&env.posts()),
+                Arc::clone(&env.feed_events()),
                 &ownership,
                 UtcInstant::now(),
                 PostCreation {
@@ -3933,10 +4234,10 @@ mod tests {
         );
         confirmed(
             perform_post_update_with_media_ownership(
-                &env.state.write_scope,
+                &env.write_scope(),
                 &env.media_content_locks(),
-                Arc::clone(&env.state.posts),
-                Arc::clone(&env.state.feed_events),
+                Arc::clone(&env.posts()),
+                Arc::clone(&env.feed_events()),
                 &ownership,
                 PostUpdate {
                     post_id: post.post_id,
@@ -3958,9 +4259,9 @@ mod tests {
         );
         confirmed(
             soft_delete_post(
-                &env.state.write_scope,
-                Arc::clone(&env.state.posts),
-                Arc::clone(&env.state.feed_events),
+                &env.write_scope(),
+                Arc::clone(&env.posts()),
+                Arc::clone(&env.feed_events()),
                 post.post_id,
                 author,
                 UtcInstant::now(),
@@ -3968,12 +4269,11 @@ mod tests {
             .await
             .expect("post deletion succeeds"),
         );
-        let source_media = Arc::clone(&env.state.media);
+        let source_media = Arc::clone(&env.media());
         let source_ref = media.clone();
         let instance_id = env.base.instance_id().clone();
         let deletion = confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         source_media
@@ -3994,8 +4294,7 @@ mod tests {
         );
         assert_eq!(deletion, crate::TryDeleteOutcome::Deleted);
         assert!(
-            env.state
-                .media
+            env.media()
                 .get_media(source_user, &media.sha256, &media.filename, &media.source)
                 .await
                 .expect("source lookup succeeds")
@@ -4003,8 +4302,7 @@ mod tests {
             "the source owner no longer has a record"
         );
         assert!(
-            env.state
-                .media
+            env.media()
                 .get_media(author, &media.sha256, &media.filename, &media.source)
                 .await
                 .expect("author lookup succeeds")

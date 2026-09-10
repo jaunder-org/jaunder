@@ -8,7 +8,7 @@ use rstest_reuse::*;
 use tower::ServiceExt;
 
 use crate::helpers::{SeededSession, atompub_at, create_user_and_session, make_app};
-use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
+use storage::test_support::{Backend, backends, backends_matrix};
 
 use super::fixtures::entry_xml;
 
@@ -63,9 +63,15 @@ impl ForbiddenRequest {
 #[case::update(ForbiddenRequest::Update)]
 #[tokio::test]
 async fn forbids_other_user(backend: Backend, #[case] request: ForbiddenRequest) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
 
     let response = app.oneshot(request.build(&session)).await.unwrap();
 
@@ -79,9 +85,15 @@ async fn forbids_other_user(backend: Backend, #[case] request: ForbiddenRequest)
 #[apply(backends)]
 #[tokio::test]
 async fn malformed_username_path_returns_400(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
     let uri = parse_root_relative_url("/atompub/a@b/posts");
 
     let response = app

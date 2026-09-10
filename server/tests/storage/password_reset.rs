@@ -11,7 +11,8 @@ use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{self, Backend, SeedUser, backends};
 use storage::{
-    AppState, UsePasswordResetError, WriteScopeError,
+    PasswordResetStorage, SessionStorage, UsePasswordResetError, UserStorage, WriteScope,
+    WriteScopeError,
     account_mutations::{self, ConfirmPasswordResetError},
 };
 #[apply(backends)]
@@ -20,17 +21,23 @@ async fn confirm_password_reset_hash_failure_preserves_password_error_source_and
     #[case] backend: Backend,
 ) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
     let reset_token = create_password_reset(
-        state,
+        env.password_resets(),
+        env.write_scope(),
         user_id,
         "2099-01-02T03:04:05.123456Z".parse().unwrap(),
     )
     .await;
 
     let error = confirm_password_reset_result(
-        state,
+        env.password_resets(),
+        env.users(),
+        env.sessions(),
+        env.write_scope(),
         reset_token.clone(),
         password("force-hash-error-for-test-coverage"),
     )
@@ -49,26 +56,29 @@ async fn confirm_password_reset_hash_failure_preserves_password_error_source_and
         "the password error must remain downcastable through sqlx::Error::Io"
     );
 
-    assert_eq!(use_password_reset(state, reset_token).await, user_id);
+    assert_eq!(
+        use_password_reset(env.password_resets(), env.write_scope(), reset_token,).await,
+        user_id
+    );
 }
 
 #[apply(backends)]
 #[tokio::test]
 async fn confirm_password_reset_changes_credentials(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user = SeedUser::new().seed(state).await;
+    let user = SeedUser::new().seed(env.users(), env.write_scope()).await;
     let reset_token = create_password_reset(
-        state,
+        env.password_resets(),
+        env.write_scope(),
         user.user_id,
         "2099-01-02T03:04:05.123456Z".parse().unwrap(),
     )
     .await;
 
-    let sessions = Arc::clone(&state.sessions);
+    let sessions = Arc::clone(&env.sessions());
     let label = common::test_support::parse_session_label("Existing device");
-    let outcome = state
-        .write_scope
+    let outcome = env
+        .write_scope()
         .run(|transaction| {
             Box::pin(async move {
                 sessions
@@ -80,8 +90,7 @@ async fn confirm_password_reset_changes_credentials(#[case] backend: Backend) {
         .expect("session fixture setup should succeed");
     storage::test_support::confirmed_for(outcome, "session fixture setup");
     assert_eq!(
-        state
-            .sessions
+        env.sessions()
             .list_sessions(user.user_id)
             .await
             .unwrap()
@@ -89,17 +98,25 @@ async fn confirm_password_reset_changes_credentials(#[case] backend: Backend) {
         1
     );
 
-    confirm_password_reset(state, reset_token, password("new_password123")).await;
+    confirm_password_reset(
+        env.password_resets(),
+        env.users(),
+        env.sessions(),
+        env.write_scope(),
+        reset_token,
+        password("new_password123"),
+    )
+    .await;
 
-    let users = Arc::clone(&state.users);
+    let users = Arc::clone(&env.users());
     let username = user.username.clone();
     let password = password("new_password123");
     let authentication = users
         .prepare_authentication(&username, &password)
         .await
         .unwrap();
-    let outcome = state
-        .write_scope
+    let outcome = env
+        .write_scope()
         .run(|transaction| {
             Box::pin(async move { users.authenticate(transaction, authentication).await })
         })
@@ -108,8 +125,7 @@ async fn confirm_password_reset_changes_credentials(#[case] backend: Backend) {
     let authenticated = storage::test_support::confirmed_for(outcome, "authentication");
     assert_eq!(authenticated.user_id, user.user_id);
     assert!(
-        state
-            .sessions
+        env.sessions()
             .list_sessions(user.user_id)
             .await
             .unwrap()
@@ -123,12 +139,14 @@ async fn confirm_password_reset_bogus_token_returns_not_found_without_hashing(
     #[case] backend: Backend,
 ) {
     let env = backend.setup().await;
-    let state = &env.state;
     // No password_resets row matches this token. A hash-failing new password proves the
     // hash is NOT attempted: the claim rejects the token first -> NotFound, not Internal
     // (ADR-0022).
     let result = confirm_password_reset_result(
-        state,
+        env.password_resets(),
+        env.users(),
+        env.sessions(),
+        env.write_scope(),
         parse_raw_token("dGVzdA"),
         password("force-hash-error-for-test-coverage"),
     )
@@ -144,14 +162,23 @@ async fn confirm_password_reset_bogus_token_returns_not_found_without_hashing(
 #[tokio::test]
 async fn create_password_reset_and_use_returns_user_id(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
 
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
     let expires_at: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
-    let raw_token = create_password_reset(state, user_id, expires_at).await;
+    let raw_token = create_password_reset(
+        env.password_resets(),
+        env.write_scope(),
+        user_id,
+        expires_at,
+    )
+    .await;
 
-    let consumed_user_id = use_password_reset(state, raw_token).await;
+    let consumed_user_id =
+        use_password_reset(env.password_resets(), env.write_scope(), raw_token).await;
     assert_eq!(consumed_user_id, user_id);
 }
 
@@ -159,16 +186,24 @@ async fn create_password_reset_and_use_returns_user_id(#[case] backend: Backend)
 #[tokio::test]
 async fn use_password_reset_already_used_returns_already_used(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
 
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
     let expires_at: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
-    let raw_token = create_password_reset(state, user_id, expires_at).await;
+    let raw_token = create_password_reset(
+        env.password_resets(),
+        env.write_scope(),
+        user_id,
+        expires_at,
+    )
+    .await;
 
-    use_password_reset(state, raw_token.clone()).await;
+    use_password_reset(env.password_resets(), env.write_scope(), raw_token.clone()).await;
 
-    let err = use_password_reset_result(state, raw_token)
+    let err = use_password_reset_result(env.password_resets(), env.write_scope(), raw_token)
         .await
         .unwrap_err();
     let WriteScopeError::Operation(err) = err else {
@@ -184,14 +219,22 @@ async fn use_password_reset_already_used_returns_already_used(#[case] backend: B
 #[tokio::test]
 async fn use_password_reset_expired_returns_expired(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
 
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
     let expires_at: UtcInstant = "2000-01-02T03:04:05.123456Z".parse().unwrap();
-    let raw_token = create_password_reset(state, user_id, expires_at).await;
+    let raw_token = create_password_reset(
+        env.password_resets(),
+        env.write_scope(),
+        user_id,
+        expires_at,
+    )
+    .await;
 
-    let err = use_password_reset_result(state, raw_token)
+    let err = use_password_reset_result(env.password_resets(), env.write_scope(), raw_token)
         .await
         .unwrap_err();
     let WriteScopeError::Operation(err) = err else {
@@ -207,11 +250,14 @@ async fn use_password_reset_expired_returns_expired(#[case] backend: Backend) {
 #[tokio::test]
 async fn use_password_reset_unknown_token_returns_not_found(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
 
-    let err = use_password_reset_result(state, parse_raw_token("not-a-real-token"))
-        .await
-        .unwrap_err();
+    let err = use_password_reset_result(
+        env.password_resets(),
+        env.write_scope(),
+        parse_raw_token("not-a-real-token"),
+    )
+    .await
+    .unwrap_err();
     let WriteScopeError::Operation(err) = err else {
         unreachable!("expected password reset operation error, got {err:?}");
     };
@@ -222,13 +268,12 @@ async fn use_password_reset_unknown_token_returns_not_found(#[case] backend: Bac
 }
 
 async fn create_password_reset(
-    state: &AppState,
-    user_id: common::ids::UserId,
+    password_resets: Arc<dyn PasswordResetStorage>,
+    write_scope: WriteScope,
+    user_id: UserId,
     expires_at: UtcInstant,
-) -> common::token::RawToken {
-    let password_resets = Arc::clone(&state.password_resets);
-    let outcome = state
-        .write_scope
+) -> RawToken {
+    let outcome = write_scope
         .run(|transaction| {
             Box::pin(async move {
                 password_resets
@@ -241,20 +286,23 @@ async fn create_password_reset(
     storage::test_support::confirmed_for(outcome, "password-reset fixture setup")
 }
 
-async fn use_password_reset(state: &AppState, raw_token: RawToken) -> UserId {
-    let outcome = use_password_reset_result(state, raw_token)
+async fn use_password_reset(
+    password_resets: Arc<dyn PasswordResetStorage>,
+    write_scope: WriteScope,
+    raw_token: RawToken,
+) -> UserId {
+    let outcome = use_password_reset_result(password_resets, write_scope, raw_token)
         .await
         .expect("password reset should succeed");
     test_support::confirmed_for(outcome, "password reset")
 }
 
 async fn use_password_reset_result(
-    state: &AppState,
+    password_resets: Arc<dyn PasswordResetStorage>,
+    write_scope: WriteScope,
     raw_token: RawToken,
 ) -> Result<MutationOutcome<UserId>, WriteScopeError<UsePasswordResetError>> {
-    let password_resets = Arc::clone(&state.password_resets);
-    state
-        .write_scope
+    write_scope
         .run(|transaction| {
             Box::pin(async move {
                 password_resets
@@ -265,23 +313,36 @@ async fn use_password_reset_result(
         .await
 }
 
-async fn confirm_password_reset(state: &AppState, raw_token: RawToken, password: Password) {
-    let outcome = confirm_password_reset_result(state, raw_token, password)
-        .await
-        .expect("password reset confirmation should succeed");
+async fn confirm_password_reset(
+    password_resets: Arc<dyn PasswordResetStorage>,
+    users: Arc<dyn UserStorage>,
+    sessions: Arc<dyn SessionStorage>,
+    write_scope: WriteScope,
+    raw_token: RawToken,
+    password: Password,
+) {
+    let outcome = confirm_password_reset_result(
+        password_resets,
+        users,
+        sessions,
+        write_scope,
+        raw_token,
+        password,
+    )
+    .await
+    .expect("password reset confirmation should succeed");
     test_support::confirmed_for(outcome, "password reset confirmation");
 }
 
 async fn confirm_password_reset_result(
-    state: &AppState,
+    password_resets: Arc<dyn PasswordResetStorage>,
+    users: Arc<dyn UserStorage>,
+    sessions: Arc<dyn SessionStorage>,
+    write_scope: WriteScope,
     raw_token: RawToken,
     password: Password,
 ) -> Result<MutationOutcome<UserId>, WriteScopeError<ConfirmPasswordResetError>> {
-    let password_resets = Arc::clone(&state.password_resets);
-    let users = Arc::clone(&state.users);
-    let sessions = Arc::clone(&state.sessions);
-    state
-        .write_scope
+    write_scope
         .run(|transaction| {
             Box::pin(async move {
                 account_mutations::confirm_password_reset(

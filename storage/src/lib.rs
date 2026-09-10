@@ -11,7 +11,6 @@
 #![cfg_attr(any(test, feature = "test-utils"), expect(clippy::ref_option_ref))]
 
 pub mod account_mutations;
-mod app_state;
 mod audiences;
 mod backend;
 mod backup;
@@ -41,6 +40,7 @@ mod site_config;
 mod smtp;
 pub mod sql;
 mod sqlite;
+mod storage_factory;
 mod subscriptions;
 mod theme_asset_manager;
 mod theme_manager;
@@ -58,7 +58,6 @@ pub mod seed_theme_fixture;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 
-pub use app_state::*;
 pub use audiences::*;
 pub use backend::*;
 pub use backup::{
@@ -108,6 +107,7 @@ pub use sqlite::{
     SqlitePostStorage, SqliteSessionStorage, SqliteSiteConfigStorage, SqliteSubscriptionStorage,
     SqliteUserConfigStorage, SqliteUserStorage,
 };
+pub use storage_factory::*;
 pub use subscriptions::*;
 pub use theme_asset_manager::{
     THEME_CONTENT_RETENTION_SECONDS, ThemeAssetError, ThemeAssetManager, ThemeContentReconciliation,

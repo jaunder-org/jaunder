@@ -1,24 +1,20 @@
-use std::sync::Arc;
-
-use axum::http::StatusCode;
+use axum::{Router, http::StatusCode};
 use common::ids::{PostId, RevisionId};
 use common::revision_history::{RevisionHistoryAudience, RevisionHistoryDetail};
 use rstest::*;
 use rstest_reuse::*;
 use server_fn::ServerFn;
-use storage::test_support::{Backend, TestEnv, backends};
+use storage::test_support::{Backend, backends};
 use web::posts::{PostInputs, PostRevisionHistory, RevisionHistoryPage, SavedPost};
 
 use crate::helpers::{
-    confirmed_mutation, create_post_json, create_user_and_session, post_json, update_post_json,
+    confirmed_mutation, create_post_json, create_user_and_session, make_app, post_json,
+    update_post_json,
 };
 
-async fn list_history(
-    state: &Arc<storage::AppState>,
-    cookie: Option<&str>,
-) -> (StatusCode, String) {
+async fn list_history(app: Router, cookie: Option<&str>) -> (StatusCode, String) {
     post_json(
-        state,
+        app,
         <web::posts::ListHistory as ServerFn>::PATH,
         serde_json::to_value(web::posts::ListHistory {
             cursor: None,
@@ -31,12 +27,12 @@ async fn list_history(
 }
 
 async fn get_post_history(
-    state: &Arc<storage::AppState>,
+    app: Router,
     post_id: PostId,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
     post_json(
-        state,
+        app,
         <web::posts::GetPostHistory as ServerFn>::PATH,
         serde_json::to_value(web::posts::GetPostHistory {
             post_id,
@@ -50,13 +46,13 @@ async fn get_post_history(
 }
 
 async fn get_revision_detail(
-    state: &Arc<storage::AppState>,
+    app: Router,
     post_id: PostId,
     revision_id: RevisionId,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
     post_json(
-        state,
+        app,
         <web::posts::GetRevisionHistoryDetail as ServerFn>::PATH,
         serde_json::to_value(web::posts::GetRevisionHistoryDetail {
             post_id,
@@ -71,14 +67,15 @@ async fn get_revision_detail(
 #[apply(backends)]
 #[tokio::test]
 async fn revision_history_endpoints_hide_anonymous_access(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
-    let (status, body) = list_history(&state, None).await;
+    let (status, body) = list_history(app.clone(), None).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
     let expected_body = body;
 
-    let (status, body) = get_post_history(&state, PostId::from(1), None).await;
+    let (status, body) = get_post_history(app.clone(), PostId::from(1), None).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
     assert_eq!(
         body, expected_body,
@@ -86,7 +83,7 @@ async fn revision_history_endpoints_hide_anonymous_access(#[case] backend: Backe
     );
 
     let (status, body) =
-        get_revision_detail(&state, PostId::from(1), RevisionId::from(1), None).await;
+        get_revision_detail(app.clone(), PostId::from(1), RevisionId::from(1), None).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
     assert_eq!(
         body, expected_body,
@@ -97,11 +94,17 @@ async fn revision_history_endpoints_hide_anonymous_access(#[case] backend: Backe
 #[apply(backends)]
 #[tokio::test]
 async fn revision_history_http_exposes_page_current_and_detail_fields(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let cookie = session.cookie();
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(false),
             ..PostInputs::new(
@@ -115,7 +118,7 @@ async fn revision_history_http_exposes_page_current_and_detail_fields(#[case] ba
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let post: SavedPost = confirmed_mutation(&body);
     let (status, body) = update_post_json(
-        &state,
+        app.clone(),
         post.post_id,
         PostInputs {
             publish: Some(false),
@@ -129,7 +132,7 @@ async fn revision_history_http_exposes_page_current_and_detail_fields(#[case] ba
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
 
-    let (status, body) = list_history(&state, Some(&cookie)).await;
+    let (status, body) = list_history(app.clone(), Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let page: RevisionHistoryPage = serde_json::from_str(&body).unwrap();
     assert_eq!(page.revisions.len(), 1);
@@ -137,7 +140,7 @@ async fn revision_history_http_exposes_page_current_and_detail_fields(#[case] ba
     assert!(page.next_cursor.is_none());
     assert!(!page.has_more);
 
-    let (status, body) = get_post_history(&state, post.post_id, Some(&cookie)).await;
+    let (status, body) = get_post_history(app.clone(), post.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let history: PostRevisionHistory = serde_json::from_str(&body).unwrap();
     assert_eq!(history.current.post_id, post.post_id);
@@ -147,7 +150,7 @@ async fn revision_history_http_exposes_page_current_and_detail_fields(#[case] ba
     );
 
     let (status, body) = get_revision_detail(
-        &state,
+        app.clone(),
         post.post_id,
         page.revisions[0].revision_id,
         Some(&cookie),
@@ -173,12 +176,24 @@ async fn revision_history_http_exposes_page_current_and_detail_fields(#[case] ba
 async fn revision_history_http_hides_foreign_missing_and_mismatched_resources(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let owner = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let owner = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let owner_cookie = owner.cookie();
-    let stranger_cookie = create_user_and_session(&state).await.cookie();
+    let stranger_cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(false),
             ..PostInputs::new(
@@ -192,7 +207,7 @@ async fn revision_history_http_hides_foreign_missing_and_mismatched_resources(
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let post: SavedPost = confirmed_mutation(&body);
     let (status, body) = update_post_json(
-        &state,
+        app.clone(),
         post.post_id,
         PostInputs {
             publish: Some(false),
@@ -205,22 +220,28 @@ async fn revision_history_http_hides_foreign_missing_and_mismatched_resources(
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let (_, body) = list_history(&state, Some(&owner_cookie)).await;
+    let (_, body) = list_history(app.clone(), Some(&owner_cookie)).await;
     let page: RevisionHistoryPage = serde_json::from_str(&body).unwrap();
     let revision_id = page.revisions[0].revision_id;
 
-    let (status, body) = get_post_history(&state, post.post_id, Some(&stranger_cookie)).await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
-    assert!(body.contains("not found"), "body: {body}");
-    let (status, body) =
-        get_revision_detail(&state, post.post_id, revision_id, Some(&stranger_cookie)).await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
-    assert!(body.contains("not found"), "body: {body}");
-    let (status, body) = get_post_history(&state, PostId::from(999_999), Some(&owner_cookie)).await;
+    let (status, body) = get_post_history(app.clone(), post.post_id, Some(&stranger_cookie)).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
     assert!(body.contains("not found"), "body: {body}");
     let (status, body) = get_revision_detail(
-        &state,
+        app.clone(),
+        post.post_id,
+        revision_id,
+        Some(&stranger_cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
+    assert!(body.contains("not found"), "body: {body}");
+    let (status, body) =
+        get_post_history(app.clone(), PostId::from(999_999), Some(&owner_cookie)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
+    assert!(body.contains("not found"), "body: {body}");
+    let (status, body) = get_revision_detail(
+        app.clone(),
         PostId::from(999_999),
         revision_id,
         Some(&owner_cookie),

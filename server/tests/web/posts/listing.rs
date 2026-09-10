@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use axum::http::StatusCode;
+use axum::{Router, http::StatusCode};
 use common::seed::{Page, PublicPresentation, RenderedPost};
 use common::tag::TagLabel;
 use common::test_support::{parse_post_body, parse_tag_label};
@@ -15,22 +15,18 @@ use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{
-    confirmed_mutation, create_post_json, create_session_for, create_user_and_session, post_form,
-    post_json,
+    confirmed_mutation, create_post_json, create_session_for, create_user_and_session, make_app,
+    post_form, post_json,
 };
-use storage::test_support::{Backend, SeedRawPost, SeedUser, TestEnv, backends, backends_matrix};
+use storage::test_support::{Backend, SeedRawPost, SeedUser, backends, backends_matrix};
 
 use super::fixtures::{
     list_drafts, list_home_feed, list_local_timeline, list_scheduled, list_user_posts,
 };
 
-async fn list_posts_by_tag(
-    state: &Arc<storage::AppState>,
-    tag: &str,
-    cookie: Option<&str>,
-) -> (StatusCode, String) {
+async fn list_posts_by_tag(app: Router, tag: &str, cookie: Option<&str>) -> (StatusCode, String) {
     post_json(
-        state,
+        app,
         <web::timeline::ListByTag as ServerFn>::PATH,
         serde_json::json!({ "tag": tag, "cursor": null, "limit": 50 }),
         cookie,
@@ -39,13 +35,13 @@ async fn list_posts_by_tag(
 }
 
 async fn list_user_posts_by_tag(
-    state: &Arc<storage::AppState>,
+    app: Router,
     username: &str,
     tag: &str,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
     post_json(
-        state,
+        app,
         <web::timeline::ListByUserAndTag as ServerFn>::PATH,
         serde_json::json!({ "username": username, "tag": tag, "cursor": null, "limit": 50 }),
         cookie,
@@ -56,12 +52,25 @@ async fn list_user_posts_by_tag(
 #[apply(backends)]
 #[tokio::test]
 async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let author_cookie = create_user_and_session(&state).await.cookie();
-    let stranger_cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let author_cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
+    let stranger_cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(false),
             ..PostInputs::new(parse_post_body("first"), PostFormat::Markdown)
@@ -73,7 +82,7 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] 
     let first_draft: SavedPost = confirmed_mutation(&body);
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(false),
             ..PostInputs::new(parse_post_body("second"), PostFormat::Markdown)
@@ -85,7 +94,7 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] 
     let second_draft: SavedPost = confirmed_mutation(&body);
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(true),
             ..PostInputs::new(parse_post_body("visible"), PostFormat::Markdown)
@@ -96,7 +105,7 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] 
     assert_eq!(status, StatusCode::OK, "create body: {body}");
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(false),
             ..PostInputs::new(parse_post_body("private"), PostFormat::Markdown)
@@ -106,7 +115,7 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] 
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
 
-    let (status, body) = list_drafts(&state, None, 1, Some(&author_cookie)).await;
+    let (status, body) = list_drafts(app.clone(), None, 1, Some(&author_cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let first_page: Page<UnpublishedPost> = serde_json::from_str(&body).unwrap();
     assert_eq!(first_page.posts.len(), 1, "body: {body}");
@@ -124,7 +133,7 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] 
         .next_cursor
         .expect("page 1 has more, so it carries a cursor");
 
-    let (status, body) = list_drafts(&state, Some(cursor), 10, Some(&author_cookie)).await;
+    let (status, body) = list_drafts(app.clone(), Some(cursor), 10, Some(&author_cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let second_page: Page<UnpublishedPost> = serde_json::from_str(&body).unwrap();
     assert_eq!(second_page.posts.len(), 1, "body: {body}");
@@ -144,8 +153,14 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] 
 #[apply(backends)]
 #[tokio::test]
 async fn list_drafts_surfaces_scheduled_with_marker_excludes_live(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let author = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let author = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
 
     // Seed a scheduled post (future `published_at`) and a live post (past)
     // directly via storage — the web compose datetime control is Task 6.
@@ -157,7 +172,7 @@ async fn list_drafts_surfaces_scheduled_with_marker_excludes_live(#[case] backen
     );
     let sched_id = SeedRawPost::new(author.user_id)
         .published_at(scheduled_at)
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await
         .post_id;
     let live_at = UtcInstant::from(
@@ -167,11 +182,11 @@ async fn list_drafts_surfaces_scheduled_with_marker_excludes_live(#[case] backen
     );
     let live_id = SeedRawPost::new(author.user_id)
         .published_at(live_at)
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await
         .post_id;
 
-    let (status, body) = list_drafts(&state, None, 50, Some(&author.cookie())).await;
+    let (status, body) = list_drafts(app.clone(), None, 50, Some(&author.cookie())).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let drafts: Page<UnpublishedPost> = serde_json::from_str(&body).unwrap();
 
@@ -195,9 +210,20 @@ async fn list_drafts_surfaces_scheduled_with_marker_excludes_live(#[case] backen
 async fn list_scheduled_returns_current_user_future_posts_ordered_by_schedule(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let author = create_user_and_session(&state).await;
-    let stranger = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let author = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let stranger = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let author_cookie = author.cookie();
 
     let now = UtcInstant::now();
@@ -209,7 +235,7 @@ async fn list_scheduled_returns_current_user_future_posts_ordered_by_schedule(
 
     let draft_id = SeedRawPost::new(author.user_id)
         .draft()
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await
         .post_id;
     let live_at = UtcInstant::from(
@@ -219,7 +245,7 @@ async fn list_scheduled_returns_current_user_future_posts_ordered_by_schedule(
     );
     let live_id = SeedRawPost::new(author.user_id)
         .published_at(live_at)
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await
         .post_id;
     let deleted_at = UtcInstant::from(
@@ -229,12 +255,11 @@ async fn list_scheduled_returns_current_user_future_posts_ordered_by_schedule(
     );
     let deleted_id = SeedRawPost::new(author.user_id)
         .published_at(deleted_at)
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await
         .post_id;
-    let posts = Arc::clone(&state.posts);
-    state
-        .write_scope
+    let posts = Arc::clone(&env.posts());
+    env.write_scope()
         .run(move |transaction| {
             Box::pin(async move {
                 posts
@@ -256,7 +281,7 @@ async fn list_scheduled_returns_current_user_future_posts_ordered_by_schedule(
     );
     let other_id = SeedRawPost::new(stranger.user_id)
         .published_at(other_at)
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await
         .post_id;
 
@@ -267,17 +292,17 @@ async fn list_scheduled_returns_current_user_future_posts_ordered_by_schedule(
     );
     let earlier_id = SeedRawPost::new(author.user_id)
         .published_at(earlier_at)
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await
         .post_id;
     let same_a_id = SeedRawPost::new(author.user_id)
         .published_at(same_time)
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await
         .post_id;
     let same_b_id = SeedRawPost::new(author.user_id)
         .published_at(same_time)
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await
         .post_id;
     let later_at = UtcInstant::from(
@@ -287,11 +312,11 @@ async fn list_scheduled_returns_current_user_future_posts_ordered_by_schedule(
     );
     let later_id = SeedRawPost::new(author.user_id)
         .published_at(later_at)
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await
         .post_id;
 
-    let (status, body) = list_scheduled(&state, None, 2, Some(&author_cookie)).await;
+    let (status, body) = list_scheduled(app.clone(), None, 2, Some(&author_cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let first_page: Page<UnpublishedPost> = serde_json::from_str(&body).unwrap();
     assert_eq!(first_page.posts.len(), 2, "body: {body}");
@@ -300,7 +325,7 @@ async fn list_scheduled_returns_current_user_future_posts_ordered_by_schedule(
         .next_cursor
         .expect("page 1 has more, so it carries a cursor");
 
-    let (status, body) = list_scheduled(&state, Some(cursor), 10, Some(&author_cookie)).await;
+    let (status, body) = list_scheduled(app.clone(), Some(cursor), 10, Some(&author_cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let second_page: Page<UnpublishedPost> = serde_json::from_str(&body).unwrap();
     assert_eq!(second_page.posts.len(), 2, "body: {body}");
@@ -387,32 +412,52 @@ async fn list_rejects_invalid_cursor_inputs(
     #[case] half_cursor_body: serde_json::Value,
     #[case] bad_time_body: serde_json::Value,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
-    let (status, body) = post_json(&state, uri, half_cursor_body, Some(&cookie)).await;
+    let (status, body) = post_json(app.clone(), uri, half_cursor_body, Some(&cookie)).await;
     assert_ne!(status, StatusCode::OK, "body: {body}");
     assert!(
         body.contains("post_id"),
         "the rejection names the missing cursor component: {body}"
     );
 
-    let (status, body) = post_json(&state, uri, bad_time_body, Some(&cookie)).await;
+    let (status, body) = post_json(app.clone(), uri, bad_time_body, Some(&cookie)).await;
     assert_ne!(status, StatusCode::OK, "body: {body}");
 }
 
 #[apply(backends)]
 #[tokio::test]
 async fn list_user_posts_returns_published_posts_with_cursor_pagination(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let author = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let author = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let author_cookie = author.cookie();
-    let other_cookie = create_user_and_session(&state).await.cookie();
+    let other_cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
-    storage::test_support::seed_posts(&state, author.user_id, 51, true).await;
+    storage::test_support::seed_posts(env.posts(), env.write_scope(), author.user_id, 51, true)
+        .await;
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(false),
             ..PostInputs::new(parse_post_body("private"), PostFormat::Markdown)
@@ -423,7 +468,7 @@ async fn list_user_posts_returns_published_posts_with_cursor_pagination(#[case] 
     assert_eq!(status, StatusCode::OK, "create body: {body}");
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(true),
             ..PostInputs::new(parse_post_body("body"), PostFormat::Markdown)
@@ -433,7 +478,7 @@ async fn list_user_posts_returns_published_posts_with_cursor_pagination(#[case] 
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
 
-    let (status, body) = list_user_posts(&state, &author.username, None, 50, None).await;
+    let (status, body) = list_user_posts(app.clone(), &author.username, None, 50, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let first_page: Page<RenderedPost> =
         serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
@@ -457,8 +502,14 @@ async fn list_user_posts_returns_published_posts_with_cursor_pagination(#[case] 
         "body: {body}"
     );
 
-    let (status, body) =
-        list_user_posts(&state, &author.username, first_page.next_cursor, 50, None).await;
+    let (status, body) = list_user_posts(
+        app.clone(),
+        &author.username,
+        first_page.next_cursor,
+        50,
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let second_page: Page<RenderedPost> =
         serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
@@ -471,9 +522,10 @@ async fn list_user_posts_returns_published_posts_with_cursor_pagination(#[case] 
 #[apply(backends)]
 #[tokio::test]
 async fn list_user_posts_rejects_invalid_username(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
-    let (status, body) = list_user_posts(&state, "Invalid Name", None, 50, None).await;
+    let (status, body) = list_user_posts(app.clone(), "Invalid Name", None, 50, None).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
     assert!(body.contains("username"), "body: {body}");
 }
@@ -489,9 +541,13 @@ async fn list_user_posts_rejects_invalid_username(#[case] backend: Backend) {
 async fn list_by_user_takes_a_nested_json_cursor_and_no_longer_the_flat_pair(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let author = SeedUser::new().seed(&state).await;
-    storage::test_support::seed_posts(&state, author.user_id, 2, true).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let author = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await;
+    storage::test_support::seed_posts(env.posts(), env.write_scope(), author.user_id, 2, true)
+        .await;
 
     let nested = serde_json::json!({
         "username": author.username,
@@ -499,7 +555,7 @@ async fn list_by_user_takes_a_nested_json_cursor_and_no_longer_the_flat_pair(
         "limit": 10,
     });
     let (status, body) = post_json(
-        &state,
+        app.clone(),
         <web::timeline::ListByUser as ServerFn>::PATH,
         nested,
         None,
@@ -512,7 +568,7 @@ async fn list_by_user_takes_a_nested_json_cursor_and_no_longer_the_flat_pair(
         author.username
     );
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::timeline::ListByUser as ServerFn>::PATH,
         flat,
         None,
@@ -530,11 +586,15 @@ async fn list_by_user_takes_a_nested_json_cursor_and_no_longer_the_flat_pair(
 #[apply(backends)]
 #[tokio::test]
 async fn timeline_page_two_uses_the_cursor_the_first_page_returned(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let author = SeedUser::new().seed(&state).await;
-    storage::test_support::seed_posts(&state, author.user_id, 2, true).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let author = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await;
+    storage::test_support::seed_posts(env.posts(), env.write_scope(), author.user_id, 2, true)
+        .await;
 
-    let (status, body) = list_user_posts(&state, &author.username, None, 1, None).await;
+    let (status, body) = list_user_posts(app.clone(), &author.username, None, 1, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let first_page: Page<RenderedPost> =
         serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
@@ -545,7 +605,8 @@ async fn timeline_page_two_uses_the_cursor_the_first_page_returned(#[case] backe
         .next_cursor
         .expect("page 1 has more, so it carries a cursor");
 
-    let (status, body) = list_user_posts(&state, &author.username, Some(cursor), 1, None).await;
+    let (status, body) =
+        list_user_posts(app.clone(), &author.username, Some(cursor), 1, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let second_page: Page<RenderedPost> =
         serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
@@ -563,15 +624,29 @@ async fn timeline_page_two_uses_the_cursor_the_first_page_returned(#[case] backe
 async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let author = SeedUser::new().seed(&state).await;
-    let other = SeedUser::new().seed(&state).await;
-    let author_cookie = create_session_for(&state, author.user_id).await.cookie();
-    storage::test_support::seed_posts(&state, author.user_id, 26, true).await;
-    storage::test_support::seed_posts(&state, other.user_id, 26, true).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let author = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await;
+    let other = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await;
+    let author_cookie = create_session_for(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+        author.user_id,
+    )
+    .await
+    .cookie();
+    storage::test_support::seed_posts(env.posts(), env.write_scope(), author.user_id, 26, true)
+        .await;
+    storage::test_support::seed_posts(env.posts(), env.write_scope(), other.user_id, 26, true)
+        .await;
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(false),
             ..PostInputs::new(parse_post_body("private"), PostFormat::Markdown)
@@ -582,7 +657,7 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
     assert_eq!(status, StatusCode::OK, "create body: {body}");
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(true),
             ..PostInputs::new(parse_post_body("gone"), PostFormat::Markdown)
@@ -592,9 +667,8 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let deleted: SavedPost = confirmed_mutation(&body);
-    let posts = Arc::clone(&state.posts);
-    state
-        .write_scope
+    let posts = Arc::clone(&env.posts());
+    env.write_scope()
         .run(move |transaction| {
             Box::pin(async move {
                 posts
@@ -610,7 +684,7 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
         .await
         .unwrap();
 
-    let (status, body) = list_local_timeline(&state, None, 50, None).await;
+    let (status, body) = list_local_timeline(app.clone(), None, 50, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let first_page: Page<RenderedPost> =
         serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
@@ -648,7 +722,7 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
         "body: {body}"
     );
 
-    let (status, body) = list_local_timeline(&state, first_page.next_cursor, 50, None).await;
+    let (status, body) = list_local_timeline(app.clone(), first_page.next_cursor, 50, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let second_page: Page<RenderedPost> =
         serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
@@ -661,15 +735,28 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
 #[apply(backends)]
 #[tokio::test]
 async fn list_home_feed_returns_authenticated_users_published_posts_only(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let author = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let author = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let author_cookie = author.cookie();
-    let other_cookie = create_user_and_session(&state).await.cookie();
+    let other_cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
-    storage::test_support::seed_posts(&state, author.user_id, 51, true).await;
+    storage::test_support::seed_posts(env.posts(), env.write_scope(), author.user_id, 51, true)
+        .await;
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(false),
             ..PostInputs::new(parse_post_body("private"), PostFormat::Markdown)
@@ -682,7 +769,7 @@ async fn list_home_feed_returns_authenticated_users_published_posts_only(#[case]
     for i in 0..3 {
         let request_body = format!("# Post {i}\n\nbody");
         let (status, body) = create_post_json(
-            &state,
+            app.clone(),
             PostInputs {
                 publish: Some(true),
                 ..PostInputs::new(parse_post_body(&request_body), PostFormat::Markdown)
@@ -693,7 +780,7 @@ async fn list_home_feed_returns_authenticated_users_published_posts_only(#[case]
         assert_eq!(status, StatusCode::OK, "create body: {body}");
     }
 
-    let (status, body) = list_home_feed(&state, None, 50, Some(&author_cookie)).await;
+    let (status, body) = list_home_feed(app.clone(), None, 50, Some(&author_cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let first_page: Page<RenderedPost> = serde_json::from_str(&body).unwrap();
     assert_eq!(first_page.posts.len(), 50, "body: {body}");
@@ -714,8 +801,13 @@ async fn list_home_feed_returns_authenticated_users_published_posts_only(#[case]
         "body: {body}"
     );
 
-    let (status, body) =
-        list_home_feed(&state, first_page.next_cursor, 50, Some(&author_cookie)).await;
+    let (status, body) = list_home_feed(
+        app.clone(),
+        first_page.next_cursor,
+        50,
+        Some(&author_cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let second_page: Page<RenderedPost> = serde_json::from_str(&body).unwrap();
     assert_eq!(second_page.posts.len(), 1, "body: {body}");
@@ -725,12 +817,18 @@ async fn list_home_feed_returns_authenticated_users_published_posts_only(#[case]
 #[apply(backends)]
 #[tokio::test]
 async fn list_user_posts_carries_tags_per_post(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let cookie = session.cookie();
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(true),
             ..PostInputs::new(
@@ -750,8 +848,8 @@ async fn list_user_posts_carries_tags_per_post(#[case] backend: Backend) {
     // Applied in reverse-slug order so the slug assertion below tests ordering
     // (#772) rather than coinciding with insertion order.
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         created.post_id,
         session.user_id,
         &[
@@ -762,7 +860,8 @@ async fn list_user_posts_carries_tags_per_post(#[case] backend: Backend) {
     .await
     .unwrap();
 
-    let (status, body) = list_user_posts(&state, &session.username, None, 50, Some(&cookie)).await;
+    let (status, body) =
+        list_user_posts(app.clone(), &session.username, None, 50, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "list body: {body}");
     let page: Page<RenderedPost> =
         serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
@@ -781,9 +880,10 @@ async fn list_user_posts_carries_tags_per_post(#[case] backend: Backend) {
 async fn list_user_posts_for_unknown_user_keeps_empty_profile_with_site_theme(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
-    let (status, body) = list_user_posts(&state, "nobody", None, 50, None).await;
+    let (status, body) = list_user_posts(app.clone(), "nobody", None, 50, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let presentation: PublicPresentation<Page<RenderedPost>> = serde_json::from_str(&body).unwrap();
     assert_eq!(
@@ -796,19 +896,30 @@ async fn list_user_posts_for_unknown_user_keeps_empty_profile_with_site_theme(
 #[apply(backends)]
 #[tokio::test]
 async fn list_posts_by_tag_returns_matching_posts_from_all_users(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
     // Two authors each post twice; only some posts get the target tag.
-    let alice = create_user_and_session(&state).await;
+    let alice = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let alice_cookie = alice.cookie();
-    let bob = create_user_and_session(&state).await;
+    let bob = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let bob_cookie = bob.cookie();
 
     let create = |cookie: String, body: &'static str, tags: Vec<TagLabel>| {
-        let state = Arc::clone(&state);
+        let app = app.clone();
         async move {
             let (status, body) = create_post_json(
-                &state,
+                app.clone(),
                 PostInputs {
                     publish: Some(true),
                     tags: Some(tags),
@@ -847,7 +958,7 @@ async fn list_posts_by_tag_returns_matching_posts_from_all_users(#[case] backend
     )
     .await;
 
-    let (status, body) = list_posts_by_tag(&state, "rust", None).await;
+    let (status, body) = list_posts_by_tag(app.clone(), "rust", None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let page: Page<RenderedPost> =
         serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
@@ -864,9 +975,10 @@ async fn list_posts_by_tag_returns_matching_posts_from_all_users(#[case] backend
 #[apply(backends)]
 #[tokio::test]
 async fn list_posts_by_tag_returns_empty_for_unknown_tag(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
-    let (status, body) = list_posts_by_tag(&state, "rust", None).await;
+    let (status, body) = list_posts_by_tag(app.clone(), "rust", None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let page: Page<RenderedPost> =
         serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
@@ -879,17 +991,29 @@ async fn list_posts_by_tag_returns_empty_for_unknown_tag(#[case] backend: Backen
 #[apply(backends)]
 #[tokio::test]
 async fn list_user_posts_by_tag_scopes_to_user(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let author = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let author = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let alice_cookie = author.cookie();
-    let bob_cookie = create_user_and_session(&state).await.cookie();
+    let bob_cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     // Alice ("author") + Bob each post with shared tag.
     let create = |cookie: String, body: &'static str| {
-        let state = Arc::clone(&state);
+        let app = app.clone();
         async move {
             let (status, body) = create_post_json(
-                &state,
+                app.clone(),
                 PostInputs {
                     publish: Some(true),
                     tags: Some(vec![parse_tag_label("shared")]),
@@ -904,7 +1028,8 @@ async fn list_user_posts_by_tag_scopes_to_user(#[case] backend: Backend) {
     create(alice_cookie, "# Author Post\n\nbody").await;
     create(bob_cookie, "# Bob Post\n\nbody").await;
 
-    let (status, body) = list_user_posts_by_tag(&state, &author.username, "shared", None).await;
+    let (status, body) =
+        list_user_posts_by_tag(app.clone(), &author.username, "shared", None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let page: Page<RenderedPost> =
         serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
@@ -917,9 +1042,10 @@ async fn list_user_posts_by_tag_scopes_to_user(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn list_user_posts_by_tag_unknown_user_returns_not_found(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
-    let (status, body) = list_user_posts_by_tag(&state, "nobody", "rust", None).await;
+    let (status, body) = list_user_posts_by_tag(app.clone(), "nobody", "rust", None).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("user"), "body: {body}");
 }

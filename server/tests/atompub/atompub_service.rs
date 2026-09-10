@@ -14,7 +14,7 @@ use tower::ServiceExt;
 use crate::helpers::{
     atompub_at, atompub_authed, atompub_xml, body_string, create_user_and_session, make_app,
 };
-use storage::test_support::{Backend, TestEnv, backends};
+use storage::test_support::{Backend, backends};
 
 fn assert_basic_challenge(response: &Response) {
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
@@ -53,83 +53,38 @@ fn accept_values(collection: &str) -> Vec<&str> {
         .collect()
 }
 
-#[derive(Default)]
-struct AppStateOverrides {
-    site_config: Option<Arc<dyn storage::SiteConfigStorage>>,
-    sessions: Option<Arc<dyn storage::SessionStorage>>,
-}
-
-fn with_overrides(
-    state: &Arc<storage::AppState>,
-    overrides: AppStateOverrides,
-) -> Arc<storage::AppState> {
-    Arc::new(storage::AppState {
-        site_config: overrides
-            .site_config
-            .unwrap_or_else(|| state.site_config.clone()),
-        users: state.users.clone(),
-        sessions: overrides.sessions.unwrap_or_else(|| state.sessions.clone()),
-        invites: state.invites.clone(),
-        email_verifications: state.email_verifications.clone(),
-        password_resets: state.password_resets.clone(),
-        posts: state.posts.clone(),
-        subscriptions: state.subscriptions.clone(),
-        audiences: state.audiences.clone(),
-        media: state.media.clone(),
-        user_config: state.user_config.clone(),
-        feed_cache: state.feed_cache.clone(),
-        feed_events: state.feed_events.clone(),
-        publisher: state.publisher.clone(),
-        themes: state.themes.clone(),
-        write_scope: state.write_scope.clone(),
-    })
-}
-
-fn with_site_config(
-    state: &Arc<storage::AppState>,
-    site_config: Arc<dyn storage::SiteConfigStorage>,
-) -> Arc<storage::AppState> {
-    with_overrides(
-        state,
-        AppStateOverrides {
-            site_config: Some(site_config),
-            ..Default::default()
-        },
-    )
-}
-
-fn with_sessions(
-    state: &Arc<storage::AppState>,
-    sessions: Arc<dyn storage::SessionStorage>,
-) -> Arc<storage::AppState> {
-    with_overrides(
-        state,
-        AppStateOverrides {
-            sessions: Some(sessions),
-            ..Default::default()
-        },
-    )
-}
-
 #[apply(backends)]
 #[tokio::test]
 async fn service_document_returns_200_with_app_password(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let name: &str = &session.username;
     // Give the user a tagged post so the service document's category list is
     // non-empty (exercises the tag-collection path in `service_document`).
-    let post = session.seed_post().seed(&state).await;
+    let post = session
+        .seed_post()
+        .seed(
+            std::sync::Arc::clone(&env.posts()),
+            std::sync::Arc::clone(&env.feed_events()),
+            env.write_scope(),
+        )
+        .await;
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post.post_id,
         session.user_id,
         &["rust".parse::<TagLabel>().unwrap()],
     )
     .await
     .unwrap();
-    let app = make_app(&state, &base);
+    let app = make_app!(&env, base);
     let uri = parse_root_relative_url("/atompub/service");
 
     let response = app
@@ -180,9 +135,15 @@ async fn service_document_returns_200_with_app_password(#[case] backend: Backend
 #[apply(backends)]
 #[tokio::test]
 async fn service_document_omits_media_when_uploads_are_disabled(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().media_uploads_enabled(false).await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().media_uploads_enabled(false).await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
     let uri = parse_root_relative_url("/atompub/service");
 
     let response = app
@@ -214,10 +175,21 @@ async fn service_document_omits_media_when_uploads_are_disabled(#[case] backend:
 #[apply(backends)]
 #[tokio::test]
 async fn explicit_basic_identity_wins_and_expires_simultaneous_cookie(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let alice = create_user_and_session(&state).await;
-    let bob = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let alice = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let bob = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
     let uri = parse_root_relative_url("/atompub/service");
 
     let response = app
@@ -252,10 +224,21 @@ async fn explicit_basic_identity_wins_and_expires_simultaneous_cookie(#[case] ba
 #[apply(backends)]
 #[tokio::test]
 async fn explicit_basic_identity_mismatch_does_not_expire_valid_cookie(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let alice = create_user_and_session(&state).await;
-    let bob = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let alice = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let bob = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
     let uri = parse_root_relative_url("/atompub/service");
     let username = parse_username("mallory");
 
@@ -276,9 +259,15 @@ async fn explicit_basic_identity_mismatch_does_not_expire_valid_cookie(#[case] b
 #[apply(backends)]
 #[tokio::test]
 async fn service_document_rejects_basic_username_mismatch(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
     let uri = parse_root_relative_url("/atompub/service");
     let username = parse_username("mallory");
 
@@ -302,8 +291,9 @@ async fn service_document_rejects_basic_username_mismatch(#[case] backend: Backe
 async fn service_document_requires_basic_challenge_without_authentication(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base } = backend.setup().await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let app = make_app!(&env, base);
 
     let response = app
         .oneshot(
@@ -327,10 +317,21 @@ async fn service_document_requires_basic_challenge_without_authentication(
 async fn service_document_challenges_explicit_authentication_failures_without_cookie_fallback(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base } = backend.setup().await;
-    let cookie_session = create_user_and_session(&state).await;
-    let credential_session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let cookie_session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let credential_session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
     let uri = parse_root_relative_url("/atompub/service");
 
     for authorization in ["Basic not-base64", "Digest credentials"] {
@@ -369,9 +370,9 @@ async fn service_document_challenges_explicit_authentication_failures_without_co
     assert_basic_challenge(&response);
 
     let token_hash = host::token::hash(&credential_session.token).expect("hash credential token");
-    let sessions = Arc::clone(&state.sessions);
-    let outcome = state
-        .write_scope
+    let sessions = Arc::clone(&env.sessions());
+    let outcome = env
+        .write_scope()
         .run(|transaction| {
             Box::pin(async move { sessions.revoke_session(transaction, &token_hash).await })
         })
@@ -395,11 +396,17 @@ async fn service_document_challenges_explicit_authentication_failures_without_co
 async fn service_document_accepts_bearer_and_cookie_without_basic_challenge(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let uri = parse_root_relative_url("/atompub/service");
 
-    let bearer_response = make_app(&state, &base)
+    let bearer_response = make_app!(&env, base)
         .oneshot(
             Request::builder()
                 .method(Method::GET)
@@ -418,7 +425,7 @@ async fn service_document_accepts_bearer_and_cookie_without_basic_challenge(
             .is_none()
     );
 
-    let cookie_response = make_app(&state, &base)
+    let cookie_response = make_app!(&env, base)
         .oneshot(
             Request::builder()
                 .method(Method::GET)
@@ -441,15 +448,16 @@ async fn service_document_accepts_bearer_and_cookie_without_basic_challenge(
 // guard:no-backend — injected authentication storage failure before HTTP projection
 #[tokio::test]
 async fn service_document_authentication_storage_error_keeps_500_without_basic_challenge() {
-    let TestEnv { state, base } = Backend::Sqlite.setup().await;
+    let env = Backend::Sqlite.setup().await;
+    let base = &env.base;
     let mut sessions = storage::MockSessionStorage::new();
     sessions
         .expect_authenticate()
         .times(1)
         .return_once(|_, _| Err(storage::SessionAuthError::Internal(sqlx::Error::PoolClosed)));
-    let state = with_sessions(&state, Arc::new(sessions));
+    let app = make_app!(&env, base; override_sessions = Arc::new(sessions));
 
-    let response = make_app(&state, &base)
+    let response = app
         .oneshot(
             Request::builder()
                 .uri("/atompub/service")
@@ -491,10 +499,16 @@ async fn required_base_url_preserves_storage_error_source() {
 #[apply(backends)]
 #[tokio::test]
 async fn service_document_unconfigured_base_url_keeps_documented_500(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().base_url(None).await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().base_url(None).await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let uri = parse_root_relative_url("/atompub/service");
-    let response = make_app(&state, &base)
+    let response = make_app!(&env, base)
         .oneshot(
             atompub_at(&session, Method::GET, &uri)
                 .body(Body::empty())
@@ -516,17 +530,23 @@ async fn service_document_unconfigured_base_url_keeps_documented_500(#[case] bac
 async fn service_document_identity_storage_error_keeps_500_and_is_not_absence(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let mut failing = storage::MockSiteConfigStorage::new();
     failing
         .expect_get_identity()
         .times(1)
         .return_once(|| Err(sqlx::Error::PoolClosed));
-    let state = with_site_config(&state, Arc::new(failing));
+    let app = make_app!(&env, base; override_site_config = Arc::new(failing));
     let uri = parse_root_relative_url("/atompub/service");
 
-    let response = make_app(&state, &base)
+    let response = app
         .oneshot(
             atompub_at(&session, Method::GET, &uri)
                 .body(Body::empty())

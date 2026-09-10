@@ -23,11 +23,13 @@ mod subscriptions;
 mod themes;
 mod users;
 
+#[cfg(test)]
+pub(crate) use backend::RawPostRevision;
 pub use backend::{
     Backend, CloseablePool, MediaReferenceWriteLock, PostWriteLock, SetupBuilder, TestBase,
     TestEnv, backends, backends_matrix, confirmed, confirmed_for, fixture_media_content_locks,
-    inject_invalid_site_config, postgres_only, set_post_tags_confirmed, set_site_config,
-    sqlite_only, sqlite_url, sqlite_write_scope,
+    postgres_only, set_post_tags_confirmed, set_site_config, sqlite_only, sqlite_url,
+    sqlite_write_scope,
 };
 #[cfg(any(test, feature = "test-utils"))]
 pub use backend::{mock_write_scope, mock_write_scope_with_commit_acknowledgement_loss};
@@ -36,10 +38,11 @@ pub use feed_cache::SeedFeedCache;
 pub use feeds::fp;
 pub use mail::noop_mailer;
 pub(crate) use media::RawMediaFilename;
+#[cfg(any(test, feature = "test-utils"))]
+pub use media::fixture_post_media_ownership;
 pub use media::{
-    MEDIA_TEST_SHA256, fetch_post_media, fixture_post_media_ownership, media_ref_for,
-    media_row_exists, media_url_for, raw_media_filename_exists, rewrite_media_filename_in_backup,
-    seed_media,
+    MEDIA_TEST_SHA256, media_ref_for, media_row_exists, media_url_for, raw_media_filename_exists,
+    rewrite_media_filename_in_backup, seed_media,
 };
 pub use post_service::{
     create_draft_via_service, create_post_via_service, update_post_body_via_service,
@@ -49,8 +52,6 @@ pub use postgres::{
     recorded_postgres_url, template_postgres_url, unique_postgres_url,
 };
 pub(crate) use postgres::{TemplateDatabaseLockKey, TemplateDatabaseName};
-#[cfg(test)]
-pub(crate) use posts::count_post_revisions;
 pub use posts::{
     SeedPost, SeedRawPost, SeededPost, UpdateRawPost, create_posts_confirmed, seed_posts,
 };

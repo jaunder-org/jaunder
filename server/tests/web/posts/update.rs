@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use axum::http::StatusCode;
+use axum::{Router, http::StatusCode};
 use common::ids::PostId;
 use common::tag::MAX_TAGS_PER_POST;
 use common::test_support::{parse_post_body, parse_slug, parse_tag_label};
@@ -12,23 +12,23 @@ use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{
-    confirmed_mutation, create_post_json, create_user_and_session, post_form, post_json,
+    confirmed_mutation, create_post_json, create_user_and_session, make_app, post_form, post_json,
     update_post_json,
 };
-use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
+use storage::test_support::{Backend, backends, backends_matrix};
 
 use super::fixtures::{
-    get_post_form, list_drafts, list_local_timeline, list_user_posts, login_and_state,
+    get_post_form, list_drafts, list_local_timeline, list_user_posts, login_and_env,
     publish_post_form,
 };
 
 async fn unpublish_post_form(
-    state: &Arc<storage::AppState>,
+    app: Router,
     post_id: PostId,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
     post_form(
-        state,
+        app,
         <web::posts::Unpublish as ServerFn>::PATH,
         format!("post_id={post_id}"),
         cookie,
@@ -39,11 +39,18 @@ async fn unpublish_post_form(
 #[apply(backends)]
 #[tokio::test]
 async fn update_post_updates_draft_content_and_slug(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(false),
             ..PostInputs::new(parse_post_body("original"), PostFormat::Markdown)
@@ -57,7 +64,7 @@ async fn update_post_updates_draft_content_and_slug(#[case] backend: Backend) {
 
     // Title embedded as # heading; slug_override takes precedence over the derived slug
     let (status, body) = update_post_json(
-        &state,
+        app.clone(),
         post_id,
         PostInputs {
             slug_override: Some(parse_slug("updated-slug")),
@@ -76,8 +83,8 @@ async fn update_post_updates_draft_content_and_slug(#[case] backend: Backend) {
     assert_eq!(updated.slug, "updated-slug");
     assert!(updated.published_at.is_none());
 
-    let record = state
-        .posts
+    let record = env
+        .posts()
         .get_post_by_id(post_id, &common::visibility::ViewerIdentity::Anonymous)
         .await
         .unwrap()
@@ -95,11 +102,18 @@ async fn update_post_updates_draft_content_and_slug(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn update_post_freezes_slug_when_published(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(true),
             ..PostInputs::new(parse_post_body("body"), PostFormat::Markdown)
@@ -113,7 +127,7 @@ async fn update_post_freezes_slug_when_published(#[case] backend: Backend) {
     let original_slug = created.slug.clone();
 
     let (status, body) = update_post_json(
-        &state,
+        app.clone(),
         post_id,
         PostInputs {
             slug_override: Some(parse_slug("new-slug")),
@@ -136,11 +150,18 @@ async fn update_post_freezes_slug_when_published(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn update_post_publishes_draft(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(false),
             ..PostInputs::new(parse_post_body("draft body"), PostFormat::Markdown)
@@ -154,7 +175,7 @@ async fn update_post_publishes_draft(#[case] backend: Backend) {
     let post_id = created.post_id;
 
     let (status, body) = update_post_json(
-        &state,
+        app.clone(),
         post_id,
         PostInputs {
             publish: Some(true),
@@ -173,12 +194,25 @@ async fn update_post_publishes_draft(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn update_post_rejects_non_author(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let author_cookie = create_user_and_session(&state).await.cookie();
-    let stranger_cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let author_cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
+    let stranger_cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(false),
             ..PostInputs::new(parse_post_body("body"), PostFormat::Markdown)
@@ -190,7 +224,7 @@ async fn update_post_rejects_non_author(#[case] backend: Backend) {
     let created = confirmed_mutation::<SavedPost>(&body);
 
     let (status, body) = update_post_json(
-        &state,
+        app.clone(),
         created.post_id,
         PostInputs {
             publish: Some(false),
@@ -220,11 +254,18 @@ async fn update_post_rejects(
     #[case] update_format: &str,
     #[case] expected: &str,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(false),
             ..PostInputs::new(parse_post_body("original"), PostFormat::Markdown)
@@ -236,7 +277,7 @@ async fn update_post_rejects(
     let created = confirmed_mutation::<SavedPost>(&body);
 
     let (status, body) = post_json(
-        &state,
+        app.clone(),
         <web::posts::Update as ServerFn>::PATH,
         serde_json::json!({
             "post_id": created.post_id,
@@ -258,11 +299,18 @@ async fn update_post_rejects(
 #[apply(backends)]
 #[tokio::test]
 async fn update_post_returns_not_found_for_missing_post(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = update_post_json(
-        &state,
+        app.clone(),
         PostId::from(99999),
         PostInputs {
             publish: Some(false),
@@ -279,12 +327,18 @@ async fn update_post_returns_not_found_for_missing_post(#[case] backend: Backend
 #[apply(backends)]
 #[tokio::test]
 async fn update_post_returns_not_found_for_deleted_post(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let cookie = session.cookie();
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(false),
             ..PostInputs::new(parse_post_body("body"), PostFormat::Markdown)
@@ -295,9 +349,8 @@ async fn update_post_returns_not_found_for_deleted_post(#[case] backend: Backend
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created = confirmed_mutation::<SavedPost>(&body);
 
-    let posts = Arc::clone(&state.posts);
-    state
-        .write_scope
+    let posts = Arc::clone(&env.posts());
+    env.write_scope()
         .run(move |transaction| {
             Box::pin(async move {
                 posts
@@ -314,7 +367,7 @@ async fn update_post_returns_not_found_for_deleted_post(#[case] backend: Backend
         .unwrap();
 
     let (status, body) = update_post_json(
-        &state,
+        app.clone(),
         created.post_id,
         PostInputs {
             publish: Some(false),
@@ -331,12 +384,18 @@ async fn update_post_returns_not_found_for_deleted_post(#[case] backend: Backend
 #[apply(backends)]
 #[tokio::test]
 async fn publish_post_publishes_draft_and_returns_permalink(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let cookie = session.cookie();
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(false),
             ..PostInputs::new(parse_post_body("draft body"), PostFormat::Markdown)
@@ -348,7 +407,7 @@ async fn publish_post_publishes_draft_and_returns_permalink(#[case] backend: Bac
     let created = confirmed_mutation::<SavedPost>(&body);
     assert!(created.published_at.is_none());
 
-    let (status, body) = publish_post_form(&state, created.post_id, Some(&cookie)).await;
+    let (status, body) = publish_post_form(app.clone(), created.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "publish body: {body}");
     let published = confirmed_mutation::<SavedPost>(&body);
     assert_eq!(published.post_id, created.post_id);
@@ -358,8 +417,8 @@ async fn publish_post_publishes_draft_and_returns_permalink(#[case] backend: Bac
             .contains(&format!("/~{}/", session.username))
     );
 
-    let record = state
-        .posts
+    let record = env
+        .posts()
         .get_post_by_id(
             created.post_id,
             &common::visibility::ViewerIdentity::Anonymous,
@@ -373,12 +432,25 @@ async fn publish_post_publishes_draft_and_returns_permalink(#[case] backend: Bac
 #[apply(backends)]
 #[tokio::test]
 async fn publish_post_rejects_non_author(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let author_cookie = create_user_and_session(&state).await.cookie();
-    let stranger_cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let author_cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
+    let stranger_cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(false),
             ..PostInputs::new(parse_post_body("secret"), PostFormat::Markdown)
@@ -389,7 +461,8 @@ async fn publish_post_rejects_non_author(#[case] backend: Backend) {
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created = confirmed_mutation::<SavedPost>(&body);
 
-    let (status, body) = publish_post_form(&state, created.post_id, Some(&stranger_cookie)).await;
+    let (status, body) =
+        publish_post_form(app.clone(), created.post_id, Some(&stranger_cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
 }
@@ -397,16 +470,22 @@ async fn publish_post_rejects_non_author(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn publish_post_returns_not_found_for_missing_or_deleted_posts(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let cookie = session.cookie();
 
-    let (status, body) = publish_post_form(&state, PostId::from(999_999), Some(&cookie)).await;
+    let (status, body) = publish_post_form(app.clone(), PostId::from(999_999), Some(&cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(false),
             ..PostInputs::new(parse_post_body("body"), PostFormat::Markdown)
@@ -416,9 +495,8 @@ async fn publish_post_returns_not_found_for_missing_or_deleted_posts(#[case] bac
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created = confirmed_mutation::<SavedPost>(&body);
-    let posts = Arc::clone(&state.posts);
-    state
-        .write_scope
+    let posts = Arc::clone(&env.posts());
+    env.write_scope()
         .run(move |transaction| {
             Box::pin(async move {
                 posts
@@ -434,18 +512,18 @@ async fn publish_post_returns_not_found_for_missing_or_deleted_posts(#[case] bac
         .await
         .unwrap();
 
-    let (status, body) = publish_post_form(&state, created.post_id, Some(&cookie)).await;
+    let (status, body) = publish_post_form(app.clone(), created.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
 }
 
 async fn delete_post_form(
-    state: &Arc<storage::AppState>,
+    app: Router,
     post_id: PostId,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
     post_form(
-        state,
+        app,
         <web::posts::Delete as ServerFn>::PATH,
         format!("post_id={post_id}"),
         cookie,
@@ -456,11 +534,18 @@ async fn delete_post_form(
 #[apply(backends)]
 #[tokio::test]
 async fn delete_post_soft_deletes_post(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(true),
             ..PostInputs::new(parse_post_body("gone"), PostFormat::Markdown)
@@ -471,11 +556,11 @@ async fn delete_post_soft_deletes_post(#[case] backend: Backend) {
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created = confirmed_mutation::<SavedPost>(&body);
 
-    let (status, body) = delete_post_form(&state, created.post_id, Some(&cookie)).await;
+    let (status, body) = delete_post_form(app.clone(), created.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
 
-    let post = state
-        .posts
+    let post = env
+        .posts()
         .get_post_by_id(
             created.post_id,
             &common::visibility::ViewerIdentity::Anonymous,
@@ -489,12 +574,25 @@ async fn delete_post_soft_deletes_post(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn delete_post_rejects_non_author(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let author_cookie = create_user_and_session(&state).await.cookie();
-    let stranger_cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let author_cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
+    let stranger_cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(true),
             ..PostInputs::new(parse_post_body("mine"), PostFormat::Markdown)
@@ -505,7 +603,8 @@ async fn delete_post_rejects_non_author(#[case] backend: Backend) {
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created = confirmed_mutation::<SavedPost>(&body);
 
-    let (status, body) = delete_post_form(&state, created.post_id, Some(&stranger_cookie)).await;
+    let (status, body) =
+        delete_post_form(app.clone(), created.post_id, Some(&stranger_cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
 }
@@ -513,11 +612,18 @@ async fn delete_post_rejects_non_author(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn delete_post_rejects_unauthenticated(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(true),
             ..PostInputs::new(parse_post_body("body"), PostFormat::Markdown)
@@ -528,7 +634,7 @@ async fn delete_post_rejects_unauthenticated(#[case] backend: Backend) {
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created = confirmed_mutation::<SavedPost>(&body);
 
-    let (status, body) = delete_post_form(&state, created.post_id, None).await;
+    let (status, body) = delete_post_form(app.clone(), created.post_id, None).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("unauthorized"), "body: {body}");
 }
@@ -536,11 +642,18 @@ async fn delete_post_rejects_unauthenticated(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn delete_post_returns_not_found_for_already_deleted_post(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(true),
             ..PostInputs::new(parse_post_body("body"), PostFormat::Markdown)
@@ -551,10 +664,10 @@ async fn delete_post_returns_not_found_for_already_deleted_post(#[case] backend:
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created = confirmed_mutation::<SavedPost>(&body);
 
-    let (status, body) = delete_post_form(&state, created.post_id, Some(&cookie)).await;
+    let (status, body) = delete_post_form(app.clone(), created.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "first delete body: {body}");
 
-    let (status, body) = delete_post_form(&state, created.post_id, Some(&cookie)).await;
+    let (status, body) = delete_post_form(app.clone(), created.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
 }
@@ -564,19 +677,25 @@ async fn delete_post_returns_not_found_for_already_deleted_post(#[case] backend:
 async fn deleted_post_excluded_from_timelines_and_returns_404_at_permalink(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let cookie = session.cookie();
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(true),
             ..PostInputs::new(
                 parse_post_body(
                     "# Deletable Post
-        
-        body",
+    
+    body",
                 ),
                 PostFormat::Markdown,
             )
@@ -589,21 +708,21 @@ async fn deleted_post_excluded_from_timelines_and_returns_404_at_permalink(
     let permalink = String::from(created.permalink);
 
     // Presence before deletion proves the exclusions below are the delete's doing.
-    let (status, body) = list_user_posts(&state, &session.username, None, 10, None).await;
+    let (status, body) = list_user_posts(app.clone(), &session.username, None, 10, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(body.contains("Deletable Post"), "expected post in timeline");
 
-    let (status, body) = delete_post_form(&state, created.post_id, Some(&cookie)).await;
+    let (status, body) = delete_post_form(app.clone(), created.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "delete body: {body}");
 
-    let (status, body) = list_user_posts(&state, &session.username, None, 10, None).await;
+    let (status, body) = list_user_posts(app.clone(), &session.username, None, 10, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(
         !body.contains("Deletable Post"),
         "expected post excluded from timeline: {body}"
     );
 
-    let (status, body) = list_local_timeline(&state, None, 10, None).await;
+    let (status, body) = list_local_timeline(app.clone(), None, 10, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(
         !body.contains("Deletable Post"),
@@ -618,7 +737,7 @@ async fn deleted_post_excluded_from_timelines_and_returns_404_at_permalink(
     let slug = parts[4];
 
     let (status, body) =
-        get_post_form(&state, &session.username, year, month, day, slug, None).await;
+        get_post_form(app.clone(), &session.username, year, month, day, slug, None).await;
     assert_eq!(StatusCode::NOT_FOUND, status, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
 }
@@ -626,19 +745,25 @@ async fn deleted_post_excluded_from_timelines_and_returns_404_at_permalink(
 #[apply(backends)]
 #[tokio::test]
 async fn unpublish_post_reverts_published_post_to_draft(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let cookie = session.cookie();
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(true),
             ..PostInputs::new(
                 parse_post_body(
                     "# Unpublish Me
-        
-        body",
+    
+    body",
                 ),
                 PostFormat::Markdown,
             )
@@ -650,11 +775,11 @@ async fn unpublish_post_reverts_published_post_to_draft(#[case] backend: Backend
     let created = confirmed_mutation::<SavedPost>(&body);
     assert!(created.published_at.is_some(), "should be published");
 
-    let (status, body) = unpublish_post_form(&state, created.post_id, Some(&cookie)).await;
+    let (status, body) = unpublish_post_form(app.clone(), created.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "unpublish body: {body}");
 
     // Should no longer appear in the user timeline
-    let (status, body) = list_user_posts(&state, &session.username, None, 10, None).await;
+    let (status, body) = list_user_posts(app.clone(), &session.username, None, 10, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(
         !body.contains("Unpublish Me"),
@@ -662,7 +787,7 @@ async fn unpublish_post_reverts_published_post_to_draft(#[case] backend: Backend
     );
 
     // Should appear in drafts
-    let (status, body) = list_drafts(&state, None, 50, Some(&cookie)).await;
+    let (status, body) = list_drafts(app.clone(), None, 50, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(
         body.contains("unpublish-me"),
@@ -682,12 +807,19 @@ async fn unpublish_post_reverts_published_post_to_draft(#[case] backend: Backend
 #[apply(backends)]
 #[tokio::test]
 async fn unpublish_post_returns_the_draft_permalink(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let body_text = "# Moved Permalink\n\nbody";
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(false),
             ..PostInputs::new(parse_post_body(body_text), PostFormat::Markdown)
@@ -705,7 +837,7 @@ async fn unpublish_post_returns_the_draft_permalink(#[case] backend: Backend) {
         .parse::<jiff::Timestamp>()
         .expect("valid test instant");
     let (status, body) = update_post_json(
-        &state,
+        app.clone(),
         draft.post_id,
         PostInputs {
             publish: Some(true),
@@ -723,7 +855,7 @@ async fn unpublish_post_returns_the_draft_permalink(#[case] backend: Backend) {
         published.permalink
     );
 
-    let (status, body) = unpublish_post_form(&state, draft.post_id, Some(&cookie)).await;
+    let (status, body) = unpublish_post_form(app.clone(), draft.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "unpublish body: {body}");
     let unpublished = confirmed_mutation::<SavedPost>(&body);
     assert!(unpublished.published_at.is_none(), "reverted to draft");
@@ -742,19 +874,32 @@ async fn unpublish_post_returns_the_draft_permalink(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn unpublish_post_rejects_non_author(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let author_cookie = create_user_and_session(&state).await.cookie();
-    let other_cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let author_cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
+    let other_cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(true),
             ..PostInputs::new(
                 parse_post_body(
                     "# Others Post
-        
-        body",
+    
+    body",
                 ),
                 PostFormat::Markdown,
             )
@@ -765,7 +910,8 @@ async fn unpublish_post_rejects_non_author(#[case] backend: Backend) {
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created = confirmed_mutation::<SavedPost>(&body);
 
-    let (status, body) = unpublish_post_form(&state, created.post_id, Some(&other_cookie)).await;
+    let (status, body) =
+        unpublish_post_form(app.clone(), created.post_id, Some(&other_cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
 }
@@ -773,11 +919,12 @@ async fn unpublish_post_rejects_non_author(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn update_post_applies_tag_set_diff(#[case] backend: Backend) {
-    let (_base, state, cookie) = login_and_state(backend).await;
+    let (env, cookie) = login_and_env(backend).await;
+    let app = make_app!(&env, &env.base);
 
     // Create with two tags.
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(false),
             tags: Some(vec![parse_tag_label("rust"), parse_tag_label("old-tag")]),
@@ -791,7 +938,7 @@ async fn update_post_applies_tag_set_diff(#[case] backend: Backend) {
 
     // Update: replace old-tag with new-tag, keep rust.
     let (status, body) = update_post_json(
-        &state,
+        app.clone(),
         created.post_id,
         PostInputs {
             publish: Some(false),
@@ -803,8 +950,8 @@ async fn update_post_applies_tag_set_diff(#[case] backend: Backend) {
     .await;
     assert_eq!(status, StatusCode::OK, "update body: {body}");
 
-    let stored = state
-        .posts
+    let stored = env
+        .posts()
         .get_post_by_id(
             created.post_id,
             &common::visibility::ViewerIdentity::Anonymous,
@@ -822,10 +969,11 @@ async fn update_post_applies_tag_set_diff(#[case] backend: Backend) {
 async fn update_post_rejects_over_limit_tags_without_mutating_post_or_tags(
     #[case] backend: Backend,
 ) {
-    let (_base, state, cookie) = login_and_state(backend).await;
+    let (env, cookie) = login_and_env(backend).await;
+    let app = make_app!(&env, &env.base);
     let original_body = "# Original Title\n\noriginal body";
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(false),
             tags: Some(vec![parse_tag_label("original-tag")]),
@@ -837,8 +985,8 @@ async fn update_post_rejects_over_limit_tags_without_mutating_post_or_tags(
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created = confirmed_mutation::<SavedPost>(&body);
 
-    let original = state
-        .posts
+    let original = env
+        .posts()
         .get_post_by_id(
             created.post_id,
             &common::visibility::ViewerIdentity::Anonymous,
@@ -867,7 +1015,7 @@ async fn update_post_rejects_over_limit_tags_without_mutating_post_or_tags(
         }
     });
     let (status, body) = post_json(
-        &state,
+        app.clone(),
         <web::posts::Update as ServerFn>::PATH,
         update_payload,
         Some(&cookie),
@@ -876,8 +1024,8 @@ async fn update_post_rejects_over_limit_tags_without_mutating_post_or_tags(
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("too many tags"), "body: {body}");
 
-    let stored = state
-        .posts
+    let stored = env
+        .posts()
         .get_post_by_id(
             created.post_id,
             &common::visibility::ViewerIdentity::Anonymous,
@@ -898,11 +1046,12 @@ async fn update_post_rejects_over_limit_tags_without_mutating_post_or_tags(
 #[apply(backends)]
 #[tokio::test]
 async fn update_post_with_tags_unset_leaves_existing_tags_alone(#[case] backend: Backend) {
-    let (_base, state, cookie) = login_and_state(backend).await;
+    let (env, cookie) = login_and_env(backend).await;
+    let app = make_app!(&env, &env.base);
 
     // Create with one tag.
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(false),
             tags: Some(vec![parse_tag_label("keep")]),
@@ -916,7 +1065,7 @@ async fn update_post_with_tags_unset_leaves_existing_tags_alone(#[case] backend:
 
     // `None` leaves the existing tag set unchanged.
     let (status, body) = update_post_json(
-        &state,
+        app.clone(),
         created.post_id,
         PostInputs {
             publish: Some(false),
@@ -930,8 +1079,8 @@ async fn update_post_with_tags_unset_leaves_existing_tags_alone(#[case] backend:
     .await;
     assert_eq!(status, StatusCode::OK, "update body: {body}");
 
-    let stored = state
-        .posts
+    let stored = env
+        .posts()
         .get_post_by_id(
             created.post_id,
             &common::visibility::ViewerIdentity::Anonymous,
@@ -949,11 +1098,17 @@ async fn update_post_with_tags_unset_leaves_existing_tags_alone(#[case] backend:
 async fn update_org_header_applies_tags_and_rejects_mismatched_bookkeeping(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let cookie = session.cookie();
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(false),
             ..PostInputs::new(parse_post_body("original"), PostFormat::Org)
@@ -969,7 +1124,7 @@ async fn update_org_header_applies_tags_and_rejects_mismatched_bookkeeping(
         created.post_id
     );
     let (status, body) = update_post_json(
-        &state,
+        app.clone(),
         created.post_id,
         PostInputs {
             publish: Some(false),
@@ -980,8 +1135,8 @@ async fn update_org_header_applies_tags_and_rejects_mismatched_bookkeeping(
     .await;
     assert_eq!(status, StatusCode::OK, "update body: {body}");
     let updated = confirmed_mutation::<SavedPost>(&body);
-    let record = state
-        .posts
+    let record = env
+        .posts()
         .get_post_by_id(
             updated.post_id,
             &common::visibility::ViewerIdentity::Local {
@@ -1003,7 +1158,7 @@ async fn update_org_header_applies_tags_and_rejects_mismatched_bookkeeping(
     );
 
     let (status, body) = update_post_json(
-        &state,
+        app.clone(),
         updated.post_id,
         PostInputs {
             publish: Some(false),
@@ -1020,8 +1175,8 @@ async fn update_org_header_applies_tags_and_rejects_mismatched_bookkeeping(
         body.contains("JAUNDER_ID does not match update target"),
         "body: {body}"
     );
-    let unchanged = state
-        .posts
+    let unchanged = env
+        .posts()
         .get_post_by_id(
             updated.post_id,
             &common::visibility::ViewerIdentity::Local {
@@ -1050,10 +1205,17 @@ async fn update_org_header_applies_tags_and_rejects_mismatched_bookkeeping(
 #[apply(backends)]
 #[tokio::test]
 async fn update_org_uses_header_lifecycle_when_publish_is_omitted(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(false),
             ..PostInputs::new(parse_post_body("original"), PostFormat::Org)
@@ -1064,7 +1226,7 @@ async fn update_org_uses_header_lifecycle_when_publish_is_omitted(#[case] backen
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created = confirmed_mutation::<SavedPost>(&body);
     let (status, body) = update_post_json(
-        &state,
+        app.clone(),
         created.post_id,
         PostInputs::new(
             parse_post_body(
@@ -1086,10 +1248,17 @@ async fn update_org_uses_header_lifecycle_when_publish_is_omitted(#[case] backen
 #[apply(backends)]
 #[tokio::test]
 async fn update_org_without_any_lifecycle_unpublishes_post(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(true),
             ..PostInputs::new(parse_post_body("Original"), PostFormat::Org)
@@ -1105,7 +1274,7 @@ async fn update_org_without_any_lifecycle_unpublishes_post(#[case] backend: Back
     );
 
     let (status, body) = update_post_json(
-        &state,
+        app.clone(),
         created.post_id,
         PostInputs::new(parse_post_body("Updated body"), PostFormat::Org),
         Some(&cookie),
@@ -1122,10 +1291,17 @@ async fn update_org_without_any_lifecycle_unpublishes_post(#[case] backend: Back
 #[apply(backends)]
 #[tokio::test]
 async fn update_non_org_requires_publish_presence(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(false),
             ..PostInputs::new(parse_post_body("original"), PostFormat::Markdown)
@@ -1143,7 +1319,7 @@ async fn update_non_org_requires_publish_presence(#[case] backend: Backend) {
         }
     });
     let (status, body) = post_json(
-        &state,
+        app.clone(),
         <web::posts::Update as ServerFn>::PATH,
         payload,
         Some(&cookie),
@@ -1155,11 +1331,17 @@ async fn update_non_org_requires_publish_presence(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn update_org_current_sync_succeeds_and_stale_sync_preserves_post(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let cookie = session.cookie();
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(false),
             ..PostInputs::new(parse_post_body("original"), PostFormat::Org)
@@ -1169,8 +1351,8 @@ async fn update_org_current_sync_succeeds_and_stale_sync_preserves_post(#[case] 
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created = confirmed_mutation::<SavedPost>(&body);
-    let before = state
-        .posts
+    let before = env
+        .posts()
         .get_post_by_id(
             created.post_id,
             &common::visibility::ViewerIdentity::Local {
@@ -1188,23 +1370,20 @@ async fn update_org_current_sync_succeeds_and_stale_sync_preserves_post(#[case] 
         before.tags.iter().map(|tag| &tag.tag_display),
         before.published_at.is_none(),
     );
-    let (status, body) = update_post_json(
-        &state,
-        created.post_id,
-        PostInputs {
-            publish: Some(false),
-            ..PostInputs::new(
-                parse_post_body(&format!("#+TITLE: Changed\n#+PROPERTY: JAUNDER_STATUS draft\n#+PROPERTY: JAUNDER_ID {}\n#+PROPERTY: JAUNDER_SYNCED {current_etag}\n\nChanged body", created.post_id)),
-                PostFormat::Org,
-            )
-        },
-        Some(&cookie),
-    )
+    let (status, body) = update_post_json(app.clone(), created.post_id,
+    PostInputs {
+        publish: Some(false),
+        ..PostInputs::new(
+            parse_post_body(&format!("#+TITLE: Changed\n#+PROPERTY: JAUNDER_STATUS draft\n#+PROPERTY: JAUNDER_ID {}\n#+PROPERTY: JAUNDER_SYNCED {current_etag}\n\nChanged body", created.post_id)),
+            PostFormat::Org,
+        )
+    },
+    Some(&cookie),)
     .await;
     assert_eq!(status, StatusCode::OK, "matching sync update: {body}");
     let changed = confirmed_mutation::<SavedPost>(&body);
-    let before_stale = state
-        .posts
+    let before_stale = env
+        .posts()
         .get_post_by_id(
             changed.post_id,
             &common::visibility::ViewerIdentity::Local {
@@ -1215,18 +1394,15 @@ async fn update_org_current_sync_succeeds_and_stale_sync_preserves_post(#[case] 
         .unwrap()
         .expect("changed post exists");
 
-    let (status, body) = update_post_json(
-        &state,
-        changed.post_id,
-        PostInputs {
-            publish: Some(false),
-            ..PostInputs::new(
-                parse_post_body(&format!("#+TITLE: Stale\n#+PROPERTY: JAUNDER_STATUS draft\n#+PROPERTY: JAUNDER_ID {}\n#+PROPERTY: JAUNDER_SYNCED {current_etag}\n\nStale body", changed.post_id)),
-                PostFormat::Org,
-            )
-        },
-        Some(&cookie),
-    )
+    let (status, body) = update_post_json(app.clone(), changed.post_id,
+    PostInputs {
+        publish: Some(false),
+        ..PostInputs::new(
+            parse_post_body(&format!("#+TITLE: Stale\n#+PROPERTY: JAUNDER_STATUS draft\n#+PROPERTY: JAUNDER_ID {}\n#+PROPERTY: JAUNDER_SYNCED {current_etag}\n\nStale body", changed.post_id)),
+            PostFormat::Org,
+        )
+    },
+    Some(&cookie),)
     .await;
     assert_eq!(
         status,
@@ -1234,8 +1410,8 @@ async fn update_org_current_sync_succeeds_and_stale_sync_preserves_post(#[case] 
         "stale sync body: {body}"
     );
     assert!(body.contains("\"conflict\""), "stale sync body: {body}");
-    let unchanged = state
-        .posts
+    let unchanged = env
+        .posts()
         .get_post_by_id(
             changed.post_id,
             &common::visibility::ViewerIdentity::Local {

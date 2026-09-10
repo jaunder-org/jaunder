@@ -1,14 +1,14 @@
 use host::config_key::SiteConfigKey;
 use rstest::*;
 use rstest_reuse::*;
-use storage::test_support::{Backend, TestEnv, backends};
+use storage::test_support::{Backend, backends};
 
 // --- build_mailer tests ---
 #[apply(backends)]
 #[tokio::test]
 async fn build_mailer_returns_noop_when_smtp_not_configured(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let mailer = jaunder::mailer::build_mailer(env.state.site_config.as_ref(), None)
+    let mailer = jaunder::mailer::build_mailer(env.site_config().as_ref(), None)
         .await
         .expect("absent SMTP selects the no-op mailer");
 
@@ -31,13 +31,17 @@ async fn build_mailer_returns_noop_when_smtp_not_configured(#[case] backend: Bac
 #[apply(backends)]
 #[tokio::test]
 async fn site_config_round_trips_through_typed_keys(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    crate::helpers::set_site_config(&state, SiteConfigKey::SiteTitle, "My Site")
-        .await
-        .unwrap();
+    let env = backend.setup().await;
+    crate::helpers::set_site_config(
+        env.site_config(),
+        env.write_scope(),
+        SiteConfigKey::SiteTitle,
+        "My Site",
+    )
+    .await
+    .unwrap();
     assert_eq!(
-        state
-            .site_config
+        env.site_config()
             .get_raw(SiteConfigKey::SiteTitle)
             .await
             .unwrap()
@@ -45,21 +49,23 @@ async fn site_config_round_trips_through_typed_keys(#[case] backend: Backend) {
         Some("My Site")
     );
     assert_eq!(
-        state
-            .site_config
+        env.site_config()
             .get_raw(SiteConfigKey::FeedsMinDays)
             .await
             .unwrap(),
         None
     );
     assert!(
-        crate::helpers::delete_site_config(&state, SiteConfigKey::SiteTitle)
-            .await
-            .unwrap()
+        crate::helpers::delete_site_config(
+            env.site_config(),
+            env.write_scope(),
+            SiteConfigKey::SiteTitle,
+        )
+        .await
+        .unwrap()
     );
     assert_eq!(
-        state
-            .site_config
+        env.site_config()
             .get_raw(SiteConfigKey::SiteTitle)
             .await
             .unwrap(),
@@ -71,26 +77,35 @@ async fn site_config_round_trips_through_typed_keys(#[case] backend: Backend) {
 #[tokio::test]
 async fn site_config_operations(#[case] backend: Backend) {
     let env = backend.setup().pristine().await;
-    let state = &env.state;
-    let value = state.site_config.get_raw(SiteConfigKey::SiteBaseUrl).await;
+    let value = env.site_config().get_raw(SiteConfigKey::SiteBaseUrl).await;
     match value {
         Ok(None) => {}
         other => panic!("Expected Ok(None), got {other:?}"),
     }
 
-    crate::helpers::set_site_config(state, SiteConfigKey::SiteTitle, "test.value")
-        .await
-        .expect("set failed");
-    let value = state.site_config.get_raw(SiteConfigKey::SiteTitle).await;
+    crate::helpers::set_site_config(
+        env.site_config(),
+        env.write_scope(),
+        SiteConfigKey::SiteTitle,
+        "test.value",
+    )
+    .await
+    .expect("set failed");
+    let value = env.site_config().get_raw(SiteConfigKey::SiteTitle).await;
     match value {
         Ok(Some(v)) => assert_eq!(v, "test.value"),
         other => panic!("Expected Ok(Some), got {other:?}"),
     }
 
-    crate::helpers::set_site_config(state, SiteConfigKey::SiteTitle, "updated.value")
-        .await
-        .expect("set update failed");
-    let value = state.site_config.get_raw(SiteConfigKey::SiteTitle).await;
+    crate::helpers::set_site_config(
+        env.site_config(),
+        env.write_scope(),
+        SiteConfigKey::SiteTitle,
+        "updated.value",
+    )
+    .await
+    .expect("set update failed");
+    let value = env.site_config().get_raw(SiteConfigKey::SiteTitle).await;
     match value {
         Ok(Some(v)) => assert_eq!(v, "updated.value"),
         other => panic!("Expected updated value, got {other:?}"),

@@ -1,23 +1,23 @@
 use std::sync::Arc;
 
-use axum::http::StatusCode;
+use axum::{Router, http::StatusCode};
 use common::ids::{AudienceId, PostId, SubscriptionId, UserId};
 use common::seed::{AuthoredPost, Page, PublicPresentation, RenderedPost};
 use common::test_support::{parse_audience_name, parse_post_body};
 use jiff::ToSpan;
 use server_fn::ServerFn;
-use storage::PostFormat;
+use storage::{AudienceStorage, PostFormat, PostStorage, WriteScope};
 use web::posts::{EditPostPreview, PostInputs, SavedPost};
 
 use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{
-    confirmed_mutation, create_post_json, create_session_for, create_user_and_session, post_form,
-    post_json_with_credentials, update_post_json,
+    confirmed_mutation, create_post_json, create_session_for, create_user_and_session, make_app,
+    post_form, post_json_with_credentials, update_post_json,
 };
 use storage::test_support::{
-    Backend, SeedRawPost, SeedUser, SeededPost, TestEnv, backends, backends_matrix,
+    Backend, SeedRawPost, SeedUser, SeededPost, backends, backends_matrix,
     confirmed_for as confirmed, seed_local_subscription,
 };
 
@@ -36,13 +36,12 @@ fn utc_permalink_date(timestamp: jiff::Timestamp) -> (i32, u32, u32) {
 }
 
 async fn create_audience_confirmed(
-    state: &Arc<storage::AppState>,
+    audiences: Arc<dyn AudienceStorage>,
+    write_scope: WriteScope,
     author: UserId,
     name: common::audience::AudienceName,
 ) -> AudienceId {
-    let audiences = Arc::clone(&state.audiences);
-    let outcome = state
-        .write_scope
+    let outcome = write_scope
         .run(move |transaction| {
             Box::pin(async move { audiences.create_audience(transaction, author, &name).await })
         })
@@ -52,14 +51,13 @@ async fn create_audience_confirmed(
 }
 
 async fn add_member_confirmed(
-    state: &Arc<storage::AppState>,
+    audiences: Arc<dyn AudienceStorage>,
+    write_scope: WriteScope,
     author: UserId,
     audience: AudienceId,
     subscription: SubscriptionId,
 ) {
-    let audiences = Arc::clone(&state.audiences);
-    let outcome = state
-        .write_scope
+    let outcome = write_scope
         .run(move |transaction| {
             Box::pin(async move {
                 audiences
@@ -73,13 +71,13 @@ async fn add_member_confirmed(
 }
 
 async fn get_post_preview_form(
-    state: &Arc<storage::AppState>,
+    app: Router,
     post_id: PostId,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
     let body = format!("post_id={post_id}");
     post_form(
-        state,
+        app,
         <web::posts::GetPreview as ServerFn>::PATH,
         body,
         cookie,
@@ -100,14 +98,11 @@ enum UnauthEndpoint {
     ListHomeFeed,
 }
 
-async fn unauthenticated_request(
-    state: &Arc<storage::AppState>,
-    endpoint: UnauthEndpoint,
-) -> (StatusCode, String) {
+async fn unauthenticated_request(app: Router, endpoint: UnauthEndpoint) -> (StatusCode, String) {
     match endpoint {
         UnauthEndpoint::CreatePost => {
             create_post_json(
-                state,
+                app.clone(),
                 PostInputs {
                     publish: Some(false),
                     ..PostInputs::new(parse_post_body("body"), PostFormat::Markdown)
@@ -118,7 +113,7 @@ async fn unauthenticated_request(
         }
         UnauthEndpoint::UpdatePost => {
             update_post_json(
-                state,
+                app.clone(),
                 PostId::from(42),
                 PostInputs {
                     publish: Some(false),
@@ -128,10 +123,10 @@ async fn unauthenticated_request(
             )
             .await
         }
-        UnauthEndpoint::ListDrafts => list_drafts(state, None, 10, None).await,
-        UnauthEndpoint::ListScheduled => list_scheduled(state, None, 10, None).await,
-        UnauthEndpoint::PublishPost => publish_post_form(state, PostId::from(99), None).await,
-        UnauthEndpoint::ListHomeFeed => list_home_feed(state, None, 50, None).await,
+        UnauthEndpoint::ListDrafts => list_drafts(app.clone(), None, 10, None).await,
+        UnauthEndpoint::ListScheduled => list_scheduled(app.clone(), None, 10, None).await,
+        UnauthEndpoint::PublishPost => publish_post_form(app.clone(), PostId::from(99), None).await,
+        UnauthEndpoint::ListHomeFeed => list_home_feed(app, None, 50, None).await,
     }
 }
 
@@ -147,9 +142,10 @@ async fn unauthenticated_request(
 #[case::list_home_feed(UnauthEndpoint::ListHomeFeed)]
 #[tokio::test]
 async fn endpoint_rejects_unauthenticated(backend: Backend, #[case] endpoint: UnauthEndpoint) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
-    let (status, body) = unauthenticated_request(&state, endpoint).await;
+    let (status, body) = unauthenticated_request(app.clone(), endpoint).await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("unauthorized"), "body: {body}");
@@ -158,13 +154,25 @@ async fn endpoint_rejects_unauthenticated(backend: Backend, #[case] endpoint: Un
 #[apply(backends)]
 #[tokio::test]
 async fn get_post_returns_draft_to_author_only(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let author = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let author = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let author_cookie = author.cookie();
-    let stranger_cookie = create_user_and_session(&state).await.cookie();
+    let stranger_cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(false),
             ..PostInputs::new(parse_post_body("# Draft\n\ndraft"), PostFormat::Markdown)
@@ -174,8 +182,8 @@ async fn get_post_returns_draft_to_author_only(#[case] backend: Backend) {
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created = confirmed_mutation::<SavedPost>(&body);
-    let record = state
-        .posts
+    let record = env
+        .posts()
         .get_post_by_id(
             created.post_id,
             &common::visibility::ViewerIdentity::Anonymous,
@@ -186,7 +194,7 @@ async fn get_post_returns_draft_to_author_only(#[case] backend: Backend) {
     let (year, month, day) = utc_permalink_date(record.created_at.value());
 
     let (status, body) = get_post_form(
-        &state,
+        app.clone(),
         &author.username,
         year,
         month,
@@ -199,7 +207,7 @@ async fn get_post_returns_draft_to_author_only(#[case] backend: Backend) {
     assert!(body.contains("Post not found"), "body: {body}");
 
     let (status, body) = get_post_form(
-        &state,
+        app.clone(),
         &author.username,
         year,
         month,
@@ -212,7 +220,7 @@ async fn get_post_returns_draft_to_author_only(#[case] backend: Backend) {
     assert!(body.contains("Post not found"), "body: {body}");
 
     let (status, body) = get_post_form(
-        &state,
+        app.clone(),
         &author.username,
         year,
         month,
@@ -225,7 +233,8 @@ async fn get_post_returns_draft_to_author_only(#[case] backend: Backend) {
     assert!(!body.contains("\"is_draft\""), "body: {body}");
     assert!(body.contains("Draft"), "body: {body}");
 
-    let (status, body) = get_post_preview_form(&state, created.post_id, Some(&author_cookie)).await;
+    let (status, body) =
+        get_post_preview_form(app.clone(), created.post_id, Some(&author_cookie)).await;
     assert_eq!(
         status,
         StatusCode::OK,
@@ -237,12 +246,25 @@ async fn get_post_returns_draft_to_author_only(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn get_post_preview_shows_draft_to_author_only(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let author_cookie = create_user_and_session(&state).await.cookie();
-    let stranger_cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let author_cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
+    let stranger_cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(false),
             ..PostInputs::new(
@@ -257,7 +279,8 @@ async fn get_post_preview_shows_draft_to_author_only(#[case] backend: Backend) {
     let created = confirmed_mutation::<SavedPost>(&body);
 
     let before = common::time::UtcInstant::now();
-    let (status, body) = get_post_preview_form(&state, created.post_id, Some(&author_cookie)).await;
+    let (status, body) =
+        get_post_preview_form(app.clone(), created.post_id, Some(&author_cookie)).await;
     let after = common::time::UtcInstant::now();
     assert_eq!(status, StatusCode::OK, "author preview failed: {body}");
 
@@ -269,11 +292,11 @@ async fn get_post_preview_shows_draft_to_author_only(#[case] backend: Backend) {
     assert!(preview.fetched_at <= after);
 
     let (status, body) =
-        get_post_preview_form(&state, created.post_id, Some(&stranger_cookie)).await;
+        get_post_preview_form(app.clone(), created.post_id, Some(&stranger_cookie)).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
 
-    let (status, body) = get_post_preview_form(&state, created.post_id, None).await;
+    let (status, body) = get_post_preview_form(app.clone(), created.post_id, None).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
 }
@@ -281,12 +304,18 @@ async fn get_post_preview_shows_draft_to_author_only(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn get_post_hides_drafts_from_guests(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let author = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let author = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let author_cookie = author.cookie();
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(false),
             ..PostInputs::new(parse_post_body("draft"), PostFormat::Markdown)
@@ -296,8 +325,8 @@ async fn get_post_hides_drafts_from_guests(#[case] backend: Backend) {
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created = confirmed_mutation::<SavedPost>(&body);
-    let record = state
-        .posts
+    let record = env
+        .posts()
         .get_post_by_id(
             created.post_id,
             &common::visibility::ViewerIdentity::Anonymous,
@@ -308,7 +337,7 @@ async fn get_post_hides_drafts_from_guests(#[case] backend: Backend) {
 
     let (year, month, day) = utc_permalink_date(record.created_at.value());
     let (status, body) = get_post_form(
-        &state,
+        app.clone(),
         &author.username,
         year,
         month,
@@ -326,8 +355,14 @@ async fn get_post_hides_drafts_from_guests(#[case] backend: Backend) {
 async fn get_post_returns_scheduled_post_at_canonical_permalink_to_author(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let author = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let author = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let cookie = author.cookie();
     let scheduled_at = common::time::UtcInstant::from(
         common::time::UtcInstant::now()
@@ -337,12 +372,12 @@ async fn get_post_returns_scheduled_post_at_canonical_permalink_to_author(
     );
     let scheduled = SeedRawPost::new(author.user_id)
         .published_at(scheduled_at)
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await;
 
     let (year, month, day) = utc_permalink_date(scheduled_at.value());
     let (status, body) = get_post_form(
-        &state,
+        app.clone(),
         &author.username,
         year,
         month,
@@ -371,13 +406,14 @@ async fn get_post_returns_scheduled_post_at_canonical_permalink_to_author(
 /// directly through the store (the web create path is Public-only in Layer A).
 /// Returns the [`SeededPost`] so callers read back the autogenerated slug.
 async fn create_targeted_post(
-    state: &Arc<storage::AppState>,
+    posts: Arc<dyn PostStorage>,
+    write_scope: WriteScope,
     author: UserId,
     audiences: Vec<common::visibility::AudienceTarget>,
 ) -> SeededPost {
     SeedRawPost::new(author)
         .audiences(audiences)
-        .seed(state)
+        .seed(posts, write_scope)
         .await
 }
 
@@ -391,33 +427,99 @@ fn timeline_slugs(page: &Page<RenderedPost>) -> std::collections::BTreeSet<Strin
 async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend) {
     use common::visibility::AudienceTarget;
 
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
-    let author = SeedUser::new().seed(&state).await.user_id;
-    let subscriber = SeedUser::new().seed(&state).await.user_id;
-    let stranger = SeedUser::new().seed(&state).await.user_id;
+    let author = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await
+        .user_id;
+    let subscriber = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await
+        .user_id;
+    let stranger = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await
+        .user_id;
 
     // A named audience containing the subscriber's subscription. The local
     // subscription fixture establishes the active subscription and yields the
     // subscription id for audience membership.
-    let friends = create_audience_confirmed(&state, author, parse_audience_name("Friends")).await;
-    let sub_id = seed_local_subscription(&state, author, subscriber).await;
-    add_member_confirmed(&state, author, friends, sub_id).await;
+    let friends = create_audience_confirmed(
+        Arc::clone(&env.audiences()),
+        env.write_scope(),
+        author,
+        parse_audience_name("Friends"),
+    )
+    .await;
+    let sub_id = seed_local_subscription(
+        Arc::clone(&env.subscriptions()),
+        env.write_scope(),
+        author,
+        subscriber,
+    )
+    .await;
+    add_member_confirmed(
+        Arc::clone(&env.audiences()),
+        env.write_scope(),
+        author,
+        friends,
+        sub_id,
+    )
+    .await;
 
-    let public = create_targeted_post(&state, author, vec![AudienceTarget::Public]).await;
-    let subscribers = create_targeted_post(&state, author, vec![AudienceTarget::Subscribers]).await;
-    let named = create_targeted_post(&state, author, vec![AudienceTarget::Named(friends)]).await;
-    let private = create_targeted_post(&state, author, vec![]).await;
+    let public = create_targeted_post(
+        Arc::clone(&env.posts()),
+        env.write_scope(),
+        author,
+        vec![AudienceTarget::Public],
+    )
+    .await;
+    let subscribers = create_targeted_post(
+        Arc::clone(&env.posts()),
+        env.write_scope(),
+        author,
+        vec![AudienceTarget::Subscribers],
+    )
+    .await;
+    let named = create_targeted_post(
+        Arc::clone(&env.posts()),
+        env.write_scope(),
+        author,
+        vec![AudienceTarget::Named(friends)],
+    )
+    .await;
+    let private =
+        create_targeted_post(Arc::clone(&env.posts()), env.write_scope(), author, vec![]).await;
 
-    let author_session = create_session_for(&state, author).await;
-    let subscriber_session = create_session_for(&state, subscriber).await;
-    let stranger_session = create_session_for(&state, stranger).await;
+    let author_session = create_session_for(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+        author,
+    )
+    .await;
+    let subscriber_session = create_session_for(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+        subscriber,
+    )
+    .await;
+    let stranger_session = create_session_for(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+        stranger,
+    )
+    .await;
     let author_cookie = author_session.cookie();
     let subscriber_cookie = subscriber_session.cookie();
     let stranger_cookie = stranger_session.cookie();
 
     // Anonymous viewer: only the Public post.
-    let (status, body) = list_local_timeline(&state, None, 50, None).await;
+    let (status, body) = list_local_timeline(app.clone(), None, 50, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let anon: Page<RenderedPost> =
         serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
@@ -430,7 +532,7 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
     );
 
     // Author: sees all of their own posts, including the private one.
-    let (status, body) = list_local_timeline(&state, None, 50, Some(&author_cookie)).await;
+    let (status, body) = list_local_timeline(app.clone(), None, 50, Some(&author_cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let authored: Page<RenderedPost> =
         serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
@@ -450,7 +552,7 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
     );
 
     // Active subscriber + named member: Public + Subscribers + Named (not Private).
-    let (status, body) = list_local_timeline(&state, None, 50, Some(&subscriber_cookie)).await;
+    let (status, body) = list_local_timeline(app.clone(), None, 50, Some(&subscriber_cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let sub: Page<RenderedPost> =
         serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
@@ -475,7 +577,7 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
     // Explicit Bearer identity is authoritative over an unrelated ambient cookie.
     let authorization = format!("Bearer {}", subscriber_session.token);
     let response = post_json_with_credentials(
-        &state,
+        app.clone(),
         <web::timeline::ListLocalTimeline as ServerFn>::PATH,
         serde_json::json!({ "cursor": null, "limit": 50 }),
         Some(&stranger_cookie),
@@ -508,7 +610,7 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
     // A present but failed explicit credential rejects instead of becoming
     // anonymous or falling back to the valid cookie.
     let response = post_json_with_credentials(
-        &state,
+        app.clone(),
         <web::timeline::ListLocalTimeline as ServerFn>::PATH,
         serde_json::json!({ "cursor": null, "limit": 50 }),
         Some(&subscriber_cookie),
@@ -523,7 +625,7 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
     // Authed non-subscriber: only the Public post (same reach as anonymous,
     // proving viewer_identity yields a Channel viewer that is correctly *not*
     // admitted to subscriber/named content).
-    let (status, body) = list_local_timeline(&state, None, 50, Some(&stranger_cookie)).await;
+    let (status, body) = list_local_timeline(app.clone(), None, 50, Some(&stranger_cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let stranger_page: Page<RenderedPost> =
         serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
@@ -541,16 +643,33 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
 async fn single_post_permalink_hides_subscribers_post_from_anonymous(#[case] backend: Backend) {
     use common::visibility::AudienceTarget;
 
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let author = SeedUser::new().seed(&state).await;
-    let subscriber = SeedUser::new().seed(&state).await.user_id;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let author = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await;
+    let subscriber = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await
+        .user_id;
 
-    seed_local_subscription(&state, author.user_id, subscriber).await;
+    seed_local_subscription(
+        Arc::clone(&env.subscriptions()),
+        env.write_scope(),
+        author.user_id,
+        subscriber,
+    )
+    .await;
 
-    let seeded =
-        create_targeted_post(&state, author.user_id, vec![AudienceTarget::Subscribers]).await;
-    let post = state
-        .posts
+    let seeded = create_targeted_post(
+        Arc::clone(&env.posts()),
+        env.write_scope(),
+        author.user_id,
+        vec![AudienceTarget::Subscribers],
+    )
+    .await;
+    let post = env
+        .posts()
         .get_post_by_id(
             seeded.post_id,
             &common::visibility::ViewerIdentity::local(author.user_id),
@@ -563,7 +682,7 @@ async fn single_post_permalink_hides_subscribers_post_from_anonymous(#[case] bac
 
     // Anonymous → 404 (the resolution filter hides the subscribers-only post).
     let (status, _body) = get_post_form(
-        &state,
+        app.clone(),
         &author.username,
         y,
         m,
@@ -579,9 +698,16 @@ async fn single_post_permalink_hides_subscribers_post_from_anonymous(#[case] bac
     );
 
     // Active subscriber → 200.
-    let subscriber_cookie = create_session_for(&state, subscriber).await.cookie();
+    let subscriber_cookie = create_session_for(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+        subscriber,
+    )
+    .await
+    .cookie();
     let (status, body) = get_post_form(
-        &state,
+        app.clone(),
         &author.username,
         y,
         m,

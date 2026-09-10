@@ -381,17 +381,22 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::test_support::{Backend, SeedFeedCache, backends, fp};
+    use crate::{
+        WriteScope,
+        test_support::{Backend, SeedFeedCache, backends, fp},
+    };
 
     use common::{feed::FeedFormat, test_support::parse_etag};
     use host::feed::SyndicationFeedRepresentation;
     use rstest::*;
     use rstest_reuse::*;
 
-    async fn upsert_confirmed(state: &crate::AppState, row: FeedCacheRow) {
-        let cache = Arc::clone(&state.feed_cache);
-        let outcome = state
-            .write_scope
+    async fn upsert_confirmed(
+        cache: Arc<dyn FeedCacheStorage>,
+        write_scope: WriteScope,
+        row: FeedCacheRow,
+    ) {
+        let outcome = write_scope
             .run(move |transaction| Box::pin(async move { cache.upsert(transaction, row).await }))
             .await
             .expect("upsert cache");
@@ -401,11 +406,13 @@ mod tests {
         ));
     }
 
-    async fn delete_confirmed(state: &crate::AppState, feed_path: &FeedPath) {
-        let cache = Arc::clone(&state.feed_cache);
+    async fn delete_confirmed(
+        cache: Arc<dyn FeedCacheStorage>,
+        write_scope: WriteScope,
+        feed_path: &FeedPath,
+    ) {
         let feed_path = feed_path.clone();
-        let outcome = state
-            .write_scope
+        let outcome = write_scope
             .run(move |transaction| {
                 Box::pin(async move { cache.delete(transaction, &feed_path).await })
             })
@@ -485,10 +492,14 @@ mod tests {
                     .expect("valid UTC instant"),
             )
             .build();
-        upsert_confirmed(&env.state, row.clone()).await;
+        upsert_confirmed(
+            env.feed_cache().clone(),
+            env.write_scope().clone(),
+            row.clone(),
+        )
+        .await;
         let got = env
-            .state
-            .feed_cache
+            .feed_cache()
             .get(&fp("/feed.rss"))
             .await
             .unwrap()
@@ -513,7 +524,12 @@ mod tests {
         let row = SeedFeedCache::new(fp("/feed.rss"))
             .body("<rss>first</rss>".to_owned())
             .build();
-        upsert_confirmed(&env.state, row.clone()).await;
+        upsert_confirmed(
+            env.feed_cache().clone(),
+            env.write_scope().clone(),
+            row.clone(),
+        )
+        .await;
         let replacement = SeedFeedCache::new(fp("/feed.rss"))
             .body("<rss>discarded</rss>".to_owned())
             .etag(parse_etag("\"sha256-rejected-candidate\""))
@@ -525,10 +541,14 @@ mod tests {
                     .expect("test instant remains representable"),
             ))
             .build();
-        upsert_confirmed(&env.state, replacement).await;
+        upsert_confirmed(
+            env.feed_cache().clone(),
+            env.write_scope().clone(),
+            replacement,
+        )
+        .await;
         let got = env
-            .state
-            .feed_cache
+            .feed_cache()
             .get(&fp("/feed.rss"))
             .await
             .unwrap()
@@ -549,7 +569,7 @@ mod tests {
         let row = SeedFeedCache::new(fp("/feed.rss"))
             .body("<rss>first</rss>".to_owned())
             .build();
-        upsert_confirmed(&env.state, row).await;
+        upsert_confirmed(env.feed_cache().clone(), env.write_scope().clone(), row).await;
         let replacement = SeedFeedCache::new(fp("/feed.rss"))
             .body("<rss>replacement</rss>".to_owned())
             .semantic_fingerprint(
@@ -558,10 +578,14 @@ mod tests {
                     .expect("valid fingerprint"),
             )
             .build();
-        upsert_confirmed(&env.state, replacement.clone()).await;
+        upsert_confirmed(
+            env.feed_cache().clone(),
+            env.write_scope().clone(),
+            replacement.clone(),
+        )
+        .await;
         let got = env
-            .state
-            .feed_cache
+            .feed_cache()
             .get(&fp("/feed.rss"))
             .await
             .unwrap()
@@ -575,7 +599,12 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        SeedFeedCache::new(fp("/feed.rss")).seed(&env.state).await;
+        SeedFeedCache::new(fp("/feed.rss"))
+            .seed(
+                std::sync::Arc::clone(&env.feed_cache()),
+                env.write_scope().clone(),
+            )
+            .await;
         // A non-media-type value bypasses `ContentType` validation — only reachable via
         // DB tampering. The key stays valid so the row is found; the validating bridge
         // `Decode` (#438) then rejects the `content_type` column on read.
@@ -587,12 +616,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let err = env
-            .state
-            .feed_cache
-            .get(&fp("/feed.rss"))
-            .await
-            .unwrap_err();
+        let err = env.feed_cache().get(&fp("/feed.rss")).await.unwrap_err();
         assert!(
             matches!(err, FeedCacheError::Db(sqlx::Error::ColumnDecode { .. })),
             "expected a column-decode error, got: {err:?}"
@@ -603,7 +627,12 @@ mod tests {
     #[tokio::test]
     async fn get_rejects_directly_inserted_path_content_type_mismatch(#[case] backend: Backend) {
         let env = backend.setup().await;
-        SeedFeedCache::new(fp("/feed.rss")).seed(&env.state).await;
+        SeedFeedCache::new(fp("/feed.rss"))
+            .seed(
+                std::sync::Arc::clone(&env.feed_cache()),
+                env.write_scope().clone(),
+            )
+            .await;
         env.base
             .pool()
             .execute(
@@ -613,12 +642,7 @@ mod tests {
             .await
             .unwrap();
 
-        let err = env
-            .state
-            .feed_cache
-            .get(&fp("/feed.rss"))
-            .await
-            .unwrap_err();
+        let err = env.feed_cache().get(&fp("/feed.rss")).await.unwrap_err();
 
         assert!(
             matches!(err, FeedCacheError::MismatchedStoredMetadata { .. }),
@@ -630,7 +654,12 @@ mod tests {
     #[tokio::test]
     async fn get_surfaces_a_column_decode_error_for_a_malformed_etag(#[case] backend: Backend) {
         let env = backend.setup().await;
-        SeedFeedCache::new(fp("/feed.rss")).seed(&env.state).await;
+        SeedFeedCache::new(fp("/feed.rss"))
+            .seed(
+                std::sync::Arc::clone(&env.feed_cache()),
+                env.write_scope().clone(),
+            )
+            .await;
         // An unquoted value bypasses `ETag`'s quoted-format invariant — only reachable via
         // DB tampering. The key stays valid so the row is found; the validating bridge
         // `Decode` (#438/#634) then rejects the `etag` column on read.
@@ -642,12 +671,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let err = env
-            .state
-            .feed_cache
-            .get(&fp("/feed.rss"))
-            .await
-            .unwrap_err();
+        let err = env.feed_cache().get(&fp("/feed.rss")).await.unwrap_err();
         assert!(
             matches!(err, FeedCacheError::Db(sqlx::Error::ColumnDecode { .. })),
             "expected a column-decode error, got: {err:?}"
@@ -658,7 +682,12 @@ mod tests {
     #[tokio::test]
     async fn get_rejects_a_malformed_semantic_fingerprint(#[case] backend: Backend) {
         let env = backend.setup().await;
-        SeedFeedCache::new(fp("/feed.rss")).seed(&env.state).await;
+        SeedFeedCache::new(fp("/feed.rss"))
+            .seed(
+                std::sync::Arc::clone(&env.feed_cache()),
+                env.write_scope().clone(),
+            )
+            .await;
         env.base
             .pool()
             .execute(
@@ -669,7 +698,7 @@ mod tests {
             .unwrap();
 
         assert!(matches!(
-            env.state.feed_cache.get(&fp("/feed.rss")).await,
+            env.feed_cache().get(&fp("/feed.rss")).await,
             Err(FeedCacheError::InvalidSemanticFingerprint)
         ));
     }
@@ -680,8 +709,7 @@ mod tests {
         let env = backend.setup().await;
 
         assert!(
-            env.state
-                .feed_cache
+            env.feed_cache()
                 .get(&fp("/tags/absent/feed.rss"))
                 .await
                 .unwrap()
@@ -693,10 +721,9 @@ mod tests {
     async fn failed_cache_operation_rolls_back_its_write_scope(#[case] backend: Backend) {
         let env = backend.setup().await;
         let row = SeedFeedCache::new(fp("/feed.rss")).build();
-        let cache = Arc::clone(&env.state.feed_cache);
+        let cache = Arc::clone(&env.feed_cache());
         let result = env
-            .state
-            .write_scope
+            .write_scope()
             .run(move |transaction| {
                 Box::pin(async move {
                     cache.upsert(transaction, row).await?;
@@ -712,8 +739,7 @@ mod tests {
             )))
         ));
         assert!(
-            env.state
-                .feed_cache
+            env.feed_cache()
                 .get(&fp("/feed.rss"))
                 .await
                 .expect("read after rolled-back write")
@@ -726,10 +752,9 @@ mod tests {
     async fn indeterminate_cache_commit_is_not_reported_as_confirmed(#[case] backend: Backend) {
         let env = backend.setup().await;
         let scope = env
-            .state
-            .write_scope
+            .write_scope()
             .with_commit_acknowledgement_loss_after_commit_for_test();
-        let cache = Arc::clone(&env.state.feed_cache);
+        let cache = Arc::clone(&env.feed_cache());
         let row = SeedFeedCache::new(fp("/feed.rss")).build();
 
         let outcome = scope
@@ -742,8 +767,7 @@ mod tests {
             common::mutation::MutationOutcome::CommitIndeterminate(())
         ));
         assert!(
-            env.state
-                .feed_cache
+            env.feed_cache()
                 .get(&fp("/feed.rss"))
                 .await
                 .expect("read after indeterminate commit")
@@ -755,11 +779,20 @@ mod tests {
     #[tokio::test]
     async fn delete_removes_row(#[case] backend: Backend) {
         let env = backend.setup().await;
-        SeedFeedCache::new(fp("/feed.rss")).seed(&env.state).await;
-        delete_confirmed(&env.state, &fp("/feed.rss")).await;
+        SeedFeedCache::new(fp("/feed.rss"))
+            .seed(
+                std::sync::Arc::clone(&env.feed_cache()),
+                env.write_scope().clone(),
+            )
+            .await;
+        delete_confirmed(
+            env.feed_cache().clone(),
+            env.write_scope().clone(),
+            &fp("/feed.rss"),
+        )
+        .await;
         assert!(
-            env.state
-                .feed_cache
+            env.feed_cache()
                 .get(&fp("/feed.rss"))
                 .await
                 .unwrap()

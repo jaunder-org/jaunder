@@ -298,12 +298,7 @@ mod tests {
     #[tokio::test]
     async fn regenerate_cache_miss_preserves_cache_commit_storage_errors(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let snapshot = env
-            .state
-            .publisher
-            .snapshot()
-            .await
-            .expect("valid snapshot");
+        let snapshot = env.publisher().snapshot().await.expect("valid snapshot");
         let directory = tempfile::tempdir().expect("temporary storage directory");
         let mut publisher = MockPublisherStorage::new();
         publisher

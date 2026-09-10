@@ -4,7 +4,7 @@
 //! (`helpers::ensure_server_fns_registered`) lives — rather than carrying a
 //! second, independently-rotting registrar in the library crate.
 //!
-//! They need an `AppState`, so they run over the standard `backends` fixture
+//! They need exact storage handles, so they run over the standard `backends` fixture
 //! (temp `SQLite` + Postgres) like every other `server/tests/web` test, satisfying
 //! the `test-backend-pattern` guard honestly. Their assertions are
 //! backend-agnostic (routing only), so running on both backends is redundant but
@@ -21,8 +21,8 @@ use tower::ServiceExt;
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{body_string, ensure_server_fns_registered, tmp_storage_path};
-use storage::test_support::{Backend, TestEnv, backends, noop_mailer};
+use crate::helpers::{body_string, ensure_server_fns_registered, make_app};
+use storage::test_support::{Backend, backends, noop_mailer};
 
 const INSTANCE_HEADER: &str = "x-jaunder-instance";
 
@@ -43,17 +43,20 @@ fn assert_instance_header(response: &axum::response::Response, expected: &storag
 #[apply(backends)]
 #[tokio::test]
 async fn home_route_returns_ok(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let instance_id = base.instance_id().clone();
+    let env = backend.setup().await;
+    let instance_id = env.base.instance_id().clone();
     ensure_server_fns_registered();
-    let app = jaunder::create_router(
-        state,
-        instance_id.clone(),
-        noop_mailer(),
-        true,
-        tmp_storage_path(),
-    )
-    .expect("canonical instance identity is an HTTP header");
+    let storage = tempfile::TempDir::new().expect("test storage directory");
+    let app = make_app!(
+        &env,
+        &storage;
+        instance_id = instance_id.clone(),
+        mailer = noop_mailer(),
+        secure_cookies = true,
+        resolver = std::sync::Arc::new(
+            jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new(),
+        )
+    );
     let response = app
         .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
         .await
@@ -65,13 +68,22 @@ async fn home_route_returns_ok(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn spa_fallback_serves_embedded_shell_without_disk_index_html(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let instance_id = base.instance_id().clone();
+    let env = backend.setup().await;
+    let instance_id = env.base.instance_id().clone();
     // With no declared bundle in a host test, the explicit non-production shell
     // keeps router construction possible without guessing final asset names.
     ensure_server_fns_registered();
-    let app = jaunder::create_router(state, instance_id, noop_mailer(), true, tmp_storage_path())
-        .expect("canonical instance identity is an HTTP header");
+    let storage = tempfile::TempDir::new().expect("test storage directory");
+    let app = make_app!(
+        &env,
+        &storage;
+        instance_id = instance_id,
+        mailer = noop_mailer(),
+        secure_cookies = true,
+        resolver = std::sync::Arc::new(
+            jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new(),
+        )
+    );
     // `/login` is a client route → not a projector route → SPA fallback.
     let response = app
         .oneshot(
@@ -94,16 +106,19 @@ async fn spa_fallback_serves_embedded_shell_without_disk_index_html(#[case] back
 #[apply(backends)]
 #[tokio::test]
 async fn session_api_route_returns_ok(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    ensure_server_fns_registered();
-    let app = jaunder::create_router(
-        state,
-        base.instance_id().clone(),
-        noop_mailer(),
-        true,
-        tmp_storage_path(),
-    )
-    .expect("canonical instance identity is an HTTP header");
+    let env = backend.setup().await;
+    let base = &env.base;
+    let storage = tempfile::TempDir::new().expect("test storage directory");
+    let app = make_app!(
+        &env,
+        &storage;
+        instance_id = base.instance_id().clone(),
+        mailer = noop_mailer(),
+        secure_cookies = true,
+        resolver = std::sync::Arc::new(
+            jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new(),
+        )
+    );
     let response = app
         .oneshot(
             Request::builder()
@@ -130,16 +145,19 @@ async fn session_api_route_returns_ok(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn multi_segment_server_fn_route_is_reachable(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    ensure_server_fns_registered();
-    let app = jaunder::create_router(
-        state,
-        base.instance_id().clone(),
-        noop_mailer(),
-        true,
-        tmp_storage_path(),
-    )
-    .expect("canonical instance identity is an HTTP header");
+    let env = backend.setup().await;
+    let base = &env.base;
+    let storage = tempfile::TempDir::new().expect("test storage directory");
+    let app = make_app!(
+        &env,
+        &storage;
+        instance_id = base.instance_id().clone(),
+        mailer = noop_mailer(),
+        secure_cookies = true,
+        resolver = std::sync::Arc::new(
+            jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new(),
+        )
+    );
     let path = <web::auth::GetSession as ServerFn>::PATH;
     assert_eq!(path, "/api/auth/get_session", "the #684 scheme under test");
     let response = app
@@ -165,18 +183,21 @@ async fn multi_segment_server_fn_route_is_reachable(#[case] backend: Backend) {
 async fn instance_header_covers_not_found_method_not_allowed_and_handler_error(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base } = backend.setup().await;
-    let instance_id = base.instance_id().clone();
+    let env = backend.setup().await;
+    let instance_id = env.base.instance_id().clone();
     ensure_server_fns_registered();
 
-    let app = jaunder::create_router(
-        state,
-        instance_id.clone(),
-        noop_mailer(),
-        true,
-        tmp_storage_path(),
-    )
-    .expect("canonical instance identity is an HTTP header");
+    let storage = tempfile::TempDir::new().expect("test storage directory");
+    let app = make_app!(
+        &env,
+        &storage;
+        instance_id = instance_id.clone(),
+        mailer = noop_mailer(),
+        secure_cookies = true,
+        resolver = std::sync::Arc::new(
+            jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new(),
+        )
+    );
     let not_found = app
         .clone()
         .oneshot(
@@ -204,7 +225,7 @@ async fn instance_header_covers_not_found_method_not_allowed_and_handler_error(
     assert_eq!(method_not_allowed.status(), StatusCode::METHOD_NOT_ALLOWED);
     assert_instance_header(&method_not_allowed, &instance_id);
 
-    base.close_pool().await;
+    env.base.close_pool().await;
     let handler_error = app
         .oneshot(
             Request::builder()

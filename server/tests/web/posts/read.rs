@@ -8,20 +8,26 @@ use web::posts::{PostInputs, SavedPost};
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{confirmed_mutation, create_post_json, create_user_and_session};
-use storage::test_support::{Backend, TestEnv, backends};
+use crate::helpers::{confirmed_mutation, create_post_json, create_user_and_session, make_app};
+use storage::test_support::{Backend, backends};
 
 use super::fixtures::get_post_form;
 
 #[apply(backends)]
 #[tokio::test]
 async fn get_post_returns_published_post(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let cookie = session.cookie();
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(true),
             ..PostInputs::new(
@@ -39,8 +45,8 @@ async fn get_post_returns_published_post(#[case] backend: Backend) {
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created = confirmed_mutation::<SavedPost>(&body);
 
-    let record = state
-        .posts
+    let record = env
+        .posts()
         .get_post_by_id(
             created.post_id,
             &common::visibility::ViewerIdentity::Anonymous,
@@ -55,7 +61,7 @@ async fn get_post_returns_published_post(#[case] backend: Backend) {
         .to_datetime(published_at.value())
         .date();
     let (status, body) = get_post_form(
-        &state,
+        app.clone(),
         &session.username,
         i32::from(published_date.year()),
         u32::try_from(published_date.month()).expect("Jiff civil month fits u32"),
@@ -73,9 +79,11 @@ async fn get_post_returns_published_post(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn get_post_rejects_invalid_username(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
-    let (status, body) = get_post_form(&state, "Invalid Name", 2024, 1, 1, "missing", None).await;
+    let (status, body) =
+        get_post_form(app.clone(), "Invalid Name", 2024, 1, 1, "missing", None).await;
 
     assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
     assert!(body.contains("username"), "body: {body}");
@@ -84,9 +92,11 @@ async fn get_post_rejects_invalid_username(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn get_post_rejects_invalid_slug(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
-    let (status, body) = get_post_form(&state, "author", 2024, 1, 1, "Invalid Slug", None).await;
+    let (status, body) =
+        get_post_form(app.clone(), "author", 2024, 1, 1, "Invalid Slug", None).await;
 
     assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
     assert!(body.contains("slug"), "body: {body}");
@@ -95,9 +105,10 @@ async fn get_post_rejects_invalid_slug(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn get_post_returns_not_found_for_missing_post(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
-    let (status, body) = get_post_form(&state, "author", 2024, 1, 1, "missing", None).await;
+    let (status, body) = get_post_form(app.clone(), "author", 2024, 1, 1, "missing", None).await;
 
     assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
@@ -106,12 +117,18 @@ async fn get_post_returns_not_found_for_missing_post(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn get_post_carries_tags(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let cookie = session.cookie();
 
     let (status, body) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(true),
             ..PostInputs::new(
@@ -126,8 +143,8 @@ async fn get_post_carries_tags(#[case] backend: Backend) {
     let created = confirmed_mutation::<SavedPost>(&body);
 
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         created.post_id,
         session.user_id,
         &["Performance".parse::<TagLabel>().unwrap()],
@@ -135,8 +152,8 @@ async fn get_post_carries_tags(#[case] backend: Backend) {
     .await
     .unwrap();
 
-    let published_at = state
-        .posts
+    let published_at = env
+        .posts()
         .get_post_by_id(
             created.post_id,
             &common::visibility::ViewerIdentity::Anonymous,
@@ -151,7 +168,7 @@ async fn get_post_carries_tags(#[case] backend: Backend) {
         .to_datetime(published_at.value())
         .date();
     let (status, body) = get_post_form(
-        &state,
+        app.clone(),
         &session.username,
         i32::from(published_date.year()),
         u32::try_from(published_date.month()).expect("Jiff civil month fits u32"),

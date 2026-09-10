@@ -310,7 +310,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{Backend, TestEnv, backends, confirmed_for};
+    use crate::test_support::{Backend, backends, confirmed_for};
     use jiff::ToSpan;
     use rstest::*;
     use rstest_reuse::*;
@@ -333,17 +333,16 @@ mod tests {
         // `create_invite` binds a typed `InviteCode`; `list_invites` decodes the
         // `code` column straight back into `InviteCode` — exercising both bridge
         // directions.
-        let invites = Arc::clone(&env.state.invites);
+        let invites = Arc::clone(&env.invites());
         let outcome = env
-            .state
-            .write_scope
+            .write_scope()
             .run(|transaction| {
                 Box::pin(async move { invites.create_invite(transaction, expires_at).await })
             })
             .await
             .unwrap();
         let code = confirmed_for(outcome, "invite fixture setup");
-        let invites = env.state.invites.list_invites().await.unwrap();
+        let invites = env.invites().list_invites().await.unwrap();
 
         assert_eq!(invites.len(), 1);
         assert_eq!(invites[0].code.as_ref(), code.as_ref());
@@ -352,7 +351,7 @@ mod tests {
     #[apply(backends)]
     #[tokio::test]
     async fn list_invites_rejects_a_malformed_code_column(#[case] backend: Backend) {
-        let TestEnv { state, base } = backend.setup().await;
+        let env = backend.setup().await;
         let now = UtcInstant::now();
         let expires_at = UtcInstant::from(
             now.value()
@@ -363,7 +362,7 @@ mod tests {
         // Seed a row whose `code` column holds a value `InviteCode::from_str`
         // rejects (a space is not a base64url character).
         let sql = "INSERT INTO invites (code, created_at, expires_at) VALUES ($1, $2, $3)";
-        crate::with_closeable_pool!(base.pool(), pool, {
+        crate::with_closeable_pool!(env.base.pool(), pool, {
             sqlx::query(sql)
                 .bind_storage(CorruptInviteCode::malformed())
                 .bind_storage(now)
@@ -377,7 +376,7 @@ mod tests {
         // which validates through `FromStr`; the malformed value surfaces as a
         // `ColumnDecode` error rather than being silently admitted (covers the
         // bridge's `Decode` error arm).
-        let err = state.invites.list_invites().await.unwrap_err();
+        let err = env.invites().list_invites().await.unwrap_err();
         assert!(
             matches!(err, SqlxError::ColumnDecode { .. }),
             "expected a column-decode error, got: {err:?}"
@@ -387,9 +386,9 @@ mod tests {
     #[apply(backends)]
     #[tokio::test]
     async fn list_invites_with_closed_pool_returns_error(#[case] backend: Backend) {
-        let TestEnv { state, base } = backend.setup().await;
-        base.close_pool().await;
-        let result = state.invites.list_invites().await;
+        let env = backend.setup().await;
+        env.base.close_pool().await;
+        let result = env.invites().list_invites().await;
         assert!(result.is_err());
     }
 
@@ -411,25 +410,23 @@ mod tests {
                 .expect("fixture is within Timestamp range"),
         );
 
-        let invites = Arc::clone(&env.state.invites);
-        env.state
-            .write_scope
+        let invites = Arc::clone(&env.invites());
+        env.write_scope()
             .run(|transaction| {
                 Box::pin(async move { invites.create_invite(transaction, eligible_at).await })
             })
             .await
             .unwrap();
-        let invites = Arc::clone(&env.state.invites);
-        env.state
-            .write_scope
+        let invites = Arc::clone(&env.invites());
+        env.write_scope()
             .run(|transaction| {
                 Box::pin(async move { invites.create_invite(transaction, valid_until).await })
             })
             .await
             .unwrap();
 
-        assert_eq!(env.state.invites.prune_invites(now).await.unwrap(), 1);
-        let invites = env.state.invites.list_invites().await.unwrap();
+        assert_eq!(env.invites().prune_invites(now).await.unwrap(), 1);
+        let invites = env.invites().list_invites().await.unwrap();
         assert_eq!(invites.len(), 1);
         assert_eq!(invites[0].expires_at, valid_until);
     }
@@ -437,25 +434,25 @@ mod tests {
     #[apply(backends)]
     #[tokio::test]
     async fn prune_invites_uses_the_supplied_instant_for_consumed_rows(#[case] backend: Backend) {
-        let TestEnv { state, base } = backend.setup().await;
+        let env = backend.setup().await;
         let now: UtcInstant = "2050-01-02T03:04:05Z".parse().unwrap();
         let valid_until = UtcInstant::from(
             now.value()
                 .checked_add(1.hour())
                 .expect("fixture is within Timestamp range"),
         );
-        let invites = Arc::clone(&state.invites);
-        let outcome = state
-            .write_scope
+        let invites = Arc::clone(&env.invites());
+        let outcome = env
+            .write_scope()
             .run(|transaction| {
                 Box::pin(async move { invites.create_invite(transaction, valid_until).await })
             })
             .await
             .unwrap();
         let boundary_code = confirmed_for(outcome, "boundary invite fixture");
-        let invites = Arc::clone(&state.invites);
-        let outcome = state
-            .write_scope
+        let invites = Arc::clone(&env.invites());
+        let outcome = env
+            .write_scope()
             .run(|transaction| {
                 Box::pin(async move { invites.create_invite(transaction, valid_until).await })
             })
@@ -463,7 +460,7 @@ mod tests {
             .unwrap();
         let future_code = confirmed_for(outcome, "future invite fixture");
 
-        crate::with_closeable_pool!(base.pool(), pool, {
+        crate::with_closeable_pool!(env.base.pool(), pool, {
             sqlx::query("UPDATE invites SET used_at = $1 WHERE code = $2")
                 .bind(now)
                 .bind(&boundary_code)
@@ -478,12 +475,12 @@ mod tests {
                 .unwrap();
         });
 
-        assert_eq!(state.invites.prune_invites(now).await.unwrap(), 1);
-        let invites = state.invites.list_invites().await.unwrap();
+        assert_eq!(env.invites().prune_invites(now).await.unwrap(), 1);
+        let invites = env.invites().list_invites().await.unwrap();
         assert_eq!(invites.len(), 1);
         assert_eq!(invites[0].code.as_ref(), future_code.as_ref());
 
-        base.close_pool().await;
-        assert!(state.invites.prune_invites(now).await.is_err());
+        env.base.close_pool().await;
+        assert!(env.invites().prune_invites(now).await.is_err());
     }
 }

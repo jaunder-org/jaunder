@@ -1,13 +1,21 @@
 use std::path::PathBuf;
 
-use storage::BackupRestoreOutcome;
+use anyhow::Context;
+use common::{
+    display_name::DisplayName, email::Email, invite::InviteTtlHours, session_label::SessionLabel,
+    tagged_url::HubUrl, username::Username,
+};
+use host::{config_key::SiteConfigKey, password::Password};
+use storage::{BackupRestoreOutcome, FeedWindowMutation, StorageFactory};
 
-use crate::cli::{Commands, DeadLetterAction, DeadLetterCursor, SiteConfigAction, WebsubAction};
+use crate::cli::{
+    Commands, DeadLetterAction, DeadLetterCursor, SiteConfigAction, StorageArgs, WebsubAction,
+};
 
 use super::{
     account, backup,
     lifecycle::{self, ServeCapturePaths},
-    shut_down, site_config, storage_bootstrap, websub,
+    shut_down, site_config, storage_bootstrap, support, websub,
 };
 
 pub enum CommandOutput {
@@ -16,11 +24,171 @@ pub enum CommandOutput {
     Restore(BackupRestoreOutcome),
 }
 
+async fn open_existing_storage(storage: &StorageArgs) -> anyhow::Result<StorageFactory> {
+    let runtime = support::storage_runtime_config(&storage.db)?;
+    Ok(storage::open_existing_database(&storage.db, &runtime).await?)
+}
+
+async fn open_account_storage(storage: &StorageArgs) -> anyhow::Result<StorageFactory> {
+    let runtime = support::storage_runtime_config(&storage.db)?;
+    storage::open_existing_database(&storage.db, &runtime)
+        .await
+        .context(support::INIT_FIRST_CONTEXT)
+}
+
+async fn execute_user_create(
+    storage: StorageArgs,
+    username: Username,
+    password: Option<Password>,
+    display_name: Option<DisplayName>,
+    operator: bool,
+) -> anyhow::Result<()> {
+    let factory = open_account_storage(&storage).await?;
+    account::cmd_user_create(
+        factory.users(),
+        &factory.write_scope(),
+        &username,
+        password,
+        display_name.as_ref(),
+        operator,
+    )
+    .await
+}
+
+async fn execute_app_password_create(
+    storage: StorageArgs,
+    username: Username,
+    label: SessionLabel,
+) -> anyhow::Result<()> {
+    let factory = open_account_storage(&storage).await?;
+    account::cmd_app_password_create(
+        factory.users(),
+        factory.sessions(),
+        &factory.write_scope(),
+        &username,
+        &label,
+    )
+    .await
+}
+
+async fn execute_user_invite(
+    storage: StorageArgs,
+    expires_in: Option<InviteTtlHours>,
+) -> anyhow::Result<()> {
+    let factory = open_account_storage(&storage).await?;
+    account::cmd_user_invite(
+        factory.site_config().as_ref(),
+        factory.invites(),
+        &factory.write_scope(),
+        expires_in,
+    )
+    .await
+}
+
+async fn execute_smtp_test(storage: StorageArgs, to: Email) -> anyhow::Result<()> {
+    let factory = open_account_storage(&storage).await?;
+    account::cmd_smtp_test(factory.site_config().as_ref(), &to).await
+}
+
+async fn execute_site_config_set(
+    storage: StorageArgs,
+    key: SiteConfigKey,
+    value: String,
+) -> anyhow::Result<()> {
+    key.validate(&value)?;
+    let factory = open_existing_storage(&storage).await?;
+    match key {
+        SiteConfigKey::FeedsMinItems => {
+            site_config::cmd_feed_window_set(
+                storage.storage_path,
+                factory.publisher(),
+                factory.write_scope(),
+                FeedWindowMutation::SetMinItems(value.parse()?),
+                key,
+                &value,
+            )
+            .await
+        }
+        SiteConfigKey::FeedsMinDays => {
+            site_config::cmd_feed_window_set(
+                storage.storage_path,
+                factory.publisher(),
+                factory.write_scope(),
+                FeedWindowMutation::SetMinDays(value.parse()?),
+                key,
+                &value,
+            )
+            .await
+        }
+        SiteConfigKey::FeedsWebsubHubUrl => {
+            let hub = if value.is_empty() {
+                None
+            } else {
+                Some(value.parse::<HubUrl>()?)
+            };
+            site_config::cmd_websub_hub_set(
+                storage.storage_path,
+                factory.publisher(),
+                factory.write_scope(),
+                hub.as_ref(),
+                &value,
+            )
+            .await
+        }
+        _ => {
+            site_config::cmd_site_config_set(
+                factory.site_config(),
+                &factory.write_scope(),
+                key,
+                &value,
+            )
+            .await
+        }
+    }
+}
+
+async fn execute_site_config_unset(storage: StorageArgs, key: SiteConfigKey) -> anyhow::Result<()> {
+    let factory = open_existing_storage(&storage).await?;
+    match key {
+        SiteConfigKey::FeedsMinItems => {
+            site_config::cmd_feed_window_unset(
+                storage.storage_path,
+                factory.publisher(),
+                factory.write_scope(),
+                FeedWindowMutation::UnsetMinItems,
+                key,
+            )
+            .await
+        }
+        SiteConfigKey::FeedsMinDays => {
+            site_config::cmd_feed_window_unset(
+                storage.storage_path,
+                factory.publisher(),
+                factory.write_scope(),
+                FeedWindowMutation::UnsetMinDays,
+                key,
+            )
+            .await
+        }
+        SiteConfigKey::FeedsWebsubHubUrl => {
+            site_config::cmd_websub_hub_unset(
+                storage.storage_path,
+                factory.publisher(),
+                factory.write_scope(),
+            )
+            .await
+        }
+        _ => {
+            site_config::cmd_site_config_unset(factory.site_config(), &factory.write_scope(), key)
+                .await
+        }
+    }
+}
+
 impl Commands {
-    /// Dispatch this parsed subcommand to its handler. A flat match-expression:
-    /// each arm evaluates to the command's `Result<CommandOutput>`, so there is no `?` on
-    /// the dispatch call and no trailing `Ok(())` — keeping any single function's
-    /// cyclomatic complexity (and thus CRAP) low as subcommands are added (#147).
+    /// Dispatch this parsed subcommand to its handler. Each non-serve storage
+    /// arm is a CLI composition root: it opens the factory, mints only the
+    /// selected command's dependencies, and injects them into the handler.
     ///
     /// # Errors
     ///
@@ -67,29 +235,23 @@ impl Commands {
                 password,
                 display_name,
                 operator,
-            } => account::cmd_user_create(
-                &storage,
-                &username,
-                password,
-                display_name.as_ref(),
-                operator,
-            )
-            .await
-            .map(|()| CommandOutput::None),
+            } => execute_user_create(storage, username, password, display_name, operator)
+                .await
+                .map(|()| CommandOutput::None),
             Commands::AppPasswordCreate {
                 storage,
                 username,
                 label,
-            } => account::cmd_app_password_create(&storage, &username, &label)
+            } => execute_app_password_create(storage, username, label)
                 .await
                 .map(|()| CommandOutput::None),
             Commands::UserInvite {
                 storage,
                 expires_in,
-            } => account::cmd_user_invite(&storage, expires_in)
+            } => execute_user_invite(storage, expires_in)
                 .await
                 .map(|()| CommandOutput::None),
-            Commands::SmtpTest { storage, to } => account::cmd_smtp_test(&storage, &to)
+            Commands::SmtpTest { storage, to } => execute_smtp_test(storage, to)
                 .await
                 .map(|()| CommandOutput::None),
             Commands::Backup {
@@ -123,13 +285,17 @@ impl SiteConfigAction {
                 storage,
                 key,
                 value,
-            } => site_config::cmd_site_config_set(&storage, key, &value).await,
+            } => execute_site_config_set(storage, key, value).await,
             SiteConfigAction::Get { storage, key } => {
-                site_config::cmd_site_config_get(&storage, key).await
+                let factory = open_existing_storage(&storage).await?;
+                site_config::cmd_site_config_get(factory.site_config().as_ref(), key).await
             }
-            SiteConfigAction::List { storage } => site_config::cmd_site_config_list(&storage).await,
+            SiteConfigAction::List { storage } => {
+                let factory = open_existing_storage(&storage).await?;
+                site_config::cmd_site_config_list(factory.site_config().as_ref()).await
+            }
             SiteConfigAction::Unset { storage, key } => {
-                site_config::cmd_site_config_unset(&storage, key).await
+                execute_site_config_unset(storage, key).await
             }
         }
     }
@@ -162,8 +328,9 @@ impl DeadLetterAction {
                 cursor,
                 page_size,
             } => {
+                let factory = open_existing_storage(&storage).await?;
                 websub::cmd_dead_letters_list(
-                    &storage,
+                    factory.feed_events().as_ref(),
                     phase,
                     cursor.map(DeadLetterCursor::into_inner),
                     page_size,
@@ -171,7 +338,13 @@ impl DeadLetterAction {
                 .await
             }
             DeadLetterAction::Redrive { storage, ids } => {
-                websub::cmd_dead_letters_redrive(&storage, &ids).await
+                let factory = open_existing_storage(&storage).await?;
+                websub::cmd_dead_letters_redrive(
+                    factory.feed_events(),
+                    &factory.write_scope(),
+                    &ids,
+                )
+                .await
             }
         }
     }

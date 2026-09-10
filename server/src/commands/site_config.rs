@@ -1,74 +1,83 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use host::config_key::SiteConfigKey;
-
-use crate::cli::StorageArgs;
-use crate::publisher::PublisherService;
 use common::tagged_url::HubUrl;
-use storage::FeedWindowMutation;
+use host::config_key::SiteConfigKey;
+use storage::{FeedWindowMutation, PublisherStorage, SiteConfigStorage, WriteScope};
+
+use crate::publisher::PublisherService;
 
 use super::support;
 
-/// Upsert a `site_config` key/value through the real storage path.
+/// Upsert an ordinary `site_config` key/value through the injected storage path.
 ///
-/// The value is checked against the key's own validator *before* the database is
-/// opened, so a rejected value never reaches a row.
+/// # Errors
+///
+/// Returns an error if the value cannot be stored.
 pub(super) async fn cmd_site_config_set(
-    storage: &StorageArgs,
+    site_config: Arc<dyn SiteConfigStorage>,
+    write_scope: &WriteScope,
     key: SiteConfigKey,
     value: &str,
 ) -> anyhow::Result<()> {
-    key.validate(value)?;
-    let runtime = support::storage_runtime_config(&storage.db)?;
-    let state = storage::open_existing_database(&storage.db, &runtime).await?;
-    if key == SiteConfigKey::FeedsWebsubHubUrl {
-        let hub = if value.is_empty() {
-            None
-        } else {
-            Some(value.parse::<HubUrl>()?)
-        };
-        let publisher = PublisherService::new(
-            storage.storage_path.clone(),
-            Arc::clone(&state.publisher),
-            state.write_scope.clone(),
-        );
-        publisher.mutate_hub(hub.as_ref()).await?;
-    } else if let Some(mutation) = match key {
-        SiteConfigKey::FeedsMinItems => Some(FeedWindowMutation::SetMinItems(value.parse()?)),
-        SiteConfigKey::FeedsMinDays => Some(FeedWindowMutation::SetMinDays(value.parse()?)),
-        _ => None,
-    } {
-        let publisher = PublisherService::new(
-            storage.storage_path.clone(),
-            Arc::clone(&state.publisher),
-            state.write_scope.clone(),
-        );
-        let outcome = publisher.mutate_feed_window_with_feedback(mutation).await?;
-        support::require_confirmed_mutation(outcome, "feed window mutation")?;
-    } else {
-        let site_config = Arc::clone(&state.site_config);
-        let value_for_set = value.to_owned();
-        let outcome = state
-            .write_scope
-            .run(move |transaction| {
-                Box::pin(async move { site_config.set(transaction, key, &value_for_set).await })
-            })
-            .await?;
-        support::require_confirmed_mutation(outcome, "site_config set")?;
-    }
+    let value_for_set = value.to_owned();
+    let outcome = write_scope
+        .run(move |transaction| {
+            Box::pin(async move { site_config.set(transaction, key, &value_for_set).await })
+        })
+        .await?;
+    support::require_confirmed_mutation(outcome, "site_config set")?;
     eprintln!("set site_config {key} = {value}");
+    Ok(())
+}
+
+/// Change one feed-window setting through its injected storage dependencies.
+///
+/// # Errors
+///
+/// Returns an error if the mutation fails or is not confirmed.
+pub(super) async fn cmd_feed_window_set(
+    storage_path: PathBuf,
+    publisher: Arc<dyn PublisherStorage>,
+    write_scope: WriteScope,
+    mutation: FeedWindowMutation,
+    key: SiteConfigKey,
+    value: &str,
+) -> anyhow::Result<()> {
+    let publisher = PublisherService::new(storage_path, publisher, write_scope);
+    let outcome = publisher.mutate_feed_window_with_feedback(mutation).await?;
+    support::require_confirmed_mutation(outcome, "feed window mutation")?;
+    eprintln!("set site_config {key} = {value}");
+    Ok(())
+}
+
+/// Change the `WebSub` hub through its injected storage dependencies.
+///
+/// # Errors
+///
+pub(super) async fn cmd_websub_hub_set(
+    storage_path: PathBuf,
+    publisher: Arc<dyn PublisherStorage>,
+    write_scope: WriteScope,
+    hub: Option<&HubUrl>,
+    value: &str,
+) -> anyhow::Result<()> {
+    let publisher = PublisherService::new(storage_path, publisher, write_scope);
+    publisher.mutate_hub(hub).await?;
+    eprintln!(
+        "set site_config {} = {value}",
+        SiteConfigKey::FeedsWebsubHubUrl
+    );
     Ok(())
 }
 
 /// Print the value for `key` to stdout; error (→ non-zero exit) if it is unset,
 /// so a caller can distinguish an unset key from an empty value.
 pub(super) async fn cmd_site_config_get(
-    storage: &StorageArgs,
+    site_config: &dyn SiteConfigStorage,
     key: SiteConfigKey,
 ) -> anyhow::Result<()> {
-    let runtime = support::storage_runtime_config(&storage.db)?;
-    let state = storage::open_existing_database(&storage.db, &runtime).await?;
-    match state.site_config.get_raw(key).await? {
+    match site_config.get_raw(key).await? {
         Some(value) => {
             println!("{value}");
             Ok(())
@@ -78,51 +87,22 @@ pub(super) async fn cmd_site_config_get(
 }
 
 /// Print all `site_config` entries as `key=value`, one per line, ordered by key.
-pub(super) async fn cmd_site_config_list(storage: &StorageArgs) -> anyhow::Result<()> {
-    let runtime = support::storage_runtime_config(&storage.db)?;
-    let state = storage::open_existing_database(&storage.db, &runtime).await?;
-    let entries = state.site_config.list().await?;
+pub(super) async fn cmd_site_config_list(
+    site_config: &dyn SiteConfigStorage,
+) -> anyhow::Result<()> {
+    let entries = site_config.list().await?;
     print!("{}", format_entries(&entries));
     Ok(())
 }
 
-/// Delete a `site_config` key. Idempotent (exit 0 whether or not a row existed);
-/// stderr notes which happened.
+/// Delete an ordinary `site_config` key. Idempotent (exit 0 whether or not a
+/// row existed); stderr notes which happened.
 pub(super) async fn cmd_site_config_unset(
-    storage: &StorageArgs,
+    site_config: Arc<dyn SiteConfigStorage>,
+    write_scope: &WriteScope,
     key: SiteConfigKey,
 ) -> anyhow::Result<()> {
-    let runtime = support::storage_runtime_config(&storage.db)?;
-    let state = storage::open_existing_database(&storage.db, &runtime).await?;
-    let mutation = match key {
-        SiteConfigKey::FeedsMinItems => Some(FeedWindowMutation::UnsetMinItems),
-        SiteConfigKey::FeedsMinDays => Some(FeedWindowMutation::UnsetMinDays),
-        _ => None,
-    };
-    if key == SiteConfigKey::FeedsWebsubHubUrl {
-        let publisher = PublisherService::new(
-            storage.storage_path.clone(),
-            Arc::clone(&state.publisher),
-            state.write_scope.clone(),
-        );
-        publisher.mutate_hub(None).await?;
-        eprintln!("unset site_config {key}");
-        return Ok(());
-    }
-    if let Some(mutation) = mutation {
-        let publisher = PublisherService::new(
-            storage.storage_path.clone(),
-            Arc::clone(&state.publisher),
-            state.write_scope.clone(),
-        );
-        let outcome = publisher.mutate_feed_window_with_feedback(mutation).await?;
-        support::require_confirmed_mutation(outcome, "feed window mutation")?;
-        eprintln!("unset site_config {key}");
-        return Ok(());
-    }
-    let site_config = Arc::clone(&state.site_config);
-    let outcome = state
-        .write_scope
+    let outcome = write_scope
         .run(move |transaction| Box::pin(async move { site_config.delete(transaction, key).await }))
         .await?;
     let removed = support::require_confirmed_mutation(outcome, "site_config unset")?;
@@ -134,6 +114,40 @@ pub(super) async fn cmd_site_config_unset(
     Ok(())
 }
 
+/// Unset one feed-window setting through its injected storage dependencies.
+///
+/// # Errors
+///
+/// Returns an error if the mutation fails or is not confirmed.
+pub(super) async fn cmd_feed_window_unset(
+    storage_path: PathBuf,
+    publisher: Arc<dyn PublisherStorage>,
+    write_scope: WriteScope,
+    mutation: FeedWindowMutation,
+    key: SiteConfigKey,
+) -> anyhow::Result<()> {
+    let publisher = PublisherService::new(storage_path, publisher, write_scope);
+    let outcome = publisher.mutate_feed_window_with_feedback(mutation).await?;
+    support::require_confirmed_mutation(outcome, "feed window mutation")?;
+    eprintln!("unset site_config {key}");
+    Ok(())
+}
+
+/// Unset the `WebSub` hub through the injected publisher storage dependencies.
+///
+/// # Errors
+///
+/// Returns an error if the mutation fails.
+pub(super) async fn cmd_websub_hub_unset(
+    storage_path: PathBuf,
+    publisher: Arc<dyn PublisherStorage>,
+    write_scope: WriteScope,
+) -> anyhow::Result<()> {
+    let publisher = PublisherService::new(storage_path, publisher, write_scope);
+    publisher.mutate_hub(None).await?;
+    eprintln!("unset site_config {}", SiteConfigKey::FeedsWebsubHubUrl);
+    Ok(())
+}
 /// Render `site_config` entries as `key=value\n` lines (a human/discovery view;
 /// `site-config get` is the lossless scriptable accessor). Pure, unit-tested directly.
 ///
@@ -175,14 +189,14 @@ mod tests {
     use storage::{
         StorageRuntimeConfig,
         test_support::{
-            Backend, PostgresDbGuard, TestEnv, backends, confirmed, sqlite_url, unique_postgres_url,
+            Backend, PostgresDbGuard, backends, confirmed, sqlite_url, unique_postgres_url,
         },
     };
 
-    use super::super::test_support::sqlite_storage_args;
+    use crate::cli::{SiteConfigAction, StorageArgs};
 
     /// A `StorageArgs` for `backend` whose database already exists, since the
-    /// `site-config` handlers all go through `open_existing_database`.
+    /// site-configuration CLI composition root opens existing storage.
     async fn site_config_args(
         backend: Backend,
         base: &TempDir,
@@ -207,6 +221,46 @@ mod tests {
         )
     }
 
+    async fn execute_set(
+        storage: &StorageArgs,
+        key: SiteConfigKey,
+        value: &str,
+    ) -> anyhow::Result<()> {
+        SiteConfigAction::Set {
+            storage: storage.clone(),
+            key,
+            value: value.to_owned(),
+        }
+        .execute()
+        .await
+    }
+
+    async fn execute_get(storage: &StorageArgs, key: SiteConfigKey) -> anyhow::Result<()> {
+        SiteConfigAction::Get {
+            storage: storage.clone(),
+            key,
+        }
+        .execute()
+        .await
+    }
+
+    async fn execute_list(storage: &StorageArgs) -> anyhow::Result<()> {
+        SiteConfigAction::List {
+            storage: storage.clone(),
+        }
+        .execute()
+        .await
+    }
+
+    async fn execute_unset(storage: &StorageArgs, key: SiteConfigKey) -> anyhow::Result<()> {
+        SiteConfigAction::Unset {
+            storage: storage.clone(),
+            key,
+        }
+        .execute()
+        .await
+    }
+
     #[test]
     fn format_entries_renders_sorted_key_value_lines() {
         let entries = vec![
@@ -229,17 +283,18 @@ mod tests {
     async fn site_config_set_rejects_an_invalid_value(#[case] backend: Backend) {
         let base = TempDir::new().expect("temp dir");
         let (args, _pg) = site_config_args(backend, &base).await;
-        let state = storage::open_existing_database(&args.db, &StorageRuntimeConfig::default())
+        let factory = storage::open_existing_database(&args.db, &StorageRuntimeConfig::default())
             .await
             .expect("reopen");
-        let before = state.site_config.list().await.unwrap().len();
+        let site_config = factory.site_config();
+        let before = site_config.list().await.unwrap().len();
 
-        cmd_site_config_set(&args, SiteConfigKey::SiteBaseUrl, "nonsense://x")
+        execute_set(&args, SiteConfigKey::SiteBaseUrl, "nonsense://x")
             .await
             .expect_err("an unparseable base URL is refused");
 
         assert_eq!(
-            state.site_config.list().await.unwrap().len(),
+            site_config.list().await.unwrap().len(),
             before,
             "no row written",
         );
@@ -252,16 +307,16 @@ mod tests {
         let base = TempDir::new().expect("temp dir");
         let (args, _pg) = site_config_args(backend, &base).await;
 
-        cmd_site_config_set(&args, SiteConfigKey::SiteBaseUrl, "")
+        execute_set(&args, SiteConfigKey::SiteBaseUrl, "")
             .await
             .expect("empty means unset on an optional key");
 
-        let state = storage::open_existing_database(&args.db, &StorageRuntimeConfig::default())
+        let factory = storage::open_existing_database(&args.db, &StorageRuntimeConfig::default())
             .await
             .expect("reopen");
+        let site_config = factory.site_config();
         assert_eq!(
-            state
-                .site_config
+            site_config
                 .get_raw(SiteConfigKey::SiteBaseUrl)
                 .await
                 .unwrap(),
@@ -276,23 +331,23 @@ mod tests {
         let base = TempDir::new().expect("temp dir");
         let (args, _pg) = site_config_args(backend, &base).await;
 
-        cmd_site_config_set(
+        execute_set(
             &args,
             SiteConfigKey::FeedsWebsubHubUrl,
             "https://hub.example/",
         )
         .await
         .expect("set hub");
-        cmd_site_config_set(&args, SiteConfigKey::FeedsWebsubHubUrl, "")
+        execute_set(&args, SiteConfigKey::FeedsWebsubHubUrl, "")
             .await
             .expect("empty hub input unsets through publisher");
 
-        let state = storage::open_existing_database(&args.db, &StorageRuntimeConfig::default())
+        let factory = storage::open_existing_database(&args.db, &StorageRuntimeConfig::default())
             .await
             .expect("reopen");
+        let site_config = factory.site_config();
         assert_eq!(
-            state
-                .site_config
+            site_config
                 .get_raw(SiteConfigKey::FeedsWebsubHubUrl)
                 .await
                 .unwrap(),
@@ -310,54 +365,42 @@ mod tests {
         let base = TempDir::new().expect("temp dir");
         let (args, _pg) = site_config_args(backend, &base).await;
 
-        let state = storage::open_existing_database(&args.db, &StorageRuntimeConfig::default())
+        let factory = storage::open_existing_database(&args.db, &StorageRuntimeConfig::default())
             .await
             .expect("reopen");
-        let mut generation = state
-            .publisher
+        let publisher = factory.publisher();
+        let mut generation = publisher
             .snapshot()
             .await
             .expect("publisher snapshot")
             .generation;
 
-        cmd_site_config_set(&args, SiteConfigKey::FeedsMinItems, "42")
+        execute_set(&args, SiteConfigKey::FeedsMinItems, "42")
             .await
             .expect("set minimum items through publisher");
-        cmd_site_config_set(&args, SiteConfigKey::FeedsMinDays, "7")
+        execute_set(&args, SiteConfigKey::FeedsMinDays, "7")
             .await
             .expect("set minimum days through publisher");
 
-        let snapshot = state
-            .publisher
-            .snapshot()
-            .await
-            .expect("publisher snapshot");
+        let snapshot = publisher.snapshot().await.expect("publisher snapshot");
         assert!(snapshot.generation > generation);
         generation = snapshot.generation;
         assert_eq!(snapshot.feeds.min_items, parse_feed_min_items("42"));
         assert_eq!(snapshot.feeds.min_days, parse_feed_min_days("7"));
 
-        cmd_site_config_unset(&args, SiteConfigKey::FeedsMinItems)
+        execute_unset(&args, SiteConfigKey::FeedsMinItems)
             .await
             .expect("unset minimum items through publisher");
-        let snapshot = state
-            .publisher
-            .snapshot()
-            .await
-            .expect("publisher snapshot");
+        let snapshot = publisher.snapshot().await.expect("publisher snapshot");
         assert_eq!(snapshot.feeds.min_items, parse_feed_min_items("20"));
         assert_eq!(snapshot.feeds.min_days, parse_feed_min_days("7"));
         assert!(snapshot.generation > generation);
         generation = snapshot.generation;
 
-        cmd_site_config_unset(&args, SiteConfigKey::FeedsMinDays)
+        execute_unset(&args, SiteConfigKey::FeedsMinDays)
             .await
             .expect("unset minimum days through publisher");
-        let snapshot = state
-            .publisher
-            .snapshot()
-            .await
-            .expect("publisher snapshot");
+        let snapshot = publisher.snapshot().await.expect("publisher snapshot");
         assert_eq!(snapshot.feeds.min_items, parse_feed_min_items("20"));
         assert!(snapshot.generation > generation);
         assert_eq!(snapshot.feeds.min_days, parse_feed_min_days("30"));
@@ -369,7 +412,7 @@ mod tests {
         let base = TempDir::new().expect("temp dir");
         let (args, _pg) = site_config_args(backend, &base).await;
 
-        cmd_site_config_set(&args, SiteConfigKey::FeedsWebsubHubUrl, "not a hub URL")
+        execute_set(&args, SiteConfigKey::FeedsWebsubHubUrl, "not a hub URL")
             .await
             .expect_err("nonempty malformed hub input is rejected");
     }
@@ -378,21 +421,23 @@ mod tests {
     #[apply(backends)]
     #[tokio::test]
     async fn site_config_list_flags_unknown_keys_and_invalid_values(#[case] backend: Backend) {
-        let TestEnv { state, base } = backend.setup().await;
+        let env = backend.setup().await;
         // A row the registry does not know. `set` cannot express it any more, which is
         // exactly the legacy case `list` exists to surface -- so write it as raw SQL
         // through the harness pool.
-        base.pool()
+        env.base
+            .pool()
             .execute("INSERT INTO site_config (key, value) VALUES ('legacy.orphan', 'x')")
             .await
             .unwrap();
-        let cfg = &state.site_config;
+        let site_config = env.site_config();
+        let write_scope = env.write_scope();
+        let cfg = site_config.as_ref();
         // set() is the typed seam and does not validate; the CLI does. Storing junk
         // here is how a pre-#687 row would look to `list`.
-        let config = Arc::clone(&state.site_config);
+        let config = Arc::clone(&site_config);
         confirmed(
-            state
-                .write_scope
+            write_scope
                 .run(move |transaction| {
                     Box::pin(async move {
                         config
@@ -403,10 +448,9 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let config = Arc::clone(&state.site_config);
+        let config = Arc::clone(&site_config);
         confirmed(
-            state
-                .write_scope
+            write_scope
                 .run(move |transaction| {
                     Box::pin(async move {
                         config
@@ -418,10 +462,9 @@ mod tests {
                 .unwrap(),
         );
         // An empty value on an optional key means unset, not invalid (spec D1b).
-        let config = Arc::clone(&state.site_config);
+        let config = Arc::clone(&site_config);
         confirmed(
-            state
-                .write_scope
+            write_scope
                 .run(move |transaction| {
                     Box::pin(async move {
                         config
@@ -452,16 +495,13 @@ mod tests {
         );
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn cmd_site_config_set_upserts_and_get_and_list_read_back() {
+    async fn cmd_site_config_set_upserts_and_get_and_list_read_back(#[case] backend: Backend) {
         let temp = TempDir::new().expect("temp dir");
-        let storage_args = sqlite_storage_args(&temp);
-        // Handlers use open_existing_database, so the DB must already exist.
-        storage::open_database(&storage_args.db, &StorageRuntimeConfig::default())
-            .await
-            .expect("open db");
+        let (storage_args, _pg) = site_config_args(backend, &temp).await;
 
-        cmd_site_config_set(
+        execute_set(
             &storage_args,
             SiteConfigKey::FeedsWebsubHubUrl,
             "https://x/",
@@ -469,7 +509,7 @@ mod tests {
         .await
         .expect("set ok");
         // set() is an upsert: a second write on the same key overwrites.
-        cmd_site_config_set(
+        execute_set(
             &storage_args,
             SiteConfigKey::FeedsWebsubHubUrl,
             "https://y/",
@@ -477,13 +517,13 @@ mod tests {
         .await
         .expect("upsert ok");
 
-        let state =
+        let factory =
             storage::open_existing_database(&storage_args.db, &StorageRuntimeConfig::default())
                 .await
                 .expect("reopen");
+        let site_config = factory.site_config();
         assert_eq!(
-            state
-                .site_config
+            site_config
                 .get_raw(SiteConfigKey::FeedsWebsubHubUrl)
                 .await
                 .unwrap(),
@@ -494,30 +534,44 @@ mod tests {
         // get: present key returns Ok (exercises the println! path); an unwritten key
         // errors. A key outside the registry can no longer be named here at all — clap
         // rejects it at parse time (see `cli`'s `site_config_rejects_an_unknown_key`).
-        cmd_site_config_get(&storage_args, SiteConfigKey::FeedsWebsubHubUrl)
+        execute_get(&storage_args, SiteConfigKey::FeedsWebsubHubUrl)
             .await
             .expect("get present key ok");
-        cmd_site_config_get(&storage_args, SiteConfigKey::SiteTitle)
+        execute_get(&storage_args, SiteConfigKey::SiteTitle)
             .await
             .expect_err("get unwritten key errors (→ non-zero exit)");
 
         // list runs against a populated store (exercises the print path).
-        cmd_site_config_list(&storage_args).await.expect("list ok");
+        execute_list(&storage_args).await.expect("list ok");
 
-        cmd_site_config_unset(&storage_args, SiteConfigKey::FeedsWebsubHubUrl)
+        execute_unset(&storage_args, SiteConfigKey::FeedsWebsubHubUrl)
             .await
             .expect("unset configured hub");
         assert_eq!(
-            state
-                .site_config
+            site_config
                 .get_raw(SiteConfigKey::FeedsWebsubHubUrl)
                 .await
                 .unwrap(),
             None,
             "unset removes the hub",
         );
-        cmd_site_config_unset(&storage_args, SiteConfigKey::FeedsWebsubHubUrl)
+        execute_unset(&storage_args, SiteConfigKey::FeedsWebsubHubUrl)
             .await
             .expect("unsetting an absent hub is a no-op");
+
+        execute_set(&storage_args, SiteConfigKey::SiteTitle, "My Site")
+            .await
+            .expect("set ordinary key");
+        execute_unset(&storage_args, SiteConfigKey::SiteTitle)
+            .await
+            .expect("unset ordinary key");
+        assert_eq!(
+            site_config.get_raw(SiteConfigKey::SiteTitle).await.unwrap(),
+            None,
+            "ordinary unset removes the configured value",
+        );
+        execute_unset(&storage_args, SiteConfigKey::SiteTitle)
+            .await
+            .expect("unsetting an absent ordinary key is a no-op");
     }
 }

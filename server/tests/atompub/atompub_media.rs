@@ -10,7 +10,7 @@ use tower::ServiceExt;
 
 use crate::helpers::{
     ForeignReferenceResolver, atompub, atompub_at, atompub_get, atompub_location, atompub_upload,
-    body_string, create_user_and_session, make_app, make_app_with_media_ownership_resolver,
+    body_string, create_user_and_session, make_app,
 };
 use common::pagination::{PageOffset, RowLimit};
 use common::root_relative_url::RootRelativeUrl;
@@ -20,7 +20,7 @@ use common::test_support::{
 use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{
-    Backend, SeedRawPost, TestEnv, backends, backends_matrix, confirmed, noop_mailer, seed_media,
+    Backend, SeedRawPost, backends, backends_matrix, confirmed, noop_mailer, seed_media,
 };
 use url::Url;
 
@@ -81,11 +81,16 @@ async fn assert_media_delete_conflict(
 #[apply(backends)]
 #[tokio::test]
 async fn upload_returns_201_and_media_link_entry(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
 
     let response = app
         .oneshot(atompub_upload(&session, "pic.png", PNG))
@@ -121,10 +126,16 @@ async fn upload_returns_201_and_media_link_entry(#[case] backend: Backend) {
 async fn member_delete_masks_closed_write_storage_and_retains_the_typed_handler_cause(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let storage = TempDir::new().expect("temporary media root");
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
     base.close_pool().await;
     let hash =
         parse_content_hash("0000000000000000000000000000000000000000000000000000000000000000");
@@ -154,12 +165,33 @@ async fn member_delete_masks_closed_write_storage_and_retains_the_typed_handler_
 async fn live_instance_proven_absolute_and_scheme_relative_posts_materialize_independent_records(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let source = create_user_and_session(&state).await;
-    let author = create_user_and_session(&state).await;
-    let absolute_media = seed_media(&state, source.user_id, "live-proven-absolute.png").await;
-    let scheme_relative_media =
-        seed_media(&state, source.user_id, "live-proven-scheme-relative.png").await;
+    let env = backend.setup().await;
+    let source = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let author = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let absolute_media = seed_media(
+        std::sync::Arc::clone(&env.media()),
+        env.write_scope(),
+        source.user_id,
+        "live-proven-absolute.png",
+    )
+    .await;
+    let scheme_relative_media = seed_media(
+        std::sync::Arc::clone(&env.media()),
+        env.write_scope(),
+        source.user_id,
+        "live-proven-scheme-relative.png",
+    )
+    .await;
     let storage = TempDir::new().expect("temporary media root");
     let instance_id = storage::InstanceId::new();
     let resolver = Arc::new(
@@ -175,15 +207,14 @@ async fn live_instance_proven_absolute_and_scheme_relative_posts_materialize_ind
         .expect("media cache directory");
     std::fs::create_dir_all(storage.path().join("media").join("tmp"))
         .expect("media temporary directory");
-    let app = jaunder::create_router_with_media_reference_ownership_resolver(
-        Arc::clone(&state),
-        instance_id,
-        noop_mailer(),
-        false,
-        storage.path().to_path_buf(),
-        resolver,
-    )
-    .expect("router construction");
+    let app = make_app!(
+        &env,
+        &storage;
+        instance_id = instance_id,
+        mailer = noop_mailer(),
+        secure_cookies = false,
+        resolver = resolver
+    );
     for (title, media, origin) in [
         ("Proven absolute", &absolute_media, "https://example.com"),
         (
@@ -208,8 +239,7 @@ async fn live_instance_proven_absolute_and_scheme_relative_posts_materialize_ind
             .expect("post response");
         assert_eq!(response.status(), StatusCode::CREATED);
         assert!(
-            state
-                .media
+            env.media()
                 .get_media(
                     author.user_id,
                     &media.sha256,
@@ -226,10 +256,15 @@ async fn live_instance_proven_absolute_and_scheme_relative_posts_materialize_ind
 #[apply(backends)]
 #[tokio::test]
 async fn disabled_upload_is_forbidden_without_media_mutation(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().media_uploads_enabled(false).await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().media_uploads_enabled(false).await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let storage = TempDir::new().unwrap();
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
 
     let response = app
         .oneshot(atompub_upload(&session, "blocked.png", PNG))
@@ -253,8 +288,7 @@ async fn disabled_upload_is_forbidden_without_media_mutation(#[case] backend: Ba
         "disabled upload must not create durable media"
     );
     assert!(
-        state
-            .media
+        env.media()
             .list_media(
                 session.user_id,
                 None,
@@ -271,10 +305,15 @@ async fn disabled_upload_is_forbidden_without_media_mutation(#[case] backend: Ba
 #[apply(backends)]
 #[tokio::test]
 async fn upload_accepts_pdf_content_type(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().media_uploads_enabled(true).await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().media_uploads_enabled(true).await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let storage = TempDir::new().unwrap();
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
 
     let response = app
         .oneshot(
@@ -295,10 +334,15 @@ async fn upload_accepts_pdf_content_type(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn upload_without_content_type_defaults_to_octet_stream(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let storage = TempDir::new().unwrap();
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
 
     let response = app
         .oneshot(
@@ -321,10 +365,15 @@ async fn upload_without_content_type_defaults_to_octet_stream(#[case] backend: B
 #[apply(backends)]
 #[tokio::test]
 async fn upload_rejects_invalid_present_content_type(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let storage = TempDir::new().unwrap();
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
 
     let response = app
         .oneshot(
@@ -343,10 +392,15 @@ async fn upload_rejects_invalid_present_content_type(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn upload_rejects_opaque_present_content_type(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let storage = TempDir::new().unwrap();
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
 
     let response = app
         .oneshot(
@@ -368,11 +422,16 @@ async fn upload_rejects_opaque_present_content_type(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn reupload_identical_returns_200(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
 
     let _resp1 = app
         .clone()
@@ -392,11 +451,16 @@ async fn reupload_identical_returns_200(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn get_media_member_returns_entry(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
 
     let resp = app
         .clone()
@@ -429,11 +493,22 @@ async fn get_media_member_returns_entry(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn disabled_uploads_leave_existing_media_readable_and_deletable(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().media_uploads_enabled(false).await;
-    let session = create_user_and_session(&state).await;
-    let media = seed_media(&state, session.user_id, "existing.png").await;
+    let env = backend.setup().media_uploads_enabled(false).await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let media = seed_media(
+        std::sync::Arc::clone(&env.media()),
+        env.write_scope(),
+        session.user_id,
+        "existing.png",
+    )
+    .await;
     let storage = TempDir::new().unwrap();
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
     let location = parse_root_relative_url(&format!(
         "/atompub/{}/media/{}/{}",
         session.username, media.sha256, media.filename
@@ -464,11 +539,16 @@ async fn disabled_uploads_leave_existing_media_readable_and_deletable(#[case] ba
 #[apply(backends)]
 #[tokio::test]
 async fn get_unknown_media_returns_404(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
 
     let response = app
         .oneshot(atompub_get(
@@ -487,11 +567,16 @@ async fn get_unknown_media_returns_404(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn delete_media_member_returns_204_then_404(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
 
     let resp = app
         .clone()
@@ -534,10 +619,15 @@ async fn delete_media_member_returns_204_then_404(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn delete_media_member_reports_owner_live_post_and_preserves_media(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let storage = TempDir::new().unwrap();
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
     let loc = upload_and_member_url(&app, &session, "referenced.png").await;
     let sha256 = loc
         .as_ref()
@@ -549,7 +639,7 @@ async fn delete_media_member_reports_owner_live_post_and_preserves_media(#[case]
     let media_url = common::media::url(&common::media::MediaSource::Upload, &sha256, &filename);
     let post = SeedRawPost::new(session.user_id)
         .body(parse_post_body(&format!("![referenced]({media_url})")))
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await;
 
     let response = app
@@ -582,10 +672,15 @@ async fn delete_media_member_reports_owner_live_post_and_preserves_media(#[case]
 async fn delete_media_member_reports_unique_ascending_owner_live_post_ids(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let storage = TempDir::new().unwrap();
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
     let loc = upload_and_member_url(&app, &session, "many-references.png").await;
     let sha256 = loc
         .as_ref()
@@ -597,11 +692,11 @@ async fn delete_media_member_reports_unique_ascending_owner_live_post_ids(
     let media_url = common::media::url(&common::media::MediaSource::Upload, &sha256, &filename);
     let first = SeedRawPost::new(session.user_id)
         .body(parse_post_body(&format!("![first]({media_url})")))
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await;
     let second = SeedRawPost::new(session.user_id)
         .body(parse_post_body(&format!("<img src=\"{media_url}\">")))
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await;
     let mut expected = [i64::from(first.post_id), i64::from(second.post_id)];
     expected.sort_unstable();
@@ -621,10 +716,15 @@ async fn delete_media_member_reports_unique_ascending_owner_live_post_ids(
 #[apply(backends)]
 #[tokio::test]
 async fn delete_media_member_reports_deleted_post_and_revision_once(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let storage = TempDir::new().unwrap();
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
     let loc = upload_and_member_url(&app, &session, "deleted-reference.png").await;
     let sha256 = loc
         .as_ref()
@@ -636,12 +736,12 @@ async fn delete_media_member_reports_deleted_post_and_revision_once(#[case] back
     let media_url = common::media::url(&common::media::MediaSource::Upload, &sha256, &filename);
     let post = SeedRawPost::new(session.user_id)
         .body(parse_post_body(&format!("![deleted]({media_url})")))
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await;
     let outcome = storage::soft_delete_post(
-        &state.write_scope,
-        Arc::clone(&state.posts),
-        Arc::clone(&state.feed_events),
+        &env.write_scope(),
+        Arc::clone(&env.posts()),
+        Arc::clone(&env.feed_events()),
         post.post_id,
         session.user_id,
         common::time::UtcInstant::now(),
@@ -678,11 +778,21 @@ async fn delete_media_member_reports_deleted_post_and_revision_once(#[case] back
 #[apply(backends)]
 #[tokio::test]
 async fn delete_media_member_prefers_global_safety_over_owner_ids(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let storage = TempDir::new().unwrap();
-    let other_owner = create_user_and_session(&state).await;
-    let app = make_app(&state, &storage);
+    let other_owner = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, &storage);
 
     let loc = upload_and_member_url(&app, &session, "pic.png").await;
     let sha256 = loc
@@ -695,14 +805,14 @@ async fn delete_media_member_prefers_global_safety_over_owner_ids(#[case] backen
     let media_url = common::media::url(&common::media::MediaSource::Upload, &sha256, &filename);
     SeedRawPost::new(session.user_id)
         .body(parse_post_body(&format!("![referenced]({media_url})")))
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await;
 
     SeedRawPost::new(other_owner.user_id)
         .body(parse_post_body(&format!(
             "<img src=\"https://unknown.example{media_url}\">"
         )))
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await;
     let del_resp = app
         .oneshot(
@@ -721,11 +831,21 @@ async fn delete_media_member_prefers_global_safety_over_owner_ids(#[case] backen
 async fn delete_media_member_returns_409_for_another_owners_retained_reference(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let owner = create_user_and_session(&state).await;
-    let other_owner = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let owner = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let other_owner = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let storage = TempDir::new().unwrap();
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
 
     let loc = upload_and_member_url(&app, &owner, "retained.png").await;
     let sha256 = loc
@@ -741,7 +861,7 @@ async fn delete_media_member_returns_409_for_another_owners_retained_reference(
     );
     SeedRawPost::new(other_owner.user_id)
         .body(parse_post_body(&format!("<img src=\"{media_url}\">")))
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await;
 
     let response = app
@@ -769,12 +889,29 @@ async fn delete_media_member_returns_409_for_another_owners_retained_reference(
 #[apply(backends)]
 #[tokio::test]
 async fn delete_media_member_has_no_force_override(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let foreign_session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let foreign_session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let storage = TempDir::new().unwrap();
     let resolver = Arc::new(ForeignReferenceResolver::new([]));
-    let app = make_app_with_media_ownership_resolver(&state, &storage, resolver.clone());
+    let app = make_app!(
+        &env,
+        &storage;
+        instance_id = storage::InstanceId::new(),
+        mailer = noop_mailer(),
+        secure_cookies = false,
+        resolver = resolver.clone()
+    );
     let exact_member_url = upload_and_member_url(&app, &session, "exact-origin.png").await;
     let exact_hash = exact_member_url
         .rsplit('/')
@@ -791,7 +928,7 @@ async fn delete_media_member_has_no_force_override(#[case] backend: Backend) {
         .body(parse_post_body(&format!(
             "<img src=\"https://example.com{exact_media_url}\">"
         )))
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await;
 
     let forced_member_url =
@@ -854,7 +991,7 @@ async fn delete_media_member_has_no_force_override(#[case] backend: Backend) {
         .body(parse_post_body(&format!(
             "<img src=\"https://foreign.example{foreign_media_url}\">"
         )))
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await;
 
     resolver.insert_foreign_form(
@@ -892,7 +1029,7 @@ async fn delete_media_member_has_no_force_override(#[case] backend: Backend) {
         .body(parse_post_body(&format!(
             "<img src=\"https://unknown.example{unknown_media_url}\">"
         )))
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await;
     let unknown_delete = app
         .clone()
@@ -957,10 +1094,15 @@ async fn member_get_resolves_a_filename_needing_encoding(#[case] backend: Backen
     // private member-address extractor skipped re-encoding. This one would: Axum decodes
     // the `my%20photo.jpg` segment to `my photo.jpg`, and only the conversion recovers
     // the stored spelling to match the row.
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let storage = TempDir::new().unwrap();
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
 
     let loc = upload_and_member_url(&app, &session, "my photo.jpg").await;
     assert!(
@@ -990,10 +1132,15 @@ async fn member_get_resolves_a_filename_needing_encoding(#[case] backend: Backen
 async fn member_delete_resolves_a_filename_needing_encoding(#[case] backend: Backend) {
     // As above, for `member_delete`: the delete must match the stored row rather than
     // missing it, which the follow-up 404 confirms actually happened.
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let storage = TempDir::new().unwrap();
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
 
     let loc = upload_and_member_url(&app, &session, "my photo.jpg").await;
 
@@ -1028,10 +1175,15 @@ async fn an_over_long_segment_does_not_truncate_onto_a_stored_name(#[case] backe
     // name sitting exactly at the budget, then request a *longer* one whose truncation
     // would land on it. If the decoded-segment conversion ever repaired instead of
     // rejecting, this would resolve to another user's file rather than missing.
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let storage = TempDir::new().unwrap();
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
 
     let at_budget = "a".repeat(common::media::MAX_FILENAME_ENCODED_BYTES);
     let loc = upload_and_member_url(&app, &session, &at_budget).await;
@@ -1061,11 +1213,16 @@ async fn an_over_long_segment_does_not_truncate_onto_a_stored_name(#[case] backe
 #[apply(backends)]
 #[tokio::test]
 async fn upload_forbids_other_user(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
     let uri = parse_root_relative_url("/atompub/bob/media");
 
     let response = app
@@ -1085,10 +1242,15 @@ async fn upload_forbids_other_user(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn upload_rejects_empty_slug(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let storage = TempDir::new().unwrap();
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
 
     // ".." sanitizes to an empty filename.
     let response = app
@@ -1113,10 +1275,15 @@ async fn upload_rejects_empty_slug(#[case] backend: Backend) {
 #[case::delete(Method::DELETE)]
 #[tokio::test]
 async fn member_forbids_other_user(backend: Backend, #[case] method: Method) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let storage = TempDir::new().unwrap();
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
     let uri = parse_root_relative_url(
         "/atompub/bob/media/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/pic.png",
     );
@@ -1150,10 +1317,15 @@ async fn member_forbids_other_user(backend: Backend, #[case] method: Method) {
 #[apply(backends)]
 #[tokio::test]
 async fn member_rejects_malformed_segment_returns_400(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let storage = TempDir::new().unwrap();
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
 
     // Malformed hash segment (`deadbeef` is not 64 hex) → ContentHash parse fails → 400.
     let bad_hash = app

@@ -8,13 +8,13 @@ use rstest_reuse::*;
 use std::sync::Arc;
 
 use crate::helpers::{
-    confirmed_mutation, create_user_and_session, post_form, post_server_fn,
+    confirmed_mutation, create_user_and_session, make_app, post_form, post_server_fn,
     post_server_fn_request_fixture,
 };
 use storage::{
-    AppState,
+    AudienceStorage, WriteScope,
     test_support::{
-        Backend, SeedUser, TestEnv, backends, confirmed_for as confirmed, seed_local_subscription,
+        Backend, SeedUser, backends, confirmed_for as confirmed, seed_local_subscription,
     },
 };
 
@@ -30,13 +30,12 @@ fn parse_id(body: &str) -> i64 {
 }
 
 async fn create_audience_confirmed(
-    state: &AppState,
+    audiences: Arc<dyn AudienceStorage>,
+    write_scope: WriteScope,
     author: UserId,
     name: common::audience::AudienceName,
 ) -> AudienceId {
-    let audiences = Arc::clone(&state.audiences);
-    let outcome = state
-        .write_scope
+    let outcome = write_scope
         .run(move |transaction| {
             Box::pin(async move { audiences.create_audience(transaction, author, &name).await })
         })
@@ -46,14 +45,13 @@ async fn create_audience_confirmed(
 }
 
 async fn add_member_confirmed(
-    state: &AppState,
+    audiences: Arc<dyn AudienceStorage>,
+    write_scope: WriteScope,
     author: UserId,
     audience: AudienceId,
     subscription: SubscriptionId,
 ) {
-    let audiences = Arc::clone(&state.audiences);
-    let outcome = state
-        .write_scope
+    let outcome = write_scope
         .run(move |transaction| {
             Box::pin(async move {
                 audiences
@@ -70,12 +68,18 @@ async fn add_member_confirmed(
 #[apply(backends)]
 #[tokio::test]
 async fn rename_nested_request_maps_id_and_name(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let author = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let author = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let cookie = author.cookie();
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::audiences::Create as ServerFn>::PATH,
         "name=Friends",
         Some(&cookie),
@@ -85,7 +89,7 @@ async fn rename_nested_request_maps_id_and_name(#[case] backend: Backend) {
     let id = parse_id(&body);
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::audiences::ListMine as ServerFn>::PATH,
         "",
         Some(&cookie),
@@ -98,7 +102,7 @@ async fn rename_nested_request_maps_id_and_name(#[case] backend: Backend) {
     );
 
     let (status, body) = post_server_fn(
-        &state,
+        app.clone(),
         &web::audiences::Rename {
             request: web::audiences::RenameAudienceRequest {
                 audience_id: AudienceId::from(id),
@@ -110,7 +114,7 @@ async fn rename_nested_request_maps_id_and_name(#[case] backend: Backend) {
     .await;
     assert_eq!(status, StatusCode::OK, "rename failed: {body}");
     let (_status, body) = post_form(
-        &state,
+        app.clone(),
         <web::audiences::ListMine as ServerFn>::PATH,
         "",
         Some(&cookie),
@@ -119,15 +123,15 @@ async fn rename_nested_request_maps_id_and_name(#[case] backend: Backend) {
     assert!(body.contains("BestFriends"), "rename not reflected: {body}");
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::audiences::Delete as ServerFn>::PATH,
         &format!("audience_id={id}"),
         Some(&cookie),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "delete failed: {body}");
-    let audiences = state
-        .audiences
+    let audiences = env
+        .audiences()
         .list_audiences(author.user_id)
         .await
         .unwrap();
@@ -138,11 +142,18 @@ async fn rename_nested_request_maps_id_and_name(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn duplicate_audience_name_is_user_error(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, _) = post_form(
-        &state,
+        app.clone(),
         <web::audiences::Create as ServerFn>::PATH,
         "name=Friends",
         Some(&cookie),
@@ -151,7 +162,7 @@ async fn duplicate_audience_name_is_user_error(#[case] backend: Backend) {
     assert_eq!(status, StatusCode::OK);
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::audiences::Create as ServerFn>::PATH,
         "name=Friends",
         Some(&cookie),
@@ -169,12 +180,18 @@ async fn duplicate_audience_name_is_user_error(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_audience_empty_name_is_rejected(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let author = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let author = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let cookie = author.cookie();
 
     let (status, _body) = post_form(
-        &state,
+        app.clone(),
         <web::audiences::Create as ServerFn>::PATH,
         "name=%20%20",
         Some(&cookie),
@@ -182,8 +199,7 @@ async fn create_audience_empty_name_is_rejected(#[case] backend: Backend) {
     .await;
     assert_ne!(status, StatusCode::OK, "empty name must be rejected");
     assert!(
-        state
-            .audiences
+        env.audiences()
             .list_audiences(author.user_id)
             .await
             .unwrap()
@@ -197,12 +213,18 @@ async fn create_audience_empty_name_is_rejected(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn rename_audience_empty_name_is_rejected(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let author = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let author = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let cookie = author.cookie();
 
     let (_status, body) = post_form(
-        &state,
+        app.clone(),
         <web::audiences::Create as ServerFn>::PATH,
         "name=Friends",
         Some(&cookie),
@@ -211,7 +233,7 @@ async fn rename_audience_empty_name_is_rejected(#[case] backend: Backend) {
     let aud_id = parse_id(&body);
 
     let (status, _body) = post_server_fn_request_fixture::<web::audiences::Rename, _>(
-        &state,
+        app.clone(),
         &RenameAudienceDecodeFixture {
             audience_id: AudienceId::from(aud_id),
             name: "  ",
@@ -221,8 +243,8 @@ async fn rename_audience_empty_name_is_rejected(#[case] backend: Backend) {
     .await;
     assert_ne!(status, StatusCode::OK, "empty rename must be rejected");
     // Original name is unchanged.
-    let audiences = state
-        .audiences
+    let audiences = env
+        .audiences()
         .list_audiences(author.user_id)
         .await
         .unwrap();
@@ -234,17 +256,44 @@ async fn rename_audience_empty_name_is_rejected(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn list_audience_members_returns_members(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let author = create_user_and_session(&state).await;
-    let subscriber = SeedUser::new().seed(&state).await.user_id;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let author = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let subscriber = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await
+        .user_id;
     let cookie = author.cookie();
-    let sub_id = seed_local_subscription(&state, author.user_id, subscriber).await;
-    let aud_id =
-        create_audience_confirmed(&state, author.user_id, parse_audience_name("Friends")).await;
-    add_member_confirmed(&state, author.user_id, aud_id, sub_id).await;
+    let sub_id = seed_local_subscription(
+        env.subscriptions(),
+        env.write_scope(),
+        author.user_id,
+        subscriber,
+    )
+    .await;
+    let aud_id = create_audience_confirmed(
+        env.audiences(),
+        env.write_scope(),
+        author.user_id,
+        parse_audience_name("Friends"),
+    )
+    .await;
+    add_member_confirmed(
+        env.audiences(),
+        env.write_scope(),
+        author.user_id,
+        aud_id,
+        sub_id,
+    )
+    .await;
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::audiences::ListMembers as ServerFn>::PATH,
         &format!("audience_id={aud_id}"),
         Some(&cookie),
@@ -265,15 +314,36 @@ async fn list_audience_members_returns_members(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn add_subscriber_nested_request_maps_both_ids(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let author = create_user_and_session(&state).await;
-    let subscriber = SeedUser::new().seed(&state).await.user_id;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let author = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let subscriber = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await
+        .user_id;
     let cookie = author.cookie();
-    let sub_id = seed_local_subscription(&state, author.user_id, subscriber).await;
-    create_audience_confirmed(&state, author.user_id, parse_audience_name("Decoy")).await;
+    let sub_id = seed_local_subscription(
+        env.subscriptions(),
+        env.write_scope(),
+        author.user_id,
+        subscriber,
+    )
+    .await;
+    create_audience_confirmed(
+        env.audiences(),
+        env.write_scope(),
+        author.user_id,
+        parse_audience_name("Decoy"),
+    )
+    .await;
 
     let (_s, body) = post_form(
-        &state,
+        app.clone(),
         <web::audiences::Create as ServerFn>::PATH,
         "name=Friends",
         Some(&cookie),
@@ -291,7 +361,7 @@ async fn add_subscriber_nested_request_maps_both_ids(#[case] backend: Backend) {
         subscription_id: sub_id,
     };
     let (status, body) = post_server_fn(
-        &state,
+        app.clone(),
         &web::audiences::AddSubscriber {
             request: request.clone(),
         },
@@ -300,8 +370,7 @@ async fn add_subscriber_nested_request_maps_both_ids(#[case] backend: Backend) {
     .await;
     assert_eq!(status, StatusCode::OK, "add_member failed: {body}");
     assert_eq!(
-        state
-            .audiences
+        env.audiences()
             .list_members(author.user_id, aud_id)
             .await
             .unwrap(),
@@ -310,7 +379,7 @@ async fn add_subscriber_nested_request_maps_both_ids(#[case] backend: Backend) {
 
     // Adding the same subscriber again is idempotent through the boundary.
     let (status, body) = post_server_fn(
-        &state,
+        app.clone(),
         &web::audiences::AddSubscriber {
             request: request.clone(),
         },
@@ -319,8 +388,7 @@ async fn add_subscriber_nested_request_maps_both_ids(#[case] backend: Backend) {
     .await;
     assert_eq!(status, StatusCode::OK, "idempotent add failed: {body}");
     assert_eq!(
-        state
-            .audiences
+        env.audiences()
             .list_members(author.user_id, aud_id)
             .await
             .unwrap(),
@@ -329,7 +397,7 @@ async fn add_subscriber_nested_request_maps_both_ids(#[case] backend: Backend) {
     );
 
     let (status, body) = post_server_fn(
-        &state,
+        app.clone(),
         &web::audiences::RemoveSubscriber {
             request: request.clone(),
         },
@@ -338,8 +406,7 @@ async fn add_subscriber_nested_request_maps_both_ids(#[case] backend: Backend) {
     .await;
     assert_eq!(status, StatusCode::OK, "remove_member failed: {body}");
     assert!(
-        state
-            .audiences
+        env.audiences()
             .list_members(author.user_id, aud_id)
             .await
             .unwrap()
@@ -348,7 +415,7 @@ async fn add_subscriber_nested_request_maps_both_ids(#[case] backend: Backend) {
 
     // Removing a subscriber who is no longer a member is a no-op, not an error.
     let (status, body) = post_server_fn(
-        &state,
+        app.clone(),
         &web::audiences::RemoveSubscriber { request },
         Some(&cookie),
     )
@@ -359,8 +426,7 @@ async fn add_subscriber_nested_request_maps_both_ids(#[case] backend: Backend) {
         "redundant remove should be a no-op: {body}"
     );
     assert!(
-        state
-            .audiences
+        env.audiences()
             .list_members(author.user_id, aud_id)
             .await
             .unwrap()
@@ -371,24 +437,56 @@ async fn add_subscriber_nested_request_maps_both_ids(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn remove_subscriber_nested_request_maps_both_ids(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let author = create_user_and_session(&state).await;
-    let subscriber = SeedUser::new().seed(&state).await.user_id;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let author = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let subscriber = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await
+        .user_id;
     let cookie = author.cookie();
-    let subscription_id = seed_local_subscription(&state, author.user_id, subscriber).await;
-    create_audience_confirmed(&state, author.user_id, parse_audience_name("Decoy")).await;
-    let audience_id =
-        create_audience_confirmed(&state, author.user_id, parse_audience_name("Remove target"))
-            .await;
+    let subscription_id = seed_local_subscription(
+        env.subscriptions(),
+        env.write_scope(),
+        author.user_id,
+        subscriber,
+    )
+    .await;
+    create_audience_confirmed(
+        env.audiences(),
+        env.write_scope(),
+        author.user_id,
+        parse_audience_name("Decoy"),
+    )
+    .await;
+    let audience_id = create_audience_confirmed(
+        env.audiences(),
+        env.write_scope(),
+        author.user_id,
+        parse_audience_name("Remove target"),
+    )
+    .await;
     assert_ne!(
         i64::from(audience_id),
         i64::from(subscription_id),
         "sentinel ids must differ so a transposition cannot pass"
     );
-    add_member_confirmed(&state, author.user_id, audience_id, subscription_id).await;
+    add_member_confirmed(
+        env.audiences(),
+        env.write_scope(),
+        author.user_id,
+        audience_id,
+        subscription_id,
+    )
+    .await;
 
     let (status, body) = post_server_fn(
-        &state,
+        app.clone(),
         &web::audiences::RemoveSubscriber {
             request: web::audiences::AudienceMembershipRequest {
                 audience_id,
@@ -401,8 +499,7 @@ async fn remove_subscriber_nested_request_maps_both_ids(#[case] backend: Backend
 
     assert_eq!(status, StatusCode::OK, "remove_member failed: {body}");
     assert!(
-        state
-            .audiences
+        env.audiences()
             .list_members(author.user_id, audience_id)
             .await
             .unwrap()
@@ -417,18 +514,45 @@ async fn remove_subscriber_nested_request_maps_both_ids(#[case] backend: Backend
 #[apply(backends)]
 #[tokio::test]
 async fn cross_author_audience_id_is_scoped_away(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let alice = SeedUser::new().seed(&state).await.user_id;
-    let subscriber = SeedUser::new().seed(&state).await.user_id;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let alice = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await
+        .user_id;
+    let subscriber = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await
+        .user_id;
     // Alice owns an audience with a member.
-    let alice_sub = seed_local_subscription(&state, alice, subscriber).await;
-    let alice_aud = create_audience_confirmed(&state, alice, parse_audience_name("Secret")).await;
-    add_member_confirmed(&state, alice, alice_aud, alice_sub).await;
-    let bob_cookie = create_user_and_session(&state).await.cookie();
+    let alice_sub =
+        seed_local_subscription(env.subscriptions(), env.write_scope(), alice, subscriber).await;
+    let alice_aud = create_audience_confirmed(
+        env.audiences(),
+        env.write_scope(),
+        alice,
+        parse_audience_name("Secret"),
+    )
+    .await;
+    add_member_confirmed(
+        env.audiences(),
+        env.write_scope(),
+        alice,
+        alice_aud,
+        alice_sub,
+    )
+    .await;
+    let bob_cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     // Bob lists Alice's audience members → succeeds, but sees nothing of hers.
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::audiences::ListMembers as ServerFn>::PATH,
         &format!("audience_id={alice_aud}"),
         Some(&bob_cookie),
@@ -443,7 +567,7 @@ async fn cross_author_audience_id_is_scoped_away(#[case] backend: Backend) {
 
     // Bob removes from Alice's audience → succeeds, but changes nothing.
     let (status, body) = post_server_fn(
-        &state,
+        app.clone(),
         &web::audiences::RemoveSubscriber {
             request: web::audiences::AudienceMembershipRequest {
                 audience_id: alice_aud,
@@ -456,8 +580,7 @@ async fn cross_author_audience_id_is_scoped_away(#[case] backend: Backend) {
     assert_eq!(status, StatusCode::OK, "{body}");
     // Alice's membership is intact.
     assert_eq!(
-        state
-            .audiences
+        env.audiences()
             .list_members(alice, alice_aud)
             .await
             .unwrap(),
@@ -469,14 +592,28 @@ async fn cross_author_audience_id_is_scoped_away(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn list_my_subscribers_resolves_usernames(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let author = create_user_and_session(&state).await;
-    let subscriber = SeedUser::new().seed(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let author = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let subscriber = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await;
     let cookie = author.cookie();
-    seed_local_subscription(&state, author.user_id, subscriber.user_id).await;
+    seed_local_subscription(
+        env.subscriptions(),
+        env.write_scope(),
+        author.user_id,
+        subscriber.user_id,
+    )
+    .await;
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::audiences::ListMySubscribers as ServerFn>::PATH,
         "",
         Some(&cookie),
@@ -495,7 +632,8 @@ async fn list_my_subscribers_resolves_usernames(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn audience_endpoints_require_authentication(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
     let direct_endpoints = [
         (<web::audiences::Create as ServerFn>::PATH, "name=Friends"),
@@ -508,7 +646,7 @@ async fn audience_endpoints_require_authentication(#[case] backend: Backend) {
         ),
     ];
     for (uri, body) in direct_endpoints {
-        let (status, _body) = post_form(&state, uri, body, None).await;
+        let (status, _body) = post_form(app.clone(), uri, body, None).await;
         assert_eq!(
             status,
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -517,7 +655,7 @@ async fn audience_endpoints_require_authentication(#[case] backend: Backend) {
     }
 
     let (status, _body) = post_server_fn(
-        &state,
+        app.clone(),
         &web::audiences::Rename {
             request: web::audiences::RenameAudienceRequest {
                 audience_id: AudienceId::from(1),
@@ -538,7 +676,7 @@ async fn audience_endpoints_require_authentication(#[case] backend: Backend) {
         subscription_id: SubscriptionId::from(1),
     };
     let (status, _body) = post_server_fn(
-        &state,
+        app.clone(),
         &web::audiences::AddSubscriber {
             request: request.clone(),
         },
@@ -551,8 +689,12 @@ async fn audience_endpoints_require_authentication(#[case] backend: Backend) {
         "add subscriber must require authentication"
     );
 
-    let (status, _body) =
-        post_server_fn(&state, &web::audiences::RemoveSubscriber { request }, None).await;
+    let (status, _body) = post_server_fn(
+        app.clone(),
+        &web::audiences::RemoveSubscriber { request },
+        None,
+    )
+    .await;
     assert_eq!(
         status,
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -568,17 +710,37 @@ async fn audience_endpoints_require_authentication(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn cross_author_add_member_is_rejected(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let alice = SeedUser::new().seed(&state).await.user_id;
-    let subscriber = SeedUser::new().seed(&state).await.user_id;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let alice = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await
+        .user_id;
+    let subscriber = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await
+        .user_id;
     // Alice owns a subscription and an audience (no members yet).
-    let alice_sub = seed_local_subscription(&state, alice, subscriber).await;
-    let alice_aud = create_audience_confirmed(&state, alice, parse_audience_name("Secret")).await;
-    let bob_cookie = create_user_and_session(&state).await.cookie();
+    let alice_sub =
+        seed_local_subscription(env.subscriptions(), env.write_scope(), alice, subscriber).await;
+    let alice_aud = create_audience_confirmed(
+        env.audiences(),
+        env.write_scope(),
+        alice,
+        parse_audience_name("Secret"),
+    )
+    .await;
+    let bob_cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     // Bob tries to inject Alice's subscription into Alice's audience.
     let (status, body) = post_server_fn(
-        &state,
+        app.clone(),
         &web::audiences::AddSubscriber {
             request: web::audiences::AudienceMembershipRequest {
                 audience_id: alice_aud,
@@ -595,8 +757,7 @@ async fn cross_author_add_member_is_rejected(#[case] backend: Backend) {
     );
     // Alice's audience is still empty — nothing was added on her behalf.
     assert!(
-        state
-            .audiences
+        env.audiences()
             .list_members(alice, alice_aud)
             .await
             .unwrap()
@@ -613,14 +774,30 @@ async fn cross_author_add_member_is_rejected(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn cross_author_rename_and_delete_are_scoped(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let alice = SeedUser::new().seed(&state).await.user_id;
-    let alice_aud = create_audience_confirmed(&state, alice, parse_audience_name("Secret")).await;
-    let bob_cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let alice = SeedUser::new()
+        .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
+        .await
+        .user_id;
+    let alice_aud = create_audience_confirmed(
+        env.audiences(),
+        env.write_scope(),
+        alice,
+        parse_audience_name("Secret"),
+    )
+    .await;
+    let bob_cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     // Bob renames Alice's audience → refused (store NotFound); name unchanged.
     let (status, body) = post_server_fn(
-        &state,
+        app.clone(),
         &web::audiences::Rename {
             request: web::audiences::RenameAudienceRequest {
                 audience_id: alice_aud,
@@ -638,7 +815,7 @@ async fn cross_author_rename_and_delete_are_scoped(#[case] backend: Backend) {
 
     // Bob deletes Alice's audience → author-scoped no-op (OK), still present.
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::audiences::Delete as ServerFn>::PATH,
         &format!("audience_id={alice_aud}"),
         Some(&bob_cookie),
@@ -651,7 +828,7 @@ async fn cross_author_rename_and_delete_are_scoped(#[case] backend: Backend) {
     );
 
     // Alice's audience is intact under its original name.
-    let audiences = state.audiences.list_audiences(alice).await.unwrap();
+    let audiences = env.audiences().list_audiences(alice).await.unwrap();
     assert_eq!(audiences.len(), 1);
     assert_eq!(audiences[0].name, "Secret", "name must be unchanged");
 }

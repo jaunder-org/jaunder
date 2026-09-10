@@ -10,7 +10,7 @@ use crate::helpers::{
     SeededSession, atompub, atompub_at, atompub_location, body_string, create_user_and_session,
     make_app,
 };
-use storage::test_support::{Backend, TestEnv, backends};
+use storage::test_support::{Backend, backends};
 
 use super::fixtures::{entry_xml, etag_of};
 
@@ -61,9 +61,15 @@ fn location_of(response: &axum::response::Response) -> String {
 #[tokio::test]
 async fn create_with_same_idempotency_key_dedups(#[case] backend: Backend) {
     // AC-S1: the same key creates one post; the retry returns it as 200.
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
     let xml = entry_xml("Hello", "text", "the body");
 
     let first = create_post_keyed(app.clone(), &session, &xml, Some("idem-1")).await;
@@ -92,9 +98,15 @@ async fn create_with_same_idempotency_key_dedups(#[case] backend: Backend) {
 #[tokio::test]
 async fn replay_for_deleted_post_returns_not_found(#[case] backend: Backend) {
     // A live retry mapping must not bypass the active-Post boundary after deletion.
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
     let xml = entry_xml("Deleted", "text", "the body");
 
     let created = create_post_keyed(app.clone(), &session, &xml, Some("deleted-key")).await;
@@ -127,9 +139,15 @@ async fn replay_for_deleted_post_returns_not_found(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_with_expired_idempotency_key_creates_a_replacement(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
     let first_xml = entry_xml("Original", "text", "original body");
 
     let first = create_post_keyed(app.clone(), &session, &first_xml, Some("expired-key")).await;
@@ -161,9 +179,15 @@ async fn create_with_expired_idempotency_key_creates_a_replacement(#[case] backe
 #[tokio::test]
 async fn create_with_fresh_idempotency_key_is_201(#[case] backend: Backend) {
     // AC-S2: distinct keys create distinct posts.
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
     let xml = entry_xml("Hello", "text", "the body");
 
     let first = create_post_keyed(app.clone(), &session, &xml, Some("k-a")).await;
@@ -177,9 +201,15 @@ async fn create_with_fresh_idempotency_key_is_201(#[case] backend: Backend) {
 #[tokio::test]
 async fn create_without_idempotency_key_is_201(#[case] backend: Backend) {
     // AC-S3: no header → create as today.
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
     let xml = entry_xml("Hello", "text", "the body");
 
     let response = create_post_keyed(app, &session, &xml, None).await;
@@ -189,9 +219,15 @@ async fn create_without_idempotency_key_is_201(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn unreadable_or_blank_idempotency_keys_do_not_dedup(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
     let xml = entry_xml("Hello", "text", "the body");
 
     for header_value in [
@@ -218,10 +254,21 @@ async fn unreadable_or_blank_idempotency_keys_do_not_dedup(#[case] backend: Back
 #[apply(backends)]
 #[tokio::test]
 async fn idempotency_key_is_scoped_to_the_authenticated_user(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let alice = create_user_and_session(&state).await;
-    let bob = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let alice = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let bob = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
     let xml = entry_xml("Hello", "text", "the body");
 
     let alice_response = create_post_keyed(app.clone(), &alice, &xml, Some("shared-key")).await;

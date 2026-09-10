@@ -31,14 +31,16 @@ use common::test_support::{
     parse_byte_size, parse_content_hash, parse_content_type, parse_filename, parse_post_body,
 };
 use storage::test_support::{
-    Backend, SeedRawPost, TestEnv, backends, backends_matrix, noop_mailer, seed_media,
+    Backend, SeedRawPost, backends, backends_matrix, noop_mailer, seed_media,
 };
 
-async fn create_media(state: &storage::AppState, record: &MediaRecord) {
-    let media = state.media.clone();
+async fn create_media(
+    media: std::sync::Arc<dyn storage::MediaStorage>,
+    write_scope: storage::WriteScope,
+    record: &MediaRecord,
+) {
     let record = record.clone();
-    let outcome = match state
-        .write_scope
+    let outcome = match write_scope
         .run(move |transaction| {
             Box::pin(async move { media.create_media(transaction, &record).await })
         })
@@ -108,11 +110,18 @@ impl MediaReferenceOwnershipResolver for BlockingOwnershipResolver {
 #[apply(backends)]
 #[tokio::test]
 async fn media_usage_returns_defaults_for_authenticated_user(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::media::GetUsage as ServerFn>::PATH,
         "",
         Some(&cookie),
@@ -133,11 +142,22 @@ async fn media_usage_returns_defaults_for_authenticated_user(#[case] backend: Ba
 #[apply(backends)]
 #[tokio::test]
 async fn get_uploads_enabled_defaults_to_true_for_authenticated_user(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
-    let (status, body) =
-        post_server_fn(&state, &web::media::GetUploadsEnabled {}, Some(&cookie)).await;
+    let (status, body) = post_server_fn(
+        app.clone(),
+        &web::media::GetUploadsEnabled {},
+        Some(&cookie),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(
@@ -149,11 +169,22 @@ async fn get_uploads_enabled_defaults_to_true_for_authenticated_user(#[case] bac
 #[apply(backends)]
 #[tokio::test]
 async fn get_uploads_enabled_reports_an_explicitly_disabled_capability(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().media_uploads_enabled(false).await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().media_uploads_enabled(false).await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
-    let (status, body) =
-        post_server_fn(&state, &web::media::GetUploadsEnabled {}, Some(&cookie)).await;
+    let (status, body) = post_server_fn(
+        app.clone(),
+        &web::media::GetUploadsEnabled {},
+        Some(&cookie),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(
@@ -168,14 +199,16 @@ async fn get_uploads_enabled_reports_an_explicitly_disabled_capability(#[case] b
 #[apply(backends)]
 #[tokio::test]
 async fn media_endpoints_reject_unauthenticated_requests(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
-    let (usage_status, usage_body) = post_server_fn(&state, &web::media::GetUsage {}, None).await;
+    let (usage_status, usage_body) =
+        post_server_fn(app.clone(), &web::media::GetUsage {}, None).await;
     let (uploads_enabled_status, uploads_enabled_body) =
-        post_server_fn(&state, &web::media::GetUploadsEnabled {}, None).await;
+        post_server_fn(app.clone(), &web::media::GetUploadsEnabled {}, None).await;
 
     let (list_status, list_body) = post_server_fn(
-        &state,
+        app.clone(),
         &web::media::ListMine {
             source: None,
             limit: None,
@@ -185,7 +218,7 @@ async fn media_endpoints_reject_unauthenticated_requests(#[case] backend: Backen
     )
     .await;
     let (delete_status, delete_body) = post_server_fn(
-        &state,
+        app.clone(),
         &web::media::Delete {
             request: web::media::DeleteMediaRequest {
                 sha256: parse_content_hash(
@@ -222,11 +255,12 @@ async fn media_endpoints_reject_unauthenticated_requests(#[case] backend: Backen
 #[apply(backends)]
 #[tokio::test]
 async fn media_server_function_auth_rejection_does_not_advertise_basic(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
     let request_body =
         serde_qs::to_string(&web::media::GetUsage {}).expect("serialize server-function input");
 
-    let response = make_app(&state, &base)
+    let response = app
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -247,11 +281,18 @@ async fn media_server_function_auth_rejection_does_not_advertise_basic(#[case] b
 #[apply(backends)]
 #[tokio::test]
 async fn list_my_media_returns_empty_for_new_user(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::media::ListMine as ServerFn>::PATH,
         "",
         Some(&cookie),
@@ -266,13 +307,20 @@ async fn list_my_media_returns_empty_for_new_user(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn list_my_media_rejects_out_of_range_limit(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     // `limit=999` is outside PageSize's `1..=50`; the typed wire arg rejects it on
     // deserialization instead of fetching an unbounded page.
     let (status, _body) = post_form(
-        &state,
+        app.clone(),
         <web::media::ListMine as ServerFn>::PATH,
         "limit=999",
         Some(&cookie),
@@ -289,15 +337,27 @@ async fn list_my_media_rejects_out_of_range_limit(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn list_my_media_returns_inserted_item(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().media_uploads_enabled(false).await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().media_uploads_enabled(false).await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
 
-    seed_media(&state, session.user_id, "photo.jpg").await;
+    seed_media(
+        std::sync::Arc::clone(&env.media()),
+        env.write_scope(),
+        session.user_id,
+        "photo.jpg",
+    )
+    .await;
 
     let cookie = session.cookie();
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::media::ListMine as ServerFn>::PATH,
         "",
         Some(&cookie),
@@ -318,15 +378,27 @@ async fn list_my_media_returns_inserted_item(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn list_my_media_with_source_filter(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
 
-    seed_media(&state, session.user_id, "clip.mp4").await;
+    seed_media(
+        std::sync::Arc::clone(&env.media()),
+        env.write_scope(),
+        session.user_id,
+        "clip.mp4",
+    )
+    .await;
 
     let cookie = session.cookie();
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::media::ListMine as ServerFn>::PATH,
         "source=upload",
         Some(&cookie),
@@ -344,15 +416,27 @@ async fn list_my_media_with_source_filter(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn delete_nested_request_maps_identity_without_force(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().media_uploads_enabled(false).await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().media_uploads_enabled(false).await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
 
-    let media = seed_media(&state, session.user_id, "test.png").await;
+    let media = seed_media(
+        std::sync::Arc::clone(&env.media()),
+        env.write_scope(),
+        session.user_id,
+        "test.png",
+    )
+    .await;
 
     let cookie = session.cookie();
 
     let (status, body_str) = post_server_fn(
-        &state,
+        app.clone(),
         &web::media::Delete {
             request: web::media::DeleteMediaRequest {
                 sha256: media.sha256.clone(),
@@ -376,22 +460,34 @@ async fn delete_nested_request_maps_identity_without_force(#[case] backend: Back
 #[apply(backends)]
 #[tokio::test]
 async fn delete_nested_request_refuses_referenced_without_force(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let user_id = session.user_id;
 
-    let media = seed_media(&state, user_id, "inline.png").await;
+    let media = seed_media(
+        std::sync::Arc::clone(&env.media()),
+        env.write_scope(),
+        user_id,
+        "inline.png",
+    )
+    .await;
     let media_url = common::media::url(&media.source, &media.sha256, &media.filename);
 
     let post = SeedRawPost::new(user_id)
         .body(parse_post_body(&format!("![inline]({media_url})")))
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await;
 
     let cookie = session.cookie();
 
     let (status, body_str) = post_server_fn(
-        &state,
+        app.clone(),
         &web::media::Delete {
             request: web::media::DeleteMediaRequest {
                 sha256: media.sha256.clone(),
@@ -417,9 +513,19 @@ async fn delete_nested_request_refuses_referenced_without_force(#[case] backend:
 #[apply(backends)]
 #[tokio::test]
 async fn delete_uses_one_global_live_ownership_snapshot(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let owner = create_user_and_session(&state).await;
-    let stranger = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let owner = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let stranger = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let sha256 =
         parse_content_hash("deadbeef99999998000000000000000000000000000000000000000000000000");
     let filename = parse_filename("live-evidence.png");
@@ -433,22 +539,29 @@ async fn delete_uses_one_global_live_ownership_snapshot(#[case] backend: Backend
         source_url: None,
         created_at: UtcInstant::now(),
     };
-    create_media(&state, &media).await;
+    create_media(env.media(), env.write_scope(), &media).await;
     let media_url = common::media::url(&media.source, &sha256, &filename);
     let foreign_form: MediaReferenceForm = format!("https://foreign.example{media_url}")
         .parse()
         .expect("valid media reference form");
     let resolver = Arc::new(ForeignReferenceResolver::new([foreign_form.clone()]));
+    let app = make_app!(
+        &env, &env.base;
+        instance_id = InstanceId::new(),
+        mailer = noop_mailer(),
+        secure_cookies = false,
+        resolver = resolver.clone()
+    );
+    // The router owns this resolver for the full request lifecycle.
 
     let owned = SeedRawPost::new(owner.user_id)
         .body(parse_post_body(&format!(
             "<img src=\"https://owned.example{media_url}\">"
         )))
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await;
     let (status, body) = post_server_fn_with_media_ownership_resolver(
-        &state,
-        resolver.clone(),
+        app.clone(),
         &web::media::Delete {
             request: web::media::DeleteMediaRequest {
                 sha256: sha256.clone(),
@@ -476,17 +589,16 @@ async fn delete_uses_one_global_live_ownership_snapshot(#[case] backend: Backend
 
     let _foreign = SeedRawPost::new(owner.user_id)
         .body(parse_post_body(&format!("<img src=\"{foreign_form}\">")))
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await;
     let _unknown = SeedRawPost::new(stranger.user_id)
         .body(parse_post_body(&format!(
             "<img src=\"https://unknown.example{media_url}\">"
         )))
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await;
     let (status, body) = post_server_fn_with_media_ownership_resolver(
-        &state,
-        resolver.clone(),
+        app.clone(),
         &web::media::Delete {
             request: web::media::DeleteMediaRequest {
                 sha256,
@@ -524,8 +636,21 @@ async fn delete_uses_one_global_live_ownership_snapshot(#[case] backend: Backend
 async fn delete_refusal_reports_locked_classification_including_concurrent_post(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let resolver = Arc::new(BlockingOwnershipResolver::new());
+    let app = make_app!(
+        &env, &env.base;
+        instance_id = InstanceId::new(),
+        mailer = noop_mailer(),
+        secure_cookies = false,
+        resolver = resolver.clone()
+    );
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let sha256 =
         parse_content_hash("deadbeef99999997000000000000000000000000000000000000000000000000");
     let filename = parse_filename("snapshot.png");
@@ -539,13 +664,13 @@ async fn delete_refusal_reports_locked_classification_including_concurrent_post(
         source_url: None,
         created_at: UtcInstant::now(),
     };
-    create_media(&state, &media).await;
+    create_media(env.media(), env.write_scope(), &media).await;
     let media_url = common::media::url(&media.source, &sha256, &filename);
     let original = SeedRawPost::new(session.user_id)
         .body(parse_post_body(&format!("<img src=\"{media_url}\">")))
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await;
-    let resolver = Arc::new(BlockingOwnershipResolver::new());
+    // The router owns this resolver for the full request lifecycle.
     let started = resolver.started.notified();
     let request = web::media::Delete {
         request: web::media::DeleteMediaRequest {
@@ -556,19 +681,17 @@ async fn delete_refusal_reports_locked_classification_including_concurrent_post(
         },
     };
     let deleting = tokio::spawn({
-        let state = Arc::clone(&state);
-        let resolver = Arc::clone(&resolver);
+        let app = app.clone();
         let cookie = session.cookie();
         async move {
-            post_server_fn_with_media_ownership_resolver(&state, resolver, &request, Some(&cookie))
-                .await
+            post_server_fn_with_media_ownership_resolver(app.clone(), &request, Some(&cookie)).await
         }
     });
     started.await;
 
     let later = SeedRawPost::new(session.user_id)
         .body(parse_post_body(&format!("<img src=\"{media_url}\">")))
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await;
     resolver.release.notify_one();
     let (status, body) = deleting.await.expect("delete task does not panic");
@@ -589,8 +712,14 @@ async fn delete_refusal_reports_locked_classification_including_concurrent_post(
 #[apply(backends)]
 #[tokio::test]
 async fn delete_nested_request_force_can_break_owner_retained_history(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let user_id = session.user_id;
     let sha256 =
         parse_content_hash("feedface99999999000000000000000000000000000000000000000000000000");
@@ -606,14 +735,14 @@ async fn delete_nested_request_force_can_break_owner_retained_history(#[case] ba
         source_url: None,
         created_at: UtcInstant::now(),
     };
-    create_media(&state, &record).await;
+    create_media(env.media(), env.write_scope(), &record).await;
     SeedRawPost::new(user_id)
         .body(parse_post_body(&format!("![forced]({media_url})")))
-        .seed(&state)
+        .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await;
 
     let (status, body_str) = post_server_fn(
-        &state,
+        app.clone(),
         &web::media::Delete {
             request: web::media::DeleteMediaRequest {
                 sha256: sha256.clone(),
@@ -633,8 +762,7 @@ async fn delete_nested_request_force_can_break_owner_retained_history(#[case] ba
         "explicit force may knowingly break the owner's retained history"
     );
     assert!(
-        state
-            .media
+        env.media()
             .get_media(user_id, &sha256, &filename, &MediaSource::Upload)
             .await
             .unwrap()
@@ -648,14 +776,20 @@ async fn delete_nested_request_force_can_break_owner_retained_history(#[case] ba
 #[apply(backends)]
 #[tokio::test]
 async fn upload_media_stores_file_and_returns_metadata(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let storage = TempDir::new().unwrap();
+    let app = make_app!(&env, &storage);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     // A real writable root so the upload lands on disk (separate from the DB backend).
-    let storage = TempDir::new().unwrap();
     let (status, body) = post_multipart(
-        &state,
-        &storage,
+        app.clone(),
         <web::media::Upload as ServerFn>::PATH,
         MultipartFile {
             filename: "photo.jpg",
@@ -677,14 +811,20 @@ async fn upload_media_stores_file_and_returns_metadata(#[case] backend: Backend)
 #[apply(backends)]
 #[tokio::test]
 async fn upload_media_detects_content_type_when_field_omits_it(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
     let storage = TempDir::new().unwrap();
     let boundary = "----testboundary1234";
     let body = format!(
         "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"photo.jpg\"\r\n\r\nfake jpeg data\r\n--{boundary}--\r\n"
     );
-    let response = make_app(&state, &storage)
+    let response = make_app!(&env, &storage)
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -709,16 +849,22 @@ async fn upload_media_detects_content_type_when_field_omits_it(#[case] backend: 
 #[apply(backends)]
 #[tokio::test]
 async fn upload_then_serve_round_trips_a_filename_needing_encoding(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
     let storage = TempDir::new().unwrap();
+    let app = make_app!(&env, &storage);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     // A space is a *legal* `Filename` — `sanitize_filename` permits it — so this is an
     // ordinary upload, not a hostile one. The derived URL must carry it encoded:
     // `RootRelativeUrl` cannot even represent a raw space (#675).
     let (status, body) = post_multipart(
-        &state,
-        &storage,
+        app.clone(),
         <web::media::Upload as ServerFn>::PATH,
         MultipartFile {
             filename: "my photo.jpg",
@@ -771,7 +917,7 @@ async fn upload_then_serve_round_trips_a_filename_needing_encoding(#[case] backe
     // The property that actually matters, and the one no unit test can reach: fetching the
     // URL we just handed the client returns the bytes we stored. It fails if the writer's
     // spelling of the name on disk and the reader's ever diverge again.
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
     let request = Request::builder()
         .method("GET")
         .uri(resp.url.to_string())
@@ -788,17 +934,22 @@ async fn upload_then_serve_round_trips_a_filename_needing_encoding(#[case] backe
 #[apply(backends)]
 #[tokio::test]
 async fn upload_then_serve_survives_a_name_too_long_to_store(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
     let storage = TempDir::new().unwrap();
+    let app = make_app!(&env, &storage);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     // 200 `ä` is 400 raw bytes and ~1200 once percent-encoded — far past the filesystem's
     // 255-byte per-component limit. It must be rejected before the file write, not fail
-    // there with an opaque 500 (#708); the name is otherwise perfectly legal.
     let long_name = format!("{}.jpg", "ä".repeat(200));
     let (status, body) = post_multipart(
-        &state,
-        &storage,
+        app.clone(),
         <web::media::Upload as ServerFn>::PATH,
         MultipartFile {
             filename: &long_name,
@@ -808,8 +959,8 @@ async fn upload_then_serve_survives_a_name_too_long_to_store(#[case] backend: Ba
         Some(&cookie),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "body: {body}");
     let resp = confirmed_upload(&body);
+    assert_eq!(status, StatusCode::OK, "body: {body}");
 
     // Truncated, not rejected — and the extension survived, so the detected content type is
     // still an image rather than octet-stream.
@@ -819,7 +970,7 @@ async fn upload_then_serve_survives_a_name_too_long_to_store(#[case] backend: Ba
 
     // The point of the test: the file actually landed and is served back at the URL handed
     // to the client.
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
     let request = Request::builder()
         .method("GET")
         .uri(resp.url.to_string())
@@ -836,12 +987,11 @@ async fn upload_then_serve_survives_a_name_too_long_to_store(#[case] backend: Ba
 #[apply(backends)]
 #[tokio::test]
 async fn upload_media_rejects_unauthenticated_request(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-
+    let env = backend.setup().await;
     let storage = TempDir::new().unwrap();
+    let app = make_app!(&env, &storage);
     let (status, body) = post_multipart(
-        &state,
-        &storage,
+        app.clone(),
         <web::media::Upload as ServerFn>::PATH,
         MultipartFile {
             filename: "photo.jpg",
@@ -861,13 +1011,18 @@ async fn upload_media_rejects_unauthenticated_request(#[case] backend: Backend) 
 #[apply(backends)]
 #[tokio::test]
 async fn disabled_upload_is_forbidden_without_media_mutation(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().media_uploads_enabled(false).await;
-    let session = create_user_and_session(&state).await;
-    let cookie = session.cookie();
+    let env = backend.setup().media_uploads_enabled(false).await;
     let storage = TempDir::new().unwrap();
+    let app = make_app!(&env, &storage);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let cookie = session.cookie();
     let (status, body) = post_multipart(
-        &state,
-        &storage,
+        app.clone(),
         <web::media::Upload as ServerFn>::PATH,
         MultipartFile {
             filename: "blocked.png",
@@ -898,8 +1053,7 @@ async fn disabled_upload_is_forbidden_without_media_mutation(#[case] backend: Ba
         "disabled upload must not create durable media"
     );
     assert!(
-        state
-            .media
+        env.media()
             .list_media(
                 session.user_id,
                 None,
@@ -916,15 +1070,20 @@ async fn disabled_upload_is_forbidden_without_media_mutation(#[case] backend: Ba
 #[apply(backends)]
 #[tokio::test]
 async fn upload_media_rejects_invalid_filename(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
-
+    let env = backend.setup().await;
     let storage = TempDir::new().unwrap();
+    let app = make_app!(&env, &storage);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
     // `..` sanitizes to empty → `MediaError::BadRequest`, exercising `map_media_error`'s
     // BadRequest arm (projected to `WebError::Validation`).
     let (status, body) = post_multipart(
-        &state,
-        &storage,
+        app.clone(),
         <web::media::Upload as ServerFn>::PATH,
         MultipartFile {
             filename: "..",
@@ -947,16 +1106,21 @@ async fn upload_media_rejects_invalid_filename(#[case] backend: Backend) {
 async fn upload_media_rejects_oversized_file(#[case] backend: Backend) {
     // Cap the max file size at 5 bytes so a 14-byte upload trips PayloadTooLarge,
     // exercising `map_media_error`'s PayloadTooLarge arm.
-    let TestEnv { state, base: _base } = backend
+    let env = backend
         .setup()
         .media_limits("5".parse().unwrap(), UserQuota::default())
         .await;
-    let cookie = create_user_and_session(&state).await.cookie();
-
     let storage = TempDir::new().unwrap();
+    let app = make_app!(&env, &storage);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
     let (status, body) = post_multipart(
-        &state,
-        &storage,
+        app.clone(),
         <web::media::Upload as ServerFn>::PATH,
         MultipartFile {
             filename: "big.jpg",
@@ -979,16 +1143,21 @@ async fn upload_media_rejects_oversized_file(#[case] backend: Backend) {
 async fn upload_media_rejects_over_quota_file(#[case] backend: Backend) {
     // A 5-byte user quota with a 14-byte upload trips InsufficientStorage, exercising
     // `map_media_error`'s InsufficientStorage arm.
-    let TestEnv { state, base: _base } = backend
+    let env = backend
         .setup()
         .media_limits(MaxFileSize::default(), "5".parse().unwrap())
         .await;
-    let cookie = create_user_and_session(&state).await.cookie();
-
     let storage = TempDir::new().unwrap();
+    let app = make_app!(&env, &storage);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
     let (status, body) = post_multipart(
-        &state,
-        &storage,
+        app.clone(),
         <web::media::Upload as ServerFn>::PATH,
         MultipartFile {
             filename: "big.jpg",
@@ -1009,13 +1178,19 @@ async fn upload_media_rejects_over_quota_file(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn upload_media_rejects_missing_file_field(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     // An empty multipart body (a closing boundary with no field) yields
     // `next_field() == None`, exercising the "no file field" guard.
     let storage = TempDir::new().unwrap();
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
     let boundary = "----testboundary1234";
     let body = format!("--{boundary}--\r\n");
 
@@ -1044,21 +1219,13 @@ async fn upload_media_rejects_missing_file_field(#[case] backend: Backend) {
 
 // ─── serve_handler hash validation (security: §2.2) ────────────
 
-async fn media_serve_get(state: &Arc<storage::AppState>, uri: &str) -> StatusCode {
+async fn media_serve_get(app: axum::Router, uri: &str) -> StatusCode {
     let request = Request::builder()
         .method("GET")
         .uri(uri)
         .body(Body::empty())
         .expect("failed to build request");
 
-    let app = jaunder::create_router(
-        Arc::clone(state),
-        storage::InstanceId::new(),
-        noop_mailer(),
-        true,
-        crate::helpers::tmp_storage_path(),
-    )
-    .expect("canonical instance identity is an HTTP header");
     app.oneshot(request)
         .await
         .expect("router oneshot failed")
@@ -1072,9 +1239,20 @@ async fn media_serve_get(state: &Arc<storage::AppState>, uri: &str) -> StatusCod
 #[case::non_hex(format!("/media/upload/zz/zz/{}/file.txt", "z".repeat(64)))]
 #[tokio::test]
 async fn serve_handler_rejects_malformed_hash(backend: Backend, #[case] uri: String) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let storage = TempDir::new().expect("test storage directory");
+    let app = make_app!(
+        &env,
+        &storage;
+        instance_id = storage::InstanceId::new(),
+        mailer = noop_mailer(),
+        secure_cookies = true,
+        resolver = std::sync::Arc::new(
+            jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new(),
+        )
+    );
 
-    let status = media_serve_get(&state, &uri).await;
+    let status = media_serve_get(app, &uri).await;
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }

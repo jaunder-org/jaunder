@@ -10,8 +10,6 @@ use storage::test_support::{
 };
 use storage::{AudienceStorage, WriteScope};
 
-use super::fixtures::{activitypub_channel_id, raw_exec};
-
 // The full resolution matrix: viewers {anonymous, author A, active subscriber S,
 // named-member M (in audience G, also subscribed), non-member N (not subscribed)}
 // × posts {Public, Private, Subscribers, Named(G), Named(G2), Public+Named(G)},
@@ -23,17 +21,16 @@ use super::fixtures::{activitypub_channel_id, raw_exec};
 #[tokio::test]
 async fn resolution_matrix(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let [a, s, m, n] = seed_users(state).await;
-    seed_local_subscription(state, a, s).await;
-    let m_sub = seed_local_subscription(state, a, m).await;
+    let [a, s, m, n] = seed_users(env.users(), env.write_scope()).await;
+    seed_local_subscription(env.subscriptions(), env.write_scope(), a, s).await;
+    let m_sub = seed_local_subscription(env.subscriptions(), env.write_scope(), a, m).await;
     let g =
-        create_audience_confirmed(&state.write_scope, Arc::clone(&state.audiences), a, "G").await;
+        create_audience_confirmed(&env.write_scope(), Arc::clone(&env.audiences()), a, "G").await;
     let g2 =
-        create_audience_confirmed(&state.write_scope, Arc::clone(&state.audiences), a, "G2").await;
+        create_audience_confirmed(&env.write_scope(), Arc::clone(&env.audiences()), a, "G2").await;
     add_member_confirmed(
-        &state.write_scope,
-        Arc::clone(&state.audiences),
+        &env.write_scope(),
+        Arc::clone(&env.audiences()),
         a,
         g,
         m_sub,
@@ -41,22 +38,28 @@ async fn resolution_matrix(#[case] backend: Backend) {
     .await;
 
     let make = |audiences: Vec<AudienceTarget>| SeedRawPost::new(a).audiences(audiences);
-    let p_public = make(vec![AudienceTarget::Public]).seed(state).await.post_id;
-    let p_private = make(vec![]).seed(state).await.post_id;
+    let p_public = make(vec![AudienceTarget::Public])
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
+    let p_private = make(vec![])
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
     let p_subscribers = make(vec![AudienceTarget::Subscribers])
-        .seed(state)
+        .seed(env.posts(), env.write_scope())
         .await
         .post_id;
     let p_named_g = make(vec![AudienceTarget::Named(g)])
-        .seed(state)
+        .seed(env.posts(), env.write_scope())
         .await
         .post_id;
     let p_named_g2 = make(vec![AudienceTarget::Named(g2)])
-        .seed(state)
+        .seed(env.posts(), env.write_scope())
         .await
         .post_id;
     let p_public_named_g = make(vec![AudienceTarget::Public, AudienceTarget::Named(g)])
-        .seed(state)
+        .seed(env.posts(), env.write_scope())
         .await
         .post_id;
 
@@ -66,13 +69,9 @@ async fn resolution_matrix(#[case] backend: Backend) {
     let viewer_m = ViewerIdentity::local(m);
     let viewer_n = ViewerIdentity::local(n);
 
-    raw_exec(
-        backend,
-        &env,
-        "INSERT INTO channels (name) VALUES ('activitypub')",
-    )
-    .await;
-    let remote_channel = activitypub_channel_id(backend, &env).await;
+    env.execute_raw_sql("INSERT INTO channels (name) VALUES ('activitypub')")
+        .await;
+    let remote_channel = env.channel_id_by_fixed_name("activitypub").await;
     let impostor = ViewerIdentity::Remote {
         channel_id: remote_channel,
         subscriber_ref: a.to_string().parse().unwrap(),
@@ -117,8 +116,8 @@ async fn resolution_matrix(#[case] backend: Backend) {
 
     for (label, post_id, expected) in matrix {
         for (i, (vlabel, viewer)) in viewers.iter().enumerate() {
-            let visible = state
-                .posts
+            let visible = env
+                .posts()
                 .get_post_by_id(*post_id, viewer)
                 .await
                 .unwrap()
@@ -132,8 +131,8 @@ async fn resolution_matrix(#[case] backend: Backend) {
     }
 
     for (vi, (vlabel, viewer)) in viewers.iter().enumerate() {
-        let listed: std::collections::HashSet<PostId> = state
-            .posts
+        let listed: std::collections::HashSet<PostId> = env
+            .posts()
             .list_published(
                 None,
                 parse_row_limit("100"),

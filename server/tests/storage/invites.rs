@@ -10,14 +10,13 @@ use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{Backend, CloseablePool, SeedUser, backends, confirmed_for};
 use storage::{
-    AppState, OperatorStatus, WriteScopeError,
+    InviteStorage, OperatorStatus, UserStorage, WriteScope, WriteScopeError,
     account_mutations::{self, RegisterWithInviteError, RegisterWithInviteInput},
 };
 #[apply(backends)]
 #[tokio::test]
 async fn create_invite_and_list_invites_includes_it(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
 
     let expires_at = UtcInstant::from(
         UtcInstant::now()
@@ -25,9 +24,9 @@ async fn create_invite_and_list_invites_includes_it(#[case] backend: Backend) {
             .checked_add(24.hours())
             .expect("fixture is within Timestamp range"),
     );
-    let code = create_invite(state, expires_at).await;
+    let code = create_invite(env.invites(), env.write_scope(), expires_at).await;
 
-    let list = state.invites.list_invites().await.unwrap();
+    let list = env.invites().list_invites().await.unwrap();
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].code.as_ref(), code.as_ref());
     assert!(list[0].used_at.is_none());
@@ -52,28 +51,14 @@ async fn invite_list_preserves_timestamp_roles_and_used_state(#[case] backend: B
             .unwrap();
     });
 
-    let invite = env
-        .state
-        .invites
-        .list_invites()
-        .await
-        .unwrap()
-        .pop()
-        .unwrap();
+    let invite = env.invites().list_invites().await.unwrap().pop().unwrap();
     assert_eq!(invite.created_at, created_at);
     assert_eq!(invite.expires_at, expires_at);
     assert!(invite.used_at.is_none());
 
     set_invite_used_at(env.base.pool(), &code, used_at).await;
 
-    let invite = env
-        .state
-        .invites
-        .list_invites()
-        .await
-        .unwrap()
-        .pop()
-        .unwrap();
+    let invite = env.invites().list_invites().await.unwrap().pop().unwrap();
     assert_eq!(invite.created_at, created_at);
     assert_eq!(invite.expires_at, expires_at);
     assert_eq!(invite.used_at, Some(used_at));
@@ -96,25 +81,28 @@ async fn set_invite_used_at(pool: &CloseablePool, code: &InviteCode, used_at: Ut
 #[tokio::test]
 async fn create_user_with_invite_creates_user_and_marks_invite_used(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
 
     let expires_at: UtcInstant = "2099-01-02T03:04:05.123457Z".parse().unwrap();
-    let code = create_invite(state, expires_at).await;
+    let code = create_invite(env.invites(), env.write_scope(), expires_at).await;
     let user_id = create_user_with_invite(
-        state,
-        username("alice"),
-        password("password123"),
-        Some(parse_display_name("Alice")),
-        OperatorStatus::STANDARD,
-        code.clone(),
+        env.users(),
+        env.invites(),
+        env.write_scope(),
+        InviteRegistration {
+            username: username("alice"),
+            password: password("password123"),
+            display_name: Some(parse_display_name("Alice")),
+            is_operator: OperatorStatus::STANDARD,
+            code: code.clone(),
+        },
     )
     .await;
 
-    let record = state.users.get_user(user_id).await.unwrap().unwrap();
+    let record = env.users().get_user(user_id).await.unwrap().unwrap();
     assert_eq!(record.username, "alice");
     assert_eq!(record.display_name.as_deref(), Some("Alice"));
 
-    let list = state.invites.list_invites().await.unwrap();
+    let list = env.invites().list_invites().await.unwrap();
     assert_eq!(list.len(), 1);
     assert!(list[0].used_at.is_some());
     assert_eq!(list[0].used_by, Some(user_id));
@@ -124,28 +112,23 @@ async fn create_user_with_invite_creates_user_and_marks_invite_used(#[case] back
 #[tokio::test]
 async fn create_user_with_invite_second_call_returns_already_used(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
 
     let expires_at: UtcInstant = "2099-01-02T03:04:05.123457Z".parse().unwrap();
-    let code = create_invite(state, expires_at).await;
+    let code = create_invite(env.invites(), env.write_scope(), expires_at).await;
 
     create_user_with_invite(
-        state,
-        username("alice"),
-        password("password123"),
-        None,
-        OperatorStatus::STANDARD,
-        code.clone(),
+        env.users(),
+        env.invites(),
+        env.write_scope(),
+        InviteRegistration::standard(username("alice"), password("password123"), code.clone()),
     )
     .await;
 
     let err = create_user_with_invite_result(
-        state,
-        username("bob"),
-        password("password123"),
-        None,
-        OperatorStatus::STANDARD,
-        code,
+        env.users(),
+        env.invites(),
+        env.write_scope(),
+        InviteRegistration::standard(username("bob"), password("password123"), code),
     )
     .await
     .unwrap_err();
@@ -156,8 +139,7 @@ async fn create_user_with_invite_second_call_returns_already_used(#[case] backen
     assert!(matches!(err, RegisterWithInviteError::InviteAlreadyUsed));
 
     assert!(
-        state
-            .users
+        env.users()
             .get_user_by_username(&username("bob"))
             .await
             .unwrap()
@@ -169,23 +151,30 @@ async fn create_user_with_invite_second_call_returns_already_used(#[case] backen
 #[tokio::test]
 async fn concurrent_registrations_claim_exactly_one_invite(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = Arc::clone(&env.state);
+    let invites = Arc::clone(&env.invites());
+    let users = Arc::clone(&env.users());
+    let write_scope = env.write_scope();
     let code = create_invite(
-        &state,
+        Arc::clone(&invites),
+        write_scope.clone(),
         "2099-01-02T03:04:05.123457Z".parse::<UtcInstant>().unwrap(),
     )
     .await;
     let start_barrier = Arc::new(tokio::sync::Barrier::new(2));
 
     let first = tokio::spawn(register_after_start_barrier(
-        Arc::clone(&state),
+        Arc::clone(&users),
+        Arc::clone(&invites),
+        write_scope.clone(),
         Arc::clone(&start_barrier),
         code.clone(),
         username("alice"),
         password("alice-password"),
     ));
     let second = tokio::spawn(register_after_start_barrier(
-        Arc::clone(&state),
+        users,
+        invites,
+        write_scope,
         start_barrier,
         code,
         username("bob"),
@@ -198,7 +187,8 @@ async fn concurrent_registrations_claim_exactly_one_invite(#[case] backend: Back
     .expect("concurrent registrations must finish");
 
     assert_exactly_one_invite_registration(
-        &state,
+        Arc::clone(&env.invites()),
+        Arc::clone(&env.users()),
         first.expect("first concurrent registration task must not panic"),
         second.expect("second concurrent registration task must not panic"),
     )
@@ -209,18 +199,15 @@ async fn concurrent_registrations_claim_exactly_one_invite(#[case] backend: Back
 #[tokio::test]
 async fn create_user_with_invite_expired_returns_invite_expired(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
 
     let expires_at: UtcInstant = "2000-01-02T03:04:05.123455Z".parse().unwrap();
-    let code = create_invite(state, expires_at).await;
+    let code = create_invite(env.invites(), env.write_scope(), expires_at).await;
 
     let err = create_user_with_invite_result(
-        state,
-        username("alice"),
-        password("password123"),
-        None,
-        OperatorStatus::STANDARD,
-        code,
+        env.users(),
+        env.invites(),
+        env.write_scope(),
+        InviteRegistration::standard(username("alice"), password("password123"), code),
     )
     .await
     .unwrap_err();
@@ -231,8 +218,7 @@ async fn create_user_with_invite_expired_returns_invite_expired(#[case] backend:
     assert!(matches!(err, RegisterWithInviteError::InviteExpired));
 
     assert!(
-        state
-            .users
+        env.users()
             .get_user_by_username(&username("alice"))
             .await
             .unwrap()
@@ -244,15 +230,16 @@ async fn create_user_with_invite_expired_returns_invite_expired(#[case] backend:
 #[tokio::test]
 async fn create_user_with_invite_unknown_code_returns_not_found(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
 
     let err = create_user_with_invite_result(
-        state,
-        username("alice"),
-        password("password123"),
-        None,
-        OperatorStatus::STANDARD,
-        "no-such-code".parse().unwrap(),
+        env.users(),
+        env.invites(),
+        env.write_scope(),
+        InviteRegistration::standard(
+            username("alice"),
+            password("password123"),
+            "no-such-code".parse().unwrap(),
+        ),
     )
     .await
     .unwrap_err();
@@ -263,8 +250,7 @@ async fn create_user_with_invite_unknown_code_returns_not_found(#[case] backend:
     assert!(matches!(err, RegisterWithInviteError::InviteNotFound));
 
     assert!(
-        state
-            .users
+        env.users()
             .get_user_by_username(&username("alice"))
             .await
             .unwrap()
@@ -278,10 +264,9 @@ async fn create_user_with_invite_duplicate_username_returns_username_taken(
     #[case] backend: Backend,
 ) {
     let env = backend.setup().await;
-    let state = &env.state;
 
     // alice exists before the invite is used
-    let user = SeedUser::new().seed(state).await;
+    let user = SeedUser::new().seed(env.users(), env.write_scope()).await;
 
     let expires_at = UtcInstant::from(
         UtcInstant::now()
@@ -289,15 +274,13 @@ async fn create_user_with_invite_duplicate_username_returns_username_taken(
             .checked_add(24.hours())
             .expect("fixture is within Timestamp range"),
     );
-    let code = create_invite(state, expires_at).await;
+    let code = create_invite(env.invites(), env.write_scope(), expires_at).await;
 
     let err = create_user_with_invite_result(
-        state,
-        user.username.clone(),
-        password("other_password"),
-        None,
-        OperatorStatus::STANDARD,
-        code,
+        env.users(),
+        env.invites(),
+        env.write_scope(),
+        InviteRegistration::standard(user.username.clone(), password("other_password"), code),
     )
     .await
     .unwrap_err();
@@ -308,7 +291,7 @@ async fn create_user_with_invite_duplicate_username_returns_username_taken(
     assert!(matches!(err, RegisterWithInviteError::UsernameTaken));
 
     // A failed registration must not consume the invite.
-    let list = state.invites.list_invites().await.unwrap();
+    let list = env.invites().list_invites().await.unwrap();
     assert_eq!(list.len(), 1);
     assert!(list[0].used_at.is_none());
 }
@@ -318,20 +301,22 @@ async fn create_user_with_invite_hash_failure_preserves_password_error_and_invit
     #[case] backend: Backend,
 ) {
     let env = backend.setup().await;
-    let state = &env.state;
     let code = create_invite(
-        state,
+        env.invites(),
+        env.write_scope(),
         "2099-01-02T03:04:05.123457Z".parse::<UtcInstant>().unwrap(),
     )
     .await;
 
     let error = create_user_with_invite_result(
-        state,
-        username("alice"),
-        password("force-hash-error-for-test-coverage"),
-        None,
-        OperatorStatus::STANDARD,
-        code,
+        env.users(),
+        env.invites(),
+        env.write_scope(),
+        InviteRegistration::standard(
+            username("alice"),
+            password("force-hash-error-for-test-coverage"),
+            code,
+        ),
     )
     .await
     .expect_err("a forced password hash failure must reject registration");
@@ -348,12 +333,11 @@ async fn create_user_with_invite_hash_failure_preserves_password_error_and_invit
         "the password error must remain downcastable through sqlx::Error::Io"
     );
 
-    let invite = state.invites.list_invites().await.unwrap().pop().unwrap();
+    let invite = env.invites().list_invites().await.unwrap().pop().unwrap();
     assert!(invite.used_at.is_none());
     assert!(invite.used_by.is_none());
     assert!(
-        state
-            .users
+        env.users()
             .get_user_by_username(&username("alice"))
             .await
             .unwrap()
@@ -365,7 +349,6 @@ async fn create_user_with_invite_hash_failure_preserves_password_error_and_invit
 #[tokio::test]
 async fn invite_list_operations(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let now = UtcInstant::now();
     let future = UtcInstant::from(
         now.value()
@@ -378,12 +361,12 @@ async fn invite_list_operations(#[case] backend: Backend) {
             .expect("fixture is within Timestamp range"),
     );
 
-    let _invite1 = create_invite(state, future).await;
+    let _invite1 = create_invite(env.invites(), env.write_scope(), future).await;
 
-    let _invite2 = create_invite(state, past).await;
+    let _invite2 = create_invite(env.invites(), env.write_scope(), past).await;
 
-    let invites = state
-        .invites
+    let invites = env
+        .invites()
         .list_invites()
         .await
         .expect("list_invites failed");
@@ -394,10 +377,12 @@ async fn invite_list_operations(#[case] backend: Backend) {
     assert!(unused_count >= 2);
 }
 
-pub(super) async fn create_invite(state: &AppState, expires_at: UtcInstant) -> InviteCode {
-    let invites = Arc::clone(&state.invites);
-    let outcome = state
-        .write_scope
+pub(super) async fn create_invite(
+    invites: Arc<dyn InviteStorage>,
+    write_scope: WriteScope,
+    expires_at: UtcInstant,
+) -> InviteCode {
+    let outcome = write_scope
         .run(|transaction| {
             Box::pin(async move { invites.create_invite(transaction, expires_at).await })
         })
@@ -406,33 +391,49 @@ pub(super) async fn create_invite(state: &AppState, expires_at: UtcInstant) -> I
     confirmed_for(outcome, "invite fixture setup")
 }
 
-async fn create_user_with_invite(
-    state: &AppState,
+struct InviteRegistration {
     username: common::username::Username,
     password: host::password::Password,
     display_name: Option<common::display_name::DisplayName>,
     is_operator: OperatorStatus,
     code: InviteCode,
+}
+
+impl InviteRegistration {
+    fn standard(
+        username: common::username::Username,
+        password: host::password::Password,
+        code: InviteCode,
+    ) -> Self {
+        Self {
+            username,
+            password,
+            display_name: None,
+            is_operator: OperatorStatus::STANDARD,
+            code,
+        }
+    }
+}
+
+async fn create_user_with_invite(
+    users: Arc<dyn UserStorage>,
+    invites: Arc<dyn InviteStorage>,
+    write_scope: WriteScope,
+    registration: InviteRegistration,
 ) -> common::ids::UserId {
-    let outcome =
-        create_user_with_invite_result(state, username, password, display_name, is_operator, code)
-            .await
-            .expect("invite registration should succeed");
+    let outcome = create_user_with_invite_result(users, invites, write_scope, registration)
+        .await
+        .expect("invite registration should succeed");
     confirmed_for(outcome, "invite registration")
 }
 
 async fn create_user_with_invite_result(
-    state: &AppState,
-    username: common::username::Username,
-    password: host::password::Password,
-    display_name: Option<common::display_name::DisplayName>,
-    is_operator: OperatorStatus,
-    code: InviteCode,
+    users: Arc<dyn UserStorage>,
+    invites: Arc<dyn InviteStorage>,
+    write_scope: WriteScope,
+    registration: InviteRegistration,
 ) -> Result<MutationOutcome<common::ids::UserId>, WriteScopeError<RegisterWithInviteError>> {
-    let users = Arc::clone(&state.users);
-    let invites = Arc::clone(&state.invites);
-    state
-        .write_scope
+    write_scope
         .run(|transaction| {
             Box::pin(async move {
                 account_mutations::register_with_invite(
@@ -440,11 +441,11 @@ async fn create_user_with_invite_result(
                     users.as_ref(),
                     invites.as_ref(),
                     RegisterWithInviteInput {
-                        username: &username,
-                        password: &password,
-                        display_name: display_name.as_ref(),
-                        is_operator,
-                        invite_code: &code,
+                        username: &registration.username,
+                        password: &registration.password,
+                        display_name: registration.display_name.as_ref(),
+                        is_operator: registration.is_operator,
+                        invite_code: &registration.code,
                     },
                 )
                 .await
@@ -454,7 +455,9 @@ async fn create_user_with_invite_result(
 }
 
 async fn register_after_start_barrier(
-    state: Arc<AppState>,
+    users: Arc<dyn UserStorage>,
+    invites: Arc<dyn InviteStorage>,
+    write_scope: WriteScope,
     start_barrier: Arc<tokio::sync::Barrier>,
     code: InviteCode,
     username: common::username::Username,
@@ -462,18 +465,17 @@ async fn register_after_start_barrier(
 ) -> Result<MutationOutcome<common::ids::UserId>, WriteScopeError<RegisterWithInviteError>> {
     start_barrier.wait().await;
     create_user_with_invite_result(
-        &state,
-        username,
-        password,
-        None,
-        OperatorStatus::STANDARD,
-        code,
+        users,
+        invites,
+        write_scope,
+        InviteRegistration::standard(username, password, code),
     )
     .await
 }
 
 pub(super) async fn assert_exactly_one_invite_registration(
-    state: &AppState,
+    invites: Arc<dyn InviteStorage>,
+    users: Arc<dyn UserStorage>,
     first: Result<MutationOutcome<common::ids::UserId>, WriteScopeError<RegisterWithInviteError>>,
     second: Result<MutationOutcome<common::ids::UserId>, WriteScopeError<RegisterWithInviteError>>,
 ) {
@@ -491,18 +493,13 @@ pub(super) async fn assert_exactly_one_invite_registration(
         ),
     };
 
-    let invite = state.invites.list_invites().await.unwrap().pop().unwrap();
+    let invite = invites.list_invites().await.unwrap().pop().unwrap();
     assert_eq!(invite.used_by, Some(winner));
-    let alice = state
-        .users
+    let alice = users
         .get_user_by_username(&username("alice"))
         .await
         .unwrap();
-    let bob = state
-        .users
-        .get_user_by_username(&username("bob"))
-        .await
-        .unwrap();
+    let bob = users.get_user_by_username(&username("bob")).await.unwrap();
     match (alice, bob) {
         (Some(alice), None) => assert_eq!(alice.user_id, winner),
         (None, Some(bob)) => assert_eq!(bob.user_id, winner),

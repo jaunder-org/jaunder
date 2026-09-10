@@ -2,7 +2,7 @@
 //! Authentication and user-storage behavior remain the responsibility of the tests under setup.
 
 use super::confirmed_for;
-use crate::{AppState, OperatorStatus};
+use crate::{OperatorStatus, UserStorage, WriteScope};
 
 use common::ids::UserId;
 use common::test_support::{parse_display_name, parse_username};
@@ -91,17 +91,15 @@ impl<'a> SeedUser<'a> {
     /// # Panics
     ///
     /// If the password/display name fail to parse or the user cannot be created.
-    pub async fn seed(self, state: &Arc<AppState>) -> SeededUser {
+    pub async fn seed(self, users: Arc<dyn UserStorage>, write_scope: WriteScope) -> SeededUser {
         let n = SEED_SEQ.fetch_add(1, Ordering::Relaxed);
         let username = parse_username(&format!("user{n}"));
         let display_name = self.display_name.map(parse_display_name);
-        let users = Arc::clone(&state.users);
         let create_username = username.clone();
         let password = crate::prepare_password(host::test_support::parse_password(self.password))
             .await
             .expect("user fixture password preparation should succeed");
-        let outcome = state
-            .write_scope
+        let outcome = write_scope
             .run(move |transaction| {
                 Box::pin(async move {
                     users
@@ -129,10 +127,18 @@ impl<'a> SeedUser<'a> {
 /// # Panics
 ///
 /// If any user cannot be created.
-pub async fn seed_users<const N: usize>(state: &Arc<AppState>) -> [UserId; N] {
+pub async fn seed_users<const N: usize>(
+    users: Arc<dyn UserStorage>,
+    write_scope: WriteScope,
+) -> [UserId; N] {
     let mut ids = Vec::with_capacity(N);
     for _ in 0..N {
-        ids.push(SeedUser::new().seed(state).await.user_id);
+        ids.push(
+            SeedUser::new()
+                .seed(Arc::clone(&users), write_scope.clone())
+                .await
+                .user_id,
+        );
     }
     ids.try_into().expect("seeded exactly N users")
 }
@@ -141,7 +147,6 @@ pub async fn seed_users<const N: usize>(state: &Arc<AppState>) -> [UserId; N] {
 mod tests {
     use super::{OperatorStatus, SeedUser};
     use crate::test_support::{Backend, backends};
-    use std::sync::Arc;
 
     use rstest::*;
     use rstest_reuse::*;
@@ -150,10 +155,9 @@ mod tests {
     #[tokio::test]
     async fn seed_user_builder_defaults_create_a_plain_non_operator_user(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let state = &env.state;
-        let user = SeedUser::new().seed(state).await;
-        let u = state
-            .users
+        let user = SeedUser::new().seed(env.users(), env.write_scope()).await;
+        let u = env
+            .users()
             .get_user(user.user_id)
             .await
             .unwrap()
@@ -161,15 +165,15 @@ mod tests {
         assert_eq!(u.username, user.username);
         assert_eq!(u.is_operator, OperatorStatus::STANDARD);
         assert!(u.display_name.is_none());
-        let users = Arc::clone(&state.users);
+        let users = env.users();
         let username = user.username.clone();
         let password = host::test_support::parse_password("password123");
         let authentication = users
             .prepare_authentication(&username, &password)
             .await
             .expect("default password prepares authentication");
-        let outcome = state
-            .write_scope
+        let write_scope = env.write_scope();
+        let outcome = write_scope
             .run(move |transaction| {
                 Box::pin(async move { users.authenticate(transaction, authentication).await })
             })
@@ -184,30 +188,29 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let state = &env.state;
         let user = SeedUser::new()
             .password("hunter2xyz")
             .display_name("Bob B")
             .operator()
-            .seed(state)
+            .seed(env.users(), env.write_scope())
             .await;
-        let u = state
-            .users
+        let u = env
+            .users()
             .get_user(user.user_id)
             .await
             .unwrap()
             .expect("user exists");
         assert_eq!(u.is_operator, OperatorStatus::OPERATOR);
         assert_eq!(u.display_name.expect("display name set"), "Bob B");
-        let users = Arc::clone(&state.users);
+        let users = env.users();
         let username = user.username.clone();
         let password = host::test_support::parse_password("hunter2xyz");
         let authentication = users
             .prepare_authentication(&username, &password)
             .await
             .expect("overridden password prepares authentication");
-        let outcome = state
-            .write_scope
+        let write_scope = env.write_scope();
+        let outcome = write_scope
             .run(move |transaction| {
                 Box::pin(async move { users.authenticate(transaction, authentication).await })
             })
@@ -220,13 +223,22 @@ mod tests {
     #[tokio::test]
     async fn seed_user_autogenerates_distinct_usernames(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let a = SeedUser::new().seed(&env.state).await;
-        let b = SeedUser::default().seed(&env.state).await;
+        let a = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
+        let b = SeedUser::default()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
         assert_ne!(a.username, b.username, "each seed gets a fresh name");
         for user in [&a, &b] {
             let rec = env
-                .state
-                .users
+                .users()
                 .get_user(user.user_id)
                 .await
                 .unwrap()

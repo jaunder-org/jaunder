@@ -95,6 +95,7 @@ mod tests {
     use host::test_support::parse_smtp_password;
     use rstest::*;
     use rstest_reuse::*;
+    use std::sync::Arc;
 
     // -- load_smtp_config tests --
 
@@ -102,7 +103,7 @@ mod tests {
     #[tokio::test]
     async fn load_smtp_config_returns_none_when_host_absent(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let store = &*env.state.site_config;
+        let store = &*env.site_config();
         assert!(load_smtp_config(store).await.unwrap().is_none());
     }
 
@@ -110,7 +111,7 @@ mod tests {
     #[tokio::test]
     async fn load_smtp_config_returns_some_with_all_keys_present(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let store = &*env.state.site_config;
+        let store = &*env.site_config();
         for (key, value) in [
             (SiteConfigKey::SmtpHost, "mail.example.com"),
             (SiteConfigKey::SmtpPort, "465"),
@@ -119,9 +120,14 @@ mod tests {
             (SiteConfigKey::SmtpPassword, "s3cr3t"),
             (SiteConfigKey::SmtpSender, "Jaunder <noreply@example.com>"),
         ] {
-            crate::test_support::set_site_config(&env, key, value)
-                .await
-                .unwrap();
+            crate::test_support::set_site_config(
+                Arc::clone(&env.site_config()),
+                env.write_scope(),
+                key,
+                value,
+            )
+            .await
+            .unwrap();
         }
 
         let config = load_smtp_config(store)
@@ -147,10 +153,15 @@ mod tests {
     #[tokio::test]
     async fn load_smtp_config_uses_defaults_for_missing_optional_fields(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let store = &*env.state.site_config;
-        crate::test_support::set_site_config(&env, SiteConfigKey::SmtpHost, "relay.example.com")
-            .await
-            .unwrap();
+        let store = &*env.site_config();
+        crate::test_support::set_site_config(
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::SmtpHost,
+            "relay.example.com",
+        )
+        .await
+        .unwrap();
 
         let config = load_smtp_config(store)
             .await
@@ -169,13 +180,23 @@ mod tests {
     #[tokio::test]
     async fn load_smtp_config_returns_err_for_invalid_sender(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let store = &*env.state.site_config;
-        crate::test_support::set_site_config(&env, SiteConfigKey::SmtpHost, "mail.example.com")
-            .await
-            .unwrap();
-        crate::test_support::set_site_config(&env, SiteConfigKey::SmtpSender, "not-a-valid-email")
-            .await
-            .unwrap();
+        let store = &*env.site_config();
+        crate::test_support::set_site_config(
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::SmtpHost,
+            "mail.example.com",
+        )
+        .await
+        .unwrap();
+        crate::test_support::set_site_config(
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::SmtpSender,
+            "not-a-valid-email",
+        )
+        .await
+        .unwrap();
 
         let err = load_smtp_config(store).await.unwrap_err();
         // Asserts the offending value reaches the *message*, deliberately not the
@@ -193,13 +214,23 @@ mod tests {
     #[tokio::test]
     async fn load_smtp_config_returns_err_for_invalid_port(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let store = &*env.state.site_config;
-        crate::test_support::set_site_config(&env, SiteConfigKey::SmtpHost, "mail.example.com")
-            .await
-            .unwrap();
-        crate::test_support::set_site_config(&env, SiteConfigKey::SmtpPort, "not-a-port")
-            .await
-            .unwrap();
+        let store = &*env.site_config();
+        crate::test_support::set_site_config(
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::SmtpHost,
+            "mail.example.com",
+        )
+        .await
+        .unwrap();
+        crate::test_support::set_site_config(
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::SmtpPort,
+            "not-a-port",
+        )
+        .await
+        .unwrap();
 
         let err = load_smtp_config(store).await.unwrap_err();
         // Message, not variant — see the note on `..._invalid_sender`.
@@ -213,13 +244,23 @@ mod tests {
     #[tokio::test]
     async fn load_smtp_config_returns_err_for_invalid_tls_mode(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let store = &*env.state.site_config;
-        crate::test_support::set_site_config(&env, SiteConfigKey::SmtpHost, "mail.example.com")
-            .await
-            .unwrap();
-        crate::test_support::set_site_config(&env, SiteConfigKey::SmtpTlsMode, "ssl")
-            .await
-            .unwrap();
+        let store = &*env.site_config();
+        crate::test_support::set_site_config(
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::SmtpHost,
+            "mail.example.com",
+        )
+        .await
+        .unwrap();
+        crate::test_support::set_site_config(
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::SmtpTlsMode,
+            "ssl",
+        )
+        .await
+        .unwrap();
 
         let err = load_smtp_config(store).await.unwrap_err();
         // Message, not variant — see the note on `..._invalid_sender`.
@@ -233,13 +274,23 @@ mod tests {
     #[tokio::test]
     async fn load_smtp_config_returns_err_for_empty_password(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let store = &*env.state.site_config;
-        crate::test_support::set_site_config(&env, SiteConfigKey::SmtpHost, "mail.example.com")
-            .await
-            .unwrap();
-        crate::test_support::set_site_config(&env, SiteConfigKey::SmtpPassword, "")
-            .await
-            .unwrap();
+        let store = &*env.site_config();
+        crate::test_support::set_site_config(
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::SmtpHost,
+            "mail.example.com",
+        )
+        .await
+        .unwrap();
+        crate::test_support::set_site_config(
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::SmtpPassword,
+            "",
+        )
+        .await
+        .unwrap();
 
         let err = load_smtp_config(store).await.unwrap_err();
         assert!(matches!(err, SmtpConfigError::InvalidCredential));
@@ -249,13 +300,23 @@ mod tests {
     #[tokio::test]
     async fn load_smtp_config_returns_err_for_empty_username(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let store = &*env.state.site_config;
-        crate::test_support::set_site_config(&env, SiteConfigKey::SmtpHost, "mail.example.com")
-            .await
-            .unwrap();
-        crate::test_support::set_site_config(&env, SiteConfigKey::SmtpUsername, "")
-            .await
-            .unwrap();
+        let store = &*env.site_config();
+        crate::test_support::set_site_config(
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::SmtpHost,
+            "mail.example.com",
+        )
+        .await
+        .unwrap();
+        crate::test_support::set_site_config(
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::SmtpUsername,
+            "",
+        )
+        .await
+        .unwrap();
 
         let err = load_smtp_config(store).await.unwrap_err();
         assert!(matches!(err, SmtpConfigError::InvalidCredential));

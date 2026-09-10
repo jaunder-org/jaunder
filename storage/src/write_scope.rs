@@ -317,14 +317,25 @@ mod tests {
     #[tokio::test]
     async fn callback_failure_rolls_back_and_later_writer_commits(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let post_id = SeedRawPost::new(user_id).seed(&env.state).await.post_id;
-        let posts = Arc::clone(&env.state.posts);
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let post_id = SeedRawPost::new(user_id)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
+            .await
+            .post_id;
+        let posts = Arc::clone(&env.posts());
         let desired = vec![parse_tag_label("rolled-back")];
 
         let result = env
-            .state
-            .write_scope
+            .write_scope()
             .run(|transaction| {
                 Box::pin(async move {
                     posts
@@ -340,11 +351,11 @@ mod tests {
             result,
             Err(WriteScopeError::Operation("later mutation failed"))
         ));
-        assert!(tag_labels(&*env.state.posts, post_id).await.is_empty());
+        assert!(tag_labels(&*env.posts(), post_id).await.is_empty());
 
         set_post_tags_confirmed(
-            &env.state.write_scope,
-            Arc::clone(&env.state.posts),
+            &env.write_scope(),
+            Arc::clone(&env.posts()),
             post_id,
             user_id,
             &[parse_tag_label("later-writer")],
@@ -352,7 +363,7 @@ mod tests {
         .await
         .expect("later writer commits after rollback");
         assert_eq!(
-            tag_labels(&*env.state.posts, post_id).await,
+            tag_labels(&*env.posts(), post_id).await,
             vec![parse_tag_label("later-writer")]
         );
     }
@@ -361,30 +372,40 @@ mod tests {
     #[tokio::test]
     async fn unwinding_scope_drops_transaction_and_releases_writer(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let post_id = SeedRawPost::new(user_id).seed(&env.state).await.post_id;
-        let posts = Arc::clone(&env.state.posts);
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let post_id = SeedRawPost::new(user_id)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
+            .await
+            .post_id;
+        let posts = Arc::clone(&env.posts());
         let desired = vec![parse_tag_label("unwound")];
 
-        let unwind = AssertUnwindSafe(env.state.write_scope.run::<(), TaggingError>(
-            |transaction| {
-                Box::pin(async move {
-                    posts
-                        .set_post_tags(transaction, post_id, user_id, &desired)
-                        .await
-                        .expect("mutation succeeds before unwind");
-                    panic!("force scope unwind");
-                })
-            },
-        ))
+        let unwind = AssertUnwindSafe(env.write_scope().run::<(), TaggingError>(|transaction| {
+            Box::pin(async move {
+                posts
+                    .set_post_tags(transaction, post_id, user_id, &desired)
+                    .await
+                    .expect("mutation succeeds before unwind");
+                panic!("force scope unwind");
+            })
+        }))
         .catch_unwind()
         .await;
 
         assert!(unwind.is_err());
-        assert!(tag_labels(&*env.state.posts, post_id).await.is_empty());
+        assert!(tag_labels(&*env.posts(), post_id).await.is_empty());
         set_post_tags_confirmed(
-            &env.state.write_scope,
-            Arc::clone(&env.state.posts),
+            &env.write_scope(),
+            Arc::clone(&env.posts()),
             post_id,
             user_id,
             &[parse_tag_label("after-unwind")],
@@ -399,14 +420,25 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let post_id = SeedRawPost::new(user_id).seed(&env.state).await.post_id;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let post_id = SeedRawPost::new(user_id)
+            .seed(
+                std::sync::Arc::clone(&env.posts()),
+                env.write_scope().clone(),
+            )
+            .await
+            .post_id;
         let confirmed_tags = vec![parse_tag_label("confirmed")];
-        let confirmed_posts = Arc::clone(&env.state.posts);
+        let confirmed_posts = Arc::clone(&env.posts());
 
         let confirmed = env
-            .state
-            .write_scope
+            .write_scope()
             .run(|transaction| {
                 Box::pin(async move {
                     confirmed_posts
@@ -419,16 +451,15 @@ mod tests {
             .expect("confirmed write scope");
         assert_eq!(confirmed, MutationOutcome::Confirmed("confirmed value"));
         assert_eq!(
-            tag_labels(&*env.state.posts, post_id).await,
+            tag_labels(&*env.posts(), post_id).await,
             vec![parse_tag_label("confirmed")]
         );
 
         let indeterminate_scope = env
-            .state
-            .write_scope
+            .write_scope()
             .with_commit_acknowledgement_loss_after_commit_for_test();
         let indeterminate_tags = vec![parse_tag_label("indeterminate")];
-        let indeterminate_posts = Arc::clone(&env.state.posts);
+        let indeterminate_posts = Arc::clone(&env.posts());
         let indeterminate = indeterminate_scope
             .run(|transaction| {
                 Box::pin(async move {
@@ -445,7 +476,7 @@ mod tests {
             MutationOutcome::CommitIndeterminate("indeterminate value")
         );
         assert_eq!(
-            tag_labels(&*env.state.posts, post_id).await,
+            tag_labels(&*env.posts(), post_id).await,
             vec![parse_tag_label("indeterminate")]
         );
     }
@@ -460,8 +491,7 @@ mod tests {
         let guard = tracing::subscriber::set_default(subscriber);
 
         let rollback = env
-            .state
-            .write_scope
+            .write_scope()
             .run(|_| Box::pin(async { Err::<(), _>("operation failure") }))
             .await;
         assert!(matches!(
@@ -469,15 +499,13 @@ mod tests {
             Err(WriteScopeError::Operation("operation failure"))
         ));
         assert!(matches!(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(|_| Box::pin(async { Ok::<_, &'static str>(()) }))
                 .await,
             Ok(MutationOutcome::Confirmed(()))
         ));
         assert!(matches!(
-            env.state
-                .write_scope
+            env.write_scope()
                 .with_commit_acknowledgement_loss_after_commit_for_test()
                 .run(|_| Box::pin(async { Ok::<_, &'static str>(()) }))
                 .await,
@@ -547,16 +575,14 @@ mod tests {
 
         let result = match backend {
             Backend::Sqlite => {
-                env.state
-                    .write_scope
+                env.write_scope()
                     .run(|transaction| {
                         Box::pin(async move { postgres_connection(transaction).map(|_| ()) })
                     })
                     .await
             }
             Backend::Postgres => {
-                env.state
-                    .write_scope
+                env.write_scope()
                     .run(|transaction| {
                         Box::pin(async move { sqlite_connection(transaction).map(|_| ()) })
                     })

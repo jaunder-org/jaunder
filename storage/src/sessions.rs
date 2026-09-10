@@ -326,16 +326,21 @@ mod tests {
         // Keep the whole `TestEnv` bound: dropping `base` unlinks the SQLite file
         // (ADR-0053 TempDir hazard).
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
 
         // `create_session` binds the `TokenHash`; `authenticate`/`list_sessions`
         // decode the `token_hash` and joined `username` columns straight back into
         // their newtypes via the sqlx bridge (#438).
-        let sessions = Arc::clone(&env.state.sessions);
+        let sessions = Arc::clone(&env.sessions());
         let label = parse_session_label("Test Device");
         let outcome = env
-            .state
-            .write_scope
+            .write_scope()
             .run(|transaction| {
                 Box::pin(async move { sessions.create_session(transaction, user_id, &label).await })
             })
@@ -344,10 +349,9 @@ mod tests {
         let raw_token = crate::test_support::confirmed_for(outcome, "session fixture setup");
         let expected_hash = token::hash(&raw_token).unwrap();
 
-        let sessions = Arc::clone(&env.state.sessions);
+        let sessions = Arc::clone(&env.sessions());
         let outcome = env
-            .state
-            .write_scope
+            .write_scope()
             .run(|transaction| {
                 Box::pin(async move { sessions.authenticate(transaction, &raw_token).await })
             })
@@ -357,7 +361,7 @@ mod tests {
         assert_eq!(record.token_hash, expected_hash);
         assert_eq!(record.user_id, user_id);
 
-        let listed = env.state.sessions.list_sessions(user_id).await.unwrap();
+        let listed = env.sessions().list_sessions(user_id).await.unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].token_hash, expected_hash);
     }
@@ -366,12 +370,17 @@ mod tests {
     #[tokio::test]
     async fn list_sessions_rejects_a_malformed_token_hash_column(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let sessions = Arc::clone(&env.state.sessions);
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let sessions = Arc::clone(&env.sessions());
         let label = parse_session_label("Test Device");
         let outcome = env
-            .state
-            .write_scope
+            .write_scope()
             .run(|transaction| {
                 Box::pin(async move { sessions.create_session(transaction, user_id, &label).await })
             })
@@ -394,7 +403,7 @@ mod tests {
         // bridge, which validates through `FromStr`; the malformed value surfaces
         // as a column-decode error rather than being silently admitted (covers the
         // bridge's `Decode` error arm).
-        let err = env.state.sessions.list_sessions(user_id).await.unwrap_err();
+        let err = env.sessions().list_sessions(user_id).await.unwrap_err();
         assert!(
             matches!(err, sqlx::Error::ColumnDecode { .. }),
             "expected a column-decode error, got: {err:?}"
@@ -407,12 +416,17 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let sessions = Arc::clone(&env.state.sessions);
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let sessions = Arc::clone(&env.sessions());
         let label = parse_session_label("Test Device");
         let outcome = env
-            .state
-            .write_scope
+            .write_scope()
             .run(|transaction| {
                 Box::pin(async move { sessions.create_session(transaction, user_id, &label).await })
             })
@@ -428,7 +442,7 @@ mod tests {
                 .unwrap();
         });
 
-        let sessions = env.state.sessions.list_sessions(user_id).await.unwrap();
+        let sessions = env.sessions().list_sessions(user_id).await.unwrap();
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].label, SessionLabel::from_lossy(stored.as_str()));
     }
@@ -436,12 +450,17 @@ mod tests {
     #[tokio::test]
     async fn session_rows_preserve_created_and_last_used_roles(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let sessions = Arc::clone(&env.state.sessions);
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let sessions = Arc::clone(&env.sessions());
         let label = parse_session_label("Test Device");
         let outcome = env
-            .state
-            .write_scope
+            .write_scope()
             .run(|transaction| {
                 Box::pin(async move { sessions.create_session(transaction, user_id, &label).await })
             })
@@ -464,7 +483,7 @@ mod tests {
             .unwrap();
         });
 
-        let sessions = env.state.sessions.list_sessions(user_id).await.unwrap();
+        let sessions = env.sessions().list_sessions(user_id).await.unwrap();
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].created_at, created_at);
         assert_eq!(sessions[0].last_used_at, last_used_at);
@@ -474,7 +493,13 @@ mod tests {
     #[tokio::test]
     async fn touch_and_load_observes_stale_exact_and_fresh_boundaries(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
         let now = "2026-04-05T06:07:08.123456Z".parse::<UtcInstant>().unwrap();
         let stale_before = session_touch_cutoff(now);
         let cases = [
@@ -507,12 +532,11 @@ mod tests {
         ];
 
         for (label, stored_last_used_at, expected_last_used_at) in cases {
-            let sessions = Arc::clone(&env.state.sessions);
+            let sessions = Arc::clone(&env.sessions());
             let label = parse_session_label(label);
             let label_for_create = label.clone();
             let outcome = env
-                .state
-                .write_scope
+                .write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         sessions
@@ -535,8 +559,7 @@ mod tests {
             let token_hash_for_touch = token_hash.clone();
 
             let outcome = env
-                .state
-                .write_scope
+                .write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         match backend {

@@ -10,8 +10,8 @@ use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{Backend, SeedUser, postgres_only};
 use storage::{
-    AppState, PasswordResetStorage, UsePasswordResetError, UserAuthError, WriteScopeError,
-    WriteTransaction,
+    PasswordResetStorage, SessionStorage, UsePasswordResetError, UserAuthError, UserStorage,
+    WriteScope, WriteScopeError, WriteTransaction,
     account_mutations::{self, ConfirmPasswordResetError},
 };
 
@@ -54,24 +54,38 @@ impl PasswordResetStorage for BarrierPasswordResetStorage {
 #[tokio::test]
 async fn concurrent_password_reset_confirmations_claim_exactly_once(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = Arc::clone(&env.state);
-    let user = SeedUser::new().seed(&state).await;
-    let raw_token = create_password_reset(&state, user.user_id).await;
-    create_session(&state, user.user_id).await;
+    let users = env.users();
+    let sessions = env.sessions();
+    let reset_storage = env.password_resets();
+    let write_scope = env.write_scope();
+    let user = SeedUser::new()
+        .seed(Arc::clone(&users), write_scope.clone())
+        .await;
+    let raw_token = create_password_reset(
+        Arc::clone(&reset_storage),
+        write_scope.clone(),
+        user.user_id,
+    )
+    .await;
+    create_session(Arc::clone(&sessions), write_scope.clone(), user.user_id).await;
 
     let password_resets: Arc<dyn PasswordResetStorage> = Arc::new(BarrierPasswordResetStorage {
-        inner: Arc::clone(&state.password_resets),
+        inner: Arc::clone(&reset_storage),
         claim_barrier: Arc::new(tokio::sync::Barrier::new(2)),
     });
     let first = tokio::spawn(confirm_after_claim_barrier(
-        Arc::clone(&state),
         Arc::clone(&password_resets),
+        Arc::clone(&users),
+        Arc::clone(&sessions),
+        write_scope.clone(),
         raw_token.clone(),
         password("first-new-password"),
     ));
     let second = tokio::spawn(confirm_after_claim_barrier(
-        Arc::clone(&state),
-        password_resets,
+        Arc::clone(&password_resets),
+        Arc::clone(&users),
+        Arc::clone(&sessions),
+        write_scope.clone(),
         raw_token.clone(),
         password("second-new-password"),
     ));
@@ -97,29 +111,40 @@ async fn concurrent_password_reset_confirmations_claim_exactly_once(#[case] back
         }
     };
 
-    let token_error = use_password_reset_result(&state, raw_token)
-        .await
-        .expect_err("the winning confirmation must consume the reset token");
+    let token_error =
+        use_password_reset_result(Arc::clone(&reset_storage), write_scope.clone(), raw_token)
+            .await
+            .expect_err("the winning confirmation must consume the reset token");
     assert!(matches!(
         token_error,
         WriteScopeError::Operation(UsePasswordResetError::AlreadyUsed)
     ));
     let authenticated = storage::test_support::confirmed_for(
-        authenticate_result(&state, user.username.clone(), password(winner_password))
-            .await
-            .unwrap(),
+        authenticate_result(
+            Arc::clone(&users),
+            write_scope.clone(),
+            user.username.clone(),
+            password(winner_password),
+        )
+        .await
+        .unwrap(),
         "winning password authentication",
     );
     assert_eq!(authenticated.user_id, user.user_id);
     assert!(matches!(
-        authenticate_result(&state, user.username, password(loser_password)).await,
+        authenticate_result(
+            Arc::clone(&users),
+            write_scope.clone(),
+            user.username,
+            password(loser_password),
+        )
+        .await,
         Err(WriteScopeError::Operation(
             UserAuthError::InvalidCredentials
         ))
     ));
     assert!(
-        state
-            .sessions
+        sessions
             .list_sessions(user.user_id)
             .await
             .unwrap()
@@ -128,10 +153,12 @@ async fn concurrent_password_reset_confirmations_claim_exactly_once(#[case] back
     );
 }
 
-async fn create_password_reset(state: &AppState, user_id: UserId) -> RawToken {
-    let password_resets = Arc::clone(&state.password_resets);
-    let outcome = state
-        .write_scope
+async fn create_password_reset(
+    password_resets: Arc<dyn PasswordResetStorage>,
+    write_scope: WriteScope,
+    user_id: UserId,
+) -> RawToken {
+    let outcome = write_scope
         .run(|transaction| {
             Box::pin(async move {
                 password_resets
@@ -148,11 +175,13 @@ async fn create_password_reset(state: &AppState, user_id: UserId) -> RawToken {
     storage::test_support::confirmed_for(outcome, "password-reset fixture setup")
 }
 
-async fn create_session(state: &AppState, user_id: UserId) {
-    let sessions = Arc::clone(&state.sessions);
+async fn create_session(
+    sessions: Arc<dyn SessionStorage>,
+    write_scope: WriteScope,
+    user_id: UserId,
+) {
     let label = parse_session_label("Existing device");
-    let outcome = state
-        .write_scope
+    let outcome = write_scope
         .run(|transaction| {
             Box::pin(async move { sessions.create_session(transaction, user_id, &label).await })
         })
@@ -162,15 +191,14 @@ async fn create_session(state: &AppState, user_id: UserId) {
 }
 
 async fn confirm_after_claim_barrier(
-    state: Arc<AppState>,
     password_resets: Arc<dyn PasswordResetStorage>,
+    users: Arc<dyn UserStorage>,
+    sessions: Arc<dyn SessionStorage>,
+    write_scope: WriteScope,
     raw_token: RawToken,
     new_password: Password,
 ) -> Result<MutationOutcome<UserId>, WriteScopeError<ConfirmPasswordResetError>> {
-    let users = Arc::clone(&state.users);
-    let sessions = Arc::clone(&state.sessions);
-    state
-        .write_scope
+    write_scope
         .run(|transaction| {
             Box::pin(async move {
                 account_mutations::confirm_password_reset(
@@ -188,12 +216,11 @@ async fn confirm_after_claim_barrier(
 }
 
 async fn use_password_reset_result(
-    state: &AppState,
+    password_resets: Arc<dyn PasswordResetStorage>,
+    write_scope: WriteScope,
     raw_token: RawToken,
 ) -> Result<MutationOutcome<UserId>, WriteScopeError<UsePasswordResetError>> {
-    let password_resets = Arc::clone(&state.password_resets);
-    state
-        .write_scope
+    write_scope
         .run(|transaction| {
             Box::pin(async move {
                 password_resets
@@ -205,17 +232,16 @@ async fn use_password_reset_result(
 }
 
 async fn authenticate_result(
-    state: &AppState,
+    users: Arc<dyn UserStorage>,
+    write_scope: WriteScope,
     username: common::username::Username,
     password: Password,
 ) -> Result<MutationOutcome<storage::UserRecord>, WriteScopeError<UserAuthError>> {
-    let users = Arc::clone(&state.users);
     let authentication = users
         .prepare_authentication(&username, &password)
         .await
         .map_err(WriteScopeError::Operation)?;
-    state
-        .write_scope
+    write_scope
         .run(|transaction| {
             Box::pin(async move { users.authenticate(transaction, authentication).await })
         })

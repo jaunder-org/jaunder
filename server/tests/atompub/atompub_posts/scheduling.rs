@@ -12,7 +12,7 @@ use crate::helpers::{
     atompub_at, atompub_get, atompub_location, atompub_post_xml, atompub_put_xml, body_string,
     create_user_and_session, make_app,
 };
-use storage::test_support::{Backend, TestEnv, backends};
+use storage::test_support::{Backend, backends};
 
 use super::fixtures::location_post_id;
 
@@ -47,9 +47,15 @@ fn entry_xml_with_draft_no_and_published(title: &str, content: &str, published: 
 #[apply(backends)]
 #[tokio::test]
 async fn create_draft_entry_is_unpublished(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
 
     let xml = r#"<?xml version="1.0"?>
 <entry xmlns="http://www.w3.org/2005/Atom" xmlns:app="http://www.w3.org/2007/app">
@@ -99,8 +105,14 @@ async fn create_draft_entry_is_unpublished(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn explicit_atom_draft_no_beats_org_metadata_and_canonicalizes_org(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let xml = r#"<?xml version="1.0"?>
 <entry xmlns="http://www.w3.org/2005/Atom" xmlns:app="http://www.w3.org/2007/app">
   <title>Atom title</title>
@@ -116,7 +128,7 @@ Org body</content>
   <app:control><app:draft>no</app:draft></app:control>
 </entry>"#;
 
-    let response = make_app(&state, &base)
+    let response = make_app!(&env, base)
         .oneshot(atompub_post_xml(&session, "posts", xml))
         .await
         .unwrap();
@@ -130,7 +142,7 @@ Org body</content>
             .to_str()
             .expect("Location is text"),
     );
-    let response = make_app(&state, &base)
+    let response = make_app!(&env, base)
         .oneshot(
             atompub_at(&session, Method::GET, &location)
                 .body(Body::empty())
@@ -163,8 +175,14 @@ Org body</content>
 #[apply(backends)]
 #[tokio::test]
 async fn create_org_bookkeeping_must_match_final_values(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let publication = "2024-01-02T03:04:05Z";
     let valid = format!(
         r#"<?xml version="1.0"?>
@@ -178,7 +196,7 @@ Body</content>
   <published>{publication}</published>
 </entry>"#
     );
-    let response = make_app(&state, &base)
+    let response = make_app!(&env, base)
         .oneshot(atompub_post_xml(&session, "posts", &valid))
         .await
         .unwrap();
@@ -199,7 +217,7 @@ Body</content>
   <published>{publication}</published>
 </entry>"#
         );
-        let response = make_app(&state, &base)
+        let response = make_app!(&env, base)
             .oneshot(atompub_post_xml(&session, "posts", &xml))
             .await
             .unwrap();
@@ -209,7 +227,7 @@ Body</content>
             "bookkeeping {metadata:?} must match final post"
         );
     }
-    let response = make_app(&state, &base)
+    let response = make_app!(&env, base)
         .oneshot(atompub_get(&session, "posts"))
         .await
         .unwrap();
@@ -224,9 +242,15 @@ Body</content>
 #[apply(backends)]
 #[tokio::test]
 async fn create_with_future_published_is_scheduled(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
 
     // A non-draft entry whose <published> is in the far future schedules the post.
     let xml = entry_xml_with_published("Future post", "body", Some("2099-01-01T00:00:00Z"));
@@ -240,8 +264,8 @@ async fn create_with_future_published_is_scheduled(#[case] backend: Backend) {
 
     // The owner may inspect the scheduled private post's persisted timestamp.
     let owner = common::visibility::ViewerIdentity::local(session.user_id);
-    let rec = state
-        .posts
+    let rec = env
+        .posts()
         .get_post_by_id(PostId::from(post_id), &owner)
         .await
         .unwrap()
@@ -254,8 +278,8 @@ async fn create_with_future_published_is_scheduled(#[case] backend: Backend) {
     let viewer = common::visibility::ViewerIdentity::Anonymous;
 
     // ...and it is invisible on the public permalink at "now".
-    let public = state
-        .posts
+    let public = env
+        .posts()
         .get_post_by_permalink(
             &session.username,
             permalink_date(2099, 1, 1),
@@ -274,9 +298,15 @@ async fn create_with_future_published_is_scheduled(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_with_past_published_is_live_backdated(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
 
     // A non-draft entry whose <published> is in the past is live, backdated.
     let xml = entry_xml_with_published("Old post", "body", Some("2000-01-01T00:00:00Z"));
@@ -289,8 +319,8 @@ async fn create_with_past_published_is_live_backdated(#[case] backend: Backend) 
     let post_id = location_post_id(&response);
 
     let viewer = common::visibility::ViewerIdentity::local(session.user_id);
-    let rec = state
-        .posts
+    let rec = env
+        .posts()
         .get_post_by_id(PostId::from(post_id), &viewer)
         .await
         .unwrap()
@@ -304,9 +334,15 @@ async fn create_with_past_published_is_live_backdated(#[case] backend: Backend) 
 #[apply(backends)]
 #[tokio::test]
 async fn create_with_explicit_draft_no_preserves_published_instant(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
     let xml = entry_xml_with_draft_no_and_published("Old post", "body", "2000-01-01T00:00:00Z");
 
     let response = app
@@ -317,8 +353,8 @@ async fn create_with_explicit_draft_no_preserves_published_instant(#[case] backe
     assert_eq!(response.status(), StatusCode::CREATED);
     let post_id = location_post_id(&response);
     let owner = common::visibility::ViewerIdentity::local(session.user_id);
-    let rec = state
-        .posts
+    let rec = env
+        .posts()
         .get_post_by_id(PostId::from(post_id), &owner)
         .await
         .unwrap()
@@ -332,14 +368,27 @@ async fn create_with_explicit_draft_no_preserves_published_instant(#[case] backe
 #[apply(backends)]
 #[tokio::test]
 async fn update_with_future_published_schedules_post(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
 
     // Start from a live post, then PUT a non-draft entry with a future
     // <published>: it must become scheduled (future published_at, hidden).
-    let post = session.seed_post().seed(&state).await;
+    let post = session
+        .seed_post()
+        .seed(
+            std::sync::Arc::clone(&env.posts()),
+            std::sync::Arc::clone(&env.feed_events()),
+            env.write_scope(),
+        )
+        .await;
 
-    let app = make_app(&state, &base);
+    let app = make_app!(&env, base);
 
     let xml = entry_xml_with_published("Rescheduled", "new body", Some("2099-06-01T00:00:00Z"));
     let response = app
@@ -354,8 +403,8 @@ async fn update_with_future_published_schedules_post(#[case] backend: Backend) {
     assert_eq!(response.status(), StatusCode::OK);
 
     let viewer = common::visibility::ViewerIdentity::Anonymous;
-    let rec = state
-        .posts
+    let rec = env
+        .posts()
         .get_post_by_id(post.post_id, &viewer)
         .await
         .unwrap()
@@ -370,10 +419,23 @@ async fn update_with_future_published_schedules_post(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn update_with_explicit_draft_no_preserves_published_instant(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let post = session.seed_post().seed(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let post = session
+        .seed_post()
+        .seed(
+            std::sync::Arc::clone(&env.posts()),
+            std::sync::Arc::clone(&env.feed_events()),
+            env.write_scope(),
+        )
+        .await;
+    let app = make_app!(&env, base);
     let xml =
         entry_xml_with_draft_no_and_published("Backdated", "new body", "2000-01-01T00:00:00Z");
 
@@ -388,8 +450,8 @@ async fn update_with_explicit_draft_no_preserves_published_instant(#[case] backe
 
     assert_eq!(response.status(), StatusCode::OK);
     let viewer = common::visibility::ViewerIdentity::Anonymous;
-    let rec = state
-        .posts
+    let rec = env
+        .posts()
         .get_post_by_id(post.post_id, &viewer)
         .await
         .unwrap()

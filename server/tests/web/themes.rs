@@ -10,7 +10,7 @@ use rstest::*;
 use rstest_reuse::*;
 use server_fn::ServerFn;
 use storage::ThemeOwner;
-use storage::test_support::{Backend, TestEnv, backends, confirmed_for};
+use storage::test_support::{Backend, backends, confirmed_for};
 use tempfile::TempDir;
 use tower::ServiceExt;
 use web::themes::{Draft, OwnershipScope};
@@ -40,13 +40,13 @@ fn archive(css: &str) -> Vec<u8> {
 }
 
 async fn create_author_theme(
-    state: &std::sync::Arc<storage::AppState>,
+    app: axum::Router,
     cookie: &str,
     name: &str,
     css: &str,
 ) -> web::themes::CatalogEntry {
     let (status, body) = post_server_fn(
-        state,
+        app,
         &web::themes::Create {
             scope: OwnershipScope::Author,
             name: name.to_owned(),
@@ -81,16 +81,14 @@ where
 }
 
 async fn server_fn_response<F>(
-    state: &std::sync::Arc<storage::AppState>,
-    storage: &TempDir,
+    app: axum::Router,
     input: &F,
     cookie: Option<&str>,
 ) -> axum::response::Response
 where
     F: serde::Serialize + ServerFn,
 {
-    make_app(state, storage)
-        .oneshot(server_fn_request(input, cookie))
+    app.oneshot(server_fn_request(input, cookie))
         .await
         .expect("router accepts request")
 }
@@ -110,13 +108,11 @@ fn multipart_request(body: Vec<u8>, cookie: &str) -> Request<Body> {
 }
 
 async fn multipart_response(
-    state: &std::sync::Arc<storage::AppState>,
-    storage: &TempDir,
+    app: axum::Router,
     body: Vec<u8>,
     cookie: &str,
 ) -> axum::response::Response {
-    make_app(state, storage)
-        .oneshot(multipart_request(body, cookie))
+    app.oneshot(multipart_request(body, cookie))
         .await
         .expect("router accepts multipart request")
 }
@@ -135,12 +131,22 @@ fn multipart_body(scope: &str, name: &str, archive: &[u8]) -> Vec<u8> {
 #[apply(backends)]
 #[tokio::test]
 async fn theme_catalog_enforces_authentication_and_scope(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let member = create_user_and_session(&state).await;
-    let operator = create_operator_and_session(&state).await;
+    let env = backend.setup().await;
+    let member = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let operator = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
 
     let (anonymous_status, anonymous_body) = post_server_fn(
-        &state,
+        make_app!(&env, &env.base),
         &web::themes::List {
             scope: OwnershipScope::Author,
         },
@@ -158,7 +164,7 @@ async fn theme_catalog_enforces_authentication_and_scope(#[case] backend: Backen
     );
 
     let (author_status, author_body) = post_server_fn(
-        &state,
+        make_app!(&env, &env.base),
         &web::themes::List {
             scope: OwnershipScope::Author,
         },
@@ -172,7 +178,7 @@ async fn theme_catalog_enforces_authentication_and_scope(#[case] backend: Backen
     );
 
     let (site_denied_status, site_denied_body) = post_server_fn(
-        &state,
+        make_app!(&env, &env.base),
         &web::themes::List {
             scope: OwnershipScope::Site,
         },
@@ -190,7 +196,7 @@ async fn theme_catalog_enforces_authentication_and_scope(#[case] backend: Backen
     );
 
     let (site_status, site_body) = post_server_fn(
-        &state,
+        make_app!(&env, &env.base),
         &web::themes::List {
             scope: OwnershipScope::Site,
         },
@@ -203,16 +209,30 @@ async fn theme_catalog_enforces_authentication_and_scope(#[case] backend: Backen
 #[apply(backends)]
 #[tokio::test]
 async fn theme_drafts_mask_foreign_ids_and_never_cache_private_responses(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let owner = create_user_and_session(&state).await;
-    let stranger = create_user_and_session(&state).await;
-    let theme =
-        create_author_theme(&state, &owner.cookie(), "Draft", "body { color: navy; }").await;
+    let env = backend.setup().await;
+    let owner = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let stranger = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let theme = create_author_theme(
+        make_app!(&env, &env.base),
+        &owner.cookie(),
+        "Draft",
+        "body { color: navy; }",
+    )
+    .await;
     let storage = TempDir::new().expect("temporary storage");
 
     let draft = server_fn_response(
-        &state,
-        &storage,
+        make_app!(&env, &storage),
         &web::themes::GetDraft {
             scope: OwnershipScope::Author,
             theme_id: theme.id,
@@ -231,8 +251,7 @@ async fn theme_drafts_mask_foreign_ids_and_never_cache_private_responses(#[case]
     );
 
     let foreign = server_fn_response(
-        &state,
-        &storage,
+        make_app!(&env, &storage),
         &web::themes::GetDraft {
             scope: OwnershipScope::Author,
             theme_id: theme.id,
@@ -248,10 +267,15 @@ async fn theme_drafts_mask_foreign_ids_and_never_cache_private_responses(#[case]
 #[apply(backends)]
 #[tokio::test]
 async fn theme_export_is_private_safe_and_contains_only_package_state(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let owner = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let owner = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let theme = create_author_theme(
-        &state,
+        make_app!(&env, &env.base),
         &owner.cookie(),
         "dangerous; filename=owned\".zip",
         "body { color: teal; }",
@@ -259,8 +283,7 @@ async fn theme_export_is_private_safe_and_contains_only_package_state(#[case] ba
     .await;
     let storage = TempDir::new().expect("temporary storage");
     let response = server_fn_response(
-        &state,
-        &storage,
+        make_app!(&env, &storage),
         &web::themes::Export {
             scope: OwnershipScope::Author,
             theme_id: theme.id,
@@ -285,10 +308,14 @@ async fn theme_export_is_private_safe_and_contains_only_package_state(#[case] ba
         package.asset_paths().collect::<Vec<_>>(),
         Vec::<&str>::new()
     );
-    let stranger = create_user_and_session(&state).await;
+    let stranger = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let foreign = server_fn_response(
-        &state,
-        &storage,
+        make_app!(&env, &storage),
         &web::themes::Export {
             scope: OwnershipScope::Author,
             theme_id: theme.id,
@@ -303,13 +330,19 @@ async fn theme_export_is_private_safe_and_contains_only_package_state(#[case] ba
 #[apply(backends)]
 #[tokio::test]
 async fn theme_import_zip_creates_drafts_and_rejects_invalid_packages(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let owner = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let themes: std::sync::Arc<dyn storage::ThemeStorage> = std::sync::Arc::clone(&env.themes());
+
+    let owner = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let storage = TempDir::new().expect("temporary storage");
 
     let imported = multipart_response(
-        &state,
-        &storage,
+        make_app!(&env, &storage),
         multipart_body("author", "Imported", &archive("body { color: green; }")),
         &owner.cookie(),
     )
@@ -324,8 +357,7 @@ async fn theme_import_zip_creates_drafts_and_rejects_invalid_packages(#[case] ba
     assert_eq!(imported.name, "Imported");
 
     let malformed = multipart_response(
-        &state,
-        &storage,
+        make_app!(&env, &storage),
         multipart_body("author", "Rejected", b"not a zip"),
         &owner.cookie(),
     )
@@ -333,8 +365,7 @@ async fn theme_import_zip_creates_drafts_and_rejects_invalid_packages(#[case] ba
     assert_eq!(malformed.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
     let oversized = multipart_response(
-        &state,
-        &storage,
+        make_app!(&env, &storage),
         multipart_body(
             "author",
             "Too Large",
@@ -345,14 +376,12 @@ async fn theme_import_zip_creates_drafts_and_rejects_invalid_packages(#[case] ba
     .await;
     assert_eq!(oversized.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
-    let catalog = state
-        .themes
+    let catalog = themes
         .list_themes(ThemeOwner::Author(owner.user_id))
         .await
         .expect("catalog lookup");
     assert_eq!(catalog.len(), 1, "failed imports do not create drafts");
-    let stored = state
-        .themes
+    let stored = themes
         .get_draft(ThemeOwner::Author(owner.user_id), imported.id)
         .await
         .expect("draft lookup")
@@ -365,11 +394,21 @@ async fn theme_import_zip_creates_drafts_and_rejects_invalid_packages(#[case] ba
 async fn theme_import_admission_precedes_archive_parsing_and_is_principal_scoped(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let owner = create_user_and_session(&state).await;
-    let other = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let owner = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let other = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let storage = TempDir::new().expect("temporary storage");
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
     for _ in 0..4 {
         let response = app
             .clone()
@@ -445,10 +484,15 @@ async fn theme_import_admission_precedes_archive_parsing_and_is_principal_scoped
 #[apply(backends)]
 #[tokio::test]
 async fn theme_import_validation_releases_the_request_permit(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let owner = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let owner = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let storage = TempDir::new().expect("temporary storage");
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
 
     let invalid = app
         .clone()
@@ -479,12 +523,16 @@ async fn theme_import_validation_releases_the_request_permit(#[case] backend: Ba
 #[apply(backends)]
 #[tokio::test]
 async fn theme_import_css_and_presentation_are_owner_private(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let owner = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let owner = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let storage = TempDir::new().expect("temporary storage");
     let imported = server_fn_response(
-        &state,
-        &storage,
+        make_app!(&env, &storage),
         &web::themes::ImportCss {
             scope: OwnershipScope::Author,
             name: "CSS import".to_owned(),
@@ -503,8 +551,7 @@ async fn theme_import_css_and_presentation_are_owner_private(#[case] backend: Ba
     assert_eq!(imported.name, "CSS import");
 
     let presentation = server_fn_response(
-        &state,
-        &storage,
+        make_app!(&env, &storage),
         &web::themes::GetPresentation {
             scope: OwnershipScope::Author,
             theme_id: imported.id,
@@ -529,10 +576,17 @@ async fn theme_import_css_and_presentation_are_owner_private(#[case] backend: Ba
 #[apply(backends)]
 #[tokio::test]
 async fn theme_selection_rejects_unpublished_custom_and_preview_isolated(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let owner = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let themes: std::sync::Arc<dyn storage::ThemeStorage> = std::sync::Arc::clone(&env.themes());
+
+    let owner = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let theme = create_author_theme(
-        &state,
+        make_app!(&env, &env.base),
         &owner.cookie(),
         "Preview",
         "body { color: purple; }",
@@ -541,7 +595,7 @@ async fn theme_selection_rejects_unpublished_custom_and_preview_isolated(#[case]
     let storage = TempDir::new().expect("temporary storage");
 
     let (select_status, select_body) = post_server_fn(
-        &state,
+        make_app!(&env, &env.base),
         &web::themes::Select {
             scope: OwnershipScope::Author,
             selection: Some(PublicThemeSelection::Custom(theme.id)),
@@ -557,8 +611,7 @@ async fn theme_selection_rejects_unpublished_custom_and_preview_isolated(#[case]
     assert!(select_body.contains("not found"), "body: {select_body}");
 
     let preview = server_fn_response(
-        &state,
-        &storage,
+        make_app!(&env, &storage),
         &web::themes::Preview {
             scope: OwnershipScope::Author,
             theme_id: theme.id,
@@ -573,9 +626,14 @@ async fn theme_selection_rejects_unpublished_custom_and_preview_isolated(#[case]
     assert!(preview.html.contains("data-jaunder-theme-surface"));
     assert!(preview.css.contains("purple"), "CSS: {}", preview.css);
 
-    let operator = create_operator_and_session(&state).await;
+    let operator = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let (site_status, site_body) = post_server_fn(
-        &state,
+        make_app!(&env, &env.base),
         &web::themes::Create {
             scope: OwnershipScope::Site,
             name: "Site preview".to_owned(),
@@ -590,8 +648,7 @@ async fn theme_selection_rejects_unpublished_custom_and_preview_isolated(#[case]
         "site theme creation",
     );
     let site_preview = server_fn_response(
-        &state,
-        &storage,
+        make_app!(&env, &storage),
         &web::themes::Preview {
             scope: OwnershipScope::Site,
             theme_id: site_theme.id,
@@ -610,8 +667,7 @@ async fn theme_selection_rejects_unpublished_custom_and_preview_isolated(#[case]
     );
 
     assert_eq!(
-        state
-            .themes
+        themes
             .selection(ThemeOwner::Author(owner.user_id))
             .await
             .expect("selection lookup"),

@@ -12,19 +12,32 @@ use crate::helpers::{
     SeededSession, atompub, atompub_at, atompub_get, atompub_location, atompub_post_xml,
     atompub_put_xml, body_string, create_user_and_session, make_app,
 };
-use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
+use storage::test_support::{Backend, backends, backends_matrix};
 
 use super::fixtures::{entry_xml, etag_of};
 
 #[apply(backends)]
 #[tokio::test]
 async fn update_with_stale_if_match_returns_412(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
 
-    let post = session.seed_post().seed(&state).await;
+    let post = session
+        .seed_post()
+        .seed(
+            std::sync::Arc::clone(&env.posts()),
+            std::sync::Arc::clone(&env.feed_events()),
+            env.write_scope(),
+        )
+        .await;
 
-    let app = make_app(&state, &base);
+    let app = make_app!(&env, base);
 
     let xml = entry_xml("New", "text", "new body");
     let response = app
@@ -49,15 +62,25 @@ async fn update_with_stale_if_match_returns_412(#[case] backend: Backend) {
 async fn stale_org_synced_returns_412_despite_matching_if_match_without_mutation(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let post = session
         .seed_post()
         .body(parse_post_body("Original body"))
-        .seed(&state)
+        .seed(
+            std::sync::Arc::clone(&env.posts()),
+            std::sync::Arc::clone(&env.feed_events()),
+            env.write_scope(),
+        )
         .await;
     let member = format!("posts/{}", post.post_id);
-    let initial = make_app(&state, &base)
+    let initial = make_app!(&env, base)
         .oneshot(atompub_get(&session, &member))
         .await
         .unwrap();
@@ -72,7 +95,7 @@ async fn stale_org_synced_returns_412_despite_matching_if_match_without_mutation
         ),
     );
 
-    let response = make_app(&state, &base)
+    let response = make_app!(&env, base)
         .oneshot(
             atompub(&session, Method::PUT, &member)
                 .header(header::CONTENT_TYPE, "application/atom+xml")
@@ -84,7 +107,7 @@ async fn stale_org_synced_returns_412_despite_matching_if_match_without_mutation
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
-    let response = make_app(&state, &base)
+    let response = make_app!(&env, base)
         .oneshot(atompub_get(&session, &member))
         .await
         .unwrap();
@@ -99,11 +122,24 @@ async fn stale_org_synced_returns_412_despite_matching_if_match_without_mutation
 #[apply(backends)]
 #[tokio::test]
 async fn matching_org_id_and_synced_bookkeeping_updates_member(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let post = session.seed_post().seed(&state).await;
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let post = session
+        .seed_post()
+        .seed(
+            std::sync::Arc::clone(&env.posts()),
+            std::sync::Arc::clone(&env.feed_events()),
+            env.write_scope(),
+        )
+        .await;
     let member = format!("posts/{}", post.post_id);
-    let initial = make_app(&state, &base)
+    let initial = make_app!(&env, base)
         .oneshot(atompub_get(&session, &member))
         .await
         .unwrap();
@@ -118,7 +154,7 @@ async fn matching_org_id_and_synced_bookkeeping_updates_member(#[case] backend: 
         ),
     );
 
-    let response = make_app(&state, &base)
+    let response = make_app!(&env, base)
         .oneshot(atompub_put_xml(&session, &member, &xml))
         .await
         .unwrap();
@@ -132,9 +168,15 @@ async fn matching_org_id_and_synced_bookkeeping_updates_member(#[case] backend: 
 #[apply(backends)]
 #[tokio::test]
 async fn update_with_matching_if_match_succeeds(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
 
     let xml = r#"<?xml version="1.0"?>
 <entry xmlns="http://www.w3.org/2005/Atom">
@@ -257,9 +299,15 @@ async fn delete_if_match_precondition(
     #[case] expected_status: StatusCode,
     #[case] post_survives: bool,
 ) {
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
     let (location, etag) = create_location_etag(app.clone(), &session).await;
 
     let builder = atompub_at(&session, Method::DELETE, &location);
@@ -287,9 +335,15 @@ async fn delete_if_match_precondition(
 #[tokio::test]
 async fn editing_content_via_put_changes_etag(#[case] backend: Backend) {
     // AC4 (HTTP): a PUT that changes the body changes the ETag end-to-end.
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
     let (location, e1) = create_location_etag(app.clone(), &session).await;
 
     let edited = r#"<?xml version="1.0"?>
@@ -323,9 +377,15 @@ async fn editing_content_via_put_changes_etag(#[case] backend: Backend) {
 #[tokio::test]
 async fn etag_is_content_hash_format(#[case] backend: Backend) {
     // AC1: the emitted ETag is a strong, quoted "sha256-<64 lowercase hex>" token.
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
 
     let etag = create_etag(app, &session).await;
     let hex = etag
@@ -344,9 +404,15 @@ async fn etag_is_content_hash_format(#[case] backend: Backend) {
 async fn identical_posts_share_etag(#[case] backend: Backend) {
     // AC2: two distinct posts with identical content get the same ETag — the
     // per-post id / tag ids / slug are excluded from the hash.
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
 
     let e1 = create_etag(app.clone(), &session).await;
     let e2 = create_etag(app, &session).await;
@@ -358,9 +424,15 @@ async fn identical_posts_share_etag(#[case] backend: Backend) {
 async fn idempotent_reput_keeps_etag(#[case] backend: Backend) {
     // AC3 + AC5: re-PUT byte-identical content → the ETag is unchanged (a
     // timestamp ETag would have bumped on the write).
-    let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
 
     let created = app
         .clone()

@@ -425,8 +425,8 @@ mod tests {
         // cov:ignore-start — #[ignore]d manual #18 repro; its body never runs in the
         // automated coverage suite, so these lines are accepted-uncovered.
         let env = backend.setup().await;
-        let feed_events = env.state.feed_events.clone();
-        let write_scope = env.state.write_scope.clone();
+        let feed_events = env.feed_events().clone();
+        let write_scope = env.write_scope().clone();
 
         // Seed a populated queue with distinct valid feed paths.
         for i in 0..200 {

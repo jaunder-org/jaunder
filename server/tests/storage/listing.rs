@@ -15,8 +15,9 @@ use storage::test_support::{
     seed_local_subscription,
 };
 use storage::{
-    AppState, GoLivePost, ListByTagError, PostBookkeepingExpectation, PostCursor, PostFormat,
-    PostRecord, RenderedPostContent, create_rendered_post,
+    AudienceStorage, FeedEventStorage, GoLivePost, ListByTagError, PostBookkeepingExpectation,
+    PostCursor, PostFormat, PostRecord, PostStorage, RenderedPostContent, WriteScope,
+    create_rendered_post,
 };
 
 use rstest::*;
@@ -45,10 +46,13 @@ fn subtract(instant: UtcInstant, span: Span) -> UtcInstant {
     )
 }
 
-async fn soft_delete_post_confirmed(state: &AppState, post_id: PostId, user_id: UserId) {
-    let posts = Arc::clone(&state.posts);
-    let outcome = state
-        .write_scope
+async fn soft_delete_post_confirmed(
+    posts: Arc<dyn PostStorage>,
+    write_scope: WriteScope,
+    post_id: PostId,
+    user_id: UserId,
+) {
+    let outcome = write_scope
         .run(move |transaction| {
             Box::pin(async move {
                 posts
@@ -66,11 +70,14 @@ async fn soft_delete_post_confirmed(state: &AppState, post_id: PostId, user_id: 
     confirmed(outcome, "post deletion");
 }
 
-async fn create_named_audience(state: &AppState, author: UserId, name: &str) -> AudienceId {
+async fn create_named_audience(
+    audiences: Arc<dyn AudienceStorage>,
+    write_scope: WriteScope,
+    author: UserId,
+    name: &str,
+) -> AudienceId {
     let name = parse_audience_name(name);
-    let audiences = Arc::clone(&state.audiences);
-    let outcome = state
-        .write_scope
+    let outcome = write_scope
         .run(move |transaction| {
             Box::pin(async move { audiences.create_audience(transaction, author, &name).await })
         })
@@ -80,13 +87,12 @@ async fn create_named_audience(state: &AppState, author: UserId, name: &str) -> 
 }
 
 async fn anon_user_by_tag(
-    state: &AppState,
+    posts: Arc<dyn PostStorage>,
     user_id: UserId,
     tag: &Tag,
     limit: &str,
 ) -> Vec<PostRecord> {
-    state
-        .posts
+    posts
         .list_user_posts_by_tag(
             user_id,
             tag,
@@ -100,12 +106,11 @@ async fn anon_user_by_tag(
 }
 
 async fn anon_published_by_user(
-    state: &AppState,
+    posts: Arc<dyn PostStorage>,
     username: &Username,
     limit: &str,
 ) -> Vec<PostRecord> {
-    state
-        .posts
+    posts
         .list_published_by_user(
             username,
             None,
@@ -117,9 +122,8 @@ async fn anon_published_by_user(
         .expect("list_published_by_user failed")
 }
 
-async fn drafts_of(state: &AppState, user_id: UserId, limit: &str) -> Vec<PostRecord> {
-    state
-        .posts
+async fn drafts_of(posts: Arc<dyn PostStorage>, user_id: UserId, limit: &str) -> Vec<PostRecord> {
+    posts
         .list_drafts_by_user(
             user_id,
             None,
@@ -135,17 +139,19 @@ async fn drafts_of(state: &AppState, user_id: UserId, limit: &str) -> Vec<PostRe
 /// invisible until its time); a past one a live post. Lets the boundary tests
 /// below pin the publication instant relative to the injected `now`.
 async fn seed_post_published_at(
-    state: &Arc<AppState>,
+    posts: Arc<dyn PostStorage>,
+    feed_events: Arc<dyn FeedEventStorage>,
+    write_scope: WriteScope,
     user_id: UserId,
     slug: &str,
     published_at: common::time::UtcInstant,
 ) -> PostId {
     confirmed(
         create_rendered_post(
-            &state.write_scope,
+            &write_scope,
             &storage::test_support::fixture_media_content_locks(),
-            Arc::clone(&state.posts),
-            Arc::clone(&state.feed_events),
+            posts,
+            feed_events,
             RenderedPostContent {
                 user_id,
                 title: None,
@@ -177,15 +183,30 @@ async fn seed_post_published_at(
 #[tokio::test]
 async fn permalink_hides_scheduled_until_due(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let now = fixed_instant("2026-06-26T12:00:00Z");
-    let user = SeedUser::new().seed(state).await;
-    seed_post_published_at(state, user.user_id, "live-one", subtract(now, 1.hour())).await;
-    seed_post_published_at(state, user.user_id, "sched-one", add(now, 1.hour())).await;
+    let user = SeedUser::new().seed(env.users(), env.write_scope()).await;
+    seed_post_published_at(
+        Arc::clone(&env.posts()),
+        Arc::clone(&env.feed_events()),
+        env.write_scope(),
+        user.user_id,
+        "live-one",
+        subtract(now, 1.hour()),
+    )
+    .await;
+    seed_post_published_at(
+        Arc::clone(&env.posts()),
+        Arc::clone(&env.feed_events()),
+        env.write_scope(),
+        user.user_id,
+        "sched-one",
+        add(now, 1.hour()),
+    )
+    .await;
 
     // At `now`: the live post is visible, the scheduled one is not.
-    let got_live = state
-        .posts
+    let got_live = env
+        .posts()
         .get_post_by_permalink(
             &user.username,
             permalink_date(2026, 6, 26),
@@ -196,8 +217,8 @@ async fn permalink_hides_scheduled_until_due(#[case] backend: Backend) {
         .await
         .unwrap();
     assert!(got_live.is_some(), "live post must be visible at now");
-    let got_sched = state
-        .posts
+    let got_sched = env
+        .posts()
         .get_post_by_permalink(
             &user.username,
             permalink_date(2026, 6, 26),
@@ -215,8 +236,8 @@ async fn permalink_hides_scheduled_until_due(#[case] backend: Backend) {
     // Exactly at go-live, the scheduled post appears (locks the `<= now`
     // boundary shared with the unpublished lookup's strict `> now` predicate).
     let due = add(now, 1.hour());
-    let got_after = state
-        .posts
+    let got_after = env
+        .posts()
         .get_post_by_permalink(
             &user.username,
             permalink_date(2026, 6, 26),
@@ -236,15 +257,29 @@ async fn permalink_hides_scheduled_until_due(#[case] backend: Backend) {
 #[tokio::test]
 async fn list_published_by_user_hides_scheduled_until_due(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let now = fixed_instant("2026-06-26T12:00:00Z");
-    let user = SeedUser::new().seed(state).await;
-    let live =
-        seed_post_published_at(state, user.user_id, "live-one", subtract(now, 1.hour())).await;
-    let sched = seed_post_published_at(state, user.user_id, "sched-one", add(now, 1.hour())).await;
+    let user = SeedUser::new().seed(env.users(), env.write_scope()).await;
+    let live = seed_post_published_at(
+        Arc::clone(&env.posts()),
+        Arc::clone(&env.feed_events()),
+        env.write_scope(),
+        user.user_id,
+        "live-one",
+        subtract(now, 1.hour()),
+    )
+    .await;
+    let sched = seed_post_published_at(
+        Arc::clone(&env.posts()),
+        Arc::clone(&env.feed_events()),
+        env.write_scope(),
+        user.user_id,
+        "sched-one",
+        add(now, 1.hour()),
+    )
+    .await;
 
-    let at_now = state
-        .posts
+    let at_now = env
+        .posts()
         .list_published_by_user(
             &user.username,
             None,
@@ -262,8 +297,8 @@ async fn list_published_by_user_hides_scheduled_until_due(#[case] backend: Backe
     );
 
     let after = add(add(now, 1.hour()), 1.second());
-    let at_after = state
-        .posts
+    let at_after = env
+        .posts()
         .list_published_by_user(
             &user.username,
             None,
@@ -283,14 +318,32 @@ async fn list_published_by_user_hides_scheduled_until_due(#[case] backend: Backe
 #[tokio::test]
 async fn list_published_hides_scheduled_until_due(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let now = fixed_instant("2026-06-26T12:00:00Z");
-    let user_id = SeedUser::new().seed(state).await.user_id;
-    let live = seed_post_published_at(state, user_id, "live-one", subtract(now, 1.hour())).await;
-    let sched = seed_post_published_at(state, user_id, "sched-one", add(now, 1.hour())).await;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
+    let live = seed_post_published_at(
+        Arc::clone(&env.posts()),
+        Arc::clone(&env.feed_events()),
+        env.write_scope(),
+        user_id,
+        "live-one",
+        subtract(now, 1.hour()),
+    )
+    .await;
+    let sched = seed_post_published_at(
+        Arc::clone(&env.posts()),
+        Arc::clone(&env.feed_events()),
+        env.write_scope(),
+        user_id,
+        "sched-one",
+        add(now, 1.hour()),
+    )
+    .await;
 
-    let at_now = state
-        .posts
+    let at_now = env
+        .posts()
         .list_published(None, parse_row_limit("50"), &ViewerIdentity::Anonymous, now)
         .await
         .unwrap();
@@ -302,8 +355,8 @@ async fn list_published_hides_scheduled_until_due(#[case] backend: Backend) {
     );
 
     let after = add(add(now, 1.hour()), 1.second());
-    let at_after = state
-        .posts
+    let at_after = env
+        .posts()
         .list_published(
             None,
             parse_row_limit("50"),
@@ -322,14 +375,32 @@ async fn list_published_hides_scheduled_until_due(#[case] backend: Backend) {
 #[tokio::test]
 async fn list_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let now = fixed_instant("2026-06-26T12:00:00Z");
-    let user_id = SeedUser::new().seed(state).await.user_id;
-    let live = seed_post_published_at(state, user_id, "live-one", subtract(now, 1.hour())).await;
-    let sched = seed_post_published_at(state, user_id, "sched-one", add(now, 1.hour())).await;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
+    let live = seed_post_published_at(
+        Arc::clone(&env.posts()),
+        Arc::clone(&env.feed_events()),
+        env.write_scope(),
+        user_id,
+        "live-one",
+        subtract(now, 1.hour()),
+    )
+    .await;
+    let sched = seed_post_published_at(
+        Arc::clone(&env.posts()),
+        Arc::clone(&env.feed_events()),
+        env.write_scope(),
+        user_id,
+        "sched-one",
+        add(now, 1.hour()),
+    )
+    .await;
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         live,
         user_id,
         &["scheduling".parse::<TagLabel>().unwrap()],
@@ -337,8 +408,8 @@ async fn list_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backend) {
     .await
     .unwrap();
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         sched,
         user_id,
         &["scheduling".parse::<TagLabel>().unwrap()],
@@ -347,8 +418,8 @@ async fn list_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backend) {
     .unwrap();
     let tag_slug: Tag = "scheduling".parse().unwrap();
 
-    let at_now = state
-        .posts
+    let at_now = env
+        .posts()
         .list_posts_by_tag(
             &tag_slug,
             None,
@@ -366,8 +437,8 @@ async fn list_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backend) {
     );
 
     let after = add(add(now, 1.hour()), 1.second());
-    let at_after = state
-        .posts
+    let at_after = env
+        .posts()
         .list_posts_by_tag(
             &tag_slug,
             None,
@@ -387,14 +458,32 @@ async fn list_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backend) {
 #[tokio::test]
 async fn list_user_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let now = fixed_instant("2026-06-26T12:00:00Z");
-    let user_id = SeedUser::new().seed(state).await.user_id;
-    let live = seed_post_published_at(state, user_id, "live-one", subtract(now, 1.hour())).await;
-    let sched = seed_post_published_at(state, user_id, "sched-one", add(now, 1.hour())).await;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
+    let live = seed_post_published_at(
+        Arc::clone(&env.posts()),
+        Arc::clone(&env.feed_events()),
+        env.write_scope(),
+        user_id,
+        "live-one",
+        subtract(now, 1.hour()),
+    )
+    .await;
+    let sched = seed_post_published_at(
+        Arc::clone(&env.posts()),
+        Arc::clone(&env.feed_events()),
+        env.write_scope(),
+        user_id,
+        "sched-one",
+        add(now, 1.hour()),
+    )
+    .await;
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         live,
         user_id,
         &["scheduling".parse::<TagLabel>().unwrap()],
@@ -402,8 +491,8 @@ async fn list_user_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backe
     .await
     .unwrap();
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         sched,
         user_id,
         &["scheduling".parse::<TagLabel>().unwrap()],
@@ -412,8 +501,8 @@ async fn list_user_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backe
     .unwrap();
     let tag_slug: Tag = "scheduling".parse().unwrap();
 
-    let at_now = state
-        .posts
+    let at_now = env
+        .posts()
         .list_user_posts_by_tag(
             user_id,
             &tag_slug,
@@ -432,8 +521,8 @@ async fn list_user_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backe
     );
 
     let after = add(add(now, 1.hour()), 1.second());
-    let at_after = state
-        .posts
+    let at_after = env
+        .posts()
         .list_user_posts_by_tag(
             user_id,
             &tag_slug,
@@ -454,21 +543,32 @@ async fn list_user_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backe
 #[tokio::test]
 async fn soft_delete_excludes_post_from_lists(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
-    let post_id = SeedRawPost::new(user_id).seed(state).await.post_id;
+    let post_id = SeedRawPost::new(user_id)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
-    let published = anon_published(state, "10").await;
+    let published = anon_published(env.posts(), "10").await;
     assert!(published.iter().any(|p| p.post_id == post_id));
 
-    soft_delete_post_confirmed(state, post_id, user_id).await;
+    soft_delete_post_confirmed(
+        Arc::clone(&env.posts()),
+        env.write_scope(),
+        post_id,
+        user_id,
+    )
+    .await;
 
-    let published = anon_published(state, "10").await;
+    let published = anon_published(env.posts(), "10").await;
     assert!(!published.iter().any(|p| p.post_id == post_id));
 
-    let record = state
-        .posts
+    let record = env
+        .posts()
         .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
         .await
         .unwrap()
@@ -486,10 +586,9 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
     };
 
     let env = backend.setup().await;
-    let state = &env.state;
 
-    let alice = SeedUser::new().seed(state).await;
-    let bob = SeedUser::new().seed(state).await;
+    let alice = SeedUser::new().seed(env.users(), env.write_scope()).await;
+    let bob = SeedUser::new().seed(env.users(), env.write_scope()).await;
     let alice_id = alice.user_id;
     let bob_id = bob.user_id;
 
@@ -499,16 +598,28 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
     };
 
     // Alice: 4 posts published 1, 2, 100, 200 days ago.
-    let alice_recent_1 = make_post(alice_id, 1).seed(state).await;
-    make_post(alice_id, 2).seed(state).await;
-    make_post(alice_id, 100).seed(state).await;
-    make_post(alice_id, 200).seed(state).await;
+    let alice_recent_1 = make_post(alice_id, 1)
+        .seed(env.posts(), env.write_scope())
+        .await;
+    make_post(alice_id, 2)
+        .seed(env.posts(), env.write_scope())
+        .await;
+    make_post(alice_id, 100)
+        .seed(env.posts(), env.write_scope())
+        .await;
+    make_post(alice_id, 200)
+        .seed(env.posts(), env.write_scope())
+        .await;
 
     // Bob: 1 post published 5 days ago.
-    make_post(bob_id, 5).seed(state).await;
+    make_post(bob_id, 5)
+        .seed(env.posts(), env.write_scope())
+        .await;
 
     // Future-dated draft-equivalent (excluded).
-    make_post(alice_id, -1).seed(state).await;
+    make_post(alice_id, -1)
+        .seed(env.posts(), env.write_scope())
+        .await;
 
     // Site feed, window {3 items, 30 days} → union of "top 3" and "in last 30
     // days". Alice 1d+2d and Bob 5d are in-window (3 posts). Alice 100d/200d
@@ -518,8 +629,8 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
         min_items: parse_feed_min_items("3"),
         min_days: parse_feed_min_days("30"),
     };
-    let site = state
-        .posts
+    let site = env
+        .posts()
         .list_published_in_window(&FeedSurface::Site, &window, now, &ViewerIdentity::Anonymous)
         .await
         .unwrap();
@@ -535,8 +646,8 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
         min_items: parse_feed_min_items("5"),
         min_days: parse_feed_min_days("30"),
     };
-    let site_big = state
-        .posts
+    let site_big = env
+        .posts()
         .list_published_in_window(&FeedSurface::Site, &big, now, &ViewerIdentity::Anonymous)
         .await
         .unwrap();
@@ -549,8 +660,8 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
         min_items: parse_feed_min_items("2"),
         min_days: parse_feed_min_days("30"),
     };
-    let alice_feed = state
-        .posts
+    let alice_feed = env
+        .posts()
         .list_published_in_window(
             &FeedSurface::User {
                 username: alice.username.clone(),
@@ -565,8 +676,8 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
     assert!(alice_feed.iter().all(|p| p.user_id == alice_id));
 
     // User feed: bob has only 1 post, returned even with min_items=10.
-    let bob_feed = state
-        .posts
+    let bob_feed = env
+        .posts()
         .list_published_in_window(
             &FeedSurface::User {
                 username: bob.username.clone(),
@@ -585,8 +696,8 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
 
     // Add a tag to alice-recent-1 and verify site-tag / user-tag feeds.
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         alice_recent_1.post_id,
         alice_id,
         &["rust".parse::<TagLabel>().unwrap()],
@@ -594,8 +705,8 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
     .await
     .unwrap();
 
-    let tag_site = state
-        .posts
+    let tag_site = env
+        .posts()
         .list_published_in_window(
             &FeedSurface::SiteTag {
                 tag: "rust".parse().unwrap(),
@@ -612,8 +723,8 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
     assert_eq!(tag_site.len(), 1);
     assert_eq!(tag_site[0].slug, alice_recent_1.slug);
 
-    let tag_user = state
-        .posts
+    let tag_user = env
+        .posts()
         .list_published_in_window(
             &FeedSurface::UserTag {
                 username: alice.username.clone(),
@@ -631,8 +742,8 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
     assert_eq!(tag_user.len(), 1);
 
     // User-tag for bob+rust: bob has no rust post → empty.
-    let bob_tag = state
-        .posts
+    let bob_tag = env
+        .posts()
         .list_published_in_window(
             &FeedSurface::UserTag {
                 username: bob.username.clone(),
@@ -662,20 +773,19 @@ async fn list_published_in_window_with_unrepresentable_cutoff_keeps_eligible_his
     };
 
     let env = backend.setup().await;
-    let state = &env.state;
-    let author = SeedUser::new().seed(state).await;
+    let author = SeedUser::new().seed(env.users(), env.write_scope()).await;
     let now = UtcInstant::now();
     let publish = |days_ago: i64| {
         SeedRawPost::new(author.user_id).published_at(subtract(now, (days_ago * 24).hours()))
     };
 
-    let yesterday = publish(1).seed(state).await;
-    let last_month = publish(31).seed(state).await;
-    let last_year = publish(365).seed(state).await;
-    publish(-1).seed(state).await;
+    let yesterday = publish(1).seed(env.posts(), env.write_scope()).await;
+    let last_month = publish(31).seed(env.posts(), env.write_scope()).await;
+    let last_year = publish(365).seed(env.posts(), env.write_scope()).await;
+    publish(-1).seed(env.posts(), env.write_scope()).await;
 
-    let posts = state
-        .posts
+    let posts = env
+        .posts()
         .list_published_in_window(
             &FeedSurface::Site,
             &HybridWindow {
@@ -704,32 +814,31 @@ async fn list_published_in_window_resolves_viewers_before_ranking(#[case] backen
     };
 
     let env = backend.setup().await;
-    let state = &env.state;
-    let alice = SeedUser::new().seed(state).await;
-    let bob = SeedUser::new().seed(state).await;
+    let alice = SeedUser::new().seed(env.users(), env.write_scope()).await;
+    let bob = SeedUser::new().seed(env.users(), env.write_scope()).await;
     let now = UtcInstant::now();
     let public = SeedRawPost::new(alice.user_id)
         .published_at(subtract(now, 2_160.hours()))
         .audiences(vec![AudienceTarget::Public])
-        .seed(state)
+        .seed(env.posts(), env.write_scope())
         .await
         .post_id;
     let subscribers = SeedRawPost::new(alice.user_id)
         .published_at(subtract(now, 2_184.hours()))
         .audiences(vec![AudienceTarget::Subscribers])
-        .seed(state)
+        .seed(env.posts(), env.write_scope())
         .await
         .post_id;
     let private = SeedRawPost::new(alice.user_id)
         .published_at(subtract(now, 24.hours()))
         .audiences(vec![])
-        .seed(state)
+        .seed(env.posts(), env.write_scope())
         .await
         .post_id;
     for post_id in [public, subscribers, private] {
         storage::test_support::set_post_tags_confirmed(
-            &state.write_scope,
-            Arc::clone(&state.posts),
+            &env.write_scope(),
+            Arc::clone(&env.posts()),
             post_id,
             alice.user_id,
             &["rust".parse::<TagLabel>().unwrap()],
@@ -738,7 +847,13 @@ async fn list_published_in_window_resolves_viewers_before_ranking(#[case] backen
         .expect("tag hybrid-window fixture");
     }
 
-    seed_local_subscription(state, alice.user_id, bob.user_id).await;
+    seed_local_subscription(
+        env.subscriptions(),
+        env.write_scope(),
+        alice.user_id,
+        bob.user_id,
+    )
+    .await;
 
     let surfaces = [
         FeedSurface::Site,
@@ -764,8 +879,8 @@ async fn list_published_in_window_resolves_viewers_before_ranking(#[case] backen
     let authenticated = ViewerIdentity::local(bob.user_id);
 
     for surface in surfaces {
-        let anonymous = state
-            .posts
+        let anonymous = env
+            .posts()
             .list_published_in_window(&surface, &anonymous_window, now, &ViewerIdentity::Anonymous)
             .await
             .expect("list anonymous hybrid window");
@@ -778,8 +893,8 @@ async fn list_published_in_window_resolves_viewers_before_ranking(#[case] backen
             "{surface:?}: the older Public post still satisfies the count floor"
         );
 
-        let visible_to_subscriber = state
-            .posts
+        let visible_to_subscriber = env
+            .posts()
             .list_published_in_window(&surface, &authenticated_window, now, &authenticated)
             .await
             .expect("list authenticated hybrid window");
@@ -798,21 +913,26 @@ async fn list_published_in_window_resolves_viewers_before_ranking(#[case] backen
 #[tokio::test]
 async fn list_published_by_user_returns_only_user_posts(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let alice = SeedUser::new().seed(state).await;
-    let bob = SeedUser::new().seed(state).await;
+    let alice = SeedUser::new().seed(env.users(), env.write_scope()).await;
+    let bob = SeedUser::new().seed(env.users(), env.write_scope()).await;
     let alice_id = alice.user_id;
     let bob_id = bob.user_id;
 
-    SeedRawPost::new(alice_id).seed(state).await;
-    SeedRawPost::new(alice_id).seed(state).await;
-    SeedRawPost::new(bob_id).seed(state).await;
+    SeedRawPost::new(alice_id)
+        .seed(env.posts(), env.write_scope())
+        .await;
+    SeedRawPost::new(alice_id)
+        .seed(env.posts(), env.write_scope())
+        .await;
+    SeedRawPost::new(bob_id)
+        .seed(env.posts(), env.write_scope())
+        .await;
 
-    let alice_posts = anon_published_by_user(state, &alice.username, "10").await;
+    let alice_posts = anon_published_by_user(Arc::clone(&env.posts()), &alice.username, "10").await;
     assert_eq!(alice_posts.len(), 2);
     assert!(alice_posts.iter().all(|p| p.user_id == alice_id));
 
-    let bob_posts = anon_published_by_user(state, &bob.username, "10").await;
+    let bob_posts = anon_published_by_user(Arc::clone(&env.posts()), &bob.username, "10").await;
     assert_eq!(bob_posts.len(), 1);
     assert_eq!(bob_posts[0].user_id, bob_id);
 }
@@ -821,16 +941,25 @@ async fn list_published_by_user_returns_only_user_posts(#[case] backend: Backend
 #[tokio::test]
 async fn list_published_returns_published_non_deleted_posts(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
     // Create a draft (should not appear)
-    SeedRawPost::new(user_id).draft().seed(state).await;
+    SeedRawPost::new(user_id)
+        .draft()
+        .seed(env.posts(), env.write_scope())
+        .await;
 
-    SeedRawPost::new(user_id).seed(state).await;
-    SeedRawPost::new(user_id).seed(state).await;
+    SeedRawPost::new(user_id)
+        .seed(env.posts(), env.write_scope())
+        .await;
+    SeedRawPost::new(user_id)
+        .seed(env.posts(), env.write_scope())
+        .await;
 
-    let published = anon_published(state, "10").await;
+    let published = anon_published(env.posts(), "10").await;
     assert_eq!(published.len(), 2);
     assert!(published.iter().all(|p| p.published_at.is_some()));
 }
@@ -839,16 +968,26 @@ async fn list_published_returns_published_non_deleted_posts(#[case] backend: Bac
 #[tokio::test]
 async fn list_drafts_by_user_returns_only_drafts(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
-    SeedRawPost::new(user_id).draft().seed(state).await;
-    SeedRawPost::new(user_id).draft().seed(state).await;
+    SeedRawPost::new(user_id)
+        .draft()
+        .seed(env.posts(), env.write_scope())
+        .await;
+    SeedRawPost::new(user_id)
+        .draft()
+        .seed(env.posts(), env.write_scope())
+        .await;
 
     // Create a published post (should not appear in drafts)
-    SeedRawPost::new(user_id).seed(state).await;
+    SeedRawPost::new(user_id)
+        .seed(env.posts(), env.write_scope())
+        .await;
 
-    let drafts = drafts_of(state, user_id, "10").await;
+    let drafts = drafts_of(Arc::clone(&env.posts()), user_id, "10").await;
     assert_eq!(drafts.len(), 2);
     assert!(drafts.iter().all(|p| p.published_at.is_none()));
     assert!(drafts.iter().all(|p| p.user_id == user_id));
@@ -862,23 +1001,41 @@ async fn list_drafts_by_user_returns_only_drafts(#[case] backend: Backend) {
 #[tokio::test]
 async fn drafts_list_includes_scheduled_excludes_live(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let now = fixed_instant("2026-06-26T12:00:00Z");
-    let user_id = SeedUser::new().seed(state).await.user_id;
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
     // True draft (published_at NULL).
     SeedRawPost::new(user_id)
         .draft()
         .slug("a-draft")
-        .seed(state)
+        .seed(env.posts(), env.write_scope())
         .await;
     // Scheduled post (published_at in the future).
-    seed_post_published_at(state, user_id, "a-sched", add(now, 2.hour())).await;
+    seed_post_published_at(
+        Arc::clone(&env.posts()),
+        Arc::clone(&env.feed_events()),
+        env.write_scope(),
+        user_id,
+        "a-sched",
+        add(now, 2.hour()),
+    )
+    .await;
     // Live post (published_at in the past).
-    seed_post_published_at(state, user_id, "a-live", subtract(now, 2.hour())).await;
+    seed_post_published_at(
+        Arc::clone(&env.posts()),
+        Arc::clone(&env.feed_events()),
+        env.write_scope(),
+        user_id,
+        "a-live",
+        subtract(now, 2.hour()),
+    )
+    .await;
 
-    let rows = state
-        .posts
+    let rows = env
+        .posts()
         .list_drafts_by_user(user_id, None, parse_row_limit("50"), now)
         .await
         .unwrap();
@@ -906,18 +1063,24 @@ async fn drafts_list_includes_scheduled_excludes_live(#[case] backend: Backend) 
 #[tokio::test]
 async fn list_posts_gone_live_between_returns_only_window_with_tags(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let after = fixed_instant("2026-06-26T12:00:00Z");
     let upto = add(after, 1.hour());
-    let alice = SeedUser::new().seed(state).await;
-    let bob = SeedUser::new().seed(state).await;
+    let alice = SeedUser::new().seed(env.users(), env.write_scope()).await;
+    let bob = SeedUser::new().seed(env.users(), env.write_scope()).await;
 
     // Inside the window (after, upto], tagged: must be returned with its tag.
-    let inside =
-        seed_post_published_at(state, alice.user_id, "in-window", add(after, 30.minute())).await;
+    let inside = seed_post_published_at(
+        Arc::clone(&env.posts()),
+        Arc::clone(&env.feed_events()),
+        env.write_scope(),
+        alice.user_id,
+        "in-window",
+        add(after, 30.minute()),
+    )
+    .await;
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         inside,
         alice.user_id,
         &["scheduling".parse::<TagLabel>().unwrap()],
@@ -925,11 +1088,35 @@ async fn list_posts_gone_live_between_returns_only_window_with_tags(#[case] back
     .await
     .unwrap();
     // Exactly at the inclusive upper bound: must be returned (untagged).
-    seed_post_published_at(state, bob.user_id, "at-upto", upto).await;
+    seed_post_published_at(
+        Arc::clone(&env.posts()),
+        Arc::clone(&env.feed_events()),
+        env.write_scope(),
+        bob.user_id,
+        "at-upto",
+        upto,
+    )
+    .await;
     // Exactly at the exclusive lower bound: must be excluded.
-    seed_post_published_at(state, alice.user_id, "at-after", after).await;
+    seed_post_published_at(
+        Arc::clone(&env.posts()),
+        Arc::clone(&env.feed_events()),
+        env.write_scope(),
+        alice.user_id,
+        "at-after",
+        after,
+    )
+    .await;
     // Past the window: must be excluded.
-    seed_post_published_at(state, alice.user_id, "out-window", add(upto, 1.hour())).await;
+    seed_post_published_at(
+        Arc::clone(&env.posts()),
+        Arc::clone(&env.feed_events()),
+        env.write_scope(),
+        alice.user_id,
+        "out-window",
+        add(upto, 1.hour()),
+    )
+    .await;
 
     // These posts are live in the time window, but only Public Posts may enqueue
     // the public Syndication Feed surfaces.
@@ -937,31 +1124,43 @@ async fn list_posts_gone_live_between_returns_only_window_with_tags(#[case] back
         .slug("private-in-window")
         .published_at(add(after, 35.minute()))
         .audiences(vec![])
-        .seed(state)
+        .seed(env.posts(), env.write_scope())
         .await;
     SeedRawPost::new(alice.user_id)
         .slug("subscribers-in-window")
         .published_at(add(after, 40.minute()))
         .audiences(vec![AudienceTarget::Subscribers])
-        .seed(state)
+        .seed(env.posts(), env.write_scope())
         .await;
-    let named = create_named_audience(state, alice.user_id, "go-live-private").await;
+    let named = create_named_audience(
+        Arc::clone(&env.audiences()),
+        env.write_scope(),
+        alice.user_id,
+        "go-live-private",
+    )
+    .await;
     SeedRawPost::new(alice.user_id)
         .slug("named-in-window")
         .published_at(add(after, 45.minute()))
         .audiences(vec![AudienceTarget::Named(named)])
-        .seed(state)
+        .seed(env.posts(), env.write_scope())
         .await;
     let deleted = SeedRawPost::new(alice.user_id)
         .slug("deleted-in-window")
         .published_at(add(after, 50.minute()))
-        .seed(state)
+        .seed(env.posts(), env.write_scope())
         .await
         .post_id;
-    soft_delete_post_confirmed(state, deleted, alice.user_id).await;
+    soft_delete_post_confirmed(
+        Arc::clone(&env.posts()),
+        env.write_scope(),
+        deleted,
+        alice.user_id,
+    )
+    .await;
 
-    let live: Vec<GoLivePost> = state
-        .posts
+    let live: Vec<GoLivePost> = env
+        .posts()
         .list_posts_gone_live_between(after, upto)
         .await
         .unwrap();
@@ -999,18 +1198,24 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
     use host::feed::FeedPath;
 
     let env = backend.setup().await;
-    let state = &env.state;
     let now = fixed_instant("2026-06-26T12:00:00Z");
     let t0 = subtract(now, 2.hour());
-    let alice = SeedUser::new().seed(state).await;
+    let alice = SeedUser::new().seed(env.users(), env.write_scope()).await;
 
     // A live post, newer than t0, on the site/user feeds and — once tagged —
     // on the site-tag and user-tag feeds too.
-    let post =
-        seed_post_published_at(state, alice.user_id, "live-one", subtract(now, 1.hour())).await;
+    let post = seed_post_published_at(
+        Arc::clone(&env.posts()),
+        Arc::clone(&env.feed_events()),
+        env.write_scope(),
+        alice.user_id,
+        "live-one",
+        subtract(now, 1.hour()),
+    )
+    .await;
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post,
         alice.user_id,
         &["rust".parse::<TagLabel>().unwrap()],
@@ -1020,33 +1225,45 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
 
     // A stale feed with only non-Public or Deleted Posts must remain quiet: a
     // restart catch-up pass materializes public projections, not every live row.
-    let bob = SeedUser::new().seed(state).await;
+    let bob = SeedUser::new().seed(env.users(), env.write_scope()).await;
     SeedRawPost::new(bob.user_id)
         .slug("private-live")
         .published_at(subtract(now, 30.minute()))
         .audiences(vec![])
-        .seed(state)
+        .seed(env.posts(), env.write_scope())
         .await;
     SeedRawPost::new(bob.user_id)
         .slug("subscribers-live")
         .published_at(subtract(now, 25.minute()))
         .audiences(vec![AudienceTarget::Subscribers])
-        .seed(state)
+        .seed(env.posts(), env.write_scope())
         .await;
-    let named = create_named_audience(state, bob.user_id, "catch-up-private").await;
+    let named = create_named_audience(
+        Arc::clone(&env.audiences()),
+        env.write_scope(),
+        bob.user_id,
+        "catch-up-private",
+    )
+    .await;
     SeedRawPost::new(bob.user_id)
         .slug("named-live")
         .published_at(subtract(now, 20.minute()))
         .audiences(vec![AudienceTarget::Named(named)])
-        .seed(state)
+        .seed(env.posts(), env.write_scope())
         .await;
     let deleted = SeedRawPost::new(bob.user_id)
         .slug("deleted-live")
         .published_at(subtract(now, 15.minute()))
-        .seed(state)
+        .seed(env.posts(), env.write_scope())
         .await
         .post_id;
-    soft_delete_post_confirmed(state, deleted, bob.user_id).await;
+    soft_delete_post_confirmed(
+        Arc::clone(&env.posts()),
+        env.write_scope(),
+        deleted,
+        bob.user_id,
+    )
+    .await;
 
     // The exact feed-url keys for each surface, built the same way the worker
     // does, so the per-surface arms of `max_published_at_for_surface` are all
@@ -1067,21 +1284,21 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
         .etag(parse_etag("\"etag\""))
         .representation_modified_at(t0)
         .generated_at(t0)
-        .seed(state)
+        .seed(env.feed_cache(), env.write_scope())
         .await;
     SeedFeedCache::new(site_tag_url.clone())
         .body("cached".to_owned())
         .etag(parse_etag("\"etag\""))
         .representation_modified_at(t0)
         .generated_at(t0)
-        .seed(state)
+        .seed(env.feed_cache(), env.write_scope())
         .await;
     SeedFeedCache::new(user_tag_url.clone())
         .body("cached".to_owned())
         .etag(parse_etag("\"etag\""))
         .representation_modified_at(t0)
         .generated_at(t0)
-        .seed(state)
+        .seed(env.feed_cache(), env.write_scope())
         .await;
     let bob_feed_url = format!("/~{}/feed.atom", bob.username);
     SeedFeedCache::new(fp(&bob_feed_url))
@@ -1089,7 +1306,7 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
         .etag(parse_etag("\"etag\""))
         .representation_modified_at(t0)
         .generated_at(t0)
-        .seed(state)
+        .seed(env.feed_cache(), env.write_scope())
         .await;
     // Fresh (generated after the newest live post) => must NOT be returned.
     SeedFeedCache::new(fp("/~alice/feed.atom"))
@@ -1097,10 +1314,10 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
         .etag(parse_etag("\"etag\""))
         .representation_modified_at(now)
         .generated_at(now)
-        .seed(state)
+        .seed(env.feed_cache(), env.write_scope())
         .await;
 
-    let stale = state.posts.feed_urls_needing_catchup(now).await.unwrap();
+    let stale = env.posts().feed_urls_needing_catchup(now).await.unwrap();
     assert!(
         stale.iter().any(|u| u.as_ref() == "/feed.atom"),
         "a stale site feed is returned: {stale:?}"
@@ -1127,21 +1344,23 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
 #[tokio::test]
 async fn tag_list_pagination(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let user = SeedUser::new()
         .display_name("Pagination")
-        .seed(state)
+        .seed(env.users(), env.write_scope())
         .await
         .user_id;
 
     let mut post_ids = Vec::new();
     for _ in 0..5 {
-        let post_id = SeedRawPost::new(user).seed(state).await.post_id;
+        let post_id = SeedRawPost::new(user)
+            .seed(env.posts(), env.write_scope())
+            .await
+            .post_id;
         post_ids.push(post_id);
 
         storage::test_support::set_post_tags_confirmed(
-            &state.write_scope,
-            std::sync::Arc::clone(&state.posts),
+            &env.write_scope(),
+            std::sync::Arc::clone(&env.posts()),
             post_id,
             user,
             &["pagination-test".parse::<TagLabel>().unwrap()],
@@ -1151,7 +1370,7 @@ async fn tag_list_pagination(#[case] backend: Backend) {
     }
 
     let tag_slug: Tag = "pagination-test".parse().unwrap();
-    let posts = anon_by_tag(state, &tag_slug, "2").await;
+    let posts = anon_by_tag(env.posts(), &tag_slug, "2").await;
 
     assert_eq!(posts.len(), 2);
     // Should be newest-first.
@@ -1162,26 +1381,31 @@ async fn tag_list_pagination(#[case] backend: Backend) {
 #[tokio::test]
 async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let user1 = SeedUser::new()
         .display_name("User1")
-        .seed(state)
+        .seed(env.users(), env.write_scope())
         .await
         .user_id;
 
     let user2 = SeedUser::new()
         .display_name("User2")
-        .seed(state)
+        .seed(env.users(), env.write_scope())
         .await
         .user_id;
 
-    let post1 = SeedRawPost::new(user1).seed(state).await.post_id;
+    let post1 = SeedRawPost::new(user1)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
-    let post2 = SeedRawPost::new(user2).seed(state).await.post_id;
+    let post2 = SeedRawPost::new(user2)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post1,
         user1,
         &["shared-tag".parse::<TagLabel>().unwrap()],
@@ -1189,8 +1413,8 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
     .await
     .expect("tag post1 failed");
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post2,
         user2,
         &["shared-tag".parse::<TagLabel>().unwrap()],
@@ -1199,12 +1423,12 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
     .expect("tag post2 failed");
 
     let tag_slug: Tag = "shared-tag".parse().unwrap();
-    let user1_posts = anon_user_by_tag(state, user1, &tag_slug, "50").await;
+    let user1_posts = anon_user_by_tag(Arc::clone(&env.posts()), user1, &tag_slug, "50").await;
 
     assert_eq!(user1_posts.len(), 1);
     assert_eq!(user1_posts[0].post_id, post1);
 
-    let user2_posts = anon_user_by_tag(state, user2, &tag_slug, "50").await;
+    let user2_posts = anon_user_by_tag(Arc::clone(&env.posts()), user2, &tag_slug, "50").await;
 
     assert_eq!(user2_posts.len(), 1);
     assert_eq!(user2_posts[0].post_id, post2);
@@ -1214,10 +1438,9 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
 #[tokio::test]
 async fn list_posts_by_nonexistent_tag(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let tag_slug: Tag = "nosuch-tag".parse().unwrap();
-    let result = state
-        .posts
+    let result = env
+        .posts()
         .list_posts_by_tag(
             &tag_slug,
             None,
@@ -1234,16 +1457,15 @@ async fn list_posts_by_nonexistent_tag(#[case] backend: Backend) {
 #[tokio::test]
 async fn list_user_posts_by_nonexistent_tag(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let user = SeedUser::new()
         .display_name("UserTagNope")
-        .seed(state)
+        .seed(env.users(), env.write_scope())
         .await
         .user_id;
 
     let tag_slug: Tag = "nonexistent-tag-99".parse().unwrap();
-    let result = state
-        .posts
+    let result = env
+        .posts()
         .list_user_posts_by_tag(
             user,
             &tag_slug,
@@ -1265,26 +1487,31 @@ async fn list_user_posts_by_nonexistent_tag(#[case] backend: Backend) {
 #[tokio::test]
 async fn list_posts_by_tag(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let user1 = SeedUser::new()
         .display_name("Eve")
-        .seed(state)
+        .seed(env.users(), env.write_scope())
         .await
         .user_id;
 
     let user2 = SeedUser::new()
         .display_name("Frank")
-        .seed(state)
+        .seed(env.users(), env.write_scope())
         .await
         .user_id;
 
-    let post1 = SeedRawPost::new(user1).seed(state).await.post_id;
+    let post1 = SeedRawPost::new(user1)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
-    let post2 = SeedRawPost::new(user2).seed(state).await.post_id;
+    let post2 = SeedRawPost::new(user2)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post1,
         user1,
         &["javascript".parse::<TagLabel>().unwrap()],
@@ -1292,8 +1519,8 @@ async fn list_posts_by_tag(#[case] backend: Backend) {
     .await
     .expect("set_post_tags failed");
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post2,
         user2,
         &["javascript".parse::<TagLabel>().unwrap()],
@@ -1302,7 +1529,7 @@ async fn list_posts_by_tag(#[case] backend: Backend) {
     .expect("set_post_tags failed");
 
     let tag_slug: Tag = "javascript".parse().unwrap();
-    let posts = anon_by_tag(state, &tag_slug, "50").await;
+    let posts = anon_by_tag(env.posts(), &tag_slug, "50").await;
 
     assert_eq!(posts.len(), 2);
     assert!(posts.iter().any(|p| p.post_id == post1));
@@ -1313,28 +1540,36 @@ async fn list_posts_by_tag(#[case] backend: Backend) {
 #[tokio::test]
 async fn list_user_posts_by_tag(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let user1 = SeedUser::new()
         .display_name("Grace")
-        .seed(state)
+        .seed(env.users(), env.write_scope())
         .await
         .user_id;
 
     let user2 = SeedUser::new()
         .display_name("Henry")
-        .seed(state)
+        .seed(env.users(), env.write_scope())
         .await
         .user_id;
 
-    let post1 = SeedRawPost::new(user1).seed(state).await.post_id;
+    let post1 = SeedRawPost::new(user1)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
-    let post2 = SeedRawPost::new(user1).seed(state).await.post_id;
+    let post2 = SeedRawPost::new(user1)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
-    let post3 = SeedRawPost::new(user2).seed(state).await.post_id;
+    let post3 = SeedRawPost::new(user2)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post1,
         user1,
         &["clojure".parse::<TagLabel>().unwrap()],
@@ -1342,8 +1577,8 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
     .await
     .expect("set_post_tags failed");
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post2,
         user1,
         &["clojure".parse::<TagLabel>().unwrap()],
@@ -1351,8 +1586,8 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
     .await
     .expect("set_post_tags failed");
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post3,
         user2,
         &["clojure".parse::<TagLabel>().unwrap()],
@@ -1361,7 +1596,7 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
     .expect("set_post_tags failed");
 
     let tag_slug: Tag = "clojure".parse().unwrap();
-    let posts = anon_user_by_tag(state, user1, &tag_slug, "50").await;
+    let posts = anon_user_by_tag(Arc::clone(&env.posts()), user1, &tag_slug, "50").await;
 
     assert_eq!(posts.len(), 2);
     assert!(posts.iter().all(|p| p.user_id == user1));
@@ -1371,10 +1606,9 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
 #[tokio::test]
 async fn tag_not_found_error(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let tag_slug: Tag = "nonexistent".parse().unwrap();
-    let result = state
-        .posts
+    let result = env
+        .posts()
         .list_posts_by_tag(
             &tag_slug,
             None,
@@ -1394,20 +1628,25 @@ async fn tag_not_found_error(#[case] backend: Backend) {
 #[tokio::test]
 async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let user = SeedUser::new()
         .display_name("Iris")
-        .seed(state)
+        .seed(env.users(), env.write_scope())
         .await
         .user_id;
 
-    let post1 = SeedRawPost::new(user).seed(state).await.post_id;
+    let post1 = SeedRawPost::new(user)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
-    let post2 = SeedRawPost::new(user).seed(state).await.post_id;
+    let post2 = SeedRawPost::new(user)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post1,
         user,
         &["haskell".parse::<TagLabel>().unwrap()],
@@ -1415,8 +1654,8 @@ async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
     .await
     .expect("set_post_tags failed");
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post2,
         user,
         &["haskell".parse::<TagLabel>().unwrap()],
@@ -1424,10 +1663,10 @@ async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
     .await
     .expect("set_post_tags failed");
 
-    soft_delete_post_confirmed(state, post1, user).await;
+    soft_delete_post_confirmed(Arc::clone(&env.posts()), env.write_scope(), post1, user).await;
 
     let tag_slug: Tag = "haskell".parse().unwrap();
-    let posts = anon_by_tag(state, &tag_slug, "50").await;
+    let posts = anon_by_tag(env.posts(), &tag_slug, "50").await;
 
     assert_eq!(posts.len(), 1);
     assert_eq!(posts[0].post_id, post2);
@@ -1441,20 +1680,26 @@ async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
 #[tokio::test]
 async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let user = SeedUser::new()
         .display_name("Jack")
-        .seed(state)
+        .seed(env.users(), env.write_scope())
         .await
         .user_id;
 
-    let post1 = SeedRawPost::new(user).draft().seed(state).await.post_id;
+    let post1 = SeedRawPost::new(user)
+        .draft()
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
-    let post2 = SeedRawPost::new(user).seed(state).await.post_id;
+    let post2 = SeedRawPost::new(user)
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
 
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post1,
         user,
         &["kotlin".parse::<TagLabel>().unwrap()],
@@ -1462,8 +1707,8 @@ async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
     .await
     .expect("set_post_tags failed");
     storage::test_support::set_post_tags_confirmed(
-        &state.write_scope,
-        std::sync::Arc::clone(&state.posts),
+        &env.write_scope(),
+        std::sync::Arc::clone(&env.posts()),
         post2,
         user,
         &["kotlin".parse::<TagLabel>().unwrap()],
@@ -1472,7 +1717,7 @@ async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
     .expect("set_post_tags failed");
 
     let tag_slug: Tag = "kotlin".parse().unwrap();
-    let posts = anon_by_tag(state, &tag_slug, "50").await;
+    let posts = anon_by_tag(env.posts(), &tag_slug, "50").await;
 
     assert_eq!(posts.len(), 1);
     assert_eq!(posts[0].post_id, post2);
@@ -1484,17 +1729,21 @@ async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
 #[tokio::test]
 async fn list_published_cursor_boundary(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user = SeedUser::new().seed(state).await.user_id;
+    let user = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
     for _ in 0..5 {
-        SeedRawPost::new(user).seed(state).await;
+        SeedRawPost::new(user)
+            .seed(env.posts(), env.write_scope())
+            .await;
     }
 
-    let all = anon_published(state, "10").await;
+    let all = anon_published(env.posts(), "10").await;
     assert_eq!(all.len(), 5);
 
-    let first = anon_published(state, "2").await;
+    let first = anon_published(env.posts(), "2").await;
     assert_eq!(first.len(), 2);
 
     if !first.is_empty() {
@@ -1502,8 +1751,8 @@ async fn list_published_cursor_boundary(#[case] backend: Backend) {
             created_at: first[first.len() - 1].created_at,
             post_id: first[first.len() - 1].post_id,
         };
-        let next = state
-            .posts
+        let next = env
+            .posts()
             .list_published(
                 Some(&cursor),
                 parse_row_limit("2"),
@@ -1520,19 +1769,24 @@ async fn list_published_cursor_boundary(#[case] backend: Backend) {
 #[tokio::test]
 async fn list_drafts_cursor_boundary(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user = SeedUser::new().seed(state).await.user_id;
+    let user = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
     let _now = UtcInstant::now();
 
     for _ in 0..3 {
-        SeedRawPost::new(user).draft().seed(state).await;
+        SeedRawPost::new(user)
+            .draft()
+            .seed(env.posts(), env.write_scope())
+            .await;
     }
 
-    let all = drafts_of(state, user, "10").await;
+    let all = drafts_of(Arc::clone(&env.posts()), user, "10").await;
     assert_eq!(all.len(), 3);
 
-    let first = drafts_of(state, user, "1").await;
+    let first = drafts_of(Arc::clone(&env.posts()), user, "1").await;
     assert_eq!(first.len(), 1);
 
     if !first.is_empty() {
@@ -1540,8 +1794,8 @@ async fn list_drafts_cursor_boundary(#[case] backend: Backend) {
             created_at: first[0].created_at,
             post_id: first[0].post_id,
         };
-        let next = state
-            .posts
+        let next = env
+            .posts()
             .list_drafts_by_user(
                 user,
                 Some(&cursor),
@@ -1558,15 +1812,20 @@ async fn list_drafts_cursor_boundary(#[case] backend: Backend) {
 #[tokio::test]
 async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user = SeedUser::new().seed(state).await.user_id;
+    let user = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
     for _ in 0..3 {
-        let post_id = SeedRawPost::new(user).seed(state).await.post_id;
+        let post_id = SeedRawPost::new(user)
+            .seed(env.posts(), env.write_scope())
+            .await
+            .post_id;
 
         storage::test_support::set_post_tags_confirmed(
-            &state.write_scope,
-            std::sync::Arc::clone(&state.posts),
+            &env.write_scope(),
+            std::sync::Arc::clone(&env.posts()),
             post_id,
             user,
             &["cursor-tag".parse::<TagLabel>().unwrap()],
@@ -1577,10 +1836,10 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
 
     let tag: Tag = "cursor-tag".parse().unwrap();
 
-    let all = anon_user_by_tag(state, user, &tag, "10").await;
+    let all = anon_user_by_tag(Arc::clone(&env.posts()), user, &tag, "10").await;
     assert_eq!(all.len(), 3);
 
-    let first = anon_user_by_tag(state, user, &tag, "1").await;
+    let first = anon_user_by_tag(Arc::clone(&env.posts()), user, &tag, "1").await;
     assert_eq!(first.len(), 1);
 
     if !first.is_empty() {
@@ -1588,8 +1847,8 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
             created_at: first[0].created_at,
             post_id: first[0].post_id,
         };
-        let next = state
-            .posts
+        let next = env
+            .posts()
             .list_user_posts_by_tag(
                 user,
                 &tag,
@@ -1608,15 +1867,20 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
 #[tokio::test]
 async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user = SeedUser::new().seed(state).await.user_id;
+    let user = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
     for _ in 0..3 {
-        let post_id = SeedRawPost::new(user).seed(state).await.post_id;
+        let post_id = SeedRawPost::new(user)
+            .seed(env.posts(), env.write_scope())
+            .await
+            .post_id;
 
         storage::test_support::set_post_tags_confirmed(
-            &state.write_scope,
-            std::sync::Arc::clone(&state.posts),
+            &env.write_scope(),
+            std::sync::Arc::clone(&env.posts()),
             post_id,
             user,
             &["global-tag".parse::<TagLabel>().unwrap()],
@@ -1627,10 +1891,10 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
 
     let tag: Tag = "global-tag".parse().unwrap();
 
-    let all = anon_by_tag(state, &tag, "10").await;
+    let all = anon_by_tag(env.posts(), &tag, "10").await;
     assert_eq!(all.len(), 3);
 
-    let first = anon_by_tag(state, &tag, "1").await;
+    let first = anon_by_tag(env.posts(), &tag, "1").await;
     assert_eq!(first.len(), 1);
 
     if !first.is_empty() {
@@ -1638,8 +1902,8 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
             created_at: first[0].created_at,
             post_id: first[0].post_id,
         };
-        let next = state
-            .posts
+        let next = env
+            .posts()
             .list_posts_by_tag(
                 &tag,
                 Some(&cursor),
@@ -1659,18 +1923,17 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
 #[tokio::test]
 async fn list_published_by_user_no_posts(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user = SeedUser::new().seed(state).await;
+    let user = SeedUser::new().seed(env.users(), env.write_scope()).await;
 
-    let posts = anon_published_by_user(state, &user.username, "10").await;
+    let posts = anon_published_by_user(Arc::clone(&env.posts()), &user.username, "10").await;
     assert!(posts.is_empty());
 
     let cursor = PostCursor {
         created_at: common::time::UtcInstant::now(),
         post_id: PostId::from(999),
     };
-    let posts = state
-        .posts
+    let posts = env
+        .posts()
         .list_published_by_user(
             &user.username,
             Some(&cursor),
@@ -1687,19 +1950,18 @@ async fn list_published_by_user_no_posts(#[case] backend: Backend) {
 #[tokio::test]
 async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user = SeedUser::new().seed(state).await;
+    let user = SeedUser::new().seed(env.users(), env.write_scope()).await;
 
     let created_at = UtcInstant::now();
     let created_date = Offset::UTC.to_datetime(created_at.value()).date();
 
     let seeded = SeedRawPost::new(user.user_id)
         .published_at(created_at)
-        .seed(state)
+        .seed(env.posts(), env.write_scope())
         .await;
 
-    let post = state
-        .posts
+    let post = env
+        .posts()
         .get_post_by_permalink(
             &user.username,
             permalink_date(
@@ -1715,10 +1977,16 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
         .expect("get_post_by_permalink failed");
     assert!(post.is_some());
 
-    soft_delete_post_confirmed(state, seeded.post_id, user.user_id).await;
+    soft_delete_post_confirmed(
+        Arc::clone(&env.posts()),
+        env.write_scope(),
+        seeded.post_id,
+        user.user_id,
+    )
+    .await;
 
-    let post = state
-        .posts
+    let post = env
+        .posts()
         .get_post_by_permalink(
             &user.username,
             permalink_date(
@@ -1741,17 +2009,22 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
 #[tokio::test]
 async fn list_published_with_cursor_same_timestamp(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
-    let user = SeedUser::new().seed(state).await.user_id;
+    let user = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
 
     // Create posts at the same time
     let mut post_ids = vec![];
     for _ in 0..4 {
-        let post_id = SeedRawPost::new(user).seed(state).await.post_id;
+        let post_id = SeedRawPost::new(user)
+            .seed(env.posts(), env.write_scope())
+            .await
+            .post_id;
         post_ids.push(post_id);
     }
 
-    let first = anon_published(state, "2").await;
+    let first = anon_published(env.posts(), "2").await;
     assert_eq!(first.len(), 2);
 
     // Use cursor to get next batch with same created_at but different post_id
@@ -1760,8 +2033,8 @@ async fn list_published_with_cursor_same_timestamp(#[case] backend: Backend) {
             created_at: first[first.len() - 1].created_at,
             post_id: first[first.len() - 1].post_id,
         };
-        let next = state
-            .posts
+        let next = env
+            .posts()
             .list_published(
                 Some(&cursor),
                 parse_row_limit("2"),

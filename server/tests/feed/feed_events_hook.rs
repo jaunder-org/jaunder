@@ -17,14 +17,15 @@ use crate::helpers::{
     atompub, atompub_post_xml, atompub_put_xml, confirmed_mutation, create_post_json,
     create_user_and_session, make_app, post_form, update_post_json,
 };
-use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
+use storage::test_support::{Backend, backends, backends_matrix};
 use web::posts::{PostInputs, SavedPost};
 
-async fn claim_pending(state: &std::sync::Arc<storage::AppState>) -> Vec<storage::FeedEventRecord> {
-    let feed_events = state.feed_events.clone();
+async fn claim_pending(
+    feed_events: std::sync::Arc<dyn storage::FeedEventStorage>,
+    write_scope: storage::WriteScope,
+) -> Vec<storage::FeedEventRecord> {
     storage::test_support::confirmed_for(
-        state
-            .write_scope
+        write_scope
             .run(move |transaction| {
                 Box::pin(async move {
                     feed_events
@@ -42,11 +43,12 @@ fn confirmed_post_id(response: &str) -> i64 {
     i64::from(confirmed_mutation::<SavedPost>(response).post_id)
 }
 
-async fn use_public_default(state: &std::sync::Arc<storage::AppState>) {
-    let site_config = std::sync::Arc::clone(&state.site_config);
+async fn use_public_default(
+    site_config: std::sync::Arc<dyn storage::SiteConfigStorage>,
+    write_scope: storage::WriteScope,
+) {
     storage::test_support::confirmed(
-        state
-            .write_scope
+        write_scope
             .run(move |transaction| {
                 Box::pin(async move {
                     site_config
@@ -103,12 +105,18 @@ async fn create_published_post_enqueues_expected_feeds(
     #[case] tags: Option<Vec<String>>,
     #[case] expected_rows: usize,
 ) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
-    let session = create_user_and_session(&state).await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
 
     let (status, _response) = create_post_json(
-        &state,
+        app,
         PostInputs {
             publish: Some(true),
             tags: tags.map(|tags| tags.into_iter().map(|tag| parse_tag_label(&tag)).collect()),
@@ -120,7 +128,7 @@ async fn create_published_post_enqueues_expected_feeds(
 
     assert_eq!(status, StatusCode::OK);
 
-    let batch = claim_pending(&state).await;
+    let batch = claim_pending(env.feed_events(), env.write_scope()).await;
 
     assert_eq!(
         batch.len(),
@@ -132,13 +140,19 @@ async fn create_published_post_enqueues_expected_feeds(
 #[apply(backends)]
 #[tokio::test]
 async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
-    let session = create_user_and_session(&state).await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let cookie = session.cookie();
 
     let (status, create_response) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(true),
             tags: Some(vec![parse_tag_label("rust"), parse_tag_label("web")]),
@@ -153,11 +167,11 @@ async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backe
     let post_id = confirmed_post_id(&create_response);
 
     // Drain initial create events
-    let _initial_batch = claim_pending(&state).await;
+    let _initial_batch = claim_pending(env.feed_events(), env.write_scope()).await;
 
     // Union should be {leptos, rust, web} = 3 tags
     let (status, _) = update_post_json(
-        &state,
+        app,
         common::ids::PostId::from(post_id),
         PostInputs {
             publish: Some(false),
@@ -170,7 +184,7 @@ async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backe
 
     assert_eq!(status, StatusCode::OK);
 
-    let update_batch = claim_pending(&state).await;
+    let update_batch = claim_pending(env.feed_events(), env.write_scope()).await;
 
     // Expected: Site (3) + User (3) + 3 tags × (SiteTag + UserTag) × 3 formats = 6 + 18 = 24 rows
     assert_eq!(
@@ -183,13 +197,19 @@ async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backe
 #[apply(backends)]
 #[tokio::test]
 async fn unpublish_enqueues_site_and_user_and_tag_feeds(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
-    let session = create_user_and_session(&state).await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let cookie = session.cookie();
 
     let (status, create_response) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(true),
             tags: Some(vec![parse_tag_label("rust")]),
@@ -204,11 +224,11 @@ async fn unpublish_enqueues_site_and_user_and_tag_feeds(#[case] backend: Backend
     let post_id = confirmed_post_id(&create_response);
 
     // Drain initial create events
-    let _initial_batch = claim_pending(&state).await;
+    let _initial_batch = claim_pending(env.feed_events(), env.write_scope()).await;
 
     let unpublish_body = format!("post_id={post_id}");
     let (status, _) = post_form(
-        &state,
+        app,
         <web::posts::Unpublish as ServerFn>::PATH,
         unpublish_body,
         Some(&cookie),
@@ -217,7 +237,7 @@ async fn unpublish_enqueues_site_and_user_and_tag_feeds(#[case] backend: Backend
 
     assert_eq!(status, StatusCode::OK);
 
-    let unpublish_batch = claim_pending(&state).await;
+    let unpublish_batch = claim_pending(env.feed_events(), env.write_scope()).await;
 
     // Expected: Site (3) + User (3) + 1 tag × (SiteTag + UserTag) × 3 formats = 6 + 6 = 12 rows
     assert_eq!(
@@ -230,13 +250,19 @@ async fn unpublish_enqueues_site_and_user_and_tag_feeds(#[case] backend: Backend
 #[apply(backends)]
 #[tokio::test]
 async fn delete_published_post_enqueues_feeds(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
-    let session = create_user_and_session(&state).await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let cookie = session.cookie();
 
     let (status, create_response) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(true),
             tags: Some(vec![parse_tag_label("rust")]),
@@ -251,11 +277,11 @@ async fn delete_published_post_enqueues_feeds(#[case] backend: Backend) {
     let post_id = confirmed_post_id(&create_response);
 
     // Drain initial create events
-    let _initial_batch = claim_pending(&state).await;
+    let _initial_batch = claim_pending(env.feed_events(), env.write_scope()).await;
 
     let delete_body = format!("post_id={post_id}");
     let (status, _) = post_form(
-        &state,
+        app,
         <web::posts::Delete as ServerFn>::PATH,
         delete_body,
         Some(&cookie),
@@ -264,7 +290,7 @@ async fn delete_published_post_enqueues_feeds(#[case] backend: Backend) {
 
     assert_eq!(status, StatusCode::OK);
 
-    let delete_batch = claim_pending(&state).await;
+    let delete_batch = claim_pending(env.feed_events(), env.write_scope()).await;
 
     // Expected: Site (3) + User (3) + 1 tag × (SiteTag + UserTag) × 3 formats = 6 + 6 = 12 rows
     assert_eq!(
@@ -277,13 +303,19 @@ async fn delete_published_post_enqueues_feeds(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn delete_draft_post_enqueues_nothing(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
-    let session = create_user_and_session(&state).await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let cookie = session.cookie();
 
     let (status, create_response) = create_post_json(
-        &state,
+        app.clone(),
         PostInputs {
             publish: Some(false),
             tags: Some(vec![parse_tag_label("rust")]),
@@ -298,11 +330,11 @@ async fn delete_draft_post_enqueues_nothing(#[case] backend: Backend) {
     let post_id = confirmed_post_id(&create_response);
 
     // Drain any events from create (drafts still enqueue as per spec)
-    let _initial_batch = claim_pending(&state).await;
+    let _initial_batch = claim_pending(env.feed_events(), env.write_scope()).await;
 
     let delete_body = format!("post_id={post_id}");
     let (status, _) = post_form(
-        &state,
+        app,
         <web::posts::Delete as ServerFn>::PATH,
         delete_body,
         Some(&cookie),
@@ -311,7 +343,7 @@ async fn delete_draft_post_enqueues_nothing(#[case] backend: Backend) {
 
     assert_eq!(status, StatusCode::OK);
 
-    let delete_batch = claim_pending(&state).await;
+    let delete_batch = claim_pending(env.feed_events(), env.write_scope()).await;
 
     // Expected: 0 rows (draft posts don't affect feeds)
     assert_eq!(
@@ -324,10 +356,15 @@ async fn delete_draft_post_enqueues_nothing(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn atompub_publication_transitions_enqueue_expected_feeds(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    use_public_default(&state).await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    use_public_default(env.site_config(), env.write_scope()).await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, &env.base);
 
     let response = app
         .clone()
@@ -346,7 +383,10 @@ async fn atompub_publication_transitions_enqueue_expected_feeds(#[case] backend:
         .and_then(|location| location.rsplit('/').next())
         .and_then(|id| id.parse::<i64>().ok())
         .expect("Location should end in the Post id");
-    assert_public_atom_paths(claim_pending(&state).await, &session.username);
+    assert_public_atom_paths(
+        claim_pending(env.feed_events(), env.write_scope()).await,
+        &session.username,
+    );
 
     let suffix = format!("posts/{post_id}");
     let response = app
@@ -359,7 +399,10 @@ async fn atompub_publication_transitions_enqueue_expected_feeds(#[case] backend:
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    assert_public_atom_paths(claim_pending(&state).await, &session.username);
+    assert_public_atom_paths(
+        claim_pending(env.feed_events(), env.write_scope()).await,
+        &session.username,
+    );
 
     let response = app
         .oneshot(atompub_put_xml(
@@ -370,7 +413,10 @@ async fn atompub_publication_transitions_enqueue_expected_feeds(#[case] backend:
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    assert_public_atom_paths(claim_pending(&state).await, &session.username);
+    assert_public_atom_paths(
+        claim_pending(env.feed_events(), env.write_scope()).await,
+        &session.username,
+    );
 }
 
 #[apply(backends_matrix)]
@@ -382,10 +428,15 @@ async fn atompub_delete_enqueues_only_for_public_posts(
     #[case] draft: bool,
     #[case] expected_rows: usize,
 ) {
-    let TestEnv { state, base } = backend.setup().await;
-    use_public_default(&state).await;
-    let session = create_user_and_session(&state).await;
-    let app = make_app(&state, &base);
+    let env = backend.setup().await;
+    use_public_default(env.site_config(), env.write_scope()).await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, &env.base);
 
     let response = app
         .clone()
@@ -404,14 +455,14 @@ async fn atompub_delete_enqueues_only_for_public_posts(
         .and_then(|location| location.rsplit('/').next())
         .and_then(|id| id.parse::<i64>().ok())
         .expect("Location should end in the Post id");
-    let _creation_events = claim_pending(&state).await;
+    let _creation_events = claim_pending(env.feed_events(), env.write_scope()).await;
 
     let request = atompub(&session, Method::DELETE, &format!("posts/{post_id}"))
         .body(Body::empty())
         .expect("DELETE request");
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
-    let events = claim_pending(&state).await;
+    let events = claim_pending(env.feed_events(), env.write_scope()).await;
     if expected_rows == 0 {
         assert!(events.is_empty());
     } else {

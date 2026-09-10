@@ -1140,11 +1140,15 @@ mod tests {
     #[tokio::test]
     async fn persisted_selections_preserve_site_author_precedence(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let author = SeedUser::new().seed(&env.state).await;
-        let themes = Arc::clone(&env.state.themes);
+        let author = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
+        let themes = Arc::clone(&env.themes());
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -1164,7 +1168,7 @@ mod tests {
             resolve_public_theme(
                 PublicThemeOwner::Site,
                 &PublicThemeRoute::site(),
-                env.state.themes.as_ref(),
+                env.themes().as_ref(),
             )
             .await
             .unwrap(),
@@ -1174,17 +1178,16 @@ mod tests {
             resolve_public_theme(
                 PublicThemeOwner::Author(author.user_id),
                 &PublicThemeRoute::site(),
-                env.state.themes.as_ref(),
+                env.themes().as_ref(),
             )
             .await
             .unwrap(),
             builtin(Theme::Terminal)
         );
 
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         confirmed(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -1204,7 +1207,7 @@ mod tests {
             resolve_public_theme(
                 PublicThemeOwner::Author(author.user_id),
                 &PublicThemeRoute::site(),
-                env.state.themes.as_ref(),
+                env.themes().as_ref(),
             )
             .await
             .unwrap(),

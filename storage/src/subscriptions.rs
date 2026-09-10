@@ -392,25 +392,29 @@ mod tests {
     #[tokio::test]
     async fn local_viewer_subscription_follows_active_row_lifecycle(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let state = &env.state;
-        let author_user_id = SeedUser::new().seed(state).await.user_id;
-        let subscriber_user_id = SeedUser::new().seed(state).await.user_id;
+        let author_user_id = SeedUser::new()
+            .seed(env.users(), env.write_scope())
+            .await
+            .user_id;
+        let subscriber_user_id = SeedUser::new()
+            .seed(env.users(), env.write_scope())
+            .await
+            .user_id;
         let viewer = ViewerIdentity::local(subscriber_user_id);
-        let local_channel_id = state.subscriptions.local_channel_id().await.unwrap();
+        let local_channel_id = env.subscriptions().local_channel_id().await.unwrap();
         let subscriber = local_subscriber_identity(local_channel_id, subscriber_user_id);
 
         assert!(
-            !state
-                .subscriptions
+            !env.subscriptions()
                 .is_subscriber(author_user_id, &viewer)
                 .await
                 .unwrap()
         );
 
-        let subscriptions = Arc::clone(&state.subscriptions);
+        let subscriptions = Arc::clone(&env.subscriptions());
         let subscribed_identity = subscriber.clone();
-        let outcome = state
-            .write_scope
+        let outcome = env
+            .write_scope()
             .run(move |transaction| {
                 Box::pin(async move {
                     subscriptions
@@ -423,16 +427,15 @@ mod tests {
         confirmed_for(outcome, "local subscription creation");
 
         assert!(
-            state
-                .subscriptions
+            env.subscriptions()
                 .is_subscriber(author_user_id, &viewer)
                 .await
                 .unwrap()
         );
 
-        let subscriptions = Arc::clone(&state.subscriptions);
-        let outcome = state
-            .write_scope
+        let subscriptions = Arc::clone(&env.subscriptions());
+        let outcome = env
+            .write_scope()
             .run(move |transaction| {
                 Box::pin(async move {
                     subscriptions
@@ -445,8 +448,7 @@ mod tests {
         confirmed_for(outcome, "local subscription removal");
 
         assert!(
-            !state
-                .subscriptions
+            !env.subscriptions()
                 .is_subscriber(author_user_id, &viewer)
                 .await
                 .unwrap()

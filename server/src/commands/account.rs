@@ -1,6 +1,7 @@
 use jiff::ToSpan;
 use std::sync::Arc;
 
+use crate::mailer::LettreMailSender;
 use anyhow::Context;
 use common::display_name::DisplayName;
 use common::email::Email;
@@ -13,10 +14,9 @@ use common::token::RawToken;
 use common::username::Username;
 use host::password::Password;
 use host::smtp_config::SmtpConfig;
-use storage::OperatorStatus;
-
-use crate::cli::StorageArgs;
-use crate::mailer::LettreMailSender;
+use storage::{
+    InviteStorage, OperatorStatus, SessionStorage, SiteConfigStorage, UserStorage, WriteScope,
+};
 
 use super::support;
 
@@ -51,24 +51,19 @@ async fn create_command_user(
     support::require_confirmed_mutation(outcome, "user creation")
 }
 
-/// Creates a new user in the database.
+/// Creates a new user with the injected user store and write capability.
 ///
 /// # Errors
 ///
-/// Returns an error if the database cannot be opened, or if the user creation
-/// fails (e.g., duplicate username).
+/// Returns an error if the user creation fails (e.g., duplicate username).
 pub async fn cmd_user_create(
-    storage: &StorageArgs,
+    users: Arc<dyn UserStorage>,
+    write_scope: &WriteScope,
     username: &Username,
     password: Option<Password>,
     display_name: Option<&DisplayName>,
     is_operator: bool,
 ) -> anyhow::Result<()> {
-    let runtime = support::storage_runtime_config(&storage.db)?;
-    let state = storage::open_existing_database(&storage.db, &runtime)
-        .await
-        .context(support::INIT_FIRST_CONTEXT)?;
-
     let password = if let Some(p) = password {
         p
     } else {
@@ -83,8 +78,8 @@ pub async fn cmd_user_create(
     };
 
     let user_id = create_command_user(
-        &state.write_scope,
-        Arc::clone(&state.users),
+        write_scope,
+        users,
         username.clone(),
         password,
         display_name.cloned(),
@@ -141,24 +136,23 @@ pub async fn app_password_create(
     support::require_confirmed_mutation(outcome, "app password")
 }
 
-/// CLI wrapper: opens the database, mints an app password, prints it to stdout.
+/// Mints an app password from the injected account-storage dependencies and
+/// prints it to stdout.
 ///
 /// # Errors
 ///
-/// Returns an error if the database cannot be opened or minting fails.
+/// Returns an error if the user does not exist or minting fails.
 pub async fn cmd_app_password_create(
-    storage: &StorageArgs,
+    users: Arc<dyn UserStorage>,
+    sessions: Arc<dyn SessionStorage>,
+    write_scope: &WriteScope,
     username: &Username,
     label: &SessionLabel,
 ) -> anyhow::Result<()> {
-    let runtime = support::storage_runtime_config(&storage.db)?;
-    let state = storage::open_existing_database(&storage.db, &runtime)
-        .await
-        .context(support::INIT_FIRST_CONTEXT)?;
     let token = app_password_create(
-        &state.write_scope,
-        state.users(),
-        Arc::clone(&state.sessions),
+        write_scope,
+        users.as_ref(),
+        sessions,
         username,
         label.clone(),
     )
@@ -171,18 +165,15 @@ pub async fn cmd_app_password_create(
 ///
 /// # Errors
 ///
-/// Returns an error if the database cannot be opened, the active registration policy
-/// forbids issuance, or the invitation cannot be saved.
+/// Returns an error if the active registration policy forbids issuance, or the
+/// invitation cannot be saved.
 pub async fn cmd_user_invite(
-    storage: &StorageArgs,
+    site_config: &dyn SiteConfigStorage,
+    invites: Arc<dyn InviteStorage>,
+    write_scope: &WriteScope,
     expires_in: Option<InviteTtlHours>,
 ) -> anyhow::Result<()> {
-    let runtime = support::storage_runtime_config(&storage.db)?;
-    let state = storage::open_existing_database(&storage.db, &runtime)
-        .await
-        .context(support::INIT_FIRST_CONTEXT)?;
-
-    let policy = state.site_config().get_registration_policy().await?;
+    let policy = site_config.get_registration_policy().await?;
     if !policy.may_issue_invitation(true) {
         return Err(anyhow::anyhow!(
             "invitation issuance is disabled by registration policy '{policy}'"
@@ -199,9 +190,7 @@ pub async fn cmd_user_invite(
             .context("invite expiry is outside Jiff's supported timestamp range")?,
     );
 
-    let invites = Arc::clone(&state.invites);
-    let outcome = state
-        .write_scope
+    let outcome = write_scope
         .run(move |transaction| {
             Box::pin(async move { invites.create_invite(transaction, expires_at).await })
         })
@@ -212,7 +201,7 @@ pub async fn cmd_user_invite(
     host::metrics::invite(host::metrics::InviteEvent::Created);
     // Deliberate operator-facing reveal via `AsRef` (InviteCode has no Display/serde). With a
     // configured base URL, print a ready-to-send invitation link; otherwise the bare code.
-    match state.site_config().get_identity().await?.base_url {
+    match site_config.get_identity().await?.base_url {
         Some(base_url) => {
             let register_url: MailConfirmUrl = tagged_url::compose(&base_url, "/register");
             println!("{register_url}?invite_code={}", code.as_ref());
@@ -222,19 +211,14 @@ pub async fn cmd_user_invite(
     Ok(())
 }
 
-/// Sends a test email using the configured SMTP settings.
+/// Sends a test email using the injected site-configuration store.
 ///
 /// # Errors
 ///
 /// Returns an error if SMTP is not configured, or if the test email cannot be
 /// sent.
-pub async fn cmd_smtp_test(storage: &StorageArgs, to: &Email) -> anyhow::Result<()> {
-    let runtime = support::storage_runtime_config(&storage.db)?;
-    let state = storage::open_existing_database(&storage.db, &runtime)
-        .await
-        .context(support::INIT_FIRST_CONTEXT)?;
-
-    smtp_test_with(state.site_config(), to, |config| {
+pub async fn cmd_smtp_test(site_config: &dyn SiteConfigStorage, to: &Email) -> anyhow::Result<()> {
+    smtp_test_with(site_config, to, |config| {
         Ok(Box::new(LettreMailSender::from_config(config)?) as Box<dyn MailSender>)
     })
     .await
@@ -298,11 +282,13 @@ mod tests {
         }
     }
 
-    async fn set_registration_policy(state: &storage::AppState, policy: RegistrationPolicy) {
-        let site_config = Arc::clone(&state.site_config);
+    async fn set_registration_policy(
+        site_config: Arc<dyn storage::SiteConfigStorage>,
+        write_scope: &storage::WriteScope,
+        policy: RegistrationPolicy,
+    ) {
         confirmed(
-            state
-                .write_scope
+            write_scope
                 .run(move |transaction| {
                     Box::pin(async move {
                         site_config
@@ -419,17 +405,30 @@ mod tests {
     async fn cmd_user_invite_creates_invite_expiring_in_the_future() {
         let temp = TempDir::new().expect("temp dir");
         let storage_args = sqlite_storage_args(&temp);
-        let state = storage::open_database(&storage_args.db, &StorageRuntimeConfig::default())
+        let factory = storage::open_database(&storage_args.db, &StorageRuntimeConfig::default())
             .await
             .expect("open db");
-        set_registration_policy(&state, RegistrationPolicy::OperatorInvites).await;
+        let site_config = factory.site_config();
+        let invites = factory.invites();
+        let write_scope = factory.write_scope();
+        set_registration_policy(
+            Arc::clone(&site_config),
+            &write_scope,
+            RegistrationPolicy::OperatorInvites,
+        )
+        .await;
 
         let before = common::time::UtcInstant::now();
-        cmd_user_invite(&storage_args, Some(parse_invite_ttl_hours("24")))
-            .await
-            .expect("create invite");
+        cmd_user_invite(
+            site_config.as_ref(),
+            Arc::clone(&invites),
+            &write_scope,
+            Some(parse_invite_ttl_hours("24")),
+        )
+        .await
+        .expect("create invite");
 
-        let invites = state.invites.list_invites().await.expect("list invites");
+        let invites = invites.list_invites().await.expect("list invites");
         assert_eq!(invites.len(), 1, "exactly one invite must be created");
         assert!(
             invites[0].expires_at > before,
@@ -444,14 +443,21 @@ mod tests {
         // command prints a ready-to-send invitation link rather than the bare code.
         let temp = TempDir::new().expect("temp dir");
         let storage_args = sqlite_storage_args(&temp);
-        let state = storage::open_database(&storage_args.db, &StorageRuntimeConfig::default())
+        let factory = storage::open_database(&storage_args.db, &StorageRuntimeConfig::default())
             .await
             .expect("open db");
-        set_registration_policy(&state, RegistrationPolicy::MemberInvites).await;
-        let config = Arc::clone(&state.site_config);
+        let site_config = factory.site_config();
+        let invites = factory.invites();
+        let write_scope = factory.write_scope();
+        set_registration_policy(
+            Arc::clone(&site_config),
+            &write_scope,
+            RegistrationPolicy::MemberInvites,
+        )
+        .await;
+        let config = Arc::clone(&site_config);
         confirmed(
-            state
-                .write_scope
+            write_scope
                 .run(move |transaction| {
                     Box::pin(async move {
                         config
@@ -467,11 +473,16 @@ mod tests {
                 .expect("set base_url"),
         );
 
-        cmd_user_invite(&storage_args, Some(parse_invite_ttl_hours("24")))
-            .await
-            .expect("create invite");
+        cmd_user_invite(
+            site_config.as_ref(),
+            Arc::clone(&invites),
+            &write_scope,
+            Some(parse_invite_ttl_hours("24")),
+        )
+        .await
+        .expect("create invite");
 
-        let invites = state.invites.list_invites().await.expect("list invites");
+        let invites = invites.list_invites().await.expect("list invites");
         assert_eq!(invites.len(), 1, "exactly one invite must be created");
     }
 
@@ -480,14 +491,23 @@ mod tests {
         for policy in [RegistrationPolicy::Closed, RegistrationPolicy::Open] {
             let temp = TempDir::new().expect("temp dir");
             let storage_args = sqlite_storage_args(&temp);
-            let state = storage::open_database(&storage_args.db, &StorageRuntimeConfig::default())
-                .await
-                .expect("open db");
-            set_registration_policy(&state, policy).await;
+            let factory =
+                storage::open_database(&storage_args.db, &StorageRuntimeConfig::default())
+                    .await
+                    .expect("open db");
+            let site_config = factory.site_config();
+            let invites = factory.invites();
+            let write_scope = factory.write_scope();
+            set_registration_policy(Arc::clone(&site_config), &write_scope, policy).await;
 
-            let error = cmd_user_invite(&storage_args, Some(parse_invite_ttl_hours("24")))
-                .await
-                .expect_err("policy must block CLI invitation issuance");
+            let error = cmd_user_invite(
+                site_config.as_ref(),
+                Arc::clone(&invites),
+                &write_scope,
+                Some(parse_invite_ttl_hours("24")),
+            )
+            .await
+            .expect_err("policy must block CLI invitation issuance");
             assert!(
                 error
                     .to_string()
@@ -495,8 +515,7 @@ mod tests {
                 "{policy:?} rejection: {error:#}"
             );
             assert!(
-                state
-                    .invites
+                invites
                     .list_invites()
                     .await
                     .expect("list invites")

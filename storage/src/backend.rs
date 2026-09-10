@@ -15,7 +15,7 @@
 /// identity and adapting the sealed write capability to its connection.
 ///
 /// Generic stores use this public marker. It deliberately does not construct
-/// write scopes; that composition step belongs exclusively to `AppState`.
+/// write scopes; that composition step belongs exclusively to [`crate::StorageFactory`].
 pub trait Backend: sqlx::Database {
     /// Value of the `db.system` span field (`"sqlite"` | `"postgres"`).
     const DB_SYSTEM: &'static str;
@@ -30,11 +30,12 @@ pub trait Backend: sqlx::Database {
     ) -> Result<&mut Self::Connection, sqlx::Error>;
 }
 
-/// Backend capability used only while composing [`crate::AppState`].
+/// Backend capability used only by [`crate::StorageFactory`] while constructing
+/// a [`crate::WriteScope`] from a concrete connection pool.
 ///
 /// This remains crate-private so downstream code can use a factory-minted
 /// [`crate::WriteScope`] but cannot construct one from a pool.
-pub(crate) trait AppStateBackend: Backend {
+pub(crate) trait WriteScopeFactoryBackend: Backend {
     /// Creates this backend's sealed write capability from its connection pool.
     fn write_scope(pool: sqlx::Pool<Self>) -> crate::WriteScope;
 }
@@ -49,7 +50,7 @@ impl Backend for sqlx::Sqlite {
     }
 }
 
-impl AppStateBackend for sqlx::Sqlite {
+impl WriteScopeFactoryBackend for sqlx::Sqlite {
     fn write_scope(pool: sqlx::Pool<Self>) -> crate::WriteScope {
         crate::WriteScope::sqlite(pool)
     }
@@ -65,7 +66,7 @@ impl Backend for sqlx::Postgres {
     }
 }
 
-impl AppStateBackend for sqlx::Postgres {
+impl WriteScopeFactoryBackend for sqlx::Postgres {
     fn write_scope(pool: sqlx::Pool<Self>) -> crate::WriteScope {
         crate::WriteScope::postgres(pool)
     }

@@ -16,21 +16,27 @@ use crate::helpers::{
     TestHttpResponse, create_session_for, create_user_and_session, make_app, post_form,
     post_form_with_credentials,
 };
-use storage::test_support::{Backend, TestEnv, backends};
+use storage::test_support::{Backend, backends};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
 #[apply(backends)]
 #[tokio::test]
 async fn list_sessions_returns_sessions_for_authenticated_user(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let cookie = session.cookie();
     // Create a second session with a label.
-    let sessions = Arc::clone(&state.sessions);
+    let sessions = Arc::clone(&env.sessions());
     let label = parse_session_label("mobile");
-    let outcome = state
-        .write_scope
+    let outcome = env
+        .write_scope()
         .run(|transaction| {
             Box::pin(async move {
                 sessions
@@ -43,7 +49,7 @@ async fn list_sessions_returns_sessions_for_authenticated_user(#[case] backend: 
     assert!(matches!(outcome, MutationOutcome::Confirmed(_)));
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::sessions::List as ServerFn>::PATH,
         "",
         Some(&cookie),
@@ -64,11 +70,18 @@ async fn list_sessions_returns_sessions_for_authenticated_user(#[case] backend: 
 #[apply(backends)]
 #[tokio::test]
 async fn list_sessions_marks_current_session(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::sessions::List as ServerFn>::PATH,
         "",
         Some(&cookie),
@@ -84,13 +97,24 @@ async fn list_sessions_marks_current_session(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn bearer_identity_wins_and_expires_simultaneous_cookie(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie_user = create_user_and_session(&state).await;
-    let bearer_user = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base; secure_cookies = true);
+    let cookie_user = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let bearer_user = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let authorization = format!("Bearer {}", bearer_user.token);
 
     let response = post_form_with_credentials(
-        &state,
+        app.clone(),
         <web::sessions::List as ServerFn>::PATH,
         "",
         Some(&cookie_user.cookie()),
@@ -116,12 +140,18 @@ async fn bearer_identity_wins_and_expires_simultaneous_cookie(#[case] backend: B
 #[apply(backends)]
 #[tokio::test]
 async fn bearer_matching_cookie_still_expires_cookie(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base; secure_cookies = true);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let authorization = format!("Bearer {}", session.token);
 
     let response = post_form_with_credentials(
-        &state,
+        app.clone(),
         <web::sessions::List as ServerFn>::PATH,
         "",
         Some(&session.cookie()),
@@ -140,8 +170,15 @@ async fn bearer_matching_cookie_still_expires_cookie(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn explicit_auth_failures_do_not_expire_valid_cookie(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     for authorization in [
         "Bearer unknown-token",
@@ -153,7 +190,7 @@ async fn explicit_auth_failures_do_not_expire_valid_cookie(#[case] backend: Back
             set_cookies,
             ..
         } = post_form_with_credentials(
-            &state,
+            app.clone(),
             <web::sessions::List as ServerFn>::PATH,
             "",
             Some(&cookie),
@@ -170,12 +207,18 @@ async fn explicit_auth_failures_do_not_expire_valid_cookie(#[case] backend: Back
 #[apply(backends)]
 #[tokio::test]
 async fn bearer_only_success_does_not_emit_cookie_expiry(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let authorization = format!("Bearer {}", session.token);
 
     let response = post_form_with_credentials(
-        &state,
+        app.clone(),
         <web::sessions::List as ServerFn>::PATH,
         "",
         None,
@@ -191,9 +234,16 @@ async fn bearer_only_success_does_not_emit_cookie_expiry(#[case] backend: Backen
 #[apply(backends)]
 #[tokio::test]
 async fn list_sessions_requires_authentication(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
-    let (status, _) = post_form(&state, <web::sessions::List as ServerFn>::PATH, "", None).await;
+    let (status, _) = post_form(
+        app.clone(),
+        <web::sessions::List as ServerFn>::PATH,
+        "",
+        None,
+    )
+    .await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
@@ -201,14 +251,27 @@ async fn list_sessions_requires_authentication(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn revoke_session_removes_session_for_authenticated_user(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let cookie1 = session.cookie();
     // Create a second session to revoke.
-    let raw_token2 = create_session_for(&state, session.user_id).await.token;
-    let sessions = Arc::clone(&state.sessions);
-    let outcome = state
-        .write_scope
+    let raw_token2 = create_session_for(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+        session.user_id,
+    )
+    .await
+    .token;
+    let sessions = Arc::clone(&env.sessions());
+    let outcome = env
+        .write_scope()
         .run(|transaction| {
             Box::pin(async move { sessions.authenticate(transaction, &raw_token2).await })
         })
@@ -219,7 +282,7 @@ async fn revoke_session_removes_session_for_authenticated_user(#[case] backend: 
 
     let body = format!("token_hash={token_hash2}");
     let (status, _) = post_form(
-        &state,
+        app.clone(),
         <web::sessions::Revoke as ServerFn>::PATH,
         body,
         Some(&cookie1),
@@ -229,17 +292,17 @@ async fn revoke_session_removes_session_for_authenticated_user(#[case] backend: 
     assert_eq!(status, StatusCode::OK);
 
     // Verify the revoked session is gone but the requester's session remains.
-    let sessions = state.sessions.list_sessions(session.user_id).await.unwrap();
+    let sessions = env.sessions().list_sessions(session.user_id).await.unwrap();
     assert_eq!(sessions.len(), 1, "only one session should remain");
     assert!(
         !sessions.iter().any(|s| s.token_hash == token_hash2),
         "revoked session should not appear"
     );
     // The requesting session should still be valid.
-    let sessions = Arc::clone(&state.sessions);
+    let sessions = Arc::clone(&env.sessions());
     let token = session.token.clone();
-    let outcome = state
-        .write_scope
+    let outcome = env
+        .write_scope()
         .run(|transaction| {
             Box::pin(async move { sessions.authenticate(transaction, &token).await })
         })
@@ -254,13 +317,25 @@ async fn revoke_session_removes_session_for_authenticated_user(#[case] backend: 
 #[apply(backends)]
 #[tokio::test]
 async fn revoke_session_rejects_session_belonging_to_another_user(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let alice_cookie = create_user_and_session(&state).await.cookie();
-    let bob = create_user_and_session(&state).await;
-    let sessions = Arc::clone(&state.sessions);
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let alice_cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
+    let bob = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let sessions = Arc::clone(&env.sessions());
     let token = bob.token.clone();
-    let outcome = state
-        .write_scope
+    let outcome = env
+        .write_scope()
         .run(|transaction| {
             Box::pin(async move { sessions.authenticate(transaction, &token).await })
         })
@@ -272,7 +347,7 @@ async fn revoke_session_rejects_session_belonging_to_another_user(#[case] backen
     // Alice tries to revoke Bob's session.
     let body = format!("token_hash={bob_token_hash}");
     let (status, _) = post_form(
-        &state,
+        app.clone(),
         <web::sessions::Revoke as ServerFn>::PATH,
         body,
         Some(&alice_cookie),
@@ -282,7 +357,7 @@ async fn revoke_session_rejects_session_belonging_to_another_user(#[case] backen
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 
     // Bob's session should still exist.
-    let bob_sessions = state.sessions.list_sessions(bob.user_id).await.unwrap();
+    let bob_sessions = env.sessions().list_sessions(bob.user_id).await.unwrap();
     assert!(
         !bob_sessions.is_empty(),
         "Bob's session should not be revoked"
@@ -292,10 +367,11 @@ async fn revoke_session_rejects_session_belonging_to_another_user(#[case] backen
 #[apply(backends)]
 #[tokio::test]
 async fn revoke_session_requires_authentication(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
     let (status, _) = post_form(
-        &state,
+        app.clone(),
         <web::sessions::Revoke as ServerFn>::PATH,
         "token_hash=somehash",
         None,
@@ -308,12 +384,18 @@ async fn revoke_session_requires_authentication(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_app_password_mints_labelled_session(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let cookie = session.cookie();
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::sessions::CreateAppPassword as ServerFn>::PATH,
         "label=MarsEdit",
         Some(&cookie),
@@ -325,18 +407,25 @@ async fn create_app_password_mints_labelled_session(#[case] backend: Backend) {
     assert!(body.contains("MarsEdit"), "label missing: {body}");
 
     // The new app password appears as a session with its label.
-    let sessions = state.sessions.list_sessions(session.user_id).await.unwrap();
+    let sessions = env.sessions().list_sessions(session.user_id).await.unwrap();
     assert!(sessions.iter().any(|s| s.label == "MarsEdit"));
 }
 
 #[apply(backends)]
 #[tokio::test]
 async fn create_app_password_rejects_blank_label(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, _body) = post_form(
-        &state,
+        app.clone(),
         <web::sessions::CreateAppPassword as ServerFn>::PATH,
         "label=%20%20",
         Some(&cookie),
@@ -352,14 +441,21 @@ async fn create_app_password_rejects_blank_label(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_app_password_rejects_overlong_label(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     // A label past MAX_SESSION_LABEL_CHARS (255) is rejected at the SessionLabel
     // decode — coverage the cap makes possible.
     let overlong = "a".repeat(256);
     let (status, _body) = post_form(
-        &state,
+        app.clone(),
         <web::sessions::CreateAppPassword as ServerFn>::PATH,
         format!("label={overlong}"),
         Some(&cookie),
@@ -372,11 +468,18 @@ async fn create_app_password_rejects_overlong_label(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_app_password_rejects_missing_label(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
 
     let (status, body) = post_form(
-        &state,
+        app.clone(),
         <web::sessions::CreateAppPassword as ServerFn>::PATH,
         "",
         Some(&cookie),
@@ -390,10 +493,16 @@ async fn create_app_password_rejects_missing_label(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn malformed_progressive_form_is_not_redirected(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let env = backend.setup().await;
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
     let storage = TempDir::new().unwrap();
-    let app = make_app(&state, &storage);
+    let app = make_app!(&env, &storage);
     let request = |body: &str| {
         Request::builder()
             .method("POST")
@@ -427,10 +536,11 @@ async fn malformed_progressive_form_is_not_redirected(#[case] backend: Backend) 
 #[apply(backends)]
 #[tokio::test]
 async fn create_app_password_requires_authentication(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
 
     let (status, _body) = post_form(
-        &state,
+        app.clone(),
         <web::sessions::CreateAppPassword as ServerFn>::PATH,
         "label=MarsEdit",
         None,

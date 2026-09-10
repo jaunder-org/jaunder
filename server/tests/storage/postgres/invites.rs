@@ -7,8 +7,8 @@ use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{Backend, postgres_only};
 use storage::{
-    AppState, InviteRecord, InviteStorage, OperatorStatus, UseInviteError, WriteScopeError,
-    WriteTransaction,
+    InviteRecord, InviteStorage, OperatorStatus, UseInviteError, UserStorage, WriteScope,
+    WriteScopeError, WriteTransaction,
     account_mutations::{self, RegisterWithInviteError, RegisterWithInviteInput},
 };
 
@@ -61,26 +61,31 @@ impl InviteStorage for BarrierInviteStorage {
 #[tokio::test]
 async fn concurrent_registrations_claim_exactly_one_invite(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = Arc::clone(&env.state);
+    let invites = Arc::clone(&env.invites());
+    let users = Arc::clone(&env.users());
+    let write_scope = env.write_scope();
     let code = create_invite(
-        &state,
+        Arc::clone(&invites),
+        write_scope.clone(),
         "2099-01-02T03:04:05.123457Z".parse::<UtcInstant>().unwrap(),
     )
     .await;
     let invites: Arc<dyn InviteStorage> = Arc::new(BarrierInviteStorage {
-        inner: Arc::clone(&state.invites),
+        inner: invites,
         claim_barrier: Arc::new(tokio::sync::Barrier::new(2)),
     });
 
     let first = tokio::spawn(register_after_claim_barrier(
-        Arc::clone(&state),
+        Arc::clone(&users),
+        write_scope.clone(),
         Arc::clone(&invites),
         code.clone(),
         username("alice"),
         password("alice-password"),
     ));
     let second = tokio::spawn(register_after_claim_barrier(
-        Arc::clone(&state),
+        users,
+        write_scope,
         invites,
         code,
         username("bob"),
@@ -92,7 +97,8 @@ async fn concurrent_registrations_claim_exactly_one_invite(#[case] backend: Back
     .await
     .expect("concurrent registrations must finish");
     assert_exactly_one_invite_registration(
-        &state,
+        Arc::clone(&env.invites()),
+        Arc::clone(&env.users()),
         first.expect("first concurrent registration task must not panic"),
         second.expect("second concurrent registration task must not panic"),
     )
@@ -100,15 +106,14 @@ async fn concurrent_registrations_claim_exactly_one_invite(#[case] backend: Back
 }
 
 async fn register_after_claim_barrier(
-    state: Arc<AppState>,
+    users: Arc<dyn UserStorage>,
+    write_scope: WriteScope,
     invites: Arc<dyn InviteStorage>,
     code: InviteCode,
     username: Username,
     password: Password,
 ) -> Result<common::MutationOutcome<UserId>, WriteScopeError<RegisterWithInviteError>> {
-    let users = Arc::clone(&state.users);
-    state
-        .write_scope
+    write_scope
         .run(|transaction| {
             Box::pin(async move {
                 account_mutations::register_with_invite(
