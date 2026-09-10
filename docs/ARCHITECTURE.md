@@ -1350,7 +1350,7 @@ clips the Post/header ancestor indirectly removes the visual anchor; switching
 that public presentation to Studio is the supported recovery path. This
 authenticated mutation surface requires Chromium 125+, Firefox 147+ (including
 ESR 153+), or Safari/iOS 26+; anonymous reading remains independent of CSS
-anchor support (the proposed trusted Post action positioning decision).
+anchor support ([ADR-0186](adr/0186-trusted-post-actions-use-css-anchors.md)).
 
 The operator and each author own separate custom-theme catalogs. An effective
 public selection is either a built-in `Theme` or an owner-valid custom Theme ID;

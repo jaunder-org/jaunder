@@ -212,6 +212,7 @@ convention). See the Status column below for each ADR's current status.
 | [0183](adr/0183-per-user-media-records-from-local-post-references.md)  | Per-user Media Records from local Post references                                                            | accepted   |
 | [0184](adr/0184-css-package-public-themes.md)                          | Custom public themes are scoped CSS packages                                                                 | accepted   |
 | [0185](adr/0185-reason-bearing-coverage-exceptions.md)                 | Reason-bearing Rust coverage exceptions                                                                      | accepted   |
+| [0186](adr/0186-trusted-post-actions-use-css-anchors.md)               | Trusted Post Actions Use CSS Anchor Positioning                                                              | accepted   |
 
 <!-- adr-table:end -->
 
