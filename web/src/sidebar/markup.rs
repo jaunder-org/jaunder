@@ -210,20 +210,12 @@ pub(crate) fn active_key(pathname: &str) -> Option<&'static str> {
         .map(|item| item.key)
 }
 
-/// The static demo "Sources" rows in the sidebar: `(proto, name, sub)`.
-pub(crate) const SIDEBAR_SOURCES: &[(&str, &str, &str)] = &[
-    ("atproto", "Bluesky", "mara.bsky.social"),
-    ("activitypub", "Mastodon", "@mara@hachyderm.io"),
-    ("rss", "Ivy Chen", "weeknotes"),
-    ("jsonfeed", "Manton", "manton.org"),
-];
-
 /// The inner HTML of the **anonymous** `<aside class="j-sidebar">`: brand, search,
-/// the public nav (items with an href and no auth requirement — just "Home"),
-/// the sources section, and an empty footer. The reactive [`crate::sidebar::Sidebar`]
-/// injects this verbatim via `inner_html` for the anonymous viewer, so a seeded
-/// first paint and the reactive re-render coincide; authed users get the reactive
-/// build (extra nav, footer avatar) layered on top (#181).
+/// the public nav (items with an href and no auth requirement — just "Home"), and
+/// an empty footer. The reactive [`crate::sidebar::Sidebar`] injects this verbatim
+/// via `inner_html` for the anonymous viewer, so a seeded first paint and the
+/// reactive re-render coincide; authed users get the reactive build (extra nav,
+/// footer avatar) layered on top (#181).
 #[must_use]
 pub(crate) fn render_sidebar(active_key: &str) -> Markup {
     Markup::new(html! {
@@ -250,21 +242,6 @@ pub(crate) fn render_sidebar(active_key: &str) -> Markup {
                 }
             }
         }
-        div {
-            div class="j-sb-head" {
-                span { "Sources" }
-                span class="j-sb-add" { "+" }
-            }
-            @for &(proto, name, sub) in SIDEBAR_SOURCES {
-                div class="j-source" {
-                    span class="j-dot" data-jaunder-protocol=(proto) {}
-                    div class="j-source-body" {
-                        div class="j-source-name" { (name) }
-                        div class="j-source-sub" { (sub) }
-                    }
-                }
-            }
-        }
         div class="j-sb-foot" {}
     })
 }
@@ -274,7 +251,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sidebar_renders_brand_public_nav_sources_and_empty_foot() {
+    fn sidebar_renders_brand_public_nav_without_fabricated_sources() {
         let markup = render_sidebar("home");
         let html = markup.as_str();
         assert!(
@@ -304,7 +281,7 @@ mod tests {
         assert!(!html.contains(">Configure Backups<"), "{html}");
         assert!(!html.contains(">Site Settings<"), "{html}");
         assert!(!html.contains(">WebSub Recovery<"), "{html}");
-        // Sources section + empty footer.
+        // No source-following capability is advertised without real source data.
         let compose = NAV_ITEMS
             .iter()
             .find(|item| item.key == "compose")
@@ -313,10 +290,8 @@ mod tests {
         assert_eq!(compose.icon_path, Icons::EDIT);
         assert_eq!(compose.href.as_deref(), Some("/posts/new"));
 
-        assert!(
-            html.contains("<div class=\"j-source-name\">Bluesky</div>"),
-            "{html}"
-        );
+        assert!(!html.contains(">Sources<"), "{html}");
+        assert!(!html.contains(">Bluesky<"), "{html}");
         assert!(html.ends_with("<div class=\"j-sb-foot\"></div>"), "{html}");
     }
 

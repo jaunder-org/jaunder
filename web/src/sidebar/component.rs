@@ -39,20 +39,6 @@ fn SidebarNavItem(
     }
 }
 
-/// A static source row in the sidebar sources section.
-#[component]
-fn SidebarSource(proto: &'static str, name: &'static str, sub: &'static str) -> impl IntoView {
-    view! {
-        <div class="j-source">
-            <span class="j-dot" data-jaunder-protocol=proto></span>
-            <div class="j-source-body">
-                <div class="j-source-name">{name}</div>
-                <div class="j-source-sub">{sub}</div>
-            </div>
-        </div>
-    }
-}
-
 /// The left navigation sidebar. Reads session and current location from context.
 #[component]
 pub fn Sidebar() -> impl IntoView {
@@ -102,10 +88,10 @@ pub fn Sidebar() -> impl IntoView {
     }
 }
 
-/// The authenticated sidebar chrome (brand, search, nav + policy-authorized links,
-/// sources, footer avatar). Shared by the marker-seeded initial render and the
-/// reconciled render (#181) so both are byte-for-byte the same authed markup —
-/// only its inputs change from awaited values to these params.
+/// The authenticated sidebar chrome (brand, search, navigation, and footer avatar).
+/// Shared by the marker-seeded initial render and the reconciled render (#181) so
+/// both are byte-for-byte the same authed markup; only its inputs change from
+/// awaited values to these params.
 fn authed_sidebar(
     active_key: &str,
     username: &Username,
@@ -141,18 +127,6 @@ fn authed_sidebar(
                     })
                     .collect::<Vec<_>>()}
             </nav>
-            <div>
-                <div class="j-sb-head">
-                    <span>"Sources"</span>
-                    <span class="j-sb-add">"+"</span>
-                </div>
-                {markup::SIDEBAR_SOURCES
-                    .iter()
-                    .map(|&(proto, name, sub)| {
-                        view! { <SidebarSource proto=proto name=name sub=sub /> }
-                    })
-                    .collect::<Vec<_>>()}
-            </div>
             <div class="j-sb-foot">
                 <Avatar name=&username size=28 />
                 <div class="j-sb-foot-body">

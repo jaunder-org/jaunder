@@ -304,6 +304,8 @@ test("sidebar shows Home only and no Compose link when not logged in", async ({
   await expect(navAnchors).toHaveCount(1);
   await expect(navAnchors.first()).toHaveAttribute("href", "/");
   await expect(page.locator('.j-nav a[href="/posts/new"]')).toHaveCount(0);
+  await expect(page.locator(".j-sidebar")).not.toContainText("Sources");
+  await expect(page.locator(".j-sidebar")).not.toContainText("Bluesky");
 
   // Sidebar footer must not contain a "Sign in" link.
   await expect(page.locator(".j-sb-foot a[href='/login']")).toHaveCount(0);
@@ -321,6 +323,8 @@ test("authenticated sidebar orders Compose after Feed", async ({
   // Home, Feed (/app cockpit, #181), Compose, Drafts, Scheduled, History, Media,
   // Audiences, Themes, and Settings have hrefs.
   await waitForSelector(page, '.j-nav a[href="/audiences"]');
+  await expect(page.locator(".j-sidebar")).not.toContainText("Sources");
+  await expect(page.locator(".j-sidebar")).not.toContainText("Bluesky");
   await waitForSelector(page, '.j-nav a[href="/history"]');
   const navAnchors = page.locator(".j-nav a");
   await expect(navAnchors).toHaveCount(10);
