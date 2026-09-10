@@ -42,6 +42,15 @@ export const FORMAT_PROBE_BODY = "*emphasis*";
 /** What `FORMAT_PROBE_BODY` renders to as text, once the markup is consumed. */
 const FORMAT_PROBE_TEXT = "emphasis";
 
+/** The create endpoint's server-classified publication result. */
+type CreatePublication = "draft" | "published" | "scheduled";
+
+/** The nested create response returned by the `ClassifiedSavedPost` wire DTO. */
+type ClassifiedSavedPost = {
+  post: { post_id: number; permalink: string };
+  publication: CreatePublication;
+};
+
 /** Create a post via `POST /api/posts/create`. Wraps the request in
  *  `withTimedAction` so it appears in the OTEL trace, asserts success with a
  *  contextful message, and returns the typed JSON. `publish` defaults to `true`;
@@ -79,10 +88,7 @@ export async function createPostViaApi(
     `posts::create failed (${res.status()}): ${await res.text()}`,
   ).toBeTruthy();
   return confirmedMutation(
-    (await res.json()) as MutationOutcome<{
-      post: { post_id: number; permalink: string };
-      publication: "draft" | "published" | "scheduled";
-    }>,
+    (await res.json()) as MutationOutcome<ClassifiedSavedPost>,
     "posts::create",
   ).post;
 }

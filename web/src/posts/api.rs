@@ -254,7 +254,12 @@ pub struct SavedPost {
 }
 
 /// The server's publication classification at the creation request clock.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[macros::text_enum(
+    error = InvalidCreatePublication,
+    message = "publication must be \"draft\", \"published\", or \"scheduled\""
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[strum(serialize_all = "snake_case")]
 pub enum CreatePublication {
     Draft,
     Published,
@@ -267,7 +272,7 @@ pub enum CreatePublication {
 /// callers observe their settled `SavedPost` without receiving incidental
 /// request-clock metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CreatedPost {
+pub struct ClassifiedSavedPost {
     pub post: SavedPost,
     pub publication: CreatePublication,
 }
@@ -285,13 +290,13 @@ fn create_publication(
     }
 }
 
-/// The author-only payload used to seed the Post editor.
+/// An authored Post plus the server instant captured with its read.
 ///
-/// `fetched_at` is captured by the server with the Post so the client can
-/// distinguish a scheduled Post from a live one without comparing against the
-/// browser clock. The loaded editor keeps that classification for its lifetime.
+/// Consumers classify scheduled versus live state against `fetched_at` without
+/// consulting a browser clock. The classification remains stable for the
+/// lifetime of the loaded view.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct EditPostPreview {
+pub struct AuthoredPostSnapshot {
     pub post: AuthoredPost,
     pub fetched_at: UtcInstant,
 }
@@ -503,7 +508,7 @@ impl PostInputs {
 /// server and the wasm client). The browser converts the author's committed
 /// local Date and Time fields to UTC before sending.
 #[macros::server(input = Json, skip_all)]
-pub async fn create(post: PostInputs) -> WebResult<MutationOutcome<CreatedPost>> {
+pub async fn create(post: PostInputs) -> WebResult<MutationOutcome<ClassifiedSavedPost>> {
     let request_clock = UtcInstant::now();
     let PostInputs {
         body,
@@ -626,7 +631,7 @@ pub async fn create(post: PostInputs) -> WebResult<MutationOutcome<CreatedPost>>
             published_at: record.published_at,
             permalink: record.permalink(),
         };
-        CreatedPost {
+        ClassifiedSavedPost {
             publication: create_publication(post.published_at, request_clock),
             post,
         }
@@ -642,7 +647,8 @@ async fn public_post_presentation(
     post: PostRecord,
     is_author: bool,
     route: &common::theme::PublicThemeRoute,
-) -> crate::error::InternalResult<PublicPresentation<AuthoredPost>> {
+    fetched_at: UtcInstant,
+) -> crate::error::InternalResult<PublicPresentation<AuthoredPostSnapshot>> {
     let themes = expect_context::<Arc<dyn ThemeStorage>>();
     let theme = storage::resolve_public_theme(
         storage::PublicThemeOwner::Author(post.user_id),
@@ -652,7 +658,10 @@ async fn public_post_presentation(
     .await?;
     Ok(PublicPresentation {
         theme,
-        page: server::authored_post(post, is_author),
+        page: AuthoredPostSnapshot {
+            post: server::authored_post(post, is_author),
+            fetched_at,
+        },
     })
 }
 
@@ -662,7 +671,7 @@ pub async fn get(
     username: Username,
     date: PermalinkDate,
     slug: Slug,
-) -> WebResult<PublicPresentation<AuthoredPost>> {
+) -> WebResult<PublicPresentation<AuthoredPostSnapshot>> {
     let posts = expect_context::<Arc<dyn PostStorage>>();
     let now = UtcInstant::now();
 
@@ -679,7 +688,7 @@ pub async fn get(
         let is_author = auth::require_auth()
             .await
             .is_ok_and(|auth| auth.user_id == post.user_id);
-        return public_post_presentation(post, is_author, &theme_route).await;
+        return public_post_presentation(post, is_author, &theme_route, now).await;
     }
 
     // The visibility-filtered lookup above found nothing public at this
@@ -699,13 +708,13 @@ pub async fn get(
         .await?
         .ok_or_else(server::not_found_error)?;
 
-    public_post_presentation(post, true, &theme_route).await
+    public_post_presentation(post, true, &theme_route, now).await
 }
 
 /// Retrieves a Post and a same-response time snapshot for its authenticated
 /// author to edit.
 #[macros::server]
-pub async fn get_preview(post_id: PostId) -> WebResult<EditPostPreview> {
+pub async fn get_preview(post_id: PostId) -> WebResult<AuthoredPostSnapshot> {
     let auth = auth::require_auth()
         .await
         .map_err(|e| server::private_post_not_found_error(&e))?;
@@ -721,7 +730,7 @@ pub async fn get_preview(post_id: PostId) -> WebResult<EditPostPreview> {
     }
 
     let fetched_at = UtcInstant::now();
-    Ok(EditPostPreview {
+    Ok(AuthoredPostSnapshot {
         post: server::authored_post(post, true),
         fetched_at,
     })
@@ -1070,6 +1079,28 @@ mod tests {
     // the raw string, and the `deserialize_with` trusted-rebuild reconstructs a
     // `RenderedHtml` (the type has no blanket `Deserialize`). Covers the sole wire
     // reconstruction door.
+    #[test]
+    fn create_publication_uses_lowercase_wire_tokens() {
+        for (publication, token) in [
+            (super::CreatePublication::Draft, "draft"),
+            (super::CreatePublication::Published, "published"),
+            (super::CreatePublication::Scheduled, "scheduled"),
+        ] {
+            assert_eq!(
+                serde_json::to_string(&publication).unwrap(),
+                format!("\"{token}\"")
+            );
+            assert_eq!(
+                serde_json::from_str::<super::CreatePublication>(&format!("\"{token}\"")).unwrap(),
+                publication
+            );
+        }
+        assert_eq!(
+            "later".parse::<super::CreatePublication>().unwrap_err(),
+            super::InvalidCreatePublication
+        );
+    }
+
     #[test]
     fn rendered_post_round_trips_rendered_html_via_server_rebuild() {
         use common::ids::PostId;

@@ -91,22 +91,21 @@ fn permalink_unpublish_callback(refetch: RwSignal<u32>) -> Callback<SavedPost> {
     })
 }
 
-/// Browser-local publication notice for an author-visible Scheduled Post.
+/// Server-classified publication notice for an author-visible Scheduled Post.
 #[component]
 fn ScheduledNotice(at: Option<UtcInstant>) -> impl IntoView {
     view! {
         {move || {
-            at.filter(|at| at.value() > UtcInstant::now().value())
-                .map(|at| {
-                    view! {
-                        <p class="success">
-                            {format!(
-                                "Scheduled for {} local time",
-                                time::local_datetime_from_utc(at).replace('T', " "),
-                            )}
-                        </p>
-                    }
-                })
+            at.map(|at| {
+                view! {
+                    <p class="success">
+                        {format!(
+                            "Scheduled for {} local time",
+                            time::local_datetime_from_utc(at).replace('T', " "),
+                        )}
+                    </p>
+                }
+            })
         }}
     }
 }
@@ -170,17 +169,26 @@ pub fn PostPage() -> impl IntoView {
                     Ok((fetched_theme, fetched)) => {
                         match presentation.adopt(fetched_theme).await {
                             Ok(crate::app::ThemeAdoption::Applied) => {
-                                let scheduled_at = fetched.post.published_at;
+                                let scheduled_at = posts::scheduled_publication_at(
+                                    fetched.post.post.published_at,
+                                    fetched.fetched_at,
+                                );
                                 let banner = fetched
+                                    .post
                                     .post
                                     .is_draft()
                                     .then_some("Draft - visible only to you".to_string());
-                                let tag_context = TagCtx::ForUser(fetched.post.username.clone());
+                                let tag_context = TagCtx::ForUser(
+                                    fetched.post.post.username.clone(),
+                                );
                                 // Both bound before the `view!`: the props are borrows
                                 // now, so an inline temporary would be dropped inside
                                 // the macro expansion (E0716).
                                 view! {
-                                    <Topbar title=format!("Post by {}", fetched.post.username) />
+                                    <Topbar title=format!(
+                                        "Post by {}",
+                                        fetched.post.post.username,
+                                    ) />
                                     {move || {
                                         crate::app::render_theme_header(&theme.get())
                                             .inject_into(leptos::html::div().class("j-contents"))
@@ -189,7 +197,7 @@ pub fn PostPage() -> impl IntoView {
                                         <div class="j-page">
                                             <ScheduledNotice at=scheduled_at />
                                             <PostCard
-                                                post=&fetched.post
+                                                post=&fetched.post.post
                                                 banner=banner.as_deref()
                                                 tag_context=&tag_context
                                                 on_unpublish=on_unpublish

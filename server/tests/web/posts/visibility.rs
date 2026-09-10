@@ -2,12 +2,12 @@ use std::sync::Arc;
 
 use axum::{Router, http::StatusCode};
 use common::ids::{AudienceId, PostId, SubscriptionId, UserId};
-use common::seed::{AuthoredPost, Page, PublicPresentation, RenderedPost};
+use common::seed::{Page, PublicPresentation, RenderedPost};
 use common::test_support::{parse_audience_name, parse_post_body};
 use jiff::ToSpan;
 use server_fn::ServerFn;
 use storage::{AudienceStorage, PostFormat, PostStorage, WriteScope};
-use web::posts::EditPostPreview;
+use web::posts::AuthoredPostSnapshot;
 use web::posts::PostInputs;
 
 use rstest::*;
@@ -220,6 +220,7 @@ async fn get_post_returns_draft_to_author_only(#[case] backend: Backend) {
     assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
 
+    let before = common::time::UtcInstant::now();
     let (status, body) = get_post_form(
         app.clone(),
         &author.username,
@@ -230,9 +231,14 @@ async fn get_post_returns_draft_to_author_only(#[case] backend: Backend) {
         Some(&author_cookie),
     )
     .await;
+    let after = common::time::UtcInstant::now();
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    assert!(!body.contains("\"is_draft\""), "body: {body}");
-    assert!(body.contains("Draft"), "body: {body}");
+    let presentation: PublicPresentation<AuthoredPostSnapshot> =
+        serde_json::from_str(&body).unwrap();
+    assert_eq!(presentation.page.post.post.post_id, created.post_id);
+    assert!(presentation.page.post.post.published_at.is_none());
+    assert!(presentation.page.fetched_at >= before);
+    assert!(presentation.page.fetched_at <= after);
 
     let (status, body) =
         get_post_preview_form(app.clone(), created.post_id, Some(&author_cookie)).await;
@@ -285,7 +291,7 @@ async fn get_post_preview_shows_draft_to_author_only(#[case] backend: Backend) {
     let after = common::time::UtcInstant::now();
     assert_eq!(status, StatusCode::OK, "author preview failed: {body}");
 
-    let preview: EditPostPreview = serde_json::from_str(&body).unwrap();
+    let preview: AuthoredPostSnapshot = serde_json::from_str(&body).unwrap();
     assert_eq!(preview.post.post.post_id, created.post_id);
     assert_eq!(preview.post.body.as_ref(), "# Preview Draft\n\ndraft\n");
     assert!(preview.post.post.published_at.is_none());
@@ -389,9 +395,10 @@ async fn get_post_returns_scheduled_post_at_canonical_permalink_to_author(
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let returned: AuthoredPost = serde_json::from_str::<PublicPresentation<AuthoredPost>>(&body)
+    let returned = serde_json::from_str::<PublicPresentation<AuthoredPostSnapshot>>(&body)
         .unwrap()
-        .page;
+        .page
+        .post;
     assert_eq!(returned.post.post_id, scheduled.post_id);
     assert!(returned.post.is_author);
 }

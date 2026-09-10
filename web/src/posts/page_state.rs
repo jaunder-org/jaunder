@@ -33,7 +33,7 @@ use common::revision_history::{
     RevisionHistoryAudience, RevisionHistoryDetail, RevisionHistoryTag,
 };
 use common::root_relative_url::RootRelativeUrl;
-use common::seed::{AuthoredPost, Page, PageCursor, PageSeed, PublicPresentation, RenderedPost};
+use common::seed::{Page, PageCursor, PageSeed, PublicPresentation, RenderedPost};
 use common::tag::Tag;
 use common::theme::PublishedThemePresentation;
 use common::username::Username;
@@ -46,7 +46,7 @@ use crate::taglist::TagCtx;
 use crate::timeline;
 
 use crate::posts::{
-    CreatedPost, CurrentPostHistory, RevisionHistoryCursor, RevisionHistoryMetadata,
+    ClassifiedSavedPost, CurrentPostHistory, RevisionHistoryCursor, RevisionHistoryMetadata,
     RevisionHistoryPage, RevisionLifecycle, SavedPost, UnpublishedPost,
 };
 
@@ -318,13 +318,13 @@ pub fn public_destination<Page>(
 ///
 /// Returns validation failures for malformed route values and propagates fetch
 /// failures.
-pub async fn permalink_destination<Fetch, FetchFuture>(
+pub async fn permalink_destination<Fetch, FetchFuture, Page>(
     route: Option<PermalinkRoute>,
     fetch: Fetch,
-) -> WebResult<(PublishedThemePresentation, AuthoredPost)>
+) -> WebResult<(PublishedThemePresentation, Page)>
 where
     Fetch: FnOnce(PermalinkRoute) -> FetchFuture,
-    FetchFuture: Future<Output = WebResult<PublicPresentation<AuthoredPost>>>,
+    FetchFuture: Future<Output = WebResult<PublicPresentation<Page>>>,
 {
     let route = route.ok_or_else(|| WebError::validation("Invalid permalink"))?;
     fetch(route).await.map(public_destination)
@@ -336,9 +336,9 @@ where
 /// only a confirmed post may drive success UI or reset the composer.
 #[must_use]
 pub fn notify_create_settlement(
-    outcome: MutationOutcome<CreatedPost>,
+    outcome: MutationOutcome<ClassifiedSavedPost>,
     on_mutation: Option<Callback<bool>>,
-    on_success: Callback<CreatedPost>,
+    on_success: Callback<ClassifiedSavedPost>,
 ) -> bool {
     let published = outcome.value().post.published_at.is_some();
     if let Some(on_mutation) = on_mutation {
@@ -1183,8 +1183,8 @@ mod tests {
             permalink: parse_root_relative_url("/~alice/2026/01/02/hello"),
         }
     }
-    fn created_post(published_at: Option<UtcInstant>) -> CreatedPost {
-        CreatedPost {
+    fn created_post(published_at: Option<UtcInstant>) -> ClassifiedSavedPost {
+        ClassifiedSavedPost {
             post: saved_post(published_at),
             publication: if published_at.is_some() {
                 crate::posts::CreatePublication::Published

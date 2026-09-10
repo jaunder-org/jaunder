@@ -1,9 +1,9 @@
 use axum::http::StatusCode;
 use common::render::PostFormat;
-use common::seed::{AuthoredPost, PublicPresentation};
+use common::seed::PublicPresentation;
 use common::tag::TagLabel;
 use common::test_support::parse_post_body;
-use web::posts::PostInputs;
+use web::posts::{AuthoredPostSnapshot, PostInputs};
 
 use rstest::*;
 use rstest_reuse::*;
@@ -178,9 +178,10 @@ async fn get_post_carries_tags(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "get body: {body}");
-    let response: AuthoredPost = serde_json::from_str::<PublicPresentation<AuthoredPost>>(&body)
+    let response = serde_json::from_str::<PublicPresentation<AuthoredPostSnapshot>>(&body)
         .unwrap()
-        .page;
+        .page
+        .post;
     assert_eq!(response.post.tags.len(), 1);
     assert_eq!(response.post.tags[0].slug, "performance");
     assert_eq!(response.post.tags[0].display, "Performance");

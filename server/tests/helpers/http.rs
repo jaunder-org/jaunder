@@ -23,7 +23,7 @@ pub fn confirmed_mutation<T: serde::de::DeserializeOwned>(body: &str) -> T {
 }
 
 pub fn confirmed_created_post(body: &str) -> web::posts::SavedPost {
-    confirmed_mutation::<web::posts::CreatedPost>(body).post
+    confirmed_mutation::<web::posts::ClassifiedSavedPost>(body).post
 }
 
 /// Read a response body fully and decode it as UTF-8.

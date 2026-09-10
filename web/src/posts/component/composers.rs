@@ -7,8 +7,8 @@ use crate::forms::{self, Field, ValidatedBareInput, ValidatedTextarea};
 use crate::media::MediaUpload;
 use crate::posts;
 use crate::posts::{
-    ComposeState, Create, CreatePublication, CreatedPost, InvalidSchedule, LoadedPublication,
-    NamedAudienceState, ScheduledEditState,
+    ClassifiedSavedPost, ComposeState, Create, CreatePublication, InvalidSchedule,
+    LoadedPublication, NamedAudienceState, ScheduledEditState,
 };
 use crate::tags::TagInput;
 use crate::topbar::Topbar;
@@ -149,7 +149,7 @@ impl CreationSchedule {
 pub fn PostCreateForm(
     compact: bool,
     #[prop(optional)] username: Option<Username>,
-    #[prop(into)] on_success: Callback<CreatedPost>,
+    #[prop(into)] on_success: Callback<ClassifiedSavedPost>,
     #[prop(optional)] on_mutation: Option<Callback<bool>>,
     #[prop(default = 6)] rows: u32,
     #[prop(default = "What\u{2019}s on your mind?")] placeholder: &'static str,
@@ -351,7 +351,7 @@ fn CreateErrorFlash(action: ServerAction<Create>) -> impl IntoView {
             action
                 .value()
                 .get()
-                .and_then(|result: Result<MutationOutcome<CreatedPost>, WebError>| match result {
+                .and_then(|result: Result<MutationOutcome<ClassifiedSavedPost>, WebError>| match result {
                     Ok(MutationOutcome::Confirmed(_)) => None,
                     Ok(MutationOutcome::CommitIndeterminate(_)) => {
                         Some(
@@ -375,7 +375,7 @@ fn CreateErrorFlash(action: ServerAction<Create>) -> impl IntoView {
 pub fn InlineComposer(username: Username, on_publish: Callback<()>) -> impl IntoView {
     let flash: RwSignal<Option<(String, String)>> = RwSignal::new(None);
 
-    let on_success = Callback::new(move |created: CreatedPost| {
+    let on_success = Callback::new(move |created: ClassifiedSavedPost| {
         use leptos_dom::helpers::set_timeout;
         use std::time::Duration;
         let url = created.post.permalink.to_string();
@@ -429,7 +429,7 @@ pub fn CreatePostPage() -> impl IntoView {
     // Server-confirmed gate: await the shared session reconcile (an expired cookie
     // must not show the create form) (#591).
     let session = auth::use_session();
-    let last_result: RwSignal<Option<CreatedPost>> = RwSignal::new(None);
+    let last_result: RwSignal<Option<ClassifiedSavedPost>> = RwSignal::new(None);
 
     view! {
         <Topbar title="New post" sub="Long-form" />
@@ -478,7 +478,7 @@ pub fn CreatePostPage() -> impl IntoView {
 /// outcome wording and the stable post-navigation test hooks, while the page owns
 /// authentication reconciliation and form presentation.
 #[component]
-fn CreateResultSummary(result: RwSignal<Option<CreatedPost>>) -> impl IntoView {
+fn CreateResultSummary(result: RwSignal<Option<ClassifiedSavedPost>>) -> impl IntoView {
     view! {
         {move || {
             result
