@@ -242,7 +242,7 @@ fn published_submit_gate(
     let save_disabled =
         Signal::derive(move || unpublish_disabled.get() || publication.get().is_err());
     let on_click = Callback::new(move |publish: bool| {
-        if unpublish_disabled.get() {
+        if also_blocked.get() {
             return;
         }
         let Some(body) = body.parsed() else {
@@ -331,7 +331,7 @@ mod tests {
                 RwSignal::new(String::new()),
             );
             let draft_publish_at = RwSignal::new(String::new());
-            let state = EditLifecycleState::new();
+            let state = EditLifecycleState::default();
 
             state.adopt_settlement::<()>(&Ok(MutationOutcome::CommitIndeterminate(saved(None))));
             assert!(matches!(
@@ -369,6 +369,8 @@ mod tests {
                 LoadedPublication::Draft,
                 RwSignal::new("2999-02-03T10:15".to_owned()),
             );
+            assert_eq!(publication.loaded(), LoadedPublication::Draft);
+            assert!(publication.publication_time().is_none());
             let (save_disabled, _, schedule_error, click) = edit_submit_gate(
                 body,
                 Signal::derive(|| false),
@@ -403,6 +405,34 @@ mod tests {
                 Ok(PublicationIntent::PublishAt(original))
             );
             assert_eq!(publication.loaded(), LoadedPublication::Live(original));
+        });
+    }
+
+    #[test]
+    fn scheduled_gate_preserves_an_untouched_exact_instant() {
+        Owner::new().with(|| {
+            let original = instant("2999-11-03T05:30:00.123456789Z");
+            let body = Field::<PostBody>::new();
+            body.set_value("body");
+            let seen = RwSignal::new(None);
+            let publication = EditPublicationState::from_loaded(
+                LoadedPublication::Scheduled(original),
+                RwSignal::new(String::new()),
+            );
+
+            assert_eq!(publication.loaded(), LoadedPublication::Scheduled(original));
+            assert!(publication.publication_time().is_some());
+            let (save_disabled, unpublish_disabled, schedule_error, click) = edit_submit_gate(
+                body,
+                Signal::derive(|| false),
+                publication,
+                Callback::new(move |(_, intent)| seen.set(Some(intent))),
+            );
+            assert!(!save_disabled.get());
+            assert!(!unpublish_disabled.get());
+            assert_eq!(schedule_error.get(), None);
+            click.run(true);
+            assert_eq!(seen.get(), Some(PublicationIntent::PublishAt(original)));
         });
     }
 
@@ -465,10 +495,11 @@ mod tests {
                 "2999-01-01T09:00".into(),
             );
             let body = Field::<PostBody>::new();
+            let blocked = RwSignal::new(false);
             let ran = RwSignal::new(false);
             let (save_disabled, unpublish_disabled, _, click) = published_submit_gate(
                 body,
-                Signal::derive(|| false),
+                Signal::derive(move || blocked.get()),
                 publication_time,
                 Callback::new(move |_| ran.set(true)),
             );
@@ -476,8 +507,14 @@ mod tests {
             assert!(save_disabled.get());
             assert!(unpublish_disabled.get());
             click.run(true);
+            assert!(!ran.get(), "blank body blocks");
+
+            body.set_value("body");
+            blocked.set(true);
+            assert!(save_disabled.get());
+            assert!(unpublish_disabled.get());
             click.run(false);
-            assert!(!ran.get());
+            assert!(!ran.get(), "caller predicate blocks");
         });
     }
 }
