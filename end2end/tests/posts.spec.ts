@@ -124,6 +124,89 @@ test("authenticated user can create a post through the UI", async ({
     "Slug: playwright-post",
   );
 });
+
+test("Post headers use the current display name with a handle-only fallback", async ({
+  page,
+}, testInfo) => {
+  const username = await signInAsNewUser(page);
+  await goto(page, "/profile", {
+    timeout: slowBrowserFirstNavigationTimeoutMs(testInfo, 15_000),
+  });
+  await createPostViaApi(page, {
+    body: "# Identity Header\n\nExisting Post body",
+  });
+
+  await navigateInApp(page, () => click(page, 'a[href="/app"]'), {
+    url: "/app",
+    ready: "article.j-post",
+  });
+  let post = page.locator("article.j-post", { hasText: "Identity Header" });
+  const emptyName = post.locator('[data-jaunder-part="author-name"]');
+  await expect(emptyName).toHaveCount(1);
+  await expect(emptyName).toBeHidden();
+  await expect(emptyName).toHaveText("");
+  await expect(post.locator('[data-jaunder-part="author-handle"]')).toHaveText(
+    `@${username}`,
+  );
+
+  await navigateInApp(
+    page,
+    () => page.getByRole("link", { name: "Settings" }).click(),
+    {
+      url: "/profile",
+      ready: 'button:has-text("Update Profile")',
+    },
+  );
+  await page.fill('input[name="display_name"]', "Ada Lovelace");
+  let updated = page.waitForResponse((response) =>
+    response.url().includes("profile/update"),
+  );
+  await click(page, 'button:has-text("Update Profile")');
+  expect((await updated).ok()).toBe(true);
+
+  await navigateInApp(page, () => click(page, 'a[href="/app"]'), {
+    url: "/app",
+    ready: "article.j-post",
+  });
+  post = page.locator("article.j-post", { hasText: "Identity Header" });
+  await expect(post.locator('[data-jaunder-part="author-name"]')).toHaveText(
+    "Ada Lovelace",
+  );
+  await expect(post.locator('[data-jaunder-part="author-handle"]')).toHaveText(
+    `@${username}`,
+  );
+
+  await navigateInApp(
+    page,
+    () => page.getByRole("link", { name: "Settings" }).click(),
+    {
+      url: "/profile",
+      ready: 'button:has-text("Update Profile")',
+    },
+  );
+  await page.fill('input[name="display_name"]', "Grace Hopper");
+  updated = page.waitForResponse((response) =>
+    response.url().includes("profile/update"),
+  );
+  await click(page, 'button:has-text("Update Profile")');
+  expect((await updated).ok()).toBe(true);
+
+  allowSecondBoot(
+    page,
+    "a fresh Home Feed load proves an existing Post reads the updated current Display Name rather than a Post snapshot",
+  );
+  await goto(page, "/app", {
+    timeout: slowBrowserTimeoutMs(testInfo, 15_000),
+  });
+  post = page.locator("article.j-post", { hasText: "Identity Header" });
+  await expect(post.locator('[data-jaunder-part="author-name"]')).toHaveText(
+    "Grace Hopper",
+  );
+  await expect(post.locator('[data-jaunder-part="author-handle"]')).toHaveText(
+    `@${username}`,
+  );
+});
+
 // #77: the full leading Org metadata block is normalized at the write boundary,
 // while the form's explicit lifecycle remains authoritative. This follows the
 // saved post back into its editor so the assertion covers the stored canonical

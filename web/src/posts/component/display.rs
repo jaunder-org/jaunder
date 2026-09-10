@@ -29,6 +29,7 @@ pub fn PostDisplay<'a>(
     let view = posts::render::PostView {
         post_id: post.post_id,
         username: &post.username,
+        display_name: post.display_name.as_ref(),
         title: post.title.as_ref(),
         banner,
         summary: post.summary.as_ref(),

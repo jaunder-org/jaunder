@@ -31,7 +31,7 @@ Out:
     absence on direct and listing reads; DTO conversion and serde behavior prove
     the presentation payload without changing feed or AtomPub author output.
 
-- [ ] Task 2: Render Post identity consistently across surfaces
+- [x] Task 2: Render Post identity consistently across surfaces
   - Contract: the shared `PostView` renders a populated `author-name` followed
     by `@username`; without a Display Name it renders one hidden, empty
     `author-name` and one visible handle. The projector and CSR adapter use that

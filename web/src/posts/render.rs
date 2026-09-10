@@ -17,6 +17,7 @@ use crate::home::render;
 use crate::html::Markup;
 use crate::taglist::TagCtx;
 use crate::{avatar, taglist, topbar};
+use common::display_name::DisplayName;
 use common::ids::PostId;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
@@ -137,6 +138,7 @@ pub(crate) fn permalink_article(post: &RenderedPost) -> Markup {
     render_post_article(&PostView {
         post_id: post.post_id,
         username: &post.username,
+        display_name: post.display_name.as_ref(),
         title: post.title.as_ref(),
         banner: None,
         summary: post.summary.as_ref(),
@@ -158,6 +160,7 @@ fn render_posts(posts: &[RenderedPost], tag_ctx: &TagCtx) -> Markup {
             (render_post_article(&PostView {
                 post_id: post.post_id,
                 username: &post.username,
+                display_name: post.display_name.as_ref(),
                 title: post.title.as_ref(),
                 banner: None,
                 summary: post.summary.as_ref(),
@@ -176,6 +179,7 @@ fn render_posts(posts: &[RenderedPost], tag_ctx: &TagCtx) -> Markup {
 pub(crate) struct PostView<'a> {
     pub post_id: PostId,
     pub username: &'a Username,
+    pub display_name: Option<&'a DisplayName>,
     pub title: Option<&'a PostTitle>,
     pub banner: Option<&'a str>,
     pub summary: Option<&'a PostSummary>,
@@ -219,7 +223,11 @@ pub(crate) fn post_inner(view: &PostView) -> Markup {
 pub(crate) fn post_content(view: &PostView) -> Markup {
     Markup::new(html! {
         header class="j-post-head" data-jaunder-part="post-header" {
-            span class="j-post-name" data-jaunder-part="author-name" { (view.username) }
+            @if let Some(display_name) = view.display_name {
+                span class="j-post-name" data-jaunder-part="author-name" { (display_name) }
+            } @else {
+                span class="j-post-name" data-jaunder-part="author-name" hidden aria-hidden="true" {}
+            }
             span class="j-post-handle" data-jaunder-part="author-handle" { "@" (view.username) }
             span class="j-spacer" {}
             time class="j-post-time" data-jaunder-part="published-time" { (view.time) }
@@ -373,8 +381,8 @@ mod tests {
     use super::*;
     use common::seed::Page;
     use common::test_support::{
-        parse_post_summary, parse_post_title, parse_root_relative_url, parse_username,
-        parse_utc_instant,
+        parse_display_name, parse_post_summary, parse_post_title, parse_root_relative_url,
+        parse_username, parse_utc_instant,
     };
 
     #[test]
@@ -425,10 +433,12 @@ mod tests {
         let ctx = TagCtx::ForUser(parse_username("alice"));
         let title = parse_post_title("T");
         let author = parse_username("alice");
+        let display_name = parse_display_name("Ada Lovelace");
         let body = common::test_support::rendered_html("<p>b</p>");
         let view = PostView {
             post_id: PostId::from(7),
             username: &author,
+            display_name: Some(&display_name),
             title: Some(&title),
             banner: None,
             summary: None,
@@ -452,6 +462,51 @@ mod tests {
         assert!(
             post_inner(&view).as_str().contains(&content),
             "anonymous inner must embed the identical content column: {content}"
+        );
+    }
+
+    #[test]
+    fn post_header_renders_display_name_before_canonical_handle() {
+        let mut authored = sample_post();
+        authored.post.display_name = Some(parse_display_name("Ada Lovelace"));
+
+        let html = permalink_article(&authored.post).into_string();
+        assert!(
+            html.contains(
+                "<span class=\"j-post-name\" data-jaunder-part=\"author-name\">Ada Lovelace</span><span class=\"j-post-handle\" data-jaunder-part=\"author-handle\">@alice</span>"
+            ),
+            "display name must precede the canonical handle: {html}"
+        );
+        assert_eq!(
+            html.matches("data-jaunder-part=\"author-name\"").count(),
+            1,
+            "Post header must expose exactly one author-name hook: {html}"
+        );
+        assert_eq!(
+            html.matches("data-jaunder-part=\"author-handle\"").count(),
+            1,
+            "Post header must expose exactly one author-handle hook: {html}"
+        );
+    }
+
+    #[test]
+    fn post_header_hides_empty_name_and_keeps_handle_visible() {
+        let html = permalink_article(&sample_post().post).into_string();
+        assert!(
+            html.contains(
+                "<span class=\"j-post-name\" data-jaunder-part=\"author-name\" hidden aria-hidden=\"true\"></span><span class=\"j-post-handle\" data-jaunder-part=\"author-handle\">@alice</span>"
+            ),
+            "missing display name must leave one hidden empty hook before the handle: {html}"
+        );
+        assert_eq!(
+            html.matches("data-jaunder-part=\"author-name\"").count(),
+            1,
+            "Post header must expose exactly one author-name hook: {html}"
+        );
+        assert_eq!(
+            html.matches("data-jaunder-part=\"author-handle\"").count(),
+            1,
+            "Post header must expose exactly one author-handle hook: {html}"
         );
     }
 
@@ -690,6 +745,7 @@ mod tests {
         let view = PostView {
             post_id: PostId::from(7),
             username: &author,
+            display_name: None,
             title: None,
             banner: None,
             summary: None,
@@ -715,6 +771,7 @@ mod tests {
         let view = PostView {
             post_id: PostId::from(7),
             username: &author,
+            display_name: None,
             title: Some(&title),
             banner: None,
             summary: None,
@@ -746,6 +803,7 @@ mod tests {
         let view = PostView {
             post_id: PostId::from(7),
             username: &author,
+            display_name: None,
             title: None,
             banner: Some("Draft - visible only to you"),
             summary: Some(&summary),
@@ -777,6 +835,7 @@ mod tests {
         let view = PostView {
             post_id: PostId::from(7),
             username: &author,
+            display_name: None,
             title: Some(&title),
             banner: None,
             summary: None,
