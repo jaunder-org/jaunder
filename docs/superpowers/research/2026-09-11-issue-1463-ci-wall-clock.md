@@ -107,6 +107,31 @@ The correction is `e2e_phases: list[dict[str, object]]`. A local
 path exercised. This confirms the repair locally, not a successful Actions
 acceptance observation; #2210 contributes only diagnostic validation timing.
 
+### Treatment Actions run: #2211
+
+[Run #2211](https://github.com/jaunder-org/jaunder/actions/runs/34632943787) is
+green on both attempts, but is not yet a matched-pair threshold result. Attempt
+1 was the cold observation: `Validate (no e2e)` was the workflow/job critical
+path at **44:59** (18:23:01–19:08:00 UTC), with setup 0:55, validation command
+39:15, coverage probe 0:26, and Nix probe 4:11. Its slowest e2e job was
+SQLite/Firefox at 25:54. Attempt-1 artifacts were replaced by the rerun, so only
+its GitHub step timestamps survive; no phase-sidecar claim is made for that
+attempt.
+
+Attempt 2 was the warmed green observation: validation was again the critical
+path at **25:20** (19:08:50–19:34:10 UTC), with setup 1:31, validation command
+20:34, coverage probe 0:18, and Nix probe 2:46. The slowest e2e job was
+PostgreSQL/Firefox at 17:56. Its coverage status reconciled 4,722 expected and
+executed tests: census 228,663 ms, instrumented run 139,218 ms, text 9,284 ms,
+LCOV 9,179 ms, and all other stages 551 ms combined.
+
+The timing instrumentation initially allowed the two probes to overwrite
+`.xtask/last-result.json`. The workflow now preserves
+`.xtask/validate-result.json` before probes and uploads it. The supporting
+`cargo xtask check` passed in **325,260 ms**. This fixes evidence retention, not
+a performance result; matched cold and warmed Actions pairs remain required
+before applying the issue threshold.
+
 ### Narrow-source baseline from #1289
 
 [#1289](https://github.com/jaunder-org/jaunder/issues/1289) deliberately
@@ -281,6 +306,9 @@ claim a post-change improvement.
 - [Excluded Actions run #2210](https://github.com/jaunder-org/jaunder/actions/runs/34624638383):
   successful validation timing within an overall failed workflow and the
   e2e-helper failure classification.
+- [Treatment Actions run #2211](https://github.com/jaunder-org/jaunder/actions/runs/34632943787):
+  cold/warmed successful-attempt timings, artifact-retention limitation, and
+  retained warm coverage status.
 - [#1289 measurement report](2026-09-04-issue-1289-nix-invalidation-boundaries.md),
   [ADR-0178](../../adr/0178-split-hermetic-static-check-boundaries.md), and
   [#1289](https://github.com/jaunder-org/jaunder/issues/1289): controlled

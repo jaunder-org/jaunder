@@ -38,6 +38,12 @@ jobs:
         run:
           nix develop .#ci --accept-flake-config -c cargo xtask validate
           --no-e2e
+      - name: Preserve validation result
+        if: always()
+        run: |
+          if test -f .xtask/last-result.json; then
+            cp .xtask/last-result.json .xtask/validate-result.json
+          fi
       # Drift guard for the Nix coverage `src` filter (#241/#37): eval-only, so it
       # reuses this job's nix + cachix + xtask cache for ~seconds. `if: always()` so a
       # filter-drift signal is not masked by an unrelated `validate` failure.
@@ -61,6 +67,7 @@ jobs:
             .xtask/gcroots/coverage/diagnostics/
             .xtask/gcroots/elisp-coverage-producer/elisp-coverage/
             .xtask/last-result.json
+            .xtask/validate-result.json
           if-no-files-found: ignore
           retention-days: 14
 
