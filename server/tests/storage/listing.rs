@@ -97,11 +97,10 @@ async fn anon_user_by_tag(
         .list_user_posts_by_tag(
             user_id,
             tag,
-            storage::PublishedPageRequest {
-                cursor: None,
-                order: common::seed::TimelineOrder::Newest,
-                limit: parse_row_limit(limit),
-            },
+            storage::PublishedPageRequest::first(
+                common::seed::TimelineOrder::Newest,
+                parse_row_limit(limit),
+            ),
             &ViewerIdentity::Anonymous,
             common::time::UtcInstant::now(),
         )
@@ -117,11 +116,10 @@ async fn anon_published_by_user(
     posts
         .list_published_by_user(
             username,
-            storage::PublishedPageRequest {
-                cursor: None,
-                order: common::seed::TimelineOrder::Newest,
-                limit: parse_row_limit(limit),
-            },
+            storage::PublishedPageRequest::first(
+                common::seed::TimelineOrder::Newest,
+                parse_row_limit(limit),
+            ),
             &ViewerIdentity::Anonymous,
             common::time::UtcInstant::now(),
         )
@@ -289,11 +287,10 @@ async fn list_published_by_user_hides_scheduled_until_due(#[case] backend: Backe
         .posts()
         .list_published_by_user(
             &user.username,
-            storage::PublishedPageRequest {
-                cursor: None,
-                order: common::seed::TimelineOrder::Newest,
-                limit: parse_row_limit("50"),
-            },
+            storage::PublishedPageRequest::first(
+                common::seed::TimelineOrder::Newest,
+                parse_row_limit("50"),
+            ),
             &ViewerIdentity::Anonymous,
             now,
         )
@@ -311,11 +308,10 @@ async fn list_published_by_user_hides_scheduled_until_due(#[case] backend: Backe
         .posts()
         .list_published_by_user(
             &user.username,
-            storage::PublishedPageRequest {
-                cursor: None,
-                order: common::seed::TimelineOrder::Newest,
-                limit: parse_row_limit("50"),
-            },
+            storage::PublishedPageRequest::first(
+                common::seed::TimelineOrder::Newest,
+                parse_row_limit("50"),
+            ),
             &ViewerIdentity::Anonymous,
             after,
         )
@@ -358,11 +354,10 @@ async fn list_published_hides_scheduled_until_due(#[case] backend: Backend) {
     let at_now = env
         .posts()
         .list_published(
-            storage::PublishedPageRequest {
-                cursor: None,
-                order: common::seed::TimelineOrder::Newest,
-                limit: parse_row_limit("50"),
-            },
+            storage::PublishedPageRequest::first(
+                common::seed::TimelineOrder::Newest,
+                parse_row_limit("50"),
+            ),
             &ViewerIdentity::Anonymous,
             now,
         )
@@ -379,11 +374,10 @@ async fn list_published_hides_scheduled_until_due(#[case] backend: Backend) {
     let at_after = env
         .posts()
         .list_published(
-            storage::PublishedPageRequest {
-                cursor: None,
-                order: common::seed::TimelineOrder::Newest,
-                limit: parse_row_limit("50"),
-            },
+            storage::PublishedPageRequest::first(
+                common::seed::TimelineOrder::Newest,
+                parse_row_limit("50"),
+            ),
             &ViewerIdentity::Anonymous,
             after,
         )
@@ -419,11 +413,10 @@ async fn site_post_timeline_newest_orders_by_publication_time(#[case] backend: B
     let posts = env
         .posts()
         .list_published(
-            storage::PublishedPageRequest {
-                cursor: None,
-                order: common::seed::TimelineOrder::Newest,
-                limit: parse_row_limit("50"),
-            },
+            storage::PublishedPageRequest::first(
+                common::seed::TimelineOrder::Newest,
+                parse_row_limit("50"),
+            ),
             &ViewerIdentity::Anonymous,
             now,
         )
@@ -488,11 +481,10 @@ async fn list_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backend) {
         .posts()
         .list_posts_by_tag(
             &tag_slug,
-            storage::PublishedPageRequest {
-                cursor: None,
-                order: common::seed::TimelineOrder::Newest,
-                limit: parse_row_limit("50"),
-            },
+            storage::PublishedPageRequest::first(
+                common::seed::TimelineOrder::Newest,
+                parse_row_limit("50"),
+            ),
             &ViewerIdentity::Anonymous,
             now,
         )
@@ -510,11 +502,10 @@ async fn list_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backend) {
         .posts()
         .list_posts_by_tag(
             &tag_slug,
-            storage::PublishedPageRequest {
-                cursor: None,
-                order: common::seed::TimelineOrder::Newest,
-                limit: parse_row_limit("50"),
-            },
+            storage::PublishedPageRequest::first(
+                common::seed::TimelineOrder::Newest,
+                parse_row_limit("50"),
+            ),
             &ViewerIdentity::Anonymous,
             after,
         )
@@ -578,11 +569,10 @@ async fn list_user_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backe
         .list_user_posts_by_tag(
             user_id,
             &tag_slug,
-            storage::PublishedPageRequest {
-                cursor: None,
-                order: common::seed::TimelineOrder::Newest,
-                limit: parse_row_limit("50"),
-            },
+            storage::PublishedPageRequest::first(
+                common::seed::TimelineOrder::Newest,
+                parse_row_limit("50"),
+            ),
             &ViewerIdentity::Anonymous,
             now,
         )
@@ -601,11 +591,10 @@ async fn list_user_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backe
         .list_user_posts_by_tag(
             user_id,
             &tag_slug,
-            storage::PublishedPageRequest {
-                cursor: None,
-                order: common::seed::TimelineOrder::Newest,
-                limit: parse_row_limit("50"),
-            },
+            storage::PublishedPageRequest::first(
+                common::seed::TimelineOrder::Newest,
+                parse_row_limit("50"),
+            ),
             &ViewerIdentity::Anonymous,
             after,
         )
@@ -1563,11 +1552,10 @@ async fn list_posts_by_nonexistent_tag(#[case] backend: Backend) {
         .posts()
         .list_posts_by_tag(
             &tag_slug,
-            storage::PublishedPageRequest {
-                cursor: None,
-                order: common::seed::TimelineOrder::Newest,
-                limit: parse_row_limit("50"),
-            },
+            storage::PublishedPageRequest::first(
+                common::seed::TimelineOrder::Newest,
+                parse_row_limit("50"),
+            ),
             &ViewerIdentity::Anonymous,
             common::time::UtcInstant::now(),
         )
@@ -1592,11 +1580,10 @@ async fn list_user_posts_by_nonexistent_tag(#[case] backend: Backend) {
         .list_user_posts_by_tag(
             user,
             &tag_slug,
-            storage::PublishedPageRequest {
-                cursor: None,
-                order: common::seed::TimelineOrder::Newest,
-                limit: parse_row_limit("50"),
-            },
+            storage::PublishedPageRequest::first(
+                common::seed::TimelineOrder::Newest,
+                parse_row_limit("50"),
+            ),
             &ViewerIdentity::Anonymous,
             common::time::UtcInstant::now(),
         )
@@ -1737,11 +1724,10 @@ async fn tag_not_found_error(#[case] backend: Backend) {
         .posts()
         .list_posts_by_tag(
             &tag_slug,
-            storage::PublishedPageRequest {
-                cursor: None,
-                order: common::seed::TimelineOrder::Newest,
-                limit: parse_row_limit("50"),
-            },
+            storage::PublishedPageRequest::first(
+                common::seed::TimelineOrder::Newest,
+                parse_row_limit("50"),
+            ),
             &ViewerIdentity::Anonymous,
             common::time::UtcInstant::now(),
         )
@@ -1914,11 +1900,7 @@ async fn published_timeline_orders_and_paginates_in_both_directions(#[case] back
         let first = env
             .posts()
             .list_published(
-                storage::PublishedPageRequest {
-                    cursor: None,
-                    order,
-                    limit: parse_row_limit("2"),
-                },
+                storage::PublishedPageRequest::first(order, parse_row_limit("2")),
                 &ViewerIdentity::Anonymous,
                 now,
             )
@@ -1933,11 +1915,7 @@ async fn published_timeline_orders_and_paginates_in_both_directions(#[case] back
         let next = env
             .posts()
             .list_published(
-                storage::PublishedPageRequest {
-                    cursor: Some(&cursor),
-                    order,
-                    limit: parse_row_limit("2"),
-                },
+                storage::PublishedPageRequest::after(&cursor, parse_row_limit("2")),
                 &ViewerIdentity::Anonymous,
                 now,
             )
@@ -2043,11 +2021,7 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
             .list_user_posts_by_tag(
                 user,
                 &tag,
-                storage::PublishedPageRequest {
-                    cursor: Some(&cursor),
-                    order: common::seed::TimelineOrder::Newest,
-                    limit: parse_row_limit("2"),
-                },
+                storage::PublishedPageRequest::after(&cursor, parse_row_limit("2")),
                 &ViewerIdentity::Anonymous,
                 common::time::UtcInstant::now(),
             )
@@ -2103,11 +2077,7 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
             .posts()
             .list_posts_by_tag(
                 &tag,
-                storage::PublishedPageRequest {
-                    cursor: Some(&cursor),
-                    order: common::seed::TimelineOrder::Newest,
-                    limit: parse_row_limit("2"),
-                },
+                storage::PublishedPageRequest::after(&cursor, parse_row_limit("2")),
                 &ViewerIdentity::Anonymous,
                 common::time::UtcInstant::now(),
             )
@@ -2137,11 +2107,7 @@ async fn list_published_by_user_no_posts(#[case] backend: Backend) {
         .posts()
         .list_published_by_user(
             &user.username,
-            storage::PublishedPageRequest {
-                cursor: Some(&cursor),
-                order: common::seed::TimelineOrder::Newest,
-                limit: parse_row_limit("10"),
-            },
+            storage::PublishedPageRequest::after(&cursor, parse_row_limit("10")),
             &ViewerIdentity::Anonymous,
             common::time::UtcInstant::now(),
         )

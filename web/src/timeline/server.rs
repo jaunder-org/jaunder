@@ -11,7 +11,7 @@
 //! here has a half-a-cursor case to reject.
 
 use common::ids::UserId;
-use common::pagination::PageSize;
+use common::pagination::{PageSize, RowLimit};
 use common::seed::{Page, RenderedPost, TimelineCursor, TimelineOrder, TimelinePageRequest};
 use common::tag::Tag;
 use common::time::UtcInstant;
@@ -48,19 +48,23 @@ pub(super) fn page_from_rows(
         has_more,
     })
 }
-/// Reject a continuation cursor produced by the opposite timeline direction.
+/// Build an invariant-preserving storage request for one timeline page.
 ///
 /// # Errors
 ///
-/// Returns a validation error when `cursor` and `order` disagree.
-pub(super) fn validate_cursor_order(
-    cursor: Option<PostCursor>,
+/// Returns a validation error when `cursor` was produced by the opposite order.
+pub(super) fn published_page_request(
+    cursor: Option<&PostCursor>,
     order: TimelineOrder,
-) -> InternalResult<Option<PostCursor>> {
-    if cursor.as_ref().is_some_and(|cursor| cursor.order != order) {
+    limit: RowLimit,
+) -> InternalResult<PublishedPageRequest<'_>> {
+    if cursor.is_some_and(|cursor| cursor.order != order) {
         return Err(InternalError::validation("timeline cursor order mismatch"));
     }
-    Ok(cursor)
+    Ok(match cursor {
+        Some(cursor) => PublishedPageRequest::after(cursor, limit),
+        None => PublishedPageRequest::first(order, limit),
+    })
 }
 
 /// The shared "posts by user" query, used by both the `list_by_user` server
@@ -77,19 +81,10 @@ pub async fn fetch_user_posts(
     order: TimelineOrder,
     limit: Option<PageSize>,
 ) -> InternalResult<Page<RenderedPost, TimelineCursor>> {
-    let cursor = validate_cursor_order(cursor, order)?;
     let page_size = limit.unwrap_or_default();
+    let page = published_page_request(cursor.as_ref(), order, page_size.fetch_limit())?;
     let rows = posts
-        .list_published_by_user(
-            username,
-            PublishedPageRequest {
-                cursor: cursor.as_ref(),
-                order,
-                limit: page_size.fetch_limit(),
-            },
-            viewer,
-            UtcInstant::now(),
-        )
+        .list_published_by_user(username, page, viewer, UtcInstant::now())
         .await?;
     page_from_rows(rows, page_size, visibility::viewer_user_id(viewer), order)
 }
@@ -107,18 +102,10 @@ pub async fn fetch_local_timeline(
     order: TimelineOrder,
     limit: Option<PageSize>,
 ) -> InternalResult<Page<RenderedPost, TimelineCursor>> {
-    let cursor = validate_cursor_order(cursor, order)?;
     let page_size = limit.unwrap_or_default();
+    let page = published_page_request(cursor.as_ref(), order, page_size.fetch_limit())?;
     let rows = posts
-        .list_published(
-            PublishedPageRequest {
-                cursor: cursor.as_ref(),
-                order,
-                limit: page_size.fetch_limit(),
-            },
-            viewer,
-            UtcInstant::now(),
-        )
+        .list_published(page, viewer, UtcInstant::now())
         .await?;
     page_from_rows(rows, page_size, visibility::viewer_user_id(viewer), order)
 }
@@ -137,20 +124,11 @@ pub async fn fetch_posts_by_tag(
     order: TimelineOrder,
     limit: Option<PageSize>,
 ) -> InternalResult<Page<RenderedPost, TimelineCursor>> {
-    let cursor = validate_cursor_order(cursor, order)?;
     let page_size = limit.unwrap_or_default();
+    let page = published_page_request(cursor.as_ref(), order, page_size.fetch_limit())?;
     let rows = storage::list_by_tag_rows(
         posts
-            .list_posts_by_tag(
-                tag,
-                PublishedPageRequest {
-                    cursor: cursor.as_ref(),
-                    order,
-                    limit: page_size.fetch_limit(),
-                },
-                viewer,
-                UtcInstant::now(),
-            )
+            .list_posts_by_tag(tag, page, viewer, UtcInstant::now())
             .await,
     )?;
     page_from_rows(rows, page_size, visibility::viewer_user_id(viewer), order)
@@ -170,28 +148,16 @@ pub async fn fetch_user_posts_by_tag(
     tag: &Tag,
     request: TimelinePageRequest,
 ) -> InternalResult<Page<RenderedPost, TimelineCursor>> {
-    let cursor = validate_cursor_order(
-        storage::timeline_keyset_cursor(request.cursor),
-        request.order,
-    )?;
+    let cursor = storage::timeline_keyset_cursor(request.cursor);
     let author = users
         .get_user_by_username(username)
         .await?
         .ok_or_else(|| InternalError::not_found("user"))?;
     let page_size = request.limit.unwrap_or_default();
+    let page = published_page_request(cursor.as_ref(), request.order, page_size.fetch_limit())?;
     let rows = storage::list_by_tag_rows(
         posts
-            .list_user_posts_by_tag(
-                author.user_id,
-                tag,
-                PublishedPageRequest {
-                    cursor: cursor.as_ref(),
-                    order: request.order,
-                    limit: page_size.fetch_limit(),
-                },
-                viewer,
-                UtcInstant::now(),
-            )
+            .list_user_posts_by_tag(author.user_id, tag, page, viewer, UtcInstant::now())
             .await,
     )?;
     page_from_rows(
@@ -206,7 +172,7 @@ pub async fn fetch_user_posts_by_tag(
 mod tests {
     use super::{
         fetch_local_timeline, fetch_posts_by_tag, fetch_user_posts, fetch_user_posts_by_tag,
-        validate_cursor_order,
+        published_page_request,
     };
     use common::ids::{PostId, UserId};
     use common::pagination::PageSize;
@@ -264,8 +230,12 @@ mod tests {
             order: TimelineOrder::Oldest,
         };
 
-        let error = validate_cursor_order(Some(cursor), TimelineOrder::Newest)
-            .expect_err("opposite-order cursor is invalid");
+        let error = published_page_request(
+            Some(&cursor),
+            TimelineOrder::Newest,
+            PageSize::default().fetch_limit(),
+        )
+        .expect_err("opposite-order cursor is invalid");
         assert_eq!(error.public_message(), "timeline cursor order mismatch");
     }
 
@@ -284,7 +254,7 @@ mod tests {
             let mut posts = MockPostStorage::new();
             posts
                 .expect_list_published_by_user()
-                .withf(move |_u, request, _v, _n| request.limit == page_size.fetch_limit())
+                .withf(move |_u, request, _v, _n| request.limit() == page_size.fetch_limit())
                 .returning(move |_u, _request, _v, _n| {
                     // `try_from(...).unwrap_or` rather than an `as` cast: total, and the
                     // ids only have to be distinct.
@@ -333,7 +303,7 @@ mod tests {
         let mut posts = MockPostStorage::new();
         posts
             .expect_list_published()
-            .withf(move |request, _v, _n| request.limit == expected)
+            .withf(move |request, _v, _n| request.limit() == expected)
             .returning(|_request, _v, _n| Ok(vec![]));
         fetch_local_timeline(
             &posts,
@@ -349,7 +319,7 @@ mod tests {
         let mut posts = MockPostStorage::new();
         posts
             .expect_list_posts_by_tag()
-            .withf(move |_t, request, _v, _n| request.limit == expected)
+            .withf(move |_t, request, _v, _n| request.limit() == expected)
             .returning(|_t, _request, _v, _n| Ok(vec![]));
         fetch_posts_by_tag(
             &posts,

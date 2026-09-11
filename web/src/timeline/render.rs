@@ -7,6 +7,7 @@ use common::seed::TimelineOrder;
 use maud::html;
 
 use crate::html::Markup;
+use crate::icon::{self, Icons};
 
 /// Builds the canonical URL for a timeline order. The route base must not carry
 /// a query: newest is the bare base and oldest is the sole `order` parameter.
@@ -23,16 +24,37 @@ pub fn order_url(base: &RootRelativeUrl, order: TimelineOrder) -> RootRelativeUr
     }
 }
 
-/// Pure, projector-coincident timeline-order control. Reactive pages inject
-/// these exact bytes and delegate its change event; this leaf owns its markup.
+/// Returns the only order different from `order`.
+#[must_use]
+pub(super) const fn opposite_order(order: TimelineOrder) -> TimelineOrder {
+    match order {
+        TimelineOrder::Newest => TimelineOrder::Oldest,
+        TimelineOrder::Oldest => TimelineOrder::Newest,
+    }
+}
+
+/// Pure, projector-coincident timeline-order toggle. Reactive pages inject
+/// these exact bytes and delegate its click event; this leaf owns its markup.
 #[must_use]
 pub(crate) fn order_control(order: TimelineOrder) -> Markup {
+    let (icon_path, current) = match order {
+        TimelineOrder::Newest => (Icons::SORT_DESCENDING, "newest"),
+        TimelineOrder::Oldest => (Icons::SORT_ASCENDING, "oldest"),
+    };
+    let action = match opposite_order(order) {
+        TimelineOrder::Newest => "Oldest first; show newest first",
+        TimelineOrder::Oldest => "Newest first; show oldest first",
+    };
     Markup::new(html! {
-        div data-jaunder-part="timeline-order" {
-            label for="timeline-order-select" { "Order" }
-            select id="timeline-order-select" {
-                option value="newest" selected[order == TimelineOrder::Newest] { "Newest" }
-                option value="oldest" selected[order == TimelineOrder::Oldest] { "Oldest" }
+        div class="j-timeline-order" data-jaunder-part="timeline-order" {
+            button
+                type="button"
+                class="j-icon-btn j-timeline-order-button"
+                data-order=(current)
+                aria-label=(action)
+                title=(action)
+            {
+                (icon::render(icon_path, 18))
             }
         }
     })
@@ -52,7 +74,7 @@ pub(crate) fn load_more(has_more: bool) -> Markup {
 
 #[cfg(test)]
 mod tests {
-    use super::{load_more, order_control, order_url};
+    use super::{load_more, opposite_order, order_control, order_url};
     use common::seed::TimelineOrder;
 
     fn route(path: &str) -> common::root_relative_url::RootRelativeUrl {
@@ -60,10 +82,22 @@ mod tests {
     }
 
     #[test]
-    fn order_control_marks_exactly_the_active_option() {
-        assert_eq!(
-            order_control(TimelineOrder::Oldest),
-            "<div data-jaunder-part=\"timeline-order\"><label for=\"timeline-order-select\">Order</label><select id=\"timeline-order-select\"><option value=\"newest\">Newest</option><option value=\"oldest\" selected>Oldest</option></select></div>"
+    fn opposite_order_toggles_both_directions() {
+        assert_eq!(opposite_order(TimelineOrder::Newest), TimelineOrder::Oldest);
+        assert_eq!(opposite_order(TimelineOrder::Oldest), TimelineOrder::Newest);
+    }
+
+    #[test]
+    fn order_control_exposes_current_direction_and_toggle_action() {
+        let control = order_control(TimelineOrder::Oldest).into_string();
+        assert!(control.contains("data-order=\"oldest\""), "{control}");
+        assert!(
+            control.contains("aria-label=\"Oldest first; show newest first\""),
+            "{control}"
+        );
+        assert!(
+            control.contains(crate::icon::Icons::SORT_ASCENDING),
+            "{control}"
         );
     }
 

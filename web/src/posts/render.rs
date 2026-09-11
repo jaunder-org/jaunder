@@ -586,10 +586,18 @@ mod tests {
         // Tag pages use the same pure order-control bytes immediately above the list.
         assert!(site.contains("<h1>#rust</h1>"), "{site}");
         assert!(site.contains("Posts on this instance"), "{site}");
+        let control = site
+            .find("data-jaunder-part=\"timeline-order\"")
+            .expect("order control");
+        let list = site
+            .find("data-jaunder-part=\"post-list\"")
+            .expect("post list");
         assert!(
-            site.contains(
-                "<div data-jaunder-part=\"timeline-order\"><label for=\"timeline-order-select\">Order</label><select id=\"timeline-order-select\"><option value=\"newest\" selected>Newest</option><option value=\"oldest\">Oldest</option></select></div><div data-jaunder-part=\"post-list\"><article class=\"j-post\" data-jaunder-part=\"post\">"
-            ),
+            control < list,
+            "order control must precede the post list: {site}"
+        );
+        assert!(
+            site.contains("aria-label=\"Newest first; show oldest first\""),
             "{site}"
         );
         assert!(site.contains("First"), "expected post rendered: {site}");
@@ -645,10 +653,18 @@ mod tests {
         );
         assert!(html.contains("<div class=\"j-hero\">"), "{html}");
         // The shared pure order control immediately precedes the semantic post list.
+        let control = html
+            .find("data-jaunder-part=\"timeline-order\"")
+            .expect("order control");
+        let list = html
+            .find("data-jaunder-part=\"post-list\"")
+            .expect("post list");
         assert!(
-            html.contains(
-                "<div data-jaunder-part=\"timeline-order\"><label for=\"timeline-order-select\">Order</label><select id=\"timeline-order-select\"><option value=\"newest\" selected>Newest</option><option value=\"oldest\">Oldest</option></select></div><div data-jaunder-part=\"post-list\"><article class=\"j-post\" data-jaunder-part=\"post\">"
-            ),
+            control < list,
+            "order control must precede the post list: {html}"
+        );
+        assert!(
+            html.contains("aria-label=\"Newest first; show oldest first\""),
             "{html}"
         );
     }

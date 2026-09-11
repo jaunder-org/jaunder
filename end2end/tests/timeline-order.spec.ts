@@ -23,11 +23,12 @@ const NEWEST_TITLES = [
 const OLDEST_TITLES = [...NEWEST_TITLES].reverse();
 
 async function expectOrderControl(page: Page): Promise<void> {
-  const order = page.getByLabel("Order", { exact: true });
-  await expect(order).toHaveValue("newest");
-  await expect(order.locator("option:checked")).toHaveCount(1);
-  await expect(order.locator('option[value="newest"]')).toHaveText("Newest");
-  await expect(order.locator('option[value="oldest"]')).toHaveText("Oldest");
+  const order = page.getByRole("button", {
+    name: "Newest first; show oldest first",
+    exact: true,
+  });
+  await expect(order).toHaveAttribute("data-order", "newest");
+  await expect(order.locator("svg")).toHaveCount(1);
   const scroll = page
     .locator(".j-scroll")
     .filter({ has: page.locator(POST_LIST) });
@@ -122,11 +123,19 @@ async function expectOldestSeededPosts(
 }
 
 async function selectOldest(page: Page, path: string): Promise<void> {
-  const order = page.getByLabel("Order", { exact: true });
-  await expect(order).toHaveValue("newest");
-  await order.selectOption("oldest");
+  const order = page.getByRole("button", {
+    name: "Newest first; show oldest first",
+    exact: true,
+  });
+  await expect(order).toHaveAttribute("data-order", "newest");
+  await click(page, `${ORDER_CONTROL} button`);
   await page.waitForURL(`${BASE_URL}${path}?order=oldest`);
-  await expect(order).toHaveValue("oldest");
+  await expect(
+    page.getByRole("button", {
+      name: "Oldest first; show newest first",
+      exact: true,
+    }),
+  ).toHaveAttribute("data-order", "oldest");
 }
 
 test("timeline order is URL-driven on every post timeline surface", async ({
@@ -175,32 +184,44 @@ test("timeline order is URL-driven on every post timeline surface", async ({
 
   await userTagPage.goBack();
   await userTagPage.waitForURL(`${BASE_URL}${userTagPath}`);
-  await expect(userTagPage.getByLabel("Order", { exact: true })).toHaveValue(
-    "newest",
-  );
+  await expect(
+    userTagPage.getByRole("button", {
+      name: "Newest first; show oldest first",
+      exact: true,
+    }),
+  ).toHaveAttribute("data-order", "newest");
   await expectOrderedPosts(userTagPage, NEWEST_TITLES);
 
   await userTagPage.goForward();
   await userTagPage.waitForURL(`${BASE_URL}${userTagPath}?order=oldest`);
-  await expect(userTagPage.getByLabel("Order", { exact: true })).toHaveValue(
-    "oldest",
-  );
+  await expect(
+    userTagPage.getByRole("button", {
+      name: "Oldest first; show newest first",
+      exact: true,
+    }),
+  ).toHaveAttribute("data-order", "oldest");
   await expectOrderedPosts(userTagPage, OLDEST_TITLES);
 
   const unknownPage = await page.context().newPage();
   await goto(unknownPage, `${userTagPath}?order=unknown`, {
     timeout: firstNav,
   });
-  await expect(unknownPage.getByLabel("Order", { exact: true })).toHaveValue(
-    "newest",
-  );
+  await expect(
+    unknownPage.getByRole("button", {
+      name: "Newest first; show oldest first",
+      exact: true,
+    }),
+  ).toHaveAttribute("data-order", "newest");
   await expectOrderedPosts(unknownPage, NEWEST_TITLES);
 
   const bareAppPage = await page.context().newPage();
   await goto(bareAppPage, "/app", { timeout: firstNav });
-  await expect(bareAppPage.getByLabel("Order", { exact: true })).toHaveValue(
-    "newest",
-  );
+  await expect(
+    bareAppPage.getByRole("button", {
+      name: "Newest first; show oldest first",
+      exact: true,
+    }),
+  ).toHaveAttribute("data-order", "newest");
 
   await bareAppPage.close();
   await unknownPage.close();
@@ -233,16 +254,22 @@ test("Oldest timeline seeds remain ordered through CSR mount and load more", asy
     waitUntil: "domcontentloaded",
     timeout: firstNav,
   });
-  await expect(guestPage.getByLabel("Order", { exact: true })).toHaveValue(
-    "oldest",
-  );
+  await expect(
+    guestPage.getByRole("button", {
+      name: "Oldest first; show newest first",
+      exact: true,
+    }),
+  ).toHaveAttribute("data-order", "oldest");
   await expectOrderedPosts(guestPage, OLDEST_TITLES);
 
   release();
   await waitForMount(guestPage);
-  await expect(guestPage.getByLabel("Order", { exact: true })).toHaveValue(
-    "oldest",
-  );
+  await expect(
+    guestPage.getByRole("button", {
+      name: "Oldest first; show newest first",
+      exact: true,
+    }),
+  ).toHaveAttribute("data-order", "oldest");
   await expectOrderedPosts(guestPage, OLDEST_TITLES);
 
   await goto(page, `/~${username}`, { timeout: firstNav });
@@ -254,7 +281,12 @@ test("Oldest timeline seeds remain ordered through CSR mount and load more", asy
   await expect(page.locator(`${POST_LIST} article.j-post`)).toHaveCount(
     PAGE_SIZE + 4,
   );
-  await expect(page.getByLabel("Order", { exact: true })).toHaveValue("oldest");
+  await expect(
+    page.getByRole("button", {
+      name: "Oldest first; show newest first",
+      exact: true,
+    }),
+  ).toHaveAttribute("data-order", "oldest");
   await expectOldestSeededPosts(page, `Timeline Load ${tag} `);
 
   await guestContext.close();

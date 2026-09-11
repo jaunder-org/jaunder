@@ -134,11 +134,10 @@ async fn resolution_matrix(#[case] backend: Backend) {
         let listed: std::collections::HashSet<PostId> = env
             .posts()
             .list_published(
-                storage::PublishedPageRequest {
-                    cursor: None,
-                    order: common::seed::TimelineOrder::Newest,
-                    limit: parse_row_limit("100"),
-                },
+                storage::PublishedPageRequest::first(
+                    common::seed::TimelineOrder::Newest,
+                    parse_row_limit("100"),
+                ),
                 viewer,
                 common::time::UtcInstant::now(),
             )

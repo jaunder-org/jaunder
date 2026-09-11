@@ -42,7 +42,8 @@ ordering query parameter; `order=oldest` selects Oldest. Unknown values safely
 resolve to Newest. The state is not persisted as an account, site, cookie, or
 browser preference.
 
-Every affected web timeline exposes the same labelled Newest/Oldest control.
+Every affected web timeline exposes the same compact sort-direction icon button;
+its accessible name and tooltip communicate the active order and toggle action.
 Changing order starts that timeline from its first page. Public projector
 operations parse the same order and embed it with the ordered seed consumed by
 the CSR client. The projected representation remains anonymous and cacheable;

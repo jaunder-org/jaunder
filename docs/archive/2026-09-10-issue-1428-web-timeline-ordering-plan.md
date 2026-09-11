@@ -61,19 +61,20 @@ Out:
       timeline
   - Depends on: Task 1's request, seed, route-order, storage, and projector
     contracts.
-  - Contract: one pure renderer emits the labelled `Order` select immediately
-    above the Post list for both projector and CSR markup. Reactive code
-    attaches behavior to that shared markup rather than maintaining a second
-    markup twin.
+  - Contract: one pure renderer emits the accessible sort-direction icon button
+    immediately above the Post list for both projector and CSR markup. Its
+    accessible name and tooltip expose the active order and toggle action.
+    Reactive code attaches behavior to that shared markup rather than
+    maintaining a second markup twin.
   - Contract: one URL builder emits a bare timeline URL for Newest and
     `?order=oldest` for Oldest. Same-origin navigation pushes history; a query
     change advances the timeline generation before fetch, replaces from page
     one, and prevents stale prior-order work from appending. Bare URLs never
     consult account, site, cookie, or browser preference state.
-  - Verification: host state/render tests prove selected markup, canonical URLs,
-    generation reset, and stale-result rejection. Browser proof exercises the
-    labelled select, both directions, Load more, direct public Oldest paint with
-    no CSR reorder, unknown fallback, back/forward restoration, bare-URL
+  - Verification: host state/render tests prove icon-button semantics, canonical
+    URLs, generation reset, and stale-result rejection. Browser proof exercises
+    the order toggle, both directions, Load more, direct public Oldest paint
+    with no CSR reorder, unknown fallback, back/forward restoration, bare-URL
     non-persistence while authenticated, and all five affected surfaces.
   - Documentation: keep the spec, draft ADR, `docs/ARCHITECTURE.md`,
     `docs/DESIGN.md`, public-reading flow, endpoint census, and e2e coverage

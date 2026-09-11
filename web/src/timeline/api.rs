@@ -111,23 +111,13 @@ pub async fn list_home_feed(
 ) -> WebResult<Page<RenderedPost, common::seed::TimelineCursor>> {
     let auth = auth::require_auth().await?;
     let posts = expect_context::<Arc<dyn PostStorage>>();
-    let cursor = server::validate_cursor_order(
-        storage::timeline_keyset_cursor(request.cursor),
-        request.order,
-    )?;
-    let viewer = viewer::viewer_identity().await?;
+    let cursor = storage::timeline_keyset_cursor(request.cursor);
     let page_size = request.limit.unwrap_or_default();
+    let page =
+        server::published_page_request(cursor.as_ref(), request.order, page_size.fetch_limit())?;
+    let viewer = viewer::viewer_identity().await?;
     let rows = posts
-        .list_published_by_user(
-            &auth.username,
-            storage::PublishedPageRequest {
-                cursor: cursor.as_ref(),
-                order: request.order,
-                limit: page_size.fetch_limit(),
-            },
-            &viewer,
-            UtcInstant::now(),
-        )
+        .list_published_by_user(&auth.username, page, &viewer, UtcInstant::now())
         .await?;
     server::page_from_rows(rows, page_size, Some(auth.user_id), request.order)
 }

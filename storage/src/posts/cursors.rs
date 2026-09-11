@@ -30,9 +30,49 @@ pub struct PostCursor {
 /// accidentally pairing a cursor with the wrong direction.
 #[derive(Debug)]
 pub struct PublishedPageRequest<'a> {
-    pub cursor: Option<&'a PostCursor>,
-    pub order: common::seed::TimelineOrder,
-    pub limit: common::pagination::RowLimit,
+    cursor: Option<&'a PostCursor>,
+    order: common::seed::TimelineOrder,
+    limit: common::pagination::RowLimit,
+}
+
+impl<'a> PublishedPageRequest<'a> {
+    /// Start a timeline walk in `order`.
+    #[must_use]
+    pub const fn first(
+        order: common::seed::TimelineOrder,
+        limit: common::pagination::RowLimit,
+    ) -> Self {
+        Self {
+            cursor: None,
+            order,
+            limit,
+        }
+    }
+
+    /// Continue a timeline walk, deriving its order from the cursor.
+    #[must_use]
+    pub const fn after(cursor: &'a PostCursor, limit: common::pagination::RowLimit) -> Self {
+        Self {
+            cursor: Some(cursor),
+            order: cursor.order,
+            limit,
+        }
+    }
+
+    #[must_use]
+    pub const fn limit(&self) -> common::pagination::RowLimit {
+        self.limit
+    }
+
+    pub(super) const fn into_parts(
+        self,
+    ) -> (
+        Option<&'a PostCursor>,
+        common::seed::TimelineOrder,
+        common::pagination::RowLimit,
+    ) {
+        (self.cursor, self.order, self.limit)
+    }
 }
 
 /// Cursor for the author-only draft listing, which retains creation ordering.
@@ -163,14 +203,16 @@ pub fn wire_scheduled_cursor(cursor: &ScheduledPostCursor) -> PageCursor {
 #[cfg(test)]
 mod tests {
     use super::{
-        PostCursor, ScheduledPostCursor, scheduled_keyset_cursor, timeline_keyset_cursor,
-        to_post_cursor, to_scheduled_post_cursor, wire_cursor, wire_scheduled_cursor,
+        PostCursor, PublishedPageRequest, ScheduledPostCursor, scheduled_keyset_cursor,
+        timeline_keyset_cursor, to_post_cursor, to_scheduled_post_cursor, wire_cursor,
+        wire_scheduled_cursor,
     };
     use crate::posts::models::{PostFormat, PostRecord};
     use common::ids::{PostId, UserId};
     use common::seed::TimelineOrder;
     use common::test_support::{
-        parse_post_body, parse_post_title, parse_slug, parse_username, rendered_html,
+        parse_post_body, parse_post_title, parse_row_limit, parse_slug, parse_username,
+        rendered_html,
     };
     use common::time::UtcInstant;
 
@@ -224,6 +266,19 @@ mod tests {
         assert_eq!(round_trip.published_at, cursor.published_at);
         assert_eq!(round_trip.post_id, cursor.post_id);
         assert_eq!(round_trip.order, TimelineOrder::Oldest);
+    }
+
+    #[test]
+    fn continuation_request_derives_order_from_its_cursor() {
+        let cursor = PostCursor {
+            published_at: UtcInstant::now(),
+            post_id: PostId::from(42),
+            order: TimelineOrder::Oldest,
+        };
+
+        let request = PublishedPageRequest::after(&cursor, parse_row_limit("10"));
+        let (_, order, _) = request.into_parts();
+        assert_eq!(order, TimelineOrder::Oldest);
     }
 
     #[test]

@@ -1348,7 +1348,8 @@ publication-time/Post-ID order. Public projector operations resolve that order
 from the URL and embed matching seed state, so a direct Oldest load is
 projector-painted in Oldest order and remains coincident through CSR mount. The
 choice is never viewer state; complete URLs distinguish cacheable
-representations.
+representations. A shared sort-direction icon button toggles the order, with an
+accessible name and tooltip that expose both the active direction and action.
 
 Public presentation carries one server-resolved `Theme` with its page seed in
 `PublicPresentation<PageSeed>`. Aggregate routes use the typed site setting; an

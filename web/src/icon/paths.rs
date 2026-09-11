@@ -25,4 +25,8 @@ impl Icons {
     pub const MEDIA: &'static str =
         "M3 5h14v10H3z M7 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2z M5 13l3-3 2 2 3-3 5 5H3z";
     pub const REFRESH: &'static str = "M15.5 8A6 6 0 1 0 16 11.5 M15.5 4v4h-4";
+    /// Standard descending-sort glyph: widest row first with a downward arrow.
+    pub const SORT_DESCENDING: &'static str = "M3 4h8 M3 8h6 M3 12h4 M15 3v14 M12 14l3 3 3-3";
+    /// Standard ascending-sort glyph: narrowest row first with an upward arrow.
+    pub const SORT_ASCENDING: &'static str = "M3 4h4 M3 8h6 M3 12h8 M15 17V3 M12 6l3-3 3 3";
 }

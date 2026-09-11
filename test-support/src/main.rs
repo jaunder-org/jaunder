@@ -555,11 +555,10 @@ mod tests {
             .posts()
             .list_published_by_user(
                 &"alice".parse().unwrap(),
-                PublishedPageRequest {
-                    cursor: None,
-                    order: common::seed::TimelineOrder::Newest,
-                    limit: common::test_support::parse_row_limit("10"),
-                },
+                PublishedPageRequest::first(
+                    common::seed::TimelineOrder::Newest,
+                    common::test_support::parse_row_limit("10"),
+                ),
                 &common::visibility::ViewerIdentity::Anonymous,
                 common::time::UtcInstant::now(),
             )

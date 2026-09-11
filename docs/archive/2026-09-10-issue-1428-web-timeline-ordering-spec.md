@@ -29,10 +29,11 @@ and Oldest without leaving the timeline, and the URL records that choice.
   Newest rather than failing the page.
 - Ordering state belongs only to the URL. It is not stored in an account,
   cookie, browser storage, or site configuration.
-- Each affected timeline presents an accessible, visibly labelled `Order` select
-  with `Newest` and `Oldest` options immediately above the Post list.
-- Changing the select performs same-origin SPA navigation to the corresponding
-  URL, replaces the current rows with the selected order's first page, and
+- Each affected timeline presents the same compact sort-direction icon button
+  immediately above the Post list. Its accessible name and tooltip state both
+  the active order and the order the action will select.
+- Activating the button performs same-origin SPA navigation to the opposite
+  order's URL, replaces the current rows with that order's first page, and
   resets continuation state. Browser history can return to the prior order.
 - Pagination remains keyset-based and opaque. A continuation cursor is bound to
   the ordering that produced it; pages from opposite orders cannot be mixed.
@@ -62,8 +63,9 @@ and Oldest without leaving the timeline, and the URL records that choice.
 - With an unchanged ordered data set, SQLite and PostgreSQL return identical
   first and continuation pages for both orders, without omissions or duplicates
   at equal-timestamp or ordinary page boundaries.
-- Every affected timeline exposes the labelled `Order` select, reflects the
-  active URL state, and starts again from the first page when changed.
+- Every affected timeline exposes the accessible sort-direction icon button,
+  reflects the active URL state, and starts again from the first page when
+  toggled.
 - The canonical Newest URL omits `order`; selecting Oldest yields
   `?order=oldest`; an unknown value displays Newest.
 - Loading an Oldest public timeline URL directly paints Oldest from the

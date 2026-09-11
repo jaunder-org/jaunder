@@ -10,6 +10,7 @@ use std::future::Future;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::components::Redirect;
+use wasm_bindgen::JsCast;
 
 use common::pagination::PageSize;
 use common::seed::{Page, RenderedPost, TimelineCursor, TimelineOrder};
@@ -165,15 +166,20 @@ pub fn TimelineRows(
     let read_rows = move || state.rows.get();
     let read_has_more = move || state.has_more.get();
     let read_in_flight = move || state.status.get().is_in_flight();
-    let change_order = move |event| {
-        on_order_change.run(
-            event_target_value(&event)
-                .parse::<TimelineOrder>()
-                .unwrap_or_default(),
-        );
+    let toggle_order = move |event: web_sys::MouseEvent| {
+        let Some(target) = event
+            .target()
+            .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
+        else {
+            return;
+        };
+        let Ok(Some(_)) = target.closest("[data-jaunder-part=\"timeline-order\"]") else {
+            return;
+        };
+        on_order_change.run(super::render::opposite_order(order.get_untracked()));
     };
     view! {
-        <div class="j-scroll" on:change=change_order>
+        <div class="j-scroll" on:click=toggle_order>
             {move || {
                 super::render::order_control(order.get())
                     .inject_into(leptos::html::div().class("j-contents"))

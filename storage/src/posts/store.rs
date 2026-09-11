@@ -1567,11 +1567,7 @@ where
         viewer: &ViewerIdentity,
         now: UtcInstant,
     ) -> Result<Vec<PostRecord>> {
-        let PublishedPageRequest {
-            cursor,
-            order,
-            limit,
-        } = page;
+        let (cursor, order, limit) = page.into_parts();
         let tags = DB::TAGS_SUBQUERY;
         let (cursor_clause, order_by) = match order {
             common::seed::TimelineOrder::Newest => (
@@ -1653,11 +1649,7 @@ where
         viewer: &ViewerIdentity,
         now: UtcInstant,
     ) -> Result<Vec<PostRecord>> {
-        let PublishedPageRequest {
-            cursor,
-            order,
-            limit,
-        } = page;
+        let (cursor, order, limit) = page.into_parts();
         let tags = DB::TAGS_SUBQUERY;
         let (cursor_clause, order_by) = match order {
             common::seed::TimelineOrder::Newest => (
@@ -1910,11 +1902,7 @@ where
         viewer: &ViewerIdentity,
         now: UtcInstant,
     ) -> Result<Vec<PostRecord>, ListByTagError> {
-        let PublishedPageRequest {
-            cursor,
-            order,
-            limit,
-        } = page;
+        let (cursor, order, limit) = page.into_parts();
         let tag_exists = sqlx::query_scalar::<_, Exists>(tags::TAG_EXISTS_SQL)
             .bind_storage(tag_slug)
             .fetch_one(&self.pool)
@@ -1999,11 +1987,7 @@ where
         viewer: &ViewerIdentity,
         now: UtcInstant,
     ) -> Result<Vec<PostRecord>, ListByTagError> {
-        let PublishedPageRequest {
-            cursor,
-            order,
-            limit,
-        } = page;
+        let (cursor, order, limit) = page.into_parts();
         let tag_exists = sqlx::query_scalar::<_, Exists>(tags::TAG_EXISTS_SQL)
             .bind_storage(tag_slug)
             .fetch_one(&self.pool)
@@ -5246,11 +5230,10 @@ mod tests {
         let result = env
             .posts()
             .list_published(
-                PublishedPageRequest {
-                    cursor: None,
-                    order: common::seed::TimelineOrder::Newest,
-                    limit: parse_row_limit("10"),
-                },
+                PublishedPageRequest::first(
+                    common::seed::TimelineOrder::Newest,
+                    parse_row_limit("10"),
+                ),
                 &ViewerIdentity::Anonymous,
                 UtcInstant::now(),
             )
