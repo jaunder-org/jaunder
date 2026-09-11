@@ -1287,6 +1287,22 @@ fn validate_allowlist(dir: &Path) -> Result<()> {
     }
     Ok(())
 }
+
+fn persist_workflow_error(
+    lifecycle: &crate::production_baseline_lifecycle::BaselineLifecycle,
+    error: &anyhow::Error,
+) -> Result<()> {
+    let path = lifecycle.private_path("workflow-error.txt")?;
+    fs::write(&path, format!("{error:#}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
 fn run_discovery(
     root: &Path,
     harness: &HarnessIdentity,
@@ -1386,6 +1402,9 @@ fn run_discovery(
             Ok(())
         })();
         let canaries = lifecycle.evidence_canaries(&[&canary_path]);
+        if let Err(error) = &result {
+            let _ = persist_workflow_error(&lifecycle, error);
+        }
         let shutdown = if result.is_ok() {
             lifecycle.cleanup().map(|()| None)
         } else {
@@ -1521,6 +1540,9 @@ fn run_acceptance(
             Ok(())
         })();
         let canaries = lifecycle.evidence_canaries(&[&canary_path]);
+        if let Err(error) = &result {
+            let _ = persist_workflow_error(&lifecycle, error);
+        }
         let shutdown = if result.is_ok() {
             lifecycle.cleanup().map(|()| None)
         } else {
