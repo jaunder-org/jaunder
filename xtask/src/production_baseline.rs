@@ -1088,6 +1088,8 @@ pub fn render_markdown(evidence: &Evidence) -> Result<String> {
             finding.id, finding.disposition, finding.rationale
         ));
     }
+    out.truncate(out.trim_end_matches('\n').len());
+    out.push('\n');
     Ok(out)
 }
 
@@ -1955,6 +1957,7 @@ mod tests {
         let markdown = render_markdown(&evidence).unwrap();
         assert!(markdown.contains("| deploy | Passed | 7 |"));
         assert!(markdown.contains("| feeds | Passed | 11 |"));
+        assert!(!markdown.ends_with("\n\n"));
     }
 
     fn package(executable_sha256: char) -> PackageIdentity {

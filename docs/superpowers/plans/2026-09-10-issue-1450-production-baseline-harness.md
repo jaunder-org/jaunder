@@ -129,7 +129,7 @@ Out:
     recovery directions; then `devtool run -- cargo xtask check`. The
     clean-upstream non-release qualification report is Task 6.
 
-- [ ] Task 6: Publish operator guidance and qualified harness evidence
+- [x] Task 6: Publish operator guidance and qualified harness evidence
   - Contract: `docs/production-baseline.md` documents prerequisites, commands,
     topology, safe cleanup, output interpretation, reruns, and failure
     distinctions. Every observed discovery defect or operational blocker has one
