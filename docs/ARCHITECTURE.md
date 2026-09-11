@@ -1373,7 +1373,7 @@ that public presentation to Studio is the supported recovery path. This
 authenticated mutation surface requires Chromium 125+, Firefox 147+ (including
 ESR 153+), or Safari/iOS 26+; anonymous reading remains independent of CSS
 anchor support
-([draft decision](adr/drafts/trusted-post-actions-use-css-anchors.md)).
+([draft decision](adr/0188-trusted-post-actions-use-css-anchors.md)).
 
 The operator and each author own separate custom-theme catalogs. An effective
 public selection is either a built-in `Theme` or an owner-valid custom Theme ID;

@@ -1,14 +1,14 @@
-# ADR-DRAFT: Trusted Post Actions Use CSS Anchor Positioning
+# ADR-0188: Trusted Post Actions Use CSS Anchor Positioning
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-10
 - Issue: [#1431](https://github.com/jaunder-org/jaunder/issues/1431)
 
 ## Context
 
-[ADR-0044](../0044-authenticated-owner-flash-free-enhancement.md) requires owner
+[ADR-0044](0044-authenticated-owner-flash-free-enhancement.md) requires owner
 affordances to be additive decoration over viewer-independent public markup.
-[ADR-0184](../0184-css-package-public-themes.md) additionally places mutation
+[ADR-0184](0184-css-package-public-themes.md) additionally places mutation
 controls in a trusted stacking context that is a sibling of the custom-theme
 surface, so owner-authored CSS cannot hide or restyle them.
 
