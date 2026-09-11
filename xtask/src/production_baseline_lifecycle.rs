@@ -214,8 +214,8 @@ impl BaselineLifecycle {
 import net from "node:net";
 const quote = (value) => "'" + value.replaceAll("'", "'\"'\"'") + "'";
 const args = process.argv.slice(2).map(quote).join(" ");
-const inner = `export $(systemctl show --property=Environment --value jaunder.service | tr ' ' '\\n' | grep '^JAUNDER_'); export JAUNDER_STORAGE_PATH=/var/lib/jaunder/data; test-support ${{args}} 2>&1`;
-const command = `${{inner}}; code=$?; printf '\\n{STATUS}%s\\n' "$code"`;
+const inner = `export $(systemctl show --property=Environment --value jaunder.service | tr ' ' '\\n' | grep '^JAUNDER_'); export JAUNDER_STORAGE_PATH=/var/lib/jaunder/data; test-support ${{args}}`;
+const command = `diagnostic=/tmp/jaunder-baseline-seed-$$.err; ${{inner}} 2>"$diagnostic"; code=$?; if [ "$code" -ne 0 ]; then cat "$diagnostic"; fi; rm -f "$diagnostic"; printf '\\n{STATUS}%s\\n' "$code"`;
 const socket = net.createConnection({{host: "127.0.0.1", port: {port}}});
 let output = "";
 socket.on("data", (chunk) => output += chunk);
