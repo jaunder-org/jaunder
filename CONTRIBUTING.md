@@ -312,7 +312,7 @@ cargo xtask sandbox
 # Persistent named instance with ordinary and operator accounts.
 cargo xtask sandbox writing-flow --profile standard
 
-# Persistent named instance with four accounts and representative Posts.
+# Persistent instance with four accounts, local images, and rich Markdown/Org Posts.
 cargo xtask sandbox timeline --profile demo
 ```
 
