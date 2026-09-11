@@ -95,17 +95,22 @@ for this pre-instrumentation Actions observation.
 ### Excluded Actions observation: #2210
 
 [Run #2210](https://github.com/jaunder-org/jaunder/actions/runs/34624638383)
-(`pull_request`, `985f81d`) failed overall and is **not** a baseline/treatment
-pair. Its independent `Validate (no e2e)` job succeeded from 16:54:12 to
-17:38:47 UTC (**44:35**); setup ended at 16:54:57, leaving a GitHub-visible
-validation-command span of **43:50**. All four e2e jobs failed from the same
-timing-helper Nix Python type error: an unannotated list inferred without
-integer `duration_ms`; the e2e gate consequently failed too.
+(`pull_request`, `985f81d`) failed overall because all four e2e jobs hit the
+same timing-helper Nix Python type error: an unannotated list inferred without
+integer `duration_ms`; the e2e gate consequently failed too. It is therefore
+excluded from whole-workflow gate-success evidence, but its independently
+successful validation jobs remain diagnostic evidence.
+
+Attempt 1 validation ran 16:54:12–17:38:47 UTC (**44:35**). Setup ended at
+16:54:57; the post-setup job tail was 43:50 including probes, while the
+validation command itself was **41:32**. Attempt 2 validation succeeded
+20:49:59–21:21:12 UTC (**31:13**): setup 0:49, validation command 27:47,
+coverage probe 0:24, and Nix probe 2:02.
 
 The correction is `e2e_phases: list[dict[str, object]]`. A local
 `cargo xtask e2e sqlite chromium` then passed in **628,158 ms** with the sidecar
-path exercised. This confirms the repair locally, not a successful Actions
-acceptance observation; #2210 contributes only diagnostic validation timing.
+path exercised. This confirms the repair locally; #2210 contributes diagnostic
+validation timing only.
 
 ### Treatment Actions run: #2211
 
@@ -131,6 +136,38 @@ The timing instrumentation initially allowed the two probes to overwrite
 `cargo xtask check` passed in **325,260 ms**. This fixes evidence retention, not
 a performance result; matched cold and warmed Actions pairs remain required
 before applying the issue threshold.
+
+### Final-head repeat: #2213
+
+[Run #2213](https://github.com/jaunder-org/jaunder/actions/runs/34641076765) was
+green on both final-head attempts. Attempt 1 validated in **28:01** and its
+durable `validate-result` total was **1,338,856 ms**, including
+`nix-static-docs` 14,625 ms, `nix-static-code` 15,110 ms, `wasm-budget` 74,916
+ms, `wasm-tests` 15,065 ms, `nix-coverage` 479,028 ms, coverage gate 4,231 ms,
+doctests 49,923 ms, doctest gate 4,228 ms, and Elisp producer 9,944 ms. Coverage
+reconciled 4,722/4,722 tests; its stages were workspace 23 ms, cleanup 747 ms,
+census 278,780 ms, instrumented run 140,433 ms, reconciliation 10 ms, text
+11,692 ms, LCOV 11,589 ms, and CRAP 319 ms.
+
+Attempt 2 validated in **28:02** with durable total **1,330,366 ms**:
+`nix-static-docs` 4,876 ms, `nix-static-code` 10,052 ms, `wasm-budget` 72,321
+ms, `wasm-tests` 20,833 ms, `nix-coverage` 495,733 ms, coverage gate 4,573 ms,
+doctests 30,070 ms, doctest gate 3,135 ms, and Elisp producer 10,390 ms.
+Coverage reconciled 4,722/4,722 tests; its stages were workspace 24 ms, cleanup
+1,327 ms, census 287,046 ms, instrumented run 147,611 ms, reconciliation 13 ms,
+text 11,335 ms, LCOV 11,090 ms, and CRAP 319 ms.
+
+The two green final-head attempts are stable repeats. The #2210 attempt-2
+diagnostic warm baseline (31:13) versus final-head warmed run (28:02) is **3:11
+(191 s, 10.2%)**, numerically clearing the threshold for one warm diagnostic
+pair—but #2210's failed e2e matrix and the required pair count prevent a
+threshold verdict.
+
+Cold acceptance is currently unmet: #2210 attempt 1 (44:35) versus #2211 attempt
+1 (44:59) regressed **0:24** at workflow/job level. Their validation commands
+alone improved from 41:32 to 39:15 (**2:17, 5.5%**), still below the threshold.
+Further controlled cold pairs and a successful baseline rerun remain required
+before any verdict.
 
 ### Narrow-source baseline from #1289
 
@@ -309,6 +346,9 @@ claim a post-change improvement.
 - [Treatment Actions run #2211](https://github.com/jaunder-org/jaunder/actions/runs/34632943787):
   cold/warmed successful-attempt timings, artifact-retention limitation, and
   retained warm coverage status.
+- [Final-head Actions run #2213](https://github.com/jaunder-org/jaunder/actions/runs/34641076765):
+  two green stable repeats with durable validation and coverage-stage evidence,
+  pending a corresponding baseline rerun.
 - [#1289 measurement report](2026-09-04-issue-1289-nix-invalidation-boundaries.md),
   [ADR-0178](../../adr/0178-split-hermetic-static-check-boundaries.md), and
   [#1289](https://github.com/jaunder-org/jaunder/issues/1289): controlled
