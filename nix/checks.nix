@@ -81,24 +81,27 @@ let
 
 # #93 / ADR-0032: shared zero-panic gate appended to each e2e testScript.
 # A server Rust panic is isolated (tests still pass), so without this it
-# gets cached green and stays invisible. Dump the service journal, copy it
-# to $out before asserting, then run the shared Rust verifier from
-# `test-support`. It scans raw bytes from the union of the scoped diagnostic
-# stream (#144/#227) and the journal fallback, de-duplicates by panic
-# location with the scoped record winning, and owns the default-empty
-# source-controlled allowlist. The CLI receives the capture directory rather
-# than restating the diagnostic filename defined by `host::capture`.
+# gets cached green and stays invisible. Dump the service journal and copy it
+# before running the shared Rust verifier from `test-support`. The caller
+# records the verifier result before asserting it, so the timing sidecar remains
+# recoverable without changing the established panic-before-Playwright failure
+# order. It scans raw bytes from the union of the scoped diagnostic stream
+# (#144/#227) and the journal fallback, de-duplicates by panic location with the
+# scoped record winning, and owns the default-empty source-controlled allowlist.
+# The CLI receives the capture directory rather than restating the diagnostic
+# filename defined by `host::capture`.
 e2ePanicGate = backend: ''
   machine.succeed("journalctl -u jaunder.service --no-pager -o cat > /tmp/jaunder-journal-${backend}.log")
   # copy_from_machine's 2nd arg is a target *directory*; "" lands the file
   # flat at $out/jaunder-journal-${backend}.log (the per-backend name comes
   # from the source).
   machine.copy_from_machine("/tmp/jaunder-journal-${backend}.log", "")
-  machine.succeed(
+  panic_status, panic_out = machine.execute(
       "test-support verify-no-panics"
       + " --capture-dir /var/lib/jaunder/capture"
       + " --server-log /tmp/jaunder-journal-${backend}.log"
   )
+  print(panic_out)
 '';
 
 # The two e2e time budgets, which must stay ordered:
@@ -170,6 +173,84 @@ e2eOtelTestHelpers = ''
     machine.wait_for_open_port(3000, timeout=30)
 '';
 
+# The NixOS test driver is a Python process, so monotonic timing is available
+# without adding a guest dependency. Nix evaluation and realization happen
+# before that process starts: preserve those required vocabulary entries as
+# explicit unavailable evidence instead of inventing a boundary the VM cannot
+# observe. The sidecar lives in the VM long enough to use the established
+# diagnostic copy path, keeping successful and --keep-failed outputs identical.
+e2ePhaseTimingHelpers = backend: browser: ''
+  import base64
+  import json
+  import shlex
+  import time
+
+  e2e_phases = [
+    {
+      "name": "nix-evaluation",
+      "duration_ms": None,
+      "outcome": "unavailable",
+      "detail": "Nix evaluation completes before the NixOS test driver starts.",
+      "nix": {
+        "classification": "unknown",
+        "detail": "The VM cannot observe Nix evaluation.",
+      },
+    },
+    {
+      "name": "nix-substitution",
+      "duration_ms": None,
+      "outcome": "unavailable",
+      "detail": "Nix substitution completes before the NixOS test driver starts.",
+      "nix": {
+        "classification": "unknown",
+        "detail": "The VM cannot observe Nix substitution.",
+      },
+    },
+    {
+      "name": "nix-local-build",
+      "duration_ms": None,
+      "outcome": "unavailable",
+      "detail": "Nix realization completes before the NixOS test driver starts.",
+      "nix": {
+        "classification": "unknown",
+        "detail": "The VM cannot distinguish a local build from another realization path.",
+      },
+    },
+  ]
+
+  def record_e2e_phase(name, started_at, outcome, detail):
+    e2e_phases.append(
+      {
+        "name": name,
+        "duration_ms": int((time.monotonic() - started_at) * 1000),
+        "outcome": outcome,
+        "detail": detail,
+      }
+    )
+
+  def write_e2e_phase_manifest():
+    payload = base64.b64encode(
+      json.dumps(
+        {
+          "schema_version": 1,
+          "backend": "${backend}",
+          "browser": "${browser}",
+          "phases": e2e_phases,
+        },
+        separators=(",", ":"),
+      ).encode()
+    ).decode()
+    # Capturing timing must never become the failure reported instead of a
+    # Playwright or panic failure. The following unconditional lift still
+    # exposes a successfully written sidecar in either output location.
+    manifest_status, manifest_out = machine.execute(
+      "printf %s " + shlex.quote(payload)
+      + " | base64 -d > /tmp/e2e-phase-${backend}.json"
+    )
+    if manifest_status != 0:
+      print("failed to write e2e phase manifest: " + manifest_out)
+'';
+
 e2eRunAndCapture =
   {
     backend,
@@ -183,6 +264,7 @@ e2eRunAndCapture =
     extraEnv ? "",
   }:
   ''
+    gate_started_at = time.monotonic()
     pw_status, pw_out = machine.execute(
       "cd /tmp/e2e"
       + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
@@ -200,6 +282,12 @@ e2eRunAndCapture =
       + " --project ${browser} --project ${browser}-admin",
       timeout=${toString e2ePlaywrightTimeout},
     )
+    record_e2e_phase(
+      "gate-execution",
+      gate_started_at,
+      "success" if pw_status == 0 else "failed",
+      "${backend}/${browser}: Playwright exited with status %d." % pw_status,
+    )
     # Stream the Playwright line-reporter output into the build log (-L), so
     # the failing test + assertion are recoverable from build.log alone,
     # even on failure and without --keep-failed.
@@ -207,6 +295,8 @@ e2eRunAndCapture =
 
     # Stop otel so its trace flushes; ignore status (best-effort capture).
     machine.execute("systemctl stop otel-collector.service")
+
+    result_lift_started_at = time.monotonic()
 
     # Copy every diagnostic UNCONDITIONALLY, each guarded so a missing file
     # (e.g. an early crash) never aborts the remaining copies.
@@ -235,11 +325,32 @@ e2eRunAndCapture =
     # reads diag.log directly, so it does not depend on this lift.
     machine.execute("test -d /var/lib/jaunder/capture && tar czf /tmp/capture-${backend}.tar.gz -C /var/lib/jaunder capture 2>/dev/null || true")
     _grab("/tmp/capture-${backend}.tar.gz")
+    record_e2e_phase(
+      "result-lift",
+      result_lift_started_at,
+      "success",
+      "${backend}/${browser}: copied available Playwright and service diagnostics.",
+    )
 
+    post_gate_started_at = time.monotonic()
     ${e2ePanicGate backend}
+    record_e2e_phase(
+      "post-gate-checks",
+      post_gate_started_at,
+      "success" if panic_status == 0 else "failed",
+      "${backend}/${browser}: zero-panic verifier exited with status %d." % panic_status,
+    )
+    write_e2e_phase_manifest()
+    # The sidecar follows the established unconditional diagnostic lift. If a
+    # guest-side write failed, _grab deliberately does not hide the original
+    # Playwright or panic verdict while still preserving every other artifact.
+    _grab("/tmp/e2e-phase-${backend}.json")
+
+    # Preserve ADR-0032's panic assertion before the Playwright assertion.
+    assert panic_status == 0, "e2e zero-panic gate failed (exit %d) for ${backend}/${browser}; see jaunder-journal-${backend}.log + e2e-phase-${backend}.json + build.log" % panic_status
 
     # Fail the check now — after all artifacts are safely copied out.
-    assert pw_status == 0, "e2e Playwright failed (exit %d) for ${backend}/${browser}; see playwright-report-${backend}.json + duration-budget-manifest-${backend}.json + playwright-artifacts-${backend}.tar.gz + build.log" % pw_status
+    assert pw_status == 0, "e2e Playwright failed (exit %d) for ${backend}/${browser}; see playwright-report-${backend}.json + duration-budget-manifest-${backend}.json + playwright-artifacts-${backend}.tar.gz + e2e-phase-${backend}.json + build.log" % pw_status
   '';
 
 mkE2eCheck =
@@ -400,13 +511,20 @@ mkE2eCheck =
       };
 
     testScript = ''
-      ${e2eOtelTestHelpers}${beforeMachineStart}machine.start()
+      ${e2ePhaseTimingHelpers backend browser}${e2eOtelTestHelpers}${beforeMachineStart}vm_startup_started_at = time.monotonic()
+      machine.start()
       machine.wait_for_unit("otel-collector.service", timeout=60)
       # `active` precedes the OTLP receiver binds; seeding immediately can
       # export into that gap and leave no trace population to verify.
       wait_for_otel_receivers()${setupBeforeJaunder}machine.succeed("systemctl start jaunder.service")
       machine.wait_for_unit("jaunder.service", timeout=60)
       machine.wait_for_open_port(3000, timeout=30)
+      record_e2e_phase(
+        "vm-startup-readiness",
+        vm_startup_started_at,
+        "success",
+        "${backend}/${browser}: VM booted and the Jaunder HTTP readiness port opened.",
+      )
 
       machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")${afterPackageCopy}# Seed a fresh DB and run the one browser this derivation targets.
       # Browsers run as separate derivations (one VM each) so their state

@@ -13,11 +13,12 @@ use std::task::Poll;
 use anyhow::{Context, Result, bail};
 use coverage::status::CoverageStatus;
 use processkit::{Outcome, StdioMode};
+use serde::Deserialize;
 use tokio::io::AsyncWrite;
 
 use super::process::Process;
 use crate::nix_build;
-use crate::result::{CommandResult, NixReport, StepResult};
+use crate::result::{CommandResult, NixReport, PhaseRecord, StepResult};
 
 /// The flake checks are Linux-only (`optionalAttrs isLinux` in `nix/checks.nix`);
 /// the project's CI host is x86_64-linux.
@@ -417,6 +418,12 @@ pub fn e2e(result: &mut CommandResult) -> E2eOutcome {
             },
             || validate_lifted_e2e_combo(backend, browser),
         );
+        lift_e2e_phase_records(
+            result,
+            Path::new(&format!(".xtask/diagnostics/{check}")),
+            backend,
+            browser,
+        );
     }
     E2eOutcome::from_combo_steps(&result.steps[combo_start..])
 }
@@ -461,6 +468,12 @@ pub fn e2e_combo(result: &mut CommandResult, backend: &str, browser: &str) {
         },
         || validate_lifted_e2e_combo(backend, browser),
     );
+    lift_e2e_phase_records(
+        result,
+        Path::new(&format!(".xtask/diagnostics/{check}")),
+        backend,
+        browser,
+    );
 }
 
 /// Validate one successful lifted E2E combination in the fixed post-build order.
@@ -492,6 +505,39 @@ fn finish_e2e_combo(
         }
     }
 }
+/// The VM-owned timing sidecar. The host validates its identity before using
+/// it, so a stale copied diagnostic cannot be attributed to another combo.
+#[derive(Deserialize)]
+struct E2ePhaseSidecar {
+    schema_version: u8,
+    backend: String,
+    browser: String,
+    phases: Vec<PhaseRecord>,
+}
+
+fn lift_e2e_phase_records(
+    result: &mut CommandResult,
+    diagnostics_dir: &Path,
+    backend: &str,
+    browser: &str,
+) {
+    let path = diagnostics_dir.join(format!("e2e-phase-{backend}.json"));
+    let sidecar = fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<E2ePhaseSidecar>(&raw).ok())
+        .filter(|sidecar| {
+            sidecar.schema_version == 1 && sidecar.backend == backend && sidecar.browser == browser
+        });
+    if let Some(sidecar) = sidecar {
+        result.record_phases(sidecar.phases);
+    } else {
+        // Phase evidence is diagnostic-only: malformed or absent timing cannot
+        // turn a completed E2E gate into a new host-side failure.
+        eprintln!(
+            "xtask: warning: xtask.nix.e2e_phase: unavailable or invalid phase sidecar for {backend}-{browser}"
+        );
+    }
+}
 
 /// What one diagnostics-copy pass did.
 struct DiagnosticsCopy {
@@ -520,6 +566,7 @@ fn copy_e2e_diagnostics_between(src_dir: &Path, dest_dir: &Path) -> DiagnosticsC
 fn is_authoritative_e2e_input(name: &str) -> bool {
     (name.starts_with("playwright-report-") && name.ends_with(".json"))
         || (name.starts_with("duration-budget-manifest-") && name.ends_with(".json"))
+        || (name.starts_with("e2e-phase-") && name.ends_with(".json"))
         || (name.starts_with("capture-") && name.ends_with(".tar.gz"))
 }
 
@@ -892,6 +939,8 @@ fn failed_build_after_diagnostics_with(
     } else {
         None
     };
+    // Preserve the primary build failure while still recovering any VM-owned
+    // diagnostics and phase sidecars from retained outputs.
     diagnostic_failed |= rescue();
     report_build_diagnostic_failure(diagnostic_failed, stderr);
     StepResult::fail(step_name).detail(failure_detail(
@@ -939,7 +988,10 @@ fn finish_build_with(
     }
     if outcome.code() == Some(0) {
         report_build_diagnostic_failure(diagnostic_failed, stderr);
-        return StepResult::ok(step_name).nix(nix_report());
+        let nix_report = nix_report();
+        return StepResult::ok(step_name)
+            .phases(nix_report.phase_records())
+            .nix(nix_report);
     }
     let Some(status) = build_status(outcome) else {
         report_build_diagnostic_failure(diagnostic_failed, stderr);
