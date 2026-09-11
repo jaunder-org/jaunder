@@ -1,6 +1,6 @@
-# ADR-DRAFT: Web Post timelines order by publication time
+# ADR-0190: Web Post timelines order by publication time
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-10
 - Issue: [#1428](https://github.com/jaunder-org/jaunder/issues/1428)
 
