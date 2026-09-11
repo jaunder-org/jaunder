@@ -214,7 +214,7 @@ impl BaselineLifecycle {
 import net from "node:net";
 const quote = (value) => "'" + value.replaceAll("'", "'\"'\"'") + "'";
 const args = process.argv.slice(2).map(quote).join(" ");
-const inner = `export $(systemctl show --property=Environment --value jaunder.service | tr ' ' '\\n' | grep '^JAUNDER_'); test-support ${{args}}`;
+const inner = `export $(systemctl show --property=Environment --value jaunder.service | tr ' ' '\\n' | grep '^JAUNDER_'); export JAUNDER_STORAGE_PATH=/var/lib/jaunder/data; test-support ${{args}}`;
 const command = `${{inner}}; code=$?; printf '\\n{STATUS}%s\\n' "$code"`;
 const socket = net.createConnection({{host: "127.0.0.1", port: {port}}});
 let output = "";
@@ -1047,7 +1047,7 @@ fn sha256_file(path: &Path) -> Result<String> {
 }
 fn baseline_command(package: &PackageIdentity, args: &str) -> String {
     format!(
-        "export $(systemctl show --property=Environment --value jaunder.service | tr ' ' '\\n' | grep '^JAUNDER_'); {} {args}",
+        "export $(systemctl show --property=Environment --value jaunder.service | tr ' ' '\\n' | grep '^JAUNDER_'); export JAUNDER_STORAGE_PATH=/var/lib/jaunder/data; {} {args}",
         Path::new(&package.output_path)
             .join("bin/jaunder")
             .display()
