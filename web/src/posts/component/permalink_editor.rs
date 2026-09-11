@@ -234,6 +234,7 @@ pub fn EditPostPage() -> impl IntoView {
     let state = ComposeState::new();
     let slug_field = Field::<Slug>::optional();
     let named = audience::load_named_audiences();
+    let lifecycle = posts::EditLifecycleState::new();
     // The redirect-on-publish effect reacts to the client-only ServerAction
     // dispatch. Whether a settled update redirects at all, and to where, is the
     // host-tested `publish_redirect` (#306), leaving this the bare `Effect`
@@ -242,6 +243,14 @@ pub fn EditPostPage() -> impl IntoView {
     support::on_settled_ok(
         move || posts::publish_redirect(update_post_action.value().get()),
         move |permalink: RootRelativeUrl| navigate(&permalink, NavigateOptions::default()),
+    );
+    // The host-tested lifecycle state owns the transition; this Effect is only
+    // reactive wiring from the server action settlement.
+    support::on_settled(
+        move || update_post_action.value().get(),
+        move |settlement: Result<MutationOutcome<SavedPost>, WebError>| {
+            lifecycle.adopt_settlement(&settlement);
+        },
     );
 
     // A missing or unparseable `post_id` is honest absence, not a real id: derive
@@ -287,17 +296,26 @@ pub fn EditPostPage() -> impl IntoView {
                         if let Ok(selection) = current_audience.await {
                             state.audience.set(selection);
                         }
+                        let post_id = fetched.post.post.post_id;
                         // The slug is not part of the bundle (the compact shape has
-                        // none) — see `seed_from`.
+                        // none) — see `seed_from`. A confirmed Unpublish is
+                        // authoritative for the new Draft branch, while the fields
+                        // already hold the exact values sent in that atomic update.
                         view! {
-                            <EditPostForm
-                                state=state
-                                slug_field=slug_field
-                                post_id=fetched.post.post.post_id
-                                publication=publication
-                                action=update_post_action
-                                named=named
-                            />
+                            {move || {
+                                let current_publication = lifecycle
+                                    .current_publication(publication, state.publish_at);
+                                view! {
+                                    <EditPostForm
+                                        state=state
+                                        slug_field=slug_field
+                                        post_id=post_id
+                                        publication=current_publication
+                                        action=update_post_action
+                                        named=named
+                                    />
+                                }
+                            }}
                         }
                             .into_any()
                     }
@@ -335,22 +353,23 @@ fn EditPostForm(
             })
     });
     let loaded_publication = publication.loaded();
-    let scheduled = publication.scheduled();
-    let (save_disabled, schedule_error, dispatch_update) = posts::edit_submit_gate(
-        state.body,
-        also_blocked,
-        publication,
-        Callback::new(move |(body, publication): (PostBody, PublicationIntent)| {
-            if state.audience.with(|selection| {
-                named.with(|state| state.selection_for_submit(selection).is_some())
-            }) {
-                action.dispatch(posts::Update {
-                    post_id,
-                    post: state.inputs(body, publication, slug_field.parsed()),
-                });
-            }
-        }),
-    );
+    let publication_time = publication.publication_time();
+    let (save_disabled, unpublish_disabled, schedule_error, dispatch_update) =
+        posts::edit_submit_gate(
+            state.body,
+            also_blocked,
+            publication,
+            Callback::new(move |(body, publication): (PostBody, PublicationIntent)| {
+                if state.audience.with(|selection| {
+                    named.with(|state| state.selection_for_submit(selection).is_some())
+                }) {
+                    action.dispatch(posts::Update {
+                        post_id,
+                        post: state.inputs(body, publication, slug_field.parsed()),
+                    });
+                }
+            }),
+        );
     view! {
         <div class="j-compose-grid">
             <div class="j-edit-form-body">
@@ -368,7 +387,7 @@ fn EditPostForm(
                     state=state
                     slug_field=slug_field
                     publication=loaded_publication
-                    scheduled=scheduled
+                    publication_time=publication_time
                     schedule_error=schedule_error
                     creation_schedule=None
                     named=named
@@ -378,6 +397,7 @@ fn EditPostForm(
                     <PostSaveActions
                         publication=loaded_publication
                         disabled=save_disabled
+                        unpublish_disabled=unpublish_disabled
                         on_save=dispatch_update
                     />
                 </div>

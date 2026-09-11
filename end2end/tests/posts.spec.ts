@@ -676,35 +676,57 @@ test("editing an invalid or nonexistent post shows not-found", async ({
   await expect(page.locator(SEL.error)).toContainText("Post not found");
 });
 
-test("editing a published post freezes the slug", async ({
+test("live editor can reschedule and atomically save edits while unpublishing", async ({
   registeredPage,
 }) => {
   test.slow();
-  // Create and publish a post; title embedded as # heading
+  const FUTURE_DATETIME_LOCAL = "2999-02-03T10:15";
   const page = await registeredPage("/posts/new");
   await page.fill(SEL.postBody, "# Published Article\n\noriginal content");
   await click(page, SEL.publishButton("true"));
   await waitForSelector(page, SEL.saveSummary);
 
   const summary = page.locator(SEL.saveSummary);
-  const originalSlug = await summary
-    .locator('[data-test="slug-value"]')
-    .getAttribute("data-slug");
-  expect(originalSlug).toBeTruthy();
-
-  // The canonical permalink is the only route (#24); both hops stay in-app.
   await followPermalink(page, summary);
   await openEditor(page);
 
-  // Published post should have neither unpublished-only option control.
   await expect(page.locator(SEL.postSlug)).not.toBeVisible();
-  await expect(page.locator(SEL.publishAt)).not.toBeVisible();
+  await expect(page.locator(SEL.publishAt)).toBeVisible();
+  await expect(page.locator(SEL.publishAt)).not.toHaveValue("");
+  await expect(page.locator(SEL.publishButton("false"))).toHaveText(
+    "Unpublish",
+  );
 
-  // Save the published post (body already pre-filled from loaded post; slug stays frozen)
+  await page.fill(SEL.publishAt, FUTURE_DATETIME_LOCAL);
   await click(page, SEL.publishButton("true"));
-  // After save, editor redirects to the permalink page
-  await waitForSelector(page, "article h1");
-  expect(page.url()).toContain(originalSlug!);
+  await page.waitForURL((url) => !url.pathname.endsWith("/edit"));
+
+  await openPostFromScheduled(page, "Published Article");
+  await page.fill(
+    SEL.postBody,
+    "# Published Article\n\nedited while unpublishing",
+  );
+  await click(page, SEL.publishButton("false"));
+  await waitForSelector(page, SEL.saveSummary);
+
+  await expect(page.locator(SEL.saveSummary)).toContainText("Draft saved.");
+  expect(new URL(page.url()).pathname).toMatch(/\/edit$/);
+  await expect(page.locator(SEL.postSlug)).toBeVisible();
+  await expect(page.locator(SEL.postBody)).toHaveValue(
+    /edited while unpublishing/,
+  );
+  await expect(page.locator(SEL.publishButton("false"))).toHaveText(
+    "Save draft",
+  );
+
+  await failServerFn(page, "posts/update");
+  await page.fill(SEL.postSlug, "failed-draft-save");
+  await click(page, SEL.publishButton("false"));
+  await expect(page.locator(SEL.error)).toBeVisible();
+  await expect(page.locator(SEL.postSlug)).toBeVisible();
+  await expect(page.locator(SEL.publishButton("false"))).toHaveText(
+    "Save draft",
+  );
 });
 
 test("draft lifecycle: create, view, edit, and publish", async ({
@@ -1766,8 +1788,7 @@ test("scheduled management page opens editor for reschedule and pullback", async
   ).toContainText("2999-02-03");
 
   await openPostFromScheduled(page, "Scheduled Management");
-  await click(page, SEL.clearSchedule);
-  await click(page, SEL.publishButton("true"));
+  await click(page, SEL.publishButton("false"));
   await waitForSelector(page, SEL.saveSummary);
   await expect(page.locator(SEL.saveSummary)).toContainText("Draft saved.");
 
@@ -1885,7 +1906,7 @@ test.describe("scheduled editor local time", () => {
     expect(afterPreview.post.post.published_at).toBe(original);
   });
 
-  test("an author can reschedule, clear, draft, and reschedule a Post", async ({
+  test("an author can reschedule, unpublish, draft, and reschedule a Post", async ({
     registeredPage,
   }) => {
     const ORIGINAL_SCHEDULE = "2999-01-01T09:00";
@@ -1903,9 +1924,10 @@ test.describe("scheduled editor local time", () => {
 
     await openPostFromDrafts(page, "Scheduled Draft");
     await expect(page.locator(SEL.publishAt)).toHaveValue(ORIGINAL_SCHEDULE);
-    await expect(page.locator(SEL.clearSchedule)).toBeVisible();
     await expect(page.locator(SEL.publishButton("true"))).toHaveText("Save");
-    await expect(page.locator(SEL.publishButton("false"))).toHaveCount(0);
+    await expect(page.locator(SEL.publishButton("false"))).toHaveText(
+      "Unpublish",
+    );
     await expect(page.locator(SEL.postSlug)).toHaveCount(0);
 
     await page.fill(SEL.publishAt, REPLACEMENT_SCHEDULE);
@@ -1920,18 +1942,19 @@ test.describe("scheduled editor local time", () => {
       "Enter a valid local date and time",
     );
     await expect(page.locator(SEL.publishButton("true"))).toBeDisabled();
+    await expect(page.locator(SEL.publishButton("false"))).toBeEnabled();
     expect(new URL(page.url()).pathname).toMatch(/\/edit$/);
 
     await openPostFromDrafts(page, "Scheduled Draft");
     await expect(page.locator(SEL.publishAt)).toHaveValue(REPLACEMENT_SCHEDULE);
-    await click(page, SEL.clearSchedule);
-    await expect(page.locator(SEL.publishAt)).toHaveValue("");
+    await page.fill(SEL.publishAt, "");
+    await expect(page.locator(SEL.publishButton("true"))).toBeDisabled();
+    await expect(page.locator(SEL.publishButton("false"))).toBeEnabled();
     expect(new URL(page.url()).pathname).toMatch(/\/edit$/);
 
     await openPostFromDrafts(page, "Scheduled Draft");
     await expect(page.locator(SEL.publishAt)).toHaveValue(REPLACEMENT_SCHEDULE);
-    await click(page, SEL.clearSchedule);
-    await click(page, SEL.publishButton("true"));
+    await click(page, SEL.publishButton("false"));
     await waitForSelector(page, SEL.saveSummary);
     const pullbackSummary = page.locator(SEL.saveSummary);
     await expect(pullbackSummary).toContainText("Draft saved.");
@@ -1944,8 +1967,6 @@ test.describe("scheduled editor local time", () => {
     );
     expect(new URL(page.url()).pathname).toMatch(/\/edit$/);
 
-    await followPermalink(page, pullbackSummary);
-    await openEditor(page);
     await expect(page.locator(SEL.postSlug)).toBeVisible();
     await page.fill(SEL.postSlug, "scheduled-draft-reopened");
     await click(page, SEL.publishButton("false"));

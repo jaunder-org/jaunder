@@ -8,7 +8,7 @@ use crate::media::MediaUpload;
 use crate::posts;
 use crate::posts::{
     ClassifiedSavedPost, ComposeState, Create, CreatePublication, InvalidSchedule,
-    LoadedPublication, NamedAudienceState, ScheduledEditState,
+    LoadedPublication, NamedAudienceState, PublicationTimeEditState,
 };
 use crate::tags::TagInput;
 use crate::topbar::Topbar;
@@ -256,6 +256,7 @@ fn CompactComposer(
                     <PostSaveActions
                         publication=LoadedPublication::Draft
                         disabled=submit_disabled
+                        unpublish_disabled=submit_disabled
                         on_save=dispatch
                     />
                 </div>
@@ -322,7 +323,7 @@ fn FullComposer(
                     state=state
                     slug_field=slug_field
                     publication=LoadedPublication::Draft
-                    scheduled=None
+                    publication_time=None
                     schedule_error=Signal::derive(|| None::<InvalidSchedule>)
                     creation_schedule=Some(schedule)
                     named=named
@@ -508,19 +509,23 @@ fn CreateResultSummary(result: RwSignal<Option<ClassifiedSavedPost>>) -> impl In
     }
 }
 
-/// Shared creation and editor save controls: "Save draft" + "Publish" for a draft,
-/// and a lone "Save" for scheduled or live Posts.
+/// Shared creation and editor save controls: "Save draft" + "Publish" for a Draft,
+/// and Save + Unpublish for a Scheduled or live Post.
 ///
 /// The callers retain their layout wrappers; this component owns only the stable
 /// publication branch and button contract. `on_save` is a plain data callback (the
 /// `publish` flag), not a view closure — ADR-0083 §3 rules out passing markup as a prop.
 #[component]
 pub(super) fn PostSaveActions(
-    /// Publication state that selects the draft pair or the scheduled/live Save control.
+    /// Publication state that selects the Draft or published controls.
     publication: LoadedPublication,
-    /// Whether saving is currently blocked by invalid form state.
+    /// Whether Save is blocked by invalid form or publication-time state.
     disabled: Signal<bool>,
-    /// Dispatches the save; the argument is the requested `publish` flag.
+    /// Whether Unpublish is blocked by invalid persisted fields. Publication-time
+    /// validity deliberately does not participate.
+    unpublish_disabled: Signal<bool>,
+    /// Dispatches the save; `false` is the explicit Unpublish intent for a
+    /// Scheduled or live Post.
     on_save: Callback<bool>,
 ) -> impl IntoView {
     view! {
@@ -559,6 +564,16 @@ pub(super) fn PostSaveActions(
                     on:click=move |_| on_save.run(true)
                 >
                     "Save"
+                </button>
+                <button
+                    class="j-btn"
+                    type="button"
+                    name="publish"
+                    value="false"
+                    prop:disabled=move || unpublish_disabled.get()
+                    on:click=move |_| on_save.run(false)
+                >
+                    "Unpublish"
                 </button>
             }
                 .into_any()
@@ -664,9 +679,9 @@ pub(super) fn SlugOverrideInput(slug_field: Field<Slug>) -> impl IntoView {
 
 /// The options aside shared by the full-page composer and editor.
 ///
-/// The immutable loaded publication state owns which controls exist: drafts show
-/// slug and schedule, scheduled Posts show only their schedule, and live Posts show
-/// neither. The remaining fields are common to every branch.
+/// The immutable loaded publication state owns which controls exist: Drafts show
+/// slug and optional scheduling; Scheduled and live Posts show their persisted
+/// publication time. The remaining fields are common to every branch.
 #[component]
 pub(super) fn ComposeOptions(
     state: ComposeState,
@@ -674,7 +689,7 @@ pub(super) fn ComposeOptions(
     /// [`ComposeState::seed_from`].
     slug_field: Field<Slug>,
     publication: LoadedPublication,
-    scheduled: Option<ScheduledEditState>,
+    publication_time: Option<PublicationTimeEditState>,
     schedule_error: Signal<Option<InvalidSchedule>>,
     /// Present only for the full new-Post composer, whose time choice is provisional.
     creation_schedule: Option<CreationSchedule>,
@@ -699,7 +714,7 @@ pub(super) fn ComposeOptions(
                                 view! {
                                     <ScheduleControl
                                         state=state
-                                        scheduled=None
+                                        publication_time=None
                                         schedule_error=schedule_error
                                     />
                                 }
@@ -709,17 +724,16 @@ pub(super) fn ComposeOptions(
                     }
                         .into_any()
                 }
-                LoadedPublication::Scheduled(_) => {
+                LoadedPublication::Scheduled(_) | LoadedPublication::Live(_) => {
                     view! {
                         <ScheduleControl
                             state=state
-                            scheduled=scheduled
+                            publication_time=publication_time
                             schedule_error=schedule_error
                         />
                     }
                         .into_any()
                 }
-                LoadedPublication::Live => ().into_any(),
             }}
             <div style="margin-top:10px">
                 <ValidatedTextarea<PostSummary>
@@ -846,30 +860,32 @@ fn CreationScheduleEditor(state: ComposeState, schedule: CreationSchedule) -> im
     }
 }
 
-/// The draft/scheduled publication-time control.
+/// The Draft/published publication-time control.
 ///
-/// A scheduled editor writes through [`ScheduledEditState`] so changing display
-/// text marks the exact loaded instant as replaced. A draft writes the composer's
-/// ordinary optional schedule field.
+/// A published editor writes through [`PublicationTimeEditState`] so changing
+/// display text marks the exact loaded instant as replaced. A Draft writes the
+/// composer's ordinary optional schedule field.
 #[component]
 pub(super) fn ScheduleControl(
     state: ComposeState,
-    scheduled: Option<ScheduledEditState>,
+    publication_time: Option<PublicationTimeEditState>,
     schedule_error: Signal<Option<InvalidSchedule>>,
 ) -> impl IntoView {
     view! {
         <div style="margin-top:10px">
-            {match scheduled {
-                Some(schedule) => {
+            {match publication_time {
+                Some(publication_time) => {
                     view! {
                         <label class="j-field-label">
-                            "Publish at"
+                            "Publication time (local)"
                             <input
                                 type="datetime-local"
                                 name="publish_at"
                                 class="j-field-val"
-                                prop:value=schedule.value
-                                on:input=move |ev| schedule.set_input(event_target_value(&ev))
+                                prop:value=publication_time.value
+                                on:input=move |ev| {
+                                    publication_time.set_input(event_target_value(&ev));
+                                }
                             />
                             {move || {
                                 schedule_error
@@ -879,9 +895,6 @@ pub(super) fn ScheduleControl(
                                     })
                             }}
                         </label>
-                        <button class="j-btn" type="button" on:click=move |_| schedule.clear()>
-                            "Clear schedule"
-                        </button>
                     }
                         .into_any()
                 }
