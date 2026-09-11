@@ -223,10 +223,11 @@ socket.on("error", (error) => {{ console.error(error.message); process.exitCode 
 socket.on("end", () => {{
   const marker = "{STATUS}";
   const index = output.lastIndexOf(marker);
-  if (index < 0 || Number(output.slice(index + marker.length).trim()) !== 0) {{
-    const body = index < 0 ? output : output.slice(0, index);
+  const status = index < 0 ? null : Number(output.slice(index + marker.length).trim());
+  const body = index < 0 ? output : output.slice(0, index);
+  if (status !== 0) {{
     if (body.trim()) process.stderr.write(body.trimEnd() + "\n");
-    console.error("test-support seed command failed");
+    console.error(`test-support seed command failed with status ${{status ?? "missing"}}`);
     process.exitCode = 1;
     return;
   }}
