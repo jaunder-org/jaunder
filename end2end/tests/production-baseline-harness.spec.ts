@@ -57,9 +57,11 @@ async function waitForRequest(sequence: number): Promise<BrowserRequest> {
     try {
       return JSON.parse(await readFile(path, "utf8")) as BrowserRequest;
     } catch (error: unknown) {
-      if (
-        !(error instanceof Error && "code" in error && error.code === "ENOENT")
-      )
+      if (!(
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ))
         throw error;
       if (Date.now() >= deadline)
         throw new Error(`timed out waiting for browser request ${sequence}`);
