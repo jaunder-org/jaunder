@@ -329,7 +329,7 @@ fn FullComposer(
                     named=named
                 />
                 <MediaSection />
-                <div style="margin-top:auto;display:flex;align-items:center;gap:8px">
+                <div style="display:flex;align-items:center;gap:8px">
                     <CreationPostActions
                         publish_at=state.publish_at
                         scheduled=schedule.scheduled
