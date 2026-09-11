@@ -30,8 +30,8 @@ Posts across all Users and returns a same-origin `302` with
 preserves the original query string unchanged. A malformed, zero-match, or
 multiple-match request returns the existing no-store public SPA shell miss
 instead. The
-[WordPress-compatible permalink alias decision](../adr/drafts/wordpress-compatible-permalink-alias.md),
-recorded at `docs/adr/drafts/wordpress-compatible-permalink-alias.md`, keeps the
+[WordPress-compatible permalink alias decision](../adr/0189-wordpress-compatible-permalink-alias.md),
+recorded at `docs/adr/0189-wordpress-compatible-permalink-alias.md`, keeps the
 compatibility route outside the CSR, preserving ADR-0076's `~`-only navigation
 rule.
 

@@ -31,7 +31,7 @@ form is an inbound server alias, not a second canonical URL or CSR route.
   observable alias result; backend choice must not change visibility, matching,
   redirect, or miss semantics.
 - The design is recorded as proposed in
-  `docs/adr/drafts/wordpress-compatible-permalink-alias.md`.
+  `docs/adr/0189-wordpress-compatible-permalink-alias.md`.
 
 ## Acceptance
 

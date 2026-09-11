@@ -1326,8 +1326,8 @@ only an exactly-one match with a same-origin `302` to that Post's canonical
 and the response is `Cache-Control: no-store`. A malformed, absent, or ambiguous
 alias is the same no-store public SPA shell miss as an absent permalink. Jaunder
 emits only canonical permalinks. The
-[WordPress-compatible permalink alias decision](adr/drafts/wordpress-compatible-permalink-alias.md),
-recorded at `docs/adr/drafts/wordpress-compatible-permalink-alias.md`, keeps
+[WordPress-compatible permalink alias decision](adr/0189-wordpress-compatible-permalink-alias.md),
+recorded at `docs/adr/0189-wordpress-compatible-permalink-alias.md`, keeps
 compatibility resolution at the HTTP boundary rather than adding a second
 permalink identity.
 
