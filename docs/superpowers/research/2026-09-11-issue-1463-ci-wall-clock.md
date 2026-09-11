@@ -172,6 +172,22 @@ report command lacked the separate-flow `llvm-cov` environment and searched
 location. The corrected treatment must apply the same `show-env` wrapper to both
 text and LCOV reports.
 
+Treatment experiment 3 is the first complete successful local verdict. The
+committed run completed in **1,302,640 ms**; `nix-coverage` was **385,744 ms**;
+and its gate was **5,800 ms**. Coverage stages were workspace resolution 21 ms,
+cleanup 94 ms, census 203,463 ms, instrumented test run 155,359 ms,
+reconciliation 7 ms, text report 4,939 ms, LCOV 4,712 ms, and CRAP 222 ms. All
+4,692 expected tests executed and reconciled, and the final host coverage gate
+passed.
+
+Against the comparable instrumentation baseline, coverage-step time fell
+**433,871 ms (7:13.871, 52.9%)**; summed producer stages fell **407,558 ms
+(6:47.558, 52.5%)**; and the instrumented run fell **318,530 ms (5:18.530,
+67.2%)**. The full local path fell **564,343 ms (9:24.343, 30.2%)**, but that
+whole-path comparison is provisional because unrelated static and Elisp
+derivation timings varied. This selects the treatment locally, not as the issue
+threshold verdict: matched Actions cold/warm pairs remain authoritative.
+
 The measured serialized arithmetic gives an ideal, contention-free overlap
 bound: `max(622,186, 257,431 + 19,658) = 622,186 ms`, or **279,511 ms
 (4:39.511)** lower than the first run. This is only a physical bound. A
@@ -180,18 +196,18 @@ evaluation/realization, transfer, aggregation, and queue overhead available
 before it misses the three-minute target; same-runner fan-out may instead slow
 the coverage producer through CPU, disk, Nix, Cargo, and PostgreSQL contention.
 
-Ranked conclusion: internal nextest partitioning with profile merge and one
-final union report is the highest-potential but unproven candidate; it must
-preserve the complete coverage census, combined SQLite/PostgreSQL behavior, and
-one stateless union verdict. Parallel post-test reports have at most the
-unattributed 28,186-ms remainder available, and pre-test preparation has no
-measured duration; neither supports a three-minute claim. Splitting coverage
-into final backend verdicts, reducing e2e, serial cache preparation, and
-same-runner broad fan-out are rejected or unselected for the preserved
-invariants and unmeasured contention described in the candidate screen. No
-change is selected until a controlled experiment records shard setup,
-compile/test/PG spans, profile merge, union verdict equivalence, wall-clock, and
-runner-time.
+Ranked conclusion: the corrected census-wrapper treatment is **selected by the
+complete local verdict**, subject to the provisional whole-path qualification
+above and the required matched Actions measurements. Internal nextest
+partitioning with profile merge and one final union report remains
+highest-potential but unproven; it must preserve the complete coverage census,
+combined SQLite/PostgreSQL behavior, and one stateless union verdict. Parallel
+post-test reports have at most the unattributed 28,186-ms remainder available,
+and pre-test preparation has no measured duration; neither supports a
+three-minute claim. Splitting coverage into final backend verdicts, reducing
+e2e, serial cache preparation, and same-runner broad fan-out remain rejected or
+unselected for the preserved invariants and unmeasured contention described in
+the candidate screen.
 
 ## Cache and source-boundary evidence
 
@@ -235,7 +251,7 @@ eligibility. It must also document Cachix's closure caveat.
 | Serial cache-preparation job                 | #2171/#2173 show duplicated cold work but the issue’s critical-path model is `B + max(V,E)` before transfer; preparation adds setup, upload, download, and substitution before fan-out.                                                                                                                       | **Rejected pending measured net win.** It may lower runner-time proxy, but has no demonstrated wall-clock benefit and has no transfer-cost measurement.                                                                                                                         |
 | Recombine or reduce the 2×2 e2e matrix       | Matrix e2e already finishes before warm validation; [ADR-0034](../../adr/0034-ci-e2e-matrix-distribution.md) records browser serialization in each VM and distribution as the wall-clock improvement.                                                                                                         | **Rejected.** It violates the preserved matrix-distribution decision and would trade elapsed time for fewer runners.                                                                                                                                                            |
 | Validation fan-out / internal partitioning   | The local 901,697-ms run has a 622,186-ms coverage producer and a 277,089-ms non-coverage total. The ideal overlap ceiling is 279,511 ms, but coverage producer→gate→host consumer and the other producer/consumer tails remain ordered; a partitioned coverage implementation must retain one union verdict. | **Highest potential, unproven; not selected.** Same-runner contention and duplicate Nix/setup work may reverse savings. Separate-runner fan-out must keep all added setup/transfer/aggregation under 99,511 ms to retain a three-minute path, then prove matched Actions pairs. |
-| Avoid duplicate coverage census binary build | The controlled baseline has a 292,235-ms census before a 473,889-ms instrumented run. Failed experiment 2 reduced the instrumented run to 140,961 ms while reconciling all 4,692 tests: a 332,928-ms (70.3%) stage-only reduction.                                                                            | **Promising but incomplete; not selected.** Its total is failed/non-comparable because text reporting lacked the separate-flow environment. Apply `show-env` to text and LCOV, then prove the complete union verdict before timing a treatment.                                 |
+| Avoid duplicate coverage census binary build | Complete successful experiment 3 reconciled all 4,692 tests and passed the final host coverage gate. Against the instrumentation baseline, coverage-step time fell 433,871 ms (52.9%), producer stages 407,558 ms (52.5%), and instrumented run 318,530 ms (67.2%).                                           | **Selected local treatment; not final threshold evidence.** The 564,343-ms (30.2%) whole-local-path change is provisional because unrelated static/Elisp timings varied; matched cold/warm Actions pairs remain decisive.                                                       |
 | Narrow Nix source closures                   | #1289 proves docs/static isolation and records supported versus necessary fan-out.                                                                                                                                                                                                                            | **Already beneficial for local realization; no CI wall-clock claim.** Future changes require a source probe; no new closure change is selected by this report.                                                                                                                  |
 | Narrow Cachix exclusion to final verdicts    | The expression overmatches cacheable support identities; exact final names and the filter’s closure caveat are known.                                                                                                                                                                                         | **Measurement/probe prerequisite, not an improvement claim.** Must prove final verdict exclusion and support eligibility before any cache-boundary edit.                                                                                                                        |
 
