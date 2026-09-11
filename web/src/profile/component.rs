@@ -168,7 +168,7 @@ fn DefaultPostFormatControl() -> impl IntoView {
                         <div class="j-form-actions">
                             <button
                                 type="button"
-                                class="j-btn"
+                                class="j-btn is-primary"
                                 prop:disabled=move || state.get().format_to_save().is_none()
                                 on:click=save
                             >
