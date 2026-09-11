@@ -1562,6 +1562,8 @@ fn run_shared_behavior(
         .output()
         .context("running shared production-baseline behavior flow")?;
     if !output.status.success() {
+        retain_behavior_output(state, phase, "stdout", &output.stdout)?;
+        retain_behavior_output(state, phase, "stderr", &output.stderr)?;
         bail!("shared production-baseline behavior flow failed during {phase}");
     }
     let stdout = String::from_utf8(output.stdout).context("behavior flow output was not UTF-8")?;
@@ -1575,6 +1577,25 @@ fn run_shared_behavior(
         bail!("behavior flow emitted an invalid machine-readable result");
     }
     Ok(result.checks)
+}
+
+fn retain_behavior_output(state: &Path, phase: &str, stream: &str, bytes: &[u8]) -> Result<()> {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("reading behavior diagnostic nonce")?
+        .as_nanos();
+    let path = state
+        .parent()
+        .context("baseline state path has no workspace")?
+        .join(format!("behavior-{phase}-{nonce}.{stream}"));
+    fs::write(&path, bytes).context("retaining restricted behavior diagnostics")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .context("restricting behavior diagnostics")?;
+    }
+    Ok(())
 }
 
 pub fn run(command: ProductionBaselineCommand) -> Result<CommandResult> {
