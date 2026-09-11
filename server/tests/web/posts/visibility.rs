@@ -15,7 +15,7 @@ use rstest_reuse::*;
 
 use crate::helpers::{
     confirmed_created_post, create_post_json, create_session_for, create_user_and_session,
-    make_app, post_form, post_json_with_credentials, update_post_json,
+    make_app, post_form, post_json, post_json_with_credentials, update_post_json,
 };
 use storage::test_support::{
     Backend, SeedRawPost, SeedUser, SeededPost, backends, backends_matrix,
@@ -23,8 +23,7 @@ use storage::test_support::{
 };
 
 use super::fixtures::{
-    get_post_form, list_drafts, list_home_feed, list_local_timeline, list_scheduled,
-    publish_post_form,
+    get_post_form, list_drafts, list_home_feed, list_scheduled, publish_post_form,
 };
 
 fn utc_permalink_date(timestamp: jiff::Timestamp) -> (i32, u32, u32) {
@@ -88,7 +87,8 @@ async fn get_post_preview_form(
 
 /// Which endpoint a `*_rejects_unauthenticated` case exercises. Each variant
 /// fires the same request the original standalone test fired, with no session
-/// cookie, through that endpoint's existing request builder.
+/// cookie, through that endpoint's existing request builder. The home feed
+/// additionally covers both timeline directions.
 #[derive(Copy, Clone)]
 enum UnauthEndpoint {
     CreatePost,
@@ -99,9 +99,12 @@ enum UnauthEndpoint {
     ListHomeFeed,
 }
 
-async fn unauthenticated_request(app: Router, endpoint: UnauthEndpoint) -> (StatusCode, String) {
+async fn unauthenticated_requests(
+    app: Router,
+    endpoint: UnauthEndpoint,
+) -> Vec<(StatusCode, String)> {
     match endpoint {
-        UnauthEndpoint::CreatePost => {
+        UnauthEndpoint::CreatePost => vec![
             create_post_json(
                 app.clone(),
                 PostInputs {
@@ -110,9 +113,9 @@ async fn unauthenticated_request(app: Router, endpoint: UnauthEndpoint) -> (Stat
                 },
                 None,
             )
-            .await
-        }
-        UnauthEndpoint::UpdatePost => {
+            .await,
+        ],
+        UnauthEndpoint::UpdatePost => vec![
             update_post_json(
                 app.clone(),
                 PostId::from(42),
@@ -122,12 +125,25 @@ async fn unauthenticated_request(app: Router, endpoint: UnauthEndpoint) -> (Stat
                 },
                 None,
             )
-            .await
+            .await,
+        ],
+        UnauthEndpoint::ListDrafts => vec![list_drafts(app.clone(), None, 10, None).await],
+        UnauthEndpoint::ListScheduled => vec![list_scheduled(app.clone(), None, 10, None).await],
+        UnauthEndpoint::PublishPost => {
+            vec![publish_post_form(app.clone(), PostId::from(99), None).await]
         }
-        UnauthEndpoint::ListDrafts => list_drafts(app.clone(), None, 10, None).await,
-        UnauthEndpoint::ListScheduled => list_scheduled(app.clone(), None, 10, None).await,
-        UnauthEndpoint::PublishPost => publish_post_form(app.clone(), PostId::from(99), None).await,
-        UnauthEndpoint::ListHomeFeed => list_home_feed(app, None, 50, None).await,
+        UnauthEndpoint::ListHomeFeed => vec![
+            list_home_feed(app.clone(), None, 50, None).await,
+            post_json(
+                app,
+                <web::timeline::ListHomeFeed as ServerFn>::PATH,
+                serde_json::json!({
+                    "request": { "order": "oldest", "cursor": null, "limit": 50 },
+                }),
+                None,
+            )
+            .await,
+        ],
     }
 }
 
@@ -146,10 +162,10 @@ async fn endpoint_rejects_unauthenticated(backend: Backend, #[case] endpoint: Un
     let env = backend.setup().await;
     let app = make_app!(&env, &env.base);
 
-    let (status, body) = unauthenticated_request(app.clone(), endpoint).await;
-
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("unauthorized"), "body: {body}");
+    for (status, body) in unauthenticated_requests(app.clone(), endpoint).await {
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+        assert!(body.contains("unauthorized"), "body: {body}");
+    }
 }
 
 #[apply(backends)]
@@ -426,8 +442,50 @@ async fn create_targeted_post(
 }
 
 /// The set of post slugs visible in a local-timeline response.
-fn timeline_slugs(page: &Page<RenderedPost>) -> std::collections::BTreeSet<String> {
+fn timeline_slugs(
+    page: &Page<RenderedPost, common::seed::TimelineCursor>,
+) -> std::collections::BTreeSet<String> {
     page.posts.iter().map(|p| p.slug.to_string()).collect()
+}
+
+/// Requests both chronology directions through the public local-timeline
+/// endpoint and verifies that neither changes the admitted posts.
+async fn assert_local_timeline_visibility(
+    app: Router,
+    cookie: Option<&str>,
+    expected: &std::collections::BTreeSet<String>,
+    viewer: &str,
+) -> Page<RenderedPost, common::seed::TimelineCursor> {
+    let mut newest_page = None;
+
+    for (order, is_newest) in [("newest", true), ("oldest", false)] {
+        let (status, body) = post_json(
+            app.clone(),
+            <web::timeline::ListLocalTimeline as ServerFn>::PATH,
+            serde_json::json!({
+                "request": { "order": order, "cursor": null, "limit": 50 },
+            }),
+            cookie,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{viewer} {order}; body: {body}");
+        let page: Page<RenderedPost, common::seed::TimelineCursor> = serde_json::from_str::<
+            PublicPresentation<Page<RenderedPost, common::seed::TimelineCursor>>,
+        >(&body)
+        .unwrap()
+        .page;
+        assert_eq!(
+            &timeline_slugs(&page),
+            expected,
+            "{viewer} {order}; body: {body}"
+        );
+
+        if is_newest {
+            newest_page = Some(page);
+        }
+    }
+
+    newest_page.expect("Newest direction is always requested")
 }
 
 #[apply(backends)]
@@ -526,60 +584,46 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
     let subscriber_cookie = subscriber_session.cookie();
     let stranger_cookie = stranger_session.cookie();
 
-    // Anonymous viewer: only the Public post.
-    let (status, body) = list_local_timeline(app.clone(), None, 50, None).await;
-    assert_eq!(status, StatusCode::OK, "body: {body}");
-    let anon: Page<RenderedPost> =
-        serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
-            .unwrap()
-            .page;
-    assert_eq!(
-        timeline_slugs(&anon),
-        [public.slug.to_string()].into_iter().collect(),
-        "anonymous viewer sees only Public; body: {body}"
-    );
+    let public_slugs = [public.slug.to_string()].into_iter().collect();
+    let author_slugs = [
+        public.slug.to_string(),
+        subscribers.slug.to_string(),
+        named.slug.to_string(),
+        private.slug.to_string(),
+    ]
+    .into_iter()
+    .collect();
+    let subscriber_slugs = [
+        public.slug.to_string(),
+        subscribers.slug.to_string(),
+        named.slug.to_string(),
+    ]
+    .into_iter()
+    .collect();
 
-    // Author: sees all of their own posts, including the private one.
-    let (status, body) = list_local_timeline(app.clone(), None, 50, Some(&author_cookie)).await;
-    assert_eq!(status, StatusCode::OK, "body: {body}");
-    let authored: Page<RenderedPost> =
-        serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
-            .unwrap()
-            .page;
-    assert_eq!(
-        timeline_slugs(&authored),
-        [
-            public.slug.to_string(),
-            subscribers.slug.to_string(),
-            named.slug.to_string(),
-            private.slug.to_string(),
-        ]
-        .into_iter()
-        .collect(),
-        "author sees own posts regardless of audience; body: {body}"
-    );
-
-    // Active subscriber + named member: Public + Subscribers + Named (not Private).
-    let (status, body) = list_local_timeline(app.clone(), None, 50, Some(&subscriber_cookie)).await;
-    assert_eq!(status, StatusCode::OK, "body: {body}");
-    let sub: Page<RenderedPost> =
-        serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
-            .unwrap()
-            .page;
-    assert_eq!(
-        timeline_slugs(&sub),
-        [
-            public.slug.to_string(),
-            subscribers.slug.to_string(),
-            named.slug.to_string(),
-        ]
-        .into_iter()
-        .collect(),
-        "subscriber sees Public + Subscribers + admitted Named; body: {body}"
-    );
+    // Direction changes chronology only: every viewer admits the same post set
+    // through both public local-timeline requests.
+    let mut subscriber_page = None;
+    for (viewer, cookie, expected) in [
+        ("anonymous", None, &public_slugs),
+        ("author", Some(author_cookie.as_str()), &author_slugs),
+        (
+            "subscriber",
+            Some(subscriber_cookie.as_str()),
+            &subscriber_slugs,
+        ),
+        ("stranger", Some(stranger_cookie.as_str()), &public_slugs),
+    ] {
+        let newest_page =
+            assert_local_timeline_visibility(app.clone(), cookie, expected, viewer).await;
+        if viewer == "subscriber" {
+            subscriber_page = Some(newest_page);
+        }
+    }
+    let subscriber_page = subscriber_page.expect("subscriber is part of the visibility matrix");
     assert!(
-        sub.posts.iter().all(|p| !p.is_author),
-        "subscriber is not the author; body: {body}"
+        subscriber_page.posts.iter().all(|post| !post.is_author),
+        "subscriber is not the author"
     );
 
     // Explicit Bearer identity is authoritative over an unrelated ambient cookie.
@@ -587,27 +631,19 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
     let response = post_json_with_credentials(
         app.clone(),
         <web::timeline::ListLocalTimeline as ServerFn>::PATH,
-        serde_json::json!({ "cursor": null, "limit": 50 }),
+        serde_json::json!({ "request": { "order": "newest", "cursor": null, "limit": 50 } }),
         Some(&stranger_cookie),
         Some(&authorization),
         true,
     )
     .await;
     assert_eq!(response.status, StatusCode::OK, "body: {}", response.body);
-    let bearer_page: Page<RenderedPost> =
-        serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&response.body)
-            .unwrap()
-            .page;
-    assert_eq!(
-        timeline_slugs(&bearer_page),
-        [
-            public.slug.to_string(),
-            subscribers.slug.to_string(),
-            named.slug.to_string(),
-        ]
-        .into_iter()
-        .collect()
-    );
+    let bearer_page: Page<RenderedPost, common::seed::TimelineCursor> = serde_json::from_str::<
+        PublicPresentation<Page<RenderedPost, common::seed::TimelineCursor>>,
+    >(&response.body)
+    .unwrap()
+    .page;
+    assert_eq!(timeline_slugs(&bearer_page), subscriber_slugs);
     assert!(
         response
             .set_cookies
@@ -620,30 +656,20 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
     let response = post_json_with_credentials(
         app.clone(),
         <web::timeline::ListLocalTimeline as ServerFn>::PATH,
-        serde_json::json!({ "cursor": null, "limit": 50 }),
+        serde_json::json!({ "request": { "order": "newest", "cursor": null, "limit": 50 } }),
         Some(&subscriber_cookie),
         Some("Bearer unknown-token"),
         true,
     )
     .await;
     assert_ne!(response.status, StatusCode::OK);
-    assert!(serde_json::from_str::<Page<RenderedPost>>(&response.body).is_err());
+    assert!(
+        serde_json::from_str::<Page<RenderedPost, common::seed::TimelineCursor>>(&response.body)
+            .is_err()
+    );
     assert!(response.set_cookies.is_empty());
 
-    // Authed non-subscriber: only the Public post (same reach as anonymous,
-    // proving viewer_identity yields a Channel viewer that is correctly *not*
-    // admitted to subscriber/named content).
-    let (status, body) = list_local_timeline(app.clone(), None, 50, Some(&stranger_cookie)).await;
-    assert_eq!(status, StatusCode::OK, "body: {body}");
-    let stranger_page: Page<RenderedPost> =
-        serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
-            .unwrap()
-            .page;
-    assert_eq!(
-        timeline_slugs(&stranger_page),
-        [public.slug.to_string()].into_iter().collect(),
-        "authed non-subscriber sees only Public; body: {body}"
-    );
+    // The stranger is included in the direction/visibility matrix above.
 }
 
 #[apply(backends)]

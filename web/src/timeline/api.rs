@@ -1,5 +1,6 @@
 //! The timeline vertical's `#[server]` endpoints: cursor-paginated public
-//! listings return [`PublicPresentation<Page<RenderedPost>>`](PublicPresentation)
+//! listings return
+//! [`PublicPresentation<Page<RenderedPost, TimelineCursor>>`](PublicPresentation)
 //! so a client-side destination commits both its data and server-resolved theme.
 //! The authenticated home feed remains a private `Page` response.
 //!
@@ -8,17 +9,15 @@
 //! wiring only and re-exports these under the stable `crate::timeline::…` paths that
 //! call sites and the server-fn registrar depend on.
 //!
-//! Every endpoint here takes the keyset cursor as one bundled [`PageCursor`]
-//! rather than a pair of `Option`s, so a half cursor is rejected at arg-decode
-//! and no body has one to validate. A nested struct cannot travel through the
-//! default form-urlencoded codec, which is why each carries `input = Json` —
-//! required, not stylistic.
+//! Every endpoint carries the cohesive [`TimelinePageRequest`]. Its nested cursor
+//! binds the continuation to its publication-time direction; JSON input is required
+//! because the default form-urlencoded codec cannot carry nested structs.
 
 #[cfg(feature = "server")]
 use crate::error::InternalResult;
 use crate::error::WebResult;
-use common::seed::{Page, PageCursor, PublicPresentation, RenderedPost};
-use common::{pagination::PageSize, tag::Tag, username::Username};
+use common::seed::{Page, PublicPresentation, RenderedPost, TimelinePageRequest};
+use common::{tag::Tag, username::Username};
 use leptos::server_fn::codec::Json;
 
 // Server-only imports for the `#[server]` fn bodies (gated on `feature = "server"`).
@@ -35,8 +34,8 @@ use {
 #[cfg(feature = "server")]
 async fn site_presentation(
     route: common::theme::PublicThemeRoute,
-    page: Page<RenderedPost>,
-) -> InternalResult<PublicPresentation<Page<RenderedPost>>> {
+    page: Page<RenderedPost, common::seed::TimelineCursor>,
+) -> InternalResult<PublicPresentation<Page<RenderedPost, common::seed::TimelineCursor>>> {
     let themes = expect_context::<Arc<dyn ThemeStorage>>();
     let theme =
         storage::resolve_public_theme(storage::PublicThemeOwner::Site, &route, themes.as_ref())
@@ -48,8 +47,8 @@ async fn site_presentation(
 async fn author_presentation(
     username: &Username,
     route: common::theme::PublicThemeRoute,
-    page: Page<RenderedPost>,
-) -> InternalResult<PublicPresentation<Page<RenderedPost>>> {
+    page: Page<RenderedPost, common::seed::TimelineCursor>,
+) -> InternalResult<PublicPresentation<Page<RenderedPost, common::seed::TimelineCursor>>> {
     let users = expect_context::<Arc<dyn UserStorage>>();
     let themes = expect_context::<Arc<dyn ThemeStorage>>();
     let owner = users
@@ -66,17 +65,17 @@ async fn author_presentation(
 #[macros::server(input = Json)]
 pub async fn list_by_user(
     username: Username,
-    cursor: Option<PageCursor>,
-    limit: Option<PageSize>,
-) -> WebResult<PublicPresentation<Page<RenderedPost>>> {
+    request: TimelinePageRequest,
+) -> WebResult<PublicPresentation<Page<RenderedPost, common::seed::TimelineCursor>>> {
     let posts = expect_context::<Arc<dyn PostStorage>>();
     let viewer = viewer::viewer_identity().await?;
     let page = server::fetch_user_posts(
         posts.as_ref(),
         &viewer,
         &username,
-        storage::keyset_cursor(cursor),
-        limit,
+        storage::timeline_keyset_cursor(request.cursor),
+        request.order,
+        request.limit,
     )
     .await?;
     author_presentation(
@@ -90,16 +89,16 @@ pub async fn list_by_user(
 #[macros::server(input = Json)]
 /// Lists published, non-deleted posts across all users using cursor pagination.
 pub async fn list_local_timeline(
-    cursor: Option<PageCursor>,
-    limit: Option<PageSize>,
-) -> WebResult<PublicPresentation<Page<RenderedPost>>> {
+    request: TimelinePageRequest,
+) -> WebResult<PublicPresentation<Page<RenderedPost, common::seed::TimelineCursor>>> {
     let posts = expect_context::<Arc<dyn PostStorage>>();
     let viewer = viewer::viewer_identity().await?;
     let page = server::fetch_local_timeline(
         posts.as_ref(),
         &viewer,
-        storage::keyset_cursor(cursor),
-        limit,
+        storage::timeline_keyset_cursor(request.cursor),
+        request.order,
+        request.limit,
     )
     .await?;
     site_presentation(common::theme::PublicThemeRoute::site(), page).await
@@ -108,45 +107,36 @@ pub async fn list_local_timeline(
 /// Lists published, non-deleted posts by the authenticated user using cursor pagination.
 #[macros::server(input = Json)]
 pub async fn list_home_feed(
-    cursor: Option<PageCursor>,
-    limit: Option<PageSize>,
-) -> WebResult<Page<RenderedPost>> {
+    request: TimelinePageRequest,
+) -> WebResult<Page<RenderedPost, common::seed::TimelineCursor>> {
     let auth = auth::require_auth().await?;
     let posts = expect_context::<Arc<dyn PostStorage>>();
-
-    let cursor = storage::keyset_cursor(cursor);
+    let cursor = storage::timeline_keyset_cursor(request.cursor);
+    let page_size = request.limit.unwrap_or_default();
+    let page =
+        server::published_page_request(cursor.as_ref(), request.order, page_size.fetch_limit())?;
     let viewer = viewer::viewer_identity().await?;
-    let page_size = limit.unwrap_or_default();
-
     let rows = posts
-        .list_published_by_user(
-            &auth.username,
-            cursor.as_ref(),
-            page_size.fetch_limit(),
-            &viewer,
-            UtcInstant::now(),
-        )
+        .list_published_by_user(&auth.username, page, &viewer, UtcInstant::now())
         .await?;
-
-    // Via the shared `page_from_rows`, so the has-more rule is spelled once (#696).
-    Ok(server::page_from_rows(rows, page_size, Some(auth.user_id)))
+    server::page_from_rows(rows, page_size, Some(auth.user_id), request.order)
 }
 
 /// Lists published, non-deleted posts site-wide carrying `tag`.
 #[macros::server(input = Json)]
 pub async fn list_by_tag(
     tag: Tag,
-    cursor: Option<PageCursor>,
-    limit: Option<PageSize>,
-) -> WebResult<PublicPresentation<Page<RenderedPost>>> {
+    request: TimelinePageRequest,
+) -> WebResult<PublicPresentation<Page<RenderedPost, common::seed::TimelineCursor>>> {
     let posts = expect_context::<Arc<dyn PostStorage>>();
     let viewer = viewer::viewer_identity().await?;
     let page = server::fetch_posts_by_tag(
         posts.as_ref(),
         &viewer,
         &tag,
-        storage::keyset_cursor(cursor),
-        limit,
+        storage::timeline_keyset_cursor(request.cursor),
+        request.order,
+        request.limit,
     )
     .await?;
     site_presentation(common::theme::PublicThemeRoute::site_tag(&tag), page).await
@@ -157,9 +147,8 @@ pub async fn list_by_tag(
 pub async fn list_by_user_and_tag(
     username: Username,
     tag: Tag,
-    cursor: Option<PageCursor>,
-    limit: Option<PageSize>,
-) -> WebResult<PublicPresentation<Page<RenderedPost>>> {
+    request: TimelinePageRequest,
+) -> WebResult<PublicPresentation<Page<RenderedPost, common::seed::TimelineCursor>>> {
     let posts = expect_context::<Arc<dyn PostStorage>>();
     let users = expect_context::<Arc<dyn UserStorage>>();
     let viewer = viewer::viewer_identity().await?;
@@ -169,8 +158,7 @@ pub async fn list_by_user_and_tag(
         &viewer,
         &username,
         &tag,
-        storage::keyset_cursor(cursor),
-        limit,
+        request,
     )
     .await?;
     author_presentation(

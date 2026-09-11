@@ -1,5 +1,8 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use leptos::prelude::*;
-use leptos_router::hooks::use_params_map;
+use leptos_router::NavigateOptions;
+use leptos_router::hooks::{use_navigate, use_params_map, use_query_map};
 
 use crate::feed_discovery::{FeedDiscovery, RsdDiscovery};
 use crate::posts::ListingRoute;
@@ -23,11 +26,13 @@ fn PublicListingPage(route: Memo<ListingRoute>) -> impl IntoView {
     let seed = use_context::<Option<PageSeed>>().flatten();
 
     state.adopt_seed(route.get_untracked().seeded_page(seed));
+    let first_destination = AtomicBool::new(true);
 
     let destination = Resource::new(
         move || {
-            // Replacement invalidates pagination before the fetcher can construct a future.
-            let _generation = state.advance_generation();
+            if !first_destination.swap(false, Ordering::Relaxed) {
+                state.begin_replacement();
+            }
             (route.get(), invalidator.track())
         },
         move |(route, _)| route.destination(),
@@ -40,6 +45,14 @@ fn PublicListingPage(route: Memo<ListingRoute>) -> impl IntoView {
         timeline::spawn_load_more(state, move |cursor, limit| async move {
             Ok(route.fetch_page(cursor, limit).await?.page)
         });
+    });
+    let navigate = use_navigate();
+    let on_order_change = Callback::new(move |order| {
+        let base = route.get_untracked().timeline_base_url();
+        navigate(
+            &timeline::order_url(&base, order),
+            NavigateOptions::default(),
+        );
     });
     let empty_text = route.get_untracked().empty_text();
 
@@ -77,6 +90,8 @@ fn PublicListingPage(route: Memo<ListingRoute>) -> impl IntoView {
             state
             on_mutate
             on_load_more
+            order=Signal::derive(move || route.get().order())
+            on_order_change
             tag_context=Signal::derive(move || route.get().tag_context())
             empty_text
         />
@@ -86,7 +101,9 @@ fn PublicListingPage(route: Memo<ListingRoute>) -> impl IntoView {
 #[component]
 pub fn UserTimelinePage() -> impl IntoView {
     let params = use_params_map();
+    let query = use_query_map();
     let route = Memo::new(move |_| {
+        let order = ListingRoute::parse_order(query.get().get("order").as_deref());
         ListingRoute::Profile(
             params
                 .get()
@@ -94,6 +111,7 @@ pub fn UserTimelinePage() -> impl IntoView {
                 .unwrap_or_default()
                 .strip_prefix('~')
                 .and_then(|value| value.parse::<Username>().ok()),
+            order,
         )
     });
     view! { <PublicListingPage route /> }
@@ -103,12 +121,15 @@ pub fn UserTimelinePage() -> impl IntoView {
 #[component]
 pub fn SiteTagPage() -> impl IntoView {
     let params = use_params_map();
+    let query = use_query_map();
     let route = Memo::new(move |_| {
+        let order = ListingRoute::parse_order(query.get().get("order").as_deref());
         ListingRoute::SiteTag(
             params
                 .get()
                 .get("tag")
                 .and_then(|value| value.parse::<Tag>().ok()),
+            order,
         )
     });
     view! { <PublicListingPage route /> }
@@ -118,6 +139,7 @@ pub fn SiteTagPage() -> impl IntoView {
 #[component]
 pub fn UserTagPage() -> impl IntoView {
     let params = use_params_map();
+    let query = use_query_map();
     let route = Memo::new(move |_| {
         let params = params.get();
         let username = params
@@ -128,7 +150,8 @@ pub fn UserTagPage() -> impl IntoView {
         let tag = params
             .get("tag")
             .and_then(|value| value.parse::<Tag>().ok());
-        ListingRoute::UserTag(username, tag)
+        let order = ListingRoute::parse_order(query.get().get("order").as_deref());
+        ListingRoute::UserTag(username, tag, order)
     });
     view! { <PublicListingPage route /> }
 }

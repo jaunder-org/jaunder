@@ -30,13 +30,17 @@ termination.
 
 ### Timelines
 
-Jaunder provides several views for consuming content, all using cursor-based
-pagination (see [ADR-0004](adr/0004-pagination-strategy.md)):
+Jaunder provides several views for consuming content. Every web Post timeline
+uses cursor-based pagination (see [ADR-0004](adr/0004-pagination-strategy.md))
+and lets the viewer choose Newest or Oldest publication order through URL state
+(see [web Post timeline ordering](adr/drafts/web-post-timeline-ordering.md)):
 
-- **Local timeline** (public): Original posts by local users.
-- **User timeline** (public): Original posts by a specific local user.
-- **Federated timeline** (authenticated): Combined feed from all sources a user
-  follows.
+- **Local timeline** (public): Original Posts by local Users.
+- **Home feed** (authenticated): The signed-in User's own published Posts.
+- **User timeline** (public): Original Posts by a specific local User.
+- **Site-tag timeline** (public): Visible Posts carrying a Tag across the site.
+- **User-tag timeline** (public): Visible Posts carrying a Tag from one local
+  User.
 
 #### Read State
 

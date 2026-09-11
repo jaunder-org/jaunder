@@ -405,8 +405,10 @@ async fn create_post_with_future_publish_at_is_scheduled(#[case] backend: Backen
     let published = env
         .posts()
         .list_published(
-            None,
-            parse_row_limit("50"),
+            storage::PublishedPageRequest::first(
+                common::seed::TimelineOrder::Newest,
+                parse_row_limit("50"),
+            ),
             &common::visibility::ViewerIdentity::Anonymous,
             common::time::UtcInstant::now(),
         )
@@ -470,8 +472,10 @@ async fn create_post_publish_without_publish_at_is_live_now(#[case] backend: Bac
     let published = env
         .posts()
         .list_published(
-            None,
-            parse_row_limit("50"),
+            storage::PublishedPageRequest::first(
+                common::seed::TimelineOrder::Newest,
+                parse_row_limit("50"),
+            ),
             &common::visibility::ViewerIdentity::Anonymous,
             now,
         )

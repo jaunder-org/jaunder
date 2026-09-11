@@ -135,11 +135,14 @@ mod tests {
     fn presentation(theme: Theme) -> PublicPresentation<PageSeed> {
         PublicPresentation {
             theme: common::theme::PublishedThemePresentation::built_in(theme),
-            page: PageSeed::SiteTimeline(Page {
-                posts: vec![],
-                next_cursor: None,
-                has_more: false,
-            }),
+            page: PageSeed::SiteTimeline {
+                order: common::seed::TimelineOrder::Newest,
+                page: Page {
+                    posts: vec![],
+                    next_cursor: None,
+                    has_more: false,
+                },
+            },
         }
     }
 

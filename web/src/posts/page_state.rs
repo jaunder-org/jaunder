@@ -33,7 +33,10 @@ use common::revision_history::{
     RevisionHistoryAudience, RevisionHistoryDetail, RevisionHistoryTag,
 };
 use common::root_relative_url::RootRelativeUrl;
-use common::seed::{Page, PageCursor, PageSeed, PublicPresentation, RenderedPost};
+use common::seed::{
+    Page, PageCursor, PageSeed, PublicPresentation, RenderedPost, TimelineCursor, TimelineOrder,
+    TimelinePageRequest,
+};
 use common::tag::Tag;
 use common::theme::PublishedThemePresentation;
 use common::username::Username;
@@ -95,11 +98,11 @@ impl NamedAudienceState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ListingRoute {
     /// `/~:username` — the user timeline.
-    Profile(Option<Username>),
+    Profile(Option<Username>, TimelineOrder),
     /// `/tags/:tag` — the site-wide tag listing.
-    SiteTag(Option<Tag>),
+    SiteTag(Option<Tag>, TimelineOrder),
     /// `/~:username/tags/:tag` — the per-user tag listing.
-    UserTag(Option<Username>, Option<Tag>),
+    UserTag(Option<Username>, Option<Tag>, TimelineOrder),
 }
 
 impl ListingRoute {
@@ -114,16 +117,16 @@ impl ListingRoute {
     /// taking precedence over Tag for a User-tag route.
     pub fn validate(&self) -> WebResult<ValidatedListingRoute> {
         match self {
-            Self::Profile(username) => Ok(ValidatedListingRoute::Profile(
+            Self::Profile(username, _) => Ok(ValidatedListingRoute::Profile(
                 username
                     .clone()
                     .ok_or_else(|| WebError::validation("Invalid username"))?,
             )),
-            Self::SiteTag(tag) => Ok(ValidatedListingRoute::SiteTag(
+            Self::SiteTag(tag, _) => Ok(ValidatedListingRoute::SiteTag(
                 tag.clone()
                     .ok_or_else(|| WebError::validation("Invalid tag"))?,
             )),
-            Self::UserTag(username, tag) => Ok(ValidatedListingRoute::UserTag(
+            Self::UserTag(username, tag, _) => Ok(ValidatedListingRoute::UserTag(
                 username
                     .clone()
                     .ok_or_else(|| WebError::validation("Invalid username"))?,
@@ -137,13 +140,13 @@ impl ListingRoute {
     #[must_use]
     pub fn title(&self) -> String {
         match self {
-            Self::Profile(username) => format!(
+            Self::Profile(username, _) => format!(
                 "Posts by {}",
                 username
                     .as_ref()
                     .map_or_else(String::new, ToString::to_string)
             ),
-            Self::SiteTag(tag) | Self::UserTag(_, tag) => {
+            Self::SiteTag(tag, _) | Self::UserTag(_, tag, _) => {
                 format!(
                     "#{}",
                     tag.as_ref().map_or_else(String::new, ToString::to_string)
@@ -156,9 +159,9 @@ impl ListingRoute {
     #[must_use]
     pub fn subtitle(&self) -> String {
         match self {
-            Self::Profile(_) => "User timeline".to_owned(),
-            Self::SiteTag(_) => "Posts on this instance".to_owned(),
-            Self::UserTag(username, _) => format!(
+            Self::Profile(_, _) => "User timeline".to_owned(),
+            Self::SiteTag(_, _) => "Posts on this instance".to_owned(),
+            Self::UserTag(username, _, _) => format!(
                 "Posts by ~{}",
                 username
                     .as_ref()
@@ -171,11 +174,11 @@ impl ListingRoute {
     #[must_use]
     pub fn feed_surface(&self) -> Option<FeedSurface> {
         match self {
-            Self::Profile(Some(username)) => Some(FeedSurface::User {
+            Self::Profile(Some(username), _) => Some(FeedSurface::User {
                 username: username.clone(),
             }),
-            Self::SiteTag(Some(tag)) => Some(FeedSurface::SiteTag { tag: tag.clone() }),
-            Self::UserTag(Some(username), Some(tag)) => Some(FeedSurface::UserTag {
+            Self::SiteTag(Some(tag), _) => Some(FeedSurface::SiteTag { tag: tag.clone() }),
+            Self::UserTag(Some(username), Some(tag), _) => Some(FeedSurface::UserTag {
                 username: username.clone(),
                 tag: tag.clone(),
             }),
@@ -187,7 +190,7 @@ impl ListingRoute {
     #[must_use]
     pub fn user_chrome(&self) -> Option<Username> {
         match self {
-            Self::Profile(Some(username)) => Some(username.clone()),
+            Self::Profile(Some(username), _) => Some(username.clone()),
             _ => None,
         }
     }
@@ -196,11 +199,11 @@ impl ListingRoute {
     #[must_use]
     pub fn tag_context(&self) -> Option<TagCtx> {
         match self {
-            Self::Profile(Some(username)) | Self::UserTag(Some(username), _) => {
+            Self::Profile(Some(username), _) | Self::UserTag(Some(username), _, _) => {
                 Some(TagCtx::ForUser(username.clone()))
             }
-            Self::Profile(None) | Self::UserTag(None, _) => None,
-            Self::SiteTag(_) => Some(TagCtx::SiteWide),
+            Self::Profile(None, _) | Self::UserTag(None, _, _) => None,
+            Self::SiteTag(_, _) => Some(TagCtx::SiteWide),
         }
     }
 
@@ -208,22 +211,45 @@ impl ListingRoute {
     #[must_use]
     pub const fn empty_text(&self) -> &'static str {
         match self {
-            Self::Profile(_) => "No posts yet.",
-            Self::SiteTag(_) | Self::UserTag(_, _) => "No posts with this tag yet.",
+            Self::Profile(_, _) => "No posts yet.",
+            Self::SiteTag(_, _) | Self::UserTag(_, _, _) => "No posts with this tag yet.",
         }
+    }
+
+    /// The route's bare canonical path, without query state.
+    #[must_use]
+    pub fn timeline_base_url(&self) -> RootRelativeUrl {
+        let path = match self {
+            Self::Profile(Some(username), _) => format!("/~{username}"),
+            Self::SiteTag(Some(tag), _) => format!("/tags/{tag}"),
+            Self::UserTag(Some(username), Some(tag), _) => format!("/~{username}/tags/{tag}"),
+            Self::Profile(None, _) | Self::UserTag(None, _, _) => "/".to_owned(),
+            Self::UserTag(Some(username), None, _) => format!("/~{username}/tags"),
+            Self::SiteTag(None, _) => "/tags".to_owned(),
+        };
+        let Ok(url) = RootRelativeUrl::try_from(path) else {
+            unreachable!("typed listing route values are path-safe");
+        };
+        url
     }
 
     /// Adopt only a projector page whose kind and every typed route value match.
     #[must_use]
-    pub fn seeded_page(&self, seed: Option<PageSeed>) -> Option<Page<RenderedPost>> {
+    pub fn seeded_page(
+        &self,
+        seed: Option<PageSeed>,
+    ) -> Option<Page<RenderedPost, TimelineCursor>> {
         match (seed?, self) {
-            (PageSeed::Profile { username, page }, Self::Profile(wanted))
-                if wanted.as_ref() == Some(&username) =>
-            {
-                Some(page)
-            }
-            (PageSeed::SiteTag { tag, page }, Self::SiteTag(wanted))
-                if wanted.as_ref() == Some(&tag) =>
+            (
+                PageSeed::Profile {
+                    username,
+                    order,
+                    page,
+                },
+                Self::Profile(wanted, wanted_order),
+            ) if wanted.as_ref() == Some(&username) && wanted_order == &order => Some(page),
+            (PageSeed::SiteTag { tag, order, page }, Self::SiteTag(wanted, wanted_order))
+                if wanted.as_ref() == Some(&tag) && wanted_order == &order =>
             {
                 Some(page)
             }
@@ -231,11 +257,13 @@ impl ListingRoute {
                 PageSeed::UserTag {
                     username,
                     tag,
+                    order,
                     page,
                 },
-                Self::UserTag(wanted_username, wanted_tag),
+                Self::UserTag(wanted_username, wanted_tag, wanted_order),
             ) if wanted_username.as_ref() == Some(&username)
-                && wanted_tag.as_ref() == Some(&tag) =>
+                && wanted_tag.as_ref() == Some(&tag)
+                && wanted_order == &order =>
             {
                 Some(page)
             }
@@ -252,10 +280,46 @@ impl ListingRoute {
     ///
     /// Returns a validation error for malformed route data or propagates the
     /// selected public listing endpoint's failure.
-    pub async fn destination(self) -> WebResult<(PublishedThemePresentation, Page<RenderedPost>)> {
+    pub async fn destination(
+        self,
+    ) -> WebResult<(
+        PublishedThemePresentation,
+        Page<RenderedPost, TimelineCursor>,
+    )> {
         self.fetch_page(None, Some(PageSize::default()))
             .await
             .map(public_destination)
+    }
+    /// Parses the optional route query value, defaulting absent or invalid values.
+    #[must_use]
+    pub fn parse_order(value: Option<&str>) -> TimelineOrder {
+        value
+            .and_then(|value| value.parse::<TimelineOrder>().ok())
+            .unwrap_or_default()
+    }
+
+    /// The order selected by the route's query state.
+    #[must_use]
+    pub const fn order(&self) -> TimelineOrder {
+        match self {
+            Self::Profile(_, order) | Self::SiteTag(_, order) | Self::UserTag(_, _, order) => {
+                *order
+            }
+        }
+    }
+
+    /// Shapes a page request so replacement and continuation preserve route order.
+    #[must_use]
+    pub const fn page_request(
+        &self,
+        cursor: Option<TimelineCursor>,
+        limit: Option<PageSize>,
+    ) -> TimelinePageRequest {
+        TimelinePageRequest {
+            order: self.order(),
+            cursor,
+            limit,
+        }
     }
 
     /// Fetch one route-specific page using the existing typed endpoint.
@@ -266,28 +330,23 @@ impl ListingRoute {
     /// selected public listing endpoint's failure.
     pub async fn fetch_page(
         self,
-        cursor: Option<PageCursor>,
+        cursor: Option<TimelineCursor>,
         limit: Option<PageSize>,
-    ) -> WebResult<PublicPresentation<Page<RenderedPost>>> {
+    ) -> WebResult<PublicPresentation<Page<RenderedPost, TimelineCursor>>> {
+        let request = self.page_request(cursor, limit);
         match self.validate()? {
             // cov:ignore-start: constructing and awaiting the generated server-function client requires the hydrated browser transport unavailable to authoritative host coverage.
             ValidatedListingRoute::Profile(username) => {
-                let request = timeline::list_by_user(username, cursor, limit);
-                request.await
-                // cov:ignore-stop
+                timeline::list_by_user(username, request).await
             }
+            // cov:ignore-stop
             // cov:ignore-start: constructing and awaiting the generated server-function client requires the hydrated browser transport unavailable to authoritative host coverage.
-            ValidatedListingRoute::SiteTag(tag) => {
-                let request = timeline::list_by_tag(tag, cursor, limit);
-                request.await
-                // cov:ignore-stop
-            }
+            ValidatedListingRoute::SiteTag(tag) => timeline::list_by_tag(tag, request).await,
+            // cov:ignore-stop
             // cov:ignore-start: constructing and awaiting the generated server-function client requires the hydrated browser transport unavailable to authoritative host coverage.
             ValidatedListingRoute::UserTag(username, tag) => {
-                let request = timeline::list_by_user_and_tag(username, tag, cursor, limit);
-                request.await
-                // cov:ignore-stop
-            }
+                timeline::list_by_user_and_tag(username, tag, request).await
+            } // cov:ignore-stop
         }
     }
 }
@@ -930,7 +989,7 @@ mod tests {
         PublishedThemePresentation::built_in(theme)
     }
 
-    fn page(has_more: bool) -> Page<RenderedPost> {
+    fn page(has_more: bool) -> Page<RenderedPost, TimelineCursor> {
         Page {
             posts: Vec::new(),
             next_cursor: None,
@@ -993,22 +1052,22 @@ mod tests {
     #[test]
     fn listing_route_validation_selects_the_typed_route_matrix() {
         assert_eq!(
-            ListingRoute::Profile(Some(alice())).validate(),
+            ListingRoute::Profile(Some(alice()), TimelineOrder::Newest).validate(),
             Ok(ValidatedListingRoute::Profile(alice()))
         );
         assert_eq!(
-            ListingRoute::SiteTag(Some(rust())).validate(),
+            ListingRoute::SiteTag(Some(rust()), TimelineOrder::Newest).validate(),
             Ok(ValidatedListingRoute::SiteTag(rust()))
         );
         assert_eq!(
-            ListingRoute::UserTag(Some(alice()), Some(rust())).validate(),
+            ListingRoute::UserTag(Some(alice()), Some(rust()), TimelineOrder::Newest).validate(),
             Ok(ValidatedListingRoute::UserTag(alice(), rust()))
         );
     }
 
     #[test]
     fn user_tag_validation_reports_username_before_tag() {
-        let error = ListingRoute::UserTag(None, None)
+        let error = ListingRoute::UserTag(None, None, TimelineOrder::Newest)
             .validate()
             .expect_err("both malformed values reject the route");
 
@@ -1017,7 +1076,7 @@ mod tests {
 
     #[test]
     fn listing_route_presentation_preserves_each_public_surface() {
-        let profile = ListingRoute::Profile(Some(alice()));
+        let profile = ListingRoute::Profile(Some(alice()), TimelineOrder::Newest);
         assert_eq!(profile.title(), "Posts by alice");
         assert_eq!(profile.subtitle(), "User timeline");
         assert_eq!(
@@ -1028,7 +1087,7 @@ mod tests {
         assert_eq!(profile.tag_context(), Some(TagCtx::ForUser(alice())));
         assert_eq!(profile.empty_text(), "No posts yet.");
 
-        let site_tag = ListingRoute::SiteTag(Some(rust()));
+        let site_tag = ListingRoute::SiteTag(Some(rust()), TimelineOrder::Newest);
         assert_eq!(site_tag.title(), "#rust");
         assert_eq!(site_tag.subtitle(), "Posts on this instance");
         assert_eq!(
@@ -1039,7 +1098,7 @@ mod tests {
         assert_eq!(site_tag.tag_context(), Some(TagCtx::SiteWide));
         assert_eq!(site_tag.empty_text(), "No posts with this tag yet.");
 
-        let user_tag = ListingRoute::UserTag(Some(alice()), Some(rust()));
+        let user_tag = ListingRoute::UserTag(Some(alice()), Some(rust()), TimelineOrder::Newest);
         assert_eq!(user_tag.title(), "#rust");
         assert_eq!(user_tag.subtitle(), "Posts by ~alice");
         assert_eq!(
@@ -1055,18 +1114,51 @@ mod tests {
     }
 
     #[test]
+    fn listing_routes_build_their_bare_canonical_paths() {
+        let profile =
+            ListingRoute::Profile(Some(alice()), TimelineOrder::Oldest).timeline_base_url();
+        let profile: &str = profile.as_ref();
+        assert_eq!(profile, "/~alice");
+
+        let site_tag =
+            ListingRoute::SiteTag(Some(rust()), TimelineOrder::Oldest).timeline_base_url();
+        let site_tag: &str = site_tag.as_ref();
+        assert_eq!(site_tag, "/tags/rust");
+
+        let user_tag = ListingRoute::UserTag(Some(alice()), Some(rust()), TimelineOrder::Oldest)
+            .timeline_base_url();
+        let user_tag: &str = user_tag.as_ref();
+        assert_eq!(user_tag, "/~alice/tags/rust");
+
+        let incomplete_profile =
+            ListingRoute::Profile(None, TimelineOrder::Newest).timeline_base_url();
+        let incomplete_profile: &str = incomplete_profile.as_ref();
+        assert_eq!(incomplete_profile, "/");
+
+        let incomplete_user_tag =
+            ListingRoute::UserTag(Some(alice()), None, TimelineOrder::Newest).timeline_base_url();
+        let incomplete_user_tag: &str = incomplete_user_tag.as_ref();
+        assert_eq!(incomplete_user_tag, "/~alice/tags");
+
+        let incomplete_site_tag =
+            ListingRoute::SiteTag(None, TimelineOrder::Newest).timeline_base_url();
+        let incomplete_site_tag: &str = incomplete_site_tag.as_ref();
+        assert_eq!(incomplete_site_tag, "/tags");
+    }
+
+    #[test]
     fn malformed_listing_presentation_never_invents_discovery_context() {
-        let profile = ListingRoute::Profile(None);
+        let profile = ListingRoute::Profile(None, TimelineOrder::Newest);
         assert_eq!(profile.title(), "Posts by ");
         assert_eq!(profile.feed_surface(), None);
         assert_eq!(profile.user_chrome(), None);
         assert_eq!(profile.tag_context(), None);
 
-        let site_tag = ListingRoute::SiteTag(None);
+        let site_tag = ListingRoute::SiteTag(None, TimelineOrder::Newest);
         assert_eq!(site_tag.title(), "#");
         assert_eq!(site_tag.feed_surface(), None);
 
-        let user_tag = ListingRoute::UserTag(None, None);
+        let user_tag = ListingRoute::UserTag(None, None, TimelineOrder::Newest);
         assert_eq!(user_tag.subtitle(), "Posts by ~");
         assert_eq!(user_tag.feed_surface(), None);
         assert_eq!(user_tag.tag_context(), None);
@@ -1074,11 +1166,15 @@ mod tests {
     #[tokio::test]
     async fn malformed_listing_routes_fail_before_constructing_a_client_request() {
         assert_eq!(
-            ListingRoute::Profile(None).fetch_page(None, None).await,
+            ListingRoute::Profile(None, TimelineOrder::Newest)
+                .fetch_page(None, None)
+                .await,
             Err(WebError::validation("Invalid username"))
         );
         assert_eq!(
-            ListingRoute::SiteTag(None).destination().await,
+            ListingRoute::SiteTag(None, TimelineOrder::Newest)
+                .destination()
+                .await,
             Err(WebError::validation("Invalid tag"))
         );
     }
@@ -1107,11 +1203,12 @@ mod tests {
 
     #[test]
     fn listing_seed_adoption_requires_exact_kind_and_route_values() {
-        let profile = ListingRoute::Profile(Some(alice()));
+        let profile = ListingRoute::Profile(Some(alice()), TimelineOrder::Oldest);
         assert!(
             profile
                 .seeded_page(Some(PageSeed::Profile {
                     username: alice(),
+                    order: TimelineOrder::Oldest,
                     page: page(true),
                 }))
                 .is_some()
@@ -1120,23 +1217,37 @@ mod tests {
             profile
                 .seeded_page(Some(PageSeed::Profile {
                     username: parse_username("bob"),
+                    order: TimelineOrder::Newest,
                     page: page(true),
                 }))
                 .is_none()
         );
         assert!(
             profile
-                .seeded_page(Some(PageSeed::SiteTimeline(page(true))))
+                .seeded_page(Some(PageSeed::Profile {
+                    username: alice(),
+                    order: TimelineOrder::Newest,
+                    page: page(true),
+                }))
+                .is_none()
+        );
+        assert!(
+            profile
+                .seeded_page(Some(PageSeed::SiteTimeline {
+                    order: TimelineOrder::Newest,
+                    page: page(true),
+                }))
                 .is_none()
         );
         assert!(profile.seeded_page(None).is_none());
 
-        let user_tag = ListingRoute::UserTag(Some(alice()), Some(rust()));
+        let user_tag = ListingRoute::UserTag(Some(alice()), Some(rust()), TimelineOrder::Oldest);
         assert!(
             user_tag
                 .seeded_page(Some(PageSeed::UserTag {
                     username: alice(),
                     tag: rust(),
+                    order: TimelineOrder::Oldest,
                     page: page(true),
                 }))
                 .is_some()
@@ -1146,6 +1257,7 @@ mod tests {
                 .seeded_page(Some(PageSeed::UserTag {
                     username: alice(),
                     tag: parse_tag("leptos"),
+                    order: TimelineOrder::Newest,
                     page: page(true),
                 }))
                 .is_none()
@@ -1154,11 +1266,12 @@ mod tests {
 
     #[test]
     fn site_tag_seed_adoption_requires_the_exact_tag() {
-        let route = ListingRoute::SiteTag(Some(rust()));
+        let route = ListingRoute::SiteTag(Some(rust()), TimelineOrder::Oldest);
         assert!(
             route
                 .seeded_page(Some(PageSeed::SiteTag {
                     tag: rust(),
+                    order: TimelineOrder::Oldest,
                     page: page(true),
                 }))
                 .is_some()
@@ -1167,9 +1280,36 @@ mod tests {
             route
                 .seeded_page(Some(PageSeed::SiteTag {
                     tag: parse_tag("leptos"),
+                    order: TimelineOrder::Newest,
                     page: page(true),
                 }))
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn oldest_order_is_preserved_in_seed_adoption_and_page_requests() {
+        let routes = [
+            ListingRoute::Profile(Some(alice()), TimelineOrder::Oldest),
+            ListingRoute::SiteTag(Some(rust()), TimelineOrder::Oldest),
+            ListingRoute::UserTag(Some(alice()), Some(rust()), TimelineOrder::Oldest),
+        ];
+
+        for route in routes {
+            assert_eq!(route.order(), TimelineOrder::Oldest);
+            assert_eq!(
+                route.page_request(None, Some(PageSize::default())).order,
+                TimelineOrder::Oldest
+            );
+        }
+        assert_eq!(
+            ListingRoute::parse_order(Some("oldest")),
+            TimelineOrder::Oldest
+        );
+        assert_eq!(ListingRoute::parse_order(None), TimelineOrder::Newest);
+        assert_eq!(
+            ListingRoute::parse_order(Some("unrecognized")),
+            TimelineOrder::Newest
         );
     }
 

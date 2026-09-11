@@ -930,9 +930,12 @@ pub async fn list_drafts(
     let has_more = page_size.has_more(rows.len());
     rows.truncate(page_size.page_len());
     let next_cursor = has_more
-        .then(|| rows.last().map(storage::to_post_cursor))
+        .then(|| rows.last())
         .flatten()
-        .map(|c| storage::wire_cursor(&c));
+        .map(|post| PageCursor {
+            created_at: post.created_at,
+            post_id: post.post_id,
+        });
 
     let unpublished = rows.into_iter().map(unpublished_post_from_record).collect();
 

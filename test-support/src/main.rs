@@ -527,7 +527,7 @@ mod tests {
     use super::*;
     #[cfg(unix)]
     use std::os::unix::ffi::OsStringExt as _;
-    use storage::test_support::sqlite_url;
+    use storage::{PublishedPageRequest, test_support::sqlite_url};
     use tempfile::TempDir;
 
     fn cli(command: Commands) -> Cli {
@@ -544,6 +544,54 @@ mod tests {
             .await
             .unwrap();
         (dir, db)
+    }
+
+    async fn assert_dispatched_command_readback(db: &DbConnectOptions) {
+        let factory =
+            storage::open_existing_database(db, &storage::StorageRuntimeConfig::default())
+                .await
+                .unwrap();
+        let published = factory
+            .posts()
+            .list_published_by_user(
+                &"alice".parse().unwrap(),
+                PublishedPageRequest::first(
+                    common::seed::TimelineOrder::Newest,
+                    common::test_support::parse_row_limit("10"),
+                ),
+                &common::visibility::ViewerIdentity::Anonymous,
+                common::time::UtcInstant::now(),
+            )
+            .await
+            .expect("list ok");
+        assert_eq!(
+            published.len(),
+            1,
+            "seed-posts should publish 1 post for alice"
+        );
+        // Same read-back proof for the session commands: bob exists and holds
+        // two sessions (seed-user's plus create-session's explicitly-labelled
+        // one), so both commands' arguments reached storage.
+        let bob = factory
+            .users()
+            .get_user_by_username(&"bob".parse().unwrap())
+            .await
+            .expect("lookup ok")
+            .expect("bob created");
+        let sessions = factory
+            .sessions()
+            .list_sessions(bob.user_id)
+            .await
+            .expect("list sessions ok");
+        assert_eq!(
+            sessions.len(),
+            2,
+            "seed-user + create-session = two sessions"
+        );
+        assert!(
+            sessions.iter().any(|s| s.label == "CI bot"),
+            "the --label argument should reach the stored session"
+        );
     }
 
     #[test]
@@ -783,53 +831,7 @@ mod tests {
         .await
         .expect("create-session should dispatch and succeed");
 
-        // Read back through a fresh connection to prove the dispatch wired each
-        // command's arguments through to storage (not merely returned Ok): the
-        // seeded post is published and attributed to alice.
-        let factory =
-            storage::open_existing_database(&db, &storage::StorageRuntimeConfig::default())
-                .await
-                .unwrap();
-        let published = factory
-            .posts()
-            .list_published_by_user(
-                &"alice".parse().unwrap(),
-                None,
-                common::test_support::parse_row_limit("10"),
-                &common::visibility::ViewerIdentity::Anonymous,
-                common::time::UtcInstant::now(),
-            )
-            .await
-            .expect("list ok");
-        assert_eq!(
-            published.len(),
-            1,
-            "seed-posts should publish 1 post for alice"
-        );
-
-        // Same read-back proof for the session commands: bob exists and holds
-        // two sessions (seed-user's plus create-session's explicitly-labelled
-        // one), so both commands' arguments reached storage.
-        let bob = factory
-            .users()
-            .get_user_by_username(&"bob".parse().unwrap())
-            .await
-            .expect("lookup ok")
-            .expect("bob created");
-        let sessions = factory
-            .sessions()
-            .list_sessions(bob.user_id)
-            .await
-            .expect("list sessions ok");
-        assert_eq!(
-            sessions.len(),
-            2,
-            "seed-user + create-session = two sessions"
-        );
-        assert!(
-            sessions.iter().any(|s| s.label == "CI bot"),
-            "the --label argument should reach the stored session"
-        );
+        assert_dispatched_command_readback(&db).await;
     }
 
     #[test]

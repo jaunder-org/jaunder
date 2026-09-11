@@ -11,10 +11,10 @@ Matrix: `matrix:docs/coverage/csr-e2e-matrix.md#tag-browsing`
 
 ## Endpoint census
 
-| Endpoint                                      | Status  | Surface                                                                     |
-| --------------------------------------------- | ------- | --------------------------------------------------------------------------- |
-| `endpoint:/api/timeline/list_by_tag`          | Covered | Fills the site-wide tag page at `/tags/:tag`.                               |
-| `endpoint:/api/timeline/list_by_user_and_tag` | Covered | Fills the per-author tag page reached from canonical `~username` tag links. |
+| Endpoint                                      | Status  | Surface                                                                                                      |
+| --------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------ |
+| `endpoint:/api/timeline/list_by_tag`          | Covered | Fills `/tags/:tag` in URL-selected Newest/Oldest order and preserves that order through continuation.        |
+| `endpoint:/api/timeline/list_by_user_and_tag` | Covered | Fills the canonical per-author tag page in URL-selected order and preserves that order through continuation. |
 
 Tag browsing is entirely read-side: the user clicks a tag chip from a public
 timeline or permalink and lands on either the site-wide tag page or the

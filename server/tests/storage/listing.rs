@@ -16,9 +16,9 @@ use storage::test_support::{
     seed_local_subscription,
 };
 use storage::{
-    AudienceStorage, FeedEventStorage, GoLivePost, ListByTagError, PostBookkeepingExpectation,
-    PostCursor, PostFormat, PostRecord, PostStorage, ProfileUpdate, RenderedPostContent,
-    WriteScope, create_rendered_post,
+    AudienceStorage, DraftPostCursor, FeedEventStorage, GoLivePost, ListByTagError,
+    PostBookkeepingExpectation, PostCursor, PostFormat, PostRecord, PostStorage, ProfileUpdate,
+    RenderedPostContent, WriteScope, create_rendered_post,
 };
 
 use rstest::*;
@@ -97,8 +97,10 @@ async fn anon_user_by_tag(
         .list_user_posts_by_tag(
             user_id,
             tag,
-            None,
-            parse_row_limit(limit),
+            storage::PublishedPageRequest::first(
+                common::seed::TimelineOrder::Newest,
+                parse_row_limit(limit),
+            ),
             &ViewerIdentity::Anonymous,
             common::time::UtcInstant::now(),
         )
@@ -114,8 +116,10 @@ async fn anon_published_by_user(
     posts
         .list_published_by_user(
             username,
-            None,
-            parse_row_limit(limit),
+            storage::PublishedPageRequest::first(
+                common::seed::TimelineOrder::Newest,
+                parse_row_limit(limit),
+            ),
             &ViewerIdentity::Anonymous,
             common::time::UtcInstant::now(),
         )
@@ -283,8 +287,10 @@ async fn list_published_by_user_hides_scheduled_until_due(#[case] backend: Backe
         .posts()
         .list_published_by_user(
             &user.username,
-            None,
-            parse_row_limit("50"),
+            storage::PublishedPageRequest::first(
+                common::seed::TimelineOrder::Newest,
+                parse_row_limit("50"),
+            ),
             &ViewerIdentity::Anonymous,
             now,
         )
@@ -302,8 +308,10 @@ async fn list_published_by_user_hides_scheduled_until_due(#[case] backend: Backe
         .posts()
         .list_published_by_user(
             &user.username,
-            None,
-            parse_row_limit("50"),
+            storage::PublishedPageRequest::first(
+                common::seed::TimelineOrder::Newest,
+                parse_row_limit("50"),
+            ),
             &ViewerIdentity::Anonymous,
             after,
         )
@@ -345,7 +353,14 @@ async fn list_published_hides_scheduled_until_due(#[case] backend: Backend) {
 
     let at_now = env
         .posts()
-        .list_published(None, parse_row_limit("50"), &ViewerIdentity::Anonymous, now)
+        .list_published(
+            storage::PublishedPageRequest::first(
+                common::seed::TimelineOrder::Newest,
+                parse_row_limit("50"),
+            ),
+            &ViewerIdentity::Anonymous,
+            now,
+        )
         .await
         .unwrap();
     let ids_now: Vec<PostId> = at_now.iter().map(|p| p.post_id).collect();
@@ -359,8 +374,10 @@ async fn list_published_hides_scheduled_until_due(#[case] backend: Backend) {
     let at_after = env
         .posts()
         .list_published(
-            None,
-            parse_row_limit("50"),
+            storage::PublishedPageRequest::first(
+                common::seed::TimelineOrder::Newest,
+                parse_row_limit("50"),
+            ),
             &ViewerIdentity::Anonymous,
             after,
         )
@@ -369,6 +386,47 @@ async fn list_published_hides_scheduled_until_due(#[case] backend: Backend) {
     assert!(
         at_after.iter().any(|p| p.post_id == sched),
         "scheduled post must be listed once now >= published_at"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn site_post_timeline_newest_orders_by_publication_time(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let now = fixed_instant("2026-06-26T12:00:00Z");
+    let user_id = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
+    let later_publication = SeedRawPost::new(user_id)
+        .published_at(subtract(now, 1.hour()))
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
+    // This later-created Post deliberately carries the earlier displayed time.
+    let earlier_publication = SeedRawPost::new(user_id)
+        .published_at(subtract(now, 2.hours()))
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
+
+    let posts = env
+        .posts()
+        .list_published(
+            storage::PublishedPageRequest::first(
+                common::seed::TimelineOrder::Newest,
+                parse_row_limit("50"),
+            ),
+            &ViewerIdentity::Anonymous,
+            now,
+        )
+        .await
+        .expect("list published site timeline");
+
+    assert_eq!(
+        posts.iter().map(|post| post.post_id).collect::<Vec<_>>(),
+        vec![later_publication, earlier_publication],
+        "Newest site Post timeline follows the displayed publication time"
     );
 }
 
@@ -423,8 +481,10 @@ async fn list_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backend) {
         .posts()
         .list_posts_by_tag(
             &tag_slug,
-            None,
-            parse_row_limit("50"),
+            storage::PublishedPageRequest::first(
+                common::seed::TimelineOrder::Newest,
+                parse_row_limit("50"),
+            ),
             &ViewerIdentity::Anonymous,
             now,
         )
@@ -442,8 +502,10 @@ async fn list_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backend) {
         .posts()
         .list_posts_by_tag(
             &tag_slug,
-            None,
-            parse_row_limit("50"),
+            storage::PublishedPageRequest::first(
+                common::seed::TimelineOrder::Newest,
+                parse_row_limit("50"),
+            ),
             &ViewerIdentity::Anonymous,
             after,
         )
@@ -507,8 +569,10 @@ async fn list_user_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backe
         .list_user_posts_by_tag(
             user_id,
             &tag_slug,
-            None,
-            parse_row_limit("50"),
+            storage::PublishedPageRequest::first(
+                common::seed::TimelineOrder::Newest,
+                parse_row_limit("50"),
+            ),
             &ViewerIdentity::Anonymous,
             now,
         )
@@ -527,8 +591,10 @@ async fn list_user_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backe
         .list_user_posts_by_tag(
             user_id,
             &tag_slug,
-            None,
-            parse_row_limit("50"),
+            storage::PublishedPageRequest::first(
+                common::seed::TimelineOrder::Newest,
+                parse_row_limit("50"),
+            ),
             &ViewerIdentity::Anonymous,
             after,
         )
@@ -1486,8 +1552,10 @@ async fn list_posts_by_nonexistent_tag(#[case] backend: Backend) {
         .posts()
         .list_posts_by_tag(
             &tag_slug,
-            None,
-            parse_row_limit("50"),
+            storage::PublishedPageRequest::first(
+                common::seed::TimelineOrder::Newest,
+                parse_row_limit("50"),
+            ),
             &ViewerIdentity::Anonymous,
             common::time::UtcInstant::now(),
         )
@@ -1512,8 +1580,10 @@ async fn list_user_posts_by_nonexistent_tag(#[case] backend: Backend) {
         .list_user_posts_by_tag(
             user,
             &tag_slug,
-            None,
-            parse_row_limit("50"),
+            storage::PublishedPageRequest::first(
+                common::seed::TimelineOrder::Newest,
+                parse_row_limit("50"),
+            ),
             &ViewerIdentity::Anonymous,
             common::time::UtcInstant::now(),
         )
@@ -1654,8 +1724,10 @@ async fn tag_not_found_error(#[case] backend: Backend) {
         .posts()
         .list_posts_by_tag(
             &tag_slug,
-            None,
-            parse_row_limit("50"),
+            storage::PublishedPageRequest::first(
+                common::seed::TimelineOrder::Newest,
+                parse_row_limit("50"),
+            ),
             &ViewerIdentity::Anonymous,
             common::time::UtcInstant::now(),
         )
@@ -1766,45 +1838,96 @@ async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
     assert_eq!(posts[0].post_id, post2);
 }
 
-// ====== Additional coverage tests for error paths ======
-
+// The timeline's page boundary is publication time plus Post ID in both
+// directions.  This deliberately includes a same-time pair so a cursor cannot
+// skip or duplicate a tie across the first continuation.
 #[apply(backends)]
 #[tokio::test]
-async fn list_published_cursor_boundary(#[case] backend: Backend) {
+async fn published_timeline_orders_and_paginates_in_both_directions(#[case] backend: Backend) {
     let env = backend.setup().await;
+    let now = fixed_instant("2026-06-26T12:00:00Z");
     let user = SeedUser::new()
         .seed(env.users(), env.write_scope())
         .await
         .user_id;
+    let early = seed_post_published_at(
+        Arc::clone(&env.posts()),
+        Arc::clone(&env.feed_events()),
+        env.write_scope(),
+        user,
+        "early",
+        subtract(now, 4.hours()),
+    )
+    .await;
+    let tied_first = seed_post_published_at(
+        Arc::clone(&env.posts()),
+        Arc::clone(&env.feed_events()),
+        env.write_scope(),
+        user,
+        "tied-first",
+        subtract(now, 2.hours()),
+    )
+    .await;
+    let tied_second = seed_post_published_at(
+        Arc::clone(&env.posts()),
+        Arc::clone(&env.feed_events()),
+        env.write_scope(),
+        user,
+        "tied-second",
+        subtract(now, 2.hours()),
+    )
+    .await;
+    let late = seed_post_published_at(
+        Arc::clone(&env.posts()),
+        Arc::clone(&env.feed_events()),
+        env.write_scope(),
+        user,
+        "late",
+        subtract(now, 1.hour()),
+    )
+    .await;
 
-    for _ in 0..5 {
-        SeedRawPost::new(user)
-            .seed(env.posts(), env.write_scope())
-            .await;
-    }
-
-    let all = anon_published(env.posts(), "10").await;
-    assert_eq!(all.len(), 5);
-
-    let first = anon_published(env.posts(), "2").await;
-    assert_eq!(first.len(), 2);
-
-    if !first.is_empty() {
+    for (order, expected) in [
+        (
+            common::seed::TimelineOrder::Newest,
+            vec![late, tied_second, tied_first, early],
+        ),
+        (
+            common::seed::TimelineOrder::Oldest,
+            vec![early, tied_first, tied_second, late],
+        ),
+    ] {
+        let first = env
+            .posts()
+            .list_published(
+                storage::PublishedPageRequest::first(order, parse_row_limit("2")),
+                &ViewerIdentity::Anonymous,
+                now,
+            )
+            .await
+            .expect("first timeline page");
+        let last = first.last().expect("first page has two posts");
         let cursor = PostCursor {
-            created_at: first[first.len() - 1].created_at,
-            post_id: first[first.len() - 1].post_id,
+            published_at: last.published_at.expect("published timeline row has time"),
+            post_id: last.post_id,
+            order,
         };
         let next = env
             .posts()
             .list_published(
-                Some(&cursor),
-                parse_row_limit("2"),
+                storage::PublishedPageRequest::after(&cursor, parse_row_limit("2")),
                 &ViewerIdentity::Anonymous,
-                common::time::UtcInstant::now(),
+                now,
             )
             .await
-            .expect("list_published with cursor failed");
-        assert_eq!(next.len(), 2);
+            .expect("continuation timeline page");
+        let actual = first
+            .into_iter()
+            .chain(next)
+            .map(|post| post.post_id)
+            .collect::<Vec<_>>();
+
+        assert_eq!(actual, expected, "{order:?} uses publication-time keysets");
     }
 }
 
@@ -1833,7 +1956,7 @@ async fn list_drafts_cursor_boundary(#[case] backend: Backend) {
     assert_eq!(first.len(), 1);
 
     if !first.is_empty() {
-        let cursor = PostCursor {
+        let cursor = DraftPostCursor {
             created_at: first[0].created_at,
             post_id: first[0].post_id,
         };
@@ -1887,16 +2010,18 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
 
     if !first.is_empty() {
         let cursor = PostCursor {
-            created_at: first[0].created_at,
+            published_at: first[0]
+                .published_at
+                .expect("published timeline row has time"),
             post_id: first[0].post_id,
+            order: common::seed::TimelineOrder::Newest,
         };
         let next = env
             .posts()
             .list_user_posts_by_tag(
                 user,
                 &tag,
-                Some(&cursor),
-                parse_row_limit("2"),
+                storage::PublishedPageRequest::after(&cursor, parse_row_limit("2")),
                 &ViewerIdentity::Anonymous,
                 common::time::UtcInstant::now(),
             )
@@ -1942,15 +2067,17 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
 
     if !first.is_empty() {
         let cursor = PostCursor {
-            created_at: first[0].created_at,
+            published_at: first[0]
+                .published_at
+                .expect("published timeline row has time"),
             post_id: first[0].post_id,
+            order: common::seed::TimelineOrder::Newest,
         };
         let next = env
             .posts()
             .list_posts_by_tag(
                 &tag,
-                Some(&cursor),
-                parse_row_limit("2"),
+                storage::PublishedPageRequest::after(&cursor, parse_row_limit("2")),
                 &ViewerIdentity::Anonymous,
                 common::time::UtcInstant::now(),
             )
@@ -1972,15 +2099,15 @@ async fn list_published_by_user_no_posts(#[case] backend: Backend) {
     assert!(posts.is_empty());
 
     let cursor = PostCursor {
-        created_at: common::time::UtcInstant::now(),
+        published_at: common::time::UtcInstant::now(),
         post_id: PostId::from(999),
+        order: common::seed::TimelineOrder::Newest,
     };
     let posts = env
         .posts()
         .list_published_by_user(
             &user.username,
-            Some(&cursor),
-            parse_row_limit("10"),
+            storage::PublishedPageRequest::after(&cursor, parse_row_limit("10")),
             &ViewerIdentity::Anonymous,
             common::time::UtcInstant::now(),
         )
@@ -2044,48 +2171,4 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
         .await
         .expect("get_post_by_permalink after delete failed");
     assert!(post.is_none());
-}
-
-// ====== Comprehensive error path coverage ======
-
-#[apply(backends)]
-#[tokio::test]
-async fn list_published_with_cursor_same_timestamp(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let user = SeedUser::new()
-        .seed(env.users(), env.write_scope())
-        .await
-        .user_id;
-
-    // Create posts at the same time
-    let mut post_ids = vec![];
-    for _ in 0..4 {
-        let post_id = SeedRawPost::new(user)
-            .seed(env.posts(), env.write_scope())
-            .await
-            .post_id;
-        post_ids.push(post_id);
-    }
-
-    let first = anon_published(env.posts(), "2").await;
-    assert_eq!(first.len(), 2);
-
-    // Use cursor to get next batch with same created_at but different post_id
-    if !first.is_empty() {
-        let cursor = PostCursor {
-            created_at: first[first.len() - 1].created_at,
-            post_id: first[first.len() - 1].post_id,
-        };
-        let next = env
-            .posts()
-            .list_published(
-                Some(&cursor),
-                parse_row_limit("2"),
-                &ViewerIdentity::Anonymous,
-                common::time::UtcInstant::now(),
-            )
-            .await
-            .expect("list_published with cursor failed");
-        assert_eq!(next.len(), 2);
-    }
 }

@@ -74,15 +74,20 @@ pub(crate) fn body_with_logo(seed: &PageSeed, logo: &Markup, header: &Markup) ->
             (header)
             div class="j-scroll" { div class="j-page" { (permalink_article(&authored.post)) } }
         }),
-        PageSeed::SiteTimeline(page) => render_timeline_page(
+        PageSeed::SiteTimeline { order, page } => render_timeline_page(
             &render::masthead(logo),
             header,
+            *order,
             &page.posts,
             page.has_more,
             &TagCtx::SiteWide,
             "No posts yet.",
         ),
-        PageSeed::Profile { username, page } => render_timeline_page(
+        PageSeed::Profile {
+            username,
+            order,
+            page,
+        } => render_timeline_page(
             &topbar::render(
                 &format!("Posts by {username}"),
                 Some("User timeline"),
@@ -90,12 +95,13 @@ pub(crate) fn body_with_logo(seed: &PageSeed, logo: &Markup, header: &Markup) ->
                 logo,
             ),
             header,
+            *order,
             &page.posts,
             page.has_more,
             &TagCtx::ForUser(username.clone()),
             "No posts yet.",
         ),
-        PageSeed::SiteTag { tag, page } => render_timeline_page(
+        PageSeed::SiteTag { tag, order, page } => render_timeline_page(
             &topbar::render(
                 &format!("#{tag}"),
                 Some("Posts on this instance"),
@@ -103,6 +109,7 @@ pub(crate) fn body_with_logo(seed: &PageSeed, logo: &Markup, header: &Markup) ->
                 logo,
             ),
             header,
+            *order,
             &page.posts,
             page.has_more,
             &TagCtx::SiteWide,
@@ -111,6 +118,7 @@ pub(crate) fn body_with_logo(seed: &PageSeed, logo: &Markup, header: &Markup) ->
         PageSeed::UserTag {
             username,
             tag,
+            order,
             page,
         } => render_timeline_page(
             &topbar::render(
@@ -120,6 +128,7 @@ pub(crate) fn body_with_logo(seed: &PageSeed, logo: &Markup, header: &Markup) ->
                 logo,
             ),
             header,
+            *order,
             &page.posts,
             page.has_more,
             &TagCtx::ForUser(username.clone()),
@@ -280,15 +289,16 @@ fn post_action_slot(post_id: PostId) -> Markup {
 }
 
 /// A timeline page's `<main>` content: the given leading `chrome` (a `Topbar`, or
-/// home's masthead), then a bare `j-scroll` holding either the empty placeholder
-/// or the posts followed by the load-more button — the same flush, wrapper-free
-/// structure the shared `TimelineRows` renders, so the projector paint and the
-/// reactive `HomePage` / `UserTimelinePage` / `SiteTagPage` / `UserTagPage`
-/// coincide (the anonymous `SubscribeButton` renders nothing).
+/// home's masthead), then a bare `j-scroll` holding the pure order control
+/// immediately above either the empty placeholder or post list and load-more
+/// button — the same structure the shared `TimelineRows` renders, so projector
+/// paint and the reactive `HomePage` / `UserTimelinePage` / `SiteTagPage` /
+/// `UserTagPage` coincide (the anonymous `SubscribeButton` renders nothing).
 #[must_use]
 fn render_timeline_page(
     chrome: &Markup,
     header: &Markup,
+    order: common::seed::TimelineOrder,
     posts: &[RenderedPost],
     has_more: bool,
     tag_ctx: &TagCtx,
@@ -298,6 +308,7 @@ fn render_timeline_page(
         (chrome)
         (header)
         div class="j-scroll" {
+            (crate::timeline::render::order_control(order))
             div data-jaunder-part="post-list" {
                 @if posts.is_empty() {
                     p { (empty_text) }
@@ -365,8 +376,7 @@ pub(crate) mod test_fixtures {
             tags: vec![],
         }
     }
-
-    pub(crate) fn one_post_page() -> Page<RenderedPost> {
+    pub(crate) fn one_post_page() -> Page<RenderedPost, common::seed::TimelineCursor> {
         Page {
             posts: vec![sample_summary()],
             next_cursor: None,
@@ -541,6 +551,7 @@ mod tests {
         };
         let html = body(&PageSeed::Profile {
             username: parse_username("bob"),
+            order: common::seed::TimelineOrder::Newest,
             page,
         })
         .into_string();
@@ -556,7 +567,11 @@ mod tests {
             next_cursor: None,
             has_more: false,
         };
-        let html = body(&PageSeed::SiteTimeline(page)).into_string();
+        let html = body(&PageSeed::SiteTimeline {
+            order: common::seed::TimelineOrder::Newest,
+            page,
+        })
+        .into_string();
         assert!(html.contains("No posts yet."), "{html}");
     }
 
@@ -564,14 +579,25 @@ mod tests {
     fn body_covers_tag_page_headings() {
         let site = body(&PageSeed::SiteTag {
             tag: "rust".parse().unwrap(),
+            order: common::seed::TimelineOrder::Newest,
             page: one_post_page(),
         })
         .into_string();
-        // Tag pages render the public masthead, then a bare j-scroll > post list.
+        // Tag pages use the same pure order-control bytes immediately above the list.
         assert!(site.contains("<h1>#rust</h1>"), "{site}");
         assert!(site.contains("Posts on this instance"), "{site}");
+        let control = site
+            .find("data-jaunder-part=\"timeline-order\"")
+            .expect("order control");
+        let list = site
+            .find("data-jaunder-part=\"post-list\"")
+            .expect("post list");
         assert!(
-            site.contains("<div class=\"j-scroll\"><div data-jaunder-part=\"post-list\"><article class=\"j-post\" data-jaunder-part=\"post\">"),
+            control < list,
+            "order control must precede the post list: {site}"
+        );
+        assert!(
+            site.contains("aria-label=\"Newest first; show oldest first\""),
             "{site}"
         );
         assert!(site.contains("First"), "expected post rendered: {site}");
@@ -579,6 +605,7 @@ mod tests {
         let user = body(&PageSeed::UserTag {
             username: parse_username("bob"),
             tag: "rust".parse().unwrap(),
+            order: common::seed::TimelineOrder::Newest,
             page: one_post_page(),
         })
         .into_string();
@@ -588,7 +615,11 @@ mod tests {
 
     #[test]
     fn post_header_has_one_protected_viewer_independent_action_slot() {
-        let html = body(&PageSeed::SiteTimeline(one_post_page())).into_string();
+        let html = body(&PageSeed::SiteTimeline {
+            order: common::seed::TimelineOrder::Newest,
+            page: one_post_page(),
+        })
+        .into_string();
         assert_eq!(
             html.matches("class=\"j-post-actions-slot\"").count(),
             1,
@@ -604,7 +635,11 @@ mod tests {
 
     #[test]
     fn home_local_body_has_topbar_hero_signin_and_posts() {
-        let html = body(&PageSeed::SiteTimeline(one_post_page())).into_string();
+        let html = body(&PageSeed::SiteTimeline {
+            order: common::seed::TimelineOrder::Newest,
+            page: one_post_page(),
+        })
+        .into_string();
         assert!(html.contains("<h1>jaunder.local</h1>"), "{html}");
         assert!(
             html.contains("<a href=\"/login\" class=\"j-btn j-anon-only\">Sign in</a>"),
@@ -617,9 +652,19 @@ mod tests {
             "{html}"
         );
         assert!(html.contains("<div class=\"j-hero\">"), "{html}");
-        // Posts sit inside the semantic post list for the home page.
+        // The shared pure order control immediately precedes the semantic post list.
+        let control = html
+            .find("data-jaunder-part=\"timeline-order\"")
+            .expect("order control");
+        let list = html
+            .find("data-jaunder-part=\"post-list\"")
+            .expect("post list");
         assert!(
-            html.contains("<div class=\"j-scroll\"><div data-jaunder-part=\"post-list\"><article class=\"j-post\" data-jaunder-part=\"post\">"),
+            control < list,
+            "order control must precede the post list: {html}"
+        );
+        assert!(
+            html.contains("aria-label=\"Newest first; show oldest first\""),
             "{html}"
         );
     }
@@ -628,23 +673,35 @@ mod tests {
     fn load_more_button_rendered_only_when_has_more() {
         let mut page = one_post_page();
         page.has_more = true;
-        let with = body(&PageSeed::SiteTimeline(page)).into_string();
+        let with = body(&PageSeed::SiteTimeline {
+            order: common::seed::TimelineOrder::Newest,
+            page,
+        })
+        .into_string();
         assert!(
             with.contains("<button data-jaunder-part=\"continuation\">Load more</button>"),
             "{with}"
         );
 
-        let without = body(&PageSeed::SiteTimeline(one_post_page())).into_string();
+        let without = body(&PageSeed::SiteTimeline {
+            order: common::seed::TimelineOrder::Newest,
+            page: one_post_page(),
+        })
+        .into_string();
         assert!(!without.contains("Load more"), "{without}");
     }
 
     #[test]
     fn style_contract_hooks_preserve_route_presence_and_post_landmarks() {
-        let timeline = body(&PageSeed::SiteTimeline(one_post_page())).into_string();
+        let timeline = body(&PageSeed::SiteTimeline {
+            order: common::seed::TimelineOrder::Newest,
+            page: one_post_page(),
+        })
+        .into_string();
         for hook in [
             "masthead",
             "site-title",
-            "post-list",
+            "timeline-order",
             "post",
             "post-header",
             "author-name",
@@ -697,12 +754,14 @@ mod tests {
         };
         let profile = body(&PageSeed::Profile {
             username: parse_username("bob"),
+            order: common::seed::TimelineOrder::Newest,
             page: empty.clone(),
         })
         .into_string();
         assert!(profile.contains("<p>No posts yet.</p>"), "{profile}");
         let tag = body(&PageSeed::SiteTag {
             tag: "rust".parse().unwrap(),
+            order: common::seed::TimelineOrder::Newest,
             page: empty,
         })
         .into_string();

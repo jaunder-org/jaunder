@@ -6,47 +6,65 @@
 //! assembles its page through [`page_from_rows`], so the over-fetch/has-more
 //! rule is spelled exactly once.
 //!
-//! The cursor arrives already parsed: the endpoints take a bundled
-//! [`PageCursor`] and project it with `storage::keyset_cursor`, so no `fetch_*`
+//! The cursor arrives already parsed: endpoints convert its bundled
+//! [`TimelineCursor`] with `storage::timeline_keyset_cursor`, so no `fetch_*`
 //! here has a half-a-cursor case to reject.
 
 use common::ids::UserId;
-use common::pagination::PageSize;
-use common::seed::{Page, RenderedPost};
+use common::pagination::{PageSize, RowLimit};
+use common::seed::{Page, RenderedPost, TimelineCursor, TimelineOrder, TimelinePageRequest};
 use common::tag::Tag;
 use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::{self, ViewerIdentity};
-use storage::{self, PostCursor, PostRecord, PostStorage, UserStorage};
+use storage::{self, PostCursor, PostRecord, PostStorage, PublishedPageRequest, UserStorage};
 
 use crate::error::{InternalError, InternalResult};
 use crate::posts;
 
-/// Assemble a cursor-paginated [`Page`] of [`RenderedPost`] rows from one
-/// over-fetched row set (`page_size + 1` rows detect `has_more`). Shared by every
-/// `fetch_*` below.
+/// Assemble a web timeline page from an over-fetched row set.
+///
+/// The cursor is derived only after truncation and preserves the requested
+/// direction, making an opposite-order continuation unrepresentable downstream.
 pub(super) fn page_from_rows(
     mut rows: Vec<PostRecord>,
     page_size: PageSize,
     viewer_user_id: Option<UserId>,
-) -> Page<RenderedPost> {
-    // The inverse of `PageSize::fetch_limit`: both halves of the has-more rule live on
-    // `PageSize`, so neither is spelled by hand here (#696).
+    order: TimelineOrder,
+) -> InternalResult<Page<RenderedPost, TimelineCursor>> {
     let has_more = page_size.has_more(rows.len());
     rows.truncate(page_size.page_len());
-    let next_cursor = has_more
-        .then(|| rows.last().map(storage::to_post_cursor))
-        .flatten()
-        .map(|c| storage::wire_cursor(&c));
+    let next_cursor = match has_more.then(|| rows.last()).flatten() {
+        Some(post) => Some(storage::wire_cursor(&storage::to_post_cursor(post, order)?)),
+        None => None,
+    };
     let posts = rows
         .into_iter()
         .filter_map(|post| posts::rendered_post(post, viewer_user_id))
         .collect();
-    Page {
+    Ok(Page {
         posts,
         next_cursor,
         has_more,
+    })
+}
+/// Build an invariant-preserving storage request for one timeline page.
+///
+/// # Errors
+///
+/// Returns a validation error when `cursor` was produced by the opposite order.
+pub(super) fn published_page_request(
+    cursor: Option<&PostCursor>,
+    order: TimelineOrder,
+    limit: RowLimit,
+) -> InternalResult<PublishedPageRequest<'_>> {
+    if cursor.is_some_and(|cursor| cursor.order != order) {
+        return Err(InternalError::validation("timeline cursor order mismatch"));
     }
+    Ok(match cursor {
+        Some(cursor) => PublishedPageRequest::after(cursor, limit),
+        None => PublishedPageRequest::first(order, limit),
+    })
 }
 
 /// The shared "posts by user" query, used by both the `list_by_user` server
@@ -60,23 +78,15 @@ pub async fn fetch_user_posts(
     viewer: &ViewerIdentity,
     username: &Username,
     cursor: Option<PostCursor>,
+    order: TimelineOrder,
     limit: Option<PageSize>,
-) -> InternalResult<Page<RenderedPost>> {
+) -> InternalResult<Page<RenderedPost, TimelineCursor>> {
     let page_size = limit.unwrap_or_default();
+    let page = published_page_request(cursor.as_ref(), order, page_size.fetch_limit())?;
     let rows = posts
-        .list_published_by_user(
-            username,
-            cursor.as_ref(),
-            page_size.fetch_limit(),
-            viewer,
-            UtcInstant::now(),
-        )
+        .list_published_by_user(username, page, viewer, UtcInstant::now())
         .await?;
-    Ok(page_from_rows(
-        rows,
-        page_size,
-        visibility::viewer_user_id(viewer),
-    ))
+    page_from_rows(rows, page_size, visibility::viewer_user_id(viewer), order)
 }
 
 /// The shared site-wide timeline query, used by both the `list_local_timeline`
@@ -89,22 +99,15 @@ pub async fn fetch_local_timeline(
     posts: &dyn PostStorage,
     viewer: &ViewerIdentity,
     cursor: Option<PostCursor>,
+    order: TimelineOrder,
     limit: Option<PageSize>,
-) -> InternalResult<Page<RenderedPost>> {
+) -> InternalResult<Page<RenderedPost, TimelineCursor>> {
     let page_size = limit.unwrap_or_default();
+    let page = published_page_request(cursor.as_ref(), order, page_size.fetch_limit())?;
     let rows = posts
-        .list_published(
-            cursor.as_ref(),
-            page_size.fetch_limit(),
-            viewer,
-            UtcInstant::now(),
-        )
+        .list_published(page, viewer, UtcInstant::now())
         .await?;
-    Ok(page_from_rows(
-        rows,
-        page_size,
-        visibility::viewer_user_id(viewer),
-    ))
+    page_from_rows(rows, page_size, visibility::viewer_user_id(viewer), order)
 }
 
 /// The shared "posts site-wide carrying a tag" query, used by both the
@@ -118,25 +121,17 @@ pub async fn fetch_posts_by_tag(
     viewer: &ViewerIdentity,
     tag: &Tag,
     cursor: Option<PostCursor>,
+    order: TimelineOrder,
     limit: Option<PageSize>,
-) -> InternalResult<Page<RenderedPost>> {
+) -> InternalResult<Page<RenderedPost, TimelineCursor>> {
     let page_size = limit.unwrap_or_default();
+    let page = published_page_request(cursor.as_ref(), order, page_size.fetch_limit())?;
     let rows = storage::list_by_tag_rows(
         posts
-            .list_posts_by_tag(
-                tag,
-                cursor.as_ref(),
-                page_size.fetch_limit(),
-                viewer,
-                UtcInstant::now(),
-            )
+            .list_posts_by_tag(tag, page, viewer, UtcInstant::now())
             .await,
     )?;
-    Ok(page_from_rows(
-        rows,
-        page_size,
-        visibility::viewer_user_id(viewer),
-    ))
+    page_from_rows(rows, page_size, visibility::viewer_user_id(viewer), order)
 }
 
 /// The shared "posts by a user carrying a tag" query, used by both the
@@ -151,47 +146,46 @@ pub async fn fetch_user_posts_by_tag(
     viewer: &ViewerIdentity,
     username: &Username,
     tag: &Tag,
-    cursor: Option<PostCursor>,
-    limit: Option<PageSize>,
-) -> InternalResult<Page<RenderedPost>> {
+    request: TimelinePageRequest,
+) -> InternalResult<Page<RenderedPost, TimelineCursor>> {
+    let cursor = storage::timeline_keyset_cursor(request.cursor);
     let author = users
         .get_user_by_username(username)
         .await?
         .ok_or_else(|| InternalError::not_found("user"))?;
-    let page_size = limit.unwrap_or_default();
+    let page_size = request.limit.unwrap_or_default();
+    let page = published_page_request(cursor.as_ref(), request.order, page_size.fetch_limit())?;
     let rows = storage::list_by_tag_rows(
         posts
-            .list_user_posts_by_tag(
-                author.user_id,
-                tag,
-                cursor.as_ref(),
-                page_size.fetch_limit(),
-                viewer,
-                UtcInstant::now(),
-            )
+            .list_user_posts_by_tag(author.user_id, tag, page, viewer, UtcInstant::now())
             .await,
     )?;
-    Ok(page_from_rows(
+    page_from_rows(
         rows,
         page_size,
         visibility::viewer_user_id(viewer),
-    ))
+        request.order,
+    )
 }
 
 #[cfg(all(test, feature = "server"))]
 mod tests {
     use super::{
         fetch_local_timeline, fetch_posts_by_tag, fetch_user_posts, fetch_user_posts_by_tag,
+        published_page_request,
     };
     use common::ids::{PostId, UserId};
     use common::pagination::PageSize;
-    use common::tag::Tag;
-    use common::test_support::{parse_post_body, parse_slug, parse_username};
-    use common::time::UtcInstant;
+    use common::seed::{TimelineOrder, TimelinePageRequest};
     use common::visibility::ViewerIdentity;
+    use common::{
+        tag::Tag,
+        test_support::{parse_post_body, parse_slug, parse_username},
+        time::UtcInstant,
+    };
     use storage::{
         EmailVerified, ListByTagError, MockPostStorage, MockUserStorage, OperatorStatus,
-        PostFormat, PostRecord, UserRecord,
+        PostCursor, PostFormat, PostRecord, UserRecord,
     };
 
     fn post(post_id: i64) -> PostRecord {
@@ -228,6 +222,22 @@ mod tests {
             is_operator: OperatorStatus::STANDARD,
         }
     }
+    #[test]
+    fn timeline_cursor_must_match_the_requested_order() {
+        let cursor = PostCursor {
+            published_at: UtcInstant::now(),
+            post_id: PostId::from(1),
+            order: TimelineOrder::Oldest,
+        };
+
+        let error = published_page_request(
+            Some(&cursor),
+            TimelineOrder::Newest,
+            PageSize::default().fetch_limit(),
+        )
+        .expect_err("opposite-order cursor is invalid");
+        assert_eq!(error.public_message(), "timeline cursor order mismatch");
+    }
 
     /// The has-more convention, end to end at a real call site (#696).
     ///
@@ -244,8 +254,8 @@ mod tests {
             let mut posts = MockPostStorage::new();
             posts
                 .expect_list_published_by_user()
-                .withf(move |_u, _c, limit, _v, _n| *limit == page_size.fetch_limit())
-                .returning(move |_u, _c, _l, _v, _n| {
+                .withf(move |_u, request, _v, _n| request.limit() == page_size.fetch_limit())
+                .returning(move |_u, _request, _v, _n| {
                     // `try_from(...).unwrap_or` rather than an `as` cast: total, and the
                     // ids only have to be distinct.
                     Ok((0..returned)
@@ -258,6 +268,7 @@ mod tests {
                 &ViewerIdentity::Anonymous,
                 &parse_username("alice"),
                 None,
+                TimelineOrder::Newest,
                 Some(page_size),
             )
             .await
@@ -292,23 +303,30 @@ mod tests {
         let mut posts = MockPostStorage::new();
         posts
             .expect_list_published()
-            .withf(move |_c, limit, _v, _n| *limit == expected)
-            .returning(|_c, _l, _v, _n| Ok(vec![]));
-        fetch_local_timeline(&posts, &ViewerIdentity::Anonymous, None, Some(page_size))
-            .await
-            .expect("local timeline succeeds");
+            .withf(move |request, _v, _n| request.limit() == expected)
+            .returning(|_request, _v, _n| Ok(vec![]));
+        fetch_local_timeline(
+            &posts,
+            &ViewerIdentity::Anonymous,
+            None,
+            TimelineOrder::Newest,
+            Some(page_size),
+        )
+        .await
+        .expect("local timeline succeeds");
 
         // `fetch_posts_by_tag` — site-wide by-tag.
         let mut posts = MockPostStorage::new();
         posts
             .expect_list_posts_by_tag()
-            .withf(move |_t, _c, limit, _v, _n| *limit == expected)
-            .returning(|_t, _c, _l, _v, _n| Ok(vec![]));
+            .withf(move |_t, request, _v, _n| request.limit() == expected)
+            .returning(|_t, _request, _v, _n| Ok(vec![]));
         fetch_posts_by_tag(
             &posts,
             &ViewerIdentity::Anonymous,
             &"rust".parse::<Tag>().expect("valid tag"),
             None,
+            TimelineOrder::Newest,
             Some(page_size),
         )
         .await
@@ -321,7 +339,7 @@ mod tests {
         let mut posts = MockPostStorage::new();
         posts
             .expect_list_posts_by_tag()
-            .returning(|_tag, _cursor, _limit, _viewer, _now| {
+            .returning(|_tag, _request, _viewer, _now| {
                 Err(ListByTagError::Internal(sqlx::Error::PoolClosed))
             });
         let result = fetch_posts_by_tag(
@@ -329,6 +347,7 @@ mod tests {
             &ViewerIdentity::Anonymous,
             &"rust".parse::<Tag>().unwrap(),
             None,
+            TimelineOrder::Newest,
             None,
         )
         .await;
@@ -343,19 +362,22 @@ mod tests {
             .expect_get_user_by_username()
             .returning(|_username| Ok(Some(user(UserId::from(2), "author"))));
         let mut posts = MockPostStorage::new();
-        posts.expect_list_user_posts_by_tag().returning(
-            |_uid, _tag, _cursor, _limit, _viewer, _now| {
+        posts
+            .expect_list_user_posts_by_tag()
+            .returning(|_uid, _tag, _request, _viewer, _now| {
                 Err(ListByTagError::Internal(sqlx::Error::PoolClosed))
-            },
-        );
+            });
         let result = fetch_user_posts_by_tag(
             &posts,
             &users,
             &ViewerIdentity::Anonymous,
             &parse_username("author"),
             &"rust".parse::<Tag>().unwrap(),
-            None,
-            None,
+            TimelinePageRequest {
+                cursor: None,
+                order: TimelineOrder::Newest,
+                limit: None,
+            },
         )
         .await;
         assert!(result.is_err());

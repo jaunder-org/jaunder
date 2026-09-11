@@ -1,6 +1,6 @@
 //! Timeline pagination — the host-tested model (ADR-0070 §6): the
-//! `LoadStatus` enum and the reactive `TimelineState` signal bundle that holds it
-//! alongside the `common::seed::PageCursor` a page hands back. Everything here is
+//! `LoadStatus` enum and the reactive `TimelineState` signal bundle that holds the
+//! order-bound `common::seed::TimelineCursor` a page hands back. Everything here is
 //! ungated and coverage-measured; the bundle is exercised under a reactive `Owner`
 //! (the `web::reactive` / `forms::Field` / `tags::input_state` convention), which
 //! is what makes its transitions testable at all — in the wasm-only
@@ -11,7 +11,7 @@
 
 use leptos::prelude::*;
 
-use common::seed::{Page, PageCursor, RenderedPost};
+use common::seed::{Page, RenderedPost, TimelineCursor};
 
 use crate::error::{WebError, WebResult};
 use crate::taglist::TagCtx;
@@ -108,7 +108,7 @@ pub struct LoadMoreClaim {
     generation: TimelineGeneration,
     /// Where to fetch from; `None` on a timeline that has yet to hand a cursor
     /// back, which the listing endpoints read as "from the beginning".
-    pub cursor: Option<PageCursor>,
+    pub cursor: Option<TimelineCursor>,
 }
 
 /// The reactive state of a cursor-paginated timeline, shared by the public Local
@@ -120,7 +120,7 @@ pub struct LoadMoreClaim {
 #[derive(Clone, Copy)]
 pub struct TimelineState {
     pub rows: RwSignal<Vec<RenderedPost>>,
-    pub cursor: RwSignal<Option<PageCursor>>,
+    pub cursor: RwSignal<Option<TimelineCursor>>,
     pub has_more: RwSignal<bool>,
     pub status: RwSignal<LoadStatus>,
     generation: RwSignal<TimelineGeneration>,
@@ -149,6 +149,14 @@ impl TimelineState {
         self.generation.get_untracked()
     }
 
+    /// Begin a first-page replacement. This revokes in-flight continuations and
+    /// clears their cursor before the replacement request is constructed, so an
+    /// order change cannot append an old page or request page two of a new order.
+    pub fn begin_replacement(&self) {
+        let _ = self.advance_generation();
+        self.clear_to(LoadStatus::NeverLoaded);
+    }
+
     /// Adopt a page's rows + cursor — a projector seed or a fresh fetch —
     /// replacing what's shown and settling to idle.
     ///
@@ -156,7 +164,7 @@ impl TimelineState {
     /// path and the fetch-resolve path; the separate `resolve()` it replaced
     /// differed only by that line (#671). It also clears any prior failure, so a
     /// successful refetch after an error recovers.
-    pub fn adopt(&self, page: Page<RenderedPost>) {
+    pub fn adopt(&self, page: Page<RenderedPost, TimelineCursor>) {
         self.cursor.set(page.next_cursor);
         self.has_more.set(page.has_more);
         self.rows.set(page.posts);
@@ -166,14 +174,14 @@ impl TimelineState {
     /// Adopt a projector seed when the page was seeded for these params. `None`
     /// means the projector painted a different page (or none), so the timeline
     /// stays `NeverLoaded` and the reactive fetch fills it in.
-    pub fn adopt_seed(&self, page: Option<Page<RenderedPost>>) {
+    pub fn adopt_seed(&self, page: Option<Page<RenderedPost, TimelineCursor>>) {
         if let Some(page) = page {
             self.adopt(page);
         }
     }
 
     /// Apply an initial/refetch result: replace on success, reset on failure.
-    pub fn apply(&self, result: WebResult<Page<RenderedPost>>) {
+    pub fn apply(&self, result: WebResult<Page<RenderedPost, TimelineCursor>>) {
         match result {
             Ok(page) => self.adopt(page),
             Err(error) => self.fail(error),
@@ -208,7 +216,11 @@ impl TimelineState {
     /// Deliberately asymmetric with [`apply`](Self::apply), which clears: page 1
     /// succeeded and only page 2 failed, so throwing page 1 away would lose work
     /// the user already has.
-    pub fn append(&self, claim: LoadMoreClaim, result: WebResult<Page<RenderedPost>>) {
+    pub fn append(
+        &self,
+        claim: LoadMoreClaim,
+        result: WebResult<Page<RenderedPost, TimelineCursor>>,
+    ) {
         if claim.generation != self.generation.get_untracked() {
             return;
         }
@@ -285,18 +297,19 @@ mod tests {
         TagCtx::ForUser(parse_username("bob"))
     }
 
-    fn cursor(created_at: UtcInstant, post_id: i64) -> PageCursor {
-        PageCursor {
-            created_at,
+    fn cursor(published_at: UtcInstant, post_id: i64) -> TimelineCursor {
+        TimelineCursor {
+            published_at,
             post_id: PostId::from(post_id),
+            order: common::seed::TimelineOrder::Newest,
         }
     }
 
     fn page_with(
         posts: Vec<RenderedPost>,
-        next_cursor: Option<PageCursor>,
+        next_cursor: Option<TimelineCursor>,
         has_more: bool,
-    ) -> Page<RenderedPost> {
+    ) -> Page<RenderedPost, TimelineCursor> {
         Page {
             posts,
             next_cursor,
@@ -469,6 +482,34 @@ mod tests {
                 state.begin_load_more().is_some(),
                 "a failed page remains retryable"
             );
+        });
+    }
+
+    #[test]
+    fn replacement_resets_pagination_and_rejects_the_previous_order_append() {
+        Owner::new().with(|| {
+            let state = TimelineState::default();
+            state.adopt(page_with(
+                vec![sample_summary()],
+                Some(cursor(instant(), 7)),
+                true,
+            ));
+            let old_order = state
+                .begin_load_more()
+                .expect("the seeded order has a continuation");
+
+            state.begin_replacement();
+            assert!(state.rows.get().is_empty());
+            assert_eq!(state.cursor.get(), None);
+            assert!(!state.has_more.get());
+            assert_eq!(state.status.get(), LoadStatus::NeverLoaded);
+
+            state.append(
+                old_order,
+                Ok(page_with(vec![sample_summary()], None, false)),
+            );
+            assert!(state.rows.get().is_empty(), "stale rows cannot reappear");
+            assert_eq!(state.status.get(), LoadStatus::NeverLoaded);
         });
     }
 

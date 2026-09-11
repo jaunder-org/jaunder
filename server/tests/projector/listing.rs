@@ -19,7 +19,7 @@ use storage::{
 
 use super::fixtures::{
     TEST_SHELL, assert_sanitized_internal_server_error, failing_site_theme_selection, get,
-    projector_app, projector_app_with_dependencies, seed_published_post,
+    projector_app, projector_app_with_dependencies, seed_published_post, seed_tagged_post,
 };
 
 #[apply(backends)]
@@ -56,6 +56,38 @@ async fn site_timeline_projects_local_posts(#[case] backend: Backend) {
     let html = body_string(resp).await;
     assert!(html.contains(title.as_ref()), "post present: {html}");
     assert!(html.contains(r#"id="jaunder-seed""#), "data blob present");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn direct_order_urls_embed_matching_seed_order(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let (username, _) = seed_tagged_post(env.users(), env.posts(), env.write_scope()).await;
+
+    for route in [
+        "/".to_owned(),
+        format!("/~{username}"),
+        "/tags/rust".to_owned(),
+        format!("/~{username}/tags/rust"),
+    ] {
+        for (query, order) in [
+            ("", "newest"),
+            ("?order=oldest", "oldest"),
+            ("?order=unknown", "newest"),
+        ] {
+            let uri = format!("{route}{query}");
+            let response = projector_app(env.posts(), env.users(), env.themes())
+                .oneshot(get(&uri))
+                .await
+                .expect("request");
+            assert_eq!(response.status(), StatusCode::OK, "{uri}");
+            let body = body_string(response).await;
+            assert!(
+                body.contains(&format!(r#""order":"{order}""#)),
+                "{uri} must seed {order}: {body}"
+            );
+        }
+    }
 }
 
 #[apply(backends)]
@@ -291,18 +323,24 @@ async fn every_page_seed_variant_serializes_without_null_fallback(#[case] backen
     };
     let tag: common::tag::Tag = "rust".parse().expect("representative tag");
     let seeds = [
-        PageSeed::SiteTimeline(page.clone()),
+        PageSeed::SiteTimeline {
+            order: common::seed::TimelineOrder::Newest,
+            page: page.clone(),
+        },
         PageSeed::Profile {
             username: username.clone(),
+            order: common::seed::TimelineOrder::Newest,
             page: page.clone(),
         },
         PageSeed::SiteTag {
             tag: tag.clone(),
+            order: common::seed::TimelineOrder::Newest,
             page: page.clone(),
         },
         PageSeed::UserTag {
             username,
             tag,
+            order: common::seed::TimelineOrder::Newest,
             page,
         },
         PageSeed::Permalink(web::posts::authored_post(record, false)),
@@ -314,7 +352,7 @@ async fn every_page_seed_variant_serializes_without_null_fallback(#[case] backen
         // string/integer/sequence/newtype serializer; none is a fallible map key
         // or custom serializer, so `null` remains defensive only.
         let variant = match &seed {
-            PageSeed::SiteTimeline(_) => "site timeline",
+            PageSeed::SiteTimeline { .. } => "site timeline",
             PageSeed::Profile { .. } => "profile",
             PageSeed::SiteTag { .. } => "site tag",
             PageSeed::UserTag { .. } => "user tag",

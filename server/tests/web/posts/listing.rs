@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::{Router, http::StatusCode};
-use common::seed::{Page, PublicPresentation, RenderedPost};
+use common::seed::{Page, PublicPresentation, RenderedPost, TimelineCursor, TimelineOrder};
 use common::tag::TagLabel;
 use common::test_support::{parse_post_body, parse_tag_label};
 use common::theme::Theme;
@@ -20,15 +20,16 @@ use crate::helpers::{
 };
 use storage::test_support::{Backend, SeedRawPost, SeedUser, backends, backends_matrix};
 
-use super::fixtures::{
-    list_drafts, list_home_feed, list_local_timeline, list_scheduled, list_user_posts,
-};
+use super::fixtures::{list_drafts, list_local_timeline, list_scheduled, list_user_posts};
 
 async fn list_posts_by_tag(app: Router, tag: &str, cookie: Option<&str>) -> (StatusCode, String) {
     post_json(
         app,
         <web::timeline::ListByTag as ServerFn>::PATH,
-        serde_json::json!({ "tag": tag, "cursor": null, "limit": 50 }),
+        serde_json::json!({
+            "tag": tag,
+            "request": { "order": "newest", "cursor": null, "limit": 50 },
+        }),
         cookie,
     )
     .await
@@ -43,7 +44,29 @@ async fn list_user_posts_by_tag(
     post_json(
         app,
         <web::timeline::ListByUserAndTag as ServerFn>::PATH,
-        serde_json::json!({ "username": username, "tag": tag, "cursor": null, "limit": 50 }),
+        serde_json::json!({
+            "username": username,
+            "tag": tag,
+            "request": { "order": "newest", "cursor": null, "limit": 50 },
+        }),
+        cookie,
+    )
+    .await
+}
+
+async fn list_home_feed_in_order(
+    app: Router,
+    order: TimelineOrder,
+    cursor: Option<TimelineCursor>,
+    limit: u32,
+    cookie: Option<&str>,
+) -> (StatusCode, String) {
+    post_json(
+        app,
+        <web::timeline::ListHomeFeed as ServerFn>::PATH,
+        serde_json::json!({
+            "request": { "order": order, "cursor": cursor, "limit": limit },
+        }),
         cookie,
     )
     .await
@@ -363,9 +386,10 @@ async fn list_scheduled_returns_current_user_future_posts_ordered_by_schedule(
 // Each fires two requests: a half-specified cursor (a `cursor` object carrying a
 // valid instant but no `post_id`) and an unparseable timestamp inside an
 // otherwise complete cursor. Both are rejected at arg-decode, before the
-// handler body: the cursor is one `PageCursor` field (ADR-0065 typing all the
-// way down), so a half cursor is a missing required struct field. We assert the
-// half cursor names the component it is missing, and otherwise only that the
+// handler body: each cursor is a typed field. Draft and scheduled listings use
+// `PageCursor`; a timeline request nests `TimelineCursor`. Thus a half cursor
+// is missing a required struct field. We assert the half cursor names the
+// component it is missing, and otherwise only that the
 // request is rejected, rather than pinning the decode-layer wording. Only the
 // endpoint URI and the (username-carrying where required) request bodies vary.
 // An author session is always created and passed — the public endpoints ignore
@@ -386,24 +410,22 @@ async fn list_scheduled_returns_current_user_future_posts_ordered_by_schedule(
     <web::timeline::ListByUser as ServerFn>::PATH,
     serde_json::json!({
         "username": "author",
-        "cursor": { "created_at": "2026-04-16T10:11:12+00:00" },
-        "limit": 10,
+        "request": { "order": "newest", "cursor": { "published_at": "2026-04-16T10:11:12+00:00" }, "limit": 10 },
     }),
     serde_json::json!({
         "username": "author",
-        "cursor": { "created_at": "bad-time", "post_id": 12 },
-        "limit": 10,
+        "request": { "order": "newest", "cursor": { "published_at": "bad-time", "post_id": 12 }, "limit": 10 },
     })
 )]
 #[case::list_local_timeline(
     <web::timeline::ListLocalTimeline as ServerFn>::PATH,
-    serde_json::json!({ "cursor": { "created_at": "2026-04-16T10:11:12+00:00" }, "limit": 10 }),
-    serde_json::json!({ "cursor": { "created_at": "bad-time", "post_id": 12 }, "limit": 10 })
+    serde_json::json!({ "request": { "order": "newest", "cursor": { "published_at": "2026-04-16T10:11:12+00:00" }, "limit": 10 } }),
+    serde_json::json!({ "request": { "order": "newest", "cursor": { "published_at": "bad-time", "post_id": 12 }, "limit": 10 } })
 )]
 #[case::list_home_feed(
     <web::timeline::ListHomeFeed as ServerFn>::PATH,
-    serde_json::json!({ "cursor": { "created_at": "2026-04-16T10:11:12+00:00" }, "limit": 10 }),
-    serde_json::json!({ "cursor": { "created_at": "bad-time", "post_id": 12 }, "limit": 10 })
+    serde_json::json!({ "request": { "order": "newest", "cursor": { "published_at": "2026-04-16T10:11:12+00:00" }, "limit": 10 } }),
+    serde_json::json!({ "request": { "order": "newest", "cursor": { "published_at": "bad-time", "post_id": 12 }, "limit": 10 } })
 )]
 #[tokio::test]
 async fn list_rejects_invalid_cursor_inputs(
@@ -431,6 +453,105 @@ async fn list_rejects_invalid_cursor_inputs(
 
     let (status, body) = post_json(app.clone(), uri, bad_time_body, Some(&cookie)).await;
     assert_ne!(status, StatusCode::OK, "body: {body}");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn timeline_rejects_a_cursor_from_the_opposite_order(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let author = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+
+    let cookie = author.cookie();
+    let cursor = serde_json::json!({
+        "published_at": "2026-04-16T10:11:12+00:00",
+        "post_id": 1,
+        "order": "newest",
+    });
+    let cases = [
+        (
+            "local timeline",
+            <web::timeline::ListLocalTimeline as ServerFn>::PATH,
+            serde_json::json!({
+                "request": {
+                    "order": "oldest",
+                    "cursor": cursor,
+                    "limit": 10,
+                },
+            }),
+            None,
+        ),
+        (
+            "user timeline",
+            <web::timeline::ListByUser as ServerFn>::PATH,
+            serde_json::json!({
+                "username": author.username,
+                "request": {
+                    "order": "oldest",
+                    "cursor": cursor,
+                    "limit": 10,
+                },
+            }),
+            None,
+        ),
+        (
+            "site tag timeline",
+            <web::timeline::ListByTag as ServerFn>::PATH,
+            serde_json::json!({
+                "tag": "rust",
+                "request": {
+                    "order": "oldest",
+                    "cursor": cursor,
+                    "limit": 10,
+                },
+            }),
+            None,
+        ),
+        (
+            "user tag timeline",
+            <web::timeline::ListByUserAndTag as ServerFn>::PATH,
+            serde_json::json!({
+                "username": author.username,
+                "tag": "rust",
+                "request": {
+                    "order": "oldest",
+                    "cursor": cursor,
+                    "limit": 10,
+                },
+            }),
+            None,
+        ),
+        (
+            "home feed",
+            <web::timeline::ListHomeFeed as ServerFn>::PATH,
+            serde_json::json!({
+                "request": {
+                    "order": "oldest",
+                    "cursor": cursor,
+                    "limit": 10,
+                },
+            }),
+            Some(cookie.as_str()),
+        ),
+    ];
+
+    for (surface, path, request, cookie) in cases {
+        let (status, body) = post_json(app.clone(), path, request, cookie).await;
+        assert_ne!(
+            status,
+            StatusCode::OK,
+            "{surface} must reject an opposite-order cursor: {body}"
+        );
+        assert!(
+            body.contains("order mismatch"),
+            "{surface} rejection must identify the mismatch: {body}"
+        );
+    }
 }
 
 #[apply(backends)]
@@ -480,8 +601,8 @@ async fn list_user_posts_returns_published_posts_with_cursor_pagination(#[case] 
 
     let (status, body) = list_user_posts(app.clone(), &author.username, None, 50, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let first_page: Page<RenderedPost> =
-        serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
+    let first_page: Page<RenderedPost, TimelineCursor> =
+        serde_json::from_str::<PublicPresentation<Page<RenderedPost, TimelineCursor>>>(&body)
             .unwrap()
             .page;
     assert_eq!(first_page.posts.len(), 50, "body: {body}");
@@ -511,8 +632,8 @@ async fn list_user_posts_returns_published_posts_with_cursor_pagination(#[case] 
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let second_page: Page<RenderedPost> =
-        serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
+    let second_page: Page<RenderedPost, TimelineCursor> =
+        serde_json::from_str::<PublicPresentation<Page<RenderedPost, TimelineCursor>>>(&body)
             .unwrap()
             .page;
     assert_eq!(second_page.posts.len(), 1, "body: {body}");
@@ -531,7 +652,7 @@ async fn list_user_posts_rejects_invalid_username(#[case] backend: Backend) {
 }
 
 // The cursor's shape ON THE WIRE, asserted as bytes rather than through a helper.
-// A behavioural test cannot see this: moving the signature to one `PageCursor`
+// A behavioural test cannot see this: moving the signature to a `TimelinePageRequest`
 // while leaving the form-urlencoded codec in place would still round-trip through
 // `list_user_posts` and pass. So both halves are hand-built here — the nested
 // JSON object must decode, and the flat `cursor_created_at`/`cursor_post_id` pair
@@ -551,8 +672,11 @@ async fn list_by_user_takes_a_nested_json_cursor_and_no_longer_the_flat_pair(
 
     let nested = serde_json::json!({
         "username": author.username,
-        "cursor": { "created_at": "2026-01-01T00:00:00Z", "post_id": 7 },
-        "limit": 10,
+        "request": {
+            "order": "newest",
+            "cursor": { "published_at": "2026-01-01T00:00:00Z", "post_id": 7, "order": "newest" },
+            "limit": 10,
+        },
     });
     let (status, body) = post_json(
         app.clone(),
@@ -596,8 +720,8 @@ async fn timeline_page_two_uses_the_cursor_the_first_page_returned(#[case] backe
 
     let (status, body) = list_user_posts(app.clone(), &author.username, None, 1, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let first_page: Page<RenderedPost> =
-        serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
+    let first_page: Page<RenderedPost, TimelineCursor> =
+        serde_json::from_str::<PublicPresentation<Page<RenderedPost, TimelineCursor>>>(&body)
             .unwrap()
             .page;
     assert_eq!(first_page.posts.len(), 1, "body: {body}");
@@ -608,8 +732,8 @@ async fn timeline_page_two_uses_the_cursor_the_first_page_returned(#[case] backe
     let (status, body) =
         list_user_posts(app.clone(), &author.username, Some(cursor), 1, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let second_page: Page<RenderedPost> =
-        serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
+    let second_page: Page<RenderedPost, TimelineCursor> =
+        serde_json::from_str::<PublicPresentation<Page<RenderedPost, TimelineCursor>>>(&body)
             .unwrap()
             .page;
     assert_eq!(second_page.posts.len(), 1, "body: {body}");
@@ -686,8 +810,8 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
 
     let (status, body) = list_local_timeline(app.clone(), None, 50, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let first_page: Page<RenderedPost> =
-        serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
+    let first_page: Page<RenderedPost, TimelineCursor> =
+        serde_json::from_str::<PublicPresentation<Page<RenderedPost, TimelineCursor>>>(&body)
             .unwrap()
             .page;
     assert_eq!(first_page.posts.len(), 50, "body: {body}");
@@ -724,8 +848,8 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
 
     let (status, body) = list_local_timeline(app.clone(), first_page.next_cursor, 50, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let second_page: Page<RenderedPost> =
-        serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
+    let second_page: Page<RenderedPost, TimelineCursor> =
+        serde_json::from_str::<PublicPresentation<Page<RenderedPost, TimelineCursor>>>(&body)
             .unwrap()
             .page;
     assert_eq!(second_page.posts.len(), 2, "body: {body}");
@@ -752,8 +876,21 @@ async fn list_home_feed_returns_authenticated_users_published_posts_only(#[case]
     .await
     .cookie();
 
-    storage::test_support::seed_posts(env.posts(), env.write_scope(), author.user_id, 51, true)
-        .await;
+    let now = UtcInstant::now();
+    let mut admitted_post_ids = Vec::with_capacity(51);
+    for hours_ago in (1_i64..=51).rev() {
+        let published_at = UtcInstant::from(
+            now.value()
+                .checked_sub(hours_ago.hours())
+                .expect("fixture is within Timestamp range"),
+        );
+        let post_id = SeedRawPost::new(author.user_id)
+            .published_at(published_at)
+            .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
+            .await
+            .post_id;
+        admitted_post_ids.push(post_id);
+    }
 
     let (status, body) = create_post_json(
         app.clone(),
@@ -780,38 +917,59 @@ async fn list_home_feed_returns_authenticated_users_published_posts_only(#[case]
         assert_eq!(status, StatusCode::OK, "create body: {body}");
     }
 
-    let (status, body) = list_home_feed(app.clone(), None, 50, Some(&author_cookie)).await;
-    assert_eq!(status, StatusCode::OK, "body: {body}");
-    let first_page: Page<RenderedPost> = serde_json::from_str(&body).unwrap();
-    assert_eq!(first_page.posts.len(), 50, "body: {body}");
-    assert!(first_page.has_more, "body: {body}");
-    assert!(first_page.next_cursor.is_some(), "body: {body}");
-    assert!(
-        first_page
-            .posts
-            .iter()
-            .all(|post| post.username == author.username),
-        "body: {body}"
-    );
-    assert!(
-        first_page.posts.iter().all(|post| post
-            .title
-            .as_deref()
-            .is_none_or(|title| { !title.contains("Other") && !title.contains("Draft") })),
-        "body: {body}"
-    );
+    let mut ids_by_order = Vec::with_capacity(2);
+    for order in [TimelineOrder::Newest, TimelineOrder::Oldest] {
+        let expected_ids: Vec<_> = match order {
+            TimelineOrder::Newest => admitted_post_ids.iter().rev().copied().collect(),
+            TimelineOrder::Oldest => admitted_post_ids.clone(),
+        };
 
-    let (status, body) = list_home_feed(
-        app.clone(),
-        first_page.next_cursor,
-        50,
-        Some(&author_cookie),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "body: {body}");
-    let second_page: Page<RenderedPost> = serde_json::from_str(&body).unwrap();
-    assert_eq!(second_page.posts.len(), 1, "body: {body}");
-    assert!(!second_page.has_more, "body: {body}");
+        let (status, body) =
+            list_home_feed_in_order(app.clone(), order, None, 50, Some(&author_cookie)).await;
+        assert_eq!(status, StatusCode::OK, "body: {body}");
+        let first_page: Page<RenderedPost, TimelineCursor> = serde_json::from_str(&body).unwrap();
+        assert_eq!(first_page.posts.len(), 50, "body: {body}");
+        assert!(first_page.has_more, "body: {body}");
+        let cursor = first_page
+            .next_cursor
+            .expect("page 1 has more, so it carries a cursor");
+        assert!(
+            first_page
+                .posts
+                .iter()
+                .all(|post| post.username == author.username),
+            "body: {body}"
+        );
+        assert!(
+            first_page.posts.iter().all(|post| post
+                .title
+                .as_deref()
+                .is_none_or(|title| { !title.contains("Other") && !title.contains("Draft") })),
+            "body: {body}"
+        );
+        let first_page_ids: Vec<_> = first_page.posts.iter().map(|post| post.post_id).collect();
+        assert_eq!(first_page_ids, expected_ids[..50], "body: {body}");
+
+        let (status, body) =
+            list_home_feed_in_order(app.clone(), order, Some(cursor), 50, Some(&author_cookie))
+                .await;
+        assert_eq!(status, StatusCode::OK, "body: {body}");
+        let second_page: Page<RenderedPost, TimelineCursor> = serde_json::from_str(&body).unwrap();
+        assert_eq!(second_page.posts.len(), 1, "body: {body}");
+        assert!(!second_page.has_more, "body: {body}");
+        assert!(second_page.next_cursor.is_none(), "body: {body}");
+        let second_page_ids: Vec<_> = second_page.posts.iter().map(|post| post.post_id).collect();
+        assert_eq!(second_page_ids, expected_ids[50..], "body: {body}");
+
+        let ids: Vec<_> = first_page_ids.into_iter().chain(second_page_ids).collect();
+        assert_eq!(ids, expected_ids, "body: {body}");
+        ids_by_order.push(ids);
+    }
+
+    assert_eq!(
+        ids_by_order[0],
+        ids_by_order[1].iter().rev().copied().collect::<Vec<_>>()
+    );
 }
 
 #[apply(backends)]
@@ -863,8 +1021,8 @@ async fn list_user_posts_carries_tags_per_post(#[case] backend: Backend) {
     let (status, body) =
         list_user_posts(app.clone(), &session.username, None, 50, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "list body: {body}");
-    let page: Page<RenderedPost> =
-        serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
+    let page: Page<RenderedPost, TimelineCursor> =
+        serde_json::from_str::<PublicPresentation<Page<RenderedPost, TimelineCursor>>>(&body)
             .unwrap()
             .page;
     assert_eq!(page.posts.len(), 1);
@@ -885,7 +1043,8 @@ async fn list_user_posts_for_unknown_user_keeps_empty_profile_with_site_theme(
 
     let (status, body) = list_user_posts(app.clone(), "nobody", None, 50, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let presentation: PublicPresentation<Page<RenderedPost>> = serde_json::from_str(&body).unwrap();
+    let presentation: PublicPresentation<Page<RenderedPost, TimelineCursor>> =
+        serde_json::from_str(&body).unwrap();
     assert_eq!(
         presentation.theme,
         common::theme::PublishedThemePresentation::built_in(Theme::Studio)
@@ -960,8 +1119,8 @@ async fn list_posts_by_tag_returns_matching_posts_from_all_users(#[case] backend
 
     let (status, body) = list_posts_by_tag(app.clone(), "rust", None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let page: Page<RenderedPost> =
-        serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
+    let page: Page<RenderedPost, TimelineCursor> =
+        serde_json::from_str::<PublicPresentation<Page<RenderedPost, TimelineCursor>>>(&body)
             .unwrap()
             .page;
     // Three posts carry the "rust" tag, across both authors.
@@ -980,8 +1139,8 @@ async fn list_posts_by_tag_returns_empty_for_unknown_tag(#[case] backend: Backen
 
     let (status, body) = list_posts_by_tag(app.clone(), "rust", None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let page: Page<RenderedPost> =
-        serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
+    let page: Page<RenderedPost, TimelineCursor> =
+        serde_json::from_str::<PublicPresentation<Page<RenderedPost, TimelineCursor>>>(&body)
             .unwrap()
             .page;
     assert!(page.posts.is_empty());
@@ -1031,8 +1190,8 @@ async fn list_user_posts_by_tag_scopes_to_user(#[case] backend: Backend) {
     let (status, body) =
         list_user_posts_by_tag(app.clone(), &author.username, "shared", None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let page: Page<RenderedPost> =
-        serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
+    let page: Page<RenderedPost, TimelineCursor> =
+        serde_json::from_str::<PublicPresentation<Page<RenderedPost, TimelineCursor>>>(&body)
             .unwrap()
             .page;
     assert_eq!(page.posts.len(), 1);

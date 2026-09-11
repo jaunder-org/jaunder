@@ -13,12 +13,72 @@ pub struct PostRevisionCursor {
     pub revision_id: RevisionId,
 }
 
-/// Cursor for keyset pagination of post listings.
+/// Cursor for keyset pagination of published web Post timelines.
 #[derive(Debug)]
 pub struct PostCursor {
-    /// Creation timestamp of the last item in the previous page.
-    pub created_at: UtcInstant,
+    /// Publication timestamp of the last item in the previous page.
+    pub published_at: UtcInstant,
     /// ID of the last item in the previous page (used for stable ordering).
+    pub post_id: PostId,
+    /// Direction that produced this cursor.
+    pub order: common::seed::TimelineOrder,
+}
+
+/// Borrowed pagination inputs shared by every published web timeline query.
+///
+/// Keeping order, cursor, and fetch limit cohesive prevents a caller from
+/// accidentally pairing a cursor with the wrong direction.
+#[derive(Debug)]
+pub struct PublishedPageRequest<'a> {
+    cursor: Option<&'a PostCursor>,
+    order: common::seed::TimelineOrder,
+    limit: common::pagination::RowLimit,
+}
+
+impl<'a> PublishedPageRequest<'a> {
+    /// Start a timeline walk in `order`.
+    #[must_use]
+    pub const fn first(
+        order: common::seed::TimelineOrder,
+        limit: common::pagination::RowLimit,
+    ) -> Self {
+        Self {
+            cursor: None,
+            order,
+            limit,
+        }
+    }
+
+    /// Continue a timeline walk, deriving its order from the cursor.
+    #[must_use]
+    pub const fn after(cursor: &'a PostCursor, limit: common::pagination::RowLimit) -> Self {
+        Self {
+            cursor: Some(cursor),
+            order: cursor.order,
+            limit,
+        }
+    }
+
+    #[must_use]
+    pub const fn limit(&self) -> common::pagination::RowLimit {
+        self.limit
+    }
+
+    pub(super) const fn into_parts(
+        self,
+    ) -> (
+        Option<&'a PostCursor>,
+        common::seed::TimelineOrder,
+        common::pagination::RowLimit,
+    ) {
+        (self.cursor, self.order, self.limit)
+    }
+}
+
+/// Cursor for the author-only draft listing, which retains creation ordering.
+#[derive(Debug)]
+pub struct DraftPostCursor {
+    pub created_at: UtcInstant,
     pub post_id: PostId,
 }
 
@@ -42,40 +102,58 @@ pub struct CollectionCursor {
     pub post_id: PostId,
 }
 
-/// Projects a [`PostRecord`] onto the keyset [`PostCursor`] that paginates the
-/// listing after it.
-#[must_use]
-pub fn to_post_cursor(post: &PostRecord) -> PostCursor {
-    PostCursor {
-        created_at: post.created_at,
-        post_id: post.post_id,
-    }
-}
-
-/// Projects a wire [`PageCursor`] onto the storage-side [`PostCursor`].
+/// Projects a published [`PostRecord`] onto the keyset [`PostCursor`] that
+/// paginates after it.
 ///
-/// Infallible by construction, not by omission: the boundary parse ADR-0063 §4
-/// asks for has already happened one layer out, at the `#[server]` argument —
-/// `PageCursor` bundles the keyset components, so arg-decode rejects a half
-/// cursor before any handler body runs. Nothing is left here to reject, which is
-/// the whole point of taking the pair as one type rather than two `Option`s.
-#[must_use]
-pub fn keyset_cursor(cursor: Option<PageCursor>) -> Option<PostCursor> {
-    cursor.map(|c| PostCursor {
-        created_at: c.created_at,
-        post_id: c.post_id,
+/// A published timeline row without its publication time violates the storage
+/// query's `published_at IS NOT NULL` invariant, so never manufacture a cursor.
+///
+/// # Errors
+///
+/// Returns an internal error if a published timeline query projects an impossible row.
+pub fn to_post_cursor(
+    post: &PostRecord,
+    order: common::seed::TimelineOrder,
+) -> InternalResult<PostCursor> {
+    let Some(published_at) = post.published_at else {
+        return Err(InternalError::server_message(
+            "published timeline row missing published_at",
+        ));
+    };
+    Ok(PostCursor {
+        published_at,
+        post_id: post.post_id,
+        order,
     })
 }
 
-/// Projects the storage-side [`PostCursor`] back onto the wire [`PageCursor`] a
-/// page hands the client as its `next_cursor` — the inverse of
-/// [`keyset_cursor`], and kept beside it so the round trip reads as one pair.
+/// Projects a wire timeline cursor onto its storage-side form.
 #[must_use]
-pub fn wire_cursor(cursor: &PostCursor) -> PageCursor {
-    PageCursor {
+pub fn timeline_keyset_cursor(cursor: Option<common::seed::TimelineCursor>) -> Option<PostCursor> {
+    cursor.map(|cursor| PostCursor {
+        published_at: cursor.published_at,
+        post_id: cursor.post_id,
+        order: cursor.order,
+    })
+}
+
+/// Projects a storage timeline cursor back onto its wire form.
+#[must_use]
+pub fn wire_cursor(cursor: &PostCursor) -> common::seed::TimelineCursor {
+    common::seed::TimelineCursor {
+        published_at: cursor.published_at,
+        post_id: cursor.post_id,
+        order: cursor.order,
+    }
+}
+
+/// Projects a wire [`PageCursor`] onto the draft-list storage cursor.
+#[must_use]
+pub fn keyset_cursor(cursor: Option<PageCursor>) -> Option<DraftPostCursor> {
+    cursor.map(|cursor| DraftPostCursor {
         created_at: cursor.created_at,
         post_id: cursor.post_id,
-    }
+    })
 }
 
 /// Projects a wire [`PageCursor`] onto the storage-side scheduled-post cursor.
@@ -125,19 +203,21 @@ pub fn wire_scheduled_cursor(cursor: &ScheduledPostCursor) -> PageCursor {
 #[cfg(test)]
 mod tests {
     use super::{
-        PostCursor, ScheduledPostCursor, keyset_cursor, scheduled_keyset_cursor,
-        to_scheduled_post_cursor, wire_cursor, wire_scheduled_cursor,
+        PostCursor, PublishedPageRequest, ScheduledPostCursor, scheduled_keyset_cursor,
+        timeline_keyset_cursor, to_post_cursor, to_scheduled_post_cursor, wire_cursor,
+        wire_scheduled_cursor,
     };
     use crate::posts::models::{PostFormat, PostRecord};
     use common::ids::{PostId, UserId};
+    use common::seed::TimelineOrder;
     use common::test_support::{
-        parse_post_body, parse_post_title, parse_slug, parse_username, rendered_html,
+        parse_post_body, parse_post_title, parse_row_limit, parse_slug, parse_username,
+        rendered_html,
     };
     use common::time::UtcInstant;
 
-    #[test]
-    fn scheduled_cursor_rejects_row_without_publish_time() {
-        let post = PostRecord {
+    fn unpublished_post() -> PostRecord {
+        PostRecord {
             author_display_name: None,
             post_id: PostId::from(1),
             user_id: UserId::from(1),
@@ -153,9 +233,21 @@ mod tests {
             deleted_at: None,
             summary: None,
             tags: vec![],
-        };
+        }
+    }
 
-        let err = to_scheduled_post_cursor(&post).unwrap_err();
+    #[test]
+    fn published_cursor_rejects_row_without_publish_time() {
+        let err = to_post_cursor(&unpublished_post(), TimelineOrder::Newest).unwrap_err();
+        assert_eq!(
+            err.operator_message(),
+            "published timeline row missing published_at"
+        );
+    }
+
+    #[test]
+    fn scheduled_cursor_rejects_row_without_publish_time() {
+        let err = to_scheduled_post_cursor(&unpublished_post()).unwrap_err();
         assert_eq!(
             err.operator_message(),
             "scheduled listing row missing published_at"
@@ -163,18 +255,30 @@ mod tests {
     }
 
     #[test]
-    fn post_cursor_round_trips_through_wire_cursor() {
+    fn post_cursor_round_trips_through_wire_cursor_with_its_order() {
         let cursor = PostCursor {
-            created_at: "2026-04-12T08:30:00.123456Z".parse().unwrap(),
+            published_at: "2026-04-12T08:30:00.123456Z".parse().unwrap(),
             post_id: PostId::from(42),
+            order: TimelineOrder::Oldest,
         };
 
-        assert_eq!(
-            keyset_cursor(Some(wire_cursor(&cursor)))
-                .unwrap()
-                .created_at,
-            cursor.created_at
-        );
+        let round_trip = timeline_keyset_cursor(Some(wire_cursor(&cursor))).unwrap();
+        assert_eq!(round_trip.published_at, cursor.published_at);
+        assert_eq!(round_trip.post_id, cursor.post_id);
+        assert_eq!(round_trip.order, TimelineOrder::Oldest);
+    }
+
+    #[test]
+    fn continuation_request_derives_order_from_its_cursor() {
+        let cursor = PostCursor {
+            published_at: UtcInstant::now(),
+            post_id: PostId::from(42),
+            order: TimelineOrder::Oldest,
+        };
+
+        let request = PublishedPageRequest::after(&cursor, parse_row_limit("10"));
+        let (_, order, _) = request.into_parts();
+        assert_eq!(order, TimelineOrder::Oldest);
     }
 
     #[test]

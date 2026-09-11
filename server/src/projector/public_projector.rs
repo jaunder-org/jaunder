@@ -5,7 +5,7 @@ use axum::{
 use common::{
     pagination::PageSize,
     permalink_route::PermalinkRoute,
-    seed::{PageSeed, PublicPresentation},
+    seed::{PageSeed, PublicPresentation, TimelineOrder, TimelinePageRequest},
     slug::Slug,
     tag::Tag,
     theme::{PublicThemeRoute, PublishedThemePresentation},
@@ -28,10 +28,14 @@ use super::{Shell, document};
 /// preserving their SPA-shell behavior for malformed paths.
 pub(crate) enum PublicProjection {
     Permalink(PermalinkRoute),
-    SiteTimeline,
-    Profile(Username),
-    SiteTag(Tag),
-    UserTag { username: Username, tag: Tag },
+    SiteTimeline(TimelineOrder),
+    Profile(Username, TimelineOrder),
+    SiteTag(Tag, TimelineOrder),
+    UserTag {
+        username: Username,
+        tag: Tag,
+        order: TimelineOrder,
+    },
 }
 
 /// Projects anonymous public routes into their final HTTP responses.
@@ -72,10 +76,14 @@ impl PublicProjector {
     async fn execute(&self, operation: PublicProjection) -> ProjectionResult {
         match operation {
             PublicProjection::Permalink(route) => self.permalink(route).await,
-            PublicProjection::SiteTimeline => self.site_timeline().await,
-            PublicProjection::Profile(username) => self.profile(username).await,
-            PublicProjection::SiteTag(tag) => self.site_tag(tag).await,
-            PublicProjection::UserTag { username, tag } => self.user_tag(username, tag).await,
+            PublicProjection::SiteTimeline(order) => self.site_timeline(order).await,
+            PublicProjection::Profile(username, order) => self.profile(username, order).await,
+            PublicProjection::SiteTag(tag, order) => self.site_tag(tag, order).await,
+            PublicProjection::UserTag {
+                username,
+                tag,
+                order,
+            } => self.user_tag(username, tag, order).await,
         }
     }
 
@@ -163,11 +171,12 @@ impl PublicProjector {
         })
     }
 
-    async fn site_timeline(&self) -> ProjectionResult {
+    async fn site_timeline(&self, order: TimelineOrder) -> ProjectionResult {
         let page = match timeline::fetch_local_timeline(
             self.posts.as_ref(),
             &ViewerIdentity::Anonymous,
             None,
+            order,
             Some(PageSize::default()),
         )
         .await
@@ -187,16 +196,17 @@ impl PublicProjector {
         };
         Ok(PublicPresentation {
             theme,
-            page: PageSeed::SiteTimeline(page),
+            page: PageSeed::SiteTimeline { order, page },
         })
     }
 
-    async fn profile(&self, username: Username) -> ProjectionResult {
+    async fn profile(&self, username: Username, order: TimelineOrder) -> ProjectionResult {
         let page = match timeline::fetch_user_posts(
             self.posts.as_ref(),
             &ViewerIdentity::Anonymous,
             &username,
             None,
+            order,
             Some(PageSize::default()),
         )
         .await
@@ -213,16 +223,21 @@ impl PublicProjector {
             .await?;
         Ok(PublicPresentation {
             theme,
-            page: PageSeed::Profile { username, page },
+            page: PageSeed::Profile {
+                username,
+                order,
+                page,
+            },
         })
     }
 
-    async fn site_tag(&self, tag: Tag) -> ProjectionResult {
+    async fn site_tag(&self, tag: Tag, order: TimelineOrder) -> ProjectionResult {
         let page = match timeline::fetch_posts_by_tag(
             self.posts.as_ref(),
             &ViewerIdentity::Anonymous,
             &tag,
             None,
+            order,
             Some(PageSize::default()),
         )
         .await
@@ -242,19 +257,27 @@ impl PublicProjector {
         };
         Ok(PublicPresentation {
             theme,
-            page: PageSeed::SiteTag { tag, page },
+            page: PageSeed::SiteTag { tag, order, page },
         })
     }
 
-    async fn user_tag(&self, username: Username, tag: Tag) -> ProjectionResult {
+    async fn user_tag(
+        &self,
+        username: Username,
+        tag: Tag,
+        order: TimelineOrder,
+    ) -> ProjectionResult {
         let page = match timeline::fetch_user_posts_by_tag(
             self.posts.as_ref(),
             self.users.as_ref(),
             &ViewerIdentity::Anonymous,
             &username,
             &tag,
-            None,
-            Some(PageSize::default()),
+            TimelinePageRequest {
+                cursor: None,
+                order,
+                limit: Some(PageSize::default()),
+            },
         )
         .await
         {
@@ -273,6 +296,7 @@ impl PublicProjector {
             page: PageSeed::UserTag {
                 username,
                 tag,
+                order,
                 page,
             },
         })

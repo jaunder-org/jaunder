@@ -209,6 +209,7 @@
 .j-trusted-chrome:has(.j-warn-banner) {
  left: 0;
 }
+
 .j-trusted-chrome>* {
  pointer-events: auto;
 }
@@ -259,6 +260,34 @@
  flex: 1;
  overflow: auto;
  background: var(--surface);
+}
+
+.j-timeline-order {
+ display: flex;
+ justify-content: flex-end;
+ align-items: center;
+ padding: 10px 28px;
+ border-bottom: 1px var(--border-style) var(--line);
+}
+
+.j-timeline-order .j-timeline-order-button {
+ width: 34px;
+ height: 34px;
+ justify-content: center;
+ color: var(--ink-soft);
+ background: var(--surface-alt);
+ border: 1px var(--border-style) var(--line);
+ border-radius: var(--radius-sm);
+}
+
+.j-timeline-order .j-timeline-order-button:hover {
+ color: var(--ink);
+ background: var(--accent-soft);
+}
+
+.j-timeline-order .j-timeline-order-button:focus-visible {
+ outline: 2px solid var(--accent);
+ outline-offset: 2px;
 }
 
 .j-page {

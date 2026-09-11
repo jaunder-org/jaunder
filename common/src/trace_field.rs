@@ -21,7 +21,7 @@ use crate::invite::InviteTtlHours;
 use crate::media::{hash::ContentHash, storage::MediaSource};
 use crate::pagination::{PageOffset, PageSize};
 use crate::render::PostFormat;
-use crate::seed::PageCursor;
+use crate::seed::{PageCursor, TimelineCursor, TimelinePageRequest};
 use crate::site::SiteTitle;
 use crate::slug::Slug;
 use crate::tag::Tag;
@@ -94,6 +94,8 @@ impl_borrowed_trace_field!(
     InviteTtlHours,
     UtcInstant,
     PageCursor,
+    TimelineCursor,
+    TimelinePageRequest,
     PostFormat,
     MediaSource,
     BackupMode,
@@ -117,7 +119,7 @@ mod tests {
     use crate::media::{hash::ContentHash, storage::MediaSource};
     use crate::pagination::{PageOffset, PageSize};
     use crate::render::PostFormat;
-    use crate::seed::PageCursor;
+    use crate::seed::{PageCursor, TimelineCursor, TimelinePageRequest};
     use crate::site::SiteTitle;
     use crate::slug::Slug;
     use crate::tag::Tag;
@@ -154,6 +156,8 @@ mod tests {
         assert_borrowed_projection::<InviteTtlHours>();
         assert_borrowed_projection::<UtcInstant>();
         assert_borrowed_projection::<PageCursor>();
+        assert_borrowed_projection::<TimelineCursor>();
+        assert_borrowed_projection::<TimelinePageRequest>();
         assert_borrowed_projection::<PostFormat>();
         assert_borrowed_projection::<MediaSource>();
         assert_borrowed_projection::<BackupMode>();
