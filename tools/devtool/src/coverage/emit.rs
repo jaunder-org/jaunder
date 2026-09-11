@@ -57,21 +57,15 @@ fn required_stage_commands() -> Vec<CommandSpec> {
             program: "sh",
             arguments: vec![
                 "-c",
-                r#"environment="$(cargo llvm-cov show-env --export-prefix)" && eval "$environment" && exec cargo nextest list --workspace --message-format json"#,
+                r#"environment="$(cargo llvm-cov show-env --export-prefix)" || exit; eval "$environment" || exit; exec cargo nextest list --workspace --message-format json"#,
             ],
         },
         CommandSpec {
             stage: RequiredStage::InstrumentedTestRun,
-            program: "cargo",
+            program: "sh",
             arguments: vec![
-                "llvm-cov",
-                "--no-clean",
-                "--no-report",
-                "nextest",
-                "--workspace",
-                "--profile",
-                "coverage",
-                "--no-fail-fast",
+                "-c",
+                r#"environment="$(cargo llvm-cov show-env --export-prefix)" || exit; eval "$environment" || exit; exec cargo nextest run --workspace --profile coverage --no-fail-fast"#,
             ],
         },
     ]
@@ -685,7 +679,7 @@ mod tests {
             census.arguments,
             [
                 "-c",
-                r#"environment="$(cargo llvm-cov show-env --export-prefix)" && eval "$environment" && exec cargo nextest list --workspace --message-format json"#
+                r#"environment="$(cargo llvm-cov show-env --export-prefix)" || exit; eval "$environment" || exit; exec cargo nextest list --workspace --message-format json"#
             ]
         );
 
@@ -693,40 +687,33 @@ mod tests {
             .iter()
             .find(|command| command.stage == RequiredStage::InstrumentedTestRun)
             .expect("instrumented test command");
-        assert_eq!(run.program, "cargo");
-        assert!(
-            run.arguments
-                .windows(3)
-                .any(|args| args == ["llvm-cov", "--no-clean", "--no-report"])
-        );
-        let census_script = census.arguments[1];
-        assert!(
-            census_script.contains("exec cargo nextest list --workspace --message-format json")
-        );
-        assert!(
-            ![
-                "-p",
-                "--package",
-                "--test",
-                "--partition",
-                "-E",
-                "--expr-filter"
+        assert_eq!(run.program, "sh");
+        assert_eq!(
+            run.arguments,
+            [
+                "-c",
+                r#"environment="$(cargo llvm-cov show-env --export-prefix)" || exit; eval "$environment" || exit; exec cargo nextest run --workspace --profile coverage --no-fail-fast"#
             ]
-            .iter()
-            .any(|filter| census_script
-                .split_ascii_whitespace()
-                .any(|argument| argument == *filter))
         );
-        assert!(run.arguments.contains(&"--workspace"));
-        assert!(!run.arguments.iter().any(|argument| matches!(
-            *argument,
-            "-p" | "--package" | "--test" | "--partition" | "-E" | "--expr-filter"
-        )));
-        assert!(
-            run.arguments
-                .windows(3)
-                .any(|args| args == ["--profile", "coverage", "--no-fail-fast"])
-        );
+
+        for script in [census.arguments[1], run.arguments[1]] {
+            assert!(script.contains("cargo llvm-cov show-env --export-prefix"));
+            assert!(script.contains(r#"eval "$environment""#));
+            assert!(
+                ![
+                    "-p",
+                    "--package",
+                    "--test",
+                    "--partition",
+                    "-E",
+                    "--expr-filter"
+                ]
+                .iter()
+                .any(|filter| script
+                    .split_ascii_whitespace()
+                    .any(|argument| argument == *filter))
+            );
+        }
     }
 
     #[test]
