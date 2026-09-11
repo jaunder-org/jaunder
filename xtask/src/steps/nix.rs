@@ -11,14 +11,14 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::task::Poll;
 
 use anyhow::{Context, Result, bail};
-use coverage::status::CoverageStatus;
+use coverage::status::{CoverageStatus, ProcessOutcome, RequiredStage};
 use processkit::{Outcome, StdioMode};
 use serde::Deserialize;
 use tokio::io::AsyncWrite;
 
 use super::process::Process;
 use crate::nix_build;
-use crate::result::{CommandResult, NixReport, PhaseRecord, StepResult};
+use crate::result::{CommandResult, NixReport, PhaseName, PhaseOutcome, PhaseRecord, StepResult};
 
 /// The flake checks are Linux-only (`optionalAttrs isLinux` in `nix/checks.nix`);
 /// the project's CI host is x86_64-linux.
@@ -165,27 +165,31 @@ pub fn coverage(result: &mut CommandResult) {
         // authoritative category lives in the producer's validated status.json.
         // Report it precisely (not as an opaque build failure) and skip host
         // post-processing (there is no coverage verdict to compute).
-        result.push(failed_status_step(
+        let (step, phases) = failed_coverage_status_step(
             "coverage",
             "xtask.nix.coverage_status",
             "coverage gate failed (no valid status.json)",
             || fs::read_to_string(status_path),
-            parse_coverage_status,
-            sentinel_detail,
             &mut std::io::stderr(),
-        ));
+        );
+        result.record_phases(phases);
+        result.push(step);
         return;
     }
     result.push(gate);
-    if let Err(error) = fs::read_to_string(status_path)
+    let status = match fs::read_to_string(status_path)
         .with_context(|| format!("reading coverage status at {status_path}"))
         .and_then(|raw| coverage_status_after_successful_gate(&raw))
     {
-        result.push(StepResult::fail("coverage").detail(format!(
-            "invalid coverage status after successful Nix gate: {error:#}"
-        )));
-        return;
-    }
+        Ok(status) => status,
+        Err(error) => {
+            result.push(StepResult::fail("coverage").detail(format!(
+                "invalid coverage status after successful Nix gate: {error:#}"
+            )));
+            return;
+        }
+    };
+    result.record_phases(coverage_status_phase_records(&status));
     // `crate::coverage` is xtask's host-side gate module; `coverage` (no
     // `crate::`) is the shared crate holding the sentinel schema.
     let (step, report) = crate::coverage::run(".xtask/gcroots/coverage");
@@ -340,6 +344,95 @@ fn parse_coverage_status(raw: &str) -> Result<CoverageStatus> {
 
 fn coverage_status_after_successful_gate(raw: &str) -> Result<CoverageStatus> {
     CoverageStatus::from_completed_json(raw).context("validating completed coverage status")
+}
+
+/// Preserve validated producer timing alongside the red producer verdict without
+/// giving optional timing evidence authority over that verdict.
+fn failed_coverage_status_step(
+    step: &str,
+    warning_key: &str,
+    fallback: &str,
+    read_status: impl FnOnce() -> io::Result<String>,
+    stderr: &mut impl Write,
+) -> (StepResult, Vec<PhaseRecord>) {
+    let parsed = match read_status() {
+        Ok(raw) => parse_coverage_status(&raw),
+        Err(error) => Err(error.into()),
+    };
+    match parsed {
+        Ok(status) => (
+            StepResult::fail(step).detail(sentinel_detail(&status)),
+            coverage_status_phase_records(&status).to_vec(),
+        ),
+        Err(_) => {
+            let _ = writeln!(
+                stderr,
+                "xtask: warning: {warning_key}: ignored failure while reading failed-gate status"
+            );
+            (StepResult::fail(step).detail(fallback), Vec::new())
+        }
+    }
+}
+
+fn coverage_status_phase_records(status: &CoverageStatus) -> [PhaseRecord; 8] {
+    RequiredStage::ALL.map(|required_stage| {
+        let stage = status
+            .stages
+            .iter()
+            .find(|stage| stage.stage == required_stage)
+            .expect("validated coverage status includes every required stage");
+        coverage_stage_phase_record(stage)
+    })
+}
+
+fn coverage_stage_phase_record(stage: &coverage::status::StageResult) -> PhaseRecord {
+    let name = match stage.stage {
+        RequiredStage::WorkspaceResolution => PhaseName::CoverageWorkspaceResolution,
+        RequiredStage::ProfileCleanup => PhaseName::CoverageProfileCleanup,
+        RequiredStage::TestCensus => PhaseName::CoverageTestCensus,
+        RequiredStage::InstrumentedTestRun => PhaseName::CoverageInstrumentedTestRun,
+        RequiredStage::PopulationReconciliation => PhaseName::CoveragePopulationReconciliation,
+        RequiredStage::TextReport => PhaseName::CoverageTextReport,
+        RequiredStage::LcovReport => PhaseName::CoverageLcovReport,
+        RequiredStage::CrapReport => PhaseName::CoverageCrapReport,
+    };
+    let (outcome, detail) = match &stage.outcome {
+        ProcessOutcome::Success if stage.duration_ms.is_some() => (
+            PhaseOutcome::Success,
+            "coverage producer stage completed".into(),
+        ),
+        ProcessOutcome::Success => (
+            PhaseOutcome::Unavailable,
+            "coverage producer stage completed; duration unavailable in status evidence".into(),
+        ),
+        ProcessOutcome::NotRun => (
+            PhaseOutcome::Unavailable,
+            "coverage producer stage was not run".into(),
+        ),
+        ProcessOutcome::ExitCode { exit_code } => (
+            PhaseOutcome::Failed,
+            format!("coverage producer stage exited with status {exit_code}"),
+        ),
+        ProcessOutcome::Signal => (
+            PhaseOutcome::Failed,
+            "coverage producer stage terminated by signal".into(),
+        ),
+        ProcessOutcome::SpawnError { spawn_error } => (
+            PhaseOutcome::Failed,
+            format!("coverage producer stage could not start: {spawn_error}"),
+        ),
+        ProcessOutcome::EvidenceError { evidence_error } => (
+            PhaseOutcome::Failed,
+            format!("coverage producer stage evidence error: {evidence_error}"),
+        ),
+    };
+    PhaseRecord {
+        name,
+        duration_ms: stage.duration_ms,
+        outcome,
+        detail,
+        nix: None,
+    }
 }
 
 /// Each located violation renders as `file:line [kind] detail`; an unreadable
@@ -1282,13 +1375,14 @@ mod tests {
         BuildCaptureOutcome, BuildCompletion, BuildStderrTee, CommandResult, E2E_COMBOS,
         E2eOutcome, FailedBuildDiagnostics, Process, STATIC_CHECKS, StepResult, build_e2e_combos,
         check_supporting_test_check_names, coverage_status_after_successful_gate,
-        doctest_sentinel_detail, failed_build_after_diagnostics_with, failed_status_step,
-        finish_build_with, finish_e2e_combo, lift_elisp_coverage_artifacts, parse_coverage_status,
+        coverage_status_phase_records, doctest_sentinel_detail,
+        failed_build_after_diagnostics_with, failed_coverage_status_step, failed_status_step,
+        finish_build_with, finish_e2e_combo, lift_elisp_coverage_artifacts,
         prepare_build_dirs_with, report_build_diagnostic_failure, sentinel_detail,
         test_check_names, validate_check_names,
     };
     use crate::audit_wasm::{ArtifactMetrics, AuditReport};
-    use crate::result::{NixRealization, NixReport};
+    use crate::result::{NixRealization, NixReport, PhaseName, PhaseOutcome};
     use crate::steps::wasm_budget;
     use coverage::status::{
         COVERAGE_STATUS_VERSION, CoverageStatus, Population, ProcessOutcome, RequiredStage,
@@ -1492,6 +1586,7 @@ mod tests {
                 .map(|stage| StageResult {
                     stage,
                     outcome: ProcessOutcome::Success,
+                    duration_ms: None,
                 })
                 .collect(),
             population: Population {
@@ -1539,20 +1634,19 @@ mod tests {
     }
 
     #[test]
-    fn failed_coverage_gate_renders_validated_producer_diagnostics() {
+    fn failed_coverage_gate_preserves_validated_producer_diagnostics_and_phases() {
         let mut failed_status = complete_coverage_status();
         failed_status.category = StatusCategory::TestFailure;
         failed_status.stages[3].outcome = ProcessOutcome::ExitCode { exit_code: 1 };
+        failed_status.stages[3].duration_ms = Some(594_000);
         failed_status.failed_tests = vec!["server::broken".into()];
         let mut stderr = Vec::new();
 
-        let step = failed_status_step(
+        let (step, phases) = failed_coverage_status_step(
             "coverage",
             "xtask.nix.coverage_status",
             "coverage gate failed (no status.json)",
             || Ok(failed_status.to_json()),
-            parse_coverage_status,
-            sentinel_detail,
             &mut stderr,
         );
 
@@ -1561,6 +1655,57 @@ mod tests {
         assert!(detail.contains("test failure"), "{detail}");
         assert!(detail.contains("server::broken"), "{detail}");
         assert!(detail.contains("not a coverage regression"), "{detail}");
+        assert_eq!(phases[3].name, PhaseName::CoverageInstrumentedTestRun);
+        assert_eq!(phases[3].outcome, PhaseOutcome::Failed);
+        assert_eq!(phases[3].duration_ms, Some(594_000));
+    }
+
+    #[test]
+    fn coverage_phase_records_follow_stage_order_and_mark_missing_timing_unavailable() {
+        let mut status = complete_coverage_status();
+        for (index, stage) in status.stages.iter_mut().enumerate() {
+            stage.duration_ms = Some((index + 1) as u128);
+        }
+        status.stages.reverse();
+
+        let phases = coverage_status_phase_records(&status);
+
+        for ((phase, expected_name), expected_duration) in phases
+            .iter()
+            .zip([
+                PhaseName::CoverageWorkspaceResolution,
+                PhaseName::CoverageProfileCleanup,
+                PhaseName::CoverageTestCensus,
+                PhaseName::CoverageInstrumentedTestRun,
+                PhaseName::CoveragePopulationReconciliation,
+                PhaseName::CoverageTextReport,
+                PhaseName::CoverageLcovReport,
+                PhaseName::CoverageCrapReport,
+            ])
+            .zip([
+                Some(1),
+                Some(2),
+                Some(3),
+                Some(4),
+                Some(5),
+                Some(6),
+                Some(7),
+                Some(8),
+            ])
+        {
+            assert_eq!(phase.name, expected_name);
+            assert_eq!(phase.outcome, PhaseOutcome::Success);
+            assert_eq!(phase.duration_ms, expected_duration);
+        }
+
+        let mut legacy = complete_coverage_status();
+        legacy.stages[0].outcome = ProcessOutcome::NotRun;
+        legacy.stages[1].outcome = ProcessOutcome::ExitCode { exit_code: 1 };
+        let legacy_phases = coverage_status_phase_records(&legacy);
+        assert_eq!(legacy_phases[0].outcome, PhaseOutcome::Unavailable);
+        assert_eq!(legacy_phases[0].duration_ms, None);
+        assert_eq!(legacy_phases[1].outcome, PhaseOutcome::Failed);
+        assert_eq!(legacy_phases[1].duration_ms, None);
     }
 
     fn assert_status_attempt_warns_once<T>(

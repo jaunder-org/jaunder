@@ -57,10 +57,18 @@ pub enum PhaseName {
     GateExecution,
     ResultLift,
     PostGateChecks,
+    CoverageWorkspaceResolution,
+    CoverageProfileCleanup,
+    CoverageTestCensus,
+    CoverageInstrumentedTestRun,
+    CoveragePopulationReconciliation,
+    CoverageTextReport,
+    CoverageLcovReport,
+    CoverageCrapReport,
 }
 
 impl PhaseName {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 15] = [
         Self::NixEvaluation,
         Self::NixSubstitution,
         Self::NixLocalBuild,
@@ -68,6 +76,14 @@ impl PhaseName {
         Self::GateExecution,
         Self::ResultLift,
         Self::PostGateChecks,
+        Self::CoverageWorkspaceResolution,
+        Self::CoverageProfileCleanup,
+        Self::CoverageTestCensus,
+        Self::CoverageInstrumentedTestRun,
+        Self::CoveragePopulationReconciliation,
+        Self::CoverageTextReport,
+        Self::CoverageLcovReport,
+        Self::CoverageCrapReport,
     ];
 
     const fn as_str(self) -> &'static str {
@@ -79,6 +95,14 @@ impl PhaseName {
             Self::GateExecution => "gate-execution",
             Self::ResultLift => "result-lift",
             Self::PostGateChecks => "post-gate-checks",
+            Self::CoverageWorkspaceResolution => "coverage-workspace-resolution",
+            Self::CoverageProfileCleanup => "coverage-profile-cleanup",
+            Self::CoverageTestCensus => "coverage-test-census",
+            Self::CoverageInstrumentedTestRun => "coverage-instrumented-test-run",
+            Self::CoveragePopulationReconciliation => "coverage-population-reconciliation",
+            Self::CoverageTextReport => "coverage-text-report",
+            Self::CoverageLcovReport => "coverage-lcov-report",
+            Self::CoverageCrapReport => "coverage-crap-report",
         }
     }
 }
@@ -752,6 +776,14 @@ mod tests {
                 "gate-execution",
                 "result-lift",
                 "post-gate-checks",
+                "coverage-workspace-resolution",
+                "coverage-profile-cleanup",
+                "coverage-test-census",
+                "coverage-instrumented-test-run",
+                "coverage-population-reconciliation",
+                "coverage-text-report",
+                "coverage-lcov-report",
+                "coverage-crap-report",
             ]
         );
         assert!(

@@ -26,6 +26,7 @@ fn tests_ok_status() -> CoverageStatus {
             .map(|stage| StageResult {
                 stage,
                 outcome: ProcessOutcome::Success,
+                duration_ms: None,
             })
             .collect(),
         population: Population {

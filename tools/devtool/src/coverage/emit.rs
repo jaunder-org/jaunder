@@ -2,6 +2,7 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::process::{Command, ExitStatus};
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use coverage::status::{
@@ -91,6 +92,7 @@ fn new_status() -> CoverageStatus {
             .map(|stage| StageResult {
                 stage,
                 outcome: ProcessOutcome::NotRun,
+                duration_ms: None,
             })
             .collect(),
         population: Population {
@@ -111,6 +113,15 @@ fn set_stage(status: &mut CoverageStatus, stage: RequiredStage, outcome: Process
         .find(|result| result.stage == stage)
         .expect("required stage")
         .outcome = outcome;
+}
+
+fn record_duration(status: &mut CoverageStatus, stage: RequiredStage, started: Instant) {
+    status
+        .stages
+        .iter_mut()
+        .find(|result| result.stage == stage)
+        .expect("required stage")
+        .duration_ms = Some(started.elapsed().as_millis());
 }
 
 #[cfg(test)]
@@ -249,27 +260,33 @@ pub fn run(out: &str) -> Result<()> {
     let commands = required_stage_commands();
 
     let metadata = &commands[0];
+    let metadata_started = Instant::now();
     let mut command = Command::new(metadata.program);
     command.args(&metadata.arguments);
-    let Some(_) = command_failure(
+    let metadata_result = command_failure(
         &mut status,
         metadata.stage,
         run_capture(&mut command),
         &diag,
         "metadata.log",
-    ) else {
+    );
+    record_duration(&mut status, metadata.stage, metadata_started);
+    let Some(_) = metadata_result else {
         write_status(out, &status)?;
         return Ok(());
     };
 
+    let cleanup_started = Instant::now();
     let cleanup = run_capture(Command::new("cargo").args(["llvm-cov", "clean", "--profraw-only"]));
-    let Some(_) = command_failure(
+    let cleanup_result = command_failure(
         &mut status,
         RequiredStage::ProfileCleanup,
         cleanup,
         &diag,
         "profile-cleanup.log",
-    ) else {
+    );
+    let Some(_) = cleanup_result else {
+        record_duration(&mut status, RequiredStage::ProfileCleanup, cleanup_started);
         write_status(out, &status)?;
         return Ok(());
     };
@@ -281,20 +298,25 @@ pub fn run(out: &str) -> Result<()> {
             RequiredStage::ProfileCleanup,
             "could not clear JUnit report",
         );
+        record_duration(&mut status, RequiredStage::ProfileCleanup, cleanup_started);
         write_status(out, &status)?;
         return Ok(());
     }
+    record_duration(&mut status, RequiredStage::ProfileCleanup, cleanup_started);
 
     let census = &commands[1];
+    let census_started = Instant::now();
     let mut command = Command::new(census.program);
     command.args(&census.arguments);
-    let Some(census_output) = command_failure(
+    let census_result = command_failure(
         &mut status,
         census.stage,
         run_capture(&mut command),
         &diag,
         "nextest-list.json",
-    ) else {
+    );
+    let Some(census_output) = census_result else {
+        record_duration(&mut status, census.stage, census_started);
         write_status(out, &status)?;
         return Ok(());
     };
@@ -306,13 +328,16 @@ pub fn run(out: &str) -> Result<()> {
                 RequiredStage::TestCensus,
                 "invalid nextest census",
             );
+            record_duration(&mut status, RequiredStage::TestCensus, census_started);
             write_status(out, &status)?;
             return Ok(());
         }
     };
     status.population.expected = expected.expected.len();
+    record_duration(&mut status, RequiredStage::TestCensus, census_started);
 
     let run = &commands[2];
+    let test_run_started = Instant::now();
     let test_run = pg::with_ephemeral(|env| {
         let mut command = Command::new(run.program);
         command.args(&run.arguments);
@@ -324,6 +349,7 @@ pub fn run(out: &str) -> Result<()> {
             let outcome = command_outcome(test_run.status);
             write_diagnostic(&diag, "nextest.log", &test_run.output);
             set_stage(&mut status, run.stage, outcome.clone());
+            record_duration(&mut status, run.stage, test_run_started);
             outcome
         }
         Err(_) => {
@@ -339,6 +365,7 @@ pub fn run(out: &str) -> Result<()> {
                 RequiredStage::InstrumentedTestRun,
                 "could not spawn command",
             );
+            record_duration(&mut status, run.stage, test_run_started);
             write_status(out, &status)?;
             return Ok(());
         }
@@ -346,6 +373,7 @@ pub fn run(out: &str) -> Result<()> {
     let test_run = instrumented_outcome.is_success();
     let _ = fs::copy(JUNIT_PATH, diag.join("nextest.junit.xml"));
 
+    let reconciliation_started = Instant::now();
     let actual = match load_junit_census() {
         Ok(actual) => actual,
         Err(_) => {
@@ -353,6 +381,11 @@ pub fn run(out: &str) -> Result<()> {
                 &mut status,
                 RequiredStage::PopulationReconciliation,
                 "invalid JUnit census",
+            );
+            record_duration(
+                &mut status,
+                RequiredStage::PopulationReconciliation,
+                reconciliation_started,
             );
             write_status(out, &status)?;
             return Ok(());
@@ -374,6 +407,11 @@ pub fn run(out: &str) -> Result<()> {
             RequiredStage::PopulationReconciliation,
             "test population did not reconcile",
         );
+        record_duration(
+            &mut status,
+            RequiredStage::PopulationReconciliation,
+            reconciliation_started,
+        );
         write_status(out, &status)?;
         return Ok(());
     }
@@ -381,6 +419,11 @@ pub fn run(out: &str) -> Result<()> {
         &mut status,
         RequiredStage::PopulationReconciliation,
         ProcessOutcome::success(),
+    );
+    record_duration(
+        &mut status,
+        RequiredStage::PopulationReconciliation,
+        reconciliation_started,
     );
 
     if !test_run && status.failed_tests.is_empty() {
@@ -402,13 +445,16 @@ pub fn run(out: &str) -> Result<()> {
         return Ok(());
     }
 
-    let Some(report) = report_command(
+    let text_report_started = Instant::now();
+    let text_report_result = report_command(
         RequiredStage::TextReport,
         Command::new("cargo").args(coverage_report_arguments("--text")),
         &mut status,
         &diag,
         "text-report.log",
-    ) else {
+    );
+    let Some(report) = text_report_result else {
+        record_duration(&mut status, RequiredStage::TextReport, text_report_started);
         write_status(out, &status)?;
         return Ok(());
     };
@@ -419,10 +465,13 @@ pub fn run(out: &str) -> Result<()> {
             RequiredStage::TextReport,
             "could not write text report",
         );
+        record_duration(&mut status, RequiredStage::TextReport, text_report_started);
         write_status(out, &status)?;
         return Ok(());
     }
+    record_duration(&mut status, RequiredStage::TextReport, text_report_started);
 
+    let lcov_report_started = Instant::now();
     let lcov = out.join("coverage-report.lcov");
     let lcov_path = match lcov.to_str() {
         Some(path) => path,
@@ -432,11 +481,12 @@ pub fn run(out: &str) -> Result<()> {
                 RequiredStage::LcovReport,
                 "invalid LCOV report path",
             );
+            record_duration(&mut status, RequiredStage::LcovReport, lcov_report_started);
             write_status(out, &status)?;
             return Ok(());
         }
     };
-    let Some(_) = report_command(
+    let lcov_result = report_command(
         RequiredStage::LcovReport,
         Command::new("cargo")
             .args(coverage_report_arguments("--lcov"))
@@ -444,11 +494,15 @@ pub fn run(out: &str) -> Result<()> {
         &mut status,
         &diag,
         "lcov-report.log",
-    ) else {
+    );
+    let Some(_) = lcov_result else {
+        record_duration(&mut status, RequiredStage::LcovReport, lcov_report_started);
         write_status(out, &status)?;
         return Ok(());
     };
+    record_duration(&mut status, RequiredStage::LcovReport, lcov_report_started);
 
+    let crap_report_started = Instant::now();
     let raw_crap = out.join("crap-report.raw.json");
     let raw_crap_path = match raw_crap.to_str() {
         Some(path) => path,
@@ -458,11 +512,12 @@ pub fn run(out: &str) -> Result<()> {
                 RequiredStage::CrapReport,
                 "invalid CRAP report path",
             );
+            record_duration(&mut status, RequiredStage::CrapReport, crap_report_started);
             write_status(out, &status)?;
             return Ok(());
         }
     };
-    let Some(_) = report_command(
+    let crap_report_result = report_command(
         RequiredStage::CrapReport,
         Command::new("cargo").args([
             "crap",
@@ -479,7 +534,9 @@ pub fn run(out: &str) -> Result<()> {
         &mut status,
         &diag,
         "crap-report.log",
-    ) else {
+    );
+    let Some(_) = crap_report_result else {
+        record_duration(&mut status, RequiredStage::CrapReport, crap_report_started);
         write_status(out, &status)?;
         return Ok(());
     };
@@ -492,6 +549,7 @@ pub fn run(out: &str) -> Result<()> {
                     RequiredStage::CrapReport,
                     "invalid CRAP report",
                 );
+                record_duration(&mut status, RequiredStage::CrapReport, crap_report_started);
                 write_status(out, &status)?;
                 return Ok(());
             }
@@ -502,6 +560,7 @@ pub fn run(out: &str) -> Result<()> {
                 RequiredStage::CrapReport,
                 "could not read CRAP report",
             );
+            record_duration(&mut status, RequiredStage::CrapReport, crap_report_started);
             write_status(out, &status)?;
             return Ok(());
         }
@@ -512,9 +571,11 @@ pub fn run(out: &str) -> Result<()> {
             RequiredStage::CrapReport,
             "could not write CRAP report",
         );
+        record_duration(&mut status, RequiredStage::CrapReport, crap_report_started);
         write_status(out, &status)?;
         return Ok(());
     }
+    record_duration(&mut status, RequiredStage::CrapReport, crap_report_started);
 
     // Disk diagnostics are intentionally best-effort and cannot change status.
     if let Ok(disk) = run_capture(Command::new("df").arg("-h")) {

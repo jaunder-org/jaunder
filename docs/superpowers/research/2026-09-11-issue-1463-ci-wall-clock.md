@@ -114,6 +114,47 @@ relevant narrow closure facts:
 These measurements make source closure a supported candidate family but do not
 demonstrate a CI improvement, a Cachix outcome, or a matched Actions pair.
 
+### Local validation remeasurement
+
+This supplementary local observation was captured from the untracked xtask
+sidecar and coverage build log immediately after each run; the measured values
+are preserved below. It is not an Actions observation, treatment pair, or
+replacement for the historical baselines above.
+
+The first clean `validate --no-e2e` run completed in **901,697 ms**. Its
+serialized pre-coverage prefix was **257,431 ms**; `nix-coverage` was **622,186
+ms**; `nix-coverage-gate` was **5,458 ms**; and its post-coverage suffix was
+**19,658 ms**. The numbers reconcile exactly. The coverage `build.log` records
+only `buildPhase completed in 9 minutes 54 seconds` (594,000 ms). It does not
+distinguish compilation, SQLite/PostgreSQL execution, LLVM report generation, or
+CRAP/report work, so those attributions remain **unavailable**.
+
+An exact same-ref rerun completed in **205,904 ms**, with `nix-coverage` reused
+in **772 ms**. This is a reused-output floor, **not** representative per-ref
+coverage verdict execution and not a matched Actions pair. It supplies no
+post-change improvement claim.
+
+The measured serialized arithmetic gives an ideal, contention-free overlap
+bound: `max(622,186, 257,431 + 19,658) = 622,186 ms`, or **279,511 ms
+(4:39.511)** lower than the first run. This is only a physical bound. A
+separate-runner fan-out would have only **99,511 ms** of setup, checkout, Nix
+evaluation/realization, transfer, aggregation, and queue overhead available
+before it misses the three-minute target; same-runner fan-out may instead slow
+the coverage producer through CPU, disk, Nix, Cargo, and PostgreSQL contention.
+
+Ranked conclusion: internal nextest partitioning with profile merge and one
+final union report is the highest-potential but unproven candidate; it must
+preserve the complete coverage census, combined SQLite/PostgreSQL behavior, and
+one stateless union verdict. Parallel post-test reports have at most the
+unattributed 28,186-ms remainder available, and pre-test preparation has no
+measured duration; neither supports a three-minute claim. Splitting coverage
+into final backend verdicts, reducing e2e, serial cache preparation, and
+same-runner broad fan-out are rejected or unselected for the preserved
+invariants and unmeasured contention described in the candidate screen. No
+change is selected until a controlled experiment records shard setup,
+compile/test/PG spans, profile merge, union verdict equivalence, wall-clock, and
+runner-time.
+
 ## Cache and source-boundary evidence
 
 The checked-in [setup action](../../../.github/actions/setup-ci/action.yml)
@@ -151,13 +192,13 @@ eligibility. It must also document Cachix's closure caveat.
 
 ## Candidate screen — no threshold verdict
 
-| Candidate                                 | Evidence / expected critical-path effect                                                                                                                                                                                                                                                                                                                         | Status and rationale                                                                                                                                           |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Serial cache-preparation job              | #2171/#2173 show duplicated cold work but the issue’s critical-path model is `B + max(V,E)` before transfer; preparation adds setup, upload, download, and substitution before fan-out.                                                                                                                                                                          | **Rejected pending measured net win.** It may lower runner-time proxy, but has no demonstrated wall-clock benefit and has no transfer-cost measurement.        |
-| Recombine or reduce the 2×2 e2e matrix    | Matrix e2e already finishes before warm validation; [ADR-0034](../../adr/0034-ci-e2e-matrix-distribution.md) records browser serialization in each VM and distribution as the wall-clock improvement.                                                                                                                                                            | **Rejected.** It violates the preserved matrix-distribution decision and would trade elapsed time for fewer runners.                                           |
-| Further validation fan-out                | Warm validation is the critical path, but #1289’s local data identifies potential duplicated Nix evaluation, source staging, instrumented compilation, result merging, and VM work rather than a measured safe split. Its ordered path preserves `static-docs → static-code`, coverage producer → gate → host consumer, and doctest producer/gate/host consumer. | **Unproven; not selected.** No runnable independent subgraph or Actions treatment evidence yet.                                                                |
-| Narrow Nix source closures                | #1289 proves docs/static isolation and records supported versus necessary fan-out.                                                                                                                                                                                                                                                                               | **Already beneficial for local realization; no CI wall-clock claim.** Future changes require a source probe; no new closure change is selected by this report. |
-| Narrow Cachix exclusion to final verdicts | The expression overmatches cacheable support identities; exact final names and the filter’s closure caveat are known.                                                                                                                                                                                                                                            | **Measurement/probe prerequisite, not an improvement claim.** Must prove final verdict exclusion and support eligibility before any cache-boundary edit.       |
+| Candidate                                  | Evidence / expected critical-path effect                                                                                                                                                                                                                                                                      | Status and rationale                                                                                                                                                                                                                                                            |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Serial cache-preparation job               | #2171/#2173 show duplicated cold work but the issue’s critical-path model is `B + max(V,E)` before transfer; preparation adds setup, upload, download, and substitution before fan-out.                                                                                                                       | **Rejected pending measured net win.** It may lower runner-time proxy, but has no demonstrated wall-clock benefit and has no transfer-cost measurement.                                                                                                                         |
+| Recombine or reduce the 2×2 e2e matrix     | Matrix e2e already finishes before warm validation; [ADR-0034](../../adr/0034-ci-e2e-matrix-distribution.md) records browser serialization in each VM and distribution as the wall-clock improvement.                                                                                                         | **Rejected.** It violates the preserved matrix-distribution decision and would trade elapsed time for fewer runners.                                                                                                                                                            |
+| Validation fan-out / internal partitioning | The local 901,697-ms run has a 622,186-ms coverage producer and a 277,089-ms non-coverage total. The ideal overlap ceiling is 279,511 ms, but coverage producer→gate→host consumer and the other producer/consumer tails remain ordered; a partitioned coverage implementation must retain one union verdict. | **Highest potential, unproven; not selected.** Same-runner contention and duplicate Nix/setup work may reverse savings. Separate-runner fan-out must keep all added setup/transfer/aggregation under 99,511 ms to retain a three-minute path, then prove matched Actions pairs. |
+| Narrow Nix source closures                 | #1289 proves docs/static isolation and records supported versus necessary fan-out.                                                                                                                                                                                                                            | **Already beneficial for local realization; no CI wall-clock claim.** Future changes require a source probe; no new closure change is selected by this report.                                                                                                                  |
+| Narrow Cachix exclusion to final verdicts  | The expression overmatches cacheable support identities; exact final names and the filter’s closure caveat are known.                                                                                                                                                                                         | **Measurement/probe prerequisite, not an improvement claim.** Must prove final verdict exclusion and support eligibility before any cache-boundary edit.                                                                                                                        |
 
 No candidate has two matched cold and warmed treatment pairs, no adaptive
 third-pair condition can be evaluated, and no candidate has a post-change
@@ -181,6 +222,14 @@ claim a post-change improvement.
   [ADR-0178](../../adr/0178-split-hermetic-static-check-boundaries.md), and
   [#1289](https://github.com/jaunder-org/jaunder/issues/1289): controlled
   source-boundary evidence.
+- The local xtask sidecar and coverage build log: clean/reused same-ref
+  remeasurement, serialized-DAG arithmetic, and the only observed coverage
+  sub-boundary; the measured values are preserved above because these runtime
+  artifacts are intentionally untracked.
+- [Validation dispatch](../../../xtask/src/dispatch.rs),
+  [Nix check graph](../../../nix/checks.nix), and
+  [coverage producer](../../../tools/devtool/src/coverage/emit.rs): serialized
+  dependency and union-coverage constraints for the local candidate screen.
 - [CI workflow](../../../.github/workflows/ci.yml),
   [CI setup action](../../../.github/actions/setup-ci/action.yml),
   [Cachix filter documentation](https://github.com/cachix/cachix-action/blob/master/README.md#push-configuration),
