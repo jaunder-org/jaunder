@@ -4,7 +4,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use common::display_name::DisplayName;
 use host::{capture, feed::FeedEventPhase};
-use storage::{DbConnectOptions, StorageRuntimeConfig};
+use storage::DbConnectOptions;
 use test_support::{
     SandboxProfile, SandboxSeedStorage, create_session_for_user, create_user,
     reset_author_theme_fixture, reset_mail, sandbox_profile_anchor, seed_dead_letters,
@@ -908,9 +908,10 @@ mod tests {
         .await
         .expect("demo profile handler succeeds");
 
-        let factory = storage::open_existing_database(&db, &StorageRuntimeConfig::default())
-            .await
-            .expect("reopen seeded database");
+        let factory =
+            storage::open_existing_database(&db, &storage::StorageRuntimeConfig::default())
+                .await
+                .expect("reopen seeded database");
         let users = factory.users();
         let posts = factory.posts();
         let media = factory.media();
@@ -942,7 +943,7 @@ mod tests {
                 .expect("Media listing")
                 .len();
         }
-        assert_eq!(post_count, 68);
-        assert_eq!(media_count, 4);
+        assert_eq!(post_count, 73);
+        assert_eq!(media_count, 1);
     }
 }

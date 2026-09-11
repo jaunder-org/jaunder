@@ -942,7 +942,7 @@ fn manifest_identity(path: PathBuf, kind: &str, authority: &str) -> Result<Manif
     }
     Ok(ManifestIdentity {
         version,
-        sha256: format!("{:x}", Sha256::digest(bytes)),
+        sha256: crate::digest::lowercase_hex(Sha256::digest(bytes)),
     })
 }
 

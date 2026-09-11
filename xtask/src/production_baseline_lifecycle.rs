@@ -1119,7 +1119,7 @@ fn sha256_file(path: &Path) -> Result<String> {
         }
         hash.update(&bytes[..read]);
     }
-    Ok(format!("{:x}", hash.finalize()))
+    Ok(crate::digest::lowercase_hex(hash.finalize()))
 }
 fn baseline_command(package: &PackageIdentity, args: &str) -> String {
     format!(

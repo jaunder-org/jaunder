@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use common::display_name::DisplayName;
 use common::ids::{FeedEventId, PostId, UserId};
 use common::media::{
-    ByteSize, ContentHash, ContentType, Filename, MediaReference, MediaSource, detect_content_type,
+    ByteSize, ContentHash, Filename, MediaReference, MediaSource, detect_content_type,
     path as media_path,
 };
 use common::post_body::PostBody;
@@ -33,7 +33,7 @@ use host::config_key::SiteConfigKey;
 use host::feed::{FeedEventPhase, FeedPath};
 use jiff::{Timestamp, ToSpan};
 use storage::{
-    FeedEventStorage, ForeignEvidenceSink, InstanceId, LocalMediaSink, MediaManager, MediaRecord,
+    FeedEventStorage, ForeignEvidenceSink, InstanceId, LocalMediaSink, MediaRecord,
     MediaReferenceEvidence, MediaReferenceOwnershipResolver, MediaStorage, OperatorStatus,
     PersistedMediaReference, PostBookkeepingExpectation, PostFormat, PostStorage, PreparedPassword,
     ProvenLocalMediaRefs, RenderedPostContent, SessionStorage, SiteConfigStorage,
@@ -433,16 +433,6 @@ impl SandboxVisibility {
             Self::Private => vec![AudienceTarget::Private],
         }
     }
-
-    #[cfg(test)]
-    fn from_read_targets(targets: &[AudienceTarget]) -> Self {
-        match targets {
-            [AudienceTarget::Public] => Self::Public,
-            [AudienceTarget::Subscribers] => Self::Subscribers,
-            [] => Self::Private,
-            _ => panic!("sandbox fixture has unsupported audience targets"),
-        }
-    }
 }
 
 /// One expected sandbox Post. The manifest is both the fixture definition and
@@ -741,7 +731,12 @@ fn sandbox_asset_urls() -> [RootRelativeUrl; 4] {
         "/media/upload/bb/2c/bb2cd32aaa8d6b4bd87af8980a5bb220753bdfafdd953bc4c9b4a861d1e4c233/green-field.svg",
         "/media/upload/2e/8d/2e8d0525784fb6a8b04b82131e9d82cddca52445e21c1faa0baccbc7ad44290c/violet-night.svg",
     ]
-    .map(|url| url.parse().expect("fixed sandbox Media URL"))
+    .map(|url| {
+        let Ok(url) = url.parse() else {
+            unreachable!("fixed sandbox Media URL is root-relative");
+        };
+        url
+    })
 }
 
 /// Produces the complete versioned typed fixture manifest for a profile creation
@@ -1411,10 +1406,11 @@ pub async fn create_session_for_user(
 mod sandbox_profile_tests {
     use super::*;
     use common::media::MediaRef;
-    use rstest_reuse::apply;
+    use rstest::*;
+    use rstest_reuse::*;
     use storage::test_support::{Backend, backends};
 
-    async fn assert_sandbox_users(users: Arc<dyn UserStorage>, expected: &[SandboxUserFixture]) {
+    async fn assert_sandbox_users(users: &dyn UserStorage, expected: &[SandboxUserFixture]) {
         for fixture in expected {
             let username = fixture
                 .username
@@ -1463,7 +1459,7 @@ mod sandbox_profile_tests {
             site_config.list().await.expect("site config list"),
             vec![("site.title".to_owned(), SANDBOX_TITLE.to_owned())]
         );
-        assert_sandbox_users(users, &SANDBOX_USER_FIXTURES[..2]).await;
+        assert_sandbox_users(users.as_ref(), &SANDBOX_USER_FIXTURES[..2]).await;
     }
 
     #[apply(backends)]
@@ -1490,7 +1486,7 @@ mod sandbox_profile_tests {
         .await
         .expect("demo profile seeds");
         assert_eq!(actual, expected);
-        assert_sandbox_users(users, &SANDBOX_USER_FIXTURES).await;
+        assert_sandbox_users(users.as_ref(), &SANDBOX_USER_FIXTURES).await;
 
         let seeded_media = MediaRef {
             source: MediaSource::Upload,
