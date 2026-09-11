@@ -100,6 +100,11 @@ pub struct PostRecord {
     pub tags: Vec<PostTag>,
 }
 
+/// Portable scalar projection shared by dynamic `PostRecord` queries.
+///
+/// Tags remain dialect-owned because their aggregate subquery differs by backend.
+pub(crate) const POST_RECORD_COLUMNS: &str = "p.post_id, p.user_id, u.username, u.display_name, p.title, p.slug, p.body, p.format, p.rendered_html, p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary";
+
 impl PostRecord {
     /// Returns the canonical permalink for this post as a [`RootRelativeUrl`].
     /// Uses the publication timestamp if published; otherwise falls back to the creation timestamp.
