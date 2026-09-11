@@ -2054,6 +2054,9 @@ test.describe("scheduled editor local time", () => {
     await page.fill(SEL.postSlug, "scheduled-draft-reopened");
     await click(page, SEL.publishButton("false"));
     await waitForSelector(page, SEL.saveSummary);
+    await expect(
+      page.locator(SEL.saveSummary).locator('[data-test="slug-value"]'),
+    ).toHaveAttribute("data-slug", "scheduled-draft-reopened");
     const draftPermalink = await followPermalink(
       page,
       page.locator(SEL.saveSummary),
