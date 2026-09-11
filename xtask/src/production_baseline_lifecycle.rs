@@ -215,24 +215,53 @@ const args = process.argv.slice(2).map(quote).join(" ");
 const inner = `export $(systemctl show --property=Environment --value jaunder.service | tr ' ' '\\n' | grep '^JAUNDER_'); export JAUNDER_STORAGE_PATH=/var/lib/jaunder/data; test-support ${{args}}`;
 const command = `diagnostic=/tmp/jaunder-baseline-seed-$$.err; ${{inner}} 2>"$diagnostic"; code=$?; if [ "$code" -ne 0 ]; then cat "$diagnostic"; fi; rm -f "$diagnostic"; printf '\\n{STATUS}%s\\n' "$code"`;
 const socket = net.createConnection({{host: "127.0.0.1", port: {port}}});
+const marker = "{STATUS}";
 let output = "";
-socket.on("data", (chunk) => output += chunk);
-socket.on("error", (error) => {{ console.error(error.message); process.exitCode = 1; }});
-socket.on("end", () => {{
-  const marker = "{STATUS}";
+let completed = false;
+const fail = (message, body = output) => {{
+  if (completed) return;
+  completed = true;
+  socket.destroy();
+  if (body.trim()) process.stderr.write(body.trimEnd() + "\n");
+  console.error(message);
+  process.exitCode = 1;
+}};
+const consume = () => {{
   const index = output.lastIndexOf(marker);
-  const statusMatch = index < 0 ? null : output.slice(index + marker.length).trimStart().match(/^(\d+)/);
-  const status = statusMatch ? Number(statusMatch[1]) : null;
-  const body = index < 0 ? output : output.slice(0, index);
+  if (index < 0) return;
+  const body = output.slice(0, index);
+  if (body.includes(marker)) {{
+    fail("test-support seed command returned multiple exit-status frames", body);
+    return;
+  }}
+  const statusMatch = output.slice(index + marker.length).match(/^(\d+)\n/);
+  if (!statusMatch) return;
+  completed = true;
+  socket.destroy();
+  const status = Number(statusMatch[1]);
   if (status !== 0) {{
     if (body.trim()) process.stderr.write(body.trimEnd() + "\n");
-    console.error(`test-support seed command failed with status ${{status ?? "missing"}}`);
+    console.error(`test-support seed command failed with status ${{status}}`);
     process.exitCode = 1;
     return;
   }}
-  process.stdout.write(output.slice(0, index).trimEnd());
+  process.stdout.write(body.trimEnd());
+}};
+socket.on("data", (chunk) => {{
+  if (completed) return;
+  output += chunk;
+  consume();
 }});
-socket.end(command + "\\n");
+socket.on("error", (error) => fail(`guest control connection failed: ${{error.message}}`));
+socket.on("end", () => {{
+  if (completed) return;
+  fail(
+    output.includes(marker)
+      ? "guest control response contained a malformed exit-status frame"
+      : "guest control response closed before exit-status frame",
+  );
+}});
+socket.write(command + "\\n");
 "#
             ),
         )?;
@@ -920,7 +949,6 @@ socket.end(command + "\\n");
         stream.set_read_timeout(Some(Duration::from_millis(200)))?;
         stream.write_all(framed.as_bytes())?;
         stream.write_all(b"\n")?;
-        stream.shutdown(Shutdown::Write)?;
         let deadline = Instant::now() + Duration::from_secs(20);
         let mut output = Vec::new();
         let mut bytes = [0_u8; 4096];
@@ -1278,6 +1306,28 @@ mod tests {
             fs::metadata(executable).unwrap().permissions().mode() & 0o777,
             0o700
         );
+    }
+
+    #[test]
+    fn complete_status_accepts_a_complete_success_frame_without_eof() {
+        assert_eq!(
+            complete_status(b"seed output\n__JAUNDER_BASELINE_STATUS__0\n").unwrap(),
+            Some("seed output".to_owned())
+        );
+    }
+
+    #[test]
+    fn complete_status_waits_for_the_frame_terminator() {
+        assert_eq!(
+            complete_status(b"seed output\n__JAUNDER_BASELINE_STATUS__0").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn complete_status_rejects_malformed_and_failed_frames() {
+        assert!(complete_status(b"__JAUNDER_BASELINE_STATUS__not-a-status\n").is_err());
+        assert!(complete_status(b"__JAUNDER_BASELINE_STATUS__1\n").is_err());
     }
 
     #[test]
