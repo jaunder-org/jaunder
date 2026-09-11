@@ -1311,7 +1311,11 @@ fn run_discovery(
                 let runtime = recorder.lifecycle(format!("{source_id}-start"), || {
                     lifecycle.start(source_id, source_backend, source.clone())
                 })?;
+                let deployment_id = runtime.deployment_id.clone();
                 recorder.runtime(runtime);
+                recorder.lifecycle(format!("{source_id}-configure-base-url"), || {
+                    lifecycle.configure_base_url(&deployment_id)
+                })?;
                 let state = lifecycle.private_path(&format!("{source_id}.json"))?;
                 let seed_process = lifecycle.seed_process(source_id)?;
                 recorder.behavior(|| {
@@ -1422,6 +1426,9 @@ fn run_acceptance(
                     })?;
                 source_runtime.deployment_id = format!("{source_id}-package-source");
                 recorder.runtime(source_runtime.clone());
+                recorder.lifecycle(format!("{source_id}-configure-base-url"), || {
+                    lifecycle.configure_base_url(source_id)
+                })?;
                 let state = lifecycle.private_path(&format!("{source_id}.json"))?;
                 let seed_process = lifecycle.seed_process(source_id)?;
                 recorder.behavior(|| {

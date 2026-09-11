@@ -549,6 +549,23 @@ socket.end(command + "\\n");
         Ok(())
     }
 
+    pub fn configure_base_url(&self, deployment_id: &str) -> Result<()> {
+        let package = &self
+            .deployments
+            .get(deployment_id)
+            .context("unknown deployment for base URL configuration")?
+            .package;
+        self.guest(
+            deployment_id,
+            &baseline_command(
+                package,
+                "site-config set site.base_url https://localhost:8443",
+            ),
+        )
+        .context("configuring stable site base URL")
+        .map(|_| ())
+    }
+
     /// Export an archive through the source deployment and retain it only in the
     /// restricted run workspace. The manifest is parsed before returning it.
     pub fn backup(&self, deployment_id: &str) -> Result<BackupArtifact> {
