@@ -9,7 +9,7 @@ import {
 } from "./production-baseline";
 import { allowSecondBoot } from "./bootBudget";
 import { goto, login, TEST_PASSWORD } from "./helpers";
-import { seedSandboxProfileViaTool } from "./seed";
+import { seedConfigViaTool, seedSandboxProfileViaTool } from "./seed";
 
 const statePath = process.env.JAUNDER_PRODUCTION_BASELINE_STATE;
 const canaryPath = process.env.JAUNDER_PRODUCTION_BASELINE_CANARY_PATH;
@@ -51,6 +51,7 @@ test("production baseline host bridge runs the shared behavior flow", async ({
   let checks: string[];
   if (phase === "create") {
     const seededManifest = await seedSandboxProfileViaTool("demo");
+    await seedConfigViaTool("site.base_url", "https://localhost:8443");
     const state = await createProductionBaseline(
       page,
       tracedContext,
