@@ -271,17 +271,17 @@ pub enum Command {
     },
 }
 
-/// `production-baseline` operations. These commands establish identities and
-/// exclusive ownership only; VM/package lifecycle work is deliberately separate.
+/// `production-baseline` runs an opt-in immutable deployment qualification and
+/// atomically publishes only sanitized dated evidence.
 #[derive(Subcommand)]
 pub enum ProductionBaselineCommand {
-    /// Resolve one immutable upstream revision and verify the executing harness.
+    /// Discover same-revision deployment, recovery, and continuity evidence.
     Discover {
         /// Git revision that resolves to a commit reachable from the upstream repository.
         #[arg(long, value_parser = nonempty)]
         revision: String,
     },
-    /// Resolve two distinct immutable upstream revisions and verify the harness.
+    /// Qualify a distinct source-to-target upgrade; this is non-release evidence.
     Accept {
         /// Source Git revision.
         #[arg(long, value_parser = nonempty)]
@@ -447,6 +447,10 @@ pub enum NixCommand {
     /// runs in CI and on request, not in per-commit `check`/`validate`.
     #[command(after_help = "EXAMPLES:\n  cargo xtask nix probe-source")]
     ProbeSource,
+    /// Run the opt-in isolated SQLite/PostgreSQL production VM lifecycle smoke
+    /// against the current checkout as a `path:` flake. It publishes no evidence.
+    #[command(after_help = "EXAMPLES:\n  devtool run -- cargo xtask nix production-baseline-smoke")]
+    ProductionBaselineSmoke,
 }
 
 /// `traces` subcommands.
@@ -542,6 +546,7 @@ impl Cli {
             Command::Traces(TracesCommand::Analyze { .. }) => "traces-analyze",
             Command::Traces(TracesCommand::Run { .. }) => "traces-run",
             Command::Traces(TracesCommand::BootPhases { .. }) => "traces-boot-phases",
+            Command::Nix(NixCommand::ProductionBaselineSmoke) => "nix-production-baseline-smoke",
             Command::Coverage(CoverageCommand::ProbeSource) => "coverage-probe-source",
             Command::WasmCoverage(WasmCoverageCommand::Probe) => "wasm-coverage-probe",
             Command::WasmCoverage(WasmCoverageCommand::Measure { .. }) => "wasm-coverage-measure",

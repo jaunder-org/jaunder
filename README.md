@@ -51,17 +51,24 @@ By default, `Jaunder` will listen on http://localhost:3000/. To make this
 publically accessible, you need to have a reverse proxy (`Caddy` is recommended)
 that will listen on a publically accessible IP address and handle HTTPS.
 
-If you are deploying with NixOS, import the shared module and enable the
-service:
+If you are deploying with NixOS, import the shared module, select the deployable
+`packages.jaunder` only when overriding the default, and enable the service:
 
 ```nix
 {
   imports = [ inputs.jaunder.nixosModules.jaunder ];
 
-  services.jaunder.enable = true;
-  services.jaunder.bind = "0.0.0.0:3000";
+  services.jaunder = {
+    enable = true;
+    bind = "0.0.0.0:3000";
+    prod = true;
+  };
 }
 ```
+
+TLS remains the external reverse-proxy boundary. For the opt-in isolated NixOS
+deployment/recovery qualification harness, see the
+[production baseline runbook](./docs/production-baseline.md).
 
 For information on the design of `Jaunder`, see
 [the Design document](./docs/DESIGN.md).

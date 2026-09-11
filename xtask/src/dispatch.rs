@@ -204,6 +204,9 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             lifecycle::finalize(&mut result, start);
             Ok(result)
         }
+        Command::Nix(NixCommand::ProductionBaselineSmoke) => {
+            production_baseline::run_current_checkout_smoke()
+        }
         Command::Coverage(CoverageCommand::ProbeSource) => {
             let start = Instant::now();
             let mut result = CommandResult::new("coverage-probe-source");

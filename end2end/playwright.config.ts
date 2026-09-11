@@ -38,6 +38,9 @@ const chromiumLaunchOptions = {
 const visualTag = /@visual/;
 const diagnosticCoverage = Boolean(process.env.JAUNDER_WASM_COVERAGE_OUT);
 const measurementMode = Boolean(process.env.JAUNDER_WASM_COVERAGE_MODE);
+const productionBaselineTls = process.env.JAUNDER_PRODUCTION_BASELINE_TLS
+  ? { ignoreHTTPSErrors: true }
+  : {};
 const diagnosticCoverageSpec = /wasm-coverage\.spec\.ts/;
 const measurementSpec = /wasm-coverage-measure\.spec\.ts/;
 const diagnosticSpec = measurementMode
@@ -116,6 +119,7 @@ export default defineConfig({
       use: {
         ...devices["Desktop Chrome"],
         launchOptions: chromiumLaunchOptions,
+        ...productionBaselineTls,
       },
     },
     {

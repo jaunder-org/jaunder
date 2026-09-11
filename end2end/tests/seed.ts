@@ -61,8 +61,9 @@ const seededScripts = new WeakMap<BrowserContext, Disposable>();
 
 /** Runs a JSON-emitting `test-support` command. */
 function runSeedToolJson(args: string[]): Record<string, unknown> {
+  const seedProcess = process.env.JAUNDER_E2E_SEED_PROCESS ?? "test-support";
   return JSON.parse(
-    execFileSync("test-support", args, {
+    execFileSync(seedProcess, args, {
       stdio: "pipe",
       env: process.env,
       encoding: "utf8",

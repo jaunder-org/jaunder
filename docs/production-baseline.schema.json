@@ -13,6 +13,7 @@
     "target",
     "runtime",
     "backups",
+    "upgrades",
     "lifecycle",
     "checks",
     "gaps",
@@ -58,6 +59,12 @@
       "type": "array",
       "items": {
         "$ref": "#/$defs/backup"
+      }
+    },
+    "upgrades": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/upgrade"
       }
     },
     "lifecycle": {
@@ -330,6 +337,47 @@
         },
         "sha256": {
           "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "upgrade": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "backend",
+        "source_package",
+        "target_package",
+        "source_schema_version",
+        "target_schema_version",
+        "binary_changed",
+        "schema_migrated"
+      ],
+      "properties": {
+        "backend": {
+          "enum": [
+            "sqlite",
+            "postgres"
+          ]
+        },
+        "source_package": {
+          "$ref": "#/$defs/package"
+        },
+        "target_package": {
+          "$ref": "#/$defs/package"
+        },
+        "source_schema_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "target_schema_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "binary_changed": {
+          "type": "boolean"
+        },
+        "schema_migrated": {
+          "type": "boolean"
         }
       }
     },

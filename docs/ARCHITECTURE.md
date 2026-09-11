@@ -2233,6 +2233,24 @@ through the service manager when needed. There is no site symlink; the module
 comment names #237 as the reason. Two `nixosConfigurations` test VMs
 (interactive, PostgreSQL) exist for development only.
 
+**Production baseline qualification.** The opt-in host-only
+`cargo xtask production-baseline` boundary resolves immutable upstream
+revisions, owns Nix builds, VM lifecycle, the stable local HTTPS proxy, workflow
+ordering, and dated sanitized evidence. It uses the supported module's
+package-selection seam without adding a lifecycle output to `checks`; Nix never
+invokes xtask. Discovery and non-release acceptance execute the shared Chromium
+Playwright behavior flow over fresh SQLite and PostgreSQL deployments, including
+restart, reboot, and all four exact-schema restore directions. Completed
+evidence is JSON-authoritative, Markdown-derived, and atomically retained only
+as an exact summary pair under `docs/evidence/production-baseline/`; raw state
+and generated secrets remain in the restricted gitignored workspace. The
+operator contract and its explicit non-claims live in
+[the production baseline runbook](production-baseline.md). This is an opt-in
+qualification surface, not a public CA/DNS, performance, or release claim
+([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md),
+[ADR-0142](adr/0142-declarative-nixos-deployment-package-outputs.md), and
+[ADR-0174](adr/0174-backup-format-and-schema-compatibility.md)).
+
 ## Emacs client
 
 The Emacs client is the reference authoring client: it publishes org-mode

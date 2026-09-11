@@ -71,7 +71,7 @@ Out:
     JSON-to-Markdown parity including durations, allowlist, all-outcome
     redaction, and canary tests; then `devtool run -- cargo xtask check`.
 
-- [ ] Task 3: Provide the isolated production VM lifecycle
+- [x] Task 3: Provide the isolated production VM lifecycle
   - Contract: add a package-selection seam to the Jaunder NixOS module while
     preserving the existing default. The lifecycle adapter alone consumes
     `ResolvedRevision`, builds that immutable revision's supported
@@ -84,12 +84,12 @@ Out:
     local HTTPS origin. Service restart and whole-VM reboot preserve Jaunder,
     Media, and database state; proxy cutover changes targets without changing
     browser origin.
-  - Verification: opt-in smoke execution for both profiles proves module
-    startup, HTTPS redirect/termination and secure cookies, package/runtime
-    identity, service restart, VM reboot, and bounded cleanup; then
-    `devtool run -- cargo xtask check`.
+  - Verification: `devtool run -- cargo xtask nix production-baseline-smoke`
+    exercises both profiles' module startup, HTTPS redirect/termination and
+    secure cookies, package/runtime identity, service restart, VM reboot, and
+    bounded cleanup; then `devtool run -- cargo xtask check`.
 
-- [ ] Task 4: Implement the discovery recovery workflow
+- [x] Task 4: Implement the discovery recovery workflow
   - Contract: with the Task 2 lease held, every run creates a new workspace and
     fresh SQLite/PostgreSQL source disks, runs every Task 1 creation/check, then
     cuts the stable origin back to each source after service restart and again
@@ -111,7 +111,7 @@ Out:
     `devtool run -- cargo xtask check`. The real upstream-identified discovery
     report is Task 6.
 
-- [ ] Task 5: Implement the two-revision acceptance-capability workflow
+- [x] Task 5: Implement the two-revision acceptance-capability workflow
   - Contract: accept only a validated distinct `ResolvedRevision` pair and
     create fresh source state. Repeat both source deployments and
     restart/reboot, switch each service declaratively to the target package,

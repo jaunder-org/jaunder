@@ -36,6 +36,7 @@
     in
     {
       inherit (nixosLayer) nixosModules nixosConfigurations;
+      lib.productionBaselineVm = nixosLayer.productionBaselineVm;
     }
     // flake-utils.lib.eachDefaultSystem (
       system:
@@ -53,7 +54,7 @@
         };
       in
       {
-        packages = packageLayer.packages // checkLayer.packages;
+        packages = packageLayer.packages // nixosLayer.packagesForSystem { inherit system pkgs; } // checkLayer.packages;
         apps = nixosLayer.appsForSystem { inherit system pkgs; };
         checks = checkLayer.checks;
         inherit devShells;

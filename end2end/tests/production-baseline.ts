@@ -778,7 +778,7 @@ export async function verifyFreshAppPasswordLifecycle(
   page: Page,
   state: BaselineState,
   tracedContext: NewTracedContext,
-): Promise<void> {
+): Promise<string> {
   const fresh = await mintAppPassword(page, "Production baseline revocable");
   const authorization = `Basic ${Buffer.from(`${state.username}:${fresh}`).toString("base64")}`;
   const atomContext = await isolatedRequest(tracedContext);
@@ -809,4 +809,5 @@ export async function verifyFreshAppPasswordLifecycle(
   } finally {
     await revokedContext.dispose();
   }
+  return fresh;
 }
