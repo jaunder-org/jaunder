@@ -1,6 +1,6 @@
-import { appendFile, readFile, writeFile } from "node:fs/promises";
+import { appendFile, readFile, rename, writeFile } from "node:fs/promises";
 
-import { test } from "./fixtures";
+import { setTestBudget, test } from "./fixtures";
 import {
   createProductionBaseline,
   verifyFreshAppPasswordLifecycle,
@@ -13,18 +13,20 @@ import { seedSandboxProfileViaTool } from "./seed";
 
 const statePath = process.env.JAUNDER_PRODUCTION_BASELINE_STATE;
 const canaryPath = process.env.JAUNDER_PRODUCTION_BASELINE_CANARY_PATH;
-const phase = process.env.JAUNDER_PRODUCTION_BASELINE_PHASE;
-type BaselineBrowserState = {
-  cookies: Array<{
-    name: string;
-    value: string;
-    domain: string;
-    path: string;
-    expires: number;
-    httpOnly: boolean;
-    secure: boolean;
-    sameSite: "Strict" | "Lax" | "None";
-  }>;
+const coordinator = process.env.JAUNDER_PRODUCTION_BASELINE_COORDINATOR;
+const PRODUCTION_BASELINE_HARNESS_BUDGET_MS = 30 * 60_000;
+
+type BrowserRequest = {
+  sequence: number;
+  phase: "create" | "read-only" | "restored" | "close";
+  seed_process?: string;
+};
+
+type BrowserResult = {
+  sequence: number;
+  phase: BrowserRequest["phase"];
+  checks: Array<{ id: string; outcome: "passed"; duration_ms: number }>;
+  error?: string;
 };
 
 async function registerCanaries(values: readonly string[]): Promise<void> {
@@ -38,28 +40,54 @@ async function registerCanaries(values: readonly string[]): Promise<void> {
   );
 }
 
-test("production baseline host bridge runs the shared behavior flow", async ({
-  page,
-  tracedContext,
-}) => {
-  test.skip(
-    !statePath || !phase,
-    "only xtask supplies restricted baseline state",
-  );
-  if (!statePath || !phase) return;
+async function publish(
+  path: string,
+  value: BrowserResult | { readonly: true },
+): Promise<void> {
+  const temporary = `${path}.tmp`;
+  await writeFile(temporary, JSON.stringify(value));
+  await rename(temporary, path);
+}
+
+async function waitForRequest(sequence: number): Promise<BrowserRequest> {
+  if (!coordinator) throw new Error("baseline browser coordinator is missing");
+  const path = `${coordinator}/request-${sequence}.json`;
+  const deadline = Date.now() + 90_000;
+  for (;;) {
+    try {
+      return JSON.parse(await readFile(path, "utf8")) as BrowserRequest;
+    } catch (error: unknown) {
+      if (
+        !(error instanceof Error && "code" in error && error.code === "ENOENT")
+      )
+        throw error;
+      if (Date.now() >= deadline)
+        throw new Error(`timed out waiting for browser request ${sequence}`);
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    }
+  }
+}
+
+async function runPhase(
+  request: BrowserRequest,
+  page: Parameters<typeof createProductionBaseline>[0],
+  tracedContext: Parameters<typeof createProductionBaseline>[1],
+): Promise<BrowserResult> {
+  if (!statePath) throw new Error("baseline browser state path is missing");
   const started = performance.now();
   let checks: string[];
-  if (phase === "create") {
+  if (request.phase === "create") {
+    if (!request.seed_process)
+      throw new Error("create phase omitted the seed process path");
+    process.env.JAUNDER_E2E_SEED_PROCESS = request.seed_process;
     const seededManifest = await seedSandboxProfileViaTool("demo");
     const state = await createProductionBaseline(
       page,
       tracedContext,
       seededManifest,
     );
-    const browser = await page.context().storageState();
     await registerCanaries([
       TEST_PASSWORD,
-      ...browser.cookies.map((cookie) => cookie.value),
       state.appPassword,
       ...state.authorAccess.map((access) => access.appPassword),
       state.aliceSession.token,
@@ -72,51 +100,91 @@ test("production baseline host bridge runs the shared behavior flow", async ({
       state.nonSubscriberSession.setCookie,
       state.nonSubscriberSession.marker,
     ]);
-    await writeFile(statePath, JSON.stringify({ browser, state }));
+    await writeFile(statePath, JSON.stringify(state));
     checks = ["browser-create", "atompub", "feeds"];
   } else {
-    const saved = JSON.parse(await readFile(statePath, "utf8")) as {
-      browser: BaselineBrowserState;
-      state: BaselineState;
-    };
-    await page.context().addCookies(saved.browser.cookies);
-    await verifyProductionBaseline(page, saved.state, tracedContext);
-    if (phase === "restored") {
-      await page.context().clearCookies();
-      allowSecondBoot(
-        page,
-        "fresh authentication after continuity verification is part of the recovery contract",
-      );
-      await login(page, saved.state.username, TEST_PASSWORD);
-      allowSecondBoot(
-        page,
-        "App Password management has no in-app navigation control after fresh login",
-      );
-      await goto(page, "/sessions");
-      const fresh = await verifyFreshAppPasswordLifecycle(
-        page,
-        saved.state,
-        tracedContext,
-      );
-      await registerCanaries([fresh]);
+    const state = JSON.parse(
+      await readFile(statePath, "utf8"),
+    ) as BaselineState;
+    await verifyProductionBaseline(page, state, tracedContext);
+    if (request.phase === "restored") {
+      const recoveryContext = await tracedContext();
+      try {
+        const recoveryPage = await recoveryContext.newPage();
+        allowSecondBoot(
+          recoveryPage,
+          "fresh authentication after continuity verification is part of the recovery contract",
+        );
+        await login(recoveryPage, state.username, TEST_PASSWORD);
+        allowSecondBoot(
+          recoveryPage,
+          "App Password management has no in-app navigation control after fresh login",
+        );
+        await goto(recoveryPage, "/sessions");
+        const fresh = await verifyFreshAppPasswordLifecycle(
+          recoveryPage,
+          state,
+          tracedContext,
+        );
+        await registerCanaries([fresh]);
+      } finally {
+        await recoveryContext.close();
+      }
     }
-    if (phase !== "read-only" && phase !== "restored")
-      throw new Error(`unknown production baseline phase ${phase}`);
     checks = ["browser-read-only", "atompub", "feeds"];
   }
   const durationMs = Math.max(
     1,
     Math.floor((performance.now() - started) / checks.length),
   );
-  console.log(
-    "production-baseline-result=" +
-      JSON.stringify({
-        phase,
-        checks: checks.map((id) => ({
-          id,
-          outcome: "passed",
-          duration_ms: durationMs,
-        })),
-      }),
+  return {
+    sequence: request.sequence,
+    phase: request.phase,
+    checks: checks.map((id) => ({
+      id,
+      outcome: "passed",
+      duration_ms: durationMs,
+    })),
+  };
+}
+
+test("production baseline host bridge preserves one browser context", async ({
+  page,
+  tracedContext,
+}) => {
+  test.skip(
+    !statePath || !coordinator,
+    "only xtask supplies restricted baseline coordinator",
   );
+  if (!statePath || !coordinator) return;
+  setTestBudget(PRODUCTION_BASELINE_HARNESS_BUDGET_MS);
+  await writeFile(`${coordinator}/ready`, "");
+  for (let sequence = 1; ; sequence += 1) {
+    const request = await waitForRequest(sequence);
+    if (request.sequence !== sequence)
+      throw new Error(
+        `unexpected browser request sequence ${request.sequence}`,
+      );
+    if (request.phase === "close") {
+      await publish(`${coordinator}/closed`, { readonly: true });
+      return;
+    }
+    try {
+      await publish(
+        `${coordinator}/result-${sequence}.json`,
+        await runPhase(request, page, tracedContext),
+      );
+    } catch (error) {
+      await publish(`${coordinator}/result-${sequence}.json`, {
+        sequence,
+        phase: request.phase,
+        checks: [],
+        error:
+          error instanceof Error
+            ? (error.stack ?? error.message)
+            : String(error),
+      });
+      throw error;
+    }
+  }
 });

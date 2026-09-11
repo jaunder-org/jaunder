@@ -8,10 +8,11 @@
 use std::{
     collections::BTreeSet,
     fs::{self, OpenOptions},
-    io::Write,
+    io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    process::Command,
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    process::{Child, Command, Stdio},
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, bail};
@@ -963,15 +964,10 @@ impl RunLease {
 
     fn acquire_at(path: &Path) -> Result<Self> {
         fs::create_dir_all(path.parent().context("host lease has no parent")?)?;
-        let mut file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(path)
-            .with_context(|| format!("opening host-global lease {}", path.display()))?;
+        let mut file = open_lease(path)?;
+        validate_lease_file(&file, path)?;
         if let Err(error) = file.try_lock() {
-            let owner = read_lease(path).ok();
+            let owner = read_lease(&mut file).ok();
             let detail = owner.map_or_else(
                 || "unknown owner".to_owned(),
                 |owner| format!("pid {}", owner.pid),
@@ -995,15 +991,166 @@ impl Drop for RunLease {
     }
 }
 
-fn global_lease_path() -> Result<PathBuf> {
-    Ok(PathBuf::from("/tmp/jaunder-production-baseline.lock"))
+#[cfg(unix)]
+fn open_lease(path: &Path) -> Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    // O_NOFOLLOW keeps an attacker-controlled link from becoming the lock inode.
+    OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .custom_flags(no_follow_flag()?)
+        .open(path)
+        .with_context(|| format!("opening host-global lease {}", path.display()))
 }
 
-fn read_lease(path: &Path) -> Result<LeaseRecord> {
-    serde_json::from_slice(
-        &fs::read(path).with_context(|| format!("reading lease {}", path.display()))?,
-    )
-    .context("parsing production-baseline lease")
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn no_follow_flag() -> Result<i32> {
+    Ok(0o400_000)
+}
+
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "watchos",
+    target_os = "freebsd",
+    target_os = "dragonfly",
+    target_os = "netbsd"
+))]
+fn no_follow_flag() -> Result<i32> {
+    Ok(0x100)
+}
+
+#[cfg(target_os = "openbsd")]
+fn no_follow_flag() -> Result<i32> {
+    Ok(0x200)
+}
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))
+))]
+fn no_follow_flag() -> Result<i32> {
+    bail!("this Unix platform does not expose a verified no-follow lease open flag")
+}
+#[cfg(not(unix))]
+fn open_lease(path: &Path) -> Result<std::fs::File> {
+    OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)
+        .with_context(|| format!("opening host-global lease {}", path.display()))
+}
+
+#[cfg(unix)]
+fn validate_lease_file(file: &std::fs::File, path: &Path) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = file
+        .metadata()
+        .with_context(|| format!("inspecting host-global lease {}", path.display()))?;
+    if !metadata.is_file() || metadata.uid() != effective_uid()? {
+        bail!("host-global lease is not a regular file owned by this user");
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_lease_file(file: &std::fs::File, _: &Path) -> Result<()> {
+    if !file.metadata()?.is_file() {
+        bail!("host-global lease is not a regular file");
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn global_lease_path() -> Result<PathBuf> {
+    let uid = effective_uid()?;
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute() && private_runtime_directory(path, uid))
+        .unwrap_or_else(|| fallback_runtime_directory(uid));
+    ensure_private_runtime_directory(&runtime, uid)?;
+    Ok(runtime.join("jaunder-production-baseline.lock"))
+}
+
+#[cfg(not(unix))]
+fn global_lease_path() -> Result<PathBuf> {
+    Ok(std::env::temp_dir().join("jaunder-production-baseline.lock"))
+}
+
+#[cfg(unix)]
+fn effective_uid() -> Result<u32> {
+    let status = fs::read_to_string("/proc/self/status").context("reading effective user ID")?;
+    let uid = status
+        .lines()
+        .find_map(|line| line.strip_prefix("Uid:"))
+        .context("missing effective user ID")?
+        .split_whitespace()
+        .nth(1)
+        .context("missing effective user ID")?;
+    uid.parse().context("parsing effective user ID")
+}
+
+#[cfg(unix)]
+fn fallback_runtime_directory(uid: u32) -> PathBuf {
+    std::env::temp_dir().join(format!("jaunder-production-baseline-{uid}"))
+}
+
+#[cfg(unix)]
+fn private_runtime_directory(path: &Path, uid: u32) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return false;
+    };
+    metadata.is_dir() && metadata.uid() == uid && metadata.mode() & 0o777 == 0o700
+}
+
+#[cfg(unix)]
+fn ensure_private_runtime_directory(path: &Path, uid: u32) -> Result<()> {
+    match fs::create_dir(path) {
+        Ok(()) => {
+            use std::os::unix::fs::PermissionsExt;
+
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+                .context("restricting host lease runtime directory")?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!("creating host lease runtime directory {}", path.display())
+            });
+        }
+    }
+    if private_runtime_directory(path, uid) {
+        Ok(())
+    } else {
+        bail!("host lease runtime directory is not caller-owned mode 0700")
+    }
+}
+
+fn read_lease(file: &mut std::fs::File) -> Result<LeaseRecord> {
+    let mut contents = Vec::new();
+    file.seek(SeekFrom::Start(0))?;
+    file.read_to_end(&mut contents)?;
+    serde_json::from_slice(&contents).context("parsing production-baseline lease")
 }
 fn process_start_ticks(pid: u32) -> Result<u64> {
     let text = fs::read_to_string(format!("/proc/{pid}/stat"))
@@ -1237,6 +1384,26 @@ pub fn publish(
     fs::rename(&staging, destination).context("atomically publishing sanitized evidence")
 }
 
+fn publish_with_workspace_cleanup(
+    workspace: &Path,
+    destination: &Path,
+    evidence: &Evidence,
+    canaries: &EvidenceCanaries,
+    cleanup: impl FnOnce(&Path) -> Result<()>,
+) -> Result<()> {
+    match publish(workspace, destination, evidence, canaries) {
+        Ok(()) => {
+            // The rename made the evidence durable; a stale private workspace is not publication failure.
+            let _ = cleanup(workspace);
+            Ok(())
+        }
+        Err(error) => match cleanup(workspace) {
+            Ok(()) => Err(error),
+            Err(cleanup_error) => Err(cleanup_error.context(error)),
+        },
+    }
+}
+
 fn validate_serialized_evidence(json: &str) -> Result<()> {
     let schema: serde_json::Value =
         serde_json::from_str(include_str!("../../docs/production-baseline.schema.json"))
@@ -1304,127 +1471,69 @@ fn persist_workflow_error(
     }
     Ok(())
 }
-
 fn run_discovery(
     root: &Path,
     harness: &HarnessIdentity,
     source: ResolvedRevision,
 ) -> (DiscoveryResult, Result<EvidenceCanaries>, Option<PathBuf>) {
-    use crate::production_baseline_lifecycle::BaselineLifecycle;
-
-    let mut workflow_ok = false;
-    let mut retained_workspace = None;
-    let mut recorder = DiscoveryRecorder::default();
-    let workflow = (|| -> Result<EvidenceCanaries> {
-        let mut lifecycle = recorder.lifecycle("workspace-create", || {
-            BaselineLifecycle::create_immutable(root, &harness.commit)
-        })?;
-        let canary_path = lifecycle.private_path("run-canaries.jsonl")?;
-        fs::File::create(&canary_path)?;
-        let result: Result<()> = (|| {
-            for (source_id, source_backend) in [
-                ("discover-source-sqlite", StorageBackend::Sqlite),
-                ("discover-source-postgres", StorageBackend::Postgres),
-            ] {
-                let runtime = recorder.lifecycle(format!("{source_id}-start"), || {
-                    lifecycle.start(source_id, source_backend, source.clone())
-                })?;
-                let deployment_id = runtime.deployment_id.clone();
-                recorder.runtime(runtime);
-                recorder.lifecycle(format!("{source_id}-configure-base-url"), || {
-                    lifecycle.configure_base_url(&deployment_id)
-                })?;
-                let state = lifecycle.private_path(&format!("{source_id}.json"))?;
-                let seed_process = lifecycle.seed_process(source_id)?;
-                recorder.behavior(|| {
-                    run_shared_behavior(&state, &canary_path, "create", Some(&seed_process))
-                })?;
-                recorder.check("service-restart", || lifecycle.restart_service(source_id))?;
-                lifecycle.select_proxy(source_id)?;
-                recorder
-                    .behavior(|| run_shared_behavior(&state, &canary_path, "read-only", None))?;
-                recorder.check("vm-reboot", || lifecycle.reboot(source_id))?;
-                lifecycle.select_proxy(source_id)?;
-
-                recorder
-                    .behavior(|| run_shared_behavior(&state, &canary_path, "read-only", None))?;
-                let backup = recorder.check("backup", || lifecycle.backup(source_id))?;
-                for (target_backend, direction, check_id) in [
-                    (StorageBackend::Sqlite, "sqlite", "restore-sqlite-sqlite"),
-                    (
-                        StorageBackend::Postgres,
-                        "postgres",
-                        "restore-sqlite-postgres",
-                    ),
-                ] {
-                    let check_id = if source_backend == StorageBackend::Postgres {
-                        if target_backend == StorageBackend::Sqlite {
-                            "restore-postgres-sqlite"
-                        } else {
-                            "restore-postgres-postgres"
-                        }
-                    } else {
-                        check_id
-                    };
-                    let target_id = format!("discover-target-{source_id}-{direction}");
-                    let target_runtime = recorder
-                        .lifecycle(format!("{target_id}-start"), || {
-                            lifecycle.start(&target_id, target_backend, source.clone())
-                        })?;
-                    recorder.runtime(target_runtime);
-                    let identity = recorder.check(check_id, || {
-                        lifecycle.restore(&target_id, &backup)?;
-                        let target_schema = lifecycle.observe_schema(&target_id)?;
-                        if target_schema != backup.schema_version {
-                            bail!("restored target schema differs from backup schema");
-                        }
-                        lifecycle.select_proxy(&target_id)?;
-                        Ok(BackupIdentity {
-                            source_backend,
-                            target_backend,
-                            format_version: backup.format_version,
-                            source_schema_version: backup.schema_version,
-                            target_schema_version: target_schema,
-                            sha256: backup.sha256.clone(),
-                        })
-                    })?;
-                    recorder.backup(identity);
-                    recorder
-                        .behavior(|| run_shared_behavior(&state, &canary_path, "restored", None))?;
-                    recorder
-                        .lifecycle(format!("{target_id}-park"), || lifecycle.park(&target_id))?;
-                }
-                recorder.lifecycle(format!("{source_id}-park"), || lifecycle.park(source_id))?;
-            }
-            recorder.checks.push(TimedOutcome {
-                id: "upgrade".into(),
-                outcome: TimedOutcomeStatus::Skipped,
-                duration_ms: 0,
-            });
-            Ok(())
-        })();
-        let canaries = lifecycle.evidence_canaries(&[&canary_path]);
-        if let Err(error) = &result {
-            let _ = persist_workflow_error(&lifecycle, error);
+    run_workflow(root, harness, |lifecycle, recorder, canary_path| {
+        for (source_id, source_backend) in [
+            ("discover-source-sqlite", StorageBackend::Sqlite),
+            ("discover-source-postgres", StorageBackend::Postgres),
+        ] {
+            run_source_matrix(
+                lifecycle,
+                recorder,
+                canary_path,
+                source_id,
+                source_backend,
+                &source,
+                None,
+            )?;
         }
-        let shutdown = if result.is_ok() {
-            lifecycle.cleanup().map(|()| None)
-        } else {
-            lifecycle.retain_for_diagnostics().map(Some)
-        };
-        workflow_ok = result.is_ok() && shutdown.is_ok();
-        retained_workspace = shutdown?;
-        canaries
-    })();
-    let evidence = recorder.finish(workflow_ok);
-    (evidence, workflow, retained_workspace)
+        recorder.checks.push(TimedOutcome {
+            id: "upgrade".into(),
+            outcome: TimedOutcomeStatus::Skipped,
+            duration_ms: 0,
+        });
+        Ok(())
+    })
 }
+
 fn run_acceptance(
     root: &Path,
     harness: &HarnessIdentity,
     source: ResolvedRevision,
     target: ResolvedRevision,
 ) -> (DiscoveryResult, Result<EvidenceCanaries>, Option<PathBuf>) {
+    run_workflow(root, harness, |lifecycle, recorder, canary_path| {
+        for (source_id, source_backend) in [
+            ("accept-source-sqlite", StorageBackend::Sqlite),
+            ("accept-source-postgres", StorageBackend::Postgres),
+        ] {
+            run_source_matrix(
+                lifecycle,
+                recorder,
+                canary_path,
+                source_id,
+                source_backend,
+                &source,
+                Some(&target),
+            )?;
+        }
+        Ok(())
+    })
+}
+
+fn run_workflow(
+    root: &Path,
+    harness: &HarnessIdentity,
+    graph: impl FnOnce(
+        &mut crate::production_baseline_lifecycle::BaselineLifecycle,
+        &mut DiscoveryRecorder,
+        &Path,
+    ) -> Result<()>,
+) -> (DiscoveryResult, Result<EvidenceCanaries>, Option<PathBuf>) {
     use crate::production_baseline_lifecycle::BaselineLifecycle;
 
     let mut workflow_ok = false;
@@ -1436,111 +1545,7 @@ fn run_acceptance(
         })?;
         let canary_path = lifecycle.private_path("run-canaries.jsonl")?;
         fs::File::create(&canary_path)?;
-        let result: Result<()> = (|| {
-            for (source_id, source_backend) in [
-                ("accept-source-sqlite", StorageBackend::Sqlite),
-                ("accept-source-postgres", StorageBackend::Postgres),
-            ] {
-                let mut source_runtime = recorder
-                    .lifecycle(format!("{source_id}-start"), || {
-                        lifecycle.start(source_id, source_backend, source.clone())
-                    })?;
-                source_runtime.deployment_id = format!("{source_id}-package-source");
-                recorder.runtime(source_runtime.clone());
-                recorder.lifecycle(format!("{source_id}-configure-base-url"), || {
-                    lifecycle.configure_base_url(source_id)
-                })?;
-                let state = lifecycle.private_path(&format!("{source_id}.json"))?;
-                let seed_process = lifecycle.seed_process(source_id)?;
-                recorder.behavior(|| {
-                    run_shared_behavior(&state, &canary_path, "create", Some(&seed_process))
-                })?;
-                recorder.check("service-restart", || lifecycle.restart_service(source_id))?;
-                lifecycle.select_proxy(source_id)?;
-                recorder
-                    .behavior(|| run_shared_behavior(&state, &canary_path, "read-only", None))?;
-                recorder.check("vm-reboot", || lifecycle.reboot(source_id))?;
-                lifecycle.select_proxy(source_id)?;
-                recorder
-                    .behavior(|| run_shared_behavior(&state, &canary_path, "read-only", None))?;
-                let source_schema = recorder
-                    .lifecycle(format!("{source_id}-source-schema"), || {
-                        lifecycle.observe_schema(source_id)
-                    })?;
-                let mut target_runtime =
-                    recorder.check("upgrade", || lifecycle.upgrade(source_id, target.clone()))?;
-                target_runtime.deployment_id = format!("{source_id}-package-target");
-                let target_schema = recorder
-                    .lifecycle(format!("{source_id}-target-schema"), || {
-                        lifecycle.observe_schema(source_id)
-                    })?;
-                recorder.upgrade(UpgradeIdentity::observe(
-                    source_backend,
-                    source_runtime.package.clone(),
-                    target_runtime.package.clone(),
-                    source_schema,
-                    target_schema,
-                )?);
-                recorder.runtime(target_runtime);
-                lifecycle.select_proxy(source_id)?;
-                recorder
-                    .behavior(|| run_shared_behavior(&state, &canary_path, "read-only", None))?;
-                recorder
-                    .behavior(|| run_shared_behavior(&state, &canary_path, "restored", None))?;
-                let backup = recorder.check("backup", || lifecycle.backup(source_id))?;
-                for target_backend in [StorageBackend::Sqlite, StorageBackend::Postgres] {
-                    let check_id = match (source_backend, target_backend) {
-                        (StorageBackend::Sqlite, StorageBackend::Sqlite) => "restore-sqlite-sqlite",
-                        (StorageBackend::Sqlite, StorageBackend::Postgres) => {
-                            "restore-sqlite-postgres"
-                        }
-                        (StorageBackend::Postgres, StorageBackend::Sqlite) => {
-                            "restore-postgres-sqlite"
-                        }
-                        (StorageBackend::Postgres, StorageBackend::Postgres) => {
-                            "restore-postgres-postgres"
-                        }
-                    };
-                    let target_id = format!(
-                        "accept-target-{}-{}",
-                        source_id,
-                        match target_backend {
-                            StorageBackend::Sqlite => "sqlite",
-                            StorageBackend::Postgres => "postgres",
-                        }
-                    );
-                    let mut restore_runtime = recorder
-                        .lifecycle(format!("{target_id}-start"), || {
-                            lifecycle.start(&target_id, target_backend, target.clone())
-                        })?;
-                    restore_runtime.deployment_id = format!("{target_id}-package-target");
-                    recorder.runtime(restore_runtime);
-                    let identity = recorder.check(check_id, || {
-                        lifecycle.restore(&target_id, &backup)?;
-                        let target_schema = lifecycle.observe_schema(&target_id)?;
-                        if target_schema != backup.schema_version {
-                            bail!("restored target schema differs from target backup schema");
-                        }
-                        lifecycle.select_proxy(&target_id)?;
-                        Ok(BackupIdentity {
-                            source_backend,
-                            target_backend,
-                            format_version: backup.format_version,
-                            source_schema_version: backup.schema_version,
-                            target_schema_version: target_schema,
-                            sha256: backup.sha256.clone(),
-                        })
-                    })?;
-                    recorder.backup(identity);
-                    recorder
-                        .behavior(|| run_shared_behavior(&state, &canary_path, "restored", None))?;
-                    recorder
-                        .lifecycle(format!("{target_id}-park"), || lifecycle.park(&target_id))?;
-                }
-                recorder.lifecycle(format!("{source_id}-park"), || lifecycle.park(source_id))?;
-            }
-            Ok(())
-        })();
+        let result = graph(&mut lifecycle, &mut recorder, &canary_path);
         let canaries = lifecycle.evidence_canaries(&[&canary_path]);
         if let Err(error) = &result {
             let _ = persist_workflow_error(&lifecycle, error);
@@ -1558,75 +1563,283 @@ fn run_acceptance(
     (evidence, workflow, retained_workspace)
 }
 
-/// Invoke the Task 1 shared Playwright behavior flow against the current stable
-/// proxy origin. Its state path is lifecycle-owned and never published.
-fn run_shared_behavior(
-    state: &Path,
+fn run_source_matrix(
+    lifecycle: &mut crate::production_baseline_lifecycle::BaselineLifecycle,
+    recorder: &mut DiscoveryRecorder,
     canary_path: &Path,
-    phase: &str,
-    seed_process: Option<&Path>,
-) -> Result<Vec<BehaviorCheck>> {
-    #[derive(Deserialize)]
-    struct BehaviorResult {
-        phase: String,
-        checks: Vec<BehaviorCheck>,
+    source_id: &str,
+    source_backend: StorageBackend,
+    source: &ResolvedRevision,
+    target: Option<&ResolvedRevision>,
+) -> Result<()> {
+    let acceptance = target.is_some();
+    let mut source_runtime = recorder.lifecycle(format!("{source_id}-start"), || {
+        lifecycle.start(source_id, source_backend, source.clone())
+    })?;
+    if acceptance {
+        source_runtime.deployment_id = format!("{source_id}-package-source");
     }
-    let mut command = Command::new("playwright");
-    command
-        .args([
-            "test",
-            "tests/production-baseline-harness.spec.ts",
-            "--project=chromium",
-            "--workers=1",
-            "--no-deps",
-        ])
-        .current_dir("end2end")
-        .env("JAUNDER_E2E_BASE_URL", "https://localhost:8443")
-        .env("JAUNDER_PRODUCTION_BASELINE_TLS", "1")
-        .env("JAUNDER_PRODUCTION_BASELINE_STATE", state)
-        .env("JAUNDER_PRODUCTION_BASELINE_PHASE", phase)
-        .env("JAUNDER_PRODUCTION_BASELINE_CANARY_PATH", canary_path);
-    if let Some(seed_process) = seed_process {
-        command.env("JAUNDER_E2E_SEED_PROCESS", seed_process);
+    recorder.runtime(source_runtime.clone());
+    recorder.lifecycle(format!("{source_id}-configure-base-url"), || {
+        lifecycle.configure_base_url(source_id)
+    })?;
+    recorder.lifecycle(format!("{source_id}-verify-proxy-security"), || {
+        lifecycle.verify_proxy_security(source_id, canary_path)
+    })?;
+
+    let state = lifecycle.private_path(&format!("{source_id}.json"))?;
+    let mut browser = BehaviorSession::start(lifecycle, source_id, &state, canary_path)?;
+    let seed_process = lifecycle.seed_process(source_id)?;
+    recorder.behavior(|| browser.run("create", Some(&seed_process)))?;
+    recorder.check("service-restart", || lifecycle.restart_service(source_id))?;
+    lifecycle.select_proxy(source_id)?;
+    recorder.behavior(|| browser.run("read-only", None))?;
+    recorder.check("vm-reboot", || lifecycle.reboot(source_id))?;
+    lifecycle.select_proxy(source_id)?;
+    recorder.behavior(|| browser.run("read-only", None))?;
+
+    if let Some(target) = target {
+        let source_schema = recorder.lifecycle(format!("{source_id}-source-schema"), || {
+            lifecycle.observe_schema(source_id)
+        })?;
+        let mut target_runtime =
+            recorder.check("upgrade", || lifecycle.upgrade(source_id, target.clone()))?;
+        target_runtime.deployment_id = format!("{source_id}-package-target");
+        let target_schema = recorder.lifecycle(format!("{source_id}-target-schema"), || {
+            lifecycle.observe_schema(source_id)
+        })?;
+        recorder.upgrade(UpgradeIdentity::observe(
+            source_backend,
+            source_runtime.package,
+            target_runtime.package.clone(),
+            source_schema,
+            target_schema,
+        )?);
+        recorder.runtime(target_runtime);
+        lifecycle.select_proxy(source_id)?;
+        recorder.behavior(|| browser.run("read-only", None))?;
+        recorder.behavior(|| browser.run("restored", None))?;
     }
-    let output = command
-        .output()
-        .context("running shared production-baseline behavior flow")?;
-    if !output.status.success() {
-        retain_behavior_output(state, phase, "stdout", &output.stdout)?;
-        retain_behavior_output(state, phase, "stderr", &output.stderr)?;
-        bail!("shared production-baseline behavior flow failed during {phase}");
+
+    let backup = recorder.check("backup", || lifecycle.backup(source_id))?;
+    for target_backend in [StorageBackend::Sqlite, StorageBackend::Postgres] {
+        let check_id = restore_check_id(source_backend, target_backend);
+        let target_id = format!(
+            "{}-target-{}-{}",
+            if acceptance { "accept" } else { "discover" },
+            source_id,
+            match target_backend {
+                StorageBackend::Sqlite => "sqlite",
+                StorageBackend::Postgres => "postgres",
+            }
+        );
+        let target_revision = target.unwrap_or(source);
+        let mut runtime = recorder.lifecycle(format!("{target_id}-start"), || {
+            lifecycle.start(&target_id, target_backend, target_revision.clone())
+        })?;
+        if acceptance {
+            runtime.deployment_id = format!("{target_id}-package-target");
+        }
+        recorder.runtime(runtime);
+        let identity = recorder.check(check_id, || {
+            lifecycle.restore(&target_id, &backup)?;
+            let target_schema = lifecycle.observe_schema(&target_id)?;
+            if target_schema != backup.schema_version {
+                bail!("restored target schema differs from backup schema");
+            }
+            lifecycle.select_proxy(&target_id)?;
+            Ok(BackupIdentity {
+                source_backend,
+                target_backend,
+                format_version: backup.format_version,
+                source_schema_version: backup.schema_version,
+                target_schema_version: target_schema,
+                sha256: backup.sha256.clone(),
+            })
+        })?;
+        recorder.backup(identity);
+        recorder.behavior(|| browser.run("restored", None))?;
+        recorder.lifecycle(format!("{target_id}-park"), || lifecycle.park(&target_id))?;
     }
-    let stdout = String::from_utf8(output.stdout).context("behavior flow output was not UTF-8")?;
-    let result = stdout
-        .lines()
-        .filter_map(|line| line.strip_prefix("production-baseline-result="))
-        .map(serde_json::from_str::<BehaviorResult>)
-        .next_back()
-        .context("behavior flow omitted machine-readable result")??;
-    if result.phase != phase || result.checks.is_empty() {
-        bail!("behavior flow emitted an invalid machine-readable result");
-    }
-    Ok(result.checks)
+    browser.close()?;
+    recorder.lifecycle(format!("{source_id}-park"), || lifecycle.park(source_id))?;
+    Ok(())
 }
 
-fn retain_behavior_output(state: &Path, phase: &str, stream: &str, bytes: &[u8]) -> Result<()> {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context("reading behavior diagnostic nonce")?
-        .as_nanos();
-    let path = state
-        .parent()
-        .context("baseline state path has no workspace")?
-        .join(format!("behavior-{phase}-{nonce}.{stream}"));
-    fs::write(&path, bytes).context("retaining restricted behavior diagnostics")?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
-            .context("restricting behavior diagnostics")?;
+fn restore_check_id(source: StorageBackend, target: StorageBackend) -> &'static str {
+    match (source, target) {
+        (StorageBackend::Sqlite, StorageBackend::Sqlite) => "restore-sqlite-sqlite",
+        (StorageBackend::Sqlite, StorageBackend::Postgres) => "restore-sqlite-postgres",
+        (StorageBackend::Postgres, StorageBackend::Sqlite) => "restore-postgres-sqlite",
+        (StorageBackend::Postgres, StorageBackend::Postgres) => "restore-postgres-postgres",
     }
-    Ok(())
+}
+
+#[derive(Serialize)]
+struct BehaviorRequest<'a> {
+    sequence: u32,
+    phase: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    seed_process: Option<&'a Path>,
+}
+
+#[derive(Deserialize)]
+struct BehaviorResult {
+    sequence: u32,
+    phase: String,
+    checks: Vec<BehaviorCheck>,
+    error: Option<String>,
+}
+
+/// One Playwright browser context survives every source lifecycle transition.
+/// The file protocol is deliberately private to the restricted lifecycle workspace.
+struct BehaviorSession {
+    child: Option<Child>,
+    coordinator: PathBuf,
+    state: PathBuf,
+    next_sequence: u32,
+}
+
+impl BehaviorSession {
+    fn start(
+        lifecycle: &crate::production_baseline_lifecycle::BaselineLifecycle,
+        source_id: &str,
+        state: &Path,
+        canary_path: &Path,
+    ) -> Result<Self> {
+        let coordinator = lifecycle.private_path(&format!("{source_id}-browser"))?;
+        fs::create_dir(&coordinator).context("creating browser coordinator workspace")?;
+        let stdout = coordinator.join("playwright.stdout");
+        let stderr = coordinator.join("playwright.stderr");
+        let mut command = Command::new("playwright");
+        command
+            .args([
+                "test",
+                "tests/production-baseline-harness.spec.ts",
+                "--project=chromium",
+                "--workers=1",
+                "--no-deps",
+            ])
+            .current_dir("end2end")
+            .env("JAUNDER_E2E_BASE_URL", "https://localhost:8443")
+            .env("JAUNDER_PRODUCTION_BASELINE_TLS", "1")
+            .env("JAUNDER_PRODUCTION_BASELINE_STATE", state)
+            .env("JAUNDER_PRODUCTION_BASELINE_CANARY_PATH", canary_path)
+            .env("JAUNDER_PRODUCTION_BASELINE_COORDINATOR", &coordinator)
+            .stdout(Stdio::from(fs::File::create(stdout)?))
+            .stderr(Stdio::from(fs::File::create(stderr)?));
+        let child = command
+            .spawn()
+            .context("starting persistent shared production-baseline browser flow")?;
+        let mut session = Self {
+            child: Some(child),
+            coordinator,
+            state: state.to_owned(),
+            next_sequence: 1,
+        };
+        session.wait_for_file("ready", "browser flow readiness")?;
+        Ok(session)
+    }
+
+    fn run(&mut self, phase: &str, seed_process: Option<&Path>) -> Result<Vec<BehaviorCheck>> {
+        let sequence = self.next_sequence;
+        self.next_sequence += 1;
+        self.write_json(
+            &format!("request-{sequence}.json"),
+            &BehaviorRequest {
+                sequence,
+                phase,
+                seed_process,
+            },
+        )?;
+        self.wait_for_file(
+            &format!("result-{sequence}.json"),
+            "browser flow phase result",
+        )?;
+        let result: BehaviorResult = serde_json::from_slice(&fs::read(
+            self.coordinator.join(format!("result-{sequence}.json")),
+        )?)
+        .context("reading browser flow phase result")?;
+        if result.sequence != sequence || result.phase != phase {
+            bail!("browser flow emitted an invalid phase result");
+        }
+        if let Some(error) = result.error {
+            bail!("browser flow failed during {phase}: {error}");
+        }
+        if result.checks.is_empty() {
+            bail!("browser flow emitted a phase result without checks");
+        }
+        Ok(result.checks)
+    }
+
+    fn close(&mut self) -> Result<()> {
+        if self.child.is_none() {
+            return Ok(());
+        }
+        let sequence = self.next_sequence;
+        self.next_sequence += 1;
+        self.write_json(
+            &format!("request-{sequence}.json"),
+            &BehaviorRequest {
+                sequence,
+                phase: "close",
+                seed_process: None,
+            },
+        )?;
+        self.wait_for_file("closed", "browser flow shutdown")?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let child = self.child.as_mut().expect("child exists after check");
+        while child.try_wait()?.is_none() {
+            if Instant::now() >= deadline {
+                child.kill().context("stopping timed-out browser flow")?;
+                child.wait().context("reaping timed-out browser flow")?;
+                bail!("browser flow did not exit after clean shutdown");
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        self.child = None;
+        Ok(())
+    }
+
+    fn write_json(&self, name: &str, value: &impl Serialize) -> Result<()> {
+        let path = self.coordinator.join(name);
+        let temporary = path.with_extension("tmp");
+        fs::write(&temporary, serde_json::to_vec(value)?)
+            .with_context(|| format!("writing browser coordinator {name}"))?;
+        fs::rename(temporary, path).context("publishing browser coordinator message")
+    }
+
+    fn wait_for_file(&mut self, name: &str, label: &str) -> Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(90);
+        let path = self.coordinator.join(name);
+        while !path.exists() {
+            if let Some(child) = self.child.as_mut()
+                && let Some(status) = child.try_wait()?
+            {
+                bail!(
+                    "{label} ended early with {status}; restricted stdout and stderr are retained beside {}",
+                    self.state.display()
+                );
+            }
+            if Instant::now() >= deadline {
+                bail!(
+                    "{label} timed out; diagnostics are retained beside {}",
+                    self.state.display()
+                );
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        Ok(())
+    }
+}
+
+impl Drop for BehaviorSession {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
 }
 
 pub fn run(command: ProductionBaselineCommand) -> Result<CommandResult> {
@@ -1689,10 +1902,10 @@ pub fn run(command: ProductionBaselineCommand) -> Result<CommandResult> {
     );
     let publication = raw.validate().and_then(|()| {
         let workspace = publication_workspace(&root)?;
-        let published =
-            canaries.and_then(|canaries| publish(&workspace, &destination, &raw, &canaries));
-        fs::remove_dir_all(&workspace).context("cleaning restricted evidence staging")?;
-        published
+        let canaries = canaries?;
+        publish_with_workspace_cleanup(&workspace, &destination, &raw, &canaries, |workspace| {
+            fs::remove_dir_all(workspace).map_err(Into::into)
+        })
     });
     let step = if raw.operation == "accept" {
         "production-baseline-accept"
@@ -1910,6 +2123,21 @@ mod tests {
         assert!(RunLease::acquire_at(&path).is_err());
         drop(first);
         assert!(RunLease::acquire_at(&path).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn host_global_lease_refuses_a_symlink_without_truncating_its_target() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempdir().unwrap();
+        let target = temp.path().join("target");
+        let path = temp.path().join("production-baseline.lock");
+        fs::write(&target, b"must remain intact").unwrap();
+        symlink(&target, &path).unwrap();
+
+        assert!(RunLease::acquire_at(&path).is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"must remain intact");
     }
     fn evidence() -> Evidence {
         Evidence {
@@ -2195,5 +2423,63 @@ mod tests {
             .is_err()
         );
         assert!(!temp.path().join("redacted").exists());
+    }
+
+    #[test]
+    fn post_rename_workspace_cleanup_failure_does_not_unpublish_evidence() {
+        let canaries = EvidenceCanaries::new(
+            vec!["unpublished-credential".into()],
+            vec!["unpublished-session".into()],
+            vec!["unpublished-private-material".into()],
+        )
+        .unwrap();
+        let temp = tempdir().unwrap();
+        let workspace = publication_workspace(temp.path()).unwrap();
+        let destination = temp.path().join("durable");
+        let cleanup_attempted = std::cell::Cell::new(false);
+
+        publish_with_workspace_cleanup(&workspace, &destination, &evidence(), &canaries, |_| {
+            cleanup_attempted.set(true);
+            bail!("simulated cleanup failure")
+        })
+        .unwrap();
+
+        assert!(cleanup_attempted.get());
+
+        validate_allowlist(&destination).unwrap();
+    }
+
+    #[test]
+    fn failed_publication_preserves_its_error_when_cleanup_also_fails() {
+        let canaries = EvidenceCanaries::new(
+            vec!["publication-error-marker".into()],
+            vec!["unpublished-session".into()],
+            vec!["unpublished-private-material".into()],
+        )
+        .unwrap();
+        let temp = tempdir().unwrap();
+        let workspace = publication_workspace(temp.path()).unwrap();
+        let destination = temp.path().join("durable");
+        let mut leaking = evidence();
+        leaking.gaps.push(Gap {
+            id: "publication-error".into(),
+            rationale: "publication-error-marker".into(),
+        });
+        let cleanup_attempted = std::cell::Cell::new(false);
+
+        let error =
+            publish_with_workspace_cleanup(&workspace, &destination, &leaking, &canaries, |_| {
+                cleanup_attempted.set(true);
+                bail!("cleanup-error-marker")
+            })
+            .unwrap_err();
+
+        assert!(cleanup_attempted.get());
+        assert_eq!(
+            error.to_string(),
+            "summary.json contains a registered canary"
+        );
+        assert!(format!("{error:#}").contains("cleanup-error-marker"));
+        assert!(!destination.exists());
     }
 }

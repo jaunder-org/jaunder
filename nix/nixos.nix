@@ -18,7 +18,8 @@ let
     OTELCOL_HTTP_ENDPOINT = "127.0.0.1:4318";
   };
 
-  jaunderModule =
+  mkJaunderModule =
+    package:
     {
       lib,
       pkgs,
@@ -27,24 +28,15 @@ let
     }:
     let
       cfg = config.services.jaunder;
-    in
-    let
       targetSystem = pkgs.stdenv.hostPlatform.system;
-      defaultPackage = self.packages.${targetSystem}.jaunder;
-    in
-    let
-      jaunderBin = cfg.package;
+      jaunderBin =
+        if package == null then self.packages.${targetSystem}.jaunder else package;
     in
     {
       options.services.jaunder = {
         enable = lib.mkEnableOption "the Jaunder service";
 
-        package = lib.mkOption {
-          type = lib.types.package;
-          default = defaultPackage;
-          defaultText = lib.literalExpression "self.packages.\${system}.jaunder";
-          description = "Jaunder package used by the service and service account.";
-        };
+
 
         bind = lib.mkOption {
           type = lib.types.str;
@@ -229,15 +221,22 @@ let
     modules = [ postgresTestingVmModule ];
   };
   productionBaselineVmModule =
-    backend:
+    {
+      backend,
+      package ? null,
+    }:
     {
       lib,
       pkgs,
       config,
       ...
     }:
+    let
+      jaunderBin =
+        if package == null then self.packages.${pkgs.stdenv.hostPlatform.system}.jaunder else package;
+    in
     {
-      imports = [ self.nixosModules.jaunder ];
+      imports = [ (mkJaunderModule package) ];
 
       networking.hostName = "jaunder-production-baseline-${backend}";
       boot.loader.grub.devices = [ "nodev" ];
@@ -312,7 +311,7 @@ let
           ${pkgs.openssl}/bin/openssl rand -hex 32 > /var/lib/jaunder/baseline-secrets/db-password
           chown jaunder:jaunder /var/lib/jaunder/baseline-secrets/db-password
           chmod 0600 /var/lib/jaunder/baseline-secrets/db-password
-          ${config.services.jaunder.package}/bin/jaunder create-pg-db \
+          ${jaunderBin}/bin/jaunder create-pg-db \
             --bootstrap-db postgres://postgres@127.0.0.1/postgres \
             --app-db postgres://jaunder@127.0.0.1/jaunder \
             --app-role-password "$(cat /var/lib/jaunder/baseline-secrets/db-password)"
@@ -331,12 +330,12 @@ let
 
   productionBaselineSqliteConfiguration = nixpkgs.lib.nixosSystem {
     system = interactiveTestingVmSystem;
-    modules = [ (productionBaselineVmModule "sqlite") ];
+    modules = [ (productionBaselineVmModule { backend = "sqlite"; }) ];
   };
 
   productionBaselinePostgresConfiguration = nixpkgs.lib.nixosSystem {
     system = interactiveTestingVmSystem;
-    modules = [ (productionBaselineVmModule "postgres") ];
+    modules = [ (productionBaselineVmModule { backend = "postgres"; }) ];
   };
   productionBaselineVm =
     {
@@ -347,15 +346,14 @@ let
     nixpkgs.lib.nixosSystem {
       inherit system;
       modules = [
-        (productionBaselineVmModule backend)
-        {
-          services.jaunder.package = package;
-        }
+        (productionBaselineVmModule {
+          inherit backend package;
+        })
       ];
     };
 in
 {
-  nixosModules.jaunder = jaunderModule;
+  nixosModules.jaunder = mkJaunderModule null;
   nixosConfigurations.interactive-testing-vm = interactiveTestingVmConfiguration;
   nixosConfigurations.postgres-testing-vm = postgresTestingVmConfiguration;
   nixosConfigurations.production-baseline-sqlite = productionBaselineSqliteConfiguration;

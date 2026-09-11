@@ -149,6 +149,9 @@ impl BaselineLifecycle {
     }
     pub fn smoke(root: &Path, revision: ResolvedRevision) -> Result<Vec<RuntimeIdentity>> {
         let mut lifecycle = Self::create_current_checkout(root)?;
+        let canary_path = lifecycle.private_path("smoke-canaries.jsonl")?;
+        fs::File::create(&canary_path)?;
+        restrict(&canary_path)?;
         let mut identities = Vec::new();
         for (id, backend) in [
             ("smoke-sqlite", StorageBackend::Sqlite),
@@ -159,12 +162,7 @@ impl BaselineLifecycle {
                     .start(id, backend, revision.clone())
                     .with_context(|| format!("{id}: start"))?,
             );
-            lifecycle
-                .assert_secure_session(id)
-                .with_context(|| format!("{id}: secure session cookie"))?;
-            lifecycle
-                .wait_for_http_redirect()
-                .with_context(|| format!("{id}: HTTP redirect"))?;
+            lifecycle.verify_proxy_security(id, &canary_path)?;
             lifecycle
                 .restart_service(id)
                 .with_context(|| format!("{id}: service restart"))?;
@@ -481,7 +479,16 @@ socket.end(command + "\\n");
         Ok(())
     }
 
-    fn assert_secure_session(&self, deployment_id: &str) -> Result<()> {
+    /// Verify that the proxy redirects HTTP and protects HTTPS session cookies.
+    pub fn verify_proxy_security(&self, deployment_id: &str, canary_path: &Path) -> Result<()> {
+        self.assert_secure_session(deployment_id, canary_path)
+            .with_context(|| format!("{deployment_id}: secure session cookie"))?;
+        self.wait_for_http_redirect()
+            .with_context(|| format!("{deployment_id}: HTTP redirect"))?;
+        Ok(())
+    }
+
+    fn assert_secure_session(&self, deployment_id: &str, canary_path: &Path) -> Result<()> {
         let package = &self
             .deployments
             .get(deployment_id)
@@ -490,6 +497,7 @@ socket.end(command + "\\n");
         let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
         let username = format!("smoke{}", std::process::id());
         let password = format!("smoke{nonce}");
+        Self::append_restricted_canary(canary_path, &password)?;
         self.guest(
             deployment_id,
             &format!(
@@ -532,21 +540,36 @@ socket.end(command + "\\n");
             bail!("stable HTTPS login request failed");
         }
         let headers = fs::read_to_string(headers)?;
-        let secure_session = headers.lines().any(|line| {
-            let Some((name, value)) = line.split_once(':') else {
-                return false;
-            };
-            name.eq_ignore_ascii_case("set-cookie")
-                && value.trim_start().starts_with("session=")
-                && value.contains("; HttpOnly;")
-                && value.contains("; SameSite=Lax;")
-                && value.contains("; Path=/;")
-                && value.contains("; Secure")
+        let secure_session = headers.lines().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            if !name.eq_ignore_ascii_case("set-cookie") {
+                return None;
+            }
+            let cookie = value.trim_start();
+            let session_cookie = cookie.split(';').next()?.strip_prefix("session=")?;
+            (!session_cookie.is_empty()
+                && cookie.contains("; HttpOnly;")
+                && cookie.contains("; SameSite=Lax;")
+                && cookie.contains("; Path=/;")
+                && cookie.contains("; Secure"))
+            .then(|| session_cookie.to_owned())
         });
-        if !secure_session {
-            bail!("stable HTTPS login did not issue the required secure session cookie");
-        }
+        let session_cookie = secure_session
+            .context("stable HTTPS login did not issue the required secure session cookie")?;
+        Self::append_restricted_canary(canary_path, &session_cookie)?;
         Ok(())
+    }
+
+    fn append_restricted_canary(path: &Path, value: &str) -> Result<()> {
+        restrict(path)?;
+        let mut registry = fs::OpenOptions::new()
+            .append(true)
+            .open(path)
+            .with_context(|| format!("opening restricted canary registry {}", path.display()))?;
+        serde_json::to_writer(&mut registry, value).context("serializing restricted canary")?;
+        registry
+            .write_all(b"\n")
+            .context("writing restricted canary registry")
     }
 
     pub fn configure_base_url(&self, deployment_id: &str) -> Result<()> {
@@ -824,7 +847,7 @@ socket.end(command + "\\n");
             thread::sleep(Duration::from_millis(200));
         }
     }
-    fn wait_for_http_redirect(&mut self) -> Result<()> {
+    fn wait_for_http_redirect(&self) -> Result<()> {
         let deadline = Instant::now() + READY_TIMEOUT;
         loop {
             let output = Command::new("curl")

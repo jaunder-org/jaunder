@@ -126,12 +126,12 @@ function escapeXmlText(value: string): string {
   return escaped;
 }
 
-function atomContent(entry: string): string {
-  const content = entry.match(
-    /<content(?:\s[^>]*)?>([\s\S]*?)<\/content>/i,
+function atomText(entry: string, element: string): string {
+  const text = entry.match(
+    new RegExp(`<${element}(?:\\s[^>]*)?>([\\s\\S]*?)</${element}>`, "i"),
   )?.[1];
-  expect(content, "Atom entry has content").toBeDefined();
-  return content!
+  expect(text, `Atom entry has ${element}`).toBeDefined();
+  return text!
     .split("&lt;")
     .join("<")
     .split("&gt;")
@@ -142,6 +142,23 @@ function atomContent(entry: string): string {
     .join("'")
     .split("&amp;")
     .join("&");
+}
+
+function atomContent(entry: string): string {
+  return atomText(entry, "content");
+}
+
+function atomPostId(entry: string): string {
+  const id = atomText(entry, "id");
+  const postId = new URL(id).pathname.match(/\/posts\/(\d+)$/)?.[1];
+  expect(postId, "Atom entry id is a post member URL").toBeTruthy();
+  return postId!;
+}
+
+function atomContentType(entry: string): string {
+  const type = entry.match(/<content\b(?=[^>]*\btype="([^"]+)")[^>]*>/i)?.[1];
+  expect(type, "Atom entry content has a type").toBeTruthy();
+  return type!;
 }
 
 function atomNextUrl(document: string): string | undefined {
@@ -199,11 +216,29 @@ async function verifySeededManifest(
           entry,
           `${post.author}/${post.slug} is present in AtomPub`,
         ).toBeTruthy();
-        expect(entry!).toContain(`<title>${post.title}</title>`);
-        expect(entry!).toContain(escapeXmlText(post.body));
-        expect(entry!).toContain(
-          `type="${post.format === "markdown" ? "text/markdown" : post.format === "org" ? "text/org" : "html"}"`,
+        expect(atomText(entry!, "title")).toBe(post.title);
+        expect(atomContent(entry!)).toBe(post.body);
+        expect(atomContentType(entry!)).toBe(
+          post.format === "markdown"
+            ? "text/markdown"
+            : post.format === "org"
+              ? "text/org"
+              : "html",
         );
+        const audience = await requestContext.request.post(
+          `${BASE_URL}/api/posts/get_audience_selection`,
+          {
+            headers: {
+              authorization: `Basic ${Buffer.from(`${access.username}:${access.appPassword}`).toString("base64")}`,
+            },
+            form: { post_id: atomPostId(entry!) },
+          },
+        );
+        expect(audience.status()).toBe(200);
+        expect(await audience.json()).toEqual({
+          base: post.visibility,
+          named: [],
+        });
         if (post.publishedAt === null) {
           expect(entry!).toMatch(/<app:draft>yes<\/app:draft>/i);
         } else {
