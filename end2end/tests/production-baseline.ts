@@ -1,11 +1,20 @@
 import { createHash } from "node:crypto";
 
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
+import { withTimedAction } from "./actions";
 import { allowSecondBoot } from "./bootBudget";
 
 import { fetchFeedContaining } from "./feeds";
 import type { NewTracedContext } from "./fixtures";
-import { BASE_URL, goto, login, subscribeTo, TEST_PASSWORD } from "./helpers";
+import {
+  BASE_URL,
+  confirmedMutation,
+  goto,
+  login,
+  subscribeTo,
+  TEST_PASSWORD,
+  type MutationOutcome,
+} from "./helpers";
 import {
   applySeededSession,
   createSessionViaTool,
@@ -13,12 +22,7 @@ import {
   type SandboxSeedManifest,
   type SeedRecord,
 } from "./seed";
-import {
-  composePost,
-  createPostViaApi,
-  followPermalink,
-  openComposerFromSidebar,
-} from "./posts";
+import { composePost, followPermalink, openComposerFromSidebar } from "./posts";
 import { mintAppPassword } from "./sessions";
 import { SEL } from "./selectors";
 
@@ -105,6 +109,42 @@ const onServer = (url: string) => {
   const parsed = new URL(url, BASE_URL);
   return `${BASE_URL}${parsed.pathname}${parsed.search}`;
 };
+type LegacySavedPost = { post_id: number; permalink: string };
+async function createLegacyPostViaApi(
+  page: Page,
+  opts: {
+    body: string;
+    format?: "markdown" | "org" | "html";
+    audience?: "public" | "subscribers" | "private";
+    slug?: string;
+    publishAt?: string;
+  },
+): Promise<LegacySavedPost> {
+  const response = await withTimedAction(page, "api.posts.create", () =>
+    page.request.post(`${BASE_URL}/api/posts/create`, {
+      data: {
+        post: {
+          body: opts.body,
+          format: opts.format ?? "markdown",
+          slug_override: opts.slug ?? null,
+          publish: true,
+          ...(opts.publishAt ? { publish_at: opts.publishAt } : {}),
+          ...(opts.audience
+            ? { audience: { base: opts.audience, named: [] } }
+            : {}),
+        },
+      },
+    }),
+  );
+  expect(
+    response.ok(),
+    `posts::create failed (${response.status()}): ${await response.text()}`,
+  ).toBeTruthy();
+  return confirmedMutation(
+    (await response.json()) as MutationOutcome<LegacySavedPost>,
+    "legacy posts::create",
+  );
+}
 type SeededPost = SandboxSeedManifest["posts"][number];
 function seededPostPath(post: SeededPost): string {
   if (post.publishedAt === null) {
@@ -415,11 +455,11 @@ export async function createProductionBaseline(
     publish: true,
   });
   const subscriberPermalink = await followPermalink(page, subscribers);
-  const webHtml = await createPostViaApi(page, {
+  const webHtml = await createLegacyPostViaApi(page, {
     ...OPERATION_MANIFEST.webHtml,
     format: "html",
   });
-  const scheduled = await createPostViaApi(page, {
+  const scheduled = await createLegacyPostViaApi(page, {
     ...OPERATION_MANIFEST.scheduledMarkdown,
     publishAt: "2035-01-01T00:00:00Z",
   });
