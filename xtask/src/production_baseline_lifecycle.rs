@@ -223,7 +223,8 @@ socket.on("error", (error) => {{ console.error(error.message); process.exitCode 
 socket.on("end", () => {{
   const marker = "{STATUS}";
   const index = output.lastIndexOf(marker);
-  const status = index < 0 ? null : Number(output.slice(index + marker.length).trim());
+  const statusMatch = index < 0 ? null : output.slice(index + marker.length).trimStart().match(/^(\d+)/);
+  const status = statusMatch ? Number(statusMatch[1]) : null;
   const body = index < 0 ? output : output.slice(0, index);
   if (status !== 0) {{
     if (body.trim()) process.stderr.write(body.trimEnd() + "\n");
