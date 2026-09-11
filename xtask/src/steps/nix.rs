@@ -14,6 +14,7 @@ use anyhow::{Context, Result, bail};
 use coverage::status::{CoverageStatus, ProcessOutcome, RequiredStage};
 use processkit::{Outcome, StdioMode};
 use serde::Deserialize;
+use serde_json::Value;
 use tokio::io::AsyncWrite;
 
 use super::process::Process;
@@ -1233,6 +1234,87 @@ fn nix_eval_raw(dir: Option<&Path>, installable: &str) -> Result<String> {
     Ok(path)
 }
 
+/// Evaluate a package's output path without realizing it.
+pub(crate) fn eval_package_out_path(flake_dir: &Path, package: &str) -> Result<String> {
+    nix_eval_raw(
+        Some(flake_dir),
+        &format!(".#packages.{SYSTEM}.{package}.outPath"),
+    )
+}
+
+/// Evaluate a check's output path without realizing it.
+pub(crate) fn eval_check_out_path(flake_dir: &Path, check: &str) -> Result<String> {
+    nix_eval_raw(
+        Some(flake_dir),
+        &format!(".#checks.{SYSTEM}.{check}.outPath"),
+    )
+}
+
+/// Evaluate the shared E2E package output-form path through a final E2E check.
+///
+/// `e2ePackage` is intentionally an internal Nix value, so it is not a flake
+/// installable. An ordinary final E2E check lists its input derivations; the
+/// uniquely named `jaunder-e2e.drv` input identifies the package without
+/// realizing either output. Stripping `.drv` preserves the output-form path
+/// basename that Cachix filters.
+pub(crate) fn eval_e2e_package_out_path(flake_dir: &Path) -> Result<String> {
+    let drv_path = nix_eval_raw(
+        Some(flake_dir),
+        &format!(".#checks.{SYSTEM}.e2e-sqlite-chromium.drvPath"),
+    )?;
+    let out = Command::new("nix")
+        .args(["derivation", "show", &drv_path])
+        .output()
+        .context("spawning `nix derivation show` for e2e-sqlite-chromium")?;
+    if !out.status.success() {
+        bail!(
+            "`nix derivation show {drv_path}` failed:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let metadata =
+        String::from_utf8(out.stdout).context("`nix derivation show` output was not UTF-8")?;
+    e2e_package_out_path_from_derivation(&metadata)
+}
+
+fn e2e_package_out_path_from_derivation(metadata: &str) -> Result<String> {
+    let metadata =
+        serde_json::from_str::<Value>(metadata).context("parsing `nix derivation show` output")?;
+    let derivations = metadata
+        .get("derivations")
+        .and_then(Value::as_object)
+        .context("`nix derivation show` output lacks derivations")?;
+    let derivation = derivations
+        .values()
+        .next()
+        .context("`nix derivation show` output has no derivation")?;
+    let input_drvs = derivation
+        .get("inputDrvs")
+        .and_then(Value::as_object)
+        .context("e2e derivation lacks inputDrvs")?;
+    let matches = input_drvs
+        .keys()
+        .filter(|path| {
+            path.strip_prefix("/nix/store/")
+                .and_then(|path| path.split_once('-'))
+                .is_some_and(|(_, basename)| basename == "jaunder-e2e.drv")
+        })
+        .collect::<Vec<_>>();
+    let [drv_path] = matches.as_slice() else {
+        bail!(
+            "expected exactly one jaunder-e2e.drv input derivation, found {}",
+            matches.len()
+        );
+    };
+    let out_path = drv_path
+        .strip_suffix(".drv")
+        .context("jaunder-e2e input derivation lacks .drv suffix")?;
+    if !out_path.starts_with("/nix/store/") || out_path.contains('\n') {
+        bail!("malformed shared e2e package output-form path: {out_path:?}");
+    }
+    Ok(out_path.to_owned())
+}
+
 pub(crate) fn eval_out_path(check: &str) -> Result<String> {
     nix_eval_raw(None, &format!(".#checks.{SYSTEM}.{check}.outPath"))
 }
@@ -1367,19 +1449,15 @@ mod tests {
     use std::sync::{Arc, mpsc};
     use std::time::Duration;
 
-    use processkit::{Command, Outcome, StdioMode};
-    use tokio::io::AsyncWriteExt;
-    use tokio::runtime::Builder;
-
     use super::{
         BuildCaptureOutcome, BuildCompletion, BuildStderrTee, CommandResult, E2E_COMBOS,
         E2eOutcome, FailedBuildDiagnostics, Process, STATIC_CHECKS, StepResult, build_e2e_combos,
         check_supporting_test_check_names, coverage_status_after_successful_gate,
         coverage_status_phase_records, doctest_sentinel_detail,
-        failed_build_after_diagnostics_with, failed_coverage_status_step, failed_status_step,
-        finish_build_with, finish_e2e_combo, lift_elisp_coverage_artifacts,
-        prepare_build_dirs_with, report_build_diagnostic_failure, sentinel_detail,
-        test_check_names, validate_check_names,
+        e2e_package_out_path_from_derivation, failed_build_after_diagnostics_with,
+        failed_coverage_status_step, failed_status_step, finish_build_with, finish_e2e_combo,
+        lift_elisp_coverage_artifacts, prepare_build_dirs_with, report_build_diagnostic_failure,
+        sentinel_detail, test_check_names, validate_check_names,
     };
     use crate::audit_wasm::{ArtifactMetrics, AuditReport};
     use crate::result::{NixRealization, NixReport, PhaseName, PhaseOutcome};
@@ -1390,12 +1468,31 @@ mod tests {
     };
     use doctests::check::{Kind, Violation};
     use doctests::status::DoctestStatus;
+    use processkit::{Command, Outcome, StdioMode};
+    use tokio::io::AsyncWriteExt;
+    use tokio::runtime::Builder;
 
     fn injected_nix_report(realization: NixRealization) -> NixReport {
         NixReport {
             installable: ".#checks.x86_64-linux.check".to_owned(),
             derivation: Some("/nix/store/check.drv".to_owned()),
             realization,
+        }
+    }
+
+    #[test]
+    fn e2e_package_output_form_path_requires_one_exact_input_derivation() {
+        let metadata = r#"{"derivations":{"check":{"inputDrvs":{"/nix/store/hash-jaunder-e2e.drv":["out"]}}}}"#;
+        assert_eq!(
+            e2e_package_out_path_from_derivation(metadata).unwrap(),
+            "/nix/store/hash-jaunder-e2e"
+        );
+        for metadata in [
+            r#"{"derivations":{"check":{"inputDrvs":{}}}}"#,
+            r#"{"derivations":{"check":{"inputDrvs":{"/nix/store/a-jaunder-e2e.drv":[],"/nix/store/b-jaunder-e2e.drv":[]}}}}"#,
+            r#"{"derivations":{"check":{"inputDrvs":{"/nix/store/hash-prefix-jaunder-e2e.drv":[]}}}}"#,
+        ] {
+            assert!(e2e_package_out_path_from_derivation(metadata).is_err());
         }
     }
 
