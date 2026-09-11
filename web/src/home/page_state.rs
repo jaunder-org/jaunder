@@ -47,11 +47,18 @@ pub fn site_timeline_seed(
 
 #[cfg(test)]
 mod tests {
-    use super::{site_destination, site_timeline_seed};
+    use super::{site_destination, site_timeline_base_url, site_timeline_seed};
     use common::{
         seed::{Page, PageSeed, PublicPresentation, TimelineOrder},
         theme::{PublishedThemePresentation, Theme},
     };
+
+    #[test]
+    fn site_timeline_uses_the_bare_root_url() {
+        let url = site_timeline_base_url();
+        let url: &str = url.as_ref();
+        assert_eq!(url, "/");
+    }
 
     #[test]
     fn destination_keeps_the_server_resolved_theme() {

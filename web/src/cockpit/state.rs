@@ -147,6 +147,12 @@ mod tests {
             ready(Ok(page()))
         }
     }
+    #[test]
+    fn cockpit_timeline_uses_the_bare_app_url() {
+        let url = cockpit_timeline_base_url();
+        let url: &str = url.as_ref();
+        assert_eq!(url, "/app");
+    }
 
     #[tokio::test]
     async fn a_confirmed_viewer_gets_their_feed_paired_with_their_name() {

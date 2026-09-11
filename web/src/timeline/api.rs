@@ -13,9 +13,9 @@
 //! binds the continuation to its publication-time direction; JSON input is required
 //! because the default form-urlencoded codec cannot carry nested structs.
 
-use crate::error::WebResult;
 #[cfg(feature = "server")]
-use crate::error::{InternalError, InternalResult};
+use crate::error::InternalResult;
+use crate::error::WebResult;
 use common::seed::{Page, PublicPresentation, RenderedPost, TimelinePageRequest};
 use common::{tag::Tag, username::Username};
 use leptos::server_fn::codec::Json;
@@ -111,13 +111,10 @@ pub async fn list_home_feed(
 ) -> WebResult<Page<RenderedPost, common::seed::TimelineCursor>> {
     let auth = auth::require_auth().await?;
     let posts = expect_context::<Arc<dyn PostStorage>>();
-    let cursor = storage::timeline_keyset_cursor(request.cursor);
-    if cursor
-        .as_ref()
-        .is_some_and(|cursor| cursor.order != request.order)
-    {
-        return Err(InternalError::validation("timeline cursor order mismatch"));
-    }
+    let cursor = server::validate_cursor_order(
+        storage::timeline_keyset_cursor(request.cursor),
+        request.order,
+    )?;
     let viewer = viewer::viewer_identity().await?;
     let page_size = request.limit.unwrap_or_default();
     let rows = posts

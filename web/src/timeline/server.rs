@@ -48,6 +48,20 @@ pub(super) fn page_from_rows(
         has_more,
     })
 }
+/// Reject a continuation cursor produced by the opposite timeline direction.
+///
+/// # Errors
+///
+/// Returns a validation error when `cursor` and `order` disagree.
+pub(super) fn validate_cursor_order(
+    cursor: Option<PostCursor>,
+    order: TimelineOrder,
+) -> InternalResult<Option<PostCursor>> {
+    if cursor.as_ref().is_some_and(|cursor| cursor.order != order) {
+        return Err(InternalError::validation("timeline cursor order mismatch"));
+    }
+    Ok(cursor)
+}
 
 /// The shared "posts by user" query, used by both the `list_by_user` server
 /// fn and the public projector (anonymous viewer). One query, no drift.
@@ -63,9 +77,7 @@ pub async fn fetch_user_posts(
     order: TimelineOrder,
     limit: Option<PageSize>,
 ) -> InternalResult<Page<RenderedPost, TimelineCursor>> {
-    if cursor.as_ref().is_some_and(|cursor| cursor.order != order) {
-        return Err(InternalError::validation("timeline cursor order mismatch"));
-    }
+    let cursor = validate_cursor_order(cursor, order)?;
     let page_size = limit.unwrap_or_default();
     let rows = posts
         .list_published_by_user(
@@ -95,9 +107,7 @@ pub async fn fetch_local_timeline(
     order: TimelineOrder,
     limit: Option<PageSize>,
 ) -> InternalResult<Page<RenderedPost, TimelineCursor>> {
-    if cursor.as_ref().is_some_and(|cursor| cursor.order != order) {
-        return Err(InternalError::validation("timeline cursor order mismatch"));
-    }
+    let cursor = validate_cursor_order(cursor, order)?;
     let page_size = limit.unwrap_or_default();
     let rows = posts
         .list_published(
@@ -127,9 +137,7 @@ pub async fn fetch_posts_by_tag(
     order: TimelineOrder,
     limit: Option<PageSize>,
 ) -> InternalResult<Page<RenderedPost, TimelineCursor>> {
-    if cursor.as_ref().is_some_and(|cursor| cursor.order != order) {
-        return Err(InternalError::validation("timeline cursor order mismatch"));
-    }
+    let cursor = validate_cursor_order(cursor, order)?;
     let page_size = limit.unwrap_or_default();
     let rows = storage::list_by_tag_rows(
         posts
@@ -162,13 +170,10 @@ pub async fn fetch_user_posts_by_tag(
     tag: &Tag,
     request: TimelinePageRequest,
 ) -> InternalResult<Page<RenderedPost, TimelineCursor>> {
-    let cursor = storage::timeline_keyset_cursor(request.cursor);
-    if cursor
-        .as_ref()
-        .is_some_and(|cursor| cursor.order != request.order)
-    {
-        return Err(InternalError::validation("timeline cursor order mismatch"));
-    }
+    let cursor = validate_cursor_order(
+        storage::timeline_keyset_cursor(request.cursor),
+        request.order,
+    )?;
     let author = users
         .get_user_by_username(username)
         .await?
@@ -201,6 +206,7 @@ pub async fn fetch_user_posts_by_tag(
 mod tests {
     use super::{
         fetch_local_timeline, fetch_posts_by_tag, fetch_user_posts, fetch_user_posts_by_tag,
+        validate_cursor_order,
     };
     use common::ids::{PostId, UserId};
     use common::pagination::PageSize;
@@ -213,7 +219,7 @@ mod tests {
     };
     use storage::{
         EmailVerified, ListByTagError, MockPostStorage, MockUserStorage, OperatorStatus,
-        PostFormat, PostRecord, UserRecord,
+        PostCursor, PostFormat, PostRecord, UserRecord,
     };
 
     fn post(post_id: i64) -> PostRecord {
@@ -249,6 +255,18 @@ mod tests {
             email_verified: EmailVerified::UNVERIFIED,
             is_operator: OperatorStatus::STANDARD,
         }
+    }
+    #[test]
+    fn timeline_cursor_must_match_the_requested_order() {
+        let cursor = PostCursor {
+            published_at: UtcInstant::now(),
+            post_id: PostId::from(1),
+            order: TimelineOrder::Oldest,
+        };
+
+        let error = validate_cursor_order(Some(cursor), TimelineOrder::Newest)
+            .expect_err("opposite-order cursor is invalid");
+        assert_eq!(error.public_message(), "timeline cursor order mismatch");
     }
 
     /// The has-more convention, end to end at a real call site (#696).

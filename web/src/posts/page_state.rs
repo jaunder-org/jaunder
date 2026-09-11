@@ -1129,6 +1129,21 @@ mod tests {
             .timeline_base_url();
         let user_tag: &str = user_tag.as_ref();
         assert_eq!(user_tag, "/~alice/tags/rust");
+
+        let incomplete_profile =
+            ListingRoute::Profile(None, TimelineOrder::Newest).timeline_base_url();
+        let incomplete_profile: &str = incomplete_profile.as_ref();
+        assert_eq!(incomplete_profile, "/");
+
+        let incomplete_user_tag =
+            ListingRoute::UserTag(Some(alice()), None, TimelineOrder::Newest).timeline_base_url();
+        let incomplete_user_tag: &str = incomplete_user_tag.as_ref();
+        assert_eq!(incomplete_user_tag, "/~alice/tags");
+
+        let incomplete_site_tag =
+            ListingRoute::SiteTag(None, TimelineOrder::Newest).timeline_base_url();
+        let incomplete_site_tag: &str = incomplete_site_tag.as_ref();
+        assert_eq!(incomplete_site_tag, "/tags");
     }
 
     #[test]
