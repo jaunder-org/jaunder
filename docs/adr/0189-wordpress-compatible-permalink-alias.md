@@ -1,6 +1,6 @@
-# ADR-DRAFT: WordPress-compatible permalink alias
+# ADR-0189: WordPress-compatible permalink alias
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-10
 - Issue: [#1429](https://github.com/jaunder-org/jaunder/issues/1429)
 
@@ -16,7 +16,7 @@ matching Posts.
 
 The public projector already treats malformed or absent public routes as its
 no-store SPA shell miss. Canonical permalink navigation is deliberately `~`-only
-in the CSR under [ADR-0076](../0076-no-full-load-spa-navigation.md): in-app
+in the CSR under [ADR-0076](0076-no-full-load-spa-navigation.md): in-app
 navigation must not add a full document load merely to hand a route back to the
 server. Compatibility URLs are therefore an inbound HTTP concern, not a second
 client route or a second permalink identity.
