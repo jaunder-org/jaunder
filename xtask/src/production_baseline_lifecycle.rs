@@ -916,7 +916,19 @@ socket.end(command + "\\n");
         Ok(())
     }
 
+    /// Stop all owned processes while preserving the restricted run workspace.
+    pub fn retain_for_diagnostics(mut self) -> Result<PathBuf> {
+        let workspace = self.workspace.clone();
+        self.stop_owned_processes()?;
+        Ok(workspace)
+    }
+
     pub fn cleanup(mut self) -> Result<()> {
+        self.stop_owned_processes()?;
+        cleanup_workspace(&self.workspace)
+    }
+
+    fn stop_owned_processes(&mut self) -> Result<()> {
         let mut errors = Vec::new();
         let ids = self.deployments.keys().cloned().collect::<Vec<_>>();
         for id in ids {
@@ -937,7 +949,7 @@ socket.end(command + "\\n");
         if let Some(error) = errors.into_iter().next() {
             return Err(error);
         }
-        cleanup_workspace(&self.workspace)
+        Ok(())
     }
 }
 

@@ -1291,10 +1291,11 @@ fn run_discovery(
     root: &Path,
     harness: &HarnessIdentity,
     source: ResolvedRevision,
-) -> (DiscoveryResult, Result<EvidenceCanaries>) {
+) -> (DiscoveryResult, Result<EvidenceCanaries>, Option<PathBuf>) {
     use crate::production_baseline_lifecycle::BaselineLifecycle;
 
     let mut workflow_ok = false;
+    let mut retained_workspace = None;
     let mut recorder = DiscoveryRecorder::default();
     let workflow = (|| -> Result<EvidenceCanaries> {
         let mut lifecycle = recorder.lifecycle("workspace-create", || {
@@ -1381,23 +1382,28 @@ fn run_discovery(
             Ok(())
         })();
         let canaries = lifecycle.evidence_canaries(&[&canary_path]);
-        let cleanup = lifecycle.cleanup();
-        workflow_ok = result.is_ok() && cleanup.is_ok();
-        cleanup?;
+        let shutdown = if result.is_ok() {
+            lifecycle.cleanup().map(|()| None)
+        } else {
+            lifecycle.retain_for_diagnostics().map(Some)
+        };
+        workflow_ok = result.is_ok() && shutdown.is_ok();
+        retained_workspace = shutdown?;
         canaries
     })();
     let evidence = recorder.finish(workflow_ok);
-    (evidence, workflow)
+    (evidence, workflow, retained_workspace)
 }
 fn run_acceptance(
     root: &Path,
     harness: &HarnessIdentity,
     source: ResolvedRevision,
     target: ResolvedRevision,
-) -> (DiscoveryResult, Result<EvidenceCanaries>) {
+) -> (DiscoveryResult, Result<EvidenceCanaries>, Option<PathBuf>) {
     use crate::production_baseline_lifecycle::BaselineLifecycle;
 
     let mut workflow_ok = false;
+    let mut retained_workspace = None;
     let mut recorder = DiscoveryRecorder::default();
     let workflow = (|| -> Result<EvidenceCanaries> {
         let mut lifecycle = recorder.lifecycle("workspace-create", || {
@@ -1508,16 +1514,17 @@ fn run_acceptance(
             Ok(())
         })();
         let canaries = lifecycle.evidence_canaries(&[&canary_path]);
-        let cleanup = lifecycle.cleanup();
-        workflow_ok = result.is_ok();
-        if cleanup.is_err() {
-            workflow_ok = false;
-        }
-        cleanup?;
+        let shutdown = if result.is_ok() {
+            lifecycle.cleanup().map(|()| None)
+        } else {
+            lifecycle.retain_for_diagnostics().map(Some)
+        };
+        workflow_ok = result.is_ok() && shutdown.is_ok();
+        retained_workspace = shutdown?;
         canaries
     })();
     let evidence = recorder.finish(workflow_ok);
-    (evidence, workflow)
+    (evidence, workflow, retained_workspace)
 }
 
 /// Invoke the Task 1 shared Playwright behavior flow against the current stable
@@ -1596,17 +1603,24 @@ pub fn run(command: ProductionBaselineCommand) -> Result<CommandResult> {
     let mut result = CommandResult::new(name);
     let _lease = RunLease::acquire(&root)?;
     result.push(StepResult::ok("production-baseline-preflight").with_duration(start.elapsed()));
-    let (raw, canaries) = match target {
+    let (raw, canaries, retained_workspace) = match target {
         Some(target) => {
-            let (raw, canaries) = run_acceptance(&root, &harness, source.clone(), target.clone());
+            let (raw, canaries, retained_workspace) =
+                run_acceptance(&root, &harness, source.clone(), target.clone());
             (
                 raw.into_accept_evidence(harness.clone(), source, target),
                 canaries,
+                retained_workspace,
             )
         }
         None => {
-            let (raw, canaries) = run_discovery(&root, &harness, source.clone());
-            (raw.into_evidence(harness.clone(), source), canaries)
+            let (raw, canaries, retained_workspace) =
+                run_discovery(&root, &harness, source.clone());
+            (
+                raw.into_evidence(harness.clone(), source),
+                canaries,
+                retained_workspace,
+            )
         }
     };
     let destination = evidence_destination(&root, &raw)?;
@@ -1640,12 +1654,22 @@ pub fn run(command: ProductionBaselineCommand) -> Result<CommandResult> {
                 .with_duration(start.elapsed()),
         );
     } else {
+        let unpublished_detail = retained_workspace
+            .as_deref()
+            .and_then(|workspace| workspace.strip_prefix(&root).ok())
+            .map(|workspace| {
+                format!(
+                    "evidence was not published; restricted-workspace={}",
+                    workspace.display()
+                )
+            })
+            .unwrap_or_else(|| "evidence was not published".into());
         result.push(
             StepResult::fail(step)
                 .detail(if publication.is_ok() {
                     detail
                 } else {
-                    "evidence was not published".into()
+                    unpublished_detail
                 })
                 .with_duration(start.elapsed()),
         );
