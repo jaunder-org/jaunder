@@ -907,4 +907,53 @@ mod tests {
             "the handler rejects PostgreSQL before it opens storage"
         );
     }
+
+    #[tokio::test]
+    async fn sandbox_profile_handler_dispatches_demo_media_and_posts() {
+        let (storage, db) = temp_db().await;
+        run(cli(Commands::SeedSandboxProfile {
+            db: db.clone(),
+            storage_path: storage.path().to_owned(),
+            profile: SandboxProfileArg::Demo,
+        }))
+        .await
+        .expect("demo profile handler succeeds");
+
+        let factory = storage::open_existing_database(&db, &StorageRuntimeConfig::default())
+            .await
+            .expect("reopen seeded database");
+        let users = factory.users();
+        let posts = factory.posts();
+        let media = factory.media();
+        let mut post_count = 0;
+        let mut media_count = 0;
+        for username in ["user", "operator", "alice", "bob"] {
+            let user = users
+                .get_user_by_username(&username.parse().expect("fixed username"))
+                .await
+                .expect("User lookup")
+                .expect("demo User exists");
+            post_count += posts
+                .list_collection_by_user(
+                    user.user_id,
+                    None,
+                    common::test_support::parse_row_limit("100"),
+                )
+                .await
+                .expect("Post listing")
+                .len();
+            media_count += media
+                .list_media(
+                    user.user_id,
+                    None,
+                    common::test_support::parse_row_limit("2"),
+                    common::pagination::PageOffset::default(),
+                )
+                .await
+                .expect("Media listing")
+                .len();
+        }
+        assert_eq!(post_count, 68);
+        assert_eq!(media_count, 4);
+    }
 }

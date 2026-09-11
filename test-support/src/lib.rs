@@ -732,6 +732,7 @@ pub fn sandbox_profile_manifest(
 /// evidence. Keeping unknown forms absent makes this resolver fail closed.
 pub struct SandboxMediaOwnershipResolver;
 
+// cov:ignore-start: sandbox seeding never resolves deletion ownership
 #[async_trait]
 impl MediaReferenceOwnershipResolver for SandboxMediaOwnershipResolver {
     async fn resolve(
@@ -754,6 +755,7 @@ impl MediaReferenceOwnershipResolver for SandboxMediaOwnershipResolver {
         local.finish()
     }
 }
+// cov:ignore-stop
 
 fn sandbox_post_content(
     fixture: &SandboxPost,
@@ -1366,7 +1368,7 @@ mod sandbox_profile_tests {
             "night-watch" => format!(
                 "<h1>Night watch</h1><p></p><p>A <b>quiet room</b> turns waiting into attention.\n</p><p><a href=\"/notes/night-watch\" rel=\"noopener noreferrer\">Read the night watch</a>\n</p><ol><li><p>Dim the lamp\n</p></li><li><p>Wait for the blink\n</p></li></ol><pre><code class=\"language-text\">signal = \"seen\"\n</code></pre><table><thead><tr><td>Hour</td><td>Signal</td></tr></thead><tbody><tr><td>Nine</td><td>Faint</td></tr><tr><td>Ten</td><td>Clear</td></tr></tbody></table><p><img src=\"{asset_url}\"></p>"
             ),
-            _ => panic!("unexpected curated Post slug: {slug}"),
+            _ => unreachable!("curated Post fixtures use only fixed slugs"),
         }
     }
 
@@ -1697,7 +1699,7 @@ mod sandbox_profile_tests {
                     ),
                 ),
             ],
-            _ => panic!("unexpected sandbox User: {username}"),
+            _ => unreachable!("sandbox fixtures use only fixed Usernames"),
         }
     }
 
