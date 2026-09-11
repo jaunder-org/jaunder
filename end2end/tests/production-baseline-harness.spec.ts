@@ -52,7 +52,7 @@ async function publish(
 async function waitForRequest(sequence: number): Promise<BrowserRequest> {
   if (!coordinator) throw new Error("baseline browser coordinator is missing");
   const path = `${coordinator}/request-${sequence}.json`;
-  const deadline = Date.now() + 90_000;
+  const deadline = Date.now() + PRODUCTION_BASELINE_HARNESS_BUDGET_MS;
   for (;;) {
     try {
       return JSON.parse(await readFile(path, "utf8")) as BrowserRequest;
