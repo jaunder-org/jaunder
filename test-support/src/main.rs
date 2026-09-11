@@ -1,14 +1,16 @@
 //! `test-support` — out-of-process test/e2e helpers that link jaunder's real
 //! crates (see `lib.rs`). Never shipped in the `jaunder` production binary.
+use std::sync::Arc;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use common::display_name::DisplayName;
 use host::{capture, feed::FeedEventPhase};
-use storage::{DbConnectOptions, StorageRuntimeConfig};
+use storage::{DbConnectOptions, MediaContentLocks, MediaManager, StorageRuntimeConfig};
 use test_support::{
-    SandboxProfile, create_session_for_user, create_user, reset_author_theme_fixture, reset_mail,
-    sandbox_profile_anchor, seed_dead_letters, seed_posts_for_user, seed_published_author_theme,
-    seed_sandbox_profile, seed_user,
+    SandboxMediaOwnershipResolver, SandboxProfile, create_session_for_user, create_user,
+    reset_author_theme_fixture, reset_mail, sandbox_profile_anchor, seed_dead_letters,
+    seed_demo_sandbox_profile, seed_posts_for_user, seed_published_author_theme,
+    seed_standard_sandbox_profile, seed_user,
 };
 
 #[derive(Parser)]
@@ -46,6 +48,9 @@ enum Commands {
         /// `SQLite` database URL for the unpublished sandbox workspace (`sqlite:...`).
         #[arg(long)]
         db: DbConnectOptions,
+        /// Root of the unpublished sandbox workspace's Media content.
+        #[arg(long)]
+        storage_path: std::path::PathBuf,
         /// Fixed sandbox profile to create.
         #[arg(long, value_enum)]
         profile: SandboxProfileArg,
@@ -235,10 +240,11 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             )
             .await
         }
-        Commands::SeedSandboxProfile { db, profile } => {
-            let storage_runtime = sandbox_storage_runtime(&db)?;
-            cmd_seed_sandbox_profile(&db, &storage_runtime, profile.into()).await
-        }
+        Commands::SeedSandboxProfile {
+            db,
+            storage_path,
+            profile,
+        } => cmd_seed_sandbox_profile(&db, &storage_path, profile.into()).await,
         Commands::SeedTheme {
             db,
             storage_path,
@@ -326,23 +332,44 @@ fn sandbox_storage_runtime(db: &DbConnectOptions) -> anyhow::Result<StorageRunti
     Ok(storage_runtime_config(db)?)
 }
 
-/// Seed one complete fixed sandbox profile and report only after its transaction commits.
+/// Seed one complete fixed sandbox profile and report only after its phases commit.
 async fn cmd_seed_sandbox_profile(
     db: &DbConnectOptions,
-    runtime: &StorageRuntimeConfig,
+    storage_path: &std::path::Path,
     profile: SandboxProfile,
 ) -> anyhow::Result<()> {
-    let factory = storage::open_existing_database(db, runtime).await?;
-    let anchor = sandbox_profile_anchor();
-    seed_sandbox_profile(
-        factory.site_config(),
-        factory.users(),
-        factory.posts(),
-        factory.write_scope(),
-        profile,
-        anchor,
-    )
-    .await?;
+    let runtime = sandbox_storage_runtime(db)?;
+    let opened = storage::open_existing_database_with_observer(db, &runtime).await?;
+    match profile {
+        SandboxProfile::Standard => {
+            seed_standard_sandbox_profile(
+                opened.factory.site_config(),
+                opened.factory.users(),
+                opened.factory.write_scope(),
+            )
+            .await?;
+        }
+        SandboxProfile::Demo => {
+            let media_manager = MediaManager::new(
+                opened.factory.media(),
+                opened.factory.posts(),
+                opened.factory.site_config(),
+                opened.factory.write_scope(),
+                Arc::new(MediaContentLocks::new(Arc::new(storage_path.to_path_buf()))),
+                opened.instance_id,
+                Arc::new(SandboxMediaOwnershipResolver),
+            );
+            seed_demo_sandbox_profile(
+                opened.factory.site_config(),
+                opened.factory.users(),
+                opened.factory.posts(),
+                opened.factory.write_scope(),
+                &media_manager,
+                sandbox_profile_anchor(),
+            )
+            .await?;
+        }
+    }
     eprintln!("seeded sandbox profile {}", profile_name(profile));
     Ok(())
 }
@@ -804,6 +831,7 @@ mod tests {
             "the --label argument should reach the stored session"
         );
     }
+
     #[test]
     fn parses_the_exact_sandbox_profile_subprocess_contract() {
         Cli::try_parse_from([
@@ -811,6 +839,8 @@ mod tests {
             "seed-sandbox-profile",
             "--db",
             "sqlite:/tmp/sandbox.db",
+            "--storage-path",
+            "/tmp/sandbox-storage",
             "--profile",
             "demo",
         ])
@@ -822,6 +852,8 @@ mod tests {
                 "seed-sandbox-profile",
                 "--db",
                 "sqlite:/tmp/sandbox.db",
+                "--storage-path",
+                "/tmp/sandbox-storage",
                 "--profile",
                 "empty",
             ])
@@ -847,9 +879,10 @@ mod tests {
 
     #[tokio::test]
     async fn sandbox_profile_handler_dispatches_standard_profile_and_rejects_postgres() {
-        let (_dir, db) = temp_db().await;
+        let (storage, db) = temp_db().await;
         run(cli(Commands::SeedSandboxProfile {
             db: db.clone(),
+            storage_path: storage.path().to_owned(),
             profile: SandboxProfileArg::Standard,
         }))
         .await
@@ -873,5 +906,54 @@ mod tests {
             sandbox_storage_runtime(&postgres).is_err(),
             "the handler rejects PostgreSQL before it opens storage"
         );
+    }
+
+    #[tokio::test]
+    async fn sandbox_profile_handler_dispatches_demo_media_and_posts() {
+        let (storage, db) = temp_db().await;
+        run(cli(Commands::SeedSandboxProfile {
+            db: db.clone(),
+            storage_path: storage.path().to_owned(),
+            profile: SandboxProfileArg::Demo,
+        }))
+        .await
+        .expect("demo profile handler succeeds");
+
+        let factory = storage::open_existing_database(&db, &StorageRuntimeConfig::default())
+            .await
+            .expect("reopen seeded database");
+        let users = factory.users();
+        let posts = factory.posts();
+        let media = factory.media();
+        let mut post_count = 0;
+        let mut media_count = 0;
+        for username in ["user", "operator", "alice", "bob"] {
+            let user = users
+                .get_user_by_username(&username.parse().expect("fixed username"))
+                .await
+                .expect("User lookup")
+                .expect("demo User exists");
+            post_count += posts
+                .list_collection_by_user(
+                    user.user_id,
+                    None,
+                    common::test_support::parse_row_limit("100"),
+                )
+                .await
+                .expect("Post listing")
+                .len();
+            media_count += media
+                .list_media(
+                    user.user_id,
+                    None,
+                    common::test_support::parse_row_limit("2"),
+                    common::pagination::PageOffset::default(),
+                )
+                .await
+                .expect("Media listing")
+                .len();
+        }
+        assert_eq!(post_count, 68);
+        assert_eq!(media_count, 4);
     }
 }
