@@ -263,6 +263,12 @@ let
       systemd.services.jaunder-baseline-control = {
         wantedBy = [ "multi-user.target" ];
         after = [ "network.target" ];
+        path = [
+          config.systemd.package
+          pkgs.coreutils
+          pkgs.gnugrep
+          self.packages.${pkgs.stdenv.hostPlatform.system}.test-support
+        ];
         serviceConfig = {
           ExecStart = "${pkgs.socat}/bin/socat TCP-LISTEN:39000,bind=0.0.0.0,reuseaddr,fork EXEC:${pkgs.bash}/bin/bash,stderr";
           Restart = "always";
