@@ -30,10 +30,10 @@ use host::config_key::SiteConfigKey;
 use host::feed::{FeedEventPhase, FeedPath};
 use jiff::{Timestamp, ToSpan};
 use storage::{
-    FeedEventStorage, ForeignEvidenceSink, InstanceId, LocalMediaSink, MediaContentLocks,
-    MediaManager, MediaReferenceEvidence, MediaReferenceOwnershipResolver, MediaStorage,
-    OperatorStatus, PersistedMediaReference, PostBookkeepingExpectation, PostFormat, PostStorage,
-    ProvenLocalMediaRefs, RenderedPostContent, SessionStorage, SiteConfigStorage, StorageFactory,
+    FeedEventStorage, ForeignEvidenceSink, InstanceId, LocalMediaSink, MediaManager,
+    MediaReferenceEvidence, MediaReferenceOwnershipResolver, OperatorStatus,
+    PersistedMediaReference, PostBookkeepingExpectation, PostFormat, PostStorage,
+    ProvenLocalMediaRefs, RenderedPostContent, SessionStorage, SiteConfigStorage,
     ThemeAssetManager, ThemeOwner, ThemeRoleBinding, ThemeStorage, UserStorage, WriteScope,
     render_post_input, seed_post_input,
 };
@@ -448,29 +448,15 @@ pub struct SandboxCuratedPostTemplate {
 }
 
 impl SandboxCuratedPostTemplate {
-    /// Materializes the deterministic native source with the sibling asset's
-    /// canonical local Media URL.
-    #[must_use]
-    pub fn materialize(self, asset_url: &RootRelativeUrl) -> String {
-        (self.source)(asset_url)
-    }
-
-    /// Returns the curated Post's fixed title.
-    #[must_use]
-    pub const fn title(self) -> &'static str {
-        self.title
-    }
-
-    /// Returns the curated Post's fixed per-author slug.
-    #[must_use]
-    pub const fn slug(self) -> &'static str {
-        self.slug
-    }
-
-    /// Returns the native authoring format.
-    #[must_use]
-    pub const fn format(self) -> PostFormat {
-        self.format
+    fn materialize_post(self, author: &'static str, asset_url: &RootRelativeUrl) -> SandboxPost {
+        SandboxPost {
+            author,
+            title: self.title.to_owned(),
+            slug: self.slug.to_owned(),
+            body: (self.source)(asset_url),
+            format: self.format,
+            published_at: None,
+        }
     }
 }
 
@@ -494,22 +480,8 @@ impl SandboxUserFixture {
     #[must_use]
     pub fn materialize_curated_posts(self, asset_url: &RootRelativeUrl) -> [SandboxPost; 2] {
         [
-            SandboxPost {
-                author: self.username,
-                title: self.markdown.title().to_owned(),
-                slug: self.markdown.slug().to_owned(),
-                body: self.markdown.materialize(asset_url),
-                format: self.markdown.format(),
-                published_at: None,
-            },
-            SandboxPost {
-                author: self.username,
-                title: self.org.title().to_owned(),
-                slug: self.org.slug().to_owned(),
-                body: self.org.materialize(asset_url),
-                format: self.org.format(),
-                published_at: None,
-            },
+            self.markdown.materialize_post(self.username, asset_url),
+            self.org.materialize_post(self.username, asset_url),
         ]
     }
 }
@@ -758,7 +730,7 @@ pub fn sandbox_profile_manifest(
 ///
 /// The seed process never performs network I/O and does not need deletion
 /// evidence. Keeping unknown forms absent makes this resolver fail closed.
-struct SandboxMediaOwnershipResolver;
+pub struct SandboxMediaOwnershipResolver;
 
 #[async_trait]
 impl MediaReferenceOwnershipResolver for SandboxMediaOwnershipResolver {
@@ -817,53 +789,22 @@ fn sandbox_post_content(
     })
 }
 
-/// Storage services and filesystem identity needed to seed one sandbox profile.
-#[derive(Clone)]
-pub struct SandboxSeedStorage {
+/// Seeds the fixed standard sandbox profile through its exact storage services.
+///
+/// # Errors
+///
+/// Returns an error when the configuration or User write fails or its commit
+/// acknowledgement is indeterminate.
+pub async fn seed_standard_sandbox_profile(
     site_config: Arc<dyn SiteConfigStorage>,
     users: Arc<dyn UserStorage>,
-    posts: Arc<dyn PostStorage>,
-    media: Arc<dyn MediaStorage>,
     write_scope: WriteScope,
-    storage_path: Arc<std::path::PathBuf>,
-    instance_id: InstanceId,
+) -> anyhow::Result<()> {
+    seed_sandbox_users(site_config, users, write_scope, SandboxProfile::Standard).await?;
+    Ok(())
 }
 
-impl SandboxSeedStorage {
-    /// Captures the exact services opened for the unpublished sandbox workspace.
-    #[must_use]
-    pub fn from_factory(
-        factory: &StorageFactory,
-        storage_path: &Path,
-        instance_id: InstanceId,
-    ) -> Self {
-        Self {
-            site_config: factory.site_config(),
-            users: factory.users(),
-            posts: factory.posts(),
-            media: factory.media(),
-            write_scope: factory.write_scope(),
-            storage_path: Arc::new(storage_path.to_path_buf()),
-            instance_id,
-        }
-    }
-
-    fn media_manager(&self) -> MediaManager {
-        let content_locks = Arc::new(MediaContentLocks::new(Arc::clone(&self.storage_path)));
-        MediaManager::new(
-            Arc::clone(&self.media),
-            Arc::clone(&self.posts),
-            Arc::clone(&self.site_config),
-            self.write_scope.clone(),
-            content_locks,
-            self.instance_id.clone(),
-            Arc::new(SandboxMediaOwnershipResolver),
-        )
-    }
-}
-
-/// Seeds the exact non-idempotent sandbox profile through the normal typed
-/// storage write services.
+/// Seeds the fixed demo sandbox profile through its exact storage services.
 ///
 /// Site configuration and Users commit before Media placement; uploads use their
 /// own manager-owned writes; Posts then commit as one final batch. The staged
@@ -873,14 +814,20 @@ impl SandboxSeedStorage {
 ///
 /// Returns an error when any phase fails or its commit acknowledgement is
 /// indeterminate.
-pub async fn seed_sandbox_profile(
-    storage: SandboxSeedStorage,
-    profile: SandboxProfile,
+pub async fn seed_demo_sandbox_profile(
+    site_config: Arc<dyn SiteConfigStorage>,
+    users: Arc<dyn UserStorage>,
+    posts: Arc<dyn PostStorage>,
+    write_scope: WriteScope,
+    media_manager: &MediaManager,
     anchor: UtcInstant,
 ) -> anyhow::Result<()> {
-    seed_sandbox_profile_inner(
-        storage,
-        profile,
+    seed_demo_sandbox_profile_inner(
+        site_config,
+        users,
+        posts,
+        write_scope,
+        media_manager,
         anchor,
         #[cfg(test)]
         None,
@@ -891,29 +838,36 @@ pub async fn seed_sandbox_profile(
 #[cfg(test)]
 type SandboxPostPhaseHook = Box<dyn FnOnce() -> anyhow::Result<()> + Send>;
 
-async fn seed_sandbox_profile_inner(
-    storage: SandboxSeedStorage,
-    profile: SandboxProfile,
+async fn seed_demo_sandbox_profile_inner(
+    site_config: Arc<dyn SiteConfigStorage>,
+    users: Arc<dyn UserStorage>,
+    posts: Arc<dyn PostStorage>,
+    write_scope: WriteScope,
+    media_manager: &MediaManager,
     anchor: UtcInstant,
     #[cfg(test)] phase_hook: Option<SandboxPostPhaseHook>,
 ) -> anyhow::Result<()> {
-    let user_ids = seed_sandbox_users(&storage, profile).await?;
-    if profile == SandboxProfile::Standard {
-        return Ok(());
-    }
-
-    let asset_urls = upload_sandbox_media(&storage.media_manager(), &user_ids).await?;
+    let user_ids = seed_sandbox_users(
+        site_config,
+        users,
+        write_scope.clone(),
+        SandboxProfile::Demo,
+    )
+    .await?;
+    let asset_urls = upload_sandbox_media(media_manager, &user_ids).await?;
 
     #[cfg(test)]
     if let Some(phase_hook) = phase_hook {
         phase_hook()?;
     }
 
-    seed_sandbox_posts(&storage, user_ids, anchor, &asset_urls).await
+    seed_sandbox_posts(posts, write_scope, user_ids, anchor, &asset_urls).await
 }
 
 async fn seed_sandbox_users(
-    storage: &SandboxSeedStorage,
+    site_config: Arc<dyn SiteConfigStorage>,
+    users: Arc<dyn UserStorage>,
+    write_scope: WriteScope,
     profile: SandboxProfile,
 ) -> anyhow::Result<Vec<(&'static str, UserId)>> {
     let sandbox_users = match profile {
@@ -935,10 +889,7 @@ async fn seed_sandbox_users(
         .parse::<SiteTitle>()
         .map_err(|error| anyhow::anyhow!("invalid fixed sandbox title: {error}"))?
         .to_string();
-    let site_config = Arc::clone(&storage.site_config);
-    let users = Arc::clone(&storage.users);
-    let outcome = storage
-        .write_scope
+    let outcome = write_scope
         .run(move |transaction| {
             Box::pin(async move {
                 site_config
@@ -1002,15 +953,14 @@ async fn upload_sandbox_media(
 }
 
 async fn seed_sandbox_posts(
-    storage: &SandboxSeedStorage,
+    posts: Arc<dyn PostStorage>,
+    write_scope: WriteScope,
     user_ids: Vec<(&'static str, UserId)>,
     anchor: UtcInstant,
     asset_urls: &[RootRelativeUrl; 4],
 ) -> anyhow::Result<()> {
     let manifest = sandbox_profile_manifest(anchor, asset_urls);
-    let posts = Arc::clone(&storage.posts);
-    let outcome = storage
-        .write_scope
+    let outcome = write_scope
         .run(move |transaction| {
             Box::pin(async move {
                 let mut inputs = Vec::with_capacity(manifest.len());
@@ -1255,16 +1205,18 @@ mod sandbox_profile_tests {
         }
     }
 
-    fn sandbox_seed_storage(env: &test_support::TestEnv) -> SandboxSeedStorage {
-        SandboxSeedStorage {
-            site_config: env.site_config(),
-            users: env.users(),
-            posts: env.posts(),
-            media: env.media(),
-            write_scope: env.write_scope(),
-            storage_path: Arc::new(env.base.path().to_path_buf()),
-            instance_id: env.base.instance_id().clone(),
-        }
+    fn sandbox_media_manager(env: &test_support::TestEnv) -> MediaManager {
+        MediaManager::new(
+            env.media(),
+            env.posts(),
+            env.site_config(),
+            env.write_scope(),
+            Arc::new(storage::MediaContentLocks::new(Arc::new(
+                env.base.path().to_path_buf(),
+            ))),
+            env.base.instance_id().clone(),
+            Arc::new(SandboxMediaOwnershipResolver),
+        )
     }
 
     #[tokio::test]
@@ -1273,14 +1225,13 @@ mod sandbox_profile_tests {
         let site_config = env.site_config();
         let users = env.users();
         let posts = env.posts();
-        let storage = sandbox_seed_storage(&env);
-        let anchor = "2026-09-06T12:34:00Z"
-            .parse::<UtcInstant>()
-            .expect("fixed anchor");
-
-        seed_sandbox_profile(storage, SandboxProfile::Standard, anchor)
-            .await
-            .expect("standard profile seeds");
+        seed_standard_sandbox_profile(
+            Arc::clone(&site_config),
+            Arc::clone(&users),
+            env.write_scope(),
+        )
+        .await
+        .expect("standard profile seeds");
 
         assert_eq!(
             site_config.list().await.expect("site config list"),
@@ -1389,6 +1340,36 @@ mod sandbox_profile_tests {
             .expect("one stored Media URL per sandbox User")
     }
 
+    fn expected_curated_html(slug: &str, asset_url: &RootRelativeUrl) -> String {
+        match slug {
+            "horizon-worth-keeping" => format!(
+                "<h1>A horizon worth keeping</h1>\n<p>A <strong>small observation</strong> can guide a whole day.</p>\n<p><a href=\"/notes/horizon\" rel=\"noopener noreferrer\">Read the field notes</a>.</p>\n<ul>\n<li>Watch the light</li>\n<li>Keep the useful detail</li>\n</ul>\n<pre><code class=\"language-text\">horizon = \"clear\"\n</code></pre>\n<table><thead><tr><th>Moment</th><th>Choice</th></tr></thead><tbody>\n<tr><td>Morning</td><td>Walk</td></tr>\n<tr><td>Evening</td><td>Write</td></tr>\n</tbody></table>\n<p><img src=\"{asset_url}\" alt=\"Blue horizon\"></p>\n"
+            ),
+            "calm-field-note" => format!(
+                "<h1>A calm field note</h1><p></p><p>A <i>steady practice</i> makes room for better work.\n</p><p><a href=\"/notes/practice\" rel=\"noopener noreferrer\">Read the practice note</a>\n</p><ul><li><p>Name the question\n</p></li><li><p>Share the answer\n</p></li></ul><pre><code class=\"language-text\">answer = \"kind\"\n</code></pre><table><thead><tr><td>Moment</td><td>Choice</td></tr></thead><tbody><tr><td>Morning</td><td>Listen</td></tr><tr><td>Evening</td><td>Rest</td></tr></tbody></table><p><img src=\"{asset_url}\"></p>"
+            ),
+            "workshop-checks" => format!(
+                "<h1>Workshop checks</h1>\n<p>A <strong>clear checklist</strong> makes maintenance less surprising.</p>\n<p><a href=\"/notes/workshop\" rel=\"noopener noreferrer\">Review the runbook</a>.</p>\n<ol>\n<li>Open the bench</li>\n<li>Record the result</li>\n</ol>\n<pre><code class=\"language-text\">status = \"ready\"\n</code></pre>\n<table><thead><tr><th>Tool</th><th>State</th></tr></thead><tbody>\n<tr><td>Saw</td><td>Ready</td></tr>\n<tr><td>Lamp</td><td>Warm</td></tr>\n</tbody></table>\n<p><img src=\"{asset_url}\" alt=\"Warm workshop\"></p>\n"
+            ),
+            "workshop-rhythm" => format!(
+                "<h1>Workshop rhythm</h1><p></p><p>A <b>shared routine</b> keeps the room useful.\n</p><p><a href=\"/notes/rhythm\" rel=\"noopener noreferrer\">Read the workshop rhythm</a>\n</p><ol><li><p>Check the bench\n</p></li><li><p>Leave a note\n</p></li></ol><pre><code class=\"language-text\">room = \"open\"\n</code></pre><table><thead><tr><td>Tool</td><td>State</td></tr></thead><tbody><tr><td>Saw</td><td>Ready</td></tr><tr><td>Lamp</td><td>Warm</td></tr></tbody></table><p><img src=\"{asset_url}\"></p>"
+            ),
+            "field-paths" => format!(
+                "<h1>Field paths</h1>\n<p>A <strong>patient route</strong> notices what hurried travel misses.</p>\n<p><a href=\"/notes/field-paths\" rel=\"noopener noreferrer\">See the path map</a>.</p>\n<ul>\n<li>Follow the shade</li>\n<li>Mark the turn</li>\n</ul>\n<pre><code class=\"language-text\">pace = \"slow\"\n</code></pre>\n<table><thead><tr><th>Place</th><th>Sound</th></tr></thead><tbody>\n<tr><td>Gate</td><td>Birds</td></tr>\n<tr><td>Hill</td><td>Wind</td></tr>\n</tbody></table>\n<p><img src=\"{asset_url}\" alt=\"Green field\"></p>\n"
+            ),
+            "field-margins" => format!(
+                "<h1>Field margins</h1><p></p><p>A <i>careful walk</i> gives a place time to speak.\n</p><p><a href=\"/notes/margins\" rel=\"noopener noreferrer\">Read the field margin</a>\n</p><ul><li><p>Follow the shade\n</p></li><li><p>Mark the turn\n</p></li></ul><pre><code class=\"language-text\">pace = \"slow\"\n</code></pre><table><thead><tr><td>Place</td><td>Sound</td></tr></thead><tbody><tr><td>Gate</td><td>Birds</td></tr><tr><td>Hill</td><td>Wind</td></tr></tbody></table><p><img src=\"{asset_url}\"></p>"
+            ),
+            "night-signals" => format!(
+                "<h1>Night signals</h1>\n<p>A <strong>quiet sky</strong> makes a distant signal easier to see.</p>\n<p><a href=\"/notes/night-signals\" rel=\"noopener noreferrer\">Open the signal log</a>.</p>\n<ol>\n<li>Dim the lamp</li>\n<li>Wait for the blink</li>\n</ol>\n<pre><code class=\"language-text\">signal = \"seen\"\n</code></pre>\n<table><thead><tr><th>Hour</th><th>Signal</th></tr></thead><tbody>\n<tr><td>Nine</td><td>Faint</td></tr>\n<tr><td>Ten</td><td>Clear</td></tr>\n</tbody></table>\n<p><img src=\"{asset_url}\" alt=\"Violet night\"></p>\n"
+            ),
+            "night-watch" => format!(
+                "<h1>Night watch</h1><p></p><p>A <b>quiet room</b> turns waiting into attention.\n</p><p><a href=\"/notes/night-watch\" rel=\"noopener noreferrer\">Read the night watch</a>\n</p><ol><li><p>Dim the lamp\n</p></li><li><p>Wait for the blink\n</p></li></ol><pre><code class=\"language-text\">signal = \"seen\"\n</code></pre><table><thead><tr><td>Hour</td><td>Signal</td></tr></thead><tbody><tr><td>Nine</td><td>Faint</td></tr><tr><td>Ten</td><td>Clear</td></tr></tbody></table><p><img src=\"{asset_url}\"></p>"
+            ),
+            _ => panic!("unexpected curated Post slug: {slug}"),
+        }
+    }
+
     async fn assert_curated_rendering(
         users: &Arc<dyn UserStorage>,
         asset_urls: &[RootRelativeUrl; 4],
@@ -1407,24 +1388,7 @@ mod sandbox_profile_tests {
                 )
                 .rendered;
                 let html = rendered.html().as_ref();
-                if curated.format == PostFormat::Markdown {
-                    assert!(html.contains("alt="), "Markdown image retains alt text");
-                }
-                assert!(html.contains("<h1"));
-                assert!(html.contains("<img"));
-                assert!(html.contains(asset_url.as_ref()));
-                match curated.format {
-                    PostFormat::Markdown => {
-                        assert!(html.contains("<strong>") || html.contains("<em>"));
-                    }
-                    PostFormat::Org => assert!(html.contains("<b>") || html.contains("<i>")),
-                    PostFormat::Html => unreachable!("sandbox fixtures use native formats"),
-                }
-                assert!(html.contains("<a "));
-                assert!(html.contains("<pre><code"));
-                assert!(html.contains("<table"));
-                assert!(html.contains("<ul>") || html.contains("<ol>"));
-                assert!(!html.contains("<script"));
+                assert_eq!(html, expected_curated_html(&curated.slug, asset_url));
                 assert_eq!(rendered.media().len(), 1);
                 assert!(matches!(
                     rendered.media()[0].kind(),
@@ -1480,9 +1444,17 @@ mod sandbox_profile_tests {
         let anchor = "2026-09-06T12:34:00Z"
             .parse::<UtcInstant>()
             .expect("fixed minute anchor");
-        seed_sandbox_profile(sandbox_seed_storage(&env), SandboxProfile::Demo, anchor)
-            .await
-            .expect("demo profile seeds");
+        let media_manager = sandbox_media_manager(&env);
+        seed_demo_sandbox_profile(
+            Arc::clone(&site_config),
+            Arc::clone(&users),
+            Arc::clone(&posts),
+            env.write_scope(),
+            &media_manager,
+            anchor,
+        )
+        .await
+        .expect("demo profile seeds");
 
         let asset_urls = demo_asset_urls(&env, &users).await;
         assert_curated_rendering(&users, &asset_urls).await;
@@ -1517,9 +1489,13 @@ mod sandbox_profile_tests {
         let env = test_support::Backend::Sqlite.setup().pristine().await;
         let users = env.users();
         let posts = env.posts();
-        let error = seed_sandbox_profile_inner(
-            sandbox_seed_storage(&env),
-            SandboxProfile::Demo,
+        let media_manager = sandbox_media_manager(&env);
+        let error = seed_demo_sandbox_profile_inner(
+            env.site_config(),
+            Arc::clone(&users),
+            Arc::clone(&posts),
+            env.write_scope(),
+            &media_manager,
             "2026-09-06T12:34:00Z".parse().expect("fixed anchor"),
             Some(Box::new(|| anyhow::bail!("injected post phase failure"))),
         )
@@ -1642,26 +1618,101 @@ mod sandbox_profile_tests {
         }
     }
 
+    type ExpectedCuratedPost = (&'static str, &'static str, PostFormat, String);
+
+    fn expected_curated_sources(
+        username: &str,
+        asset_url: &RootRelativeUrl,
+    ) -> [ExpectedCuratedPost; 2] {
+        match username {
+            "user" => [
+                (
+                    "A horizon worth keeping",
+                    "horizon-worth-keeping",
+                    PostFormat::Markdown,
+                    format!(
+                        "# A horizon worth keeping\n\nA **small observation** can guide a whole day.\n\n[Read the field notes](/notes/horizon).\n\n- Watch the light\n- Keep the useful detail\n\n```text\nhorizon = \"clear\"\n```\n\n| Moment | Choice |\n| --- | --- |\n| Morning | Walk |\n| Evening | Write |\n\n![Blue horizon]({asset_url})"
+                    ),
+                ),
+                (
+                    "A calm field note",
+                    "calm-field-note",
+                    PostFormat::Org,
+                    format!(
+                        "* A calm field note\n\nA /steady practice/ makes room for better work.\n\n[[/notes/practice][Read the practice note]]\n\n- Name the question\n- Share the answer\n\n#+begin_src text\nanswer = \"kind\"\n#+end_src\n\n| Moment | Choice |\n|---------+--------|\n| Morning | Listen |\n| Evening | Rest   |\n\n#+caption: Blue horizon\n[[{asset_url}]]"
+                    ),
+                ),
+            ],
+            "operator" => [
+                (
+                    "Workshop checks",
+                    "workshop-checks",
+                    PostFormat::Markdown,
+                    format!(
+                        "# Workshop checks\n\nA **clear checklist** makes maintenance less surprising.\n\n[Review the runbook](/notes/workshop).\n\n1. Open the bench\n2. Record the result\n\n```text\nstatus = \"ready\"\n```\n\n| Tool | State |\n| --- | --- |\n| Saw | Ready |\n| Lamp | Warm |\n\n![Warm workshop]({asset_url})"
+                    ),
+                ),
+                (
+                    "Workshop rhythm",
+                    "workshop-rhythm",
+                    PostFormat::Org,
+                    format!(
+                        "* Workshop rhythm\n\nA *shared routine* keeps the room useful.\n\n[[/notes/rhythm][Read the workshop rhythm]]\n\n1. Check the bench\n2. Leave a note\n\n#+begin_src text\nroom = \"open\"\n#+end_src\n\n| Tool | State |\n|------+-------|\n| Saw  | Ready |\n| Lamp | Warm  |\n\n#+caption: Warm workshop\n[[{asset_url}]]"
+                    ),
+                ),
+            ],
+            "alice" => [
+                (
+                    "Field paths",
+                    "field-paths",
+                    PostFormat::Markdown,
+                    format!(
+                        "# Field paths\n\nA **patient route** notices what hurried travel misses.\n\n[See the path map](/notes/field-paths).\n\n- Follow the shade\n- Mark the turn\n\n```text\npace = \"slow\"\n```\n\n| Place | Sound |\n| --- | --- |\n| Gate | Birds |\n| Hill | Wind |\n\n![Green field]({asset_url})"
+                    ),
+                ),
+                (
+                    "Field margins",
+                    "field-margins",
+                    PostFormat::Org,
+                    format!(
+                        "* Field margins\n\nA /careful walk/ gives a place time to speak.\n\n[[/notes/margins][Read the field margin]]\n\n- Follow the shade\n- Mark the turn\n\n#+begin_src text\npace = \"slow\"\n#+end_src\n\n| Place | Sound |\n|-------+-------|\n| Gate  | Birds |\n| Hill  | Wind  |\n\n#+caption: Green field\n[[{asset_url}]]"
+                    ),
+                ),
+            ],
+            "bob" => [
+                (
+                    "Night signals",
+                    "night-signals",
+                    PostFormat::Markdown,
+                    format!(
+                        "# Night signals\n\nA **quiet sky** makes a distant signal easier to see.\n\n[Open the signal log](/notes/night-signals).\n\n1. Dim the lamp\n2. Wait for the blink\n\n```text\nsignal = \"seen\"\n```\n\n| Hour | Signal |\n| --- | --- |\n| Nine | Faint |\n| Ten | Clear |\n\n![Violet night]({asset_url})"
+                    ),
+                ),
+                (
+                    "Night watch",
+                    "night-watch",
+                    PostFormat::Org,
+                    format!(
+                        "* Night watch\n\nA *quiet room* turns waiting into attention.\n\n[[/notes/night-watch][Read the night watch]]\n\n1. Dim the lamp\n2. Wait for the blink\n\n#+begin_src text\nsignal = \"seen\"\n#+end_src\n\n| Hour | Signal |\n|------+--------|\n| Nine | Faint  |\n| Ten  | Clear  |\n\n#+caption: Violet night\n[[{asset_url}]]"
+                    ),
+                ),
+            ],
+            _ => panic!("unexpected sandbox User: {username}"),
+        }
+    }
+
     #[test]
     fn demo_manifest_pins_exact_curated_sources_and_titles() {
-        let user_url = "/media/upload/user/blue-horizon.svg"
-            .parse::<RootRelativeUrl>()
-            .expect("fixed canonical fixture URL");
-        let [user_markdown, user_org] =
-            SANDBOX_USER_FIXTURES[0].materialize_curated_posts(&user_url);
-        assert_eq!(user_markdown.title, "A horizon worth keeping");
-        assert_eq!(user_markdown.slug, "horizon-worth-keeping");
-        assert_eq!(
-            user_markdown.body,
-            "# A horizon worth keeping\n\nA **small observation** can guide a whole day.\n\n[Read the field notes](/notes/horizon).\n\n- Watch the light\n- Keep the useful detail\n\n```text\nhorizon = \"clear\"\n```\n\n| Moment | Choice |\n| --- | --- |\n| Morning | Walk |\n| Evening | Write |\n\n![Blue horizon](/media/upload/user/blue-horizon.svg)"
-        );
-        assert_eq!(user_org.title, "A calm field note");
-        assert_eq!(user_org.slug, "calm-field-note");
-        assert_eq!(
-            user_org.body,
-            "* A calm field note\n\nA /steady practice/ makes room for better work.\n\n[[/notes/practice][Read the practice note]]\n\n- Name the question\n- Share the answer\n\n#+begin_src text\nanswer = \"kind\"\n#+end_src\n\n| Moment | Choice |\n|---------+--------|\n| Morning | Listen |\n| Evening | Rest   |\n\n#+caption: Blue horizon\n[[/media/upload/user/blue-horizon.svg]]"
-        );
-
+        const CURATED_TITLES: [&str; 8] = [
+            "A horizon worth keeping",
+            "A calm field note",
+            "Workshop checks",
+            "Workshop rhythm",
+            "Field paths",
+            "Field margins",
+            "Night signals",
+            "Night watch",
+        ];
         let asset_urls = SANDBOX_USER_FIXTURES
             .iter()
             .map(|fixture| {
@@ -1676,6 +1727,20 @@ mod sandbox_profile_tests {
         let asset_urls: [RootRelativeUrl; 4] = asset_urls
             .try_into()
             .expect("worked-example URLs cover every fixture User");
+
+        for (fixture, asset_url) in SANDBOX_USER_FIXTURES.iter().zip(&asset_urls) {
+            let actual = fixture.materialize_curated_posts(asset_url);
+            let expected = expected_curated_sources(fixture.username, asset_url);
+            for (actual, (title, slug, format, body)) in actual.into_iter().zip(expected) {
+                assert_eq!(actual.author, fixture.username);
+                assert_eq!(actual.title, title);
+                assert_eq!(actual.slug, slug);
+                assert_eq!(actual.format, format);
+                assert_eq!(actual.body, body);
+                assert!(actual.published_at.is_none());
+            }
+        }
+
         let manifest = sandbox_profile_manifest(
             "2026-09-06T12:34:00Z".parse().expect("fixed anchor"),
             &asset_urls,
@@ -1684,19 +1749,7 @@ mod sandbox_profile_tests {
         assert_eq!(
             manifest
                 .iter()
-                .filter(|post| {
-                    matches!(
-                        post.title.as_str(),
-                        "A horizon worth keeping"
-                            | "A calm field note"
-                            | "Workshop checks"
-                            | "Workshop rhythm"
-                            | "Field paths"
-                            | "Field margins"
-                            | "Night signals"
-                            | "Night watch"
-                    )
-                })
+                .filter(|post| CURATED_TITLES.contains(&post.title.as_str()))
                 .count(),
             8
         );

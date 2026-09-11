@@ -1,14 +1,16 @@
 //! `test-support` — out-of-process test/e2e helpers that link jaunder's real
 //! crates (see `lib.rs`). Never shipped in the `jaunder` production binary.
+use std::sync::Arc;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use common::display_name::DisplayName;
 use host::{capture, feed::FeedEventPhase};
-use storage::{DbConnectOptions, StorageRuntimeConfig};
+use storage::{DbConnectOptions, MediaContentLocks, MediaManager, StorageRuntimeConfig};
 use test_support::{
-    SandboxProfile, SandboxSeedStorage, create_session_for_user, create_user,
+    SandboxMediaOwnershipResolver, SandboxProfile, create_session_for_user, create_user,
     reset_author_theme_fixture, reset_mail, sandbox_profile_anchor, seed_dead_letters,
-    seed_posts_for_user, seed_published_author_theme, seed_sandbox_profile, seed_user,
+    seed_demo_sandbox_profile, seed_posts_for_user, seed_published_author_theme,
+    seed_standard_sandbox_profile, seed_user,
 };
 
 #[derive(Parser)]
@@ -338,9 +340,36 @@ async fn cmd_seed_sandbox_profile(
 ) -> anyhow::Result<()> {
     let runtime = sandbox_storage_runtime(db)?;
     let opened = storage::open_existing_database_with_observer(db, &runtime).await?;
-    let storage =
-        SandboxSeedStorage::from_factory(&opened.factory, storage_path, opened.instance_id);
-    seed_sandbox_profile(storage, profile, sandbox_profile_anchor()).await?;
+    match profile {
+        SandboxProfile::Standard => {
+            seed_standard_sandbox_profile(
+                opened.factory.site_config(),
+                opened.factory.users(),
+                opened.factory.write_scope(),
+            )
+            .await?;
+        }
+        SandboxProfile::Demo => {
+            let media_manager = MediaManager::new(
+                opened.factory.media(),
+                opened.factory.posts(),
+                opened.factory.site_config(),
+                opened.factory.write_scope(),
+                Arc::new(MediaContentLocks::new(Arc::new(storage_path.to_path_buf()))),
+                opened.instance_id,
+                Arc::new(SandboxMediaOwnershipResolver),
+            );
+            seed_demo_sandbox_profile(
+                opened.factory.site_config(),
+                opened.factory.users(),
+                opened.factory.posts(),
+                opened.factory.write_scope(),
+                &media_manager,
+                sandbox_profile_anchor(),
+            )
+            .await?;
+        }
+    }
     eprintln!("seeded sandbox profile {}", profile_name(profile));
     Ok(())
 }
