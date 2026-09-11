@@ -22,9 +22,9 @@ use crate::posts::media::{
     PostMediaReferenceBackfill,
 };
 use crate::posts::models::{
-    CreatePostInput, CreatedPost, CurrentPostRevisionSummary, PermalinkDate, PermalinkDateText,
-    PostMutation, PostRecord, PostRevisionDetail, PostRevisionPage, PostRevisionRecord,
-    PostRevisionTag, UpdatePostInput,
+    CreatePostInput, CreatedPost, CurrentPostRevisionSummary, POST_RECORD_COLUMNS, PermalinkDate,
+    PermalinkDateText, PostMutation, PostRecord, PostRevisionDetail, PostRevisionPage,
+    PostRevisionRecord, PostRevisionTag, UpdatePostInput,
 };
 use crate::posts::syndication::{self, GoLivePost};
 use crate::posts::tags;
@@ -876,9 +876,7 @@ where
         let (post_id, idempotency_key_expired) =
             lifecycle::write_post_in_tx::<DB>(connection, input, now).await?;
         let sql = format!(
-            "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format,
-                    p.rendered_html, p.created_at, p.updated_at, p.published_at, p.deleted_at,
-                    p.summary, {tags} AS tags
+            "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
              FROM posts p JOIN users u ON p.user_id = u.user_id WHERE p.post_id = $1",
             tags = DB::TAGS_SUBQUERY,
         );
@@ -904,9 +902,7 @@ where
             lifecycle::write_post_in_tx::<DB>(connection, input, now).await?;
         DB::materialize_proven_local_media(connection, input.user_id, local_media).await?;
         let sql = format!(
-            "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format,
-                    p.rendered_html, p.created_at, p.updated_at, p.published_at, p.deleted_at,
-                    p.summary, {tags} AS tags
+            "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
              FROM posts p JOIN users u ON p.user_id = u.user_id WHERE p.post_id = $1",
             tags = DB::TAGS_SUBQUERY,
         );
@@ -1022,9 +1018,7 @@ where
     ) -> Result<Option<PostRecord>> {
         let (resolution, binds, _) = visibility::resolution_where(viewer, 2);
         let sql = format!(
-            "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-                    p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-                    {tags} AS tags
+            "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
              FROM posts p
              JOIN users u ON p.user_id = u.user_id
              WHERE p.post_id = $1
@@ -1362,9 +1356,7 @@ where
         let (resolution, binds, _) = visibility::resolution_where(viewer, 5);
         // `published_at <= $4` hides scheduled (future-dated) posts until due.
         let sql = format!(
-            "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-                    p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-                    {tags} AS tags
+            "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
              FROM posts p
              JOIN users u ON p.user_id = u.user_id
              WHERE u.username = $1
@@ -1448,16 +1440,14 @@ where
         let date_clause = DB::PERMALINK_DATE_CLAUSE;
         let date_text = PermalinkDateText::from(date);
         let sql = format!(
-            "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-                    p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-                    {tags} AS tags
+            "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
              FROM posts p
              JOIN users u ON p.user_id = u.user_id
              WHERE p.user_id = $1
                AND p.slug = $2
                AND {date_clause}
                AND (p.published_at IS NULL OR p.published_at > $4)
-               AND p.deleted_at IS NULL"
+               AND p.deleted_at IS NULL",
         );
         let row = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
             .bind_storage(user_id)
@@ -1608,9 +1598,7 @@ where
             let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 6);
             // `published_at <= $5` hides scheduled (future-dated) posts.
             let sql = format!(
-                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-                        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-                        {tags} AS tags
+                "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  WHERE u.username = $1
@@ -1620,7 +1608,7 @@ where
                    AND (p.created_at < $2 OR (p.created_at = $3 AND p.post_id < $4))
                    AND {resolution}
                  ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT ${limit_idx}"
+                 LIMIT ${limit_idx}",
             );
             let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
                 .bind_storage(username)
@@ -1639,9 +1627,7 @@ where
             let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 3);
             // `published_at <= $2` hides scheduled (future-dated) posts.
             let sql = format!(
-                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-                        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-                        {tags} AS tags
+                "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  WHERE u.username = $1
@@ -1650,7 +1636,7 @@ where
                    AND p.deleted_at IS NULL
                    AND {resolution}
                  ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT ${limit_idx}"
+                 LIMIT ${limit_idx}",
             );
             let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
                 .bind_storage(username)
@@ -1683,9 +1669,7 @@ where
             let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 5);
             // `published_at <= $4` hides scheduled (future-dated) posts.
             let sql = format!(
-                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-                        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-                        {tags} AS tags
+                "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  WHERE p.published_at IS NOT NULL
@@ -1694,7 +1678,7 @@ where
                    AND (p.created_at < $1 OR (p.created_at = $2 AND p.post_id < $3))
                    AND {resolution}
                  ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT ${limit_idx}"
+                 LIMIT ${limit_idx}",
             );
             let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
                 .bind_storage(cursor.created_at)
@@ -1712,9 +1696,7 @@ where
             let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 2);
             // `published_at <= $1` hides scheduled (future-dated) posts.
             let sql = format!(
-                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-                        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-                        {tags} AS tags
+                "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  WHERE p.published_at IS NOT NULL
@@ -1722,7 +1704,7 @@ where
                    AND p.deleted_at IS NULL
                    AND {resolution}
                  ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT ${limit_idx}"
+                 LIMIT ${limit_idx}",
             );
             let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql)).bind_storage(now);
             binds
@@ -1751,9 +1733,7 @@ where
             // `published_at IS NULL OR published_at > $5` surfaces both true
             // drafts and scheduled (future-dated) posts to the author.
             let sql = format!(
-                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-                        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-                        {tags} AS tags
+                "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  WHERE p.user_id = $1
@@ -1761,7 +1741,7 @@ where
                    AND p.deleted_at IS NULL
                    AND (p.created_at < $2 OR (p.created_at = $3 AND p.post_id < $4))
                  ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT $6"
+                 LIMIT $6",
             );
             sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
                 .bind_storage(user_id)
@@ -1776,16 +1756,14 @@ where
             // `published_at IS NULL OR published_at > $2` surfaces both true
             // drafts and scheduled (future-dated) posts to the author.
             let sql = format!(
-                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-                        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-                        {tags} AS tags
+                "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  WHERE p.user_id = $1
                    AND (p.published_at IS NULL OR p.published_at > $2)
                    AND p.deleted_at IS NULL
                  ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT $3"
+                 LIMIT $3",
             );
             sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
                 .bind_storage(user_id)
@@ -1812,9 +1790,7 @@ where
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
             let sql = format!(
-                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-                        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-                        {tags} AS tags
+                "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  WHERE p.user_id = $1
@@ -1823,7 +1799,7 @@ where
                    AND p.deleted_at IS NULL
                    AND (p.published_at > $2 OR (p.published_at = $3 AND p.post_id > $4))
                  ORDER BY p.published_at ASC, p.post_id ASC
-                 LIMIT $6"
+                 LIMIT $6",
             );
             sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
                 .bind_storage(user_id)
@@ -1836,9 +1812,7 @@ where
                 .await?
         } else {
             let sql = format!(
-                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-                        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-                        {tags} AS tags
+                "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  WHERE p.user_id = $1
@@ -1846,7 +1820,7 @@ where
                    AND p.published_at > $2
                    AND p.deleted_at IS NULL
                  ORDER BY p.published_at ASC, p.post_id ASC
-                 LIMIT $3"
+                 LIMIT $3",
             );
             sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
                 .bind_storage(user_id)
@@ -1872,16 +1846,14 @@ where
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
             let sql = format!(
-                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-                        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-                        {tags} AS tags
+                "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  WHERE p.user_id = $1
                    AND p.deleted_at IS NULL
                    AND (p.updated_at, p.post_id) < ($2, $3)
                  ORDER BY p.updated_at DESC, p.post_id DESC
-                 LIMIT $4"
+                 LIMIT $4",
             );
             sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
                 .bind_storage(user_id)
@@ -1892,15 +1864,13 @@ where
                 .await?
         } else {
             let sql = format!(
-                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-                        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-                        {tags} AS tags
+                "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  WHERE p.user_id = $1
                    AND p.deleted_at IS NULL
                  ORDER BY p.updated_at DESC, p.post_id DESC
-                 LIMIT $2"
+                 LIMIT $2",
             );
             sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
                 .bind_storage(user_id)
@@ -1957,9 +1927,7 @@ where
             let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 6);
             // `published_at <= $5` hides scheduled (future-dated) posts.
             let sql = format!(
-                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-                        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-                        {tags} AS tags
+                "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  JOIN post_tags pt ON p.post_id = pt.post_id
@@ -1971,7 +1939,7 @@ where
                    AND (p.created_at < $2 OR (p.created_at = $3 AND p.post_id < $4))
                    AND {resolution}
                  ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT ${limit_idx}"
+                 LIMIT ${limit_idx}",
             );
             let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
                 .bind_storage(tag_slug)
@@ -1990,9 +1958,7 @@ where
             let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 3);
             // `published_at <= $2` hides scheduled (future-dated) posts.
             let sql = format!(
-                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-                        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-                        {tags} AS tags
+                "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  JOIN post_tags pt ON p.post_id = pt.post_id
@@ -2003,7 +1969,7 @@ where
                    AND p.deleted_at IS NULL
                    AND {resolution}
                  ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT ${limit_idx}"
+                 LIMIT ${limit_idx}",
             );
             let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
                 .bind_storage(tag_slug)
@@ -2050,9 +2016,7 @@ where
             let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 7);
             // `published_at <= $6` hides scheduled (future-dated) posts.
             let sql = format!(
-                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-                        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-                        {tags} AS tags
+                "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  JOIN post_tags pt ON p.post_id = pt.post_id
@@ -2065,7 +2029,7 @@ where
                    AND (p.created_at < $3 OR (p.created_at = $4 AND p.post_id < $5))
                    AND {resolution}
                  ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT ${limit_idx}"
+                 LIMIT ${limit_idx}",
             );
             let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
                 .bind_storage(user_id)
@@ -2085,9 +2049,7 @@ where
             let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 4);
             // `published_at <= $3` hides scheduled (future-dated) posts.
             let sql = format!(
-                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-                        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-                        {tags} AS tags
+                "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  JOIN post_tags pt ON p.post_id = pt.post_id
@@ -2099,7 +2061,7 @@ where
                    AND p.deleted_at IS NULL
                    AND {resolution}
                  ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT ${limit_idx}"
+                 LIMIT ${limit_idx}",
             );
             let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
                 .bind_storage(user_id)

@@ -5,6 +5,7 @@
 //! types of the media/post/tag `#[server]` fns. Pure `Serialize`/`Deserialize` data —
 //! every field is a `common` type, so this module has no `leptos`/`web_sys`/`storage` coupling.
 
+use crate::display_name::DisplayName;
 use serde::{Deserialize, Serialize};
 
 use crate::ids::PostId;
@@ -48,6 +49,7 @@ impl From<TagLabel> for TagSummary {
 pub struct RenderedPost {
     pub post_id: PostId,
     pub username: Username,
+    pub display_name: Option<DisplayName>,
     pub title: Option<PostTitle>,
     pub summary: Option<PostSummary>,
     pub slug: Slug,
@@ -175,6 +177,7 @@ mod tests {
         RenderedPost {
             post_id: PostId::from(1),
             username: "alice".parse().unwrap(),
+            display_name: None,
             title: None,
             summary: None,
             slug: "hello".parse().unwrap(),

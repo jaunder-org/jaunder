@@ -744,6 +744,7 @@ mod tests {
             .collect();
 
         PostRecord {
+            author_display_name: None,
             post_id,
             user_id: UserId::from(1),
             author_username: "alice".parse().expect("parse username"),

@@ -82,7 +82,7 @@ async fn fetch_post(
     post_id: PostId,
 ) -> Result<PostRecord, sqlx::Error> {
     sqlx::query_as::<_, PostRecord>(
-        "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format,
+        "SELECT p.post_id, p.user_id, u.username, u.display_name, p.title, p.slug, p.body, p.format,
                 p.rendered_html, p.created_at, p.updated_at, p.published_at, p.deleted_at,
                 p.summary,
                 COALESCE((SELECT json_agg(json_build_object(

@@ -197,6 +197,7 @@ mod tests {
     fn post(post_id: i64) -> PostRecord {
         let now = UtcInstant::now();
         PostRecord {
+            author_display_name: None,
             post_id: PostId::from(post_id),
             user_id: UserId::from(1),
             author_username: parse_username("alice"),

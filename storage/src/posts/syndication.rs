@@ -2,7 +2,7 @@
 
 use sqlx::{AssertSqlSafe, Encode, Executor, Pool, Result, Row, Type};
 
-use crate::posts::models::PostRecord;
+use crate::posts::models::{POST_RECORD_COLUMNS, PostRecord};
 use crate::posts::store::PostDialect;
 use crate::posts::visibility;
 use crate::sql::QueryStorageExt;
@@ -132,6 +132,7 @@ fn window_sql<DB: PostDialect>(
     resolution: &visibility::ResolutionWhere,
 ) -> AssertSqlSafe<String> {
     let tags = DB::TAGS_SUBQUERY;
+    let columns = POST_RECORD_COLUMNS;
     AssertSqlSafe(match surface {
         FeedSurface::Site => format!(
             "WITH ranked AS (
@@ -143,14 +144,12 @@ fn window_sql<DB: PostDialect>(
        AND p.published_at <= $1
        AND {resolution}
 )
- SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-        {tags} AS tags
+ SELECT {columns}, {tags} AS tags
  FROM ranked r
  JOIN posts p ON p.post_id = r.post_id
  JOIN users u ON p.user_id = u.user_id
  WHERE (r.rn <= $2 OR $3 IS NULL OR r.published_at >= $3)
- ORDER BY p.published_at DESC, p.post_id DESC"
+ ORDER BY p.published_at DESC, p.post_id DESC",
         ),
         FeedSurface::User { .. } => format!(
             "WITH ranked AS (
@@ -164,14 +163,12 @@ fn window_sql<DB: PostDialect>(
        AND u.username = $2
        AND {resolution}
 )
- SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-        {tags} AS tags
+ SELECT {columns}, {tags} AS tags
  FROM ranked r
  JOIN posts p ON p.post_id = r.post_id
  JOIN users u ON p.user_id = u.user_id
  WHERE (r.rn <= $3 OR $4 IS NULL OR r.published_at >= $4)
- ORDER BY p.published_at DESC, p.post_id DESC"
+ ORDER BY p.published_at DESC, p.post_id DESC",
         ),
         FeedSurface::SiteTag { .. } => format!(
             "WITH ranked AS (
@@ -186,14 +183,12 @@ fn window_sql<DB: PostDialect>(
        AND t.tag_slug = $2
        AND {resolution}
 )
- SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-        {tags} AS tags
+ SELECT {columns}, {tags} AS tags
  FROM ranked r
  JOIN posts p ON p.post_id = r.post_id
  JOIN users u ON p.user_id = u.user_id
  WHERE (r.rn <= $3 OR $4 IS NULL OR r.published_at >= $4)
- ORDER BY p.published_at DESC, p.post_id DESC"
+ ORDER BY p.published_at DESC, p.post_id DESC",
         ),
         FeedSurface::UserTag { .. } => format!(
             "WITH ranked AS (
@@ -210,14 +205,12 @@ fn window_sql<DB: PostDialect>(
        AND t.tag_slug = $3
        AND {resolution}
 )
- SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-        {tags} AS tags
+ SELECT {columns}, {tags} AS tags
  FROM ranked r
  JOIN posts p ON p.post_id = r.post_id
  JOIN users u ON p.user_id = u.user_id
  WHERE (r.rn <= $4 OR $5 IS NULL OR r.published_at >= $5)
- ORDER BY p.published_at DESC, p.post_id DESC"
+ ORDER BY p.published_at DESC, p.post_id DESC",
         ),
     })
 }
@@ -242,17 +235,16 @@ where
     // decodes directly into `PostRecord`; we then keep only the username + tag slugs
     // the feed fan-out needs.
     let tags = DB::TAGS_SUBQUERY;
+    let columns = POST_RECORD_COLUMNS;
     let sql = format!(
-        "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-                    p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-                    {tags} AS tags
+        "SELECT {columns}, {tags} AS tags
              FROM posts p
              JOIN users u ON p.user_id = u.user_id
              WHERE p.published_at > $1
                AND p.published_at <= $2
                AND p.deleted_at IS NULL
                AND {PUBLIC_AUDIENCE_PREDICATE}
-             ORDER BY p.published_at ASC, p.post_id ASC"
+             ORDER BY p.published_at ASC, p.post_id ASC",
     );
     let rows = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
         .bind_storage(after)
@@ -466,6 +458,10 @@ mod tests {
             assert!(
                 sql.0.contains(window_binds),
                 "{surface:?}: window bind order changed"
+            );
+            assert!(
+                sql.0.contains(POST_RECORD_COLUMNS),
+                "{surface:?}: canonical scalar post projection"
             );
             assert!(
                 sql.0.contains(<sqlx::Sqlite as PostDialect>::TAGS_SUBQUERY),

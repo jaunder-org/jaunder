@@ -1105,10 +1105,13 @@ mod tests {
     fn rendered_post_round_trips_rendered_html_via_server_rebuild() {
         use common::ids::PostId;
         use common::seed::RenderedPost;
-        use common::test_support::{parse_root_relative_url, parse_utc_instant};
+        use common::test_support::{
+            parse_display_name, parse_root_relative_url, parse_utc_instant,
+        };
         let original = RenderedPost {
             post_id: PostId::from(1),
             username: parse_username("alice"),
+            display_name: Some(parse_display_name("Ada Lovelace")),
             title: Some(common::test_support::parse_post_title("T")),
             summary: None,
             slug: "hello".parse::<Slug>().unwrap(),
@@ -1122,6 +1125,10 @@ mod tests {
         let json = serde_json::to_string(&original).unwrap();
         let round_tripped: RenderedPost = serde_json::from_str(&json).unwrap();
         assert_eq!(round_tripped.rendered_html.as_ref(), "<p>hi</p>");
+        assert_eq!(
+            round_tripped.display_name,
+            Some(parse_display_name("Ada Lovelace"))
+        );
         assert!(
             !json.contains("\"is_draft\""),
             "RenderedPost must not serialize redundant draft state: {json}"
@@ -1288,6 +1295,7 @@ mod tests {
 
         let summary = rendered_post(
             PostRecord {
+                author_display_name: None,
                 post_id: PostId::from(1),
                 user_id: UserId::from(2),
                 author_username: parse_username("author"),
@@ -1331,6 +1339,7 @@ mod tests {
 
         let draft = authored_post(
             PostRecord {
+                author_display_name: None,
                 post_id: PostId::from(1),
                 user_id: UserId::from(2),
                 author_username: author_username.clone(),
@@ -1354,6 +1363,7 @@ mod tests {
 
         let published = authored_post(
             PostRecord {
+                author_display_name: None,
                 post_id: PostId::from(2),
                 user_id: UserId::from(2),
                 author_username,
@@ -1413,6 +1423,7 @@ mod server_tests {
     fn owned_post(user_id: UserId) -> PostRecord {
         let now = UtcInstant::now();
         PostRecord {
+            author_display_name: None,
             post_id: PostId::from(1),
             user_id,
             author_username: parse_username("alice"),
@@ -1470,6 +1481,7 @@ mod server_tests {
 
     fn draft_row(post_id: i64) -> PostRecord {
         PostRecord {
+            author_display_name: None,
             post_id: PostId::from(post_id),
             ..owned_post(UserId::from(1))
         }

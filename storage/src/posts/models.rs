@@ -5,6 +5,7 @@ use sqlx::{Decode, Result, Row, Type};
 use crate::helpers::SerializedPostTags;
 use crate::posts::cursors::PostRevisionCursor;
 use crate::posts::tags::PostTag;
+use common::display_name::DisplayName;
 use common::etag::ETag;
 use common::idempotency_key::IdempotencyKey;
 use common::ids::{PostId, RevisionId, UserId};
@@ -57,9 +58,9 @@ pub use common::time::PermalinkDate;
 ///
 /// `tags` is populated by the same query that loads the rest of the row via
 /// a JSON-aggregating subquery, so post and tag state are always read from
-/// the same statement-level snapshot. `author_username` is sourced from the
-/// `users` table in the same query (via JOIN or correlated subquery), so
-/// callers never need a second roundtrip to look up the post's author.
+/// the same statement-level snapshot. `author_username` and
+/// `author_display_name` are sourced from the `users` table in the same query
+/// (via JOIN or correlated subquery), so callers never need a second author lookup.
 #[derive(Clone, Debug)]
 pub struct PostRecord {
     /// Unique internal identifier.
@@ -68,6 +69,8 @@ pub struct PostRecord {
     pub user_id: UserId,
     /// Username of the author
     pub author_username: Username,
+    /// Current optional display name of the author.
+    pub author_display_name: Option<DisplayName>,
     /// Optional title.
     pub title: Option<PostTitle>,
     /// Unique slug (per user, per day).
@@ -97,6 +100,11 @@ pub struct PostRecord {
     /// subquery on both backends (#772); do not rely on insertion order.
     pub tags: Vec<PostTag>,
 }
+
+/// Portable scalar projection shared by dynamic `PostRecord` queries.
+///
+/// Tags remain dialect-owned because their aggregate subquery differs by backend.
+pub(crate) const POST_RECORD_COLUMNS: &str = "p.post_id, p.user_id, u.username, u.display_name, p.title, p.slug, p.body, p.format, p.rendered_html, p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary";
 
 impl PostRecord {
     /// Returns the canonical permalink for this post as a [`RootRelativeUrl`].
@@ -138,6 +146,7 @@ where
     PostId: Decode<'r, R::Database> + Type<R::Database>,
     UserId: Decode<'r, R::Database> + Type<R::Database>,
     Username: Decode<'r, R::Database> + Type<R::Database>,
+    DisplayName: Decode<'r, R::Database> + Type<R::Database>,
     PostTitle: Decode<'r, R::Database> + Type<R::Database>,
     Slug: Decode<'r, R::Database> + Type<R::Database>,
     PostBody: Decode<'r, R::Database> + Type<R::Database>,
@@ -151,6 +160,7 @@ where
         let post_id = row.try_get::<PostId, _>("post_id")?;
         let user_id = row.try_get::<UserId, _>("user_id")?;
         let author_username = row.try_get::<Username, _>("username")?;
+        let author_display_name = row.try_get::<Option<DisplayName>, _>("display_name")?;
         let title = row.try_get::<Option<PostTitle>, _>("title")?;
         let slug = row.try_get::<Slug, _>("slug")?;
         let body = row.try_get::<PostBody, _>("body")?;
@@ -168,6 +178,7 @@ where
             post_id,
             user_id,
             author_username,
+            author_display_name,
             title,
             slug,
             body,
@@ -459,6 +470,7 @@ mod tests {
     #[test]
     fn fallback_summary_label_uses_the_first_non_blank_body_line() {
         let post = PostRecord {
+            author_display_name: None,
             post_id: PostId::from(1),
             user_id: UserId::from(1),
             author_username: parse_username("author"),
@@ -490,6 +502,7 @@ mod tests {
     #[test]
     fn permalink_formats_username_date_and_slug() {
         let post = PostRecord {
+            author_display_name: None,
             post_id: PostId::from(1),
             user_id: UserId::from(1),
             author_username: parse_username("author"),

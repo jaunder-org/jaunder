@@ -92,6 +92,12 @@ session-token infrastructure but is user-facing as a "password").
 compared, serialized, displayed, and used in URLs. _Avoid_: preserving case as a
 second username identity or pre-normalizing outside the Username boundary.
 
+**Display Name**: An optional, current human-readable label for a User. It is
+shown alongside the User's canonical Username but never replaces that identity
+in URLs, lookup, comparison, or protocol credentials. Casing is preserved, and
+changing it changes how all of the User's Posts are presented. _Avoid_: treating
+a Display Name as a second Username or as a per-Post publication snapshot.
+
 ### AtomPub (RFC 5023)
 
 **Member** / **Entry**: The AtomPub wire representation of a single resource in
