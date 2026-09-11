@@ -1239,15 +1239,17 @@ closed unless docs changes affect only `static-docs`; server changes affect
 `static-code` but neither wasm path; web changes affect `static-code` and
 `.#site` but not `wasm-tests`; and `common`/`macros` changes affect every
 dependent checked boundary. After that unchanged source-identity matrix, it
-evaluates the final and support output catalogs and applies the checked-in
-Cachix `pushFilter` with `grep` ERE semantics against each full store path.
-Every final coverage/e2e verdict must directly match (and so be ineligible);
-every named cacheable support output must directly not match. The ERE anchors
-the basename after the store hash: an unanchored verdict-name substring would
-also exclude support inputs. This proves only **direct** filtering: Cachix may
-still upload an otherwise excluded output through another output's closure. CI
-runs both eval-only contracts. The probe neither builds outputs nor purges the
-store.
+evaluates the final and support catalogs and applies the checked-in Cachix
+`pushFilter` with `grep` ERE semantics against each full store path. The private
+shared E2E package has no flake output, so its **output-form** path is
+synthesized from the uniquely named recursive input `.drv`; its basename is the
+only part relevant to the direct filter. Every final coverage/e2e verdict must
+directly match (and so be ineligible); every named cacheable support output must
+directly not match. The ERE anchors the basename after the store hash: an
+unanchored verdict-name substring would also exclude support inputs. This proves
+only **direct** filtering: Cachix may still upload an otherwise excluded output
+through another output's closure. CI runs both eval-only contracts. The probe
+neither builds outputs nor purges the store.
 
 To reproduce the controlled measurements, run one unrecorded
 `devtool run -- cargo xtask --json validate --no-e2e --allow-dirty` warm-up,

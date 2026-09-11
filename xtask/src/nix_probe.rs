@@ -610,10 +610,10 @@ mod tests {
         for final_output in [
             "jaunder-coverage-0.1.0",
             "jaunder-coverage-gate",
-            "jaunder-e2e-sqlite-chromium",
-            "jaunder-e2e-sqlite-firefox",
-            "jaunder-e2e-postgres-chromium",
-            "jaunder-e2e-postgres-firefox",
+            "vm-test-run-jaunder-e2e-sqlite-chromium",
+            "vm-test-run-jaunder-e2e-sqlite-firefox",
+            "vm-test-run-jaunder-e2e-postgres-chromium",
+            "vm-test-run-jaunder-e2e-postgres-firefox",
             "jaunder-e2e-checks",
         ] {
             assert!(
@@ -624,9 +624,9 @@ mod tests {
         for support_or_lookalike in [
             "jaunder-coverage-source-probe",
             "jaunder-e2e",
-            "jaunder-e2e-sqlite-chromium-single-worker",
-            "prefix-jaunder-e2e-sqlite-chromium",
-            "jaunder-e2e-sqlite-chromium-suffix",
+            "vm-test-run-jaunder-e2e-sqlite-chromium-single-worker",
+            "prefix-vm-test-run-jaunder-e2e-sqlite-chromium",
+            "vm-test-run-jaunder-e2e-sqlite-chromium-suffix",
         ] {
             assert!(
                 !grep_filter_matches(&filter, &output(support_or_lookalike)).unwrap(),

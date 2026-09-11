@@ -1250,53 +1250,44 @@ pub(crate) fn eval_check_out_path(flake_dir: &Path, check: &str) -> Result<Strin
     )
 }
 
-/// Evaluate the shared E2E package output-form path through a final E2E check.
+/// Derive the shared E2E package output-form path from a final E2E check.
 ///
 /// `e2ePackage` is intentionally an internal Nix value, so it is not a flake
-/// installable. An ordinary final E2E check lists its input derivations; the
-/// uniquely named `jaunder-e2e.drv` input identifies the package without
-/// realizing either output. Stripping `.drv` preserves the output-form path
-/// basename that Cachix filters.
+/// installable. The recursive input derivation graph of an ordinary final E2E
+/// check contains one exact `jaunder-e2e.drv` basename. Its store hash is a
+/// derivation hash, not the package output hash, so this synthesizes an
+/// output-form path solely to classify the basename Cachix filters.
 pub(crate) fn eval_e2e_package_out_path(flake_dir: &Path) -> Result<String> {
     let drv_path = nix_eval_raw(
         Some(flake_dir),
         &format!(".#checks.{SYSTEM}.e2e-sqlite-chromium.drvPath"),
     )?;
     let out = Command::new("nix")
-        .args(["derivation", "show", &drv_path])
+        .args(["derivation", "show", "--recursive", &drv_path])
         .output()
-        .context("spawning `nix derivation show` for e2e-sqlite-chromium")?;
+        .context("spawning `nix derivation show --recursive` for e2e-sqlite-chromium")?;
     if !out.status.success() {
         bail!(
-            "`nix derivation show {drv_path}` failed:\n{}",
+            "`nix derivation show --recursive {drv_path}` failed:\n{}",
             String::from_utf8_lossy(&out.stderr)
         );
     }
-    let metadata =
-        String::from_utf8(out.stdout).context("`nix derivation show` output was not UTF-8")?;
+    let metadata = String::from_utf8(out.stdout)
+        .context("`nix derivation show --recursive` output was not UTF-8")?;
     e2e_package_out_path_from_derivation(&metadata)
 }
 
 fn e2e_package_out_path_from_derivation(metadata: &str) -> Result<String> {
-    let metadata =
-        serde_json::from_str::<Value>(metadata).context("parsing `nix derivation show` output")?;
+    let metadata = serde_json::from_str::<Value>(metadata)
+        .context("parsing `nix derivation show --recursive` output")?;
     let derivations = metadata
         .get("derivations")
         .and_then(Value::as_object)
         .context("`nix derivation show` output lacks derivations")?;
-    let derivation = derivations
-        .values()
-        .next()
-        .context("`nix derivation show` output has no derivation")?;
-    let input_drvs = derivation
-        .get("inputDrvs")
-        .and_then(Value::as_object)
-        .context("e2e derivation lacks inputDrvs")?;
-    let matches = input_drvs
+    let matches = derivations
         .keys()
         .filter(|path| {
-            path.strip_prefix("/nix/store/")
-                .and_then(|path| path.split_once('-'))
+            path.split_once('-')
                 .is_some_and(|(_, basename)| basename == "jaunder-e2e.drv")
         })
         .collect::<Vec<_>>();
@@ -1306,12 +1297,10 @@ fn e2e_package_out_path_from_derivation(metadata: &str) -> Result<String> {
             matches.len()
         );
     };
-    let out_path = drv_path
+    let output_form_path = format!("/nix/store/{drv_path}");
+    let out_path = output_form_path
         .strip_suffix(".drv")
         .context("jaunder-e2e input derivation lacks .drv suffix")?;
-    if !out_path.starts_with("/nix/store/") || out_path.contains('\n') {
-        bail!("malformed shared e2e package output-form path: {out_path:?}");
-    }
     Ok(out_path.to_owned())
 }
 
@@ -1481,16 +1470,16 @@ mod tests {
     }
 
     #[test]
-    fn e2e_package_output_form_path_requires_one_exact_input_derivation() {
-        let metadata = r#"{"derivations":{"check":{"inputDrvs":{"/nix/store/hash-jaunder-e2e.drv":["out"]}}}}"#;
+    fn e2e_package_output_form_path_requires_one_exact_recursive_derivation() {
+        let metadata = r#"{"derivations":{"hash-jaunder-e2e.drv":{}}}"#;
         assert_eq!(
             e2e_package_out_path_from_derivation(metadata).unwrap(),
             "/nix/store/hash-jaunder-e2e"
         );
         for metadata in [
-            r#"{"derivations":{"check":{"inputDrvs":{}}}}"#,
-            r#"{"derivations":{"check":{"inputDrvs":{"/nix/store/a-jaunder-e2e.drv":[],"/nix/store/b-jaunder-e2e.drv":[]}}}}"#,
-            r#"{"derivations":{"check":{"inputDrvs":{"/nix/store/hash-prefix-jaunder-e2e.drv":[]}}}}"#,
+            r#"{"derivations":{}}"#,
+            r#"{"derivations":{"a-jaunder-e2e.drv":{},"b-jaunder-e2e.drv":{}}}"#,
+            r#"{"derivations":{"hash-prefix-jaunder-e2e.drv":{}}}"#,
         ] {
             assert!(e2e_package_out_path_from_derivation(metadata).is_err());
         }

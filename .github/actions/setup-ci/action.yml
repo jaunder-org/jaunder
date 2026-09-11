@@ -25,7 +25,7 @@ runs:
         # Exclude only final per-ref verdict outputs. Cachix applies this ERE to
         # full store paths; the hash prefix makes the basename anchor load-bearing.
         # Dependencies may still upload through another output's closure.
-        pushFilter: '^/nix/store/[0-9a-z]{32}-(jaunder-coverage-0\.1\.0|jaunder-coverage-gate|jaunder-e2e-(sqlite|postgres)-(chromium|firefox)|jaunder-e2e-checks)$'
+        pushFilter: '^/nix/store/[0-9a-z]{32}-(jaunder-coverage-0\.1\.0|jaunder-coverage-gate|vm-test-run-jaunder-e2e-(sqlite|postgres)-(chromium|firefox)|jaunder-e2e-checks)$'
     # xtask is host-only, so cachix can't cover it; cache its compiled deps
     # between runs.
     - name: Cache xtask host build
