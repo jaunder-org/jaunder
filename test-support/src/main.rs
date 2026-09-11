@@ -6,9 +6,9 @@ use common::display_name::DisplayName;
 use host::{capture, feed::FeedEventPhase};
 use storage::{DbConnectOptions, StorageRuntimeConfig};
 use test_support::{
-    SandboxProfile, create_session_for_user, create_user, reset_author_theme_fixture, reset_mail,
-    sandbox_profile_anchor, seed_dead_letters, seed_posts_for_user, seed_published_author_theme,
-    seed_sandbox_profile, seed_user,
+    SandboxProfile, SandboxSeedStorage, create_session_for_user, create_user,
+    reset_author_theme_fixture, reset_mail, sandbox_profile_anchor, seed_dead_letters,
+    seed_posts_for_user, seed_published_author_theme, seed_sandbox_profile, seed_user,
 };
 
 #[derive(Parser)]
@@ -46,6 +46,9 @@ enum Commands {
         /// `SQLite` database URL for the unpublished sandbox workspace (`sqlite:...`).
         #[arg(long)]
         db: DbConnectOptions,
+        /// Root of the unpublished sandbox workspace's Media content.
+        #[arg(long)]
+        storage_path: std::path::PathBuf,
         /// Fixed sandbox profile to create.
         #[arg(long, value_enum)]
         profile: SandboxProfileArg,
@@ -235,10 +238,11 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             )
             .await
         }
-        Commands::SeedSandboxProfile { db, profile } => {
-            let storage_runtime = sandbox_storage_runtime(&db)?;
-            cmd_seed_sandbox_profile(&db, &storage_runtime, profile.into()).await
-        }
+        Commands::SeedSandboxProfile {
+            db,
+            storage_path,
+            profile,
+        } => cmd_seed_sandbox_profile(&db, &storage_path, profile.into()).await,
         Commands::SeedTheme {
             db,
             storage_path,
@@ -326,23 +330,17 @@ fn sandbox_storage_runtime(db: &DbConnectOptions) -> anyhow::Result<StorageRunti
     Ok(storage_runtime_config(db)?)
 }
 
-/// Seed one complete fixed sandbox profile and report only after its transaction commits.
+/// Seed one complete fixed sandbox profile and report only after its phases commit.
 async fn cmd_seed_sandbox_profile(
     db: &DbConnectOptions,
-    runtime: &StorageRuntimeConfig,
+    storage_path: &std::path::Path,
     profile: SandboxProfile,
 ) -> anyhow::Result<()> {
-    let factory = storage::open_existing_database(db, runtime).await?;
-    let anchor = sandbox_profile_anchor();
-    seed_sandbox_profile(
-        factory.site_config(),
-        factory.users(),
-        factory.posts(),
-        factory.write_scope(),
-        profile,
-        anchor,
-    )
-    .await?;
+    let runtime = sandbox_storage_runtime(db)?;
+    let opened = storage::open_existing_database_with_observer(db, &runtime).await?;
+    let storage =
+        SandboxSeedStorage::from_factory(&opened.factory, storage_path, opened.instance_id);
+    seed_sandbox_profile(storage, profile, sandbox_profile_anchor()).await?;
     eprintln!("seeded sandbox profile {}", profile_name(profile));
     Ok(())
 }
@@ -804,6 +802,7 @@ mod tests {
             "the --label argument should reach the stored session"
         );
     }
+
     #[test]
     fn parses_the_exact_sandbox_profile_subprocess_contract() {
         Cli::try_parse_from([
@@ -811,6 +810,8 @@ mod tests {
             "seed-sandbox-profile",
             "--db",
             "sqlite:/tmp/sandbox.db",
+            "--storage-path",
+            "/tmp/sandbox-storage",
             "--profile",
             "demo",
         ])
@@ -822,6 +823,8 @@ mod tests {
                 "seed-sandbox-profile",
                 "--db",
                 "sqlite:/tmp/sandbox.db",
+                "--storage-path",
+                "/tmp/sandbox-storage",
                 "--profile",
                 "empty",
             ])
@@ -847,9 +850,10 @@ mod tests {
 
     #[tokio::test]
     async fn sandbox_profile_handler_dispatches_standard_profile_and_rejects_postgres() {
-        let (_dir, db) = temp_db().await;
+        let (storage, db) = temp_db().await;
         run(cli(Commands::SeedSandboxProfile {
             db: db.clone(),
+            storage_path: storage.path().to_owned(),
             profile: SandboxProfileArg::Standard,
         }))
         .await

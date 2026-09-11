@@ -881,8 +881,8 @@ fn prepare_workspace(
             processkit::Command::new(support)
                 .args(["seed-sandbox-profile", "--db"])
                 .arg(database_url(workspace))
-                .args(["--profile", profile.as_str()])
-                .inherit_stdin()
+                .args(["--profile", profile.as_str(), "--storage-path"])
+                .arg(workspace)
                 .stdout(StdioMode::Inherit)
                 .stderr(StdioMode::Inherit),
         )
@@ -1148,27 +1148,32 @@ mod tests {
     #[test]
     fn named_workspace_create_resume_and_reset_are_distinct_transitions() {
         let temp = tempfile::tempdir().expect("temporary sandbox root");
-        let artifacts = fake_artifacts(temp.path(), 0);
+        let artifacts = fake_artifacts_with_seeder(temp.path(), 0, 0);
         let mut signals = ServerSignals::install().expect("signal handlers");
 
         let created = ensure_named_workspace_at(
             temp.path(),
             &artifacts,
             "demo",
-            SandboxProfile::Empty,
+            SandboxProfile::Demo,
             false,
             &mut signals,
         )
         .expect("create workspace");
         assert!(created.is_none());
         let workspace = temp.path().join("demo");
+        assert_eq!(
+            fs::read_to_string(workspace.join("media/upload/representative/demo.svg"))
+                .expect("seeded media"),
+            "<svg>representative media</svg>"
+        );
         fs::write(workspace.join("retained"), "state").expect("persistent marker");
 
         ensure_named_workspace_at(
             temp.path(),
             &artifacts,
             "demo",
-            SandboxProfile::Empty,
+            SandboxProfile::Demo,
             false,
             &mut signals,
         )
@@ -1177,49 +1182,78 @@ mod tests {
             fs::read_to_string(workspace.join("retained")).expect("resume marker"),
             "state"
         );
+        assert_eq!(
+            fs::read_to_string(workspace.join("media/upload/representative/demo.svg"))
+                .expect("resumed media"),
+            "<svg>representative media</svg>"
+        );
 
         ensure_named_workspace_at(
             temp.path(),
             &artifacts,
             "demo",
-            SandboxProfile::Empty,
+            SandboxProfile::Demo,
             true,
             &mut signals,
         )
         .expect("reset workspace");
         assert!(!workspace.join("retained").exists());
         assert_eq!(
+            fs::read_to_string(workspace.join("media/upload/representative/demo.svg"))
+                .expect("reset media"),
+            "<svg>representative media</svg>"
+        );
+        assert_eq!(
             read_profile_metadata(&workspace)
                 .expect("reset profile metadata")
                 .profile,
-            SandboxProfile::Empty
+            SandboxProfile::Demo
         );
     }
 
     #[test]
-    fn failed_reset_preserves_published_workspace() {
+    fn failed_demo_reset_preserves_published_workspace_and_removes_staged_media() {
         let temp = tempfile::tempdir().expect("temporary sandbox root");
         let workspace = temp.path().join("demo");
-        fs::create_dir(&workspace).expect("published workspace");
+        fs::create_dir_all(workspace.join("media/upload/installed")).expect("published media");
         fs::write(workspace.join("retained"), "state").expect("persistent marker");
-        write_profile_metadata(&workspace, SandboxProfile::Empty).expect("profile metadata");
-        let artifacts = fake_artifacts(temp.path(), 7);
+        fs::write(
+            workspace.join("media/upload/installed/old.svg"),
+            "<svg>installed media</svg>",
+        )
+        .expect("installed media");
+        write_profile_metadata(&workspace, SandboxProfile::Demo).expect("profile metadata");
+        let artifacts = fake_artifacts_with_seeder(temp.path(), 0, 7);
+        let support = artifacts
+            .test_support
+            .as_ref()
+            .expect("fake support executable");
+        let seeded_marker = PathBuf::from(format!("{}.created", support.display()));
         let mut signals = ServerSignals::install().expect("signal handlers");
 
         let error = ensure_named_workspace_at(
             temp.path(),
             &artifacts,
             "demo",
-            SandboxProfile::Empty,
+            SandboxProfile::Demo,
             true,
             &mut signals,
         )
-        .expect_err("failed preparation must abort reset");
+        .expect_err("failed media seeding must abort reset");
 
-        assert!(error.to_string().contains("jaunder init failed"));
+        assert!(error.to_string().contains("sandbox profile seed failed"));
         assert_eq!(
             fs::read_to_string(workspace.join("retained")).expect("preserved marker"),
             "state"
+        );
+        assert_eq!(
+            fs::read_to_string(workspace.join("media/upload/installed/old.svg"))
+                .expect("preserved media"),
+            "<svg>installed media</svg>"
+        );
+        assert_eq!(
+            fs::read_to_string(seeded_marker).expect("fake seeder created staged media"),
+            "created"
         );
         assert!(!temp.path().join(".demo.reset-new").exists());
     }
@@ -1445,5 +1479,45 @@ mod tests {
             jaunder,
             test_support: None,
         }
+    }
+    fn fake_artifacts_with_seeder(
+        root: &Path,
+        init_exit_code: i32,
+        seed_exit_code: i32,
+    ) -> HostArtifacts {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut artifacts = fake_artifacts(root, init_exit_code);
+        let support = root.join(format!("fake-test-support-{seed_exit_code}"));
+        fs::write(
+            &support,
+            format!(
+                r#"#!/bin/sh
+[ "$#" -eq 7 ] || exit 91
+[ "$1" = "seed-sandbox-profile" ] || exit 92
+[ "$2" = "--db" ] || exit 93
+case "$3" in
+  sqlite:*) ;;
+  *) exit 94 ;;
+esac
+[ "$4" = "--profile" ] || exit 95
+[ "$5" = "demo" ] || exit 96
+[ "$6" = "--storage-path" ] || exit 97
+storage_path="$7"
+mkdir -p "$storage_path/media/upload/representative"
+printf '%s' '<svg>representative media</svg>' > "$storage_path/media/upload/representative/demo.svg"
+printf '%s' 'created' > "$0.created"
+exit {seed_exit_code}
+"#
+            ),
+        )
+        .expect("write fake test support");
+        let mut permissions = fs::metadata(&support)
+            .expect("fake test support metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&support, permissions).expect("make fake test support executable");
+        artifacts.test_support = Some(support);
+        artifacts
     }
 }
