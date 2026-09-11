@@ -140,10 +140,13 @@ async function createLegacyPostViaApi(
     response.ok(),
     `posts::create failed (${response.status()}): ${await response.text()}`,
   ).toBeTruthy();
-  return confirmedMutation(
-    (await response.json()) as MutationOutcome<LegacySavedPost>,
-    "legacy posts::create",
+  const saved = confirmedMutation(
+    (await response.json()) as MutationOutcome<
+      LegacySavedPost | { post: LegacySavedPost }
+    >,
+    "cross-version posts::create",
   );
+  return "post" in saved ? saved.post : saved;
 }
 type SeededPost = SandboxSeedManifest["posts"][number];
 function seededPostPath(post: SeededPost): string {
