@@ -185,7 +185,7 @@ e2ePhaseTimingHelpers = backend: browser: ''
   import shlex
   import time
 
-  e2e_phases = [
+  e2e_phases: list[dict[str, object]] = [
     {
       "name": "nix-evaluation",
       "duration_ms": None,
