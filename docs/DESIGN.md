@@ -33,7 +33,7 @@ termination.
 Jaunder provides several views for consuming content. Every web Post timeline
 uses cursor-based pagination (see [ADR-0004](adr/0004-pagination-strategy.md))
 and lets the viewer choose Newest or Oldest publication order through URL state
-(see [web Post timeline ordering](adr/drafts/web-post-timeline-ordering.md)):
+(see [web Post timeline ordering](adr/0190-web-post-timeline-ordering.md)):
 
 - **Local timeline** (public): Original Posts by local Users.
 - **Home feed** (authenticated): The signed-in User's own published Posts.

@@ -735,7 +735,7 @@ them.
 
 **Web Post timelines paginate by order-bound keyset cursor, not offset**
 ([ADR-0004](adr/0004-pagination-strategy.md),
-[web Post timeline ordering](adr/drafts/web-post-timeline-ordering.md)). Their
+[web Post timeline ordering](adr/0190-web-post-timeline-ordering.md)). Their
 opaque `PostCursor` (`storage/src/posts/cursors.rs`) carries publication time
 plus stable Post ID and the selected Newest/Oldest direction; the query uses the
 same pair descending for Newest and ascending for Oldest. A listing returns
@@ -1341,9 +1341,8 @@ render their anonymous DOM through the same pure functions the projector uses,
 so the CSR mount causes no reflow: flash-free by coincidence, not markup twins.
 
 All public and authenticated web Post timelines share one URL-addressed ordering
-contract
-([web Post timeline ordering](adr/drafts/web-post-timeline-ordering.md)): Newest
-is canonical with no parameter, while `order=oldest` selects the reverse
+contract ([web Post timeline ordering](adr/0190-web-post-timeline-ordering.md)):
+Newest is canonical with no parameter, while `order=oldest` selects the reverse
 publication-time/Post-ID order. Public projector operations resolve that order
 from the URL and embed matching seed state, so a direct Oldest load is
 projector-painted in Oldest order and remains coincident through CSR mount. The

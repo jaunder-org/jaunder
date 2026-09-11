@@ -216,6 +216,7 @@ convention). See the Status column below for each ADR's current status.
 | [0187](adr/0187-strict-new-post-local-publication-time.md)             | New-Post publication time rejects nonexistent local times                                                    | accepted   |
 | [0188](adr/0188-trusted-post-actions-use-css-anchors.md)               | Trusted Post Actions Use CSS Anchor Positioning                                                              | accepted   |
 | [0189](adr/0189-wordpress-compatible-permalink-alias.md)               | WordPress-compatible permalink alias                                                                         | accepted   |
+| [0190](adr/0190-web-post-timeline-ordering.md)                         | Web Post timelines order by publication time                                                                 | accepted   |
 
 <!-- adr-table:end -->
 

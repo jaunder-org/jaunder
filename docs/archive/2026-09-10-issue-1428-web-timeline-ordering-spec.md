@@ -49,7 +49,7 @@ and Oldest without leaving the timeline, and the URL records that choice.
 - Visibility, publication eligibility, scheduled go-live, deletion filtering,
   page-size limits, and theme ownership remain unchanged.
 - This contract is recorded architecturally in
-  `docs/adr/drafts/web-post-timeline-ordering.md` because it changes the keyset
+  `docs/adr/0190-web-post-timeline-ordering.md` because it changes the keyset
   cursor's time axis and adds URL-addressed projector variants.
 
 ## Acceptance
