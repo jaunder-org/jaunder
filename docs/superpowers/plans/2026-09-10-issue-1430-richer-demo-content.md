@@ -78,7 +78,7 @@ Out:
     `.NAME.reset-new`; removing that staged tree removes both its database Media
     records and Media subtree.
 
-- [ ] Task 4: Exercise the installed demo in an actual browser
+- [x] Task 4: Exercise the installed demo in an actual browser
   - Contract: create/reset a named `demo` sandbox through `cargo xtask sandbox`,
     authenticate with existing credentials, and inspect curated Markdown and Org
     detail pages. Browser request observation must reject any non-loopback
