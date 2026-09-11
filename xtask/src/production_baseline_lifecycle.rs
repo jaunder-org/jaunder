@@ -24,6 +24,7 @@ const ORIGIN: &str = "https://localhost:8443";
 const READY_TIMEOUT: Duration = Duration::from_secs(60);
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
 const STATUS: &str = "__JAUNDER_BASELINE_STATUS__";
+const SEED_SOCKET_WRITE: &str = r#"socket.write(command + "\nexit\n");"#;
 fn validate_harness_commit(commit: &str) -> Result<()> {
     if commit.len() != 40 || !commit.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         bail!("harness commit must be a full hexadecimal Git commit");
@@ -213,7 +214,9 @@ import net from "node:net";
 const quote = (value) => "'" + value.replaceAll("'", "'\"'\"'") + "'";
 const args = process.argv.slice(2).map(quote).join(" ");
 const inner = `export $(systemctl show --property=Environment --value jaunder.service | tr ' ' '\\n' | grep '^JAUNDER_'); export JAUNDER_STORAGE_PATH=/var/lib/jaunder/data; test-support ${{args}}`;
-const command = `diagnostic=/tmp/jaunder-baseline-seed-$$.err; ${{inner}} 2>"$diagnostic"; code=$?; if [ "$code" -ne 0 ]; then cat "$diagnostic"; fi; rm -f "$diagnostic"; printf '\\n{STATUS}%s\\n' "$code"`;
+const command = `(
+diagnostic=/tmp/jaunder-baseline-seed-$$.err; ${{inner}} 2>"$diagnostic"; code=$?; if [ "$code" -ne 0 ]; then cat "$diagnostic"; fi; rm -f "$diagnostic"; exit "$code"
+); code=$?; printf '\\n{STATUS}%s\\n' "$code"`;
 const socket = net.createConnection({{host: "127.0.0.1", port: {port}}});
 const marker = "{STATUS}";
 let output = "";
@@ -261,7 +264,7 @@ socket.on("end", () => {{
       : "guest control response closed before exit-status frame",
   );
 }});
-socket.write(command + "\\n");
+{SEED_SOCKET_WRITE}
 "#
             ),
         )?;
@@ -944,11 +947,10 @@ socket.write(command + "\\n");
             .get(deployment_id)
             .context("unknown deployment")?
             .control_port;
-        let framed = format!("{command}; code=$?; printf '\\n{STATUS}%s\\n' \"$code\"");
+        let framed = framed_guest_command(command);
         let mut stream = TcpStream::connect(format!("127.0.0.1:{port}"))?;
         stream.set_read_timeout(Some(Duration::from_millis(200)))?;
         stream.write_all(framed.as_bytes())?;
-        stream.write_all(b"\n")?;
         let deadline = Instant::now() + Duration::from_secs(20);
         let mut output = Vec::new();
         let mut bytes = [0_u8; 4096];
@@ -1038,6 +1040,10 @@ impl Drop for BaselineLifecycle {
             let _ = stop_child(&mut deployment.vm);
         }
     }
+}
+
+fn framed_guest_command(command: &str) -> String {
+    format!("(\n{command}\n); code=$?; printf '\\n{STATUS}%s\\n' \"$code\"\nexit\n")
 }
 
 fn complete_status(output: &[u8]) -> Result<Option<String>> {
@@ -1306,6 +1312,19 @@ mod tests {
             fs::metadata(executable).unwrap().permissions().mode() & 0o777,
             0o700
         );
+    }
+
+    #[test]
+    fn framed_guest_command_writes_status_then_exit_on_separate_lines() {
+        assert_eq!(
+            framed_guest_command("printf command"),
+            format!("(\nprintf command\n); code=$?; printf '\\n{STATUS}%s\\n' \"$code\"\nexit\n")
+        );
+    }
+
+    #[test]
+    fn seed_bridge_write_keeps_the_socket_open_for_shell_exit() {
+        assert_eq!(SEED_SOCKET_WRITE, r#"socket.write(command + "\nexit\n");"#);
     }
 
     #[test]
