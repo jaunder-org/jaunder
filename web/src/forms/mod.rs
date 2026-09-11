@@ -14,6 +14,7 @@ mod submit_gate;
 
 #[cfg(target_arch = "wasm32")]
 pub use component::{
-    ValidatedBareInput, ValidatedInput, ValidatedTextarea, server_action_submit, validated_error,
+    ValidatedBareInput, ValidatedInput, ValidatedTextarea, server_action_submit,
+    server_action_submit_with, validated_error,
 };
 pub use field::{Field, field_error};

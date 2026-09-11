@@ -1130,6 +1130,83 @@
  background: var(--bg);
 }
 
+/* ─── audience management ─── */
+.j-audience-create-form,
+.j-audience-summary,
+.j-audience-editor,
+.j-audience-editor>form {
+ display: flex;
+ align-items: center;
+ gap: 8px;
+ flex-wrap: wrap;
+}
+
+.j-audience-create-form .j-form-input,
+.j-audience-editor .j-form-input {
+ flex: 1 1 240px;
+ min-width: 0;
+}
+
+.j-audience-list {
+ display: flex;
+ flex-direction: column;
+ gap: 14px;
+ list-style: none;
+ margin: 0;
+ padding: 0;
+}
+
+.j-audience-item {
+ border-top: 1px var(--border-style) var(--line-soft);
+ padding-top: 14px;
+}
+
+.j-audience-item:first-child {
+ border-top: none;
+ padding-top: 0;
+}
+
+.j-audience-name {
+ flex: 1;
+ margin: 0;
+}
+
+.j-audience-head {
+ margin-left: auto;
+}
+
+.j-audience-head>[hidden] {
+ display: none;
+}
+
+.j-audience-editor>form {
+ flex: 1 1 320px;
+}
+
+@media (max-width: 720px) {
+
+ .j-audience-create-form,
+ .j-audience-summary,
+ .j-audience-editor {
+  align-items: stretch;
+  flex-direction: column;
+ }
+
+ .j-audience-create-form .j-form-input {
+  flex-basis: auto;
+  width: 100%;
+ }
+
+ .j-audience-editor>form {
+  flex: none;
+  width: 100%;
+ }
+
+ .j-audience-head {
+  margin-left: 0;
+ }
+}
+
 /* ─── backup administration ─── */
 .j-backup-settings {
  width: min(100%, 760px);

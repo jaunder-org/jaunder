@@ -49,6 +49,10 @@ test("Audiences: CRUD + membership toggle re-fetch without list remount or flash
     page.locator(".j-audience-item", { hasText: "Friends" }),
   ).toBeVisible();
 
+  // #1448: confirmed creation clears the submitted name instead of leaving a stale
+  // duplicate beside the newly rendered row.
+  await expect(page.locator(createName)).toHaveValue("");
+
   await page.fill(createName, "Family");
   await click(page, 'button:has-text("Create")');
   const friends = page.locator(".j-audience-item", { hasText: "Friends" });
@@ -56,12 +60,45 @@ test("Audiences: CRUD + membership toggle re-fetch without list remount or flash
   await expect(friends).toBeVisible();
   await expect(family).toBeVisible();
 
+  // #1448: rows rest as compact summaries. Editing is an explicit disclosure, and
+  // cancelling removes every mutation control without changing the audience.
+  const friendsEdit = friends.getByRole("button", {
+    name: "Edit",
+    exact: true,
+  });
+  await expect(friendsEdit).toBeVisible();
+  await expect(friends.locator('input[name="name"]')).toBeHidden();
+  await expect(
+    friends.getByRole("button", { name: "Delete", exact: true }),
+  ).toBeHidden();
+  await friendsEdit.click();
+  await expect(friends.locator('input[name="name"]')).toHaveValue("Friends");
+  await expect(
+    friends.getByRole("button", { name: "Save", exact: true }),
+  ).toBeVisible();
+  await expect(
+    friends.getByRole("button", { name: "Cancel", exact: true }),
+  ).toBeVisible();
+  await expect(
+    friends.getByRole("button", { name: "Delete", exact: true }),
+  ).toBeVisible();
+  await friends.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(friends.locator('input[name="name"]')).toBeHidden();
+  await expect(
+    friends.getByRole("button", { name: "Delete", exact: true }),
+  ).toBeHidden();
+
+  await friendsEdit.click();
+  await family.getByRole("button", { name: "Edit", exact: true }).click();
+
   const friendsId = await friends
     .locator('input[name="audience_id"]')
     .inputValue();
   const familyId = await family
     .locator('input[name="audience_id"]')
     .inputValue();
+  await friends.getByRole("button", { name: "Cancel", exact: true }).click();
+  await family.getByRole("button", { name: "Cancel", exact: true }).click();
 
   // X is an addable candidate in BOTH audiences (a subscriber, member of neither).
   // Wait for both checklists so the initial member fetches finish before counting.
@@ -222,7 +259,8 @@ test("Audiences: CRUD + membership toggle re-fetch without list remount or flash
 
   // Rename Friends -> BestFriends, but hold the list refetch so the prior rows stay visible
   // until the read resolves.
-  const renameForm = friends.locator("form").filter({ hasText: "Rename" });
+  await friends.getByRole("button", { name: "Edit", exact: true }).click();
+  const renameForm = friends.locator("form").filter({ hasText: "Save" });
   const friendsRowBeforeRename = await friends.elementHandle();
   const familyRowBeforeRename = await family.elementHandle();
   expect(friendsRowBeforeRename).not.toBeNull();
@@ -239,7 +277,7 @@ test("Audiences: CRUD + membership toggle re-fetch without list remount or flash
     await route.continue();
   });
   await renameForm.locator('input[name="name"]').fill("BestFriends");
-  await renameForm.locator('button:has-text("Rename")').click();
+  await renameForm.getByRole("button", { name: "Save", exact: true }).click();
   try {
     await expect.poll(() => renameListMineFetches).toBe(1);
     expect(await friendsRowBeforeRename!.evaluate((el) => el.isConnected)).toBe(
@@ -253,6 +291,10 @@ test("Audiences: CRUD + membership toggle re-fetch without list remount or flash
     await expect(page.getByText("No audiences yet.")).toHaveCount(0);
     await expect(page.locator(".j-audience-list + p.j-loading")).toHaveCount(0);
     expect(listFetches).toBe(beforeRenameListFetches + 1);
+    await expect(
+      page.locator("h3.j-audience-name", { hasText: "BestFriends" }),
+    ).toBeVisible();
+    await expect(renameForm).toBeHidden();
   } finally {
     releaseRenameListMine();
   }
@@ -262,6 +304,7 @@ test("Audiences: CRUD + membership toggle re-fetch without list remount or flash
   await expect(
     page.locator("h3.j-audience-name", { hasText: "BestFriends" }),
   ).toBeVisible();
+  await expect(friends.locator('input[name="name"]')).toBeHidden();
   await expect(family).toBeVisible();
   await page.unroute("**/api/audiences/list_mine");
   expect(renameListMineFetches).toBe(1);
@@ -286,7 +329,31 @@ test("Audiences: CRUD + membership toggle re-fetch without list remount or flash
     await deleteListMineGate;
     await route.continue();
   });
-  await extras.locator('button:has-text("Delete")').click();
+  await extras.getByRole("button", { name: "Edit", exact: true }).click();
+  const deleteButton = extras.getByRole("button", {
+    name: "Delete",
+    exact: true,
+  });
+
+  const dialogPromise = page.waitForEvent("dialog");
+  const cancelledDelete = deleteButton.click();
+  const dialog = await dialogPromise;
+  expect(dialog.message()).toBe("Delete this audience?");
+  await dialog.dismiss();
+  await cancelledDelete;
+  await expect(extras).toBeVisible();
+  expect(deleteListMineFetches).toBe(0);
+
+  await failServerFn(page, "audiences/delete");
+  page.once("dialog", (failureDialog) => failureDialog.accept());
+  await deleteButton.click();
+  await expect(extras.locator("p.error")).toBeVisible();
+  await expect(deleteButton).toBeVisible();
+  expect(deleteListMineFetches).toBe(0);
+  await page.unroute("**/api/audiences/delete");
+
+  page.once("dialog", (successDialog) => successDialog.accept());
+  await deleteButton.click();
   try {
     await expect.poll(() => deleteListMineFetches).toBe(1);
     expect(
@@ -315,7 +382,30 @@ test("Audiences: CRUD + membership toggle re-fetch without list remount or flash
   // Any create error will do — the point is that a failed create does not refetch. Not
   // coupled to the exact store message (rewording it shouldn't hang this to a timeout).
   await expect(page.locator("p.error")).toBeVisible();
+  await expect(page.locator(createName)).toHaveValue("BestFriends");
   expect(listFetches).toBe(beforeDup);
+});
+
+test("confirmed create preserves a newer audience-name draft", async ({
+  page,
+}) => {
+  await signInAsNewUser(page);
+  await goto(page, "/audiences");
+  const input = page.locator('input[placeholder="Audience name"]');
+  const create = page.getByRole("button", { name: "Create", exact: true });
+  const release = await stallServerFn(page, "audiences/create");
+
+  await input.fill("Friends");
+  await create.click();
+  await expect(create).toBeDisabled();
+  await input.fill("Family");
+  release();
+
+  await expect(
+    page.locator(".j-audience-item", { hasText: "Friends" }),
+  ).toBeVisible();
+  await expect(input).toHaveValue("Family");
+  await expect(create).toBeEnabled();
 });
 
 test("audience rename pending and error preserve the row", async ({ page }) => {
@@ -325,9 +415,10 @@ test("audience rename pending and error preserve the row", async ({ page }) => {
   await click(page, 'button:has-text("Create")');
   const row = page.locator(".j-audience-item", { hasText: "Friends" });
   await expect(row).toBeVisible();
-  const form = row.locator("form").filter({ hasText: "Rename" });
+  await row.getByRole("button", { name: "Edit", exact: true }).click();
+  const form = row.locator("form").filter({ hasText: "Save" });
   const input = form.locator('input[name="name"]');
-  const button = form.locator('button:has-text("Rename")');
+  const button = form.getByRole("button", { name: "Save", exact: true });
 
   let renameRequests = 0;
   let listRequests = 0;
@@ -358,6 +449,8 @@ test("audience rename pending and error preserve the row", async ({ page }) => {
     page.locator("h3.j-audience-name", { hasText: "BestFriends" }),
   ).toBeVisible();
   await expect.poll(() => listRequests).toBe(1);
+  await expect(form).toBeHidden();
+  await row.getByRole("button", { name: "Edit", exact: true }).click();
 
   await failServerFn(page, "audiences/rename");
   await input.fill("StillFriends");
@@ -618,8 +711,10 @@ test("Audiences: refresh pulls a mid-session new subscriber into the checklists"
   // roster renders `<p>`, not a `<ul class="j-audience-members">`.)
   await expect(friends.getByText("No active subscribers yet.")).toBeVisible();
 
-  // Click the refresh control (by accessible name); X appears as an "Add" candidate — no reload.
-  await page.getByRole("button", { name: "Refresh subscribers" }).click();
+  // #1448 keeps the compact icon while making its purpose discoverable on hover.
+  const refresh = page.getByRole("button", { name: "Refresh subscribers" });
+  await expect(refresh).toHaveAttribute("title", "Refresh subscribers");
+  await refresh.click();
   const friendsX = friends
     .locator(".j-audience-members li")
     .filter({ hasText: userX });

@@ -1,6 +1,7 @@
 //! The co-located reactive UI for named-audience management: `AudiencesPage` and
 //! its child components, plus the keyed reactive store backing the list. Wasm-only.
 
+use super::input_state::{AudienceEditorState, CreateDraftState};
 use super::model::{SubscriberSummary, Summary, SummaryStoreFields};
 use super::{
     AddSubscriber, AudienceMembershipRequest, Create, Delete, RemoveSubscriber, Rename,
@@ -87,6 +88,7 @@ pub fn AudiencesPage() -> impl IntoView {
                             type="button"
                             class="j-icon-btn"
                             aria-label="Refresh subscribers"
+                            title="Refresh subscribers"
                             on:click=move |_| roster.notify()
                         >
                             <svg
@@ -104,38 +106,45 @@ pub fn AudiencesPage() -> impl IntoView {
                             </svg>
                         </button>
                     </div>
-                    // Roster fetch error: surfaced once here (the roster feeds every
-                    // checklist), mirroring the audience-list error sibling below. Silent
-                    // while loading and on success (#346).
-                    {move || {
-                        subscribers
-                            .get()
-                            .and_then(Result::err)
-                            .map(|e| {
-                                view! {
-                                    <p class="error">
-                                        {format!("Couldn't load your subscribers: {e}")}
-                                    </p>
-                                }
-                            })
-                    }}
-                    // Mounted unconditionally: never inside a load/error branch that could
-                    // tear it down, so only keyed reconciliation ever touches rows.
-                    <ul class="j-audience-list">
-                        <For each=move || store.audiences() key=|row| row.key() let:row>
-                            <AudienceRow row=row.into() />
-                        </For>
-                    </ul>
-                    // Sibling status: loading / empty / error sit next to the list, not
-                    // wrapped around it.
-                    {move || match state.get() {
-                        ListState::Loading => {
-                            Some(view! { <p class="j-loading">"Loading\u{2026}"</p> }.into_any())
-                        }
-                        ListState::Empty => Some(view! { <p>"No audiences yet."</p> }.into_any()),
-                        ListState::Error(e) => Some(view! { <p class="error">{e}</p> }.into_any()),
-                        ListState::Loaded => None,
-                    }}
+                    <div class="j-form-body">
+                        // Roster fetch error: surfaced once here (the roster feeds every
+                        // checklist), mirroring the audience-list error sibling below. Silent
+                        // while loading and on success (#346).
+                        {move || {
+                            subscribers
+                                .get()
+                                .and_then(Result::err)
+                                .map(|e| {
+                                    view! {
+                                        <p class="error">
+                                            {format!("Couldn't load your subscribers: {e}")}
+                                        </p>
+                                    }
+                                })
+                        }} // Mounted unconditionally: never inside a load/error branch that could
+                        // tear it down, so only keyed reconciliation ever touches rows.
+                        <ul class="j-audience-list">
+                            <For each=move || store.audiences() key=|row| row.key() let:row>
+                                <AudienceRow row=row.into() />
+                            </For>
+                        // Sibling status: loading / empty / error sit next to the list, not
+                        // wrapped around it.
+                        </ul>
+                        {move || match state.get() {
+                            ListState::Loading => {
+                                Some(
+                                    view! { <p class="j-loading">"Loading\u{2026}"</p> }.into_any(),
+                                )
+                            }
+                            ListState::Empty => {
+                                Some(view! { <p>"No audiences yet."</p> }.into_any())
+                            }
+                            ListState::Error(e) => {
+                                Some(view! { <p class="error">{e}</p> }.into_any())
+                            }
+                            ListState::Loaded => None,
+                        }}
+                    </div>
                 </section>
             </div>
         </div>
@@ -147,12 +156,24 @@ pub fn AudiencesPage() -> impl IntoView {
 #[component]
 fn CreateAudienceForm() -> impl IntoView {
     let list = expect_context::<AudienceList>();
-    let create_action = reactive::action::<Create>(move || list.notify());
     // Client-side pre-validation (ADR-0065) via direct-bind: the same `AudienceName::from_str`
     // the typed `#[server]` arg decodes through gates submit (disable-until-valid), so a valid
     // name is a precondition of dispatch and the empty-name rejection never round-trips for a
     // real client. `required` is dropped — the newtype rule is the single source of truth.
-    let name = forms::Field::<AudienceName>::new();
+    let state = CreateDraftState::new();
+    let name = state.name();
+    let create_action = reactive::action::<Create>(move || list.notify());
+    let (create_disabled, submit_create) = forms::server_action_submit_with(
+        create_action,
+        move || name.parsed().map(|name| Create { name }),
+        move |input| state.record_create(&input.name),
+    );
+    // Effects remain browser wiring; the host-tested state owns the confirmed-only reset.
+    Effect::new(move |_| {
+        create_action
+            .value()
+            .with(|value| state.settle(value.as_ref()));
+    });
 
     view! {
         <section class="j-card">
@@ -164,131 +185,167 @@ fn CreateAudienceForm() -> impl IntoView {
                     </div>
                 </div>
             </div>
-            <ActionForm action=create_action>
-                <ValidatedBareInput<AudienceName>
-                    name="name"
-                    field=name
-                    placeholder=Some("Audience name")
-                />
-                <button
-                    type="submit"
-                    class="j-btn is-primary"
-                    prop:disabled=move || !name.is_valid()
-                >
-                    "Create"
-                </button>
-            </ActionForm>
-            // Touched-gated inline validation message (the newtype's own `Display`).
-            {forms::validated_error(
-                name.error(),
-                Signal::derive(move || name.is_touched()),
-                |m| view! { <p class="error">{m}</p> }.into_any(),
-            )}
-            // Server-action error (e.g. a duplicate name).
-            {move || match create_action.value().get() {
-                Some(Err(error)) => {
-                    Some(view! { <p class="error">{error.to_string()}</p> }.into_any())
-                }
-                Some(Ok(MutationOutcome::CommitIndeterminate(_))) => {
-                    Some(
-                        view! {
-                            <p class="error">
-                                "The audience may have been created, but its status could not be confirmed. Refresh to check."
-                            </p>
-                        }
-                            .into_any(),
-                    )
-                }
-                Some(Ok(MutationOutcome::Confirmed(_))) | None => None,
-            }}
-        </section>
-    }
-}
-
-/// One audience: its name with rename/delete controls and a checklist of the
-/// author's active subscribers (checked = member). Takes the row's keyed store field, so
-/// a rename updates the `<h3>` name in place (the row is never remounted).
-#[component]
-fn AudienceRow(row: Field<Summary>) -> impl IntoView {
-    let audience_id = row.audience_id().get_untracked();
-    let initial_name = row.name().get_untracked();
-    view! {
-        <li class="j-audience-item">
-            <h3 class="j-audience-name">{move || row.name().get().to_string()}</h3>
-            <AudienceHeader audience_id=audience_id name=initial_name />
-            <MemberChecklist audience_id=audience_id />
-        </li>
-    }
-}
-
-/// The `j-audience-head` controls: rename and delete forms for one audience. Both actions
-/// refetch the audience list on success via the `AudienceList` invalidator.
-#[component]
-fn AudienceHeader(audience_id: AudienceId, name: AudienceName) -> impl IntoView {
-    let list = expect_context::<AudienceList>();
-    let rename_action = reactive::action::<Rename>(move || list.notify());
-    let delete_action = reactive::action::<Delete>(move || list.notify());
-    // Client-side pre-validation (ADR-0065), seeded from the existing name so a pristine
-    // row is already valid (submit enabled); clearing it disables Rename and — once
-    // touched — shows the newtype's own message inline.
-    let name = forms::Field::<AudienceName>::prefilled(&name);
-    let (rename_disabled, submit_rename) = forms::server_action_submit(rename_action, move || {
-        name.parsed().map(|name| Rename {
-            request: RenameAudienceRequest { audience_id, name },
-        })
-    });
-
-    view! {
-        <div class="j-audience-head">
-            <form on:submit=submit_rename>
-                <ValidatedBareInput<AudienceName> name="name" field=name />
-                <button type="submit" class="j-btn" prop:disabled=move || rename_disabled.get()>
-                    "Rename"
-                </button>
+            <div class="j-form-body">
+                <form class="j-audience-create-form" on:submit=submit_create>
+                    <ValidatedBareInput<AudienceName>
+                        name="name"
+                        field=name
+                        class=Some("j-form-input")
+                        placeholder=Some("Audience name")
+                    />
+                    <button
+                        type="submit"
+                        class="j-btn is-primary"
+                        prop:disabled=move || create_disabled.get()
+                    >
+                        "Create"
+                    </button>
+                </form>
+                // Touched-gated inline validation message (the newtype's own `Display`).
                 {forms::validated_error(
                     name.error(),
                     Signal::derive(move || name.is_touched()),
                     |m| view! { <p class="error">{m}</p> }.into_any(),
                 )}
-                {move || match rename_action.value().get() {
+                // Server-action error (e.g. a duplicate name).
+                {move || match create_action.value().get() {
                     Some(Err(error)) => {
                         Some(view! { <p class="error">{error.to_string()}</p> }.into_any())
                     }
-                    Some(Ok(MutationOutcome::CommitIndeterminate(()))) => {
+                    Some(Ok(MutationOutcome::CommitIndeterminate(_))) => {
                         Some(
                             view! {
                                 <p class="error">
-                                    "The audience may have been renamed, but its status could not be confirmed. Refresh to check."
+                                    "The audience may have been created, but its status could not be confirmed. Refresh to check."
                                 </p>
                             }
                                 .into_any(),
                         )
                     }
-                    Some(Ok(MutationOutcome::Confirmed(()))) | None => None,
+                    Some(Ok(MutationOutcome::Confirmed(_))) | None => None,
                 }}
-            </form>
-            <ActionForm action=delete_action>
-                <input type="hidden" name="audience_id" value=i64::from(audience_id) />
-                <button type="submit" class="j-btn is-danger">
-                    "Delete"
-                </button>
-                {move || match delete_action.value().get() {
-                    Some(Err(error)) => {
-                        Some(view! { <p class="error">{error.to_string()}</p> }.into_any())
-                    }
-                    Some(Ok(MutationOutcome::CommitIndeterminate(()))) => {
-                        Some(
-                            view! {
-                                <p class="error">
-                                    "The audience may have been deleted, but its status could not be confirmed. Refresh to check."
-                                </p>
-                            }
-                                .into_any(),
-                        )
-                    }
-                    Some(Ok(MutationOutcome::Confirmed(()))) | None => None,
-                }}
-            </ActionForm>
+            </div>
+        </section>
+    }
+}
+
+/// One audience: a compact name / edit disclosure and a checklist of the author's active
+/// subscribers. Takes the row's keyed store field, so a rename updates the `<h3>` name in
+/// place (the row is never remounted).
+#[component]
+fn AudienceRow(row: Field<Summary>) -> impl IntoView {
+    let audience_id = row.audience_id().get_untracked();
+    view! {
+        <li class="j-audience-item">
+            <div class="j-audience-summary">
+                <h3 class="j-audience-name">{move || row.name().get().to_string()}</h3>
+                <AudienceHeader audience_id=audience_id stored_name=row.name().into() />
+            </div>
+            <MemberChecklist audience_id=audience_id />
+        </li>
+    }
+}
+
+/// Compact `Edit` affordance and the disclosed rename / delete controls for one audience.
+/// Both mutations refetch the audience list on success via the `AudienceList` invalidator.
+#[component]
+fn AudienceHeader(audience_id: AudienceId, stored_name: Field<AudienceName>) -> impl IntoView {
+    let list = expect_context::<AudienceList>();
+    let state = AudienceEditorState::new(&stored_name.get_untracked());
+    let editing = state.editing();
+    let name = state.name();
+    let rename_action = reactive::action::<Rename>(move || list.notify());
+    let delete_action =
+        reactive::action_if::<Delete>(move || list.notify(), super::delete_invalidates_list);
+    let (rename_disabled, submit_rename) = forms::server_action_submit_with(
+        rename_action,
+        move || {
+            name.parsed().map(|name| Rename {
+                request: RenameAudienceRequest { audience_id, name },
+            })
+        },
+        move |input| state.record_rename(&input.request.name),
+    );
+    // The host-tested state decides whether the disclosure closes and yields the submitted
+    // name; this effect only wires that confirmed transition into the keyed row store.
+    Effect::new(move |_| {
+        rename_action.value().with(|value| {
+            if let Some(name) = state.settle_rename(value.as_ref()) {
+                stored_name.set(name);
+            }
+        });
+    });
+
+    let open = move |_| state.open(&stored_name.get());
+    let cancel = move |_| state.cancel(&stored_name.get());
+
+    view! {
+        <div class="j-audience-head">
+            <button type="button" class="j-btn" prop:hidden=move || editing.get() on:click=open>
+                "Edit"
+            </button>
+            <div class="j-audience-editor" prop:hidden=move || !editing.get()>
+                <form on:submit=submit_rename>
+                    <ValidatedBareInput<AudienceName>
+                        name="name"
+                        field=name
+                        class=Some("j-form-input")
+                    />
+                    <button type="submit" class="j-btn" prop:disabled=move || rename_disabled.get()>
+                        "Save"
+                    </button>
+                    <button type="button" class="j-btn" on:click=cancel>
+                        "Cancel"
+                    </button>
+                    {forms::validated_error(
+                        name.error(),
+                        Signal::derive(move || name.is_touched()),
+                        |m| view! { <p class="error">{m}</p> }.into_any(),
+                    )}
+                    {move || match rename_action.value().get() {
+                        Some(Err(error)) => {
+                            Some(view! { <p class="error">{error.to_string()}</p> }.into_any())
+                        }
+                        Some(Ok(MutationOutcome::CommitIndeterminate(()))) => {
+                            Some(
+                                view! {
+                                    <p class="error">
+                                        "The audience may have been renamed, but its status could not be confirmed. Refresh to check."
+                                    </p>
+                                }
+                                    .into_any(),
+                            )
+                        }
+                        Some(Ok(MutationOutcome::Confirmed(()))) | None => None,
+                    }}
+                </form>
+                <ActionForm action=delete_action>
+                    <input type="hidden" name="audience_id" value=i64::from(audience_id) />
+                    <button
+                        type="submit"
+                        class="j-btn is-danger"
+                        onclick="return confirm('Delete this audience?')"
+                    >
+                        "Delete"
+                    </button>
+                    {move || match delete_action.value().get() {
+                        Some(Err(error)) => {
+                            Some(view! { <p class="error">{error.to_string()}</p> }.into_any())
+                        }
+                        Some(Ok(MutationOutcome::CommitIndeterminate(()))) => {
+                            Some(
+                                view! {
+                                    <p class="error">
+                                        "The audience may have been deleted, but its status could not be confirmed. Refresh to check."
+                                    </p>
+                                }
+                                    .into_any(),
+                            )
+                        }
+                        Some(Ok(MutationOutcome::Confirmed(()))) | None => None,
+                    }}
+                </ActionForm>
+            </div>
         </div>
     }
 }
