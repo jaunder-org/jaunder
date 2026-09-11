@@ -16,6 +16,7 @@ use crate::pg;
 const JUNIT_PATH: &str = "/tmp/jaunder-coverage-junit.xml";
 const CSR_BUNDLE_FILENAME_REGEX: &str = r"(^|.*/)tools/csr_bundle/";
 const CSR_BUNDLE_PACKAGE_PATH: &str = "tools/csr_bundle";
+const LLVM_COV_ENVIRONMENT_SCRIPT: &str = r#"environment="$(cargo llvm-cov show-env --export-prefix)" || exit; eval "$environment" || exit; exec "$@""#;
 
 fn is_csr_bundle_package_path(path: &str) -> bool {
     match path.strip_prefix(CSR_BUNDLE_PACKAGE_PATH) {
@@ -57,7 +58,14 @@ fn required_stage_commands() -> Vec<CommandSpec> {
             program: "sh",
             arguments: vec![
                 "-c",
-                r#"environment="$(cargo llvm-cov show-env --export-prefix)" || exit; eval "$environment" || exit; exec cargo nextest list --workspace --message-format json"#,
+                LLVM_COV_ENVIRONMENT_SCRIPT,
+                "--",
+                "cargo",
+                "nextest",
+                "list",
+                "--workspace",
+                "--message-format",
+                "json",
             ],
         },
         CommandSpec {
@@ -65,14 +73,26 @@ fn required_stage_commands() -> Vec<CommandSpec> {
             program: "sh",
             arguments: vec![
                 "-c",
-                r#"environment="$(cargo llvm-cov show-env --export-prefix)" || exit; eval "$environment" || exit; exec cargo nextest run --workspace --profile coverage --no-fail-fast"#,
+                LLVM_COV_ENVIRONMENT_SCRIPT,
+                "--",
+                "cargo",
+                "nextest",
+                "run",
+                "--workspace",
+                "--profile",
+                "coverage",
+                "--no-fail-fast",
             ],
         },
     ]
 }
 
-fn coverage_report_arguments(format: &'static str) -> [&'static str; 5] {
+fn coverage_report_arguments(format: &'static str) -> [&'static str; 9] {
     [
+        "-c",
+        LLVM_COV_ENVIRONMENT_SCRIPT,
+        "--",
+        "cargo",
         "llvm-cov",
         "report",
         format,
@@ -446,7 +466,7 @@ pub fn run(out: &str) -> Result<()> {
     let text_report_started = Instant::now();
     let text_report_result = report_command(
         RequiredStage::TextReport,
-        Command::new("cargo").args(coverage_report_arguments("--text")),
+        Command::new("sh").args(coverage_report_arguments("--text")),
         &mut status,
         &diag,
         "text-report.log",
@@ -486,7 +506,7 @@ pub fn run(out: &str) -> Result<()> {
     };
     let lcov_result = report_command(
         RequiredStage::LcovReport,
-        Command::new("cargo")
+        Command::new("sh")
             .args(coverage_report_arguments("--lcov"))
             .args(["--output-path", lcov_path]),
         &mut status,
@@ -631,6 +651,10 @@ mod tests {
         assert_eq!(
             text,
             [
+                "-c",
+                LLVM_COV_ENVIRONMENT_SCRIPT,
+                "--",
+                "cargo",
                 "llvm-cov",
                 "report",
                 "--text",
@@ -641,6 +665,10 @@ mod tests {
         assert_eq!(
             lcov,
             [
+                "-c",
+                LLVM_COV_ENVIRONMENT_SCRIPT,
+                "--",
+                "cargo",
                 "llvm-cov",
                 "report",
                 "--lcov",
@@ -648,7 +676,7 @@ mod tests {
                 CSR_BUNDLE_FILENAME_REGEX,
             ]
         );
-        assert_eq!(text[4], lcov[4]);
+        assert_eq!(text[8], lcov[8]);
     }
     #[test]
     fn required_commands_use_root_workspace_coverage_profile_without_filters() {
@@ -679,7 +707,14 @@ mod tests {
             census.arguments,
             [
                 "-c",
-                r#"environment="$(cargo llvm-cov show-env --export-prefix)" || exit; eval "$environment" || exit; exec cargo nextest list --workspace --message-format json"#
+                LLVM_COV_ENVIRONMENT_SCRIPT,
+                "--",
+                "cargo",
+                "nextest",
+                "list",
+                "--workspace",
+                "--message-format",
+                "json",
             ]
         );
 
@@ -692,27 +727,23 @@ mod tests {
             run.arguments,
             [
                 "-c",
-                r#"environment="$(cargo llvm-cov show-env --export-prefix)" || exit; eval "$environment" || exit; exec cargo nextest run --workspace --profile coverage --no-fail-fast"#
+                LLVM_COV_ENVIRONMENT_SCRIPT,
+                "--",
+                "cargo",
+                "nextest",
+                "run",
+                "--workspace",
+                "--profile",
+                "coverage",
+                "--no-fail-fast",
             ]
         );
 
-        for script in [census.arguments[1], run.arguments[1]] {
-            assert!(script.contains("cargo llvm-cov show-env --export-prefix"));
-            assert!(script.contains(r#"eval "$environment""#));
-            assert!(
-                ![
-                    "-p",
-                    "--package",
-                    "--test",
-                    "--partition",
-                    "-E",
-                    "--expr-filter"
-                ]
-                .iter()
-                .any(|filter| script
-                    .split_ascii_whitespace()
-                    .any(|argument| argument == *filter))
-            );
+        for arguments in [&census.arguments[3..], &run.arguments[3..]] {
+            assert!(!arguments.iter().any(|argument| matches!(
+                *argument,
+                "-p" | "--package" | "--test" | "--partition" | "-E" | "--expr-filter"
+            )));
         }
     }
 
