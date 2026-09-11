@@ -21,6 +21,7 @@ test("production baseline creates and verifies canonical browser and AtomPub rec
       BASELINE_SETUP_ALLOWANCE_MS,
   );
   const seededManifest = await seedSandboxProfileViaTool("demo");
+  await seedConfigViaTool("site.base_url", "https://example.com");
   try {
     const state = await createProductionBaseline(
       page,
