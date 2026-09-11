@@ -106,7 +106,12 @@ async function runPhase(
     const state = JSON.parse(
       await readFile(statePath, "utf8"),
     ) as BaselineState;
-    await verifyProductionBaseline(page, state, tracedContext);
+    const continuityPage = await page.context().newPage();
+    try {
+      await verifyProductionBaseline(continuityPage, state, tracedContext);
+    } finally {
+      await continuityPage.close();
+    }
     if (request.phase === "restored") {
       const recoveryContext = await tracedContext();
       try {
