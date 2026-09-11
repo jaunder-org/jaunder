@@ -92,6 +92,21 @@ The e2e gate completed at 21:26:43 UTC, 14:17 before validation completed at
 critical path. The same seven internal phase distinctions remain **unavailable**
 for this pre-instrumentation Actions observation.
 
+### Excluded Actions observation: #2210
+
+[Run #2210](https://github.com/jaunder-org/jaunder/actions/runs/34624638383)
+(`pull_request`, `985f81d`) failed overall and is **not** a baseline/treatment
+pair. Its independent `Validate (no e2e)` job succeeded from 16:54:12 to
+17:38:47 UTC (**44:35**); setup ended at 16:54:57, leaving a GitHub-visible
+validation-command span of **43:50**. All four e2e jobs failed from the same
+timing-helper Nix Python type error: an unannotated list inferred without
+integer `duration_ms`; the e2e gate consequently failed too.
+
+The correction is `e2e_phases: list[dict[str, object]]`. A local
+`cargo xtask e2e sqlite chromium` then passed in **628,158 ms** with the sidecar
+path exercised. This confirms the repair locally, not a successful Actions
+acceptance observation; #2210 contributes only diagnostic validation timing.
+
 ### Narrow-source baseline from #1289
 
 [#1289](https://github.com/jaunder-org/jaunder/issues/1289) deliberately
@@ -212,37 +227,27 @@ the candidate screen.
 ## Cache and source-boundary evidence
 
 The checked-in [setup action](../../../.github/actions/setup-ci/action.yml)
-configures Cachix v17 with `pushFilter: "jaunder-coverage|jaunder-e2e"` and
-leaves `pathsToPush` empty, so the filter is active. Cachix documents
-`pushFilter` as a regular expression excluding derivations from pushing, warns
-that it is ignored with `pathsToPush`, and warns that a path can still be pushed
-through another path's closure
+leaves `pathsToPush` empty and now uses an anchored `pushFilter` against actual
+full output basenames. The excluded final-verdict set is
+`jaunder-coverage-0.1.0`, `jaunder-coverage-gate`, the four
+`vm-test-run-jaunder-e2e-{sqlite,postgres}-{chromium,firefox}` outputs, and
+`jaunder-e2e-checks`. Cacheable support outputs therefore remain directly
+eligible. Cachix documents `pushFilter` as a regular expression excluding
+derivations from pushing, warns that it is ignored with `pathsToPush`, and warns
+that a path can still be pushed through another path's closure
 ([Cachix action README](https://github.com/cachix/cachix-action/blob/master/README.md#push-configuration)).
-Its daemon hook applies that unanchored expression with `grep -vEe` to each full
+Its daemon hook applies the filter with `grep -vEe` to each full
 `/nix/store/<hash>-<name>` output path
-([implementation](https://github.com/cachix/cachix-action/blob/master/src/main.ts#L362-L391)).
-Thus it directly filters any matching substring, while still not establishing a
-historical run's substitute/build classification or complete closure exclusion.
+([implementation](https://github.com/cachix/cachix-action/blob/master/src/main.ts#L362-L391));
+the closure caveat therefore remains part of the contract.
 
-The intended final per-ref verdict names are `jaunder-coverage`,
-`jaunder-coverage-gate`, the four
-`jaunder-e2e-{sqlite,postgres}-{chromium,firefox}` results, and
-`jaunder-e2e-checks`. They must remain ineligible, preserving the independently
-executed coverage and e2e verdicts required by
-[ADR-0032](../../adr/0032-e2e-zero-panic-gate.md) and
-[ADR-0077](../../adr/0077-adopt-github-merge-queue.md).
-
-Because the pattern is unanchored against full paths, it definitely also
-directly filters cacheable support outputs: `jaunder-coverage-source-probe`, the
-shared `jaunder-e2e` `buildNpmPackage`, and on-demand
-`jaunder-e2e-<backend>-<browser>-single-worker` packages. The source-closure
-facts identify the e2e matrix as four independent NixOS derivations over pinned
-application/support/end2end inputs with an aggregate `symlinkJoin`; the existing
-#1289 probe covers source identities, not this cache boundary. A safe future
-cache contract must match the post-hash basename exactly (not merely use
-`^jaunder-…$` against a full store path), enumerate the final-verdict set and
-disjoint support set, and prove negative final-verdict plus positive support
-eligibility. It must also document Cachix's closure caveat.
+The committed `cargo xtask nix probe-source` smoke passed in **207,832 ms**. It
+checked every existing source-invalidation arm plus seven excluded final
+verdicts and six directly eligible supports. The first committed probe attempt
+failed against the Nix 2.33 schema and was corrected before this passing run; it
+is retained as experiment-ledger evidence, not a performance result. The probe
+establishes boundary semantics only: no Actions cold/warm wall-clock or
+runner-time improvement is claimed from the filter.
 
 ## Candidate screen — no threshold verdict
 
@@ -253,7 +258,7 @@ eligibility. It must also document Cachix's closure caveat.
 | Validation fan-out / internal partitioning   | The local 901,697-ms run has a 622,186-ms coverage producer and a 277,089-ms non-coverage total. The ideal overlap ceiling is 279,511 ms, but coverage producer→gate→host consumer and the other producer/consumer tails remain ordered; a partitioned coverage implementation must retain one union verdict. | **Highest potential, unproven; not selected.** Same-runner contention and duplicate Nix/setup work may reverse savings. Separate-runner fan-out must keep all added setup/transfer/aggregation under 99,511 ms to retain a three-minute path, then prove matched Actions pairs. |
 | Avoid duplicate coverage census binary build | Complete successful experiment 3 reconciled all 4,692 tests and passed the final host coverage gate. Against the instrumentation baseline, coverage-step time fell 433,871 ms (52.9%), producer stages 407,558 ms (52.5%), and instrumented run 318,530 ms (67.2%).                                           | **Selected local treatment; not final threshold evidence.** The 564,343-ms (30.2%) whole-local-path change is provisional because unrelated static/Elisp timings varied; matched cold/warm Actions pairs remain decisive.                                                       |
 | Narrow Nix source closures                   | #1289 proves docs/static isolation and records supported versus necessary fan-out.                                                                                                                                                                                                                            | **Already beneficial for local realization; no CI wall-clock claim.** Future changes require a source probe; no new closure change is selected by this report.                                                                                                                  |
-| Narrow Cachix exclusion to final verdicts    | The expression overmatches cacheable support identities; exact final names and the filter’s closure caveat are known.                                                                                                                                                                                         | **Measurement/probe prerequisite, not an improvement claim.** Must prove final verdict exclusion and support eligibility before any cache-boundary edit.                                                                                                                        |
+| Narrow Cachix exclusion to final verdicts    | Anchored actual output basenames exclude seven final verdicts while six support outputs are directly eligible; the committed probe passed all source arms and these boundary sets in 207,832 ms.                                                                                                              | **Implemented boundary proof; no performance claim.** Cachix closure semantics still apply, and matched Actions evidence is required before any wall-clock or runner-time conclusion.                                                                                           |
 
 No candidate has two matched cold and warmed treatment pairs, no adaptive
 third-pair condition can be evaluated, and no candidate has a post-change
@@ -273,6 +278,9 @@ claim a post-change improvement.
   and
   [GitHub jobs API](https://api.github.com/repos/jaunder-org/jaunder/actions/runs/34530528286/jobs?per_page=100):
   queue ref, runner, job, and step timestamps.
+- [Excluded Actions run #2210](https://github.com/jaunder-org/jaunder/actions/runs/34624638383):
+  successful validation timing within an overall failed workflow and the
+  e2e-helper failure classification.
 - [#1289 measurement report](2026-09-04-issue-1289-nix-invalidation-boundaries.md),
   [ADR-0178](../../adr/0178-split-hermetic-static-check-boundaries.md), and
   [#1289](https://github.com/jaunder-org/jaunder/issues/1289): controlled
