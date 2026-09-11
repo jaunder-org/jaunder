@@ -1318,6 +1318,19 @@ later theme-owner lookup and theme resolution remain boundaries. Successful
 permalinks and user routes use author ownership, with the existing site
 fallback; site timeline and site-tag use site ownership.
 
+The server also accepts an inbound-only WordPress-compatible alias,
+`GET /YYYY/MM/DD/slug`. Because date and slug identify a Post only within its
+User, it searches anonymous-visible active Posts across all Users and redirects
+only an exactly-one match with a same-origin `302` to that Post's canonical
+`/~username/YYYY/MM/DD/slug`; the original query string is preserved unchanged
+and the response is `Cache-Control: no-store`. A malformed, absent, or ambiguous
+alias is the same no-store public SPA shell miss as an absent permalink. Jaunder
+emits only canonical permalinks. The
+[WordPress-compatible permalink alias decision](adr/drafts/wordpress-compatible-permalink-alias.md),
+recorded at `docs/adr/drafts/wordpress-compatible-permalink-alias.md`, keeps
+compatibility resolution at the HTTP boundary rather than adding a second
+permalink identity.
+
 The document is assembled from `web::app::render_head` / `render_shell`, which
 compose pure per-vertical render functions rather than a central render module.
 It embeds a `PageSeed` JSON blob (`id="jaunder-seed"`) that the CSR client reads
@@ -1709,7 +1722,11 @@ a custom `TildeUsername` route match (`web/src/route_segments.rs:13`, wired at
 `web/src/app/component.rs:151`) that matches only a `~`-leading segment,
 mirroring the server's literal-`~` projector routes. The tightening is
 deliberately partial — the other username-first routes stay plain param
-segments.
+segments. The inbound-only WordPress-compatible bare alias is server-owned: it
+redirects a cold or external HTTP request before CSR boot, but the CSR neither
+mounts nor navigates it. Thus it revisits without changing
+[ADR-0076](adr/0076-no-full-load-spa-navigation.md)'s no-full-document-load
+rule; canonical links and live SPA navigation remain `~`-only.
 
 The style companion is `docs/web-style-guide.md`.
 

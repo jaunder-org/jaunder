@@ -107,6 +107,9 @@ impl PostDialect for Sqlite {
 
     const PERMALINK_DATE_CLAUSE: &'static str = "date(COALESCE(p.published_at, p.created_at)) = $3";
 
+    const PERMALINK_ALIAS_DATE_CLAUSE: &'static str =
+        "date(COALESCE(p.published_at, p.created_at)) = $2";
+
     const DELETE_POST_AUDIENCES: &'static str = "DELETE FROM post_audiences WHERE post_id = ?";
 
     // Bind order: post_id, audience_id, kind_name (matches `replace_post_audiences`).

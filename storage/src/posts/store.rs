@@ -2,6 +2,8 @@
 
 use std::collections::BTreeSet;
 
+use futures_util::TryStreamExt;
+
 use async_trait::async_trait;
 use sqlx::{AssertSqlSafe, Database, Decode, Encode, Executor, Pool, Result, Type};
 
@@ -106,6 +108,22 @@ pub fn list_by_tag_rows(
         Err(ListByTagError::TagNotFound) => Ok(Vec::new()),
         Err(ListByTagError::Internal(e)) => Err(InternalError::storage(e)),
     }
+}
+
+/// The bounded result of resolving a User-omitting Post permalink alias.
+///
+/// A bare date-and-slug identity is only unique within one User. The resolver
+/// therefore returns the Username only when exactly one active Post visible to
+/// an anonymous viewer qualifies; it never exposes candidate rows for an
+/// ambiguous alias.
+#[derive(Debug)]
+pub enum PostPermalinkAliasMatch {
+    /// No anonymously visible active Post has the requested date and slug.
+    Missing,
+    /// The Username of the exactly one anonymously visible active Post with the requested date and slug.
+    Unique(Username),
+    /// More than one anonymously visible active Post has the requested date and slug.
+    Ambiguous,
 }
 
 #[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
@@ -220,6 +238,21 @@ pub trait PostStorage: Send + Sync {
         viewer: &ViewerIdentity,
         now: UtcInstant,
     ) -> Result<Option<PostRecord>>;
+
+    /// Resolves a User-omitting public permalink alias across all Users.
+    ///
+    /// This lookup is intrinsically anonymous: it applies the same active
+    /// lifecycle and [`ViewerIdentity::Anonymous`] audience predicates as a
+    /// public permalink lookup, then distinguishes no qualifying row, exactly
+    /// one row, and multiple rows. Implementations query at most two rows, so
+    /// ambiguity never depends on storage ordering or exposes an unbounded
+    /// candidate collection.
+    async fn resolve_post_permalink_alias(
+        &self,
+        date: PermalinkDate,
+        slug: &Slug,
+        now: UtcInstant,
+    ) -> Result<PostPermalinkAliasMatch>;
 
     /// Fetches an author's own not-yet-live post by its canonical permalink.
     ///
@@ -515,11 +548,10 @@ pub trait PostStorage: Send + Sync {
 /// Backend-specific divergence for [`PostStore`].
 ///
 /// SQL fragments and transaction hooks isolate the backend differences:
-/// [`TAGS_SUBQUERY`][PostDialect::TAGS_SUBQUERY] (`SQLite` `json_group_array`
-/// vs Postgres `json_agg`/`::text`),
-/// [`PERMALINK_DATE_CLAUSE`][PostDialect::PERMALINK_DATE_CLAUSE] (`SQLite`
-/// `date(COALESCE(...))` vs Postgres
-/// `date(COALESCE(...) AT TIME ZONE 'UTC') = $3::date`), and lifecycle row
+/// [`TAGS_SUBQUERY`][PostDialect::TAGS_SUBQUERY] (`SQLite`
+/// `json_group_array` vs Postgres `json_agg`/`::text`), canonical and alias
+/// permalink-date predicates (`SQLite` `date(COALESCE(...))` vs Postgres
+/// `date(COALESCE(...) AT TIME ZONE 'UTC') = $n::date`), and lifecycle row
 /// locking/media serialization. Shared lifecycle policy and portable SQL stay
 /// on this module rather than being copied into both dialects.
 ///
@@ -544,6 +576,13 @@ pub trait PostDialect: Backend {
     /// `COALESCE(published_at, created_at)` — against the bound `YYYY-MM-DD`
     /// string (`$3`), in this backend's date dialect.
     const PERMALINK_DATE_CLAUSE: &'static str;
+
+    /// Predicate matching a post's canonical UTC permalink date against the
+    /// alias query's `YYYY-MM-DD` bind (`$2`), in this backend's date dialect.
+    ///
+    /// The alias has no User bind, unlike [`Self::PERMALINK_DATE_CLAUSE`], so
+    /// its date occupies a different placeholder position.
+    const PERMALINK_ALIAS_DATE_CLAUSE: &'static str;
 
     /// Deletes every `post_audiences` row for a post. Bind order: `post_id`.
     const DELETE_POST_AUDIENCES: &'static str;
@@ -706,9 +745,10 @@ pub trait PostDialect: Backend {
 /// Generic [`PostStorage`] backed by any [`PostDialect`] database.
 ///
 /// Every read and the non-transactional shared mutations live here, splicing
-/// [`PostDialect::TAGS_SUBQUERY`] / [`PostDialect::PERMALINK_DATE_CLAUSE`] into
-/// otherwise-identical SQL; the transaction-bearing mutations delegate to
-/// [`PostDialect`]. See ADR-0019.
+/// [`PostDialect::TAGS_SUBQUERY`], [`PostDialect::PERMALINK_DATE_CLAUSE`], and
+/// [`PostDialect::PERMALINK_ALIAS_DATE_CLAUSE`] into otherwise-identical SQL;
+/// the transaction-bearing mutations delegate to [`PostDialect`]. See
+/// ADR-0019.
 pub struct PostStore<DB: Database> {
     pool: Pool<DB>,
 }
@@ -725,7 +765,7 @@ impl<DB> PostStorage for PostStore<DB>
 where
     DB: PostDialect,
     PostRecord: for<'r> sqlx::FromRow<'r, DB::Row>,
-    (PostId,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (Username,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (Exists,): for<'r> sqlx::FromRow<'r, DB::Row>,
     PostTag: for<'r> sqlx::FromRow<'r, DB::Row>,
     TagRecord: for<'r> sqlx::FromRow<'r, DB::Row>,
@@ -1343,6 +1383,53 @@ where
             .bind_storage(date_text)
             .bind_storage(now);
         Ok(binds.bind_onto(query).fetch_optional(&self.pool).await?)
+    }
+
+    #[tracing::instrument(
+        name = "storage.posts.resolve_permalink_alias",
+        skip(self),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn resolve_post_permalink_alias(
+        &self,
+        date: PermalinkDate,
+        slug: &Slug,
+        now: UtcInstant,
+    ) -> Result<PostPermalinkAliasMatch> {
+        let date_text = PermalinkDateText::from(date);
+        let (resolution, binds, limit) =
+            visibility::resolution_where(&ViewerIdentity::Anonymous, 4);
+        // A two-row cap distinguishes a unique alias from an ambiguous one
+        // without selecting an arbitrary storage-ordered candidate.
+        let sql = format!(
+            "SELECT u.username
+             FROM posts p
+             JOIN users u ON p.user_id = u.user_id
+             WHERE p.slug = $1
+               AND p.published_at IS NOT NULL
+               AND p.published_at <= $3
+               AND p.deleted_at IS NULL
+               AND {date_clause}
+               AND {resolution}
+             LIMIT ${limit}",
+            date_clause = DB::PERMALINK_ALIAS_DATE_CLAUSE,
+        );
+        let mut rows = binds
+            .bind_onto(
+                sqlx::query_as::<_, (Username,)>(AssertSqlSafe(sql))
+                    .bind_storage(slug)
+                    .bind_storage(date_text)
+                    .bind_storage(now),
+            )
+            .bind_storage(RowLimit::at_most(2))
+            .fetch(&self.pool);
+        Ok(match rows.try_next().await? {
+            None => PostPermalinkAliasMatch::Missing,
+            Some((username,)) => match rows.try_next().await? {
+                None => PostPermalinkAliasMatch::Unique(username),
+                Some(_) => PostPermalinkAliasMatch::Ambiguous,
+            },
+        })
     }
 
     #[tracing::instrument(
@@ -5407,6 +5494,151 @@ mod tests {
         .await
         .unwrap();
         assert!(missing.is_none());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn resolve_post_permalink_alias_distinguishes_unique_missing_and_ambiguous(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let first_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
+        let first_username = first_user.username.clone();
+        let first_user = first_user.user_id;
+        let second_user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let now = parse_utc_instant("2026-08-01T12:00:00Z");
+        let date = PermalinkDate::from(jiff::tz::Offset::UTC.to_datetime(now.value()).date());
+
+        let unique = SeedRawPost::new(first_user)
+            .slug("alias-unique")
+            .published_at(now)
+            .seed(env.posts(), env.write_scope().clone())
+            .await;
+        let unique_match = env
+            .posts()
+            .resolve_post_permalink_alias(date, &unique.slug, now)
+            .await
+            .expect("alias lookup succeeds");
+        assert!(matches!(
+            unique_match,
+            PostPermalinkAliasMatch::Unique(username) if username == first_username
+        ));
+
+        let missing = env
+            .posts()
+            .resolve_post_permalink_alias(date, &parse_slug("alias-missing"), now)
+            .await
+            .expect("alias lookup succeeds");
+        assert!(matches!(missing, PostPermalinkAliasMatch::Missing));
+
+        let ambiguous_slug = parse_slug("alias-ambiguous");
+        SeedRawPost::new(first_user)
+            .slug(&ambiguous_slug)
+            .published_at(now)
+            .seed(env.posts(), env.write_scope().clone())
+            .await;
+        SeedRawPost::new(second_user)
+            .slug(&ambiguous_slug)
+            .published_at(now)
+            .seed(env.posts(), env.write_scope().clone())
+            .await;
+        let ambiguous = env
+            .posts()
+            .resolve_post_permalink_alias(date, &ambiguous_slug, now)
+            .await
+            .expect("alias lookup succeeds");
+        assert!(matches!(ambiguous, PostPermalinkAliasMatch::Ambiguous));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn resolve_post_permalink_alias_excludes_anonymous_hidden_and_inactive_posts(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let now = parse_utc_instant("2026-08-01T12:00:00Z");
+        let date = PermalinkDate::from(jiff::tz::Offset::UTC.to_datetime(now.value()).date());
+        let future = UtcInstant::from(
+            now.value()
+                .checked_add(Duration::from_hours(1))
+                .expect("future fixture instant remains representable"),
+        );
+
+        let private = SeedRawPost::new(user_id)
+            .slug("alias-private")
+            .published_at(now)
+            .audiences(vec![AudienceTarget::Private])
+            .seed(env.posts(), env.write_scope().clone())
+            .await;
+        let subscribers = SeedRawPost::new(user_id)
+            .slug("alias-subscribers")
+            .published_at(now)
+            .audiences(vec![AudienceTarget::Subscribers])
+            .seed(env.posts(), env.write_scope().clone())
+            .await;
+        let draft = SeedRawPost::new(user_id)
+            .slug("alias-draft")
+            .draft()
+            .seed(env.posts(), env.write_scope().clone())
+            .await;
+        let scheduled = SeedRawPost::new(user_id)
+            .slug("alias-scheduled")
+            .published_at(future)
+            .seed(env.posts(), env.write_scope().clone())
+            .await;
+        let deleted = SeedRawPost::new(user_id)
+            .slug("alias-deleted")
+            .published_at(now)
+            .seed(env.posts(), env.write_scope().clone())
+            .await;
+        soft_delete_post_confirmed(
+            env.posts(),
+            env.write_scope().clone(),
+            deleted.post_id,
+            user_id,
+        )
+        .await;
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query("UPDATE posts SET created_at = $1 WHERE post_id = $2")
+                .bind_storage(now)
+                .bind_storage(draft.post_id)
+                .execute(pool)
+                .await
+                .expect("set draft permalink date");
+        });
+
+        for slug in [
+            &private.slug,
+            &subscribers.slug,
+            &draft.slug,
+            &scheduled.slug,
+            &deleted.slug,
+        ] {
+            let result = env
+                .posts()
+                .resolve_post_permalink_alias(date, slug, now)
+                .await
+                .expect("alias lookup succeeds");
+            assert!(matches!(result, PostPermalinkAliasMatch::Missing));
+        }
     }
 
     #[apply(backends)]

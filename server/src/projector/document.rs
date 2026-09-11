@@ -2,8 +2,12 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{Html, IntoResponse, Response},
 };
-use common::seed::{PageSeed, PublicPresentation};
+use common::{
+    permalink_route::PermalinkRoute,
+    seed::{PageSeed, PublicPresentation},
+};
 use host::etag;
+use percent_encoding::{AsciiSet, utf8_percent_encode};
 use web::app;
 
 use crate::bundle;
@@ -84,6 +88,37 @@ pub(super) fn shell_response(shell: &Shell) -> Response {
     (
         [(header::CACHE_CONTROL, "no-store")],
         Html(shell.0.to_string()),
+    )
+        .into_response()
+}
+
+/// Build the no-store redirect for a uniquely resolved inbound alias.
+///
+/// The route was decoded before this point, so encoding its canonical path exactly
+/// once keeps Unicode slugs valid in `Location`; the already-valid URI query stays raw.
+pub(super) fn permalink_alias_redirect(route: &PermalinkRoute, query: Option<&str>) -> Response {
+    const PATH_ENCODE_SET: &AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+        .remove(b'-')
+        .remove(b'.')
+        .remove(b'_')
+        .remove(b'~')
+        .remove(b'/');
+
+    let canonical_path = route.canonical_path();
+    let mut location = utf8_percent_encode(canonical_path.as_ref(), PATH_ENCODE_SET).to_string();
+    if let Some(query) = query {
+        location.push('?');
+        location.push_str(query);
+    }
+    let Ok(location) = HeaderValue::from_str(&location) else {
+        unreachable!("percent-encoded path and parsed URI query form a valid header value");
+    };
+    (
+        StatusCode::FOUND,
+        [
+            (header::LOCATION, location),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+        ],
     )
         .into_response()
 }

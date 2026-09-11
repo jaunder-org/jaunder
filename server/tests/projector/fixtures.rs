@@ -120,6 +120,24 @@ pub(super) fn get(uri: &str) -> Request<Body> {
         .unwrap()
 }
 
+/// Assert an indistinguishable no-store public shell miss.
+pub(super) async fn assert_shell_miss(response: Response) {
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok()),
+        Some("no-store")
+    );
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read shell body");
+    let body = String::from_utf8_lossy(&body);
+    assert!(body.contains("test-shell"), "served shell: {body}");
+    assert!(!body.contains("jaunder-seed"), "shell has no projection");
+}
+
 /// Assert the public projector's sanitized, non-cacheable storage-failure response.
 pub(super) async fn assert_sanitized_internal_server_error(response: Response) {
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);

@@ -1,5 +1,6 @@
 use std::str::FromStr;
 
+use crate::root_relative_url::RootRelativeUrl;
 use crate::slug::Slug;
 use crate::time::PermalinkDate;
 use crate::username::Username;
@@ -37,6 +38,29 @@ impl PermalinkRoute {
             slug,
         })
     }
+
+    /// Returns this typed route's canonical root-relative path.
+    #[must_use]
+    pub fn canonical_path(&self) -> RootRelativeUrl {
+        canonical_permalink_path(&self.username, self.date, &self.slug)
+    }
+}
+
+/// Formats canonical Post permalink components without taking ownership.
+#[must_use]
+pub fn canonical_permalink_path(
+    username: &Username,
+    date: PermalinkDate,
+    slug: &Slug,
+) -> RootRelativeUrl {
+    let date = date.value();
+    RootRelativeUrl::from_trusted_path(format!(
+        "/~{username}/{:04}/{:02}/{:02}/{}",
+        date.year(),
+        date.month(),
+        date.day(),
+        slug.as_ref()
+    ))
 }
 
 #[cfg(test)]

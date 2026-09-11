@@ -6,14 +6,15 @@ use common::{
     pagination::PageSize,
     permalink_route::PermalinkRoute,
     seed::{PageSeed, PublicPresentation},
+    slug::Slug,
     tag::Tag,
     theme::{PublicThemeRoute, PublishedThemePresentation},
-    time::UtcInstant,
+    time::{PermalinkDate, UtcInstant},
     username::Username,
     visibility::ViewerIdentity,
 };
 use std::sync::Arc;
-use storage::{PostStorage, PublicThemeOwner, ThemeStorage, UserStorage};
+use storage::{PostPermalinkAliasMatch, PostStorage, PublicThemeOwner, ThemeStorage, UserStorage};
 use web::{
     error::{self, InternalError, SwallowedSource},
     posts, timeline,
@@ -100,6 +101,35 @@ impl PublicProjector {
 
     pub(crate) fn shell_response(&self) -> Response {
         document::shell_response(&self.shell)
+    }
+
+    /// Resolves the inbound User-omitting alias without turning it into a second
+    /// public projection or cacheable document.
+    pub(crate) async fn resolve_permalink_alias(
+        &self,
+        date: PermalinkDate,
+        slug: Slug,
+        query: Option<&str>,
+    ) -> Response {
+        let username = match self
+            .posts
+            .resolve_post_permalink_alias(date, &slug, UtcInstant::now())
+            .await
+        {
+            Ok(PostPermalinkAliasMatch::Unique(username)) => username,
+            Ok(PostPermalinkAliasMatch::Missing | PostPermalinkAliasMatch::Ambiguous) => {
+                return self.shell_response();
+            }
+            Err(error) => {
+                return Self::boundary_response(error.into(), "server.projector.permalink_alias");
+            }
+        };
+        let route = PermalinkRoute {
+            username,
+            date,
+            slug,
+        };
+        document::permalink_alias_redirect(&route, query)
     }
 
     async fn permalink(&self, route: PermalinkRoute) -> ProjectionResult {
@@ -270,6 +300,13 @@ impl PublicProjector {
 
     fn boundary(error: impl Into<InternalError>, context: &'static str) -> ProjectionFailure {
         ProjectionFailure::BoundaryFailure(error.into().with_context("boundary", context))
+    }
+
+    fn boundary_response(error: InternalError, context: &'static str) -> Response {
+        error
+            .with_context("boundary", context)
+            .emit_boundary_failure();
+        StatusCode::INTERNAL_SERVER_ERROR.into_response()
     }
 }
 

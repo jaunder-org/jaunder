@@ -126,7 +126,10 @@ graph TD
 ```
 
 All mounted children render under the shared shell. The fallback route and
-protocol-only surfaces stay out of this map.
+protocol-only surfaces stay out of this map. The inbound-only
+`GET /YYYY/MM/DD/slug` WordPress-compatible alias is likewise absent: it is a
+server HTTP redirect before CSR boot, not a mounted route or a canonical
+navigation target.
 
 ## Mounted route declarations
 
@@ -142,3 +145,9 @@ Canonical user URLs keep the tilde in rendered links (`/~:username`,
 `/~:username/tags/:tag`, and the full permalink pattern), but the mounted user
 and user-tag matchers remain `route:/:username` and `route:/:username/tags/:tag`
 because those are the router patterns derived from `ParamSegment("username")`.
+
+The route census lists CSR-mounted declarations only. A direct HTTP request to
+`/YYYY/MM/DD/slug` has no route token: it is the server-owned, inbound-only
+compatibility alias documented in [`public-reading.md`](public-reading.md),
+which may redirect to the canonical `/~:username/:year/:month/:day/:slug` route
+before the client mounts.

@@ -10,6 +10,7 @@ use common::idempotency_key::IdempotencyKey;
 use common::ids::{PostId, RevisionId, UserId};
 use common::media::MediaReference;
 use common::org::PublicationState;
+use common::permalink_route::canonical_permalink_path;
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
@@ -103,19 +104,10 @@ impl PostRecord {
     #[must_use]
     pub fn permalink(&self) -> RootRelativeUrl {
         let date = jiff::tz::TimeZone::UTC
-            .to_datetime(self.published_at.unwrap_or(self.created_at).value());
-        let Ok(url) = format!(
-            "/~{}/{:04}/{:02}/{:02}/{}",
-            self.author_username,
-            date.year(),
-            date.month(),
-            date.day(),
-            self.slug.as_ref()
-        )
-        .parse::<RootRelativeUrl>() else {
-            unreachable!("permalink() builds a valid root-relative path");
-        };
-        url
+            .to_datetime(self.published_at.unwrap_or(self.created_at).value())
+            .date()
+            .into();
+        canonical_permalink_path(&self.author_username, date, &self.slug)
     }
 
     /// Generates a fallback summary from the post's first non-blank body line.
