@@ -54,14 +54,18 @@ fn required_stage_commands() -> Vec<CommandSpec> {
         },
         CommandSpec {
             stage: RequiredStage::TestCensus,
-            program: "cargo",
-            arguments: vec!["nextest", "list", "--workspace", "--message-format", "json"],
+            program: "sh",
+            arguments: vec![
+                "-c",
+                r#"environment="$(cargo llvm-cov show-env --export-prefix)" && eval "$environment" && exec cargo nextest list --workspace --message-format json"#,
+            ],
         },
         CommandSpec {
             stage: RequiredStage::InstrumentedTestRun,
             program: "cargo",
             arguments: vec![
                 "llvm-cov",
+                "--no-clean",
                 "--no-report",
                 "nextest",
                 "--workspace",
@@ -652,7 +656,6 @@ mod tests {
         );
         assert_eq!(text[4], lcov[4]);
     }
-
     #[test]
     fn required_commands_use_root_workspace_coverage_profile_without_filters() {
         let commands = required_stage_commands();
@@ -672,32 +675,87 @@ mod tests {
                 "--no-deps"
             ]
         );
-        for command in commands.iter().filter(|command| {
-            matches!(
-                command.stage,
-                RequiredStage::TestCensus | RequiredStage::InstrumentedTestRun
-            )
-        }) {
-            assert!(command.arguments.contains(&"--workspace"));
-            assert!(!command.arguments.iter().any(|argument| matches!(
-                *argument,
-                "-p" | "--package" | "--test" | "--partition" | "-E" | "--expr-filter"
-            )));
-        }
-        assert!(commands.iter().any(|command| {
-            command.stage == RequiredStage::TestCensus
-                && command
-                    .arguments
-                    .windows(2)
-                    .any(|args| args == ["--message-format", "json"])
-        }));
-        assert!(commands.iter().any(|command| {
-            command.stage == RequiredStage::InstrumentedTestRun
-                && command
-                    .arguments
-                    .windows(3)
-                    .any(|args| args == ["--profile", "coverage", "--no-fail-fast"])
-        }));
+
+        let census = commands
+            .iter()
+            .find(|command| command.stage == RequiredStage::TestCensus)
+            .expect("census command");
+        assert_eq!(census.program, "sh");
+        assert_eq!(
+            census.arguments,
+            [
+                "-c",
+                r#"environment="$(cargo llvm-cov show-env --export-prefix)" && eval "$environment" && exec cargo nextest list --workspace --message-format json"#
+            ]
+        );
+
+        let run = commands
+            .iter()
+            .find(|command| command.stage == RequiredStage::InstrumentedTestRun)
+            .expect("instrumented test command");
+        assert_eq!(run.program, "cargo");
+        assert!(
+            run.arguments
+                .windows(3)
+                .any(|args| args == ["llvm-cov", "--no-clean", "--no-report"])
+        );
+        let census_script = census.arguments[1];
+        assert!(
+            census_script.contains("exec cargo nextest list --workspace --message-format json")
+        );
+        assert!(
+            ![
+                "-p",
+                "--package",
+                "--test",
+                "--partition",
+                "-E",
+                "--expr-filter"
+            ]
+            .iter()
+            .any(|filter| census_script
+                .split_ascii_whitespace()
+                .any(|argument| argument == *filter))
+        );
+        assert!(run.arguments.contains(&"--workspace"));
+        assert!(!run.arguments.iter().any(|argument| matches!(
+            *argument,
+            "-p" | "--package" | "--test" | "--partition" | "-E" | "--expr-filter"
+        )));
+        assert!(
+            run.arguments
+                .windows(3)
+                .any(|args| args == ["--profile", "coverage", "--no-fail-fast"])
+        );
+    }
+
+    #[test]
+    fn failed_census_is_authoritative_and_leaves_instrumented_run_not_run() {
+        let status = status_for_required_stage_failure(
+            RequiredStage::TestCensus,
+            ProcessOutcome::ExitCode { exit_code: 1 },
+        );
+
+        assert_eq!(status.category, StatusCategory::Infra);
+        assert_eq!(
+            status
+                .stages
+                .iter()
+                .find(|result| result.stage == RequiredStage::TestCensus)
+                .expect("census stage")
+                .outcome,
+            ProcessOutcome::ExitCode { exit_code: 1 }
+        );
+        assert_eq!(
+            status
+                .stages
+                .iter()
+                .find(|result| result.stage == RequiredStage::InstrumentedTestRun)
+                .expect("instrumented test stage")
+                .outcome,
+            ProcessOutcome::NotRun
+        );
+        assert!(status.validate().is_ok());
     }
 
     #[test]
