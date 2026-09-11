@@ -467,31 +467,91 @@ async fn timeline_rejects_a_cursor_from_the_opposite_order(#[case] backend: Back
     )
     .await;
 
-    let (status, body) = post_json(
-        app,
-        <web::timeline::ListByUser as ServerFn>::PATH,
-        serde_json::json!({
-            "username": author.username,
-            "request": {
-                "order": "oldest",
-                "cursor": {
-                    "published_at": "2026-04-16T10:11:12+00:00",
-                    "post_id": 1,
-                    "order": "newest",
+    let cookie = author.cookie();
+    let cursor = serde_json::json!({
+        "published_at": "2026-04-16T10:11:12+00:00",
+        "post_id": 1,
+        "order": "newest",
+    });
+    let cases = [
+        (
+            "local timeline",
+            <web::timeline::ListLocalTimeline as ServerFn>::PATH,
+            serde_json::json!({
+                "request": {
+                    "order": "oldest",
+                    "cursor": cursor,
+                    "limit": 10,
                 },
-                "limit": 10,
-            },
-        }),
-        None,
-    )
-    .await;
+            }),
+            None,
+        ),
+        (
+            "user timeline",
+            <web::timeline::ListByUser as ServerFn>::PATH,
+            serde_json::json!({
+                "username": author.username,
+                "request": {
+                    "order": "oldest",
+                    "cursor": cursor,
+                    "limit": 10,
+                },
+            }),
+            None,
+        ),
+        (
+            "site tag timeline",
+            <web::timeline::ListByTag as ServerFn>::PATH,
+            serde_json::json!({
+                "tag": "rust",
+                "request": {
+                    "order": "oldest",
+                    "cursor": cursor,
+                    "limit": 10,
+                },
+            }),
+            None,
+        ),
+        (
+            "user tag timeline",
+            <web::timeline::ListByUserAndTag as ServerFn>::PATH,
+            serde_json::json!({
+                "username": author.username,
+                "tag": "rust",
+                "request": {
+                    "order": "oldest",
+                    "cursor": cursor,
+                    "limit": 10,
+                },
+            }),
+            None,
+        ),
+        (
+            "home feed",
+            <web::timeline::ListHomeFeed as ServerFn>::PATH,
+            serde_json::json!({
+                "request": {
+                    "order": "oldest",
+                    "cursor": cursor,
+                    "limit": 10,
+                },
+            }),
+            Some(cookie.as_str()),
+        ),
+    ];
 
-    assert_ne!(
-        status,
-        StatusCode::OK,
-        "opposite-order cursor must reject: {body}"
-    );
-    assert!(body.contains("order mismatch"), "body: {body}");
+    for (surface, path, request, cookie) in cases {
+        let (status, body) = post_json(app.clone(), path, request, cookie).await;
+        assert_ne!(
+            status,
+            StatusCode::OK,
+            "{surface} must reject an opposite-order cursor: {body}"
+        );
+        assert!(
+            body.contains("order mismatch"),
+            "{surface} rejection must identify the mismatch: {body}"
+        );
+    }
 }
 
 #[apply(backends)]
