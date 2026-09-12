@@ -1003,10 +1003,18 @@ fn publish_seeded_media(target: &Path) -> anyhow::Result<bool> {
         std::fs::File::open(parent)?.sync_all()?;
         Ok::<_, std::io::Error>(true)
     })();
+    resolve_seeded_media_write_result(write_result, target, &temporary)
+}
+
+fn resolve_seeded_media_write_result(
+    write_result: std::io::Result<bool>,
+    target: &Path,
+    temporary: &Path,
+) -> anyhow::Result<bool> {
     match write_result {
         Ok(created) => Ok(created),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            let _ = std::fs::remove_file(&temporary);
+            let _ = std::fs::remove_file(temporary);
             let bytes = std::fs::read(target).map_err(|read_error| {
                 anyhow::anyhow!("reading concurrent seeded Media content failed: {read_error}")
             })?;
@@ -1017,7 +1025,7 @@ fn publish_seeded_media(target: &Path) -> anyhow::Result<bool> {
             Ok(false)
         }
         Err(error) => {
-            let _ = std::fs::remove_file(&temporary);
+            let _ = std::fs::remove_file(temporary);
             Err(anyhow::anyhow!(
                 "publishing seeded Media content failed: {error}"
             ))
@@ -1131,6 +1139,35 @@ enum SandboxProfileWriteError {
     CommitIndeterminate,
 }
 
+fn project_sandbox_profile_write_outcome<T>(
+    outcome: &common::MutationOutcome<T>,
+) -> Result<(), SandboxProfileWriteError> {
+    match outcome {
+        common::MutationOutcome::Confirmed(_) => Ok(()),
+        common::MutationOutcome::CommitIndeterminate(_) => {
+            Err(SandboxProfileWriteError::CommitIndeterminate)
+        }
+    }
+}
+
+fn resolve_sandbox_profile_write(
+    write_result: Result<(), SandboxProfileWriteError>,
+    manifest: SandboxSeedManifest,
+    created_media: bool,
+    seeded_media_path: Option<&Path>,
+) -> anyhow::Result<SandboxSeedManifest> {
+    match write_result {
+        Ok(()) => Ok(manifest),
+        Err(SandboxProfileWriteError::Failed(error)) => {
+            cleanup_newly_published_media(created_media, seeded_media_path);
+            Err(error)
+        }
+        Err(SandboxProfileWriteError::CommitIndeterminate) => Err(anyhow::anyhow!(
+            "sandbox profile write commit acknowledgement was indeterminate; retained seeded Media for revalidation"
+        )),
+    }
+}
+
 async fn write_sandbox_profile(
     storage: SandboxSeedStorage,
     title: String,
@@ -1210,12 +1247,7 @@ async fn write_sandbox_profile(
                 "sandbox profile write failed: {error}"
             ))
         })?;
-    match outcome {
-        common::MutationOutcome::Confirmed(_) => Ok(()),
-        common::MutationOutcome::CommitIndeterminate(_) => {
-            Err(SandboxProfileWriteError::CommitIndeterminate)
-        }
-    }
+    project_sandbox_profile_write_outcome(&outcome)
 }
 
 /// Seeds the exact non-idempotent sandbox profile through the normal typed
@@ -1244,25 +1276,20 @@ pub async fn seed_sandbox_profile(
         .parse::<SiteTitle>()
         .map_err(|error| anyhow::anyhow!("invalid fixed sandbox title: {error}"))?
         .to_string();
-    match write_sandbox_profile(
-        storage,
-        title,
-        prepared_users,
-        seeded_media,
-        manifest.clone(),
-        anchor,
+    resolve_sandbox_profile_write(
+        write_sandbox_profile(
+            storage,
+            title,
+            prepared_users,
+            seeded_media,
+            manifest.clone(),
+            anchor,
+        )
+        .await,
+        manifest,
+        created_media,
+        seeded_media_path.as_deref(),
     )
-    .await
-    {
-        Ok(()) => Ok(manifest),
-        Err(SandboxProfileWriteError::Failed(error)) => {
-            cleanup_newly_published_media(created_media, seeded_media_path.as_deref());
-            Err(error)
-        }
-        Err(SandboxProfileWriteError::CommitIndeterminate) => Err(anyhow::anyhow!(
-            "sandbox profile write commit acknowledgement was indeterminate; retained seeded Media for revalidation"
-        )),
-    }
 }
 
 /// Reset the mail-capture file: delete `path` if it exists. A missing file is
@@ -1564,6 +1591,46 @@ mod sandbox_profile_tests {
         .expect_err("duplicate user makes profile write fail");
         assert!(!target.exists());
     }
+    #[apply(backends)]
+    #[tokio::test]
+    async fn profile_write_rejects_a_manifest_author_absent_from_prepared_users(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().pristine().await;
+        let anchor = "2026-09-06T12:34:00Z".parse().expect("fixed anchor");
+        let mut manifest = sandbox_profile_manifest(anchor);
+        manifest.posts[0].author = "nobody";
+
+        let error = match write_sandbox_profile(
+            SandboxSeedStorage {
+                site_config: env.site_config(),
+                users: env.users(),
+                posts: env.posts(),
+                media: env.media(),
+                write_scope: env.write_scope(),
+            },
+            SANDBOX_TITLE.to_owned(),
+            prepare_sandbox_users(SandboxProfile::Demo)
+                .await
+                .expect("fixed users prepare"),
+            None,
+            manifest,
+            anchor,
+        )
+        .await
+        {
+            Err(SandboxProfileWriteError::Failed(error)) => error,
+            Err(SandboxProfileWriteError::CommitIndeterminate) => {
+                panic!("backend acknowledged no indeterminate commit")
+            }
+            Ok(()) => panic!("missing manifest author rejects the profile write"),
+        };
+
+        assert_eq!(
+            error.to_string(),
+            "sandbox profile write failed: write operation failed: sandbox manifest author nobody is not seeded"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1622,8 +1689,133 @@ mod content_tests {
             std::fs::read(&target).expect("fixture content exists"),
             SANDBOX_SEEDED_MEDIA_BYTES
         );
+        assert!(!publish_seeded_media(&target).expect("existing fixture is reused"));
+        let directory_target = root.path().join("media-directory");
+        std::fs::create_dir(&directory_target).expect("directory target");
+        assert!(
+            publish_seeded_media(&directory_target)
+                .expect_err("a directory cannot be read as Media content")
+                .to_string()
+                .contains("reading seeded Media content failed")
+        );
         std::fs::write(&target, b"wrong bytes").expect("tamper fixture");
         assert!(publish_seeded_media(&target).is_err());
+    }
+
+    #[test]
+    fn seeded_media_write_result_projector_handles_races_and_failures() {
+        let root = tempfile::tempdir().expect("temporary storage root");
+        let target = root.path().join("seeded-media");
+        let temporary = root.path().join("seeded-media.tmp");
+
+        assert!(
+            resolve_seeded_media_write_result(Ok(true), &target, &temporary)
+                .expect("successful write result")
+        );
+
+        std::fs::write(&target, SANDBOX_SEEDED_MEDIA_BYTES).expect("concurrent exact target");
+        std::fs::write(&temporary, b"temporary").expect("temporary file");
+        assert!(
+            !resolve_seeded_media_write_result(
+                Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists)),
+                &target,
+                &temporary,
+            )
+            .expect("exact concurrent target is reused")
+        );
+        assert!(!temporary.exists());
+
+        std::fs::write(&target, b"wrong bytes").expect("concurrent mismatched target");
+        std::fs::write(&temporary, b"temporary").expect("temporary file");
+        let mismatch = resolve_seeded_media_write_result(
+            Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists)),
+            &target,
+            &temporary,
+        )
+        .expect_err("mismatched concurrent target rejects publication");
+        assert_eq!(
+            mismatch.to_string(),
+            "concurrent seeded Media bytes do not match the canonical fixture"
+        );
+        assert!(!temporary.exists());
+
+        std::fs::remove_file(&target).expect("remove target");
+        std::fs::write(&temporary, b"temporary").expect("temporary file");
+        let missing = resolve_seeded_media_write_result(
+            Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists)),
+            &target,
+            &temporary,
+        )
+        .expect_err("missing concurrent target rejects publication");
+        assert!(
+            missing
+                .to_string()
+                .contains("reading concurrent seeded Media content failed")
+        );
+        assert!(!temporary.exists());
+
+        std::fs::write(&temporary, b"temporary").expect("temporary file");
+        let write_error = resolve_seeded_media_write_result(
+            Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+            &target,
+            &temporary,
+        )
+        .expect_err("generic publication failure propagates");
+        assert_eq!(
+            write_error.to_string(),
+            "publishing seeded Media content failed: permission denied"
+        );
+        assert!(!temporary.exists());
+    }
+
+    #[test]
+    fn sandbox_profile_result_projectors_preserve_commit_cleanup_semantics() {
+        assert!(
+            project_sandbox_profile_write_outcome(&common::MutationOutcome::Confirmed(())).is_ok()
+        );
+        assert!(matches!(
+            project_sandbox_profile_write_outcome(
+                &common::MutationOutcome::CommitIndeterminate(())
+            ),
+            Err(SandboxProfileWriteError::CommitIndeterminate)
+        ));
+
+        let root = tempfile::tempdir().expect("temporary storage root");
+        let media = root.path().join("seeded-media");
+        let anchor = "2026-09-06T12:34:00Z".parse().expect("fixed anchor");
+        let manifest = profile_manifest(SandboxProfile::Standard, anchor);
+        assert_eq!(
+            resolve_sandbox_profile_write(Ok(()), manifest.clone(), true, Some(&media))
+                .expect("confirmed profile write returns manifest"),
+            manifest
+        );
+
+        std::fs::write(&media, SANDBOX_SEEDED_MEDIA_BYTES).expect("seeded media");
+        let failed = resolve_sandbox_profile_write(
+            Err(SandboxProfileWriteError::Failed(anyhow::anyhow!(
+                "write failed"
+            ))),
+            manifest.clone(),
+            true,
+            Some(&media),
+        )
+        .expect_err("confirmed write failure propagates");
+        assert_eq!(failed.to_string(), "write failed");
+        assert!(!media.exists());
+
+        std::fs::write(&media, SANDBOX_SEEDED_MEDIA_BYTES).expect("seeded media");
+        let indeterminate = resolve_sandbox_profile_write(
+            Err(SandboxProfileWriteError::CommitIndeterminate),
+            manifest,
+            true,
+            Some(&media),
+        )
+        .expect_err("indeterminate commit propagates");
+        assert_eq!(
+            indeterminate.to_string(),
+            "sandbox profile write commit acknowledgement was indeterminate; retained seeded Media for revalidation"
+        );
+        assert!(media.exists());
     }
 
     #[test]
