@@ -1,4 +1,4 @@
-// CI timing perturbation: issue #1463 cold pair B.
+// CI timing perturbation: issue #1463 cold pair C.
 // The sqlx storage bridge the `StrNewtype` derive emits (#438) is server-only:
 // `common`'s `sqlx` feature must never be enabled for a wasm target. Enabling it there
 // would already fail to build — `sqlx` pulls native deps that don't compile for
