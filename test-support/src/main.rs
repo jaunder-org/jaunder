@@ -1,16 +1,14 @@
 //! `test-support` — out-of-process test/e2e helpers that link jaunder's real
 //! crates (see `lib.rs`). Never shipped in the `jaunder` production binary.
-use std::sync::Arc;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use common::display_name::DisplayName;
 use host::{capture, feed::FeedEventPhase};
-use storage::{DbConnectOptions, MediaContentLocks, MediaManager, StorageRuntimeConfig};
+use storage::DbConnectOptions;
 use test_support::{
-    SandboxMediaOwnershipResolver, SandboxProfile, create_session_for_user, create_user,
+    SandboxProfile, SandboxSeedStorage, create_session_for_user, create_user,
     reset_author_theme_fixture, reset_mail, sandbox_profile_anchor, seed_dead_letters,
-    seed_demo_sandbox_profile, seed_posts_for_user, seed_published_author_theme,
-    seed_standard_sandbox_profile, seed_user,
+    seed_posts_for_user, seed_published_author_theme, seed_sandbox_profile, seed_user,
 };
 
 #[derive(Parser)]
@@ -25,6 +23,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Print the full Git commit embedded when this binary was built.
+    BuildCommit,
+
     /// Seed N posts for a user through the real storage path.
     SeedPosts {
         /// Database URL (`sqlite:...` or `postgres://...`) — the server's `--db`.
@@ -45,11 +46,11 @@ enum Commands {
     },
     /// Seed the fixed standard or demo sandbox profile through typed storage services.
     SeedSandboxProfile {
-        /// `SQLite` database URL for the unpublished sandbox workspace (`sqlite:...`).
-        #[arg(long)]
+        /// Database URL (`sqlite:...` or `postgres://...`) for the sandbox workspace.
+        #[arg(long, env = "JAUNDER_DB")]
         db: DbConnectOptions,
-        /// Root of the unpublished sandbox workspace's Media content.
-        #[arg(long)]
+        /// Canonical immutable-content root used by the live server.
+        #[arg(long, env = "JAUNDER_STORAGE_PATH")]
         storage_path: std::path::PathBuf,
         /// Fixed sandbox profile to create.
         #[arg(long, value_enum)]
@@ -212,7 +213,16 @@ fn storage_runtime_config(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    run(Cli::parse()).await
+    let cli = Cli::parse();
+    if matches!(&cli.command, Commands::BuildCommit) {
+        println!(
+            r#"{{"commit":"{}","clean":{}}}"#,
+            env!("JAUNDER_BUILD_COMMIT"),
+            env!("JAUNDER_BUILD_DIRTY") == "0"
+        );
+        return Ok(());
+    }
+    run(cli).await
 }
 
 /// Dispatch the parsed subcommand to its handler. A flat match: each arm
@@ -222,6 +232,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
     let telemetry = telemetry_config();
     let _telemetry = host::telemetry::init_tracing(&telemetry);
     match cli.command {
+        Commands::BuildCommit => unreachable!("build-commit returns before telemetry setup"),
         Commands::SeedPosts {
             db,
             username,
@@ -324,52 +335,29 @@ fn capture_directory() -> anyhow::Result<capture::CaptureDirectory> {
         .ok_or_else(|| anyhow::anyhow!("JAUNDER_CAPTURE_DIR is not set"))
 }
 
-/// Rejects unsupported backends before opening storage or beginning any mutation.
-fn sandbox_storage_runtime(db: &DbConnectOptions) -> anyhow::Result<StorageRuntimeConfig> {
-    if matches!(db, DbConnectOptions::Postgres { .. }) {
-        anyhow::bail!("seed-sandbox-profile supports SQLite URLs only");
-    }
-    Ok(storage_runtime_config(db)?)
-}
-
-/// Seed one complete fixed sandbox profile and report only after its phases commit.
+/// Seed one complete fixed sandbox profile and report only after its transaction commits.
 async fn cmd_seed_sandbox_profile(
     db: &DbConnectOptions,
     storage_path: &std::path::Path,
     profile: SandboxProfile,
 ) -> anyhow::Result<()> {
-    let runtime = sandbox_storage_runtime(db)?;
-    let opened = storage::open_existing_database_with_observer(db, &runtime).await?;
-    match profile {
-        SandboxProfile::Standard => {
-            seed_standard_sandbox_profile(
-                opened.factory.site_config(),
-                opened.factory.users(),
-                opened.factory.write_scope(),
-            )
-            .await?;
-        }
-        SandboxProfile::Demo => {
-            let media_manager = MediaManager::new(
-                opened.factory.media(),
-                opened.factory.posts(),
-                opened.factory.site_config(),
-                opened.factory.write_scope(),
-                Arc::new(MediaContentLocks::new(Arc::new(storage_path.to_path_buf()))),
-                opened.instance_id,
-                Arc::new(SandboxMediaOwnershipResolver),
-            );
-            seed_demo_sandbox_profile(
-                opened.factory.site_config(),
-                opened.factory.users(),
-                opened.factory.posts(),
-                opened.factory.write_scope(),
-                &media_manager,
-                sandbox_profile_anchor(),
-            )
-            .await?;
-        }
-    }
+    let runtime = storage_runtime_config(db)?;
+    let factory = storage::open_existing_database(db, &runtime).await?;
+    let anchor = sandbox_profile_anchor();
+    let manifest = seed_sandbox_profile(
+        SandboxSeedStorage {
+            site_config: factory.site_config(),
+            users: factory.users(),
+            posts: factory.posts(),
+            media: factory.media(),
+            write_scope: factory.write_scope(),
+        },
+        storage_path,
+        profile,
+        anchor,
+    )
+    .await?;
+    println!("{}", serde_json::to_string(&manifest.to_json())?);
     eprintln!("seeded sandbox profile {}", profile_name(profile));
     Ok(())
 }
@@ -880,19 +868,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sandbox_profile_handler_dispatches_standard_profile_and_rejects_postgres() {
-        let (storage, db) = temp_db().await;
+    async fn sandbox_profile_handler_dispatches_standard_profile_with_shared_backend_config() {
+        let (dir, db) = temp_db().await;
         run(cli(Commands::SeedSandboxProfile {
             db: db.clone(),
-            storage_path: storage.path().to_owned(),
+            storage_path: dir.path().to_path_buf(),
             profile: SandboxProfileArg::Standard,
         }))
         .await
         .expect("standard profile handler succeeds");
 
-        let factory = storage::open_existing_database(&db, &StorageRuntimeConfig::default())
-            .await
-            .expect("reopen seeded database");
+        let factory =
+            storage::open_existing_database(&db, &storage::StorageRuntimeConfig::default())
+                .await
+                .expect("reopen seeded database");
         assert_eq!(
             factory
                 .site_config()
@@ -904,10 +893,8 @@ mod tests {
         let postgres: DbConnectOptions = "postgres://app@localhost/jaunder"
             .parse()
             .expect("PostgreSQL URL parses");
-        assert!(
-            sandbox_storage_runtime(&postgres).is_err(),
-            "the handler rejects PostgreSQL before it opens storage"
-        );
+        storage_runtime_config(&postgres)
+            .expect("sandbox profile uses the ordinary PostgreSQL runtime configuration");
     }
 
     #[tokio::test]
@@ -921,9 +908,10 @@ mod tests {
         .await
         .expect("demo profile handler succeeds");
 
-        let factory = storage::open_existing_database(&db, &StorageRuntimeConfig::default())
-            .await
-            .expect("reopen seeded database");
+        let factory =
+            storage::open_existing_database(&db, &storage::StorageRuntimeConfig::default())
+                .await
+                .expect("reopen seeded database");
         let users = factory.users();
         let posts = factory.posts();
         let media = factory.media();
@@ -955,7 +943,7 @@ mod tests {
                 .expect("Media listing")
                 .len();
         }
-        assert_eq!(post_count, 68);
-        assert_eq!(media_count, 4);
+        assert_eq!(post_count, 73);
+        assert_eq!(media_count, 1);
     }
 }

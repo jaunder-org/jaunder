@@ -182,7 +182,7 @@ test("per-user feeds contain only that user's posts, newest first, in all format
     // Poll until the worker has regenerated Alice's feed with her full post
     // set (newest post present), then assert order and cross-user isolation.
     const aliceFeed = await fetchFeedContaining(
-      page,
+      page.request,
       `${BASE_URL}/~${alice}/feed.${fmt.ext}`,
       "Alice Newer",
     );
@@ -199,7 +199,7 @@ test("per-user feeds contain only that user's posts, newest first, in all format
     );
 
     const bobFeed = await fetchFeedContaining(
-      page,
+      page.request,
       `${BASE_URL}/~${bob}/feed.${fmt.ext}`,
       "Bob Solo",
     );

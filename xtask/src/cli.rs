@@ -3,6 +3,12 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::{issue, steps};
+const VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (",
+    env!("JAUNDER_BUILD_COMMIT"),
+    ")"
+);
 
 fn nonempty(value: &str) -> Result<String, String> {
     if value.trim().is_empty() {
@@ -13,7 +19,12 @@ fn nonempty(value: &str) -> Result<String, String> {
 }
 
 #[derive(Parser)]
-#[command(name = "xtask", about = "Jaunder dev orchestration")]
+#[command(
+    name = "xtask",
+    about = "Jaunder dev orchestration",
+    version = VERSION,
+    long_version = VERSION
+)]
 pub struct Cli {
     /// Emit the structured result envelope as JSON to stdout.
     #[arg(long, global = true)]
@@ -241,6 +252,10 @@ pub enum Command {
     /// Host-only manual command; needs `gh`.
     #[command(subcommand)]
     Issue(issue::IssueCommand),
+    /// Run the opt-in production deployment baseline harness. It validates the
+    /// immutable product and clean harness identities before any lifecycle work.
+    #[command(subcommand)]
+    ProductionBaseline(ProductionBaselineCommand),
     /// Start an interactive disposable or named UX sandbox, or run an admitted
     /// operational Jaunder command against a named sandbox after `--`.
     Sandbox {
@@ -253,6 +268,27 @@ pub enum Command {
         /// A Jaunder command run against an existing named workspace.
         #[arg(last = true, allow_hyphen_values = true)]
         command: Vec<String>,
+    },
+}
+
+/// `production-baseline` runs an opt-in immutable deployment qualification and
+/// atomically publishes only sanitized dated evidence.
+#[derive(Subcommand)]
+pub enum ProductionBaselineCommand {
+    /// Discover same-revision deployment, recovery, and continuity evidence.
+    Discover {
+        /// Git revision that resolves to a commit reachable from the upstream repository.
+        #[arg(long, value_parser = nonempty)]
+        revision: String,
+    },
+    /// Qualify a distinct source-to-target upgrade; this is non-release evidence.
+    Accept {
+        /// Source Git revision.
+        #[arg(long, value_parser = nonempty)]
+        source: String,
+        /// Target Git revision.
+        #[arg(long, value_parser = nonempty)]
+        target: String,
     },
 }
 
@@ -411,6 +447,10 @@ pub enum NixCommand {
     /// runs in CI and on request, not in per-commit `check`/`validate`.
     #[command(after_help = "EXAMPLES:\n  cargo xtask nix probe-source")]
     ProbeSource,
+    /// Run the opt-in isolated SQLite/PostgreSQL production VM lifecycle smoke
+    /// against the current checkout as a `path:` flake. It publishes no evidence.
+    #[command(after_help = "EXAMPLES:\n  devtool run -- cargo xtask nix production-baseline-smoke")]
+    ProductionBaselineSmoke,
 }
 
 /// `traces` subcommands.
@@ -506,6 +546,7 @@ impl Cli {
             Command::Traces(TracesCommand::Analyze { .. }) => "traces-analyze",
             Command::Traces(TracesCommand::Run { .. }) => "traces-run",
             Command::Traces(TracesCommand::BootPhases { .. }) => "traces-boot-phases",
+            Command::Nix(NixCommand::ProductionBaselineSmoke) => "nix-production-baseline-smoke",
             Command::Coverage(CoverageCommand::ProbeSource) => "coverage-probe-source",
             Command::WasmCoverage(WasmCoverageCommand::Probe) => "wasm-coverage-probe",
             Command::WasmCoverage(WasmCoverageCommand::Measure { .. }) => "wasm-coverage-measure",
@@ -515,6 +556,12 @@ impl Cli {
             }
             Command::ServerFnCoverage(ServerFnCoverageCommand::Verify) => {
                 steps::server_fn_coverage_check::VERIFY_STEP
+            }
+            Command::ProductionBaseline(ProductionBaselineCommand::Discover { .. }) => {
+                "production-baseline-discover"
+            }
+            Command::ProductionBaseline(ProductionBaselineCommand::Accept { .. }) => {
+                "production-baseline-accept"
             }
             Command::Sandbox { .. } => "sandbox",
             Command::Pr(PrCommand::Watch { .. }) => "pr-watch",
@@ -557,6 +604,38 @@ mod tests {
             Command::Precommit => {}
             _ => panic!("expected precommit"),
         }
+    }
+
+    #[test]
+    fn production_baseline_operations_parse_with_stable_names() {
+        let discover = Cli::try_parse_from([
+            "xtask",
+            "production-baseline",
+            "discover",
+            "--revision",
+            "abc",
+        ])
+        .unwrap();
+        assert_eq!(discover.command_name(), "production-baseline-discover");
+        assert!(matches!(
+            discover.command,
+            Command::ProductionBaseline(ProductionBaselineCommand::Discover { revision }) if revision == "abc"
+        ));
+        let accept = Cli::try_parse_from([
+            "xtask",
+            "production-baseline",
+            "accept",
+            "--source",
+            "a",
+            "--target",
+            "b",
+        ])
+        .unwrap();
+        assert_eq!(accept.command_name(), "production-baseline-accept");
+        assert!(matches!(
+            accept.command,
+            Command::ProductionBaseline(ProductionBaselineCommand::Accept { source, target }) if source == "a" && target == "b"
+        ));
     }
 
     #[test]

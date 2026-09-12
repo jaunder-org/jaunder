@@ -18,6 +18,7 @@ definitive working hub for humans and agents.
 | [web-style-guide](web-style-guide.md)                         | Conventions for the `web/` Leptos components and widgets.                          |
 | [themes](themes.md)                                           | Create, test, modify, publish, and deploy custom public themes.                    |
 | [atompub-marsedit-acceptance](atompub-marsedit-acceptance.md) | Manual MarsEdit/AtomPub (RFC 5023) acceptance checklist.                           |
+| [production-baseline](production-baseline.md)                 | Opt-in immutable NixOS deployment/recovery qualification and evidence runbook.     |
 
 ## Architecture Decision Records
 

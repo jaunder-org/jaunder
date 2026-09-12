@@ -18,7 +18,8 @@ let
     OTELCOL_HTTP_ENDPOINT = "127.0.0.1:4318";
   };
 
-  jaunderModule =
+  mkJaunderModule =
+    package:
     {
       lib,
       pkgs,
@@ -27,14 +28,15 @@ let
     }:
     let
       cfg = config.services.jaunder;
-    in
-    let
       targetSystem = pkgs.stdenv.hostPlatform.system;
-      jaunderBin = self.packages.${targetSystem}.jaunder;
+      jaunderBin =
+        if package == null then self.packages.${targetSystem}.jaunder else package;
     in
     {
       options.services.jaunder = {
         enable = lib.mkEnableOption "the Jaunder service";
+
+
 
         bind = lib.mkOption {
           type = lib.types.str;
@@ -218,11 +220,160 @@ let
     system = postgresTestingVmSystem;
     modules = [ postgresTestingVmModule ];
   };
+  productionBaselineVmModule =
+    {
+      backend,
+      package ? null,
+    }:
+    {
+      lib,
+      pkgs,
+      config,
+      ...
+    }:
+    let
+      jaunderBin =
+        if package == null then self.packages.${pkgs.stdenv.hostPlatform.system}.jaunder else package;
+    in
+    {
+      imports = [ (mkJaunderModule package) ];
+
+      networking.hostName = "jaunder-production-baseline-${backend}";
+      boot.loader.grub.devices = [ "nodev" ];
+      boot.kernelParams = [ "console=ttyS0" ];
+      fileSystems."/" = {
+        device = "/dev/vda";
+        fsType = "ext4";
+      };
+      virtualisation.vmVariant = {
+        virtualisation = {
+          graphics = false;
+          memorySize = 2048;
+          diskSize = 4096;
+        };
+      };
+      # Both listeners are reachable only through lifecycle-owned QEMU forwards
+      # bound to host loopback.
+      networking.firewall.allowedTCPPorts = [
+        3000
+        39000
+      ];
+
+      systemd.services.jaunder-baseline-control = {
+        wantedBy = [ "multi-user.target" ];
+        after = [ "network.target" ];
+        path = [
+          config.systemd.package
+          pkgs.coreutils
+          pkgs.gnugrep
+          self.packages.${pkgs.stdenv.hostPlatform.system}.test-support
+        ];
+        serviceConfig = {
+          ExecStart = "${pkgs.socat}/bin/socat TCP-LISTEN:39000,bind=0.0.0.0,reuseaddr,fork EXEC:${pkgs.bash}/bin/bash,stderr";
+          Restart = "always";
+        };
+      };
+
+      # Harness-only seeding runs through the lifecycle control channel. It is
+      # deliberately absent from the deployable Jaunder package and service.
+      environment.systemPackages = [ self.packages.${pkgs.stdenv.hostPlatform.system}.test-support ];
+
+      services.jaunder = {
+        enable = true;
+        bind = "0.0.0.0:3000";
+        prod = true;
+        db =
+          if backend == "sqlite" then
+            "sqlite:/var/lib/jaunder/data/jaunder.db"
+          else
+            "postgres://jaunder@127.0.0.1/jaunder";
+      };
+
+      services.postgresql = lib.mkIf (backend == "postgres") {
+        enable = true;
+        package = pkgs.postgresql_16;
+        authentication = ''
+          local all all trust
+          host all all 127.0.0.1/32 trust
+          host all all ::1/128 trust
+        '';
+      };
+
+      systemd.services.jaunder-baseline-postgres-bootstrap = lib.mkIf (backend == "postgres") {
+        description = "Create the isolated Jaunder PostgreSQL role and database";
+        after = [ "postgresql.service" ];
+        requires = [ "postgresql.service" ];
+        before = [ "jaunder.service" ];
+        unitConfig.ConditionPathExists = "!/var/lib/jaunder/.postgres-bootstrapped";
+        serviceConfig.Type = "oneshot";
+        script = ''
+          install -d -m 0700 -o jaunder -g jaunder /var/lib/jaunder/baseline-secrets
+          ${pkgs.openssl}/bin/openssl rand -hex 32 > /var/lib/jaunder/baseline-secrets/db-password
+          chown jaunder:jaunder /var/lib/jaunder/baseline-secrets/db-password
+          chmod 0600 /var/lib/jaunder/baseline-secrets/db-password
+          ${jaunderBin}/bin/jaunder create-pg-db \
+            --bootstrap-db postgres://postgres@127.0.0.1/postgres \
+            --app-db postgres://jaunder@127.0.0.1/jaunder \
+            --app-role-password "$(cat /var/lib/jaunder/baseline-secrets/db-password)"
+          touch /var/lib/jaunder/.postgres-bootstrapped
+        '';
+      };
+
+      systemd.services.jaunder = lib.mkIf (backend == "postgres") {
+        after = [ "jaunder-baseline-postgres-bootstrap.service" ];
+        requires = [ "jaunder-baseline-postgres-bootstrap.service" ];
+        environment.JAUNDER_DB_PASSWORD_FILE = "/var/lib/jaunder/baseline-secrets/db-password";
+      };
+
+      system.stateVersion = "26.05";
+    };
+
+  productionBaselineSqliteConfiguration = nixpkgs.lib.nixosSystem {
+    system = interactiveTestingVmSystem;
+    modules = [ (productionBaselineVmModule { backend = "sqlite"; }) ];
+  };
+
+  productionBaselinePostgresConfiguration = nixpkgs.lib.nixosSystem {
+    system = interactiveTestingVmSystem;
+    modules = [ (productionBaselineVmModule { backend = "postgres"; }) ];
+  };
+  productionBaselineVm =
+    {
+      system,
+      package,
+      backend,
+    }:
+    nixpkgs.lib.nixosSystem {
+      inherit system;
+      modules = [
+        (productionBaselineVmModule {
+          inherit backend package;
+        })
+      ];
+    };
 in
 {
-  nixosModules.jaunder = jaunderModule;
+  nixosModules.jaunder = mkJaunderModule null;
   nixosConfigurations.interactive-testing-vm = interactiveTestingVmConfiguration;
   nixosConfigurations.postgres-testing-vm = postgresTestingVmConfiguration;
+  nixosConfigurations.production-baseline-sqlite = productionBaselineSqliteConfiguration;
+  nixosConfigurations.production-baseline-postgres = productionBaselinePostgresConfiguration;
+  inherit productionBaselineVm;
+
+
+  packagesForSystem =
+    { system, pkgs }:
+    pkgs.lib.optionalAttrs (pkgs.stdenv.isLinux && system == interactiveTestingVmSystem) {
+      production-baseline-sqlite-vm = productionBaselineSqliteConfiguration.config.system.build.vm;
+      production-baseline-postgres-vm = productionBaselinePostgresConfiguration.config.system.build.vm;
+      production-baseline-proxy = pkgs.writeShellApplication {
+        name = "production-baseline-proxy";
+        runtimeInputs = [ pkgs.caddy ];
+        text = ''
+          exec caddy run --config "$1" --adapter caddyfile
+        '';
+      };
+    };
 
   appsForSystem =
     { system, pkgs }:
@@ -253,6 +404,14 @@ in
         postgres-testing-vm = {
           type = "app";
           program = "${postgresTestingVmRunner}/bin/postgres-testing-vm";
+        };
+        production-baseline-sqlite = {
+          type = "app";
+          program = "${productionBaselineSqliteConfiguration.config.system.build.vm}/bin/run-jaunder-production-baseline-sqlite-vm";
+        };
+        production-baseline-postgres = {
+          type = "app";
+          program = "${productionBaselinePostgresConfiguration.config.system.build.vm}/bin/run-jaunder-production-baseline-postgres-vm";
         };
       };
 

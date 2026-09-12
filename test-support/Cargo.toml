@@ -27,3 +27,5 @@ async-trait.workspace = true
 [dev-dependencies]
 storage = { workspace = true, features = ["test-support"] }
 tempfile = { workspace = true }
+rstest_reuse = { workspace = true }
+rstest = { workspace = true }

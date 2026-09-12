@@ -1,0 +1,312 @@
+{
+  "schema_version": 1,
+  "operation": "discover",
+  "outcome": "passed",
+  "harness": {
+    "commit": "8db83f585188968545503b3808a0e58e6ac6a299",
+    "seeded_manifest": {
+      "version": 1,
+      "sha256": "5c20b51c71d6a835a194c395963ffe998b80aadd6dbd551a417d1db503c9b2a0"
+    },
+    "operation_manifest": {
+      "version": 1,
+      "sha256": "85ff493e738c4379f91eaef9604fae656540cad2aed28222b83459116cd222be"
+    }
+  },
+  "source": {
+    "commit": "f6b26c2f9e68c82504b4758778ab2bb706e7cca7",
+    "flake_ref": "github:jaunder-org/jaunder/f6b26c2f9e68c82504b4758778ab2bb706e7cca7"
+  },
+  "target": null,
+  "runtime": [
+    {
+      "deployment_id": "discover-source-sqlite",
+      "backend": "sqlite",
+      "revision": {
+        "commit": "f6b26c2f9e68c82504b4758778ab2bb706e7cca7",
+        "flake_ref": "github:jaunder-org/jaunder/f6b26c2f9e68c82504b4758778ab2bb706e7cca7"
+      },
+      "executable": "/nix/store/9lqj4lm9q94a0c9zn1xby6n1brwhan79-jaunder-0.1.0/bin/jaunder",
+      "exec_start": "{ path=/nix/store/9lqj4lm9q94a0c9zn1xby6n1brwhan79-jaunder-0.1.0/bin/jaunder ; argv[]=/nix/store/9lqj4lm9q94a0c9zn1xby6n1brwhan79-jaunder-0.1.0/bin/jaunder serve ; ignore_errors=no ; start_time=[Fri 2026-09-11 20:42:18 UTC] ; stop_time=[n/a] ; pid=767 ; code=(null) ; status=0/0 }",
+      "package": {
+        "installable": "github:jaunder-org/jaunder/f6b26c2f9e68c82504b4758778ab2bb706e7cca7#jaunder",
+        "derivation": "/nix/store/9813q6x4g2aanpffaw4bcaffvb5crrmp-jaunder-0.1.0.drv",
+        "output_path": "/nix/store/9lqj4lm9q94a0c9zn1xby6n1brwhan79-jaunder-0.1.0",
+        "nar_hash": "sha256-7j1khrveJW61w1KsdP4vdbZ6KCMVjKyiX+DPCv8Q1/0=",
+        "executable_sha256": "d8f982bf03bfaa5a146d46bfcd5423432829d5ccc9577fbd29944679f1abfd41"
+      }
+    },
+    {
+      "deployment_id": "discover-target-discover-source-sqlite-sqlite",
+      "backend": "sqlite",
+      "revision": {
+        "commit": "f6b26c2f9e68c82504b4758778ab2bb706e7cca7",
+        "flake_ref": "github:jaunder-org/jaunder/f6b26c2f9e68c82504b4758778ab2bb706e7cca7"
+      },
+      "executable": "/nix/store/9lqj4lm9q94a0c9zn1xby6n1brwhan79-jaunder-0.1.0/bin/jaunder",
+      "exec_start": "{ path=/nix/store/9lqj4lm9q94a0c9zn1xby6n1brwhan79-jaunder-0.1.0/bin/jaunder ; argv[]=/nix/store/9lqj4lm9q94a0c9zn1xby6n1brwhan79-jaunder-0.1.0/bin/jaunder serve ; ignore_errors=no ; start_time=[Fri 2026-09-11 20:43:13 UTC] ; stop_time=[n/a] ; pid=765 ; code=(null) ; status=0/0 }",
+      "package": {
+        "installable": "github:jaunder-org/jaunder/f6b26c2f9e68c82504b4758778ab2bb706e7cca7#jaunder",
+        "derivation": "/nix/store/9813q6x4g2aanpffaw4bcaffvb5crrmp-jaunder-0.1.0.drv",
+        "output_path": "/nix/store/9lqj4lm9q94a0c9zn1xby6n1brwhan79-jaunder-0.1.0",
+        "nar_hash": "sha256-7j1khrveJW61w1KsdP4vdbZ6KCMVjKyiX+DPCv8Q1/0=",
+        "executable_sha256": "d8f982bf03bfaa5a146d46bfcd5423432829d5ccc9577fbd29944679f1abfd41"
+      }
+    },
+    {
+      "deployment_id": "discover-target-discover-source-sqlite-postgres",
+      "backend": "postgres",
+      "revision": {
+        "commit": "f6b26c2f9e68c82504b4758778ab2bb706e7cca7",
+        "flake_ref": "github:jaunder-org/jaunder/f6b26c2f9e68c82504b4758778ab2bb706e7cca7"
+      },
+      "executable": "/nix/store/9lqj4lm9q94a0c9zn1xby6n1brwhan79-jaunder-0.1.0/bin/jaunder",
+      "exec_start": "{ path=/nix/store/9lqj4lm9q94a0c9zn1xby6n1brwhan79-jaunder-0.1.0/bin/jaunder ; argv[]=/nix/store/9lqj4lm9q94a0c9zn1xby6n1brwhan79-jaunder-0.1.0/bin/jaunder serve ; ignore_errors=no ; start_time=[Fri 2026-09-11 20:43:56 UTC] ; stop_time=[n/a] ; pid=819 ; code=(null) ; status=0/0 }",
+      "package": {
+        "installable": "github:jaunder-org/jaunder/f6b26c2f9e68c82504b4758778ab2bb706e7cca7#jaunder",
+        "derivation": "/nix/store/9813q6x4g2aanpffaw4bcaffvb5crrmp-jaunder-0.1.0.drv",
+        "output_path": "/nix/store/9lqj4lm9q94a0c9zn1xby6n1brwhan79-jaunder-0.1.0",
+        "nar_hash": "sha256-7j1khrveJW61w1KsdP4vdbZ6KCMVjKyiX+DPCv8Q1/0=",
+        "executable_sha256": "d8f982bf03bfaa5a146d46bfcd5423432829d5ccc9577fbd29944679f1abfd41"
+      }
+    },
+    {
+      "deployment_id": "discover-source-postgres",
+      "backend": "postgres",
+      "revision": {
+        "commit": "f6b26c2f9e68c82504b4758778ab2bb706e7cca7",
+        "flake_ref": "github:jaunder-org/jaunder/f6b26c2f9e68c82504b4758778ab2bb706e7cca7"
+      },
+      "executable": "/nix/store/9lqj4lm9q94a0c9zn1xby6n1brwhan79-jaunder-0.1.0/bin/jaunder",
+      "exec_start": "{ path=/nix/store/9lqj4lm9q94a0c9zn1xby6n1brwhan79-jaunder-0.1.0/bin/jaunder ; argv[]=/nix/store/9lqj4lm9q94a0c9zn1xby6n1brwhan79-jaunder-0.1.0/bin/jaunder serve ; ignore_errors=no ; start_time=[Fri 2026-09-11 20:44:30 UTC] ; stop_time=[n/a] ; pid=813 ; code=(null) ; status=0/0 }",
+      "package": {
+        "installable": "github:jaunder-org/jaunder/f6b26c2f9e68c82504b4758778ab2bb706e7cca7#jaunder",
+        "derivation": "/nix/store/9813q6x4g2aanpffaw4bcaffvb5crrmp-jaunder-0.1.0.drv",
+        "output_path": "/nix/store/9lqj4lm9q94a0c9zn1xby6n1brwhan79-jaunder-0.1.0",
+        "nar_hash": "sha256-7j1khrveJW61w1KsdP4vdbZ6KCMVjKyiX+DPCv8Q1/0=",
+        "executable_sha256": "d8f982bf03bfaa5a146d46bfcd5423432829d5ccc9577fbd29944679f1abfd41"
+      }
+    },
+    {
+      "deployment_id": "discover-target-discover-source-postgres-sqlite",
+      "backend": "sqlite",
+      "revision": {
+        "commit": "f6b26c2f9e68c82504b4758778ab2bb706e7cca7",
+        "flake_ref": "github:jaunder-org/jaunder/f6b26c2f9e68c82504b4758778ab2bb706e7cca7"
+      },
+      "executable": "/nix/store/9lqj4lm9q94a0c9zn1xby6n1brwhan79-jaunder-0.1.0/bin/jaunder",
+      "exec_start": "{ path=/nix/store/9lqj4lm9q94a0c9zn1xby6n1brwhan79-jaunder-0.1.0/bin/jaunder ; argv[]=/nix/store/9lqj4lm9q94a0c9zn1xby6n1brwhan79-jaunder-0.1.0/bin/jaunder serve ; ignore_errors=no ; start_time=[Fri 2026-09-11 20:45:23 UTC] ; stop_time=[n/a] ; pid=770 ; code=(null) ; status=0/0 }",
+      "package": {
+        "installable": "github:jaunder-org/jaunder/f6b26c2f9e68c82504b4758778ab2bb706e7cca7#jaunder",
+        "derivation": "/nix/store/9813q6x4g2aanpffaw4bcaffvb5crrmp-jaunder-0.1.0.drv",
+        "output_path": "/nix/store/9lqj4lm9q94a0c9zn1xby6n1brwhan79-jaunder-0.1.0",
+        "nar_hash": "sha256-7j1khrveJW61w1KsdP4vdbZ6KCMVjKyiX+DPCv8Q1/0=",
+        "executable_sha256": "d8f982bf03bfaa5a146d46bfcd5423432829d5ccc9577fbd29944679f1abfd41"
+      }
+    },
+    {
+      "deployment_id": "discover-target-discover-source-postgres-postgres",
+      "backend": "postgres",
+      "revision": {
+        "commit": "f6b26c2f9e68c82504b4758778ab2bb706e7cca7",
+        "flake_ref": "github:jaunder-org/jaunder/f6b26c2f9e68c82504b4758778ab2bb706e7cca7"
+      },
+      "executable": "/nix/store/9lqj4lm9q94a0c9zn1xby6n1brwhan79-jaunder-0.1.0/bin/jaunder",
+      "exec_start": "{ path=/nix/store/9lqj4lm9q94a0c9zn1xby6n1brwhan79-jaunder-0.1.0/bin/jaunder ; argv[]=/nix/store/9lqj4lm9q94a0c9zn1xby6n1brwhan79-jaunder-0.1.0/bin/jaunder serve ; ignore_errors=no ; start_time=[Fri 2026-09-11 20:45:54 UTC] ; stop_time=[n/a] ; pid=819 ; code=(null) ; status=0/0 }",
+      "package": {
+        "installable": "github:jaunder-org/jaunder/f6b26c2f9e68c82504b4758778ab2bb706e7cca7#jaunder",
+        "derivation": "/nix/store/9813q6x4g2aanpffaw4bcaffvb5crrmp-jaunder-0.1.0.drv",
+        "output_path": "/nix/store/9lqj4lm9q94a0c9zn1xby6n1brwhan79-jaunder-0.1.0",
+        "nar_hash": "sha256-7j1khrveJW61w1KsdP4vdbZ6KCMVjKyiX+DPCv8Q1/0=",
+        "executable_sha256": "d8f982bf03bfaa5a146d46bfcd5423432829d5ccc9577fbd29944679f1abfd41"
+      }
+    }
+  ],
+  "backups": [
+    {
+      "source_backend": "sqlite",
+      "target_backend": "sqlite",
+      "format_version": 1,
+      "source_schema_version": 36,
+      "target_schema_version": 36,
+      "sha256": "b1f2bf91c3059c4da986dae31721f94d6b39fcec46689778faa258812a800f2c"
+    },
+    {
+      "source_backend": "sqlite",
+      "target_backend": "postgres",
+      "format_version": 1,
+      "source_schema_version": 36,
+      "target_schema_version": 36,
+      "sha256": "b1f2bf91c3059c4da986dae31721f94d6b39fcec46689778faa258812a800f2c"
+    },
+    {
+      "source_backend": "postgres",
+      "target_backend": "sqlite",
+      "format_version": 1,
+      "source_schema_version": 36,
+      "target_schema_version": 36,
+      "sha256": "de9d551700356d3f9f876e3493c63e9d20dcda14c616bc823cbb48e54473a317"
+    },
+    {
+      "source_backend": "postgres",
+      "target_backend": "postgres",
+      "format_version": 1,
+      "source_schema_version": 36,
+      "target_schema_version": 36,
+      "sha256": "de9d551700356d3f9f876e3493c63e9d20dcda14c616bc823cbb48e54473a317"
+    }
+  ],
+  "upgrades": [],
+  "lifecycle": [
+    {
+      "id": "workspace-create",
+      "outcome": "passed",
+      "duration_ms": 0
+    },
+    {
+      "id": "discover-source-sqlite-start",
+      "outcome": "passed",
+      "duration_ms": 39606
+    },
+    {
+      "id": "discover-source-sqlite-configure-base-url",
+      "outcome": "passed",
+      "duration_ms": 57
+    },
+    {
+      "id": "discover-source-sqlite-verify-proxy-security",
+      "outcome": "passed",
+      "duration_ms": 185
+    },
+    {
+      "id": "discover-target-discover-source-sqlite-sqlite-start",
+      "outcome": "passed",
+      "duration_ms": 18456
+    },
+    {
+      "id": "discover-target-discover-source-sqlite-sqlite-park",
+      "outcome": "passed",
+      "duration_ms": 1953
+    },
+    {
+      "id": "discover-target-discover-source-sqlite-postgres-start",
+      "outcome": "passed",
+      "duration_ms": 30516
+    },
+    {
+      "id": "discover-target-discover-source-sqlite-postgres-park",
+      "outcome": "passed",
+      "duration_ms": 2204
+    },
+    {
+      "id": "discover-source-sqlite-park",
+      "outcome": "passed",
+      "duration_ms": 2053
+    },
+    {
+      "id": "discover-source-postgres-start",
+      "outcome": "passed",
+      "duration_ms": 20226
+    },
+    {
+      "id": "discover-source-postgres-configure-base-url",
+      "outcome": "passed",
+      "duration_ms": 67
+    },
+    {
+      "id": "discover-source-postgres-verify-proxy-security",
+      "outcome": "passed",
+      "duration_ms": 195
+    },
+    {
+      "id": "discover-target-discover-source-postgres-sqlite-start",
+      "outcome": "passed",
+      "duration_ms": 18518
+    },
+    {
+      "id": "discover-target-discover-source-postgres-sqlite-park",
+      "outcome": "passed",
+      "duration_ms": 2053
+    },
+    {
+      "id": "discover-target-discover-source-postgres-postgres-start",
+      "outcome": "passed",
+      "duration_ms": 18538
+    },
+    {
+      "id": "discover-target-discover-source-postgres-postgres-park",
+      "outcome": "passed",
+      "duration_ms": 2153
+    },
+    {
+      "id": "discover-source-postgres-park",
+      "outcome": "passed",
+      "duration_ms": 2153
+    }
+  ],
+  "checks": [
+    {
+      "id": "browser-create",
+      "outcome": "passed",
+      "duration_ms": 3283
+    },
+    {
+      "id": "atompub",
+      "outcome": "passed",
+      "duration_ms": 18965
+    },
+    {
+      "id": "feeds",
+      "outcome": "passed",
+      "duration_ms": 18965
+    },
+    {
+      "id": "service-restart",
+      "outcome": "passed",
+      "duration_ms": 228
+    },
+    {
+      "id": "browser-read-only",
+      "outcome": "passed",
+      "duration_ms": 15682
+    },
+    {
+      "id": "vm-reboot",
+      "outcome": "passed",
+      "duration_ms": 36567
+    },
+    {
+      "id": "backup",
+      "outcome": "passed",
+      "duration_ms": 208
+    },
+    {
+      "id": "restore-sqlite-sqlite",
+      "outcome": "passed",
+      "duration_ms": 462
+    },
+    {
+      "id": "restore-sqlite-postgres",
+      "outcome": "passed",
+      "duration_ms": 654
+    },
+    {
+      "id": "restore-postgres-sqlite",
+      "outcome": "passed",
+      "duration_ms": 467
+    },
+    {
+      "id": "restore-postgres-postgres",
+      "outcome": "passed",
+      "duration_ms": 639
+    },
+    {
+      "id": "upgrade",
+      "outcome": "skipped",
+      "duration_ms": 0
+    }
+  ],
+  "gaps": [],
+  "findings": [],
+  "failure_classes": []
+}

@@ -25,6 +25,27 @@ export type SeedRecord = {
   marker: string;
 };
 
+/** Stable Rust-owned manifest emitted by `seed-sandbox-profile`. */
+export type SandboxSeedManifest = {
+  version: number;
+  posts: Array<{
+    author: string;
+    title: string;
+    slug: string;
+    body: string;
+    format: "markdown" | "org" | "html";
+    publishedAt: string | null;
+    visibility: "public" | "subscribers" | "private";
+  }>;
+  media: {
+    author: string;
+    filename: string;
+    sha256: string;
+    contentUrl: string;
+    sizeBytes: number;
+  } | null;
+};
+
 /** The subset `applySeededSession` needs — `fixtures.ts`'s `TestUser` also
  *  satisfies it. */
 export type SeededSession = Pick<
@@ -38,17 +59,21 @@ const SEED_APPLIED_KEY = "jaunder_seed_applied";
 /** The currently installed seeded-auth script for each context. */
 const seededScripts = new WeakMap<BrowserContext, Disposable>();
 
-/** Run a `test-support` session subcommand and parse its one-line JSON
- *  record. `--db` comes from `JAUNDER_DB` in the environment in both
- *  harnesses, exactly like `seedPostsViaTool` below. A non-zero exit throws
- *  with the tool's stderr, surfacing a seed failure as a test error. */
+/** Runs a JSON-emitting `test-support` command. */
+function runSeedToolJson(args: string[]): Record<string, unknown> {
+  const seedProcess = process.env.JAUNDER_E2E_SEED_PROCESS ?? "test-support";
+  return JSON.parse(
+    execFileSync(seedProcess, args, {
+      stdio: "pipe",
+      env: process.env,
+      encoding: "utf8",
+    }),
+  ) as Record<string, unknown>;
+}
+
+/** Run a `test-support` session subcommand and map its Rust field names once. */
 function runSeedTool(args: string[]): SeedRecord {
-  const stdout = execFileSync("test-support", args, {
-    stdio: "pipe",
-    env: process.env,
-    encoding: "utf8",
-  });
-  const raw = JSON.parse(stdout) as Record<string, unknown>;
+  const raw = runSeedToolJson(args);
   return {
     username: raw.username as string,
     userId: raw.user_id as number,
@@ -58,6 +83,22 @@ function runSeedTool(args: string[]): SeedRecord {
     markerKey: raw.marker_key as string,
     marker: raw.marker as string,
   };
+}
+
+/** Seed a sandbox profile once and return its exact Rust-owned manifest. */
+export async function seedSandboxProfileViaTool(
+  profile: "standard" | "demo",
+): Promise<SandboxSeedManifest> {
+  return withTimedAction(
+    null,
+    "tool.sandbox.seed",
+    async () =>
+      runSeedToolJson([
+        "seed-sandbox-profile",
+        "--profile",
+        profile,
+      ]) as unknown as SandboxSeedManifest,
+  );
 }
 
 /** Create a fresh account + session out-of-band (real storage path, genuinely

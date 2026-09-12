@@ -12,7 +12,7 @@
  * regenerates.
  */
 
-import type { Page } from "@playwright/test";
+import type { APIRequestContext, Page } from "@playwright/test";
 import { pollUntil, pollUntilOrUndefined } from "./polling";
 
 export type FeedResponse = { body: string; contentType: string };
@@ -56,8 +56,10 @@ export const FEED_POLL_TIMEOUT_MS = 25_000;
  * where a `not.toContain(...)` check passes *vacuously* — a green assertion that
  * proves nothing.
  */
+type FeedRequester = Pick<APIRequestContext, "get">;
+
 async function pollFeed(
-  page: Page,
+  requester: FeedRequester,
   url: string,
   marker: string,
   timeoutMs: number,
@@ -66,7 +68,7 @@ async function pollFeed(
   const found = await pollUntilOrUndefined(
     "wait.feed",
     async () => {
-      const res = await page.request.get(url);
+      const res = await requester.get(url);
       if (res.status() !== 200) return undefined;
       const seen = {
         body: await res.text(),
@@ -89,12 +91,12 @@ async function pollFeed(
  * timeout message, which carries the last body seen, is the failure they want.
  */
 export async function fetchFeedContaining(
-  page: Page,
+  requester: FeedRequester,
   url: string,
   marker: string,
   timeoutMs = FEED_POLL_TIMEOUT_MS,
 ): Promise<FeedResponse> {
-  const snapshot = await pollFeed(page, url, marker, timeoutMs);
+  const snapshot = await pollFeed(requester, url, marker, timeoutMs);
   if (!snapshot.matched) {
     throw new Error(
       `feed ${url} never contained "${marker}" within ${timeoutMs}ms; ` +
@@ -114,10 +116,10 @@ export async function fetchFeedContaining(
  * second assertion and an empty body would make it pass vacuously.
  */
 export async function fetchFeedSnapshot(
-  page: Page,
+  requester: FeedRequester,
   url: string,
   marker: string,
   timeoutMs = FEED_POLL_TIMEOUT_MS,
 ): Promise<FeedSnapshot> {
-  return pollFeed(page, url, marker, timeoutMs);
+  return pollFeed(requester, url, marker, timeoutMs);
 }

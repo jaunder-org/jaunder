@@ -38,6 +38,9 @@ const chromiumLaunchOptions = {
 const visualTag = /@visual/;
 const diagnosticCoverage = Boolean(process.env.JAUNDER_WASM_COVERAGE_OUT);
 const measurementMode = Boolean(process.env.JAUNDER_WASM_COVERAGE_MODE);
+const productionBaselineTls = process.env.JAUNDER_PRODUCTION_BASELINE_TLS
+  ? { ignoreHTTPSErrors: true }
+  : {};
 const diagnosticCoverageSpec = /wasm-coverage\.spec\.ts/;
 const measurementSpec = /wasm-coverage-measure\.spec\.ts/;
 const diagnosticSpec = measurementMode
@@ -84,20 +87,18 @@ export default defineConfig({
     screenshot: "only-on-failure",
     ...(traceParent ? { extraHTTPHeaders: { traceparent: traceParent } } : {}),
   },
-  // admin-site, SMTP, theme, media, and invite mutate global site-config
-  // singletons (site.title/base_url/theme; SMTP settings; media.uploads_enabled;
-  // site.registration_policy, #433). Playwright's `fullyParallel: false` is only
-  // intra-file, so the mutating files live in dependent projects to prevent cross-file
-  // overlap under workers=2. Each gated browser runs its zero-retry visual contracts
-  // first, the parallel ordinary tests second, then the serial admin-settings group,
-  // then invite. Reciprocal tag filters keep each behavioral test in exactly one
-  // project. At workers=1 the ordinary/admin serialization is inert. WebKit is
-  // host-only and excludes visual tests.
+  // admin-site, SMTP, theme, media, invite, and production-baseline mutate global
+  // site configuration or must restore it before dependent projects. Playwright's
+  // `fullyParallel: false` is only intra-file, so these files live in dependent
+  // projects to prevent cross-file overlap under workers=2. Each gated browser
+  // runs visual contracts first, parallel ordinary tests second, then the serial
+  // admin-site group, then invite. Reciprocal filters run every spec exactly once.
+  // WebKit excludes the baseline because no serial dependency chain owns it.
   projects: [
     {
       name: "chromium-visual",
       testIgnore: ignoreDiagnosticCoverage(
-        /(admin-site|smtp|invite|media)\.spec\.ts/,
+        /(admin-site|smtp|invite|media|production-baseline-flow)\.spec\.ts/,
       ),
       grep: visualTag,
       retries: 0,
@@ -109,7 +110,7 @@ export default defineConfig({
     {
       name: "chromium",
       testIgnore: ignoreDiagnosticCoverage(
-        /(admin-site|smtp|theme|invite|media)\.spec\.ts/,
+        /(admin-site|smtp|theme|invite|media|production-baseline-flow)\.spec\.ts/,
       ),
       grepInvert: visualTag,
       ...(diagnosticCoverage
@@ -118,11 +119,13 @@ export default defineConfig({
       use: {
         ...devices["Desktop Chrome"],
         launchOptions: chromiumLaunchOptions,
+        ...productionBaselineTls,
       },
     },
     {
       name: "chromium-admin-site",
-      testMatch: /(admin-site|smtp|theme|media)\.spec\.ts/,
+      testMatch:
+        /(admin-site|smtp|theme|media|production-baseline-flow)\.spec\.ts/,
       grepInvert: visualTag,
       fullyParallel: false,
       workers: 1,
@@ -146,7 +149,7 @@ export default defineConfig({
     {
       name: "firefox-visual",
       testIgnore: ignoreDiagnosticCoverage(
-        /(admin-site|smtp|invite|media)\.spec\.ts/,
+        /(admin-site|smtp|invite|media|production-baseline-flow)\.spec\.ts/,
       ),
       grep: visualTag,
       retries: 0,
@@ -158,7 +161,7 @@ export default defineConfig({
     {
       name: "firefox",
       testIgnore: ignoreDiagnosticCoverage(
-        /(admin-site|smtp|theme|invite|media)\.spec\.ts/,
+        /(admin-site|smtp|theme|invite|media|production-baseline-flow)\.spec\.ts/,
       ),
       grepInvert: visualTag,
       ...(diagnosticCoverage
@@ -171,7 +174,8 @@ export default defineConfig({
     },
     {
       name: "firefox-admin-site",
-      testMatch: /(admin-site|smtp|theme|media)\.spec\.ts/,
+      testMatch:
+        /(admin-site|smtp|theme|media|production-baseline-flow)\.spec\.ts/,
       grepInvert: visualTag,
       fullyParallel: false,
       workers: 1,
@@ -195,7 +199,7 @@ export default defineConfig({
     {
       name: "webkit",
       testIgnore: ignoreDiagnosticCoverage(
-        /(admin-site|smtp|theme|invite|media)\.spec\.ts/,
+        /(admin-site|smtp|theme|invite|media|production-baseline-flow)\.spec\.ts/,
       ),
       grepInvert: visualTag,
       use: { ...devices["Desktop Safari"] },

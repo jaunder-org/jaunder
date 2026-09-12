@@ -2222,16 +2222,38 @@ longer a deployment artifact** — the binary embeds the bundle — and is retai
 only so `cargo xtask audit-wasm` can build `.#site` and inspect the bundle for
 size analysis (`nix/packages.nix:296-305`,
 [declarative NixOS deployment and package outputs](adr/0142-declarative-nixos-deployment-package-outputs.md)).
-The `services.jaunder` module (`nix/nixos.nix:36-94`) creates a dedicated
+The `services.jaunder` module (`nix/nixos.nix:21-97`) has only ADR-0142's
+operator options: `enable`, `bind`, `db`, and `prod`. It creates a dedicated
 `jaunder` user/group, runs under systemd from `StateDirectory=jaunder` with
 `WorkingDirectory=%S/jaunder`, passes `bind` and `db` through unconditionally
-and `JAUNDER_ENV=prod` only when `prod` is set (`nix/nixos.nix:72-82`), runs
+and `JAUNDER_ENV=prod` only when `prod` is set (`nix/nixos.nix:70-80`), runs
 `jaunder init --db "$JAUNDER_DB" --skip-if-exists` in `preStart`
-(`nix/nixos.nix:81-89`), and starts `jaunder serve`. It has no module option for
-PostgreSQL password injection; operators supply `JAUNDER_DB_PASSWORD[_FILE]`
-through the service manager when needed. There is no site symlink; the module
-comment names #237 as the reason. Two `nixosConfigurations` test VMs
-(interactive, PostgreSQL) exist for development only.
+(`nix/nixos.nix:83-85`), and starts `jaunder serve`. It has no module option for
+package selection or PostgreSQL password injection; operators supply
+`JAUNDER_DB_PASSWORD[_FILE]` through the service manager when needed. There is
+no site symlink; the module comment names #237 as the reason. Two
+`nixosConfigurations` test VMs (interactive, PostgreSQL) exist for development
+only.
+
+**Production baseline qualification.** The opt-in host-only
+`cargo xtask production-baseline` boundary resolves immutable upstream
+revisions, owns Nix builds, VM lifecycle, the stable local HTTPS proxy, workflow
+ordering, and dated sanitized evidence. `productionBaselineVm` supplies its
+immutable package while it constructs its qualification VM through an internal
+module seam; this is not a `services.jaunder` option or other supported operator
+interface. It adds no lifecycle output to `checks`; Nix never invokes xtask.
+Discovery and non-release acceptance execute the shared Chromium Playwright
+behavior flow over fresh SQLite and PostgreSQL deployments, including restart,
+reboot, and all four exact-schema restore directions. Completed evidence is
+JSON-authoritative, Markdown-derived, and atomically retained only as an exact
+summary pair under `docs/evidence/production-baseline/`; raw state and generated
+secrets remain in the restricted gitignored workspace. The operator contract and
+its explicit non-claims live in
+[the production baseline runbook](production-baseline.md). This is an opt-in
+qualification surface, not a public CA/DNS, performance, or release claim
+([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md),
+[ADR-0142](adr/0142-declarative-nixos-deployment-package-outputs.md), and
+[ADR-0174](adr/0174-backup-format-and-schema-compatibility.md)).
 
 ## Emacs client
 

@@ -22,6 +22,7 @@ xshell = "0.2.7"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 anyhow = "1.0.104"
+jsonschema = { version = "0.40", default-features = false }
 flate2 = "1.1.10"
 tar = "0.4.46"
 brotli = "9.0.0"
