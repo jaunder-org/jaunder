@@ -13,6 +13,7 @@ let
     leptosfmt
     wasm-bindgen-cli
     e2ePackage
+    appOfflineCargoHome
     ;
 
   # Everything `cargo xtask validate` needs on the host (toolchain + the
@@ -94,6 +95,9 @@ let
     # on the host system's own TZDIR (which masked this locally). Mirrors
     # the ert-check derivation's TZDIR (#160).
     TZDIR = "${pkgs.tzdata}/share/zoneinfo";
+    # Host checks that spawn Cargo for the product workspace use the same
+    # reviewed, offline dependency closure as the sandboxed static checks.
+    JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME = "${appOfflineCargoHome}";
     # Store paths for `devtool provision-node-modules`. Exported as env
     # vars (rather than baked into the shellHook) so they survive `cd`
     # into a worktree — that is what lets `devtool check tsc` re-run the
