@@ -360,8 +360,6 @@
  align-items: center;
 }
 
-
-
 .j-nav {
  display: flex;
  flex-direction: column;
@@ -391,8 +389,6 @@
  border-radius: 4px;
  flex-shrink: 0;
 }
-
-
 
 /* ─── sidebar footer ─── */
 .j-sb-foot {
@@ -542,10 +538,6 @@
  width: 100%;
 }
 
-/* The body control's wrapper. `ValidatedTextarea` wraps the control in a `<label>`
-   (#860), so that label — not the textarea — is now the flex item of the composer
-   column. Restate the column layout one level down, or the body field and the format
-   toggle collapse together. */
 .j-composer-field {
  display: flex;
  flex-direction: column;
@@ -558,11 +550,6 @@
  align-items: center;
  gap: 8px;
  flex-wrap: wrap;
-}
-
-.j-format-toggle {
- display: flex;
- gap: 4px;
 }
 
 .j-tag {
@@ -1043,6 +1030,12 @@
  }
 }
 
+.j-compose-options {
+ display: flex;
+ flex-direction: column;
+ gap: 14px;
+}
+
 .j-compose-editor {
  font-size: 18px;
  line-height: 1.55;
@@ -1124,6 +1117,34 @@
 
 .j-switch.is-on .j-switch-knob {
  left: 14px;
+}
+
+@media (max-width: 720px) {
+ .j-composer {
+  padding: 16px;
+ }
+
+ .j-compose-grid {
+  grid-template-columns: 1fr;
+  overflow: auto;
+ }
+
+ .j-compose-body,
+ .j-edit-form-body {
+  padding: 20px 16px;
+  overflow: visible;
+ }
+
+ .j-compose-aside {
+  border-top: 1px var(--border-style) var(--line);
+  border-left: 0;
+  padding: 20px 16px;
+  overflow: visible;
+ }
+
+ .j-composer-toolbar {
+  align-items: flex-end;
+ }
 }
 
 /* ─── settings ─── */
@@ -1212,6 +1233,29 @@
  color: var(--ink-soft);
  font-size: 12.5px;
  line-height: 1.4;
+}
+
+/* ─── composer form groups ─── */
+.j-composer-group {
+ margin: 0;
+ padding: 0;
+ border: 0;
+}
+
+.j-composer-group>.j-form-help,
+.j-creation-schedule-editor>.j-form-help {
+ margin: 0;
+}
+
+.j-audience-named,
+.j-creation-schedule-editor {
+ display: flex;
+ flex-direction: column;
+ gap: 7px;
+}
+
+.j-creation-schedule>p {
+ margin: 0;
 }
 
 .j-form-input {

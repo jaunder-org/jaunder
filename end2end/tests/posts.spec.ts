@@ -583,31 +583,59 @@ test("authenticated user can save a draft through the UI", async ({
   await expect(page.locator(SEL.saveSummary)).toContainText("Slug: draft-slug");
 });
 
-test("full composer: format toggle round-trips to the rendered post", async ({
+test("full composer: narrow layout stays reachable and format round-trips", async ({
   registeredPage,
 }) => {
   test.slow();
   const page = await registeredPage("/posts/new");
-  await waitForSelector(page, ".j-seg");
+  await page.setViewportSize({ width: 720, height: 600 });
 
-  const markdownBtn = page.locator(SEL.formatButton("Markdown"));
-  const orgBtn = page.locator(SEL.formatButton("Org"));
+  await expect(page.getByLabel("Body", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Slug", { exact: true })).toBeVisible();
+  const publicationTime = page.getByRole("group", {
+    name: "Publish at (optional)",
+  });
+  await expect(
+    publicationTime.getByRole("button", { name: "Set publication time…" }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Summary", { exact: true })).toBeVisible();
+  await expect(page.getByText("Tags", { exact: true })).toBeVisible();
+  const tags = page.getByLabel("Tags", { exact: true });
+  await expect(tags).toBeVisible();
+  await expect(tags).toHaveAttribute("placeholder", "Add tag…");
+
+  const audience = page.getByRole("group", { name: "Audience" });
+  await expect(audience).toBeVisible();
+  await expect(
+    audience.getByRole("combobox", { name: "Audience" }),
+  ).toBeVisible();
+
+  const format = page.getByRole("group", { name: "Format" });
+  await expect(format).toBeVisible();
+  await expect(format).toContainText("Body");
+  const markdownBtn = format.getByRole("button", { name: "Markdown" });
+  const orgBtn = format.getByRole("button", { name: "Org" });
 
   // Markdown is the default (ComposeState::default, compose_state.rs:54).
-  await expect(markdownBtn).toHaveClass(/is-selected/);
-  await expect(orgBtn).not.toHaveClass(/is-selected/);
+  await expect(markdownBtn).toHaveAttribute("aria-pressed", "true");
+  await expect(orgBtn).toHaveAttribute("aria-pressed", "false");
+
+  // Native button keyboard activation must change the semantic selected state.
+  await orgBtn.focus();
+  await page.keyboard.press("Space");
+  await expect(orgBtn).toHaveAttribute("aria-pressed", "true");
+  await expect(markdownBtn).toHaveAttribute("aria-pressed", "false");
+
+  const publishButton = page.locator(SEL.publishButton("true"));
+  await publishButton.scrollIntoViewIfNeeded();
+  await expect(publishButton).toBeInViewport();
 
   const summary = await composePost(page, {
     body: FORMAT_PROBE_BODY,
     publish: true,
-    format: "org",
   });
 
-  // The toggle moved...
-  await expect(orgBtn).toHaveClass(/is-selected/);
-  await expect(markdownBtn).not.toHaveClass(/is-selected/);
-
-  // ...and the saved post really is Org, not merely highlighted as such.
+  // The saved post really is Org, not merely a selected control.
   await followPermalink(page, summary);
   await expectRenderedFormat(page, "org");
 });
@@ -672,7 +700,7 @@ test("authenticated user can edit a draft post", async ({ registeredPage }) => {
   );
 });
 
-test("edit page: format toggle prefills from the post and round-trips a change", async ({
+test("edit page: format control prefills accessibly and round-trips a change", async ({
   registeredPage,
 }) => {
   test.slow();
@@ -698,20 +726,36 @@ test("edit page: format toggle prefills from the post and round-trips a change",
   // Matched loosely: the stored body is canonicalized on save, which appends a
   // trailing newline (`normalize_body_whitespace`). This guard is about the body
   // arriving at all, so pinning the exact whitespace would only make it brittle.
-  await expect(page.locator(SEL.postBody)).toHaveValue(/^\*emphasis\*\s*$/);
+  await expect(page.getByLabel("Body", { exact: true })).toHaveValue(
+    /^\*emphasis\*\s*$/,
+  );
+  await expect(page.getByLabel("Slug", { exact: true })).toBeVisible();
+  await expect(
+    page.getByLabel("Publish at (optional)", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Summary", { exact: true })).toBeVisible();
+  await expect(page.getByText("Tags", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Tags", { exact: true })).toBeVisible();
+  await expect(
+    page
+      .getByRole("group", { name: "Audience" })
+      .getByRole("combobox", { name: "Audience" }),
+  ).toBeVisible();
 
-  const markdownBtn = page.locator(SEL.formatButton("Markdown"));
-  const orgBtn = page.locator(SEL.formatButton("Org"));
+  const format = page.getByRole("group", { name: "Format" });
+  await expect(format).toBeVisible();
+  await expect(format).toContainText("Body");
+  const markdownBtn = format.getByRole("button", { name: "Markdown" });
+  const orgBtn = format.getByRole("button", { name: "Org" });
 
-  // Prefill: the toggle shows the *stored* format, which the default cannot
-  // produce.
-  await expect(orgBtn).toHaveClass(/is-selected/);
-  await expect(markdownBtn).not.toHaveClass(/is-selected/);
+  // Prefill: the stored format, not the default, is exposed programmatically.
+  await expect(orgBtn).toHaveAttribute("aria-pressed", "true");
+  await expect(markdownBtn).toHaveAttribute("aria-pressed", "false");
 
   // Switch back to Markdown and save.
   await click(page, SEL.formatButton("Markdown"));
-  await expect(markdownBtn).toHaveClass(/is-selected/);
-  await expect(orgBtn).not.toHaveClass(/is-selected/);
+  await expect(markdownBtn).toHaveAttribute("aria-pressed", "true");
+  await expect(orgBtn).toHaveAttribute("aria-pressed", "false");
 
   await click(page, SEL.publishButton("false"));
   await waitForSelector(page, SEL.saveSummary);
@@ -726,11 +770,10 @@ test("edit page pre-selects the post's current audience", async ({
 }) => {
   test.slow();
   // Characterization test (#643): opening the editor must render the post's
-  // stored targeting — `#audience-base` set to the saved base and the
-  // named-audience checkbox pre-checked. Pins the seed behavior before it is
-  // refactored from a post-mount Effect into the Suspense block; must pass
-  // on the current (unrefactored) code too. The picker renders only for
-  // unpublished posts, so this targets a draft.
+  // stored base audience and named-audience checkbox selection. Pins the seed
+  // behavior before it is refactored from a post-mount Effect into the Suspense
+  // block; must pass on the current (unrefactored) code too. The picker renders
+  // only for unpublished posts, so this targets a draft.
 
   // A named audience must exist for its checkbox to appear in the picker.
   const page = await registeredPage("/audiences");
@@ -743,13 +786,21 @@ test("edit page pre-selects the post's current audience", async ({
   // Reach the full composer through the authenticated sidebar rather than
   // taking a second document load after managing the audience.
   await openComposerFromSidebar(page);
-  await expect(page.getByText("No named audiences.")).toHaveCount(0);
+  const audience = page.getByRole("group", { name: "Audience" });
+  await expect(audience).toContainText("Choose who can see");
+  await expect(
+    audience.getByText("Also share with", { exact: true }),
+  ).toBeVisible();
+  const audienceBase = audience.getByRole("combobox", { name: "Audience" });
+  const confidants = audience.getByRole("checkbox", { name: "Confidants" });
+  await expect(audienceBase).toBeVisible();
+  await expect(audienceBase).toHaveValue("private");
+  await expect(confidants).toBeDisabled();
+
+  await audienceBase.selectOption("subscribers");
+  await expect(confidants).toBeEnabled();
+  await confidants.check();
   await page.fill(SEL.postBody, "# Targeted Draft\n\nbody for targeted draft");
-  await page.selectOption("#audience-base", "subscribers");
-  await page
-    .locator("label", { hasText: "Confidants" })
-    .locator('input[type="checkbox"]')
-    .check();
   await expect(page.locator(SEL.publishButton("false"))).toBeEnabled();
   await click(page, SEL.publishButton("false"));
   await waitForSelector(page, SEL.saveSummary);
@@ -757,16 +808,13 @@ test("edit page pre-selects the post's current audience", async ({
   // Reach the draft's edit page through the shared in-app navigation hops.
   await followPermalink(page, page.locator(SEL.saveSummary));
   await openEditor(page);
-  await waitForSelector(page, "#audience-base");
-  await expect(page.getByText("No named audiences.")).toHaveCount(0);
-
-  // The seed pre-selects the stored base...
-  await expect(page.locator("#audience-base")).toHaveValue("subscribers");
-  // ...and pre-checks the named-audience checkbox.
+  const editedAudience = page.getByRole("group", { name: "Audience" });
+  const editedAudienceBase = editedAudience.getByRole("combobox", {
+    name: "Audience",
+  });
+  await expect(editedAudienceBase).toHaveValue("subscribers");
   await expect(
-    page
-      .locator("label", { hasText: "Confidants" })
-      .locator('input[type="checkbox"]'),
+    editedAudience.getByRole("checkbox", { name: "Confidants" }),
   ).toBeChecked();
   await expect(page.locator(SEL.publishButton("false"))).toBeEnabled();
 });
@@ -806,13 +854,16 @@ test("live editor can reschedule and atomically save edits while unpublishing", 
   await openEditor(page);
 
   await expect(page.locator(SEL.postSlug)).not.toBeVisible();
-  await expect(page.locator(SEL.publishAt)).toBeVisible();
-  await expect(page.locator(SEL.publishAt)).not.toHaveValue("");
+  const publicationTime = page.getByLabel("Publication time (local)", {
+    exact: true,
+  });
+  await expect(publicationTime).toBeVisible();
+  await expect(publicationTime).not.toHaveValue("");
   await expect(page.locator(SEL.publishButton("false"))).toHaveText(
     "Unpublish",
   );
 
-  await page.fill(SEL.publishAt, FUTURE_DATETIME_LOCAL);
+  await publicationTime.fill(FUTURE_DATETIME_LOCAL);
   await click(page, SEL.publishButton("true"));
   await page.waitForURL((url) => !url.pathname.endsWith("/edit"));
 
@@ -1343,40 +1394,41 @@ test("inline composer: flash clears when user starts typing", async ({
   await expect(page.locator(".j-composer p.success")).toHaveCount(0);
 });
 
-test("inline composer: format toggle round-trips to the rendered post", async ({
+test("inline composer: format toggle is named and keyboard-operable", async ({
   registeredPage,
 }) => {
   test.slow();
   const page = await registeredPage("/app");
   await waitForSelector(page, ".j-composer");
 
-  // Markdown is active by default.
-  const markdownBtn = page.locator(SEL.formatButton("Markdown"));
-  const orgBtn = page.locator(SEL.formatButton("Org"));
-  await expect(markdownBtn).toHaveClass(/is-selected/);
-  await expect(orgBtn).not.toHaveClass(/is-selected/);
+  const composer = page.locator(".j-composer");
+  await expect(composer.getByLabel("Body", { exact: true })).toBeVisible();
+  await expect(composer.getByLabel("Summary", { exact: true })).toBeVisible();
+  await expect(composer.getByText("Tags", { exact: true })).toBeVisible();
+  const tags = composer.getByLabel("Tags", { exact: true });
+  await expect(tags).toBeVisible();
+  await expect(tags).toHaveAttribute("placeholder", "Add tag…");
 
-  // Click Org to switch.
+  const format = composer.getByRole("group", { name: "Format" });
+  await expect(format).toBeVisible();
+  await expect(format).toContainText("Body");
+  const markdownBtn = format.getByRole("button", { name: "Markdown" });
+  const orgBtn = format.getByRole("button", { name: "Org" });
+  await expect(markdownBtn).toHaveAttribute("aria-pressed", "true");
+  await expect(orgBtn).toHaveAttribute("aria-pressed", "false");
+
   await page.fill(`.j-composer ${SEL.postBody}`, FORMAT_PROBE_BODY);
-  await click(page, SEL.formatButton("Org"));
-  await expect(orgBtn).toHaveClass(/is-selected/);
-  await expect(markdownBtn).not.toHaveClass(/is-selected/);
+  await orgBtn.focus();
+  await page.keyboard.press("Enter");
+  await expect(orgBtn).toHaveAttribute("aria-pressed", "true");
+  await expect(markdownBtn).toHaveAttribute("aria-pressed", "false");
 
-  // ...and the choice reaches the saved post, not just the highlight.
+  // The compact composer still persists the selected format.
   await click(page, `.j-composer ${SEL.publishButton("true")}`);
-
-  // The compact composer's flash *is* the permalink anchor
-  // (component.rs:717-718) — no `.j-save-summary` here, so this is the one
-  // surface `followPermalink` does not serve. It is also transient: a 30s
-  // set_timeout (:696) plus an on_input reset (:710), so move on it directly.
   const flashLink = page.locator(".j-composer p.success a");
   await flashLink.waitFor();
   const permalinkHref = (await flashLink.getAttribute("href"))!;
   expect(permalinkHref).toBeTruthy();
-  // `article.j-post` would be a barrier that waits for nothing here: the post we
-  // just published is already on the /app timeline. The permalink page wraps its
-  // article in `.j-page` (component.rs:887-888) and the timeline does not
-  // (timeline/component.rs:150), so that pairing is unique to the destination.
   await navigateInApp(page, () => flashLink.click(), {
     url: permalinkHref,
     ready: ".j-page article.j-post",
@@ -2173,8 +2225,8 @@ test.describe("scheduled editor local time", () => {
 test("scheduling from the edit page shows a Scheduled-for badge on the drafts page", async ({
   registeredPage,
 }) => {
-  // The editor renders the same semantically named, implicitly labelled schedule
-  // control the composer does (`ComposeOptions`, #863).
+  // The editor renders the same accessible schedule control the composer does
+  // (`ComposeOptions`, #863).
   // Mirrors the composer-side test above, with one deliberate
   // difference in the settle step: a *scheduled* publish sets `published_at` to a
   // future instant, so `EditSaveOutcome` takes its `Ok(_)` "Redirecting…" arm rather
@@ -2192,19 +2244,9 @@ test("scheduling from the edit page shows a Scheduled-for badge on the drafts pa
   await expect(page.locator(SEL.topbarHeading)).toHaveText("Edit Post");
 
   // The post is still a draft, so the slug and schedule controls are rendered.
-  const slug = page.locator(SEL.postSlug);
-  const slugLabel = page.locator(`label.j-field-row:has(${SEL.postSlug})`);
-  await expect(slugLabel).toContainText("Slug");
-  await expect(slug).not.toHaveAttribute("id", /.+/);
-  await expect(slugLabel).not.toHaveAttribute("for", /.+/);
-
-  const schedule = page.locator(SEL.publishAt);
-  const scheduleLabel = page.locator(
-    `label.j-field-label:has(${SEL.publishAt})`,
-  );
-  await expect(scheduleLabel).toContainText("Publish at (optional)");
-  await expect(schedule).not.toHaveAttribute("id", /.+/);
-  await expect(scheduleLabel).not.toHaveAttribute("for", /.+/);
+  await expect(page.getByLabel("Slug", { exact: true })).toBeVisible();
+  const schedule = page.getByLabel("Publish at (optional)", { exact: true });
+  await expect(schedule).toBeVisible();
   await schedule.fill(FUTURE_DATETIME_LOCAL);
   await click(page, SEL.publishButton("true"));
 

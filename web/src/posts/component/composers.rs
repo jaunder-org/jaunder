@@ -3,7 +3,7 @@ use leptos::prelude::*;
 use crate::auth;
 use crate::avatar::Avatar;
 use crate::error::WebError;
-use crate::forms::{self, Field, ValidatedBareInput, ValidatedTextarea};
+use crate::forms::{Field, ValidatedInput, ValidatedTextarea};
 use crate::icon::{IconButtonContent, Icons};
 use crate::media::MediaUpload;
 use crate::posts;
@@ -24,39 +24,48 @@ use common::username::Username;
 use super::audience::AudiencePickerWithState;
 use super::{audience, support};
 
-/// The `.j-seg` Markdown/Org format toggle, shared by every post editor. Renders one
-/// button per user-selectable `PostFormat` — those carrying a `strum` editor message;
-/// `Html` has none (renderer-internal, #445), so it is filtered out. Adding a format is
-/// a one-attribute change on `PostFormat`, not new markup here.
+/// The Markdown/Org format group shared by every post editor. Renders one button per
+/// user-selectable `PostFormat` — those carrying a `strum` editor message; `Html` has none
+/// (renderer-internal, #445), so it is filtered out. Adding a format is a one-attribute change
+/// on `PostFormat`, not new markup here.
 #[component]
 fn FormatToggle(
     format: RwSignal<PostFormat>,
-    /// Extra inline style for the `.j-seg` wrapper (e.g. spacing). Omitted when unset.
+    /// Extra inline style for the field group (e.g. spacing). Omitted when unset.
     #[prop(optional, into)]
     style: Option<&'static str>,
 ) -> impl IntoView {
     use strum::{EnumMessage, VariantArray};
     view! {
-        <div class="j-seg" style=style>
-            {PostFormat::VARIANTS
-                .iter()
-                .copied()
-                .filter_map(|f| f.get_message().map(|label| (f, label)))
-                .map(|(f, label)| {
-                    view! {
-                        <button
-                            type="button"
-                            class=move || {
-                                if format.get() == f { "j-btn is-selected" } else { "j-btn" }
-                            }
-                            on:click=move |_| format.set(f)
-                        >
-                            {label}
-                        </button>
-                    }
-                })
-                .collect_view()}
-        </div>
+        <fieldset class="j-form-field j-composer-group" style=style aria-describedby="format-help">
+            <legend class="j-form-label">"Format"</legend>
+            <p id="format-help" class="j-form-help">
+                "Format controls how Jaunder interprets the Body."
+            </p>
+            <div class="j-seg">
+                {PostFormat::VARIANTS
+                    .iter()
+                    .copied()
+                    .filter_map(|f| f.get_message().map(|label| (f, label)))
+                    .map(|(f, label)| {
+                        view! {
+                            <button
+                                type="button"
+                                class=move || {
+                                    if format.get() == f { "j-btn is-selected" } else { "j-btn" }
+                                }
+                                aria-pressed=move || {
+                                    if format.get() == f { "true" } else { "false" }
+                                }
+                                on:click=move |_| format.set(f)
+                            >
+                                {label}
+                            </button>
+                        }
+                    })
+                    .collect_view()}
+            </div>
+        </fieldset>
     }
 }
 
@@ -322,9 +331,11 @@ fn CompactComposer(
                     }
                     rows=rows
                     placeholder=placeholder
+
                     textarea_class=""
                     on_input=on_input
                 />
+
             </div>
         </div>
         <CreateErrorFlash action=create_action />
@@ -382,6 +393,7 @@ fn FullComposer(
                     }
                     rows=rows
                     placeholder=placeholder
+
                     textarea_class="j-edit-form-textarea"
                 />
             </div>
@@ -713,26 +725,17 @@ fn CreationPostActions(
 
 /// Draft-only slug override control shared by the full composer and editor.
 ///
-/// The control is deliberately slug-specific: ADR-0065's generic labelled
-/// components remain the default for ordinary fields, while this options-aside row
-/// keeps its bespoke grid layout and direct `Field<Slug>` binding.
+/// It keeps the optional `Field<Slug>` binding, validation, and direct submit-state
+/// ownership local while using the shared stacked field chrome.
 #[component]
 pub(super) fn SlugOverrideInput(slug_field: Field<Slug>) -> impl IntoView {
     view! {
-        <label class="j-field-row" style="grid-template-columns:auto 1fr">
-            <span class="j-field-label">"Slug"</span>
-            <ValidatedBareInput<Slug>
-                name="slug_override"
-                field=slug_field
-                placeholder=Some("auto")
-                class=Some("j-field-val")
-            />
-            {forms::validated_error(
-                slug_field.error(),
-                Signal::derive(move || slug_field.is_touched()),
-                |msg| view! { <span class="error">{msg}</span> }.into_any(),
-            )}
-        </label>
+        <ValidatedInput<Slug>
+            label="Slug"
+            name="slug_override"
+            field=slug_field
+            placeholder="auto"
+        />
     }
 }
 
@@ -756,8 +759,8 @@ pub(super) fn ComposeOptions(
     named: RwSignal<NamedAudienceState>,
 ) -> impl IntoView {
     view! {
-        <div>
-            <div class="j-sb-head" style="padding:0 0 10px">
+        <div class="j-compose-options">
+            <div class="j-sb-head" style="padding:0">
                 "Options"
             </div>
             {match publication {
@@ -794,9 +797,7 @@ pub(super) fn ComposeOptions(
                         .into_any()
                 }
             }}
-            <div style="margin-top:10px">
-                <AudiencePickerWithState selection=state.audience named=named />
-            </div>
+            <AudiencePickerWithState selection=state.audience named=named />
         </div>
     }
 }
@@ -814,7 +815,14 @@ fn CreationScheduleControl(state: ComposeState, schedule: CreationSchedule) -> i
         schedule.error.set(None);
     };
     view! {
-        <div style="margin-top:10px">
+        <div
+            class="j-form-field j-creation-schedule"
+            role="group"
+            aria-labelledby="publish-at-label"
+        >
+            <span id="publish-at-label" class="j-form-label">
+                "Publish at (optional)"
+            </span>
             {move || {
                 if schedule.disclosed.get() {
                     view! { <CreationScheduleEditor state=state schedule=schedule /> }.into_any()
@@ -866,44 +874,46 @@ fn CreationScheduleEditor(state: ComposeState, schedule: CreationSchedule) -> im
         }
     };
     view! {
-        <p>"Publication time uses your browser's local timezone."</p>
-        <label class="j-field-label">
-            "Date"
-            <input
-                type="date"
-                name="publish_date"
-                class="j-field-val"
-                prop:value=schedule.date
-                on:input=move |ev| {
-                    let date = event_target_value(&ev);
-                    schedule.date.set(date.clone());
-                    if !date.is_empty() && schedule.time.get().is_empty() {
-                        schedule.time.set("00:00".to_owned());
+        <div class="j-creation-schedule-editor">
+            <p class="j-form-help">"Publication time uses your browser's local timezone."</p>
+            <label class="j-form-field">
+                <span class="j-form-label">"Date"</span>
+                <input
+                    type="date"
+                    name="publish_date"
+                    class="j-form-input"
+                    prop:value=schedule.date
+                    on:input=move |ev| {
+                        let date = event_target_value(&ev);
+                        schedule.date.set(date.clone());
+                        if !date.is_empty() && schedule.time.get().is_empty() {
+                            schedule.time.set("00:00".to_owned());
+                        }
+                        schedule.error.set(None);
                     }
-                    schedule.error.set(None);
-                }
-            />
-        </label>
-        <label class="j-field-label">
-            "Time"
-            <input
-                type="time"
-                name="publish_time"
-                class="j-field-val"
-                prop:value=schedule.time
-                on:input=move |ev| {
-                    schedule.time.set(event_target_value(&ev));
-                    schedule.error.set(None);
-                }
-            />
-        </label>
-        {move || schedule.error.get().map(|error| view! { <p class="error">{error}</p> })}
-        <button class="j-btn" type="button" on:click=apply>
-            "Apply"
-        </button>
-        <button class="j-btn" type="button" on:click=cancel>
-            "Cancel"
-        </button>
+                />
+            </label>
+            <label class="j-form-field">
+                <span class="j-form-label">"Time"</span>
+                <input
+                    type="time"
+                    name="publish_time"
+                    class="j-form-input"
+                    prop:value=schedule.time
+                    on:input=move |ev| {
+                        schedule.time.set(event_target_value(&ev));
+                        schedule.error.set(None);
+                    }
+                />
+            </label>
+            {move || schedule.error.get().map(|error| view! { <p class="error">{error}</p> })}
+            <button class="j-btn" type="button" on:click=apply>
+                "Apply"
+            </button>
+            <button class="j-btn" type="button" on:click=cancel>
+                "Cancel"
+            </button>
+        </div>
     }
 }
 
@@ -919,48 +929,46 @@ pub(super) fn ScheduleControl(
     schedule_error: Signal<Option<InvalidSchedule>>,
 ) -> impl IntoView {
     view! {
-        <div style="margin-top:10px">
-            {match publication_time {
-                Some(publication_time) => {
-                    view! {
-                        <label class="j-field-label">
-                            "Publication time (local)"
-                            <input
-                                type="datetime-local"
-                                name="publish_at"
-                                class="j-field-val"
-                                prop:value=publication_time.value
-                                on:input=move |ev| {
-                                    publication_time.set_input(event_target_value(&ev));
-                                }
-                            />
-                            {move || {
-                                schedule_error
-                                    .get()
-                                    .map(|err| {
-                                        view! { <span class="error">{err.to_string()}</span> }
-                                    })
-                            }}
-                        </label>
-                    }
-                        .into_any()
+        {match publication_time {
+            Some(publication_time) => {
+                view! {
+                    <label class="j-form-field">
+                        <span class="j-form-label">"Publication time (local)"</span>
+                        <input
+                            type="datetime-local"
+                            name="publish_at"
+                            class="j-form-input"
+                            prop:value=publication_time.value
+                            on:input=move |ev| {
+                                publication_time.set_input(event_target_value(&ev));
+                            }
+                        />
+                        {move || {
+                            schedule_error
+                                .get()
+                                .map(|err| {
+                                    view! { <span class="error">{err.to_string()}</span> }
+                                })
+                        }}
+                    </label>
                 }
-                None => {
-                    view! {
-                        <label class="j-field-label">
-                            "Publish at (optional)"
-                            <input
-                                type="datetime-local"
-                                name="publish_at"
-                                class="j-field-val"
-                                prop:value=state.publish_at
-                                on:input=move |ev| state.publish_at.set(event_target_value(&ev))
-                            />
-                        </label>
-                    }
-                        .into_any()
+                    .into_any()
+            }
+            None => {
+                view! {
+                    <label class="j-form-field">
+                        <span class="j-form-label">"Publish at (optional)"</span>
+                        <input
+                            type="datetime-local"
+                            name="publish_at"
+                            class="j-form-input"
+                            prop:value=state.publish_at
+                            on:input=move |ev| state.publish_at.set(event_target_value(&ev))
+                        />
+                    </label>
                 }
-            }}
-        </div>
+                    .into_any()
+            }
+        }}
     }
 }

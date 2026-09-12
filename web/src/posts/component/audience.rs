@@ -42,11 +42,17 @@ pub(super) fn AudiencePickerWithState(
     };
 
     view! {
-        <div class="j-field-row" style="grid-template-columns:auto 1fr">
-            <label class="j-field-label" for="audience-base">
-                "Audience"
-            </label>
-            <select id="audience-base" class="j-field-val" on:change=change_base>
+        <fieldset class="j-form-field j-composer-group" aria-describedby="audience-help">
+            <legend class="j-form-label">"Audience"</legend>
+            <p id="audience-help" class="j-form-help">
+                "Choose who can see this post. You can also share it with named audiences."
+            </p>
+            <select
+                id="audience-base"
+                class="j-form-input"
+                aria-label="Audience"
+                on:change=change_base
+            >
                 <For
                     // Each base variant is paired with its caption here, so the
                     // values and visible order cannot drift apart.
@@ -70,8 +76,8 @@ pub(super) fn AudiencePickerWithState(
                     }
                 />
             </select>
-        </div>
-        <NamedAudienceOptions named=named selection=selection />
+            <NamedAudienceOptions named=named selection=selection />
+        </fieldset>
     }
 }
 
@@ -143,8 +149,8 @@ fn NamedAudienceRows(
     };
 
     view! {
-        <div style="margin-top:8px">
-            <span class="j-field-label">"Also share with"</span>
+        <div class="j-audience-named">
+            <span class="j-form-label">"Also share with"</span>
             <For
                 each=audiences
                 key=|audience| audience.audience_id
