@@ -2225,7 +2225,7 @@ contains the production `elisp/*.el` modules rooted at `jaunder.el`, excluding
 packaged `plz` and the pinned `cmark` Emacs package transitively. Nixpkgs's
 `plz` provides its immutable Nix-store curl executable reference, so the
 Protocol Client adds no separate curl PATH propagation
-([Emacs Protocol Client flake package output](adr/drafts/emacs-protocol-client-flake-package-output.md)).
+([Emacs Protocol Client flake package output](adr/0191-emacs-protocol-client-flake-package-output.md)).
 `packages.jaunder` remains the deployable server-binary output. `packages.site`
 is **no longer a deployment artifact** — the binary embeds the bundle — and is
 retained only so `cargo xtask audit-wasm` can build `.#site` and inspect the
@@ -2273,7 +2273,7 @@ owns the wire format). It lives in the top-level `elisp/` directory as a single
 `jaunder` package and is directly consumable through the per-default-system
 `emacsPackages.${system}.jaunder` flake output; this is separate from the
 deployable `packages.jaunder` server binary
-([Emacs Protocol Client flake package output](adr/drafts/emacs-protocol-client-flake-package-output.md)).
+([Emacs Protocol Client flake package output](adr/0191-emacs-protocol-client-flake-package-output.md)).
 It is a first-class but separately-tested subproject
 ([ADR-0031](adr/0031-elisp-separately-tested-subproject.md)) with a self-booting
 live-server integration harness, `jaunder-test--with-live-server`
