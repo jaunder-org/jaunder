@@ -487,6 +487,57 @@
  min-width: 0;
 }
 
+.j-post-editor-panel {
+ display: flex;
+ flex-direction: column;
+ gap: 10px;
+ min-width: 0;
+ padding: 18px;
+ border: 1px var(--border-style) var(--line);
+ border-radius: var(--radius);
+ background: var(--surface);
+}
+
+.j-post-editor-media {
+ display: flex;
+ flex-direction: column;
+ align-items: flex-start;
+}
+
+.j-btn.is-icon {
+ position: relative;
+ display: inline-grid;
+ place-items: center;
+ width: 38px;
+ height: 38px;
+ padding: 0;
+}
+
+.j-button-tooltip {
+ position: absolute;
+ bottom: calc(100% + 6px);
+ left: 50%;
+ z-index: 20;
+ padding: 4px 7px;
+ color: var(--surface);
+ font-size: 11px;
+ font-family: var(--font-meta);
+ line-height: 1.2;
+ white-space: nowrap;
+ pointer-events: none;
+ visibility: hidden;
+ background: var(--ink);
+ border-radius: var(--radius-sm);
+ opacity: 0;
+ transform: translateX(-50%);
+}
+
+.j-btn.is-icon:hover .j-button-tooltip,
+.j-btn.is-icon:focus .j-button-tooltip {
+ visibility: visible;
+ opacity: 1;
+}
+
 .j-composer-body textarea {
  width: 100%;
 }
@@ -962,6 +1013,36 @@
  overflow: auto;
 }
 
+@media (max-width: 720px) {
+ .j-compose-grid {
+  grid-template-columns: minmax(0, 1fr);
+  overflow: auto;
+ }
+
+ .j-compose-body {
+  padding: 16px;
+  overflow: visible;
+ }
+
+ .j-compose-aside {
+  border-top: 1px var(--border-style) var(--line);
+  border-left: 0;
+  overflow: visible;
+ }
+
+ .j-composer {
+  padding: 14px 16px;
+ }
+
+ .j-composer-row {
+  gap: 10px;
+ }
+
+ .j-post-editor-panel {
+  padding: 14px;
+ }
+}
+
 .j-compose-editor {
  font-size: 18px;
  line-height: 1.55;
@@ -1389,25 +1470,7 @@
  flex-wrap: wrap;
 }
 
-/* ─── edit post form ─── */
-.j-edit-form-body {
- padding: 28px 32px;
- overflow: auto;
- background: var(--surface);
- display: flex;
- flex-direction: column;
- gap: 20px;
-}
-
-.j-edit-form-field {
- display: flex;
- flex-direction: column;
- gap: 6px;
-}
-
-.j-edit-form-field--body {
- flex: 1;
-}
+/* ─── shared form field chrome ─── */
 
 .j-edit-form-label {
  font-size: 12px;
@@ -1454,12 +1517,6 @@
  border-color: var(--accent);
 }
 
-.j-edit-form-actions {
- margin-top: auto;
- display: flex;
- flex-direction: column;
- gap: 8px;
-}
 
 /* ─── drafts list ─── */
 .j-draft-list {

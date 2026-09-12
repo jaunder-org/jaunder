@@ -19,7 +19,7 @@ use common::time::{self, UtcInstant};
 use common::{MutationOutcome, permalink_route::PermalinkRoute};
 
 use super::audience;
-use super::composers::{ComposeOptions, ComposerFields, MediaSection, PostSaveActions};
+use super::composers::{ComposeOptions, ComposerActions, ComposerCore};
 use super::display::PostCard;
 use super::support;
 
@@ -372,14 +372,18 @@ fn EditPostForm(
         );
     view! {
         <div class="j-compose-grid">
-            <div class="j-edit-form-body">
-                <ComposerFields
-                    body=state.body
-                    format=state.format
+            <div class="j-compose-body">
+                <ComposerCore
+                    state=state
+                    actions=ComposerActions::Save {
+                        publication: loaded_publication,
+                        disabled: save_disabled,
+                        unpublish_disabled,
+                        on_save: dispatch_update,
+                    }
                     rows=20
-                    field_class="j-edit-form-field j-edit-form-field--body"
+                    placeholder="Write something\u{2026}"
                     textarea_class="j-edit-form-textarea"
-                    show_seg=false
                 />
             </div>
             <aside class="j-compose-aside">
@@ -392,15 +396,6 @@ fn EditPostForm(
                     creation_schedule=None
                     named=named
                 />
-                <MediaSection />
-                <div class="j-edit-form-actions">
-                    <PostSaveActions
-                        publication=loaded_publication
-                        disabled=save_disabled
-                        unpublish_disabled=unpublish_disabled
-                        on_save=dispatch_update
-                    />
-                </div>
             </aside>
         </div>
     }

@@ -20,3 +20,16 @@ pub fn Icon(path: &'static str, #[prop(default = 16)] size: u32) -> impl IntoVie
         </svg>
     }
 }
+
+/// Shared icon-and-tooltip content for compact buttons with an external accessible name.
+#[component]
+pub fn IconButtonContent(path: &'static str, tooltip: &'static str) -> impl IntoView {
+    view! {
+        <span aria-hidden="true">
+            <Icon path=path />
+        </span>
+        <span class="j-button-tooltip" role="tooltip">
+            {tooltip}
+        </span>
+    }
+}

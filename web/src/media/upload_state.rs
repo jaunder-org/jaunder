@@ -128,6 +128,56 @@ impl UploadCallbacks {
     }
 }
 
+/// The upload button's complete visual and accessible presentation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UploadButtonPresentation {
+    Text(&'static str),
+    Icon {
+        accessible_name: &'static str,
+        tooltip: &'static str,
+    },
+}
+
+impl UploadButtonPresentation {
+    /// The shared button class, with the icon modifier when applicable.
+    #[must_use]
+    pub const fn class_name(self) -> &'static str {
+        match self {
+            Self::Text(_) => "j-btn",
+            Self::Icon { .. } => "j-btn is-icon",
+        }
+    }
+
+    /// The explicit accessible name required by icon-only buttons.
+    #[must_use]
+    pub const fn accessible_name(self) -> Option<&'static str> {
+        match self {
+            Self::Text(_) => None,
+            Self::Icon {
+                accessible_name, ..
+            } => Some(accessible_name),
+        }
+    }
+}
+
+/// Classify text and icon upload controls for idle and in-flight states.
+#[must_use]
+pub fn upload_button_presentation(icon_only: bool, uploading: bool) -> UploadButtonPresentation {
+    let label = if uploading {
+        "Uploading\u{2026}"
+    } else {
+        "Attach media"
+    };
+    if icon_only {
+        UploadButtonPresentation::Icon {
+            accessible_name: label,
+            tooltip: label,
+        }
+    } else {
+        UploadButtonPresentation::Text(label)
+    }
+}
+
 /// The reactive state of one upload control: the in-flight flag the button reads and
 /// the two inline-display signals.
 ///
@@ -468,6 +518,38 @@ mod tests {
         assert!(delete_invalidates_media_resources(&deleted));
         assert!(!delete_invalidates_media_resources(&refused));
         assert!(delete_invalidates_media_resources(&indeterminate));
+    }
+
+    #[test]
+    fn upload_button_presentation_covers_text_icon_and_busy_states() {
+        let text = upload_button_presentation(false, false);
+        assert_eq!(text, UploadButtonPresentation::Text("Attach media"));
+        assert_eq!(text.class_name(), "j-btn");
+        assert_eq!(text.accessible_name(), None);
+
+        assert_eq!(
+            upload_button_presentation(false, true),
+            UploadButtonPresentation::Text("Uploading\u{2026}")
+        );
+
+        let icon = upload_button_presentation(true, false);
+        assert_eq!(
+            icon,
+            UploadButtonPresentation::Icon {
+                accessible_name: "Attach media",
+                tooltip: "Attach media",
+            }
+        );
+        assert_eq!(icon.class_name(), "j-btn is-icon");
+        assert_eq!(icon.accessible_name(), Some("Attach media"));
+
+        assert_eq!(
+            upload_button_presentation(true, true),
+            UploadButtonPresentation::Icon {
+                accessible_name: "Uploading\u{2026}",
+                tooltip: "Uploading\u{2026}",
+            }
+        );
     }
 
     #[test]
