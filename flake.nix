@@ -55,6 +55,7 @@
       in
       {
         packages = packageLayer.packages // nixosLayer.packagesForSystem { inherit system pkgs; } // checkLayer.packages;
+        emacsPackages = packageLayer.emacsPackages;
         apps = nixosLayer.appsForSystem { inherit system pkgs; };
         checks = checkLayer.checks;
         inherit devShells;

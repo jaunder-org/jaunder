@@ -2216,11 +2216,20 @@ it disables the dev-only auto-initialization of a missing database on `serve`
 (`server/src/commands.rs:501-512`).
 
 **What the flake ships.** `flake.nix` exports `packages.jaunder` (the deployable
-server binary), `packages.site`, and `nixosModules.jaunder`
-(`nix/packages.nix:407-420`, `nix/nixos.nix:223-225`). `packages.site` is **no
-longer a deployment artifact** — the binary embeds the bundle — and is retained
-only so `cargo xtask audit-wasm` can build `.#site` and inspect the bundle for
-size analysis (`nix/packages.nix:296-305`,
+server binary), `packages.site`, `nixosModules.jaunder`, and, for every system
+from `flake-utils.lib.eachDefaultSystem`, `emacsPackages.${system}.jaunder` (a
+standalone Emacs Protocol Client package for installed-package lists such as
+Home Manager's `programs.emacs.extraPackages`). The Protocol Client package
+contains the production `elisp/*.el` modules rooted at `jaunder.el`, excluding
+`elisp/test/`, `elisp/scripts/`, and documentation; it carries Nixpkgs's
+packaged `plz` and the pinned `cmark` Emacs package transitively. Nixpkgs's
+`plz` provides its immutable Nix-store curl executable reference, so the
+Protocol Client adds no separate curl PATH propagation
+([Emacs Protocol Client flake package output](adr/drafts/emacs-protocol-client-flake-package-output.md)).
+`packages.jaunder` remains the deployable server-binary output. `packages.site`
+is **no longer a deployment artifact** — the binary embeds the bundle — and is
+retained only so `cargo xtask audit-wasm` can build `.#site` and inspect the
+bundle for size analysis (`nix/packages.nix:296-305`,
 [declarative NixOS deployment and package outputs](adr/0142-declarative-nixos-deployment-package-outputs.md)).
 The `services.jaunder` module (`nix/nixos.nix:21-97`) has only ADR-0142's
 operator options: `enable`, `bind`, `db`, and `prod`. It creates a dedicated
@@ -2255,13 +2264,17 @@ qualification surface, not a public CA/DNS, performance, or release claim
 [ADR-0142](adr/0142-declarative-nixos-deployment-package-outputs.md), and
 [ADR-0174](adr/0174-backup-format-and-schema-compatibility.md)).
 
-## Emacs client
+## Emacs Protocol Client
 
-The Emacs client is the reference authoring client: it publishes org-mode
-buffers over AtomPub plus the jaunder wire extensions
+The Emacs Protocol Client is the reference authoring client: it publishes
+org-mode buffers over AtomPub plus the jaunder wire extensions
 ([ADR-0023](adr/0023-atompub-jaunder-wire-extensions.md); the Protocols section
 owns the wire format). It lives in the top-level `elisp/` directory as a single
-`jaunder` package, a first-class but separately-tested subproject
+`jaunder` package and is directly consumable through the per-default-system
+`emacsPackages.${system}.jaunder` flake output; this is separate from the
+deployable `packages.jaunder` server binary
+([Emacs Protocol Client flake package output](adr/drafts/emacs-protocol-client-flake-package-output.md)).
+It is a first-class but separately-tested subproject
 ([ADR-0031](adr/0031-elisp-separately-tested-subproject.md)) with a self-booting
 live-server integration harness, `jaunder-test--with-live-server`
 ([ADR-0035](adr/0035-elisp-live-integration-harness.md)) — the testing section

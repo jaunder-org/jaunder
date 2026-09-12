@@ -1,8 +1,30 @@
-# Jaunder Emacs client (`jaunder.el`)
+# Jaunder Emacs Protocol Client (`jaunder.el`)
 
-The Emacs blogging front-end for Jaunder over AtomPub. This is the Infra-unit
+The Emacs Protocol Client for Jaunder over AtomPub. This is the Infra-unit
 skeleton (issue #73): shared plumbing and pure helpers that units C (#74,
 authoring/publish) and D (#75, management/reconcile) extend.
+
+## Nix package
+
+The flake exposes this Protocol Client as `emacsPackages.${system}.jaunder` for
+every system that `flake-utils.lib.eachDefaultSystem` supports. It is a
+standalone Emacs package derivation, version `0.1.0`, intended for an
+installed-package list rather than as a server deployment package. For example,
+a Home Manager configuration can install it with:
+
+```nix
+programs.emacs.extraPackages = epkgs: [
+  inputs.jaunder.emacsPackages.${pkgs.system}.jaunder
+];
+```
+
+The package contains the production `elisp/*.el` Protocol Client modules rooted
+at `jaunder.el`; it excludes `elisp/test/`, `elisp/scripts/`, and project
+documentation. Its transitive Emacs-package dependencies are Nixpkgs's packaged
+`plz` and Jaunder's pinned `cmark`. Nixpkgs's `plz` supplies its immutable Nix
+store reference to the `curl` executable, so no separate curl installation or
+PATH setup is needed. The distinct `packages.jaunder` flake output remains the
+deployable Jaunder server binary.
 
 ## Layout
 
