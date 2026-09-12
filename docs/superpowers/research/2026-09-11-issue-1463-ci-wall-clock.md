@@ -133,9 +133,13 @@ LCOV 9,179 ms, and all other stages 551 ms combined.
 The timing instrumentation initially allowed the two probes to overwrite
 `.xtask/last-result.json`. The workflow now preserves
 `.xtask/validate-result.json` before probes and uploads it. The supporting
-`cargo xtask check` passed in **325,260 ms**. This fixes evidence retention, not
-a performance result; matched cold and warmed Actions pairs remain required
-before applying the issue threshold.
+`cargo xtask check` passed in **325,260 ms**.
+
+Final review found a second evidence-loss path: VM-side unavailable Nix phases
+could replace a stronger host-observed `reused` classification. The phase merge
+now retains concrete host evidence over an incoming `unknown` classification;
+its focused regression test passed, followed by all-green
+[Actions run #34700570775](https://github.com/jaunder-org/jaunder/actions/runs/34700570775).
 
 ### Final-head repeat: #2213
 
@@ -289,7 +293,11 @@ Against the comparable instrumentation baseline, coverage-step time fell
 whole-path comparison is provisional because unrelated static and Elisp
 derivation timings varied. Under the 2026-09-12 decision amendment, the complete
 local producer result is the acceptance evidence; the Actions comparisons remain
-diagnostics with their stated limits.
+diagnostics with their stated limits. At the accepted implementation head, a
+warmed local `cargo xtask validate --no-e2e` passed in **258,408 ms**; its host
+coverage verdict remained clean with 62,703 executable lines, zero failures,
+zero guard violations, and zero CRAP violations. This is a final usability
+smoke, not a replacement for the clean producer comparison above.
 
 The measured serialized arithmetic gives an ideal, contention-free overlap
 bound: `max(622,186, 257,431 + 19,658) = 622,186 ms`, or **279,511 ms
@@ -371,6 +379,8 @@ Merge-group verification remains pending the explicit merge gate.
   retained warm coverage status.
 - [Final-head Actions run #2213](https://github.com/jaunder-org/jaunder/actions/runs/34641076765):
   green diagnostic repeats with durable validation and coverage-stage evidence.
+- [Post-review Actions run](https://github.com/jaunder-org/jaunder/actions/runs/34700570775):
+  all required jobs green after preserving stronger host Nix phase evidence.
 - Controlled cold pairs:
   [A baseline](https://github.com/jaunder-org/jaunder/actions/runs/34650931625),
   [A treatment](https://github.com/jaunder-org/jaunder/actions/runs/34655060127),
