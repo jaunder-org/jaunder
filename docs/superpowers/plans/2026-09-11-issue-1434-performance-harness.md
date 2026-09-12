@@ -91,10 +91,11 @@ incompatible formats the integrated design is intended to prevent.
   - Contract: add a focused performance Playwright surface that consumes the
     Task 2 manifest, uses existing authentication/seeding and `createPerfProbe`
     conventions, and emits 20 fresh-context Node action-to-ready samples for
-    `/`, `/app`, global history, per-Post history, revision detail, and
-    pagination. A `devtool` producer validates and collects its browser
-    fragment; existing document-frame/trace diagnostics remain separately
-    attributed.
+    initial navigation on `/`, `/app`, global history, per-Post history, and
+    revision detail, plus the global-history page crossing the manifest's
+    80-percent owner-history rank. A `devtool` producer validates and collects
+    its browser fragment; existing document-frame/trace diagnostics remain
+    separately attributed.
   - Verification: a small-profile Chromium smoke against each backend proves
     every semantic-ready boundary, exact workload/sample identities, trace
     correlation, absence of pre-warming, and PII-safe emitted attributes.

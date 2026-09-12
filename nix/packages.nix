@@ -406,44 +406,97 @@ let
   );
 
   # The auxiliary tools workspace is separate from the product workspace
-  # (ADR-0141). Keep its source and cargo artifacts separate from
-  # `commonArgs`/`cargoArtifacts`: `tools/Cargo.lock` owns these deps, while
-  # `xtask/` remains host-only and outside the flake source (ADR-0028).
-  toolsSrc = pkgs.lib.cleanSourceWith {
-    src = craneLib.path ../tools;
-    filter = craneLib.filterCargoSources;
-  };
-  toolsArgs = {
+  # (ADR-0141): its lockfile and cargo artifacts stay independent, while the
+  # performance producer links the selected typed product-storage closure.
+  # Keep `xtask/` absent; it is host-only under ADR-0028.
+  toolsSrc = withWorkspacePlaceholders
+    "jaunder-tools-cargo-source"
+    (pkgs.lib.cleanSourceWith {
+      src = craneLib.path ../.;
+      filter =
+        path: type:
+        let
+          relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
+        in
+        type == "directory"
+        || relative == "tools/Cargo.lock"
+        || relative == "csr/index.html"
+        || pkgs.lib.hasPrefix "storage/migrations/" relative
+        || cargoMemberSource [ "common" "host" "macros" "storage" ] path type
+        || pkgs.lib.hasPrefix "tools/doctests/testdata/" relative
+        || (pkgs.lib.hasPrefix "tools/" relative && craneLib.filterCargoSources path type);
+    })
+    [ "client" "csr" "server" "test-support" "web" ];
+  toolsBaseArgs = {
     src = toolsSrc;
     pname = "jaunder-tools";
     version = "0.1.0";
     strictDeps = true;
+    cargoExtraArgs = "--manifest-path tools/Cargo.toml";
+    cargoLock = "${toolsSrc}/tools/Cargo.lock";
+    postPatch = ''
+      ln -sf ../Cargo.lock tools/Cargo.lock
+      substituteInPlace Cargo.toml \
+        --replace-fail '  "client",' "" \
+        --replace-fail '  "csr",' "" \
+        --replace-fail '  "server",' "" \
+        --replace-fail '  "test-support",' "" \
+        --replace-fail '  "web"' "";
+    '';
+    nativeBuildInputs = [ pkgs.pkg-config ];
+    buildInputs = [
+      pkgs.openssl
+      pkgs.sqlite
+      pkgs.dav1d
+    ]
+    ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
+      pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
+    ];
   };
-  toolsCargoArtifacts = craneLib.buildDepsOnly toolsArgs;
-  toolsCargoVendorDir = craneLib.vendorCargoDeps toolsArgs;
+  toolsCargoVendorDir = craneLib.vendorCargoDeps (
+    toolsBaseArgs
+    // {
+      overrideVendorGitCheckout =
+        ps: drv:
+        let
+          p = builtins.head ps;
+        in
+        if p.name == "atom_syndication" then
+          pkgs.runCommandLocal "tools-atom-fork-vendor-${p.name}-${p.version}" { } ''
+            dst="$out/${p.name}-${p.version}"
+            mkdir -p "$dst"
+            cp -a ${atom-fork}/. "$dst/"
+            chmod -R u+w "$dst"
+            echo '{"files":{},"package":null}' > "$dst/.cargo-checksum.json"
+          ''
+        else
+          drv;
+    }
+  );
+  toolsArgs = toolsBaseArgs // {
+    cargoVendorDir = toolsCargoVendorDir;
+  };
+  toolsCargoArtifacts = craneLib.buildDepsOnly (toolsArgs // { dummySrc = toolsSrc; });
   toolsOfflineCargoHome = mkOfflineCargoHome {
     name = "jaunder-tools";
     vendorDir = toolsCargoVendorDir;
   };
 
-  # The in-sandbox dev tool (tools/ workspace: devtool + its coverage and
-  # doctests path-deps). The offline coverage/doctests sandboxes run it
-  # from PATH (nativeBuildInputs) instead of an in-sandbox `cargo run`,
-  # whose deps would not be vendored. `csr/index.html` remains the one
-  # tracked shell template; materialize the declared store input at the
-  # relative compile-time include path without widening toolsSrc to product
-  # sources or copying another tracked template.
+  # The in-sandbox dev tool. Offline coverage/doctest sandboxes run it from
+  # PATH instead of an in-sandbox `cargo run`, whose dependencies would not be
+  # vendored. The CSR shell is retained directly in toolsSrc for include_str!.
   devtoolBin = craneLib.buildPackage (
     toolsArgs
     // {
       cargoArtifacts = toolsCargoArtifacts;
       pname = "devtool";
-      cargoExtraArgs = "-p devtool";
-      preBuild = (toolsArgs.preBuild or "") + ''
-        mkdir -p ../csr
-        cp ${../csr/index.html} ../csr/index.html
-      '';
+      cargoExtraArgs = "${toolsArgs.cargoExtraArgs} -p devtool";
       doCheck = false;
+      installPhase = ''
+        mkdir -p $out/bin
+        cp tools/target/release/devtool $out/bin/devtool
+      '';
+      doNotPostBuildInstallCargoBinaries = true;
     }
   );
 

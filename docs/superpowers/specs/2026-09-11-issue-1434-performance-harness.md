@@ -56,16 +56,17 @@ shared-runner measurements a merge gate.
   detail is a separate exact-ID point workload. They run against both SQLite and
   PostgreSQL in accordance with ADR-0001 and exercise cursor semantics from
   ADR-0004.
-- Browser workloads cover `/`, `/app`, `/history`, per-Post history, revision
-  detail, and pagination. Their primary metric is a Node monotonic-clock
-  action-to-ready duration: timing starts immediately before the initiating
-  navigation or Load-more action and ends only when the workload-specific
-  semantic-ready condition is true. Timeline and history lists require the
-  expected rows with loading cleared; per-Post history additionally requires the
-  correct Post heading; revision detail requires the requested revision identity
-  and detail content; pagination requires the expected row-count increase with
-  loading cleared. Sleeps and network-idle heuristics are not readiness
-  conditions.
+- Browser workloads cover initial navigation for `/`, `/app`, `/history`,
+  per-Post history, and revision detail, plus `/history` pagination whose
+  measured page crosses the manifest's 80-percent owner-history rank. Their
+  primary metric is a Node monotonic-clock action-to-ready duration: timing
+  starts immediately before the initiating navigation or Load-more action and
+  ends only when the workload-specific semantic-ready condition is true.
+  Timeline and history lists require the expected rows with loading cleared;
+  per-Post history additionally requires the correct Post heading; revision
+  detail requires the requested revision identity and detail content; pagination
+  requires the expected row-count increase with loading cleared. Sleeps and
+  network-idle heuristics are not readiness conditions.
 - Browser spans correlate with existing server and storage spans under ADR-0011.
   Attributes obey the existing bounded-cardinality and PII rules; benchmark
   fixtures never export bodies, secrets, email addresses, or arbitrary audience
@@ -81,9 +82,11 @@ shared-runner measurements a merge gate.
   context without a pre-warm navigation, under ADR-0099. Any future warm-browser
   experiment is a separately named matched arm, never an implicit suite warmup
   or part of the canonical baseline.
-- Paginated workloads use the product-default page size of 50. Workload identity
-  records that page size, the 80-percent cursor target, and the resolved cursor
-  rank so different query positions cannot compare as one workload.
+- Direct-storage paginated workloads use the product-default page size of 50 and
+  record the exact 80-percent cursor target and resolved rank. Browser
+  pagination also uses page size 50, but records no exact persisted cursor
+  identity because the UI exposes only sequential Load-more pages; its
+  unmeasured setup leaves the target rank within the measured page.
 - Browser action-to-ready metrics stay wholly in the Node frame. Document-frame
   boot decompositions follow ADR-0100 and remain diagnostics; bridge and
   frame-skew values are reported separately and never substituted into the
@@ -133,8 +136,9 @@ shared-runner measurements a merge gate.
   measurements for every paginated workload, plus a successful point measurement
   for revision detail, with cold and warm samples reported separately.
 - Browser output contains 20 successful cold action-to-ready samples for every
-  named route and pagination path against both canonical backend configurations,
-  each ending at its declared semantic-ready condition.
+  named initial route and the owner-history pagination path against both
+  canonical backend configurations, each ending at its declared semantic-ready
+  condition.
 - Browser artifacts preserve the existing trace correlation and clock-frame
   rules; conformance review can distinguish document-frame, Node-frame, and
   storage measurements.

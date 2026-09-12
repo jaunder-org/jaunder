@@ -31,8 +31,8 @@ use common::{
 };
 use jiff::ToSpan as _;
 use performance::{
-    Cursor, DatasetManifest, DatasetProfile, HistoryCursor, PersistedCursor, TimelineCursor,
-    Workload, WorkloadSubjects, canonical_plan, validate_manifest,
+    BrowserInitialRows, Cursor, DatasetManifest, DatasetProfile, HistoryCursor, PersistedCursor,
+    TimelineCursor, Workload, WorkloadSubjects, canonical_plan, validate_manifest,
 };
 use sha2::Digest as _;
 use storage::{
@@ -42,6 +42,7 @@ use storage::{
 };
 
 const FIXED_CLOCK: &str = "2026-09-01T12:00:00Z";
+const SCHEDULED_OFFSET_HOURS: i64 = 876_000;
 const FIXTURE_PASSWORD: &str = "performance-fixture-password";
 const POST_BATCH_SIZE: usize = 256;
 const MEDIA_BLOBS: [&[u8]; 5] = [
@@ -504,7 +505,7 @@ fn post_published_at(
         "scheduled" => Ok(Some(UtcInstant::from(
             clock
                 .value()
-                .checked_add(720_i64.hours())
+                .checked_add(SCHEDULED_OFFSET_HOURS.hours())
                 .context("fixed clock range")?,
         ))),
         _ => Ok(None),
@@ -615,7 +616,12 @@ fn revision_target(
     seeded: SeededPost,
 ) -> RevisionTarget {
     let deleted = bucket(seeded.index as u64, &plan.lifecycle[..4]) == "deleted";
-    let revisions = match bucket(seeded.index as u64, &plan.revision_distribution).as_str() {
+    let revisions = match bucket(
+        revision_bucket_index(seeded.index as u64, plan),
+        &plan.revision_distribution,
+    )
+    .as_str()
+    {
         "one" => 1,
         "five" => 5,
         "thirty_three" => 33,
@@ -627,6 +633,12 @@ fn revision_target(
         revisions: revisions - i32::from(deleted),
         deleted,
     }
+}
+fn revision_bucket_index(index: u64, plan: &performance::DatasetPlan) -> u64 {
+    let author = index % plan.authors;
+    let round = index / plan.authors;
+    let posts_per_author = plan.posts / plan.authors;
+    (plan.authors - 1 - author) * posts_per_author + round
 }
 
 async fn apply_post_revisions(
@@ -715,7 +727,10 @@ fn record_confirmed_revisions(
         }
         audit.record_confirmed(format!(
             "revisions.{}",
-            bucket(seeded.index as u64, &plan.revision_distribution)
+            bucket(
+                revision_bucket_index(seeded.index as u64, plan),
+                &plan.revision_distribution,
+            )
         ));
     }
 }
@@ -864,9 +879,13 @@ async fn resolve_manifest(
     let history_post_id = post_ids
         .iter()
         .enumerate()
+        .rev()
         .find(|(index, _)| {
             *index % authors.len() == 0
-                && bucket(*index as u64, &plan.revision_distribution) == "thirty_three"
+                && bucket(
+                    revision_bucket_index(*index as u64, plan),
+                    &plan.revision_distribution,
+                ) == "thirty_three"
         })
         .map(|(_, id)| *id)
         .context("missing 33-revision post")?;
@@ -880,6 +899,7 @@ async fn resolve_manifest(
         .revision_id;
     let public = collect_timeline(posts, ViewerIdentity::Anonymous, clock).await?;
     let authenticated = collect_timeline(posts, ViewerIdentity::local(*owner), clock).await?;
+    let app = collect_app_timeline(posts, username, *owner, clock).await?;
     let owner_history = collect_history(posts, *owner, None).await?;
     let post_history = collect_history(posts, *owner, Some(history_post_id)).await?;
     Ok(DatasetManifest {
@@ -889,6 +909,12 @@ async fn resolve_manifest(
             username: username.to_string(),
             history_post_id: i64::from(history_post_id).cast_unsigned(),
             revision_id: i64::from(revision).cast_unsigned(),
+            browser_initial_rows: BrowserInitialRows {
+                home: public.len() as u64,
+                app: app.len() as u64,
+                global_history: owner_history.len() as u64,
+                post_history: post_history.len() as u64,
+            },
         },
         cursors: vec![
             timeline_cursor(Workload::PublicTimeline, &public)?,
@@ -920,6 +946,35 @@ async fn collect_timeline(
             rows.last().context("nonempty page")?,
             TimelineOrder::Newest,
         )?);
+        out.extend(rows);
+    }
+    Ok(out)
+}
+
+async fn collect_app_timeline(
+    posts: &Arc<dyn PostStorage>,
+    username: &Username,
+    owner: UserId,
+    clock: UtcInstant,
+) -> anyhow::Result<Vec<storage::PostRecord>> {
+    let mut out = Vec::new();
+    let limit = PageSize::default().fetch_limit();
+    let mut cursor = None;
+    loop {
+        let page = match &cursor {
+            Some(cursor) => PublishedPageRequest::after(cursor, limit),
+            None => PublishedPageRequest::first(TimelineOrder::Newest, limit),
+        };
+        let rows = posts
+            .list_published_by_user(username, page, &ViewerIdentity::local(owner), clock)
+            .await?;
+        if rows.is_empty() {
+            break;
+        }
+        cursor = rows
+            .last()
+            .map(|record| storage::to_post_cursor(record, TimelineOrder::Newest))
+            .transpose()?;
         out.extend(rows);
     }
     Ok(out)

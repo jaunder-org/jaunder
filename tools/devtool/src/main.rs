@@ -16,6 +16,7 @@ mod csr_bundle;
 mod diagnostic_build;
 mod digest;
 mod doctests;
+mod performance;
 mod pg;
 mod provision;
 mod run;
@@ -63,6 +64,9 @@ enum Command {
     /// `<root>/end2end/node_modules` (gitignored, so absent in fresh checkouts and
     /// worktrees). Run by the devShell shellHook and by `check tsc` (#229).
     ProvisionNodeModules(ProvisionNodeModulesArgs),
+    /// Versioned performance fragment producers and validators.
+    #[command(subcommand)]
+    Performance(Box<performance::PerformanceCmd>),
 }
 
 #[derive(clap::Args)]
@@ -355,6 +359,7 @@ fn main() -> Result<()> {
         Command::SeedE2e(args) => {
             seed_e2e::run(&args.db, &args.test_support_bin, &args.jaunder_bin)
         }
+        Command::Performance(command) => performance::run(*command),
         Command::ProvisionNodeModules(args) => {
             let paths =
                 provision::StorePaths::resolve(args.types_node_modules, args.playwright_test)?;

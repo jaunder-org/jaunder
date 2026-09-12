@@ -124,10 +124,18 @@ pub struct DatasetPlan {
     pub cursor_requirements: Vec<CursorRequirement>,
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct BrowserInitialRows {
+    pub home: u64,
+    pub app: u64,
+    pub global_history: u64,
+    pub post_history: u64,
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct WorkloadSubjects {
     pub username: String,
     pub history_post_id: u64,
     pub revision_id: u64,
+    pub browser_initial_rows: BrowserInitialRows,
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TimelineCursor {

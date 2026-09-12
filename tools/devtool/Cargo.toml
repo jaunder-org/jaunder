@@ -27,3 +27,7 @@ oxc_ast = "0.149.0"
 oxc_ast_visit = "0.149.0"
 oxc_parser = "0.149.0"
 oxc_span = "0.149.0"
+performance = { path = "../performance" }
+storage = { path = "../../storage" }
+common = { path = "../../common" }
+jiff = "0.2.21"

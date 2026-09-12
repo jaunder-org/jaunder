@@ -100,10 +100,15 @@ pub fn validate_manifest(manifest: &DatasetManifest) -> Result<(), ManifestError
     if manifest.plan != canonical_plan(manifest.plan.profile) {
         return Err(ManifestError::Plan);
     }
+    let browser_rows = &manifest.subjects.browser_initial_rows;
     if manifest.cursors.len() != manifest.plan.cursor_requirements.len()
         || manifest.subjects.username.trim().is_empty()
         || manifest.subjects.history_post_id == 0
         || manifest.subjects.revision_id == 0
+        || browser_rows.home == 0
+        || browser_rows.app == 0
+        || browser_rows.global_history <= 50
+        || browser_rows.post_history == 0
     {
         return Err(ManifestError::Cursor);
     }
@@ -128,6 +133,19 @@ pub fn validate_manifest(manifest: &DatasetManifest) -> Result<(), ManifestError
         {
             return Err(ManifestError::Cursor);
         }
+    }
+    let cursor_count = |workload| {
+        manifest
+            .cursors
+            .iter()
+            .find(|cursor| cursor.workload == workload)
+            .map(|cursor| cursor.matching_result_count)
+    };
+    if cursor_count(Workload::PublicTimeline) != Some(browser_rows.home)
+        || cursor_count(Workload::OwnerHistory) != Some(browser_rows.global_history)
+        || cursor_count(Workload::PostHistory) != Some(browser_rows.post_history)
+    {
+        return Err(ManifestError::Cursor);
     }
     Ok(())
 }

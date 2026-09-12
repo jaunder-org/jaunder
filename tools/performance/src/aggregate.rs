@@ -96,14 +96,17 @@ pub fn assemble_run(
                 (Producer::Storage, &fragment.setup, &fragment.workloads)
             }
             Fragment::Browser(fragment) => {
-                if fragment.diagnostics.navigation_artifacts.is_empty()
-                    || fragment.diagnostics.trace_artifacts.is_empty()
-                    || fragment
-                        .diagnostics
-                        .navigation_artifacts
+                let expected_artifacts = fragment.workloads.len() * 20;
+                let navigation = &fragment.diagnostics.navigation_artifacts;
+                let traces = &fragment.diagnostics.trace_artifacts;
+                if navigation.len() != expected_artifacts
+                    || traces.len() != expected_artifacts
+                    || navigation
                         .iter()
-                        .chain(&fragment.diagnostics.trace_artifacts)
+                        .chain(traces)
                         .any(|path| path.trim().is_empty())
+                    || navigation.iter().collect::<BTreeSet<_>>().len() != navigation.len()
+                    || traces.iter().collect::<BTreeSet<_>>().len() != traces.len()
                 {
                     return Err(AggregateError::InvalidDiagnostics);
                 }
@@ -137,6 +140,46 @@ pub fn assemble_run(
         setup,
         workloads,
     })
+}
+
+/// Validates one complete producer fragment without assigning host provenance.
+///
+/// # Errors
+///
+/// Returns [`AggregateError`] when the fragment cannot satisfy its complete
+/// backend/producer workload contract.
+pub fn validate_fragment(envelope: &FragmentEnvelope) -> Result<(), AggregateError> {
+    let (storage, browser, backend) = match &envelope.fragment {
+        Fragment::Storage(fragment) => (true, Vec::new(), fragment.setup.backend),
+        Fragment::Browser(fragment) => {
+            let browser = fragment
+                .workloads
+                .first()
+                .and_then(|item| item.key.browser)
+                .ok_or(AggregateError::IncompatibleWorkload)?;
+            (false, vec![browser], fragment.setup.backend)
+        }
+    };
+    assemble_run(
+        RunSelection {
+            backends: vec![backend],
+            browsers: browser,
+            storage,
+            browser: !storage,
+        },
+        Provenance::Local(crate::LocalProvenance {
+            git_commit: "single-fragment-validation".to_owned(),
+        }),
+        RunEvidence {
+            freshness_nonce: "single-fragment-validation".to_owned(),
+            producer_derivation_identities: vec![NamedDerivationIdentity {
+                name: "validator".to_owned(),
+                identity: "single-fragment-validation".to_owned(),
+            }],
+        },
+        std::slice::from_ref(envelope),
+    )
+    .map(|_| ())
 }
 
 fn valid_selection(selection: &RunSelection) -> bool {
@@ -242,6 +285,7 @@ fn valid_result(producer: Producer, item: &WorkloadResult, manifest: &DatasetMan
     if key.build_mode != BuildMode::Release
         || key.sample_count != expected_samples
         || item.samples.len() != expected_samples as usize
+        || item.rows_returned == 0
         || crate::summarize(&item.samples).ok().as_ref() != Some(&item.summary)
         || !valid_stable_fields(key)
         || !valid_producer_workload(producer, key)
@@ -321,6 +365,11 @@ fn valid_position(key: &CompatibilityKey, manifest: &DatasetManifest) -> bool {
                 && key.cursor_target_percent.is_none()
                 && key.cursor_resolved_rank.is_none()
         }
+        MeasurementPosition::Deep if key.workload == Workload::GlobalHistory => {
+            key.page_size == Some(50)
+                && key.cursor_target_percent.is_none()
+                && key.cursor_resolved_rank.is_none()
+        }
         MeasurementPosition::Deep => cursor_workload(key.workload).is_some_and(|workload| {
             manifest.cursors.iter().any(|cursor| {
                 cursor.workload == workload
@@ -356,10 +405,11 @@ fn required(selection: &RunSelection) -> BTreeSet<RequiredKey> {
         Workload::PostHistory,
     ];
     let browser_workloads = [
-        Workload::Home,
-        Workload::App,
-        Workload::GlobalHistory,
-        Workload::BrowserPostHistory,
+        (Workload::Home, MeasurementPosition::Initial),
+        (Workload::App, MeasurementPosition::Initial),
+        (Workload::GlobalHistory, MeasurementPosition::Initial),
+        (Workload::GlobalHistory, MeasurementPosition::Deep),
+        (Workload::BrowserPostHistory, MeasurementPosition::Initial),
     ];
     if selection.storage {
         for &backend in &selection.backends {
@@ -392,17 +442,15 @@ fn required(selection: &RunSelection) -> BTreeSet<RequiredKey> {
     if selection.browser {
         for &backend in &selection.backends {
             for &browser in &selection.browsers {
-                for workload in browser_workloads {
-                    for position in [MeasurementPosition::Initial, MeasurementPosition::Deep] {
-                        keys.insert(RequiredKey {
-                            producer: Producer::Browser,
-                            workload,
-                            backend,
-                            browser: Some(browser),
-                            frame: MeasurementFrame::Cold,
-                            position,
-                        });
-                    }
+                for (workload, position) in browser_workloads {
+                    keys.insert(RequiredKey {
+                        producer: Producer::Browser,
+                        workload,
+                        backend,
+                        browser: Some(browser),
+                        frame: MeasurementFrame::Cold,
+                        position,
+                    });
                 }
                 keys.insert(RequiredKey {
                     producer: Producer::Browser,
@@ -422,9 +470,9 @@ fn required(selection: &RunSelection) -> BTreeSet<RequiredKey> {
 mod tests {
     use super::*;
     use crate::{
-        BrowserDiagnostics, BrowserFragment, Cursor, DATASET_SCHEMA_VERSION, DatasetProfile,
-        HistoryCursor, LocalProvenance, PersistedCursor, RawSample, StorageFragment,
-        TimelineCursor, WorkloadSubjects, canonical_plan,
+        BrowserDiagnostics, BrowserFragment, BrowserInitialRows, Cursor, DATASET_SCHEMA_VERSION,
+        DatasetProfile, HistoryCursor, LocalProvenance, PersistedCursor, RawSample,
+        StorageFragment, TimelineCursor, WorkloadSubjects, canonical_plan,
     };
 
     fn manifest() -> DatasetManifest {
@@ -436,6 +484,12 @@ mod tests {
                 username: "user".into(),
                 history_post_id: 1,
                 revision_id: 1,
+                browser_initial_rows: BrowserInitialRows {
+                    home: 100,
+                    app: 100,
+                    global_history: 100,
+                    post_history: 100,
+                },
             },
             cursors: [
                 Workload::PublicTimeline,
@@ -471,10 +525,6 @@ mod tests {
         position: MeasurementPosition,
     ) -> WorkloadResult {
         let plan = canonical_plan(DatasetProfile::Small);
-        let count: u32 = match frame {
-            MeasurementFrame::Cold => 1,
-            MeasurementFrame::Warm => 30,
-        };
         let browser = matches!(
             workload,
             Workload::Home
@@ -484,11 +534,22 @@ mod tests {
                 | Workload::BrowserRevisionDetail
         )
         .then_some(Browser::Chromium);
+        let count: u32 = if browser.is_some() {
+            20
+        } else {
+            match frame {
+                MeasurementFrame::Cold => 1,
+                MeasurementFrame::Warm => 30,
+            }
+        };
         let samples = (1..=u64::from(count))
             .map(|duration_us| RawSample { duration_us })
             .collect::<Vec<_>>();
         let (page_size, cursor_target_percent, cursor_resolved_rank) = match position {
             MeasurementPosition::Initial => (Some(50), None, None),
+            MeasurementPosition::Deep if workload == Workload::GlobalHistory => {
+                (Some(50), None, None)
+            }
             MeasurementPosition::Deep => (Some(50), Some(80), Some(80)),
             MeasurementPosition::Point => (None, None, None),
         };
@@ -563,6 +624,43 @@ mod tests {
             }),
         }
     }
+    fn browser_workloads() -> Vec<WorkloadResult> {
+        [
+            (Workload::Home, MeasurementPosition::Initial),
+            (Workload::App, MeasurementPosition::Initial),
+            (Workload::GlobalHistory, MeasurementPosition::Initial),
+            (Workload::GlobalHistory, MeasurementPosition::Deep),
+            (Workload::BrowserPostHistory, MeasurementPosition::Initial),
+            (Workload::BrowserRevisionDetail, MeasurementPosition::Point),
+        ]
+        .into_iter()
+        .map(|(workload, position)| item(workload, MeasurementFrame::Cold, position))
+        .collect()
+    }
+
+    fn browser_envelope(workloads: Vec<WorkloadResult>) -> FragmentEnvelope {
+        FragmentEnvelope {
+            schema_version: RESULT_SCHEMA_VERSION,
+            manifest: manifest(),
+            fragment: Fragment::Browser(BrowserFragment {
+                setup: SetupDuration {
+                    producer: Producer::Browser,
+                    backend: Backend::Sqlite,
+                    provisioning_us: 1,
+                    seeding_us: 1,
+                },
+                diagnostics: BrowserDiagnostics {
+                    navigation_artifacts: (0..workloads.len() * 20)
+                        .map(|index| format!("navigation-{index}.json"))
+                        .collect(),
+                    trace_artifacts: (0..workloads.len() * 20)
+                        .map(|index| format!("trace-{index}.zip"))
+                        .collect(),
+                },
+                workloads,
+            }),
+        }
+    }
 
     fn selection() -> RunSelection {
         RunSelection {
@@ -595,6 +693,31 @@ mod tests {
         let run = assemble(&[storage_envelope(storage_workloads())]).unwrap();
         assert_eq!(run.workloads.len(), 18);
         assert_eq!(run.setup.len(), 1);
+    }
+
+    #[test]
+    fn validates_a_complete_single_storage_fragment() {
+        assert_eq!(
+            validate_fragment(&storage_envelope(storage_workloads())),
+            Ok(())
+        );
+    }
+    #[test]
+    fn validates_the_six_canonical_browser_measurements() {
+        assert_eq!(
+            validate_fragment(&browser_envelope(browser_workloads())),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn single_fragment_validation_rejects_a_duplicate_workload() {
+        let mut workloads = storage_workloads();
+        workloads.push(workloads[0].clone());
+        assert!(matches!(
+            validate_fragment(&storage_envelope(workloads)),
+            Err(AggregateError::Duplicate(_))
+        ));
     }
 
     #[test]
@@ -704,23 +827,7 @@ mod tests {
         browser_warm.key.sample_count = 20;
         browser_warm.samples = vec![RawSample { duration_us: 1 }; 20];
         browser_warm.summary = crate::summarize(&browser_warm.samples).unwrap();
-        let fragment = FragmentEnvelope {
-            schema_version: RESULT_SCHEMA_VERSION,
-            manifest: manifest(),
-            fragment: Fragment::Browser(BrowserFragment {
-                setup: SetupDuration {
-                    producer: Producer::Browser,
-                    backend: Backend::Sqlite,
-                    provisioning_us: 1,
-                    seeding_us: 1,
-                },
-                diagnostics: BrowserDiagnostics {
-                    navigation_artifacts: vec!["navigation.json".into()],
-                    trace_artifacts: vec!["trace.json".into()],
-                },
-                workloads: vec![browser_warm],
-            }),
-        };
+        let fragment = browser_envelope(vec![browser_warm]);
         assert_eq!(
             assemble(&[fragment]),
             Err(AggregateError::IncompatibleWorkload)

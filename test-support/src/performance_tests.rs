@@ -130,6 +130,10 @@ async fn small_fixture_resolves_a_valid_manifest_from_persisted_records(#[case] 
     assert_eq!(audit.persisted, audit.confirmed);
     assert!(manifest.subjects.history_post_id > 0);
     assert!(manifest.subjects.revision_id > 0);
+    assert_eq!(manifest.subjects.browser_initial_rows.home, 50);
+    assert_eq!(manifest.subjects.browser_initial_rows.app, 6);
+    assert!(manifest.subjects.browser_initial_rows.global_history > 50);
+    assert_eq!(manifest.subjects.browser_initial_rows.post_history, 32);
     assert_eq!(manifest.cursors.len(), 4);
     for cursor in &manifest.cursors {
         assert!(cursor.matching_result_count > 0);
