@@ -86,6 +86,8 @@ impl ProcessOutcome {
 pub struct StageResult {
     pub stage: RequiredStage,
     pub outcome: ProcessOutcome,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u128>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -335,6 +337,11 @@ impl CoverageStatus {
                 .any(|stage| !observed.contains(stage))
         {
             bail!("required stages must appear exactly once");
+        }
+        if self.stages.iter().any(|result| {
+            matches!(result.outcome, ProcessOutcome::NotRun) && result.duration_ms.is_some()
+        }) {
+            bail!("unstarted stages must not have durations");
         }
         let stages_ok = self.stages.iter().all(|result| result.outcome.is_success());
         let population_ok = self.population.expected > 0
@@ -716,6 +723,7 @@ mod tests {
                     } else {
                         ProcessOutcome::success()
                     },
+                    duration_ms: Some(42),
                 })
                 .collect(),
             population: Population {
@@ -727,7 +735,9 @@ mod tests {
             missing_tests: vec![],
             infra_detail: None,
         };
-        let back = CoverageStatus::from_json(&s.to_json()).unwrap();
+        let json = s.to_json();
+        assert!(json.contains("\"duration_ms\": 42"));
+        let back = CoverageStatus::from_json(&json).unwrap();
         assert_eq!(s, back);
     }
 
@@ -747,6 +757,7 @@ mod tests {
                     } else {
                         ProcessOutcome::success()
                     },
+                    duration_ms: Some(42),
                 })
                 .collect(),
             population: Population {
@@ -759,6 +770,40 @@ mod tests {
             infra_detail: Some("ENOSPC".into()),
         };
         assert!(s.to_json().contains("\"infra\""));
+    }
+
+    #[test]
+    fn accepts_old_json_without_durations_and_omits_unstarted_duration() {
+        let status = CoverageStatus::from_json(&complete_tests_ok_status().to_string())
+            .expect("old status fixture parses");
+        assert!(status.validate().is_ok());
+        assert!(
+            status
+                .stages
+                .iter()
+                .all(|stage| stage.duration_ms.is_none())
+        );
+
+        let stage = StageResult {
+            stage: RequiredStage::WorkspaceResolution,
+            outcome: ProcessOutcome::NotRun,
+            duration_ms: None,
+        };
+        let json = serde_json::to_value(stage).expect("stage serializes");
+        assert!(json.get("duration_ms").is_none());
+    }
+
+    #[test]
+    fn validates_observed_duration_and_rejects_unstarted_duration() {
+        let mut status = CoverageStatus::from_json(&complete_tests_ok_status().to_string())
+            .expect("status fixture parses");
+        status.stages[0].duration_ms = Some(42);
+        assert!(status.validate().is_ok());
+        assert!(status.to_json().contains("\"duration_ms\": 42"));
+
+        status.stages[1].outcome = ProcessOutcome::NotRun;
+        status.stages[1].duration_ms = Some(0);
+        assert!(status.validate().is_err());
     }
 
     #[test]

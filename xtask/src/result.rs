@@ -2,7 +2,7 @@ use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 const SLOW_STEP_MS: u128 = 1_000;
 
@@ -10,6 +10,130 @@ const SLOW_STEP_MS: u128 = 1_000;
 pub enum Mode {
     Fix,
     Check,
+}
+
+/// Classification Nix exposes directly for a phase. `Realized` is deliberately
+/// absent: a local-store transition proves neither substitution nor a local build.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NixPhaseClassification {
+    Reused,
+    Substituted,
+    Built,
+    Unknown,
+}
+
+/// A durable, machine-readable observation of one CI phase.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct PhaseRecord {
+    pub name: PhaseName,
+    pub duration_ms: Option<u128>,
+    pub outcome: PhaseOutcome,
+    pub detail: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nix: Option<NixPhaseEvidence>,
+}
+
+impl PhaseRecord {
+    pub fn unavailable(name: PhaseName, detail: impl Into<String>) -> Self {
+        Self {
+            name,
+            duration_ms: None,
+            outcome: PhaseOutcome::Unavailable,
+            detail: detail.into(),
+            nix: None,
+        }
+    }
+}
+
+/// Stable vocabulary for phase-attribution records.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PhaseName {
+    NixEvaluation,
+    NixSubstitution,
+    NixLocalBuild,
+    VmStartupReadiness,
+    GateExecution,
+    ResultLift,
+    PostGateChecks,
+    CoverageWorkspaceResolution,
+    CoverageProfileCleanup,
+    CoverageTestCensus,
+    CoverageInstrumentedTestRun,
+    CoveragePopulationReconciliation,
+    CoverageTextReport,
+    CoverageLcovReport,
+    CoverageCrapReport,
+}
+
+impl PhaseName {
+    pub const ALL: [Self; 15] = [
+        Self::NixEvaluation,
+        Self::NixSubstitution,
+        Self::NixLocalBuild,
+        Self::VmStartupReadiness,
+        Self::GateExecution,
+        Self::ResultLift,
+        Self::PostGateChecks,
+        Self::CoverageWorkspaceResolution,
+        Self::CoverageProfileCleanup,
+        Self::CoverageTestCensus,
+        Self::CoverageInstrumentedTestRun,
+        Self::CoveragePopulationReconciliation,
+        Self::CoverageTextReport,
+        Self::CoverageLcovReport,
+        Self::CoverageCrapReport,
+    ];
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::NixEvaluation => "nix-evaluation",
+            Self::NixSubstitution => "nix-substitution",
+            Self::NixLocalBuild => "nix-local-build",
+            Self::VmStartupReadiness => "vm-startup-readiness",
+            Self::GateExecution => "gate-execution",
+            Self::ResultLift => "result-lift",
+            Self::PostGateChecks => "post-gate-checks",
+            Self::CoverageWorkspaceResolution => "coverage-workspace-resolution",
+            Self::CoverageProfileCleanup => "coverage-profile-cleanup",
+            Self::CoverageTestCensus => "coverage-test-census",
+            Self::CoverageInstrumentedTestRun => "coverage-instrumented-test-run",
+            Self::CoveragePopulationReconciliation => "coverage-population-reconciliation",
+            Self::CoverageTextReport => "coverage-text-report",
+            Self::CoverageLcovReport => "coverage-lcov-report",
+            Self::CoverageCrapReport => "coverage-crap-report",
+        }
+    }
+}
+
+/// Outcome of an observable phase; unavailable is evidence of a missing boundary,
+/// not a successful execution.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PhaseOutcome {
+    Success,
+    Failed,
+    Unavailable,
+}
+
+impl PhaseOutcome {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::Failed => "failed",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
+/// Nix-specific phase classification and the evidence that supports it.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct NixPhaseEvidence {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub installables: Vec<String>,
+    pub classification: NixPhaseClassification,
+    pub detail: String,
 }
 
 /// The outcome of observing the selected Nix outputs across a successful build.
@@ -40,6 +164,43 @@ pub struct NixReport {
     pub realization: NixRealization,
 }
 
+impl NixReport {
+    /// Nix's dry-run/path-info observation proves only store reuse. It exposes
+    /// no timing boundary and cannot distinguish a substitution from a build.
+    pub fn phase_records(&self) -> [PhaseRecord; 3] {
+        let classification = match self.realization {
+            NixRealization::Reused => NixPhaseClassification::Reused,
+            NixRealization::Realized | NixRealization::Unknown => NixPhaseClassification::Unknown,
+        };
+        let evidence = NixPhaseEvidence {
+            classification,
+            installables: vec![self.installable.clone()],
+            detail: "host dry-run/path-info observation; Nix did not expose substitution or local-build evidence".into(),
+        };
+        [
+            PhaseRecord::unavailable(
+                PhaseName::NixEvaluation,
+                "nix build does not expose a separate evaluation duration",
+            ),
+            PhaseRecord {
+                name: PhaseName::NixSubstitution,
+                duration_ms: None,
+                outcome: PhaseOutcome::Unavailable,
+                detail: "Nix observation cannot prove whether missing outputs were substituted"
+                    .into(),
+                nix: Some(evidence.clone()),
+            },
+            PhaseRecord {
+                name: PhaseName::NixLocalBuild,
+                duration_ms: None,
+                outcome: PhaseOutcome::Unavailable,
+                detail: "Nix observation cannot prove whether missing outputs were built locally"
+                    .into(),
+                nix: Some(evidence),
+            },
+        ]
+    }
+}
 #[derive(Debug, Serialize)]
 pub struct StepResult {
     pub name: String,
@@ -50,6 +211,8 @@ pub struct StepResult {
     pub detail: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nix: Option<NixReport>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub phases: Vec<PhaseRecord>,
 }
 
 impl StepResult {
@@ -61,6 +224,7 @@ impl StepResult {
             duration_ms: 0,
             detail: None,
             nix: None,
+            phases: Vec::new(),
         }
     }
     pub fn fail(name: &str) -> Self {
@@ -71,6 +235,7 @@ impl StepResult {
             duration_ms: 0,
             detail: None,
             nix: None,
+            phases: Vec::new(),
         }
     }
     pub fn skip(name: &str) -> Self {
@@ -81,6 +246,7 @@ impl StepResult {
             duration_ms: 0,
             detail: None,
             nix: None,
+            phases: Vec::new(),
         }
     }
 
@@ -95,6 +261,12 @@ impl StepResult {
     /// Attach the host-side Nix evidence for this step to the result envelope.
     pub fn nix(mut self, nix: NixReport) -> Self {
         self.nix = Some(nix);
+        self
+    }
+
+    /// Attach observations produced while executing this step.
+    pub fn phases(mut self, phases: impl IntoIterator<Item = PhaseRecord>) -> Self {
+        self.phases.extend(phases);
         self
     }
 
@@ -147,6 +319,9 @@ pub struct CommandResult {
     pub duration_ms: u128,
     pub finished_at_unix: u64,
     pub steps: Vec<StepResult>,
+    /// The complete stable phase vocabulary. Entries begin unavailable and are
+    /// replaced only by evidence collected during this command.
+    pub phases: Vec<PhaseRecord>,
     /// A command-specific process status, used when xtask supervises or forwards
     /// a child whose conventional exit code must survive the result envelope.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -187,6 +362,28 @@ pub struct CommandResult {
     pub wasm_coverage: Option<crate::wasm_coverage::Aggregate>,
 }
 
+fn render_phase_table(phases: &[PhaseRecord]) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::from(
+        "\n## CI phase attribution\n\n| Phase | Outcome | Duration | Evidence |\n| --- | --- | ---: | --- |\n",
+    );
+    for phase in phases {
+        let duration = phase
+            .duration_ms
+            .map(|milliseconds| format!("{milliseconds} ms"))
+            .unwrap_or_else(|| "unavailable".to_owned());
+        let evidence = phase.detail.replace('|', "\\|").replace('\n', " ");
+        writeln!(
+            out,
+            "| {} | {} | {duration} | {evidence} |",
+            phase.name.as_str(),
+            phase.outcome.as_str()
+        )
+        .unwrap();
+    }
+    out
+}
 fn render_pr_summary(pr: &crate::pr::PrReport) -> String {
     use std::fmt::Write as _;
 
@@ -212,6 +409,88 @@ fn render_pr_summary(pr: &crate::pr::PrReport) -> String {
     out
 }
 
+fn merge_nix_evidence(current: &mut Option<NixPhaseEvidence>, candidate: Option<NixPhaseEvidence>) {
+    let Some(mut candidate) = candidate else {
+        return;
+    };
+    let Some(existing) = current.as_mut() else {
+        *current = Some(candidate);
+        return;
+    };
+
+    if candidate.installables.is_empty()
+        && candidate.classification == NixPhaseClassification::Unknown
+    {
+        return;
+    }
+    if existing.installables.is_empty()
+        && existing.classification == NixPhaseClassification::Unknown
+    {
+        *existing = candidate;
+        return;
+    }
+
+    if existing.installables == candidate.installables {
+        if existing.classification == NixPhaseClassification::Unknown
+            && candidate.classification != NixPhaseClassification::Unknown
+        {
+            *existing = candidate;
+        }
+        return;
+    }
+
+    if existing.classification != candidate.classification {
+        existing.classification = NixPhaseClassification::Unknown;
+    }
+    for installable in candidate.installables.drain(..) {
+        if !existing.installables.contains(&installable) {
+            existing.installables.push(installable);
+        }
+    }
+    existing.detail = format!("{}; {}", existing.detail, candidate.detail);
+}
+
+#[derive(Clone, Copy)]
+enum PhaseDurationMerge {
+    Sum,
+    Max,
+}
+
+fn merge_phase_record(
+    existing: &mut PhaseRecord,
+    phase: PhaseRecord,
+    duration_merge: PhaseDurationMerge,
+) {
+    match (existing.outcome, phase.outcome) {
+        (PhaseOutcome::Unavailable, PhaseOutcome::Unavailable) => {
+            existing.detail = format!("{}; {}", existing.detail, phase.detail);
+            merge_nix_evidence(&mut existing.nix, phase.nix);
+        }
+        (PhaseOutcome::Unavailable, _) => {
+            let prior_nix = existing.nix.take();
+            *existing = phase;
+            merge_nix_evidence(&mut existing.nix, prior_nix);
+        }
+        (_, PhaseOutcome::Unavailable) => {
+            merge_nix_evidence(&mut existing.nix, phase.nix);
+        }
+        (_, _) => {
+            existing.duration_ms = match (existing.duration_ms, phase.duration_ms) {
+                (Some(left), Some(right)) => Some(match duration_merge {
+                    PhaseDurationMerge::Sum => left + right,
+                    PhaseDurationMerge::Max => left.max(right),
+                }),
+                (duration, None) | (None, duration) => duration,
+            };
+            if phase.outcome == PhaseOutcome::Failed {
+                existing.outcome = PhaseOutcome::Failed;
+            }
+            existing.detail = format!("{}; {}", existing.detail, phase.detail);
+            merge_nix_evidence(&mut existing.nix, phase.nix);
+        }
+    }
+}
+
 impl CommandResult {
     pub fn new(command: &str) -> Self {
         Self {
@@ -230,12 +509,54 @@ impl CommandResult {
             issue: None,
             census: None,
             wasm_coverage: None,
+            phases: PhaseName::ALL
+                .map(|name| {
+                    PhaseRecord::unavailable(
+                        name,
+                        "this command did not observe a boundary for the phase",
+                    )
+                })
+                .to_vec(),
         }
     }
 
     pub fn push(&mut self, step: StepResult) {
+        self.record_phases(step.phases.iter().cloned());
         self.steps.push(step);
         self.ok = self.steps.iter().all(|s| s.ok || s.skipped);
+    }
+
+    /// Merge evidence gathered independently of the enclosing step, such as an
+    /// E2E VM sidecar copied after its build has completed.
+    pub fn record_phases(&mut self, phases: impl IntoIterator<Item = PhaseRecord>) {
+        for phase in phases {
+            let existing = self
+                .phases
+                .iter_mut()
+                .find(|existing| existing.name == phase.name)
+                .expect("phase vocabulary is initialized in CommandResult::new");
+            merge_phase_record(existing, phase, PhaseDurationMerge::Sum);
+        }
+    }
+
+    /// Record phase groups that executed concurrently. Their longest observed
+    /// duration contributes to the enclosing command's elapsed phase time.
+    pub fn record_parallel_phases(
+        &mut self,
+        groups: impl IntoIterator<Item = impl IntoIterator<Item = PhaseRecord>>,
+    ) {
+        let mut concurrent = Vec::<PhaseRecord>::new();
+        for phase in groups.into_iter().flatten() {
+            if let Some(existing) = concurrent
+                .iter_mut()
+                .find(|existing| existing.name == phase.name)
+            {
+                merge_phase_record(existing, phase, PhaseDurationMerge::Max);
+            } else {
+                concurrent.push(phase);
+            }
+        }
+        self.record_phases(concurrent);
     }
 
     pub fn exit_code(&self) -> i32 {
@@ -245,6 +566,9 @@ impl CommandResult {
     pub fn report(&self, json: bool) {
         if let Err(err) = self.write_sidecar() {
             eprintln!("xtask: warning: could not write sidecar: {err}");
+        }
+        if let Err(err) = self.append_github_summary() {
+            eprintln!("xtask: warning: could not write GitHub step summary: {err}");
         }
         if json {
             println!("{}", serde_json::to_string_pretty(self).unwrap());
@@ -258,6 +582,17 @@ impl CommandResult {
         let mut f = std::fs::File::create(Path::new(".xtask/last-result.json"))?;
         f.write_all(serde_json::to_string_pretty(self).unwrap().as_bytes())?;
         Ok(())
+    }
+
+    fn append_github_summary(&self) -> std::io::Result<()> {
+        let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") else {
+            return Ok(());
+        };
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
+        file.write_all(render_phase_table(&self.phases).as_bytes())
     }
 
     fn print_human(&self) {
@@ -511,5 +846,170 @@ mod tests {
             assert!(rendered.contains("abc123"));
             assert!(rendered.contains("action required"));
         }
+    }
+    #[test]
+    fn phase_vocabulary_is_complete_and_unavailable_without_observation() {
+        let result = CommandResult::new("validate");
+        let value = serde_json::to_value(&result).unwrap();
+
+        assert_eq!(
+            value["phases"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|phase| phase["name"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            [
+                "nix-evaluation",
+                "nix-substitution",
+                "nix-local-build",
+                "vm-startup-readiness",
+                "gate-execution",
+                "result-lift",
+                "post-gate-checks",
+                "coverage-workspace-resolution",
+                "coverage-profile-cleanup",
+                "coverage-test-census",
+                "coverage-instrumented-test-run",
+                "coverage-population-reconciliation",
+                "coverage-text-report",
+                "coverage-lcov-report",
+                "coverage-crap-report",
+            ]
+        );
+        assert!(
+            value["phases"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|phase| phase["outcome"] == "unavailable" && phase["duration_ms"].is_null())
+        );
+    }
+
+    #[test]
+    fn unavailable_vm_phase_preserves_host_nix_reuse_evidence() {
+        let mut result = CommandResult::new("e2e-sqlite-chromium");
+        result.record_phases(
+            NixReport {
+                installable: ".#checks.x86_64-linux.e2e-sqlite-chromium".into(),
+                derivation: Some("/nix/store/e2e.drv".into()),
+                realization: NixRealization::Reused,
+            }
+            .phase_records(),
+        );
+        result.record_phases([PhaseRecord {
+            name: PhaseName::NixSubstitution,
+            duration_ms: None,
+            outcome: PhaseOutcome::Unavailable,
+            detail: "the VM cannot observe Nix substitution".into(),
+            nix: Some(NixPhaseEvidence {
+                installables: Vec::new(),
+                classification: NixPhaseClassification::Unknown,
+                detail: "VM-side classification is unknown".into(),
+            }),
+        }]);
+
+        let substitution = result
+            .phases
+            .iter()
+            .find(|phase| phase.name == PhaseName::NixSubstitution)
+            .unwrap();
+        assert_eq!(
+            substitution.nix.as_ref().unwrap().classification,
+            NixPhaseClassification::Reused
+        );
+        assert!(
+            substitution
+                .detail
+                .contains("the VM cannot observe Nix substitution")
+        );
+    }
+
+    #[test]
+    fn mixed_host_nix_observations_are_unknown() {
+        let mut result = CommandResult::new("validate");
+        result.record_phases(
+            NixReport {
+                installable: ".#checks.x86_64-linux.static-docs".into(),
+                derivation: Some("/nix/store/static-docs.drv".into()),
+                realization: NixRealization::Reused,
+            }
+            .phase_records(),
+        );
+        result.record_phases(
+            NixReport {
+                installable: ".#checks.x86_64-linux.coverage".into(),
+                derivation: Some("/nix/store/coverage.drv".into()),
+                realization: NixRealization::Realized,
+            }
+            .phase_records(),
+        );
+
+        let substitution = result
+            .phases
+            .iter()
+            .find(|phase| phase.name == PhaseName::NixSubstitution)
+            .unwrap();
+        let evidence = substitution.nix.as_ref().unwrap();
+        assert_eq!(evidence.classification, NixPhaseClassification::Unknown);
+        assert_eq!(
+            evidence.installables,
+            [
+                ".#checks.x86_64-linux.static-docs",
+                ".#checks.x86_64-linux.coverage"
+            ]
+        );
+    }
+
+    #[test]
+    fn parallel_phase_groups_contribute_the_longest_duration() {
+        let mut result = CommandResult::new("validate");
+        result.record_phases([PhaseRecord {
+            name: PhaseName::GateExecution,
+            duration_ms: Some(30),
+            outcome: PhaseOutcome::Success,
+            detail: "serialized validation".into(),
+            nix: None,
+        }]);
+        result.record_parallel_phases([
+            [PhaseRecord {
+                name: PhaseName::GateExecution,
+                duration_ms: Some(40),
+                outcome: PhaseOutcome::Success,
+                detail: "sqlite/chromium".into(),
+                nix: None,
+            }],
+            [PhaseRecord {
+                name: PhaseName::GateExecution,
+                duration_ms: Some(70),
+                outcome: PhaseOutcome::Failed,
+                detail: "postgres/firefox".into(),
+                nix: None,
+            }],
+        ]);
+
+        let gate = result
+            .phases
+            .iter()
+            .find(|phase| phase.name == PhaseName::GateExecution)
+            .unwrap();
+        assert_eq!(gate.duration_ms, Some(100));
+        assert_eq!(gate.outcome, PhaseOutcome::Failed);
+    }
+
+    #[test]
+    fn phase_summary_renders_the_same_record_evidence() {
+        let mut result = CommandResult::new("e2e-sqlite-chromium");
+        result.record_phases([PhaseRecord {
+            name: PhaseName::GateExecution,
+            duration_ms: Some(42),
+            outcome: PhaseOutcome::Failed,
+            detail: "Playwright exited 1".into(),
+            nix: None,
+        }]);
+
+        let summary = render_phase_table(&result.phases);
+        assert!(summary.contains("| gate-execution | failed | 42 ms | Playwright exited 1 |"));
+        assert!(summary.contains("| nix-evaluation | unavailable | unavailable |"));
     }
 }

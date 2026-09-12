@@ -248,6 +248,7 @@ mod tests {
                 .map(|stage| coverage::status::StageResult {
                     stage,
                     outcome: coverage::status::ProcessOutcome::Success,
+                    duration_ms: None,
                 })
                 .collect(),
             population: coverage::status::Population {
