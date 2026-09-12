@@ -201,6 +201,9 @@ pub fn ValidatedInput<T>(
     /// (id `{name}-help`), for a field whose format needs explaining (e.g. a cron expression).
     #[prop(optional)]
     help: Option<&'static str>,
+    /// Optional placeholder hint shown while the input is empty.
+    #[prop(optional)]
+    placeholder: Option<&'static str>,
     /// Live input massaging before validation/display, e.g. `transform=str::to_lowercase`
     /// for a username. `fn(&str) -> String`; a call site passes the bare fn (leptos wraps the
     /// optional prop, and the fn-item coerces to the pointer at the known type — an `into`
@@ -231,6 +234,7 @@ where
                 field=field
                 input_type=input_type
                 autocomplete=autocomplete
+                placeholder=placeholder
                 class=Some(class)
                 aria_describedby=describedby
                 transform=transform

@@ -26,40 +26,47 @@ pub fn TagInput(
 ) -> impl IntoView {
     let state = InputState::new(tags).with_on_change(on_change);
 
+    let input_id = format!("{name}-input");
     view! {
-        <div class="j-tag-input">
-            <TagChips tags name on_remove=Callback::new(move |tag| state.remove(&tag)) />
-            <input
-                type="text"
-                class="j-tag-text"
-                placeholder="Add tag\u{2026}"
-                prop:value=state.input_text
-                on:input=move |ev| {
-                    if let Some((prefix, tick)) = state.begin_input(&event_target_value(&ev)) {
-                        schedule_suggestion_fetch(
-                            prefix,
-                            tick,
-                            state.debounce_tick,
-                            state.suggestions,
-                            state.suggestions_open,
-                        );
+        <div class="j-form-field">
+            <label class="j-form-label" for=input_id.clone()>
+                "Tags"
+            </label>
+            <div class="j-tag-input">
+                <TagChips tags name on_remove=Callback::new(move |tag| state.remove(&tag)) />
+                <input
+                    id=input_id
+                    type="text"
+                    class="j-tag-text"
+                    placeholder="Add tag\u{2026}"
+                    prop:value=state.input_text
+                    on:input=move |ev| {
+                        if let Some((prefix, tick)) = state.begin_input(&event_target_value(&ev)) {
+                            schedule_suggestion_fetch(
+                                prefix,
+                                tick,
+                                state.debounce_tick,
+                                state.suggestions,
+                                state.suggestions_open,
+                            );
+                        }
                     }
-                }
-                on:keydown=move |ev| {
-                    if state.handle_key(ev.key().as_str()) {
-                        ev.prevent_default();
+                    on:keydown=move |ev| {
+                        if state.handle_key(ev.key().as_str()) {
+                            ev.prevent_default();
+                        }
                     }
-                }
-                autocomplete="off"
-            />
-            <TagSuggestions
-                suggestions=state.suggestions
-                suggestions_open=state.suggestions_open
-                selected_idx=state.selected_idx
-                on_commit=Callback::new(move |tag| state.commit(tag))
-            />
+                    autocomplete="off"
+                />
+                <TagSuggestions
+                    suggestions=state.suggestions
+                    suggestions_open=state.suggestions_open
+                    selected_idx=state.selected_idx
+                    on_commit=Callback::new(move |tag| state.commit(tag))
+                />
+            </div>
+            {move || state.error.get().map(|e| view! { <p class="j-tag-error">{e}</p> })}
         </div>
-        {move || state.error.get().map(|e| view! { <p class="j-tag-error">{e}</p> })}
     }
 }
 
