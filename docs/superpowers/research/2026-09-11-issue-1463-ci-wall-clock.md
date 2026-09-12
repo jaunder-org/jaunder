@@ -163,30 +163,35 @@ diagnostic warm baseline (31:13) versus final-head warmed run (28:02) is **3:11
 pair—but #2210's failed e2e matrix and the required pair count prevent a
 threshold verdict.
 
-Cold acceptance is currently unmet: #2210 attempt 1 (44:35) versus #2211 attempt
-1 (44:59) regressed **0:24** at workflow/job level. Their validation commands
-alone improved from 41:32 to 39:15 (**2:17, 5.5%**), still below the threshold.
-Further controlled cold pairs and a successful baseline rerun remain required
-before any verdict.
+The #2210 attempt-1/#2211 attempt-1 cold comparison is also diagnostic only:
+44:35 versus 44:59 regressed 0:24 at workflow/job level, while validation
+commands improved 41:32 to 39:15 (**2:17, 5.5%**). It is not a qualifying
+threshold observation. Spec-matched cold pairs with prerequisite
+realization/substitution evidence, a successful baseline rerun, and the required
+warm pairs remain necessary before any verdict.
 
-### Controlled cold-marker pairs
+### Controlled cold-marker diagnostics
 
-Each pair applies the identical temporary comment marker to `common/src/lib.rs`
-and runs the full required graph; the marker was removed after measurement.
+Each comparison applies the identical temporary comment marker to
+`common/src/lib.rs` and runs the full required graph; the marker was removed
+after measurement. They are **controlled diagnostics, not spec-matched pairs**:
+the baseline/treatment refs differ by more than the isolated implementation/ref
+identity, and the runs lack the per-prerequisite realization/substitution
+evidence the approved spec requires. The arithmetic below must not be used for
+the threshold calculation.
 
-| Pair         | Baseline                                                                                      | Treatment                                                                                                       |                               Result | Threshold status                                                                                                                                                             |
-| ------------ | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | -----------------------------------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A            | [#1470](https://github.com/jaunder-org/jaunder/actions/runs/34650931625), all green, 44:05    | [#1467](https://github.com/jaunder-org/jaunder/actions/runs/34655060127), all green, 40:44                      |         **+3:21** (201 s), **7.60%** | Clears the three-minute arm only.                                                                                                                                            |
-| B — excluded | [baseline](https://github.com/jaunder-org/jaunder/actions/runs/34658567242), all green, 42:55 | [treatment](https://github.com/jaunder-org/jaunder/actions/runs/34662786280), validation 40:41; workflow failed | +2:14 (134 s), 5.20% diagnostic only | Excluded: PostgreSQL/Firefox failed the theme-management test after retry (`Public` selection remained `inherit`, expected theme ID), unrelated to the marker/timing change. |
-| C            | [baseline](https://github.com/jaunder-org/jaunder/actions/runs/34665673659), all green, 34:51 | [treatment](https://github.com/jaunder-org/jaunder/actions/runs/34667793477), all green, 35:38                  |        **−0:47** (−47 s), **−2.25%** | Regression.                                                                                                                                                                  |
-| D            | [baseline](https://github.com/jaunder-org/jaunder/actions/runs/34670826980), all green, 43:54 | [treatment](https://github.com/jaunder-org/jaunder/actions/runs/34673226997), all green, 41:47                  |         **+2:07** (127 s), **4.82%** | Below both arms.                                                                                                                                                             |
+| Comparison            | Baseline                                                                                      | Treatment                                                                                                       |                Wall-clock diagnostic |                           Runner-time proxy diagnostic |
+| --------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | -----------------------------------: | -----------------------------------------------------: |
+| A                     | [#1470](https://github.com/jaunder-org/jaunder/actions/runs/34650931625), all green, 44:05    | [#1467](https://github.com/jaunder-org/jaunder/actions/runs/34655060127), all green, 40:44                      |                 +3:21 (201 s), 7.60% |            8,212 s → 7,973 s: **−239 s** (3:59, 2.91%) |
+| B — excluded workflow | [baseline](https://github.com/jaunder-org/jaunder/actions/runs/34658567242), all green, 42:55 | [treatment](https://github.com/jaunder-org/jaunder/actions/runs/34662786280), validation 40:41; workflow failed | +2:14 (134 s), 5.20% diagnostic only |                7,856 s → 7,522 s: −334 s (5:34, 4.25%) |
+| C                     | [baseline](https://github.com/jaunder-org/jaunder/actions/runs/34665673659), all green, 34:51 | [treatment](https://github.com/jaunder-org/jaunder/actions/runs/34667793477), all green, 35:38                  |                −0:47 (−47 s), −2.25% | 7,238 s → 7,472 s: **+234 s** (3:54, 3.23% regression) |
+| D                     | [baseline](https://github.com/jaunder-org/jaunder/actions/runs/34670826980), all green, 43:54 | [treatment](https://github.com/jaunder-org/jaunder/actions/runs/34673226997), all green, 41:47                  |                 +2:07 (127 s), 4.82% |             7,575 s → 7,531 s: **−44 s** (0:44, 0.58%) |
 
-The adaptive third valid pair was required because A and C have opposite signs
-and differ by more than two minutes. The authoritative valid A/C/D medians are
-**+2:07** and **+4.82%**, below both the three-minute and 10% thresholds. Cold
-acceptance therefore fails. Warm evidence has only the one qualifying diagnostic
-pair (+3:11, 10.2%) and stable treatment repeats—not the required two matched
-pairs. The issue acceptance is unmet; the issue remains open and this work stops
+The A/C/D green diagnostics have a median runner-time-proxy saving of **44 s**.
+These are summed job elapsed intervals, not billed-minute claims. No valid
+matched cold set exists. Warm evidence remains one diagnostic pair plus stable
+treatment repeats, short of the required two matched pairs. The issue acceptance
+is unmet; merge remains prohibited, the issue stays open, and this work stops
 rather than adding speculative architecture.
 
 ### Narrow-source baseline from #1289
@@ -313,10 +318,11 @@ leaves `pathsToPush` empty and now uses an anchored `pushFilter` against actual
 full output basenames. The excluded final-verdict set is
 `jaunder-coverage-0.1.0`, `jaunder-coverage-gate`, the four
 `vm-test-run-jaunder-e2e-{sqlite,postgres}-{chromium,firefox}` outputs, and
-`jaunder-e2e-checks`. Cacheable support outputs therefore remain directly
-eligible. Cachix documents `pushFilter` as a regular expression excluding
-derivations from pushing, warns that it is ignored with `pathsToPush`, and warns
-that a path can still be pushed through another path's closure
+`jaunder-e2e-checks`. Cacheable support outputs remain directly eligible under
+the filter match, but that is not proof of their closure behavior or reuse.
+Cachix documents `pushFilter` as a regular expression excluding derivations from
+pushing, warns that it is ignored with `pathsToPush`, and warns that a path can
+still be pushed through another path's closure
 ([Cachix action README](https://github.com/cachix/cachix-action/blob/master/README.md#push-configuration)).
 Its daemon hook applies the filter with `grep -vEe` to each full
 `/nix/store/<hash>-<name>` output path
@@ -328,8 +334,10 @@ checked every existing source-invalidation arm plus seven excluded final
 verdicts and six directly eligible supports. The first committed probe attempt
 failed against the Nix 2.33 schema and was corrected before this passing run; it
 is retained as experiment-ledger evidence, not a performance result. The probe
-establishes boundary semantics only: no Actions cold/warm wall-clock or
-runner-time improvement is claimed from the filter.
+proves **direct `pushFilter` matching only**, not closure-based final-verdict
+ineligibility or support reuse. Cache-boundary acceptance is therefore partial:
+the filter change must not land without a closure proof. No Actions cold/warm
+wall-clock or runner-time improvement is claimed from it.
 
 ## Candidate screen and threshold outcome
 
@@ -340,14 +348,14 @@ runner-time improvement is claimed from the filter.
 | Validation fan-out / internal partitioning   | The local 901,697-ms run has a 622,186-ms coverage producer and a 277,089-ms non-coverage total. The ideal overlap ceiling is 279,511 ms, but coverage producer→gate→host consumer and the other producer/consumer tails remain ordered; a partitioned coverage implementation must retain one union verdict. | **Highest potential, unproven; not selected.** Same-runner contention and duplicate Nix/setup work may reverse savings. Separate-runner fan-out must keep all added setup/transfer/aggregation under 99,511 ms to retain a three-minute path, then prove matched Actions pairs. |
 | Avoid duplicate coverage census binary build | Complete successful experiment 3 reconciled all 4,692 tests and passed the final host coverage gate. Against the instrumentation baseline, coverage-step time fell 433,871 ms (52.9%), producer stages 407,558 ms (52.5%), and instrumented run 318,530 ms (67.2%).                                           | **Selected local treatment; not final threshold evidence.** The 564,343-ms (30.2%) whole-local-path change is provisional because unrelated static/Elisp timings varied; matched cold/warm Actions pairs remain decisive.                                                       |
 | Narrow Nix source closures                   | #1289 proves docs/static isolation and records supported versus necessary fan-out.                                                                                                                                                                                                                            | **Already beneficial for local realization; no CI wall-clock claim.** Future changes require a source probe; no new closure change is selected by this report.                                                                                                                  |
-| Narrow Cachix exclusion to final verdicts    | Anchored actual output basenames exclude seven final verdicts while six support outputs are directly eligible; the committed probe passed all source arms and these boundary sets in 207,832 ms.                                                                                                              | **Implemented boundary proof; no performance claim.** Cachix closure semantics still apply, and matched Actions evidence is required before any wall-clock or runner-time conclusion.                                                                                           |
+| Narrow Cachix exclusion to final verdicts    | Anchored actual output basenames directly exclude seven final verdicts while six support outputs directly match as eligible; the committed probe passed all source arms and these direct sets in 207,832 ms.                                                                                                  | **Partial boundary proof; do not land yet.** It lacks a closure proof for final-verdict ineligibility and support reuse, and makes no performance claim.                                                                                                                        |
 
-Cold A/C/D are the authoritative adaptive three-pair set: their median **+2:07 /
-+4.82%** fails both threshold arms. Pair B is excluded because its workflow was
-not green. Warm evidence remains one qualifying diagnostic pair plus repeats,
-short of the required two matched pairs, and no post-change merge-group result
-exists. Consequently the issue acceptance is **unmet**: do not claim success or
-merge; keep the issue open.
+The cold A/B/C/D arithmetic is diagnostic only; it is not an authoritative
+adaptive set because **no valid matched cold set exists**. Warm evidence
+likewise has only one diagnostic pair plus repeats, short of the required two
+matched pairs, and no post-change merge-group result exists. Together with the
+partial cache-boundary proof, the issue acceptance is **unmet**: do not claim
+success or merge; keep the issue open.
 
 ## Source index
 
