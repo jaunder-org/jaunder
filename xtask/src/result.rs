@@ -406,6 +406,20 @@ fn render_pr_summary(pr: &crate::pr::PrReport) -> String {
     out
 }
 
+fn merge_nix_evidence(current: &mut Option<NixPhaseEvidence>, candidate: Option<NixPhaseEvidence>) {
+    let replace = match (current.as_ref(), candidate.as_ref()) {
+        (None, Some(_)) => true,
+        (Some(current), Some(candidate)) => {
+            current.classification == NixPhaseClassification::Unknown
+                && candidate.classification != NixPhaseClassification::Unknown
+        }
+        _ => false,
+    };
+    if replace {
+        *current = candidate;
+    }
+}
+
 impl CommandResult {
     pub fn new(command: &str) -> Self {
         Self {
@@ -450,19 +464,29 @@ impl CommandResult {
                 .iter_mut()
                 .find(|existing| existing.name == phase.name)
                 .expect("phase vocabulary is initialized in CommandResult::new");
-            if existing.outcome == PhaseOutcome::Unavailable {
-                *existing = phase;
-            } else if phase.outcome != PhaseOutcome::Unavailable {
-                existing.duration_ms = match (existing.duration_ms, phase.duration_ms) {
-                    (Some(left), Some(right)) => Some(left + right),
-                    (duration, None) | (None, duration) => duration,
-                };
-                if phase.outcome == PhaseOutcome::Failed {
-                    existing.outcome = PhaseOutcome::Failed;
+            match (existing.outcome, phase.outcome) {
+                (PhaseOutcome::Unavailable, PhaseOutcome::Unavailable) => {
+                    existing.detail = format!("{}; {}", existing.detail, phase.detail);
+                    merge_nix_evidence(&mut existing.nix, phase.nix);
                 }
-                existing.detail = format!("{}; {}", existing.detail, phase.detail);
-                if existing.nix.is_none() {
-                    existing.nix = phase.nix;
+                (PhaseOutcome::Unavailable, _) => {
+                    let prior_nix = existing.nix.take();
+                    *existing = phase;
+                    merge_nix_evidence(&mut existing.nix, prior_nix);
+                }
+                (_, PhaseOutcome::Unavailable) => {
+                    merge_nix_evidence(&mut existing.nix, phase.nix);
+                }
+                (_, _) => {
+                    existing.duration_ms = match (existing.duration_ms, phase.duration_ms) {
+                        (Some(left), Some(right)) => Some(left + right),
+                        (duration, None) | (None, duration) => duration,
+                    };
+                    if phase.outcome == PhaseOutcome::Failed {
+                        existing.outcome = PhaseOutcome::Failed;
+                    }
+                    existing.detail = format!("{}; {}", existing.detail, phase.detail);
+                    merge_nix_evidence(&mut existing.nix, phase.nix);
                 }
             }
         }
@@ -792,6 +816,44 @@ mod tests {
                 .unwrap()
                 .iter()
                 .all(|phase| phase["outcome"] == "unavailable" && phase["duration_ms"].is_null())
+        );
+    }
+
+    #[test]
+    fn unavailable_vm_phase_preserves_host_nix_reuse_evidence() {
+        let mut result = CommandResult::new("e2e-sqlite-chromium");
+        result.record_phases(
+            NixReport {
+                installable: ".#checks.x86_64-linux.e2e-sqlite-chromium".into(),
+                derivation: Some("/nix/store/e2e.drv".into()),
+                realization: NixRealization::Reused,
+            }
+            .phase_records(),
+        );
+        result.record_phases([PhaseRecord {
+            name: PhaseName::NixSubstitution,
+            duration_ms: None,
+            outcome: PhaseOutcome::Unavailable,
+            detail: "the VM cannot observe Nix substitution".into(),
+            nix: Some(NixPhaseEvidence {
+                classification: NixPhaseClassification::Unknown,
+                detail: "VM-side classification is unknown".into(),
+            }),
+        }]);
+
+        let substitution = result
+            .phases
+            .iter()
+            .find(|phase| phase.name == PhaseName::NixSubstitution)
+            .unwrap();
+        assert_eq!(
+            substitution.nix.as_ref().unwrap().classification,
+            NixPhaseClassification::Reused
+        );
+        assert!(
+            substitution
+                .detail
+                .contains("the VM cannot observe Nix substitution")
         );
     }
 
