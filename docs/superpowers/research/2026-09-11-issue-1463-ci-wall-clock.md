@@ -141,6 +141,41 @@ now retains concrete host evidence over an incoming `unknown` classification;
 its focused regression test passed, followed by all-green
 [Actions run #34700570775](https://github.com/jaunder-org/jaunder/actions/runs/34700570775).
 
+### Narrow/docs-only Actions observation
+
+The first documentation-only head,
+[`65c238c`](https://github.com/jaunder-org/jaunder/commit/65c238c27fdd16a6af88fdc2f838000143310aa1),
+failed both attempts of
+[#34702413035](https://github.com/jaunder-org/jaunder/actions/runs/34702413035)
+only at `rendered-html-compiler-boundary`. Its temporary downstream crate copied
+the workspace lockfile, which Cargo needed to adapt to the smaller graph, then
+incorrectly required that resolution to use an incompletely populated host cache
+with `--offline`. Removing that contradictory flag passed the full local check
+and the all-green source-changing
+[#34708323326](https://github.com/jaunder-org/jaunder/actions/runs/34708323326).
+
+The next commit,
+[`9e55b7a`](https://github.com/jaunder-org/jaunder/commit/9e55b7a8cf386c31689391058b48e281546bf57a),
+changed only this Markdown report relative to that green source head.
+[#34710334717](https://github.com/jaunder-org/jaunder/actions/runs/34710334717)
+was all green in **23:35** with validation again the critical path at **23:34**;
+the validation command took **20:13**, the slowest e2e job
+(SQLite/Firefox) took **20:53**, and the job-time proxy summed to **89:54**.
+The durable validation result totaled **1,125,035 ms**. Its principal Nix steps
+were `static-docs` 11,343 ms, `static-code` 7,250 ms, `wasm-budget` 56,583 ms,
+`wasm-tests` 8,422 ms, coverage 428,139 ms, doctests 32,424 ms, and the Elisp
+producer 9,869 ms. Nix reported those selected outputs as newly valid but did
+not expose substitution versus local-build attribution, so the aggregate
+classification remains **unknown**. Coverage stages were census 238,779 ms,
+instrumented execution 131,986 ms, text 9,351 ms, LCOV 9,247 ms, and all other
+stages 1,003 ms combined; the host verdict was clean across 63,789 executable
+lines with zero failures, guard violations, or CRAP violations.
+
+This completed Actions observation supplies the required narrow-change sample.
+It is not a matched performance pair: the preceding source-changing run
+populated shared prerequisites, while final coverage and e2e verdicts still
+executed for the documentation-only ref as required.
+
 ### Final-head repeat: #2213
 
 [Run #2213](https://github.com/jaunder-org/jaunder/actions/runs/34641076765) was
@@ -391,6 +426,12 @@ Merge-group verification remains pending the explicit merge gate.
   green diagnostic repeats with durable validation and coverage-stage evidence.
 - [Post-review Actions run](https://github.com/jaunder-org/jaunder/actions/runs/34700570775):
   all required jobs green after preserving stronger host Nix phase evidence.
+- [Failed narrow run](https://github.com/jaunder-org/jaunder/actions/runs/34702413035),
+  [compiler-boundary repair run](https://github.com/jaunder-org/jaunder/actions/runs/34708323326),
+  and
+  [successful narrow run](https://github.com/jaunder-org/jaunder/actions/runs/34710334717):
+  reproduced offline fixture-resolution failure, its correction, and the
+  completed documentation-only Actions observation.
 - Controlled cold pairs:
   [A baseline](https://github.com/jaunder-org/jaunder/actions/runs/34650931625),
   [A treatment](https://github.com/jaunder-org/jaunder/actions/runs/34655060127),
