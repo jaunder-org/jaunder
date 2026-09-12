@@ -42,6 +42,10 @@ use storage::{
 };
 
 pub mod panic_gate;
+pub mod performance;
+
+#[cfg(test)]
+mod performance_tests;
 
 /// The rendered-body source for seeded post `i` under `prefix`. Its Markdown H1
 /// renders the text `"{prefix} {i}"`, which the heavy e2e timeline tests assert

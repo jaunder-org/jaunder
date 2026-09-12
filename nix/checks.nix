@@ -9,11 +9,14 @@ let
     hostArgs
     wasmTestSrc
     siteSrc
+    siteCargoMembers
+    wasmTestCargoMembers
     appOfflineCargoHome
+    toolsOfflineCargoHome
     workspaceMembers
+    cargoTargetSource
     cargoMemberSource
     cargoPackageClosure
-    toolsOfflineCargoHome
     cargoArtifacts
     leanTestProfile
     leanDevAndTestProfile
@@ -36,6 +39,28 @@ let
   # The root workspace remains the coverage population. Its Cargo manifests
   # define the recursively discovered local path package build closure.
   coverageMembers = cargoPackageClosure workspaceMembers;
+  cargoSourcePath = relative: "${toString ../.}/${relative}";
+  siteTargetSource =
+    relative: cargoTargetSource siteCargoMembers (cargoSourcePath relative) "regular";
+  wasmTestTargetSource =
+    relative: cargoTargetSource wasmTestCargoMembers (cargoSourcePath relative) "regular";
+  sourceMembershipAssertions =
+    assert builtins.elem "tools/performance" siteCargoMembers;
+    assert builtins.elem "tools/performance" wasmTestCargoMembers;
+    assert (siteTargetSource "tools/performance/Cargo.toml");
+    assert (siteTargetSource "tools/performance/src/lib.rs");
+    assert (wasmTestTargetSource "tools/performance/Cargo.toml");
+    assert (wasmTestTargetSource "tools/performance/src/lib.rs");
+    assert !(siteTargetSource "tools/devtool/Cargo.toml");
+    assert !(siteTargetSource "tools/doctests/Cargo.toml");
+    assert !(siteTargetSource "tools/diagnostic-coverage-runtime/Cargo.toml");
+    assert !(siteTargetSource "xtask/Cargo.toml");
+    assert !(wasmTestTargetSource "tools/devtool/Cargo.toml");
+    assert !(wasmTestTargetSource "tools/doctests/Cargo.toml");
+    assert !(wasmTestTargetSource "tools/diagnostic-coverage-runtime/Cargo.toml");
+    assert !(wasmTestTargetSource "xtask/Cargo.toml");
+    true;
+
   # Coverage source remains bounded to Cargo-recognized package inputs plus the
   # explicit nextest profile, SQLx migration trees and rust-embed assets consumed
   # at compile time, and the immutable backup compatibility corpus consumed at
@@ -873,7 +898,7 @@ wasm-coverage-measure-firefox-instrumented = mkWasmCoverageMeasurementProducer {
   checks = pkgs.lib.optionalAttrs pkgs.stdenv.isLinux (
 e2eGateChecks
 // {
-  wasm-tests = craneLib.cargoTest (
+  wasm-tests = assert sourceMembershipAssertions; craneLib.cargoTest (
     commonArgs
     // {
       src = wasmTestSrc;

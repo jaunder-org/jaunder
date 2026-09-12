@@ -7,6 +7,7 @@ use host::{capture, feed::FeedEventPhase};
 use storage::DbConnectOptions;
 use test_support::{
     SandboxProfile, SandboxSeedStorage, create_session_for_user, create_user,
+    performance::{PerformanceSeedReceipt, PerformanceSeedStorage, seed_performance_fixture},
     reset_author_theme_fixture, reset_mail, sandbox_profile_anchor, seed_dead_letters,
     seed_posts_for_user, seed_published_author_theme, seed_sandbox_profile, seed_user,
 };
@@ -55,6 +56,21 @@ enum Commands {
         /// Fixed sandbox profile to create.
         #[arg(long, value_enum)]
         profile: SandboxProfileArg,
+    },
+    /// Populate a canonical deterministic performance fixture and atomically write its manifest.
+    PerfSeed {
+        /// Database URL (`sqlite:...` or `postgres://...`) for a freshly initialized database.
+        #[arg(long, env = "JAUNDER_DB")]
+        db: DbConnectOptions,
+        /// Canonical fixture size.
+        #[arg(long, value_enum)]
+        profile: PerformanceProfileArg,
+        /// Directory in which to atomically publish `dataset-manifest-v1.json`.
+        #[arg(long)]
+        output: std::path::PathBuf,
+        /// Canonical immutable Media-content root used by the live server.
+        #[arg(long, env = "JAUNDER_STORAGE_PATH")]
+        storage_path: std::path::PathBuf,
     },
     /// Publish and select the compiled custom-theme fixture for public browser proof.
     SeedTheme {
@@ -166,6 +182,23 @@ impl From<SandboxProfileArg> for SandboxProfile {
         }
     }
 }
+/// CLI spelling for canonical performance dataset profiles.
+#[derive(Clone, Copy, ValueEnum)]
+enum PerformanceProfileArg {
+    Small,
+    Medium,
+    Large,
+}
+
+impl From<PerformanceProfileArg> for performance::DatasetProfile {
+    fn from(profile: PerformanceProfileArg) -> Self {
+        match profile {
+            PerformanceProfileArg::Small => Self::Small,
+            PerformanceProfileArg::Medium => Self::Medium,
+            PerformanceProfileArg::Large => Self::Large,
+        }
+    }
+}
 
 fn inherited(name: &str) -> Result<Option<String>, std::env::VarError> {
     match std::env::var(name) {
@@ -251,6 +284,12 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             )
             .await
         }
+        Commands::PerfSeed {
+            db,
+            profile,
+            output,
+            storage_path,
+        } => cmd_perf_seed(&db, profile.into(), &output, &storage_path).await,
         Commands::SeedSandboxProfile {
             db,
             storage_path,
@@ -312,13 +351,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             let storage_runtime = storage_runtime_config(&db)?;
             cmd_create_session(&db, &storage_runtime, &username, label.as_deref()).await
         }
-        Commands::CapturePath { stream } => {
-            let stream = capture::Stream::parse(&stream)
-                .ok_or_else(|| anyhow::anyhow!("unknown capture stream {stream:?}"))?;
-            let path = capture_directory()?.path(stream);
-            cmd_capture_path(&path);
-            Ok(())
-        }
+        Commands::CapturePath { stream } => cmd_capture_path_for_stream(&stream),
         Commands::VerifyNoPanics {
             capture_dir,
             server_log,
@@ -333,6 +366,13 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
 fn capture_directory() -> anyhow::Result<capture::CaptureDirectory> {
     capture::CaptureDirectory::from_raw(std::env::var_os(capture::DIR_ENV))?
         .ok_or_else(|| anyhow::anyhow!("JAUNDER_CAPTURE_DIR is not set"))
+}
+fn cmd_capture_path_for_stream(stream: &str) -> anyhow::Result<()> {
+    let stream = capture::Stream::parse(stream)
+        .ok_or_else(|| anyhow::anyhow!("unknown capture stream {stream:?}"))?;
+    let path = capture_directory()?.path(stream);
+    cmd_capture_path(&path);
+    Ok(())
 }
 
 /// Seed one complete fixed sandbox profile and report only after its transaction commits.
@@ -392,6 +432,37 @@ async fn cmd_seed_posts(
     eprintln!("seeded {} posts for {username}", ids.len());
     Ok(())
 }
+/// Seed one canonical performance dataset and report its atomically published manifest.
+async fn cmd_perf_seed(
+    db: &DbConnectOptions,
+    profile: performance::DatasetProfile,
+    output: &std::path::Path,
+    storage_path: &std::path::Path,
+) -> anyhow::Result<()> {
+    let runtime = storage_runtime_config(db)?;
+    let factory = storage::open_existing_database(db, &runtime).await?;
+    let (_, duration_us) = seed_performance_fixture(
+        PerformanceSeedStorage {
+            users: factory.users(),
+            posts: factory.posts(),
+            subscriptions: factory.subscriptions(),
+            audiences: factory.audiences(),
+            media: factory.media(),
+            write_scope: factory.write_scope(),
+        },
+        profile,
+        output,
+        storage_path,
+    )
+    .await?;
+    let receipt = PerformanceSeedReceipt {
+        manifest_path: &output.join(performance::DATASET_MANIFEST_FILENAME),
+        seeding_duration_us: duration_us,
+    };
+    println!("{}", serde_json::to_string(&receipt)?);
+    Ok(())
+}
+
 /// Publish and select the compiled custom-theme fixture through the real storage path.
 async fn cmd_seed_theme(
     db: &DbConnectOptions,

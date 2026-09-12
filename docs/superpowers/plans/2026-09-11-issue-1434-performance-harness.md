@@ -68,7 +68,7 @@ incompatible formats the integrated design is intended to prevent.
     midpoint median and nearest-rank p95, incompatible-key rejection, and the
     advisory 20-percent boundary.
 
-- [ ] Task 2: Produce deterministic fixtures and the authoritative manifest
+- [x] Task 2: Produce deterministic fixtures and the authoritative manifest
   - Contract: extend `test-support` through real storage APIs with an internal
     performance seed command that consumes the shared contract, provisions every
     approved record distribution, and emits `dataset-manifest-v1.json`. It owns

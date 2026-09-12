@@ -222,13 +222,15 @@ let
         ) excludedMembers
       }
     '';
+  siteCargoMembers = [ "csr" "web" "client" "common" "macros" "tools/csr_bundle" "tools/performance" ];
+  wasmTestCargoMembers = [ "client" "common" "macros" "tools/csr_bundle" "tools/performance" ];
   siteSrc = withWorkspacePlaceholders
     "jaunder-site-cargo-source"
     (pkgs.lib.cleanSourceWith {
       src = craneLib.path ../.;
       filter =
         path: type:
-        cargoTargetSource [ "csr" "web" "client" "common" "macros" "tools/csr_bundle" ] path type
+        cargoTargetSource siteCargoMembers path type
         || pkgs.lib.hasSuffix "csr/index.html" path;
     })
     [ "host" "server" "storage" "test-support" ];
@@ -241,7 +243,7 @@ let
         let
           relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
         in
-        cargoTargetSource [ "client" "common" "macros" "tools/csr_bundle" ] path type
+        cargoTargetSource wasmTestCargoMembers path type
         || pkgs.lib.hasPrefix "client/tests/" relative;
     })
     [ "csr" "host" "server" "storage" "test-support" "web" ];
@@ -870,6 +872,8 @@ in
       hostArgs
       wasmTestSrc
       siteSrc
+      siteCargoMembers
+      wasmTestCargoMembers
       workspaceMembers
       cargoTargetSource
       cargoMemberSource
