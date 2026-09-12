@@ -6,6 +6,7 @@
 //! fixture proves that ordinary downstream use resolves; the negative fixtures prove
 //! privacy rejects both raw construction and the test-only fixture helper.
 
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -13,6 +14,7 @@ use std::process::Command;
 use crate::result::{CommandResult, StepResult};
 
 const STEP: &str = "rendered-html-compiler-boundary";
+const PRODUCT_CARGO_HOME: &str = "JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME";
 
 const POSITIVE: &str = r#"
 pub fn read(html: &common::render::RenderedHtml) -> &str {
@@ -58,12 +60,22 @@ fn manifest(common: &Path) -> String {
     )
 }
 
-fn cargo_check(manifest: &Path, target: &Path) -> std::io::Result<(bool, String)> {
-    let output = Command::new("cargo")
-        .args(["check", "--quiet", "--manifest-path"])
+fn cargo_command(manifest: &Path, target: &Path, cargo_home: &Path) -> Command {
+    let mut command = Command::new("cargo");
+    command
+        .args(["check", "--offline", "--quiet", "--manifest-path"])
         .arg(manifest)
-        .env("CARGO_TARGET_DIR", target)
-        .output()?;
+        .env("CARGO_HOME", cargo_home)
+        .env("CARGO_TARGET_DIR", target);
+    command
+}
+
+fn cargo_check(
+    manifest: &Path,
+    target: &Path,
+    cargo_home: &Path,
+) -> std::io::Result<(bool, String)> {
+    let output = cargo_command(manifest, target, cargo_home).output()?;
     let mut diagnostic = String::from_utf8_lossy(&output.stdout).into_owned();
     diagnostic.push_str(&String::from_utf8_lossy(&output.stderr));
     Ok((output.status.success(), diagnostic))
@@ -90,10 +102,27 @@ fn prepare_fixture(root: &Path, temporary: &Path) -> std::io::Result<(PathBuf, P
     Ok((manifest_path, source_path))
 }
 
+fn prepare_cargo_home(source: &Path, temporary: &Path) -> std::io::Result<PathBuf> {
+    let cargo_home = temporary.join("cargo-home");
+    fs::create_dir(&cargo_home)?;
+    fs::copy(source.join("config.toml"), cargo_home.join("config.toml"))?;
+    Ok(cargo_home)
+}
+
 fn check() -> std::result::Result<(), String> {
+    let product_cargo_home = env::var_os(PRODUCT_CARGO_HOME)
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            format!("{PRODUCT_CARGO_HOME} is not set; enter a Jaunder Nix development shell")
+        })?;
     let root =
         PathBuf::from(crate::git::toplevel(Path::new(".")).map_err(|error| error.to_string())?);
     let temporary = tempfile::tempdir().map_err(|error| error.to_string())?;
+    // Seed a fresh Cargo home with only the vendored source configuration.
+    // The real compiler fixtures therefore exercise a cold registry/cache on
+    // every run rather than trusting whatever the host previously downloaded.
+    let cargo_home = prepare_cargo_home(&product_cargo_home, temporary.path())
+        .map_err(|error| format!("prepare cold Cargo home: {error}"))?;
     let (manifest_path, source_path) =
         prepare_fixture(&root, temporary.path()).map_err(|error| error.to_string())?;
 
@@ -117,9 +146,12 @@ fn check() -> std::result::Result<(), String> {
 
     for fixture in fixtures {
         fs::write(&source_path, fixture.source).map_err(|error| error.to_string())?;
-        let (success, diagnostic) =
-            cargo_check(&manifest_path, &temporary.path().join("target"))
-                .map_err(|error| format!("{label}: {error}", label = fixture.label))?;
+        let (success, diagnostic) = cargo_check(
+            &manifest_path,
+            &temporary.path().join("target"),
+            &cargo_home,
+        )
+        .map_err(|error| format!("{label}: {error}", label = fixture.label))?;
         let observed = if fixture.label == "ordinary dependency resolution" {
             success
         } else {
