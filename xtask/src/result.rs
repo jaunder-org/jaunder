@@ -130,6 +130,8 @@ impl PhaseOutcome {
 /// Nix-specific phase classification and the evidence that supports it.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct NixPhaseEvidence {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub installables: Vec<String>,
     pub classification: NixPhaseClassification,
     pub detail: String,
 }
@@ -172,6 +174,7 @@ impl NixReport {
         };
         let evidence = NixPhaseEvidence {
             classification,
+            installables: vec![self.installable.clone()],
             detail: "host dry-run/path-info observation; Nix did not expose substitution or local-build evidence".into(),
         };
         [
@@ -407,16 +410,84 @@ fn render_pr_summary(pr: &crate::pr::PrReport) -> String {
 }
 
 fn merge_nix_evidence(current: &mut Option<NixPhaseEvidence>, candidate: Option<NixPhaseEvidence>) {
-    let replace = match (current.as_ref(), candidate.as_ref()) {
-        (None, Some(_)) => true,
-        (Some(current), Some(candidate)) => {
-            current.classification == NixPhaseClassification::Unknown
-                && candidate.classification != NixPhaseClassification::Unknown
-        }
-        _ => false,
+    let Some(mut candidate) = candidate else {
+        return;
     };
-    if replace {
-        *current = candidate;
+    let Some(existing) = current.as_mut() else {
+        *current = Some(candidate);
+        return;
+    };
+
+    if candidate.installables.is_empty()
+        && candidate.classification == NixPhaseClassification::Unknown
+    {
+        return;
+    }
+    if existing.installables.is_empty()
+        && existing.classification == NixPhaseClassification::Unknown
+    {
+        *existing = candidate;
+        return;
+    }
+
+    if existing.installables == candidate.installables {
+        if existing.classification == NixPhaseClassification::Unknown
+            && candidate.classification != NixPhaseClassification::Unknown
+        {
+            *existing = candidate;
+        }
+        return;
+    }
+
+    if existing.classification != candidate.classification {
+        existing.classification = NixPhaseClassification::Unknown;
+    }
+    for installable in candidate.installables.drain(..) {
+        if !existing.installables.contains(&installable) {
+            existing.installables.push(installable);
+        }
+    }
+    existing.detail = format!("{}; {}", existing.detail, candidate.detail);
+}
+
+#[derive(Clone, Copy)]
+enum PhaseDurationMerge {
+    Sum,
+    Max,
+}
+
+fn merge_phase_record(
+    existing: &mut PhaseRecord,
+    phase: PhaseRecord,
+    duration_merge: PhaseDurationMerge,
+) {
+    match (existing.outcome, phase.outcome) {
+        (PhaseOutcome::Unavailable, PhaseOutcome::Unavailable) => {
+            existing.detail = format!("{}; {}", existing.detail, phase.detail);
+            merge_nix_evidence(&mut existing.nix, phase.nix);
+        }
+        (PhaseOutcome::Unavailable, _) => {
+            let prior_nix = existing.nix.take();
+            *existing = phase;
+            merge_nix_evidence(&mut existing.nix, prior_nix);
+        }
+        (_, PhaseOutcome::Unavailable) => {
+            merge_nix_evidence(&mut existing.nix, phase.nix);
+        }
+        (_, _) => {
+            existing.duration_ms = match (existing.duration_ms, phase.duration_ms) {
+                (Some(left), Some(right)) => Some(match duration_merge {
+                    PhaseDurationMerge::Sum => left + right,
+                    PhaseDurationMerge::Max => left.max(right),
+                }),
+                (duration, None) | (None, duration) => duration,
+            };
+            if phase.outcome == PhaseOutcome::Failed {
+                existing.outcome = PhaseOutcome::Failed;
+            }
+            existing.detail = format!("{}; {}", existing.detail, phase.detail);
+            merge_nix_evidence(&mut existing.nix, phase.nix);
+        }
     }
 }
 
@@ -464,32 +535,28 @@ impl CommandResult {
                 .iter_mut()
                 .find(|existing| existing.name == phase.name)
                 .expect("phase vocabulary is initialized in CommandResult::new");
-            match (existing.outcome, phase.outcome) {
-                (PhaseOutcome::Unavailable, PhaseOutcome::Unavailable) => {
-                    existing.detail = format!("{}; {}", existing.detail, phase.detail);
-                    merge_nix_evidence(&mut existing.nix, phase.nix);
-                }
-                (PhaseOutcome::Unavailable, _) => {
-                    let prior_nix = existing.nix.take();
-                    *existing = phase;
-                    merge_nix_evidence(&mut existing.nix, prior_nix);
-                }
-                (_, PhaseOutcome::Unavailable) => {
-                    merge_nix_evidence(&mut existing.nix, phase.nix);
-                }
-                (_, _) => {
-                    existing.duration_ms = match (existing.duration_ms, phase.duration_ms) {
-                        (Some(left), Some(right)) => Some(left + right),
-                        (duration, None) | (None, duration) => duration,
-                    };
-                    if phase.outcome == PhaseOutcome::Failed {
-                        existing.outcome = PhaseOutcome::Failed;
-                    }
-                    existing.detail = format!("{}; {}", existing.detail, phase.detail);
-                    merge_nix_evidence(&mut existing.nix, phase.nix);
-                }
+            merge_phase_record(existing, phase, PhaseDurationMerge::Sum);
+        }
+    }
+
+    /// Record phase groups that executed concurrently. Their longest observed
+    /// duration contributes to the enclosing command's elapsed phase time.
+    pub fn record_parallel_phases(
+        &mut self,
+        groups: impl IntoIterator<Item = impl IntoIterator<Item = PhaseRecord>>,
+    ) {
+        let mut concurrent = Vec::<PhaseRecord>::new();
+        for phase in groups.into_iter().flatten() {
+            if let Some(existing) = concurrent
+                .iter_mut()
+                .find(|existing| existing.name == phase.name)
+            {
+                merge_phase_record(existing, phase, PhaseDurationMerge::Max);
+            } else {
+                concurrent.push(phase);
             }
         }
+        self.record_phases(concurrent);
     }
 
     pub fn exit_code(&self) -> i32 {
@@ -836,6 +903,7 @@ mod tests {
             outcome: PhaseOutcome::Unavailable,
             detail: "the VM cannot observe Nix substitution".into(),
             nix: Some(NixPhaseEvidence {
+                installables: Vec::new(),
                 classification: NixPhaseClassification::Unknown,
                 detail: "VM-side classification is unknown".into(),
             }),
@@ -855,6 +923,78 @@ mod tests {
                 .detail
                 .contains("the VM cannot observe Nix substitution")
         );
+    }
+
+    #[test]
+    fn mixed_host_nix_observations_are_unknown() {
+        let mut result = CommandResult::new("validate");
+        result.record_phases(
+            NixReport {
+                installable: ".#checks.x86_64-linux.static-docs".into(),
+                derivation: Some("/nix/store/static-docs.drv".into()),
+                realization: NixRealization::Reused,
+            }
+            .phase_records(),
+        );
+        result.record_phases(
+            NixReport {
+                installable: ".#checks.x86_64-linux.coverage".into(),
+                derivation: Some("/nix/store/coverage.drv".into()),
+                realization: NixRealization::Realized,
+            }
+            .phase_records(),
+        );
+
+        let substitution = result
+            .phases
+            .iter()
+            .find(|phase| phase.name == PhaseName::NixSubstitution)
+            .unwrap();
+        let evidence = substitution.nix.as_ref().unwrap();
+        assert_eq!(evidence.classification, NixPhaseClassification::Unknown);
+        assert_eq!(
+            evidence.installables,
+            [
+                ".#checks.x86_64-linux.static-docs",
+                ".#checks.x86_64-linux.coverage"
+            ]
+        );
+    }
+
+    #[test]
+    fn parallel_phase_groups_contribute_the_longest_duration() {
+        let mut result = CommandResult::new("validate");
+        result.record_phases([PhaseRecord {
+            name: PhaseName::GateExecution,
+            duration_ms: Some(30),
+            outcome: PhaseOutcome::Success,
+            detail: "serialized validation".into(),
+            nix: None,
+        }]);
+        result.record_parallel_phases([
+            [PhaseRecord {
+                name: PhaseName::GateExecution,
+                duration_ms: Some(40),
+                outcome: PhaseOutcome::Success,
+                detail: "sqlite/chromium".into(),
+                nix: None,
+            }],
+            [PhaseRecord {
+                name: PhaseName::GateExecution,
+                duration_ms: Some(70),
+                outcome: PhaseOutcome::Failed,
+                detail: "postgres/firefox".into(),
+                nix: None,
+            }],
+        ]);
+
+        let gate = result
+            .phases
+            .iter()
+            .find(|phase| phase.name == PhaseName::GateExecution)
+            .unwrap();
+        assert_eq!(gate.duration_ms, Some(100));
+        assert_eq!(gate.outcome, PhaseOutcome::Failed);
     }
 
     #[test]

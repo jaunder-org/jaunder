@@ -498,6 +498,7 @@ pub fn e2e(result: &mut CommandResult) -> E2eOutcome {
         let check = format!("e2e-{backend}-{browser}");
         build_check(&format!("nix-{check}"), &check)
     });
+    let mut phase_groups = Vec::new();
     for ((backend, browser), build) in builds {
         let check = format!("e2e-{backend}-{browser}");
         finish_e2e_combo(
@@ -511,13 +512,15 @@ pub fn e2e(result: &mut CommandResult) -> E2eOutcome {
             },
             || validate_lifted_e2e_combo(backend, browser),
         );
-        lift_e2e_phase_records(
-            result,
+        if let Some(phases) = read_e2e_phase_records(
             Path::new(&format!(".xtask/diagnostics/{check}")),
             backend,
             browser,
-        );
+        ) {
+            phase_groups.push(phases);
+        }
     }
+    result.record_parallel_phases(phase_groups);
     E2eOutcome::from_combo_steps(&result.steps[combo_start..])
 }
 
@@ -561,12 +564,13 @@ pub fn e2e_combo(result: &mut CommandResult, backend: &str, browser: &str) {
         },
         || validate_lifted_e2e_combo(backend, browser),
     );
-    lift_e2e_phase_records(
-        result,
+    if let Some(phases) = read_e2e_phase_records(
         Path::new(&format!(".xtask/diagnostics/{check}")),
         backend,
         browser,
-    );
+    ) {
+        result.record_phases(phases);
+    }
 }
 
 /// Validate one successful lifted E2E combination in the fixed post-build order.
@@ -608,12 +612,11 @@ struct E2ePhaseSidecar {
     phases: Vec<PhaseRecord>,
 }
 
-fn lift_e2e_phase_records(
-    result: &mut CommandResult,
+fn read_e2e_phase_records(
     diagnostics_dir: &Path,
     backend: &str,
     browser: &str,
-) {
+) -> Option<Vec<PhaseRecord>> {
     let path = diagnostics_dir.join(format!("e2e-phase-{backend}.json"));
     let sidecar = fs::read_to_string(&path)
         .ok()
@@ -622,13 +625,14 @@ fn lift_e2e_phase_records(
             sidecar.schema_version == 1 && sidecar.backend == backend && sidecar.browser == browser
         });
     if let Some(sidecar) = sidecar {
-        result.record_phases(sidecar.phases);
+        Some(sidecar.phases)
     } else {
         // Phase evidence is diagnostic-only: malformed or absent timing cannot
         // turn a completed E2E gate into a new host-side failure.
         eprintln!(
             "xtask: warning: xtask.nix.e2e_phase: unavailable or invalid phase sidecar for {backend}-{browser}"
         );
+        None
     }
 }
 
