@@ -2224,11 +2224,12 @@ contains the production `elisp/*.el` modules rooted at `jaunder.el`, excluding
 `elisp/test/`, `elisp/scripts/`, and documentation; it carries Nixpkgs's
 packaged `plz` and the pinned `cmark` Emacs package transitively. Nixpkgs's
 `plz` provides its immutable Nix-store curl executable reference, so the
-Protocol Client adds no separate curl PATH propagation. `packages.jaunder`
-remains the deployable server-binary output. `packages.site` is **no longer a
-deployment artifact** — the binary embeds the bundle — and is retained only so
-`cargo xtask audit-wasm` can build `.#site` and inspect the bundle for size
-analysis (`nix/packages.nix:296-305`,
+Protocol Client adds no separate curl PATH propagation
+([Emacs Protocol Client flake package output](adr/drafts/emacs-protocol-client-flake-package-output.md)).
+`packages.jaunder` remains the deployable server-binary output. `packages.site`
+is **no longer a deployment artifact** — the binary embeds the bundle — and is
+retained only so `cargo xtask audit-wasm` can build `.#site` and inspect the
+bundle for size analysis (`nix/packages.nix:296-305`,
 [declarative NixOS deployment and package outputs](adr/0142-declarative-nixos-deployment-package-outputs.md)).
 The `services.jaunder` module (`nix/nixos.nix:21-97`) has only ADR-0142's
 operator options: `enable`, `bind`, `db`, and `prod`. It creates a dedicated
