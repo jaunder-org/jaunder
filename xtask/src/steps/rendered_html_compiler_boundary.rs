@@ -60,7 +60,7 @@ fn manifest(common: &Path) -> String {
 
 fn cargo_check(manifest: &Path, target: &Path) -> std::io::Result<(bool, String)> {
     let output = Command::new("cargo")
-        .args(["check", "--offline", "--quiet", "--manifest-path"])
+        .args(["check", "--quiet", "--manifest-path"])
         .arg(manifest)
         .env("CARGO_TARGET_DIR", target)
         .output()?;
