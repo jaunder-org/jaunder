@@ -169,6 +169,26 @@ alone improved from 41:32 to 39:15 (**2:17, 5.5%**), still below the threshold.
 Further controlled cold pairs and a successful baseline rerun remain required
 before any verdict.
 
+### Controlled cold-marker pairs
+
+Each pair applies the identical temporary comment marker to `common/src/lib.rs`
+and runs the full required graph; the marker was removed after measurement.
+
+| Pair         | Baseline                                                                                      | Treatment                                                                                                       |                               Result | Threshold status                                                                                                                                                             |
+| ------------ | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | -----------------------------------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A            | [#1470](https://github.com/jaunder-org/jaunder/actions/runs/34650931625), all green, 44:05    | [#1467](https://github.com/jaunder-org/jaunder/actions/runs/34655060127), all green, 40:44                      |         **+3:21** (201 s), **7.60%** | Clears the three-minute arm only.                                                                                                                                            |
+| B — excluded | [baseline](https://github.com/jaunder-org/jaunder/actions/runs/34658567242), all green, 42:55 | [treatment](https://github.com/jaunder-org/jaunder/actions/runs/34662786280), validation 40:41; workflow failed | +2:14 (134 s), 5.20% diagnostic only | Excluded: PostgreSQL/Firefox failed the theme-management test after retry (`Public` selection remained `inherit`, expected theme ID), unrelated to the marker/timing change. |
+| C            | [baseline](https://github.com/jaunder-org/jaunder/actions/runs/34665673659), all green, 34:51 | [treatment](https://github.com/jaunder-org/jaunder/actions/runs/34667793477), all green, 35:38                  |        **−0:47** (−47 s), **−2.25%** | Regression.                                                                                                                                                                  |
+| D            | [baseline](https://github.com/jaunder-org/jaunder/actions/runs/34670826980), all green, 43:54 | [treatment](https://github.com/jaunder-org/jaunder/actions/runs/34673226997), all green, 41:47                  |         **+2:07** (127 s), **4.82%** | Below both arms.                                                                                                                                                             |
+
+The adaptive third valid pair was required because A and C have opposite signs
+and differ by more than two minutes. The authoritative valid A/C/D medians are
+**+2:07** and **+4.82%**, below both the three-minute and 10% thresholds. Cold
+acceptance therefore fails. Warm evidence has only the one qualifying diagnostic
+pair (+3:11, 10.2%) and stable treatment repeats—not the required two matched
+pairs. The issue acceptance is unmet; the issue remains open and this work stops
+rather than adding speculative architecture.
+
 ### Narrow-source baseline from #1289
 
 [#1289](https://github.com/jaunder-org/jaunder/issues/1289) deliberately
@@ -311,7 +331,7 @@ is retained as experiment-ledger evidence, not a performance result. The probe
 establishes boundary semantics only: no Actions cold/warm wall-clock or
 runner-time improvement is claimed from the filter.
 
-## Candidate screen — no threshold verdict
+## Candidate screen and threshold outcome
 
 | Candidate                                    | Evidence / expected critical-path effect                                                                                                                                                                                                                                                                      | Status and rationale                                                                                                                                                                                                                                                            |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -322,11 +342,12 @@ runner-time improvement is claimed from the filter.
 | Narrow Nix source closures                   | #1289 proves docs/static isolation and records supported versus necessary fan-out.                                                                                                                                                                                                                            | **Already beneficial for local realization; no CI wall-clock claim.** Future changes require a source probe; no new closure change is selected by this report.                                                                                                                  |
 | Narrow Cachix exclusion to final verdicts    | Anchored actual output basenames exclude seven final verdicts while six support outputs are directly eligible; the committed probe passed all source arms and these boundary sets in 207,832 ms.                                                                                                              | **Implemented boundary proof; no performance claim.** Cachix closure semantics still apply, and matched Actions evidence is required before any wall-clock or runner-time conclusion.                                                                                           |
 
-No candidate has two matched cold and warmed treatment pairs, no adaptive
-third-pair condition can be evaluated, and no candidate has a post-change
-merge-group observation. Consequently **no 10%/three-minute threshold verdict is
-applied**. The report records the baseline and rejections only; it does not
-claim a post-change improvement.
+Cold A/C/D are the authoritative adaptive three-pair set: their median **+2:07 /
++4.82%** fails both threshold arms. Pair B is excluded because its workflow was
+not green. Warm evidence remains one qualifying diagnostic pair plus repeats,
+short of the required two matched pairs, and no post-change merge-group result
+exists. Consequently the issue acceptance is **unmet**: do not claim success or
+merge; keep the issue open.
 
 ## Source index
 
@@ -349,6 +370,17 @@ claim a post-change improvement.
 - [Final-head Actions run #2213](https://github.com/jaunder-org/jaunder/actions/runs/34641076765):
   two green stable repeats with durable validation and coverage-stage evidence,
   pending a corresponding baseline rerun.
+- Controlled cold pairs:
+  [A baseline](https://github.com/jaunder-org/jaunder/actions/runs/34650931625),
+  [A treatment](https://github.com/jaunder-org/jaunder/actions/runs/34655060127),
+  [B baseline](https://github.com/jaunder-org/jaunder/actions/runs/34658567242),
+  [B treatment (excluded)](https://github.com/jaunder-org/jaunder/actions/runs/34662786280),
+  [C baseline](https://github.com/jaunder-org/jaunder/actions/runs/34665673659),
+  [C treatment](https://github.com/jaunder-org/jaunder/actions/runs/34667793477),
+  [D baseline](https://github.com/jaunder-org/jaunder/actions/runs/34670826980),
+  and
+  [D treatment](https://github.com/jaunder-org/jaunder/actions/runs/34673226997):
+  full-graph temporary-marker evidence and adaptive median calculation.
 - [#1289 measurement report](2026-09-04-issue-1289-nix-invalidation-boundaries.md),
   [ADR-0178](../../adr/0178-split-hermetic-static-check-boundaries.md), and
   [#1289](https://github.com/jaunder-org/jaunder/issues/1289): controlled
