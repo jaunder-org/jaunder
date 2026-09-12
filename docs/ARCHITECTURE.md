@@ -2272,8 +2272,9 @@ org-mode buffers over AtomPub plus the jaunder wire extensions
 owns the wire format). It lives in the top-level `elisp/` directory as a single
 `jaunder` package and is directly consumable through the per-default-system
 `emacsPackages.${system}.jaunder` flake output; this is separate from the
-deployable `packages.jaunder` server binary. It is a first-class but
-separately-tested subproject
+deployable `packages.jaunder` server binary
+([Emacs Protocol Client flake package output](adr/drafts/emacs-protocol-client-flake-package-output.md)).
+It is a first-class but separately-tested subproject
 ([ADR-0031](adr/0031-elisp-separately-tested-subproject.md)) with a self-booting
 live-server integration harness, `jaunder-test--with-live-server`
 ([ADR-0035](adr/0035-elisp-live-integration-harness.md)) — the testing section
