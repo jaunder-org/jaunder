@@ -4,11 +4,11 @@
 
 This is the Task 2 baseline required by
 [#1463](https://github.com/jaunder-org/jaunder/issues/1463) and its
-[approved spec](../specs/2026-09-11-issue-1463-lower-ci-wall-clock.md). The
-target is elapsed time until the last trustworthy required check, **not** the
-sum of concurrent runner time. The two historical Actions observations below are
-immutable baseline evidence, not baseline/treatment pairs: they differ in ref,
-event, change, cache population, and cannot isolate an implementation.
+[approved spec](../../archive/2026-09-11-issue-1463-lower-ci-wall-clock-spec.md).
+The target is elapsed time until the last trustworthy required check, **not**
+the sum of concurrent runner time. The two historical Actions observations below
+are immutable baseline evidence, not baseline/treatment pairs: they differ in
+ref, event, change, cache population, and cannot isolate an implementation.
 
 GitHub exposes job and top-level-step timestamps for these pre-instrumentation
 runs; it does not expose Nix evaluation, substitution, local-build,
@@ -159,17 +159,17 @@ The next commit,
 changed only this Markdown report relative to that green source head.
 [#34710334717](https://github.com/jaunder-org/jaunder/actions/runs/34710334717)
 was all green in **23:35** with validation again the critical path at **23:34**;
-the validation command took **20:13**, the slowest e2e job
-(SQLite/Firefox) took **20:53**, and the job-time proxy summed to **89:54**.
-The durable validation result totaled **1,125,035 ms**. Its principal Nix steps
-were `static-docs` 11,343 ms, `static-code` 7,250 ms, `wasm-budget` 56,583 ms,
-`wasm-tests` 8,422 ms, coverage 428,139 ms, doctests 32,424 ms, and the Elisp
-producer 9,869 ms. Nix reported those selected outputs as newly valid but did
-not expose substitution versus local-build attribution, so the aggregate
-classification remains **unknown**. Coverage stages were census 238,779 ms,
-instrumented execution 131,986 ms, text 9,351 ms, LCOV 9,247 ms, and all other
-stages 1,003 ms combined; the host verdict was clean across 63,789 executable
-lines with zero failures, guard violations, or CRAP violations.
+the validation command took **20:13**, the slowest e2e job (SQLite/Firefox) took
+**20:53**, and the job-time proxy summed to **89:54**. The durable validation
+result totaled **1,125,035 ms**. Its principal Nix steps were `static-docs`
+11,343 ms, `static-code` 7,250 ms, `wasm-budget` 56,583 ms, `wasm-tests` 8,422
+ms, coverage 428,139 ms, doctests 32,424 ms, and the Elisp producer 9,869 ms.
+Nix reported those selected outputs as newly valid but did not expose
+substitution versus local-build attribution, so the aggregate classification
+remains **unknown**. Coverage stages were census 238,779 ms, instrumented
+execution 131,986 ms, text 9,351 ms, LCOV 9,247 ms, and all other stages 1,003
+ms combined; the host verdict was clean across 63,789 executable lines with zero
+failures, guard violations, or CRAP violations.
 
 This completed Actions observation supplies the required narrow-change sample.
 It is not a matched performance pair: the preceding source-changing run
