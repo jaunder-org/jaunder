@@ -25,3 +25,21 @@ export async function expectVisual(
     threshold: 0,
   });
 }
+
+/** Compare one stable UI region without pinning unrelated page chrome. */
+export async function expectVisualRegion(
+  page: Page,
+  region: Locator,
+  name: string,
+  options: VisualOptions = {},
+): Promise<void> {
+  await page.evaluate(() => document.fonts.ready);
+  await expect(region).toHaveScreenshot(name, {
+    animations: "disabled",
+    caret: "hide",
+    mask: options.mask,
+    maxDiffPixels: 0,
+    stylePath,
+    threshold: 0,
+  });
+}

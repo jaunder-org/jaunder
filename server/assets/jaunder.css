@@ -1491,10 +1491,29 @@
 
 .j-draft-actions {
  display: flex;
- flex-direction: column;
+ flex-wrap: wrap;
  gap: 8px;
- flex-shrink: 0;
- align-items: flex-end;
+ justify-content: flex-end;
+}
+
+@media (max-width: 720px) {
+ .j-draft-page {
+  padding-inline: 4px;
+ }
+
+ .j-draft-row {
+  flex-direction: column;
+  padding-inline: 4px;
+ }
+
+ .j-draft-actions {
+  width: 100%;
+  justify-content: flex-start;
+ }
+
+ .j-draft-actions .j-btn {
+  padding-inline: 2px;
+ }
 }
 
 /* ─── tables ─── */
