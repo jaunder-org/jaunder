@@ -8,6 +8,7 @@ import { fetchFeedContaining } from "./feeds";
 import type { NewTracedContext } from "./fixtures";
 import {
   BASE_URL,
+  click,
   confirmedMutation,
   goto,
   login,
@@ -871,10 +872,14 @@ export async function verifyFreshAppPasswordLifecycle(
   } finally {
     await atomContext.dispose();
   }
-  await page
-    .locator("li", { hasText: "Production baseline revocable" })
-    .getByRole("button", { name: "Revoke" })
-    .click();
+  const revocableRow = page.locator("li", {
+    hasText: "Production baseline revocable",
+  });
+  await click(
+    page,
+    'li:has-text("Production baseline revocable") button:has-text("Revoke")',
+  );
+  await expect(revocableRow).toHaveCount(0);
   const revokedContext = await isolatedRequest(tracedContext);
   try {
     expect(
