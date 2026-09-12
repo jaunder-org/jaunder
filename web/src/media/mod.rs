@@ -22,8 +22,8 @@ pub use format::{format_bytes, storage_usage_percent};
 // Same reason as `format_bytes` above — the wasm-only `component` is the only
 // caller, so these must stay reachable on the host build to avoid `dead_code`.
 pub use upload_state::{
-    UploadCallbacks, UploadOutcome, UploadPresentation, UploadState,
-    delete_invalidates_media_resources, upload_presentation,
+    UploadButtonPresentation, UploadCallbacks, UploadOutcome, UploadPresentation, UploadState,
+    delete_invalidates_media_resources, upload_button_presentation, upload_presentation,
 };
 
 pub use api::{

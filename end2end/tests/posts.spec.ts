@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import {
   test,
   expect,
@@ -123,6 +123,38 @@ test("authenticated user can create a post through the UI", async ({
   await expect(page.locator(SEL.saveSummary)).toContainText(
     "Slug: playwright-post",
   );
+});
+
+test("post create surfaces expose secondary actions as accessible icons", async ({
+  registeredPage,
+}) => {
+  const page = await registeredPage("/posts/new");
+  const expectAccessibleIcons = async (scope: Locator): Promise<void> => {
+    await expect(scope).toBeVisible();
+    await scope.locator(SEL.postBody).fill("Tooltip focus");
+    const attach = scope.getByRole("button", { name: "Attach media" });
+    const saveDraft = scope.locator(SEL.publishButton("false"));
+
+    for (const [button, label] of [
+      [attach, "Attach media"],
+      [saveDraft, "Save draft"],
+    ] as const) {
+      await expect(button).toHaveAttribute("aria-label", label);
+      await expect(button.locator("svg")).toHaveCount(1);
+      const tooltip = button.locator('[role="tooltip"]');
+      await expect(tooltip).toHaveText(label);
+      await expect(tooltip).toBeHidden();
+      await button.focus();
+      await expect(tooltip).toBeVisible();
+    }
+  };
+
+  await expectAccessibleIcons(page.locator(".j-compose-grid"));
+  await navigateInApp(page, () => click(page, 'a[href="/app"]'), {
+    url: "/app",
+    ready: ".j-composer",
+  });
+  await expectAccessibleIcons(page.locator(".j-composer"));
 });
 
 test("Post headers use the current display name with a handle-only fallback", async ({
@@ -798,7 +830,8 @@ test("live editor can reschedule and atomically save edits while unpublishing", 
   await expect(page.locator(SEL.postBody)).toHaveValue(
     /edited while unpublishing/,
   );
-  await expect(page.locator(SEL.publishButton("false"))).toHaveText(
+  await expect(page.locator(SEL.publishButton("false"))).toHaveAttribute(
+    "aria-label",
     "Save draft",
   );
 
@@ -807,7 +840,8 @@ test("live editor can reschedule and atomically save edits while unpublishing", 
   await click(page, SEL.publishButton("false"));
   await expect(page.locator(SEL.error)).toBeVisible();
   await expect(page.locator(SEL.postSlug)).toBeVisible();
-  await expect(page.locator(SEL.publishButton("false"))).toHaveText(
+  await expect(page.locator(SEL.publishButton("false"))).toHaveAttribute(
+    "aria-label",
     "Save draft",
   );
 });

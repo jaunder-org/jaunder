@@ -8,7 +8,7 @@ mod markup;
 mod paths;
 
 #[cfg(target_arch = "wasm32")]
-pub use component::Icon;
+pub use component::{Icon, IconButtonContent};
 pub(crate) use markup::render;
 /// SVG path `d` strings — the one source of truth the reactive [`Icon`] component
 /// and the pure [`render`] twin share.

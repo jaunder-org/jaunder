@@ -4,6 +4,7 @@ use crate::auth;
 use crate::avatar::Avatar;
 use crate::error::WebError;
 use crate::forms::{self, Field, ValidatedBareInput, ValidatedTextarea};
+use crate::icon::{IconButtonContent, Icons};
 use crate::media::MediaUpload;
 use crate::posts;
 use crate::posts::{
@@ -99,6 +100,87 @@ pub fn ComposerFields(
             on_input=on_input
         />
         {show_seg.then(move || view! { <FormatToggle format=format /> })}
+    }
+}
+
+/// The publication-specific controls rendered in the shared editor toolbar.
+#[derive(Clone, Copy)]
+pub(super) enum ComposerActions {
+    Save {
+        publication: LoadedPublication,
+        disabled: Signal<bool>,
+        unpublish_disabled: Signal<bool>,
+        on_save: Callback<bool>,
+    },
+    Create {
+        publish_at: RwSignal<String>,
+        scheduled: RwSignal<bool>,
+        disabled: Signal<bool>,
+        on_save: Callback<bool>,
+    },
+}
+
+/// The shared body-to-actions flow that identifies every post editor.
+#[component]
+pub(super) fn ComposerCore(
+    state: ComposeState,
+    actions: ComposerActions,
+    rows: u32,
+    placeholder: &'static str,
+    textarea_class: &'static str,
+    #[prop(optional_no_strip)] on_input: Option<Callback<()>>,
+) -> impl IntoView {
+    view! {
+        <div class="j-post-editor-panel">
+            <ComposerFields
+                body=state.body
+                format=state.format
+                rows=rows
+                placeholder=placeholder
+                field_class="j-composer-field"
+                textarea_class=textarea_class
+                show_seg=false
+                on_input=on_input
+            />
+            <div class="j-post-editor-media">
+                <MediaUpload show_result=true icon_only=true />
+            </div>
+            <ValidatedTextarea<PostSummary>
+                label="Summary"
+                name="summary"
+                field=state.summary_field
+                placeholder="Optional summary or excerpt"
+            />
+            <TagInput tags=state.tags on_change=state.tag_input_changed() />
+            <div class="j-composer-toolbar">
+                <FormatToggle format=state.format />
+                <span class="j-spacer"></span>
+                {match actions {
+                    ComposerActions::Save { publication, disabled, unpublish_disabled, on_save } => {
+                        view! {
+                            <PostSaveActions
+                                publication=publication
+                                disabled=disabled
+                                unpublish_disabled=unpublish_disabled
+                                on_save=on_save
+                            />
+                        }
+                            .into_any()
+                    }
+                    ComposerActions::Create { publish_at, scheduled, disabled, on_save } => {
+                        view! {
+                            <CreationPostActions
+                                publish_at=publish_at
+                                scheduled=scheduled
+                                disabled=disabled
+                                on_save=on_save
+                            />
+                        }
+                            .into_any()
+                    }
+                }}
+            </div>
+        </div>
     }
 }
 
@@ -230,46 +312,28 @@ fn CompactComposer(
     view! {
         <div class="j-composer-row">
             {username.map(|u| view! { <Avatar name=&u size=36 /> })} <div class="j-composer-body">
-                <ComposerFields
-                    body=state.body
-                    format=state.format
+                <ComposerCore
+                    state=state
+                    actions=ComposerActions::Save {
+                        publication: LoadedPublication::Draft,
+                        disabled: submit_disabled,
+                        unpublish_disabled: submit_disabled,
+                        on_save: dispatch,
+                    }
                     rows=rows
                     placeholder=placeholder
-                    field_class="j-composer-field"
                     textarea_class=""
-                    show_seg=false
                     on_input=on_input
                 />
-                <MediaUpload show_result=true />
-                <div style="margin-top:10px">
-                    <ValidatedTextarea<PostSummary>
-                        label="Summary"
-                        name="summary"
-                        field=state.summary_field
-                        placeholder="Optional summary or excerpt"
-                    />
-                </div>
-                <TagInput tags=state.tags on_change=state.tag_input_changed() />
-                <div class="j-composer-toolbar">
-                    <FormatToggle format=state.format />
-                    <span class="j-spacer"></span>
-                    <PostSaveActions
-                        publication=LoadedPublication::Draft
-                        disabled=submit_disabled
-                        unpublish_disabled=submit_disabled
-                        on_save=dispatch
-                    />
-                </div>
             </div>
         </div>
         <CreateErrorFlash action=create_action />
     }
 }
 
-/// The full compose page: body column plus the options aside ([`ComposeOptions`]), the
-/// media column ([`MediaSection`]) and the dispatch buttons. Split out of
-/// [`PostCreateForm`] (#301). The slug field is owned here and passed down — see
-/// [`ComposeState::seed_from`] for why the bundle does not hold it.
+/// The full compose page: the shared editor core plus its advanced options aside.
+/// Split out of [`PostCreateForm`] (#301). The slug field is owned here and passed
+/// down — see [`ComposeState::seed_from`] for why the bundle does not hold it.
 #[component]
 fn FullComposer(
     state: ComposeState,
@@ -308,14 +372,17 @@ fn FullComposer(
     view! {
         <div class="j-compose-grid">
             <div class="j-compose-body">
-                <ComposerFields
-                    body=state.body
-                    format=state.format
+                <ComposerCore
+                    state=state
+                    actions=ComposerActions::Create {
+                        publish_at: state.publish_at,
+                        scheduled: schedule.scheduled,
+                        disabled: submit_disabled,
+                        on_save: dispatch,
+                    }
                     rows=rows
                     placeholder=placeholder
-                    field_class="j-composer-field"
                     textarea_class="j-edit-form-textarea"
-                    show_seg=false
                 />
             </div>
             <aside class="j-compose-aside">
@@ -328,15 +395,7 @@ fn FullComposer(
                     creation_schedule=Some(schedule)
                     named=named
                 />
-                <MediaSection />
-                <div style="display:flex;align-items:center;gap:8px">
-                    <CreationPostActions
-                        publish_at=state.publish_at
-                        scheduled=schedule.scheduled
-                        disabled=submit_disabled
-                        on_save=dispatch
-                    />
-                </div>
+
             </aside>
         </div>
         <CreateErrorFlash action=create_action />
@@ -509,6 +568,24 @@ fn CreateResultSummary(result: RwSignal<Option<ClassifiedSavedPost>>) -> impl In
     }
 }
 
+/// The icon-only secondary action used to save a Draft without publishing it.
+#[component]
+fn DraftSaveButton(disabled: Signal<bool>, on_save: Callback<bool>) -> impl IntoView {
+    view! {
+        <button
+            class="j-btn is-icon"
+            type="button"
+            name="publish"
+            value="false"
+            aria-label="Save draft"
+            prop:disabled=move || disabled.get()
+            on:click=move |_| on_save.run(false)
+        >
+            <IconButtonContent path=Icons::SAVE tooltip="Save draft" />
+        </button>
+    }
+}
+
 /// Shared creation and editor save controls: "Save draft" + "Publish" for a Draft,
 /// and Save + Unpublish for a Scheduled or live Post.
 ///
@@ -531,16 +608,7 @@ pub(super) fn PostSaveActions(
     view! {
         {if matches!(publication, LoadedPublication::Draft) {
             view! {
-                <button
-                    class="j-btn"
-                    type="button"
-                    name="publish"
-                    value="false"
-                    prop:disabled=move || disabled.get()
-                    on:click=move |_| on_save.run(false)
-                >
-                    "Save draft"
-                </button>
+                <DraftSaveButton disabled=disabled on_save=on_save />
                 <button
                     class="j-btn is-primary"
                     type="button"
@@ -625,16 +693,7 @@ fn CreationPostActions(
             }
             (false, _) => {
                 view! {
-                    <button
-                        class="j-btn"
-                        type="button"
-                        name="publish"
-                        value="false"
-                        prop:disabled=move || disabled.get()
-                        on:click=move |_| on_save.run(false)
-                    >
-                        "Save draft"
-                    </button>
+                    <DraftSaveButton disabled=disabled on_save=on_save />
                     <button
                         class="j-btn is-primary"
                         type="button"
@@ -677,11 +736,11 @@ pub(super) fn SlugOverrideInput(slug_field: Field<Slug>) -> impl IntoView {
     }
 }
 
-/// The options aside shared by the full-page composer and editor.
+/// The advanced options aside shared by the full-page composer and editor.
 ///
 /// The immutable loaded publication state owns which controls exist: Drafts show
 /// slug and optional scheduling; Scheduled and live Posts show their persisted
-/// publication time. The remaining fields are common to every branch.
+/// publication time. Audience selection remains available in every branch.
 #[component]
 pub(super) fn ComposeOptions(
     state: ComposeState,
@@ -736,20 +795,8 @@ pub(super) fn ComposeOptions(
                 }
             }}
             <div style="margin-top:10px">
-                <ValidatedTextarea<PostSummary>
-                    label="Summary"
-                    name="summary"
-                    field=state.summary_field
-                    placeholder="Optional summary or excerpt"
-                />
-            </div>
-            <div style="margin-top:10px">
-                <TagInput tags=state.tags on_change=state.tag_input_changed() />
-            </div>
-            <div style="margin-top:10px">
                 <AudiencePickerWithState selection=state.audience named=named />
             </div>
-            <FormatToggle format=state.format style="margin-top:10px" />
         </div>
     }
 }
@@ -914,24 +961,6 @@ pub(super) fn ScheduleControl(
                         .into_any()
                 }
             }}
-        </div>
-    }
-}
-
-/// The media column shared by the two full-page compose shapes.
-///
-/// Extracted from [`FullComposer`] and [`EditPostForm`] (#863), which held
-/// byte-identical copies. Emits a single wrapping `<div>` on purpose: both asides are
-/// flex columns with `gap:18px`, so a bare fragment would space the heading off the
-/// control it labels.
-#[component]
-pub(super) fn MediaSection() -> impl IntoView {
-    view! {
-        <div style="margin-top:16px">
-            <div class="j-sb-head" style="padding:0 0 10px">
-                "Media"
-            </div>
-            <MediaUpload show_result=true />
         </div>
     }
 }

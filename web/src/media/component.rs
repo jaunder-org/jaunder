@@ -12,11 +12,12 @@ use common::pagination::{PageOffset, PageSize};
 use common::root_relative_url::RootRelativeUrl;
 
 use super::{
-    Delete, DeleteMediaRequest, Item, MediaDeletion, UploadCallbacks, UploadPresentation,
-    UploadState, UsageData, api, upload_state,
+    Delete, DeleteMediaRequest, Item, MediaDeletion, UploadButtonPresentation, UploadCallbacks,
+    UploadPresentation, UploadState, UsageData, api, upload_state,
 };
 use crate::error::{WebError, WebResult};
 use crate::forms;
+use crate::icon::{IconButtonContent, Icons};
 use crate::reactive::Invalidator;
 use crate::topbar::Topbar;
 use client::{reactive, telemetry};
@@ -43,6 +44,9 @@ pub fn MediaUpload(
     /// When true, render the uploaded URL and any error inline below the button.
     #[prop(optional)]
     show_result: bool,
+    /// When true, render the composer-family icon treatment instead of visible text.
+    #[prop(optional)]
+    icon_only: bool,
 ) -> impl IntoView {
     // The signal bundle, the outcome fold, and the notify/record sequencing are all
     // host-compiled and host-tested in `super::upload_state` (#306, ADR-0083); what
@@ -88,18 +92,7 @@ pub fn MediaUpload(
 
     view! {
         <input type="file" node_ref=file_input style="display:none" on:change=on_file_change />
-        <button
-            type="button"
-            class="j-btn"
-            disabled=move || state.uploading.get()
-            on:click=move |_| {
-                if let Some(input) = file_input.get() {
-                    input.click();
-                }
-            }
-        >
-            {move || if state.uploading.get() { "Uploading\u{2026}" } else { "Attach media" }}
-        </button>
+        <MediaUploadButton state file_input icon_only />
         {move || show_result.then(|| state.last_media_url.get()).flatten().map(uploaded_url_view)}
         {move || {
             show_result
@@ -113,6 +106,37 @@ pub fn MediaUpload(
                     }
                 })
         }}
+    }
+}
+
+#[component]
+fn MediaUploadButton(
+    state: UploadState,
+    file_input: NodeRef<leptos::html::Input>,
+    icon_only: bool,
+) -> impl IntoView {
+    let presentation =
+        Signal::derive(move || super::upload_button_presentation(icon_only, state.uploading.get()));
+
+    view! {
+        <button
+            type="button"
+            class=move || presentation.get().class_name()
+            aria-label=move || presentation.get().accessible_name()
+            disabled=move || state.uploading.get()
+            on:click=move |_| {
+                if let Some(input) = file_input.get() {
+                    input.click();
+                }
+            }
+        >
+            {move || match presentation.get() {
+                UploadButtonPresentation::Text(label) => label.into_any(),
+                UploadButtonPresentation::Icon { tooltip, .. } => {
+                    view! { <IconButtonContent path=Icons::MEDIA tooltip=tooltip /> }.into_any()
+                }
+            }}
+        </button>
     }
 }
 
