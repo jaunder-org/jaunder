@@ -419,15 +419,15 @@ invoke it.
 
 #### Visual snapshot workflow
 
-Visual coverage is deliberately four existing behavioral tests tagged `@visual`:
-the public timeline, login form, authenticated `/app` cockpit, and empty
-`/posts/new` composer. Keep the assertions that prove each state ready; the
-screenshot comparison supplements them. Expected PNGs live beside their owning
-specs under `*.spec.ts-snapshots/`, with Playwright's browser project and Linux
-identity in the generated filename. There is one Chromium and one Firefox
-baseline per state, shared by the SQLite and PostgreSQL gates. Do not add
-backend, WebKit, mobile, or alternate-theme variants without changing this
-policy.
+Visual coverage is deliberately five existing behavioral tests tagged `@visual`:
+the public timeline, login form, authenticated `/app` cockpit, empty
+`/posts/new` composer, and compact `/drafts` row actions. Keep the assertions
+that prove each state ready; the screenshot comparison supplements them.
+Expected PNGs live beside their owning specs under `*.spec.ts-snapshots/`, with
+Playwright's browser project and Linux identity in the generated filename. There
+is one Chromium and one Firefox baseline per state, shared by the SQLite and
+PostgreSQL gates. Do not add backend, WebKit, mobile, or alternate-theme
+variants without changing this policy.
 
 Comparisons are exact: zero differing pixels, pinned DejaVu/fontconfig, and
 screenshot-only animation/caret/font CSS. The public timeline masks only

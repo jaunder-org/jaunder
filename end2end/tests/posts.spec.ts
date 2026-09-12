@@ -34,7 +34,7 @@ import {
 } from "./posts";
 import { navigateInApp } from "./navigate";
 import { allowSecondBoot } from "./bootBudget";
-import { expectVisual } from "./visual";
+import { expectVisual, expectVisualRegion } from "./visual";
 import { expectAccessible } from "./accessibility";
 
 const TIMELINE_PAGE_SIZE = 50;
@@ -1659,6 +1659,67 @@ test("drafts list paginates unpublished posts", async ({ page, firstNav }) => {
   await expect(rows.last()).toContainText("Draft Pagination Post 0");
   await expect(page.locator('[data-test="drafts-load-more"]')).toHaveCount(0);
 });
+
+test(
+  "draft Post actions stay compact at desktop and narrow widths",
+  { tag: "@visual" },
+  async ({ page, firstNav }) => {
+    const session = await createSessionViaTool("testlogin");
+    await seedPostsViaTool(session.username, 1, "Compact Draft Actions", {
+      published: false,
+    });
+    await applySeededSession(page.context(), session);
+    await goto(page, "/drafts", { timeout: firstNav });
+
+    const row = page.locator(".j-draft-row", {
+      hasText: "Compact Draft Actions 0",
+    });
+    const actions = row
+      .getByRole("link", { name: "Edit" })
+      .or(row.getByRole("button", { name: /Publish|Delete/ }));
+    await expect(actions).toHaveCount(3);
+
+    const desktopBoxes = await actions.evaluateAll((controls) =>
+      controls.map((control) => control.getBoundingClientRect().top),
+    );
+    expect(Math.max(...desktopBoxes) - Math.min(...desktopBoxes)).toBeLessThan(
+      2,
+    );
+    await expectVisualRegion(page, row, "draft-row-actions-desktop.png");
+
+    await page.setViewportSize({ width: 375, height: 800 });
+    const narrowLayout = await row.evaluate((element) => {
+      const rowBounds = element.getBoundingClientRect();
+      const content = element.querySelector<HTMLElement>(
+        ".j-draft-row-content",
+      )!;
+      const contentBounds = content.getBoundingClientRect();
+      const actionGroupBounds = element
+        .querySelector(".j-draft-actions")!
+        .getBoundingClientRect();
+      const actionBounds = Array.from(
+        element.querySelectorAll(".j-draft-actions .j-btn"),
+        (action) => action.getBoundingClientRect(),
+      );
+      return {
+        row: { left: rowBounds.left, right: rowBounds.right },
+        contentBottom: contentBounds.bottom,
+        actionGroupTop: actionGroupBounds.top,
+        actions: actionBounds.map(({ left, right }) => ({ left, right })),
+        contentFits: content.clientWidth >= content.scrollWidth,
+      };
+    });
+    expect(narrowLayout.contentBottom).toBeLessThanOrEqual(
+      narrowLayout.actionGroupTop,
+    );
+    expect(narrowLayout.contentFits).toBe(true);
+    for (const action of narrowLayout.actions) {
+      expect(action.left).toBeGreaterThanOrEqual(narrowLayout.row.left);
+      expect(action.right).toBeLessThanOrEqual(narrowLayout.row.right);
+    }
+    await expectVisualRegion(page, row, "draft-row-actions-narrow.png");
+  },
+);
 
 test("authenticated user can delete a draft from the drafts page", async ({
   registeredPage,

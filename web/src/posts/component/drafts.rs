@@ -28,7 +28,7 @@ pub fn DraftsPage() -> impl IntoView {
     view! {
         <Topbar title="Drafts" sub="Unpublished posts" />
         <div class="j-scroll">
-            <div class="j-page">
+            <div class="j-page j-draft-page">
                 <Suspense fallback=|| {
                     view! { <p class="j-loading">"Loading\u{2026}"</p> }
                 }>
@@ -101,7 +101,7 @@ pub fn ScheduledPage() -> impl IntoView {
     view! {
         <Topbar title="Scheduled" sub="Posts queued for publication" />
         <div class="j-scroll">
-            <div class="j-page">
+            <div class="j-page j-draft-page">
                 <Suspense fallback=|| {
                     view! { <p class="j-loading">"Loading\u{2026}"</p> }
                 }>
