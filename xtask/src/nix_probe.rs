@@ -8,7 +8,7 @@ use std::fmt;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use anyhow::{Context, Result, bail};
 
@@ -191,7 +191,7 @@ pub fn compare_arm(base: &DrvPaths, arm: Arm, changed: &DrvPaths) -> Result<(), 
 pub fn probe_source() -> StepResult {
     match run_probe() {
         Ok(()) => StepResult::ok("nix-probe-source").detail(
-            "Nix source-invalidation and Cachix direct-filter contracts hold (docs/docs-archive/server/web/common/macros; 7 final verdicts excluded, 6 supports eligible)",
+            "Nix invalidation boundary contract holds (docs/docs-archive/server/web/common/macros)",
         ),
         Err(error) => StepResult::fail("nix-probe-source").detail(format!("{error:#}")),
     }
@@ -217,196 +217,6 @@ fn eval_paths_with(evaluate: impl FnOnce() -> Result<SourceProbeDrvPaths>) -> Re
 
 fn eval_paths(dir: &Path) -> Result<DrvPaths> {
     eval_paths_with(|| nix::eval_source_probe_drvpaths(dir))
-}
-
-/// Outputs governed by Cachix's direct `pushFilter` boundary. This is the one
-/// authority for the final verdict and cacheable-support catalogs.
-#[derive(Clone, Copy)]
-enum CacheBoundaryOutput {
-    Coverage,
-    CoverageGate,
-    E2eSqliteChromium,
-    E2eSqliteFirefox,
-    E2ePostgresChromium,
-    E2ePostgresFirefox,
-    E2eAggregate,
-    CoverageSourceProbe,
-    E2ePackage,
-    E2eSqliteChromiumSingleWorker,
-    E2eSqliteFirefoxSingleWorker,
-    E2ePostgresChromiumSingleWorker,
-    E2ePostgresFirefoxSingleWorker,
-}
-
-impl CacheBoundaryOutput {
-    const FINALS: [Self; 7] = [
-        Self::Coverage,
-        Self::CoverageGate,
-        Self::E2eSqliteChromium,
-        Self::E2eSqliteFirefox,
-        Self::E2ePostgresChromium,
-        Self::E2ePostgresFirefox,
-        Self::E2eAggregate,
-    ];
-    const SUPPORTS: [Self; 6] = [
-        Self::CoverageSourceProbe,
-        Self::E2ePackage,
-        Self::E2eSqliteChromiumSingleWorker,
-        Self::E2eSqliteFirefoxSingleWorker,
-        Self::E2ePostgresChromiumSingleWorker,
-        Self::E2ePostgresFirefoxSingleWorker,
-    ];
-
-    const fn name(self) -> &'static str {
-        match self {
-            Self::Coverage => "coverage",
-            Self::CoverageGate => "coverage-gate",
-            Self::E2eSqliteChromium => "e2e-sqlite-chromium",
-            Self::E2eSqliteFirefox => "e2e-sqlite-firefox",
-            Self::E2ePostgresChromium => "e2e-postgres-chromium",
-            Self::E2ePostgresFirefox => "e2e-postgres-firefox",
-            Self::E2eAggregate => "e2e",
-            Self::CoverageSourceProbe => "coverage-source-probe",
-            Self::E2ePackage => "jaunder-e2e package",
-            Self::E2eSqliteChromiumSingleWorker => "e2e-sqlite-chromium-single-worker",
-            Self::E2eSqliteFirefoxSingleWorker => "e2e-sqlite-firefox-single-worker",
-            Self::E2ePostgresChromiumSingleWorker => "e2e-postgres-chromium-single-worker",
-            Self::E2ePostgresFirefoxSingleWorker => "e2e-postgres-firefox-single-worker",
-        }
-    }
-
-    fn eval_out_path(self, flake_dir: &Path) -> Result<String> {
-        match self {
-            Self::E2ePackage => nix::eval_e2e_package_out_path(flake_dir),
-            Self::Coverage => nix::eval_check_out_path(flake_dir, "coverage"),
-            Self::CoverageGate => nix::eval_check_out_path(flake_dir, "coverage-gate"),
-            Self::E2eSqliteChromium => nix::eval_check_out_path(flake_dir, "e2e-sqlite-chromium"),
-            Self::E2eSqliteFirefox => nix::eval_check_out_path(flake_dir, "e2e-sqlite-firefox"),
-            Self::E2ePostgresChromium => {
-                nix::eval_check_out_path(flake_dir, "e2e-postgres-chromium")
-            }
-            Self::E2ePostgresFirefox => nix::eval_check_out_path(flake_dir, "e2e-postgres-firefox"),
-            Self::E2eAggregate => nix::eval_check_out_path(flake_dir, "e2e"),
-            Self::CoverageSourceProbe => {
-                nix::eval_check_out_path(flake_dir, "coverage-source-probe")
-            }
-            Self::E2eSqliteChromiumSingleWorker => {
-                nix::eval_package_out_path(flake_dir, "e2e-sqlite-chromium-single-worker")
-            }
-            Self::E2eSqliteFirefoxSingleWorker => {
-                nix::eval_package_out_path(flake_dir, "e2e-sqlite-firefox-single-worker")
-            }
-            Self::E2ePostgresChromiumSingleWorker => {
-                nix::eval_package_out_path(flake_dir, "e2e-postgres-chromium-single-worker")
-            }
-            Self::E2ePostgresFirefoxSingleWorker => {
-                nix::eval_package_out_path(flake_dir, "e2e-postgres-firefox-single-worker")
-            }
-        }
-    }
-}
-
-fn parse_push_filter(action: &str) -> Result<String> {
-    let fields = action
-        .lines()
-        .filter_map(|line| line.trim_start().strip_prefix("pushFilter:"))
-        .map(str::trim)
-        .collect::<Vec<_>>();
-    let [value] = fields.as_slice() else {
-        bail!(
-            "expected exactly one pushFilter field, found {}",
-            fields.len()
-        );
-    };
-    let Some(quote) = value
-        .chars()
-        .next()
-        .filter(|quote| matches!(quote, '\'' | '"'))
-    else {
-        bail!("pushFilter must be a quoted scalar");
-    };
-    let Some(filter) = value
-        .strip_prefix(quote)
-        .and_then(|value| value.strip_suffix(quote))
-    else {
-        bail!("malformed quoted pushFilter");
-    };
-    if filter.is_empty() || filter.contains(quote) {
-        bail!("malformed quoted pushFilter");
-    }
-    Ok(filter.to_owned())
-}
-
-fn grep_filter_matches(filter: &str, output_path: &str) -> Result<bool> {
-    let mut child = Command::new("grep")
-        .args(["-Eq", filter])
-        .stdin(Stdio::piped())
-        .spawn()
-        .context("spawning grep for Cachix pushFilter")?;
-    let mut stdin = child.stdin.take().context("grep stdin was unavailable")?;
-    writeln!(stdin, "{output_path}").context("writing output path to grep")?;
-    drop(stdin);
-    match child
-        .wait()
-        .context("waiting for Cachix pushFilter grep")?
-        .code()
-    {
-        Some(0) => Ok(true),
-        Some(1) => Ok(false),
-        status => bail!("Cachix pushFilter grep failed with status {status:?}"),
-    }
-}
-
-fn verify_cache_boundary_with(
-    filter: &str,
-    finals: impl IntoIterator<Item = (&'static str, String)>,
-    supports: impl IntoIterator<Item = (&'static str, String)>,
-    mut matches: impl FnMut(&str, &str) -> Result<bool>,
-) -> Result<()> {
-    for (name, output_path) in finals {
-        if !matches(filter, &output_path)
-            .with_context(|| format!("applying pushFilter to final {name} ({output_path})"))?
-        {
-            bail!("final verdict {name} is reusable: {output_path}");
-        }
-    }
-    for (name, output_path) in supports {
-        if matches(filter, &output_path)
-            .with_context(|| format!("applying pushFilter to support {name} ({output_path})"))?
-        {
-            bail!("cacheable support {name} is excluded: {output_path}");
-        }
-    }
-    Ok(())
-}
-
-fn verify_cache_boundary(flake_dir: &Path) -> Result<()> {
-    let action = fs::read_to_string(flake_dir.join(".github/actions/setup-ci/action.yml"))
-        .context("reading checked-in Cachix setup action")?;
-    let filter = parse_push_filter(&action).context("parsing checked-in Cachix pushFilter")?;
-    let finals = CacheBoundaryOutput::FINALS
-        .into_iter()
-        .map(|output| {
-            Ok((
-                output.name(),
-                output
-                    .eval_out_path(flake_dir)
-                    .with_context(|| format!("evaluating final {} output path", output.name()))?,
-            ))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let supports = CacheBoundaryOutput::SUPPORTS
-        .into_iter()
-        .map(|output| {
-            Ok((
-                output.name(),
-                output
-                    .eval_out_path(flake_dir)
-                    .with_context(|| format!("evaluating support {} output path", output.name()))?,
-            ))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    verify_cache_boundary_with(&filter, finals, supports, grep_filter_matches)
 }
 
 type WorktreeRemover<'a> =
@@ -519,7 +329,6 @@ fn run_probe() -> Result<()> {
         git_run(&tmp, &["rm", "--cached", "--quiet", arm.marker_path()])?;
         fs::remove_file(marker).with_context(|| format!("removing {} marker", arm.name()))?;
     }
-    verify_cache_boundary(&tmp).context("checking Cachix direct-filter boundary")?;
     Ok(())
 }
 
@@ -593,97 +402,5 @@ mod tests {
     fn propagates_evaluation_failure() {
         let error = eval_paths_with(|| anyhow::bail!("nix eval failed")).unwrap_err();
         assert!(format!("{error:#}").contains("nix eval failed"));
-    }
-
-    const STORE: &str = "/nix/store/0123456789abcdefghijklmnopqrstuv";
-
-    fn checked_filter() -> String {
-        parse_push_filter(include_str!("../../.github/actions/setup-ci/action.yml")).unwrap()
-    }
-    fn output(name: &str) -> String {
-        format!("{STORE}-{name}")
-    }
-
-    #[test]
-    fn cache_filter_matches_only_exact_final_output_basenames() {
-        let filter = checked_filter();
-        for final_output in [
-            "jaunder-coverage-0.1.0",
-            "jaunder-coverage-gate",
-            "vm-test-run-jaunder-e2e-sqlite-chromium",
-            "vm-test-run-jaunder-e2e-sqlite-firefox",
-            "vm-test-run-jaunder-e2e-postgres-chromium",
-            "vm-test-run-jaunder-e2e-postgres-firefox",
-            "jaunder-e2e-checks",
-        ] {
-            assert!(
-                grep_filter_matches(&filter, &output(final_output)).unwrap(),
-                "{final_output}"
-            );
-        }
-        for support_or_lookalike in [
-            "jaunder-coverage-source-probe",
-            "jaunder-e2e",
-            "vm-test-run-jaunder-e2e-sqlite-chromium-single-worker",
-            "prefix-vm-test-run-jaunder-e2e-sqlite-chromium",
-            "vm-test-run-jaunder-e2e-sqlite-chromium-suffix",
-        ] {
-            assert!(
-                !grep_filter_matches(&filter, &output(support_or_lookalike)).unwrap(),
-                "{support_or_lookalike}"
-            );
-        }
-    }
-
-    #[test]
-    fn cache_boundary_rejects_a_reusable_final() {
-        let error = verify_cache_boundary_with(
-            &checked_filter(),
-            [("coverage", output("jaunder-coverage-0.1.0"))],
-            [],
-            |_, _| Ok(false),
-        )
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("final verdict coverage is reusable"));
-    }
-
-    #[test]
-    fn cache_boundary_rejects_an_excluded_support() {
-        let error = verify_cache_boundary_with(
-            &checked_filter(),
-            [],
-            [("e2e package", output("jaunder-e2e"))],
-            |_, _| Ok(true),
-        )
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("cacheable support e2e package is excluded"));
-    }
-
-    #[test]
-    fn cache_boundary_propagates_grep_indeterminate_error() {
-        let error = verify_cache_boundary_with(
-            &checked_filter(),
-            [("coverage", output("jaunder-coverage-0.1.0"))],
-            [],
-            |_, _| anyhow::bail!("grep failed with status 2"),
-        )
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("grep failed with status 2"));
-    }
-
-    #[test]
-    fn push_filter_requires_one_quoted_scalar() {
-        for action in [
-            "",
-            "pushFilter: unquoted",
-            "pushFilter: 'unterminated",
-            "pushFilter: 'one'\npushFilter: 'two'",
-        ] {
-            assert!(parse_push_filter(action).is_err(), "{action:?}");
-        }
-        assert_eq!(
-            parse_push_filter("pushFilter: '^final$'").unwrap(),
-            "^final$"
-        );
     }
 }

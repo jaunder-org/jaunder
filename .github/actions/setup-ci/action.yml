@@ -22,10 +22,11 @@ runs:
       with:
         name: jaunder-org
         authToken: ${{ inputs.cachix-auth-token }}
-        # Exclude only final per-ref verdict outputs. Cachix applies this ERE to
-        # full store paths; the hash prefix makes the basename anchor load-bearing.
-        # Dependencies may still upload through another output's closure.
-        pushFilter: '^/nix/store/[0-9a-z]{32}-(jaunder-coverage-0\.1\.0|jaunder-coverage-gate|vm-test-run-jaunder-e2e-(sqlite|postgres)-(chromium|firefox)|jaunder-e2e-checks)$'
+        # Push build products to the cache, but NOT the test-result check
+        # derivations (jaunder-coverage / jaunder-e2e): CI must always re-run
+        # the tests and never trust a cached green check (flaky-pass / impurity
+        # protection).
+        pushFilter: "jaunder-coverage|jaunder-e2e"
     # xtask is host-only, so cachix can't cover it; cache its compiled deps
     # between runs.
     - name: Cache xtask host build

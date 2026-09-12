@@ -820,10 +820,10 @@ in
     {
 # The e2e aggregate: a symlinkJoin of every browser/backend `e2e-*`
 # check, exposed as `checks.e2e` and built by `cargo xtask validate`.
-# Adding a new browser/backend combo automatically joins it here. Its exact
-# `jaunder-e2e-checks` basename is a final verdict excluded by Cachix's
-# hash-prefixed, basename-anchored `pushFilter`, so the aggregate cannot
-# substitute a cached green result.
+# Adding a new browser/backend combo automatically joins it here. Its
+# `jaunder-e2e*` name keeps it out of the cachix push, so building it
+# always realizes the underlying VM checks rather than substituting a
+# cached aggregate.
 e2e-checks = pkgs.symlinkJoin {
   name = "jaunder-e2e-checks";
   paths = builtins.attrValues (
@@ -911,10 +911,10 @@ e2eGateChecks
   # `e2e-checks` aggregates every browser/backend `checks.e2e-*` combo
   # (now 4); they are independent derivations realized in parallel up
   # to the host `max-jobs` (CI's install-nix-action sets `max-jobs =
-  # auto`; a plain dev box defaults to 1 and runs them serially). The exact
-  # final aggregate basename is excluded by Cachix's hash-prefixed,
-  # basename-anchored `pushFilter`, so it cannot substitute a cached green
-  # aggregate.
+  # auto`; a plain dev box defaults to 1 and runs them serially). The
+  # aggregate's name stays under `jaunder-e2e*`, so the cachix
+  # pushFilter still excludes it — the VM runs are never substituted
+  # from a cached aggregate.
   e2e = self.packages.${system}.e2e-checks;
 
   # The producer combines pure and server-backed ERT observations in
@@ -1143,8 +1143,8 @@ coverage = craneLib.mkCargoDerivation (
   '';
 # Belt-and-suspenders: the sandbox gate validates completed producer evidence
 # through the shared Rust contract, while the host separately consumes reports.
-# Its exact final `jaunder-coverage-gate` basename is excluded by Cachix's
-# hash-prefixed, basename-anchored `pushFilter`; support outputs remain eligible.
+# Named `jaunder-coverage-gate` so the cachix pushFilter
+# (jaunder-coverage|jaunder-e2e) excludes it.
 coverage-gate =
   pkgs.runCommand "jaunder-coverage-gate"
     {
