@@ -76,12 +76,15 @@ the host coverage denominator
 Two sibling trees are outside the root workspace, each its own cargo workspace:
 `xtask/` (the host-only dev/CI driver, also named in the root
 `exclude = ["xtask"]`) and `tools/` (members `devtool`, `coverage`,
-`diagnostic-coverage-runtime`, and `doctests`). The diagnostic coverage runtime
-is a target-only auxiliary member that is also copied into the diagnostic Nix
-source closure; its manifest therefore keeps direct package metadata so that the
-copied crate remains independently parseable. Those boundaries are
-execution/ownership boundaries, not a claim that every `tools/` crate is absent
-from every Nix derivation
+`diagnostic-coverage-runtime`, `doctests`, and `performance`). `performance` is
+the pure versioned dataset, producer-artifact, statistics, and comparison
+contract shared by sandbox producers and host analysis under
+[ADR-0028](adr/0028-devtool-vs-xtask-boundary.md). The diagnostic coverage
+runtime is a target-only auxiliary member that is also copied into the
+diagnostic Nix source closure; its manifest therefore keeps direct package
+metadata so that the copied crate remains independently parseable. Those
+boundaries are execution/ownership boundaries, not a claim that every `tools/`
+crate is absent from every Nix derivation
 ([Cargo workspace execution boundaries](adr/0141-cargo-workspace-execution-boundaries.md)).
 `elisp/` (the Emacs client,
 [ADR-0031](adr/0031-elisp-separately-tested-subproject.md)) and `end2end/`
