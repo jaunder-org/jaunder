@@ -350,6 +350,16 @@ experiment remains in this report only as rejected-candidate evidence.
 | Narrow Nix source closures                   | #1289 proves docs/static isolation and records supported versus necessary fan-out.                                                                                                                                                                                                                            | **Already beneficial for local realization; no CI wall-clock claim.** Future changes require a source probe; no new closure change is selected by this report.                                                                                                                  |
 | Narrow Cachix exclusion to final verdicts    | Anchored output basenames and direct-filter checks passed, but did not prove closure-based final-verdict ineligibility.                                                                                                                                                                                       | **Rejected and reverted.** The accepted branch retains the original broad Cachix exclusion and changes no eligibility boundary.                                                                                                                                                 |
 
+The remaining evidence-backed investigations are tracked separately:
+[#1474](https://github.com/jaunder-org/jaunder/issues/1474) covers parallel
+backend coverage execution and profile merging,
+[#1472](https://github.com/jaunder-org/jaunder/issues/1472) covers validation
+fan-out and transfer/setup economics, and
+[#1473](https://github.com/jaunder-org/jaunder/issues/1473) covers
+closure-proven support-output caching. Each is blocked by #1463 so it starts
+from the accepted timing and coverage-producer changes rather than duplicating
+this investigation.
+
 The cold A/B/C/D arithmetic remains diagnostic only; no valid matched cold set
 exists, and warm evidence likewise has only one diagnostic pair plus repeats.
 The repository owner explicitly accepted the coverage-census reuse on 2026-09-12
