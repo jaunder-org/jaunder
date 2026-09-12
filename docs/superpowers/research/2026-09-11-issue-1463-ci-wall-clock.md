@@ -190,9 +190,9 @@ the threshold calculation.
 The A/C/D green diagnostics have a median runner-time-proxy saving of **44 s**.
 These are summed job elapsed intervals, not billed-minute claims. No valid
 matched cold set exists. Warm evidence remains one diagnostic pair plus stable
-treatment repeats, short of the required two matched pairs. The issue acceptance
-is unmet; merge remains prohibited, the issue stays open, and this work stops
-rather than adding speculative architecture.
+treatment repeats, short of the original two-pair CI criterion. The 2026-09-12
+decision amendment accepts the candidate on its complete local coverage-producer
+result without reclassifying these diagnostics.
 
 ### Narrow-source baseline from #1289
 
@@ -287,8 +287,9 @@ Against the comparable instrumentation baseline, coverage-step time fell
 (6:47.558, 52.5%)**; and the instrumented run fell **318,530 ms (5:18.530,
 67.2%)**. The full local path fell **564,343 ms (9:24.343, 30.2%)**, but that
 whole-path comparison is provisional because unrelated static and Elisp
-derivation timings varied. This selects the treatment locally, not as the issue
-threshold verdict: matched Actions cold/warm pairs remain authoritative.
+derivation timings varied. Under the 2026-09-12 decision amendment, the complete
+local producer result is the acceptance evidence; the Actions comparisons remain
+diagnostics with their stated limits.
 
 The measured serialized arithmetic gives an ideal, contention-free overlap
 bound: `max(622,186, 257,431 + 19,658) = 622,186 ms`, or **279,511 ms
@@ -298,46 +299,37 @@ evaluation/realization, transfer, aggregation, and queue overhead available
 before it misses the three-minute target; same-runner fan-out may instead slow
 the coverage producer through CPU, disk, Nix, Cargo, and PostgreSQL contention.
 
-Ranked conclusion: the corrected census-wrapper treatment is **selected by the
-complete local verdict**, subject to the provisional whole-path qualification
-above and the required matched Actions measurements. Internal nextest
-partitioning with profile merge and one final union report remains
-highest-potential but unproven; it must preserve the complete coverage census,
-combined SQLite/PostgreSQL behavior, and one stateless union verdict. Parallel
-post-test reports have at most the unattributed 28,186-ms remainder available,
-and pre-test preparation has no measured duration; neither supports a
-three-minute claim. Splitting coverage into final backend verdicts, reducing
-e2e, serial cache preparation, and same-runner broad fan-out remain rejected or
-unselected for the preserved invariants and unmeasured contention described in
-the candidate screen.
+Repository-owner decision (2026-09-12): accept the corrected census-wrapper
+treatment for its complete local result. The **52.5% producer-stage reduction**
+makes the existing `validate --no-e2e` coverage gate practical to run locally
+rather than deferring coverage feedback to CI; that value outweighs the roughly
+two-minute diagnostic cold-CI improvement. This does not add coverage to
+`prepush`, and the Actions observations remain diagnostics rather than being
+reclassified as matched threshold proof.
+
+Internal nextest partitioning with profile merge and one final union report
+remains unselected complexity. It would have to preserve the complete coverage
+census, combined SQLite/PostgreSQL behavior, and one stateless union verdict.
+Splitting coverage into final backend verdicts, reducing e2e, serial cache
+preparation, and same-runner broad fan-out remain rejected for the preserved
+invariants and unmeasured contention described in the candidate screen.
 
 ## Cache and source-boundary evidence
 
-The checked-in [setup action](../../../.github/actions/setup-ci/action.yml)
-leaves `pathsToPush` empty and now uses an anchored `pushFilter` against actual
-full output basenames. The excluded final-verdict set is
-`jaunder-coverage-0.1.0`, `jaunder-coverage-gate`, the four
-`vm-test-run-jaunder-e2e-{sqlite,postgres}-{chromium,firefox}` outputs, and
-`jaunder-e2e-checks`. Cacheable support outputs remain directly eligible under
-the filter match, but that is not proof of their closure behavior or reuse.
-Cachix documents `pushFilter` as a regular expression excluding derivations from
-pushing, warns that it is ignored with `pathsToPush`, and warns that a path can
-still be pushed through another path's closure
-([Cachix action README](https://github.com/cachix/cachix-action/blob/master/README.md#push-configuration)).
-Its daemon hook applies the filter with `grep -vEe` to each full
-`/nix/store/<hash>-<name>` output path
-([implementation](https://github.com/cachix/cachix-action/blob/master/src/main.ts#L362-L391));
-the closure caveat therefore remains part of the contract.
+The Cachix-boundary experiment temporarily replaced the broad
+`jaunder-coverage|jaunder-e2e` exclusion with an anchored list of seven final
+output basenames and added a direct-filter probe for six intended support
+outputs. `cargo xtask nix probe-source` passed that experimental direct-name
+contract in **207,832 ms** after its first implementation was corrected for the
+Nix 2.33 schema.
 
-The committed `cargo xtask nix probe-source` smoke passed in **207,832 ms**. It
-checked every existing source-invalidation arm plus seven excluded final
-verdicts and six directly eligible supports. The first committed probe attempt
-failed against the Nix 2.33 schema and was corrected before this passing run; it
-is retained as experiment-ledger evidence, not a performance result. The probe
-proves **direct `pushFilter` matching only**, not closure-based final-verdict
-ineligibility or support reuse. Cache-boundary acceptance is therefore partial:
-the filter change must not land without a closure proof. No Actions cold/warm
-wall-clock or runner-time improvement is claimed from it.
+The experiment did not prove Cachix closure behavior. Cachix documents that
+`pushFilter` can still admit an otherwise excluded path through another pushed
+path's closure. Because final-verdict ineligibility is load-bearing, direct
+basename matching is insufficient evidence. The narrower filter, output catalog,
+and direct-filter probe were therefore **reverted**. The accepted branch retains
+the existing broad exclusion and changes no Cachix eligibility boundary. The
+experiment remains in this report only as rejected-candidate evidence.
 
 ## Candidate screen and threshold outcome
 
@@ -346,16 +338,18 @@ wall-clock or runner-time improvement is claimed from it.
 | Serial cache-preparation job                 | #2171/#2173 show duplicated cold work but the issue’s critical-path model is `B + max(V,E)` before transfer; preparation adds setup, upload, download, and substitution before fan-out.                                                                                                                       | **Rejected pending measured net win.** It may lower runner-time proxy, but has no demonstrated wall-clock benefit and has no transfer-cost measurement.                                                                                                                         |
 | Recombine or reduce the 2×2 e2e matrix       | Matrix e2e already finishes before warm validation; [ADR-0034](../../adr/0034-ci-e2e-matrix-distribution.md) records browser serialization in each VM and distribution as the wall-clock improvement.                                                                                                         | **Rejected.** It violates the preserved matrix-distribution decision and would trade elapsed time for fewer runners.                                                                                                                                                            |
 | Validation fan-out / internal partitioning   | The local 901,697-ms run has a 622,186-ms coverage producer and a 277,089-ms non-coverage total. The ideal overlap ceiling is 279,511 ms, but coverage producer→gate→host consumer and the other producer/consumer tails remain ordered; a partitioned coverage implementation must retain one union verdict. | **Highest potential, unproven; not selected.** Same-runner contention and duplicate Nix/setup work may reverse savings. Separate-runner fan-out must keep all added setup/transfer/aggregation under 99,511 ms to retain a three-minute path, then prove matched Actions pairs. |
-| Avoid duplicate coverage census binary build | Complete successful experiment 3 reconciled all 4,692 tests and passed the final host coverage gate. Against the instrumentation baseline, coverage-step time fell 433,871 ms (52.9%), producer stages 407,558 ms (52.5%), and instrumented run 318,530 ms (67.2%).                                           | **Selected local treatment; not final threshold evidence.** The 564,343-ms (30.2%) whole-local-path change is provisional because unrelated static/Elisp timings varied; matched cold/warm Actions pairs remain decisive.                                                       |
+| Avoid duplicate coverage census binary build | Complete successful experiment 3 reconciled all 4,692 tests and passed the final host coverage gate. Against the instrumentation baseline, coverage-step time fell 433,871 ms (52.9%), producer stages 407,558 ms (52.5%), and the instrumented run 318,530 ms (67.2%).                                       | **Accepted by the 2026-09-12 decision amendment.** The local producer reduction makes the existing `validate --no-e2e` coverage gate practical before CI; diagnostic CI and runner-time comparisons remain reported without being called matched threshold proof.               |
 | Narrow Nix source closures                   | #1289 proves docs/static isolation and records supported versus necessary fan-out.                                                                                                                                                                                                                            | **Already beneficial for local realization; no CI wall-clock claim.** Future changes require a source probe; no new closure change is selected by this report.                                                                                                                  |
-| Narrow Cachix exclusion to final verdicts    | Anchored actual output basenames directly exclude seven final verdicts while six support outputs directly match as eligible; the committed probe passed all source arms and these direct sets in 207,832 ms.                                                                                                  | **Partial boundary proof; do not land yet.** It lacks a closure proof for final-verdict ineligibility and support reuse, and makes no performance claim.                                                                                                                        |
+| Narrow Cachix exclusion to final verdicts    | Anchored output basenames and direct-filter checks passed, but did not prove closure-based final-verdict ineligibility.                                                                                                                                                                                       | **Rejected and reverted.** The accepted branch retains the original broad Cachix exclusion and changes no eligibility boundary.                                                                                                                                                 |
 
-The cold A/B/C/D arithmetic is diagnostic only; it is not an authoritative
-adaptive set because **no valid matched cold set exists**. Warm evidence
-likewise has only one diagnostic pair plus repeats, short of the required two
-matched pairs, and no post-change merge-group result exists. Together with the
-partial cache-boundary proof, the issue acceptance is **unmet**: do not claim
-success or merge; keep the issue open.
+The cold A/B/C/D arithmetic remains diagnostic only; no valid matched cold set
+exists, and warm evidence likewise has only one diagnostic pair plus repeats.
+The repository owner explicitly accepted the coverage-census reuse on 2026-09-12
+because the complete local producer improved **52.5%**, making local coverage
+gating materially more practical, while the diagnostic cold-CI median still
+improved by about two minutes. The original CI threshold is not claimed. The
+narrower Cachix experiment is excluded from the accepted implementation.
+Merge-group verification remains pending the explicit merge gate.
 
 ## Source index
 
@@ -376,8 +370,7 @@ success or merge; keep the issue open.
   cold/warmed successful-attempt timings, artifact-retention limitation, and
   retained warm coverage status.
 - [Final-head Actions run #2213](https://github.com/jaunder-org/jaunder/actions/runs/34641076765):
-  two green stable repeats with durable validation and coverage-stage evidence,
-  pending a corresponding baseline rerun.
+  green diagnostic repeats with durable validation and coverage-stage evidence.
 - Controlled cold pairs:
   [A baseline](https://github.com/jaunder-org/jaunder/actions/runs/34650931625),
   [A treatment](https://github.com/jaunder-org/jaunder/actions/runs/34655060127),
@@ -388,7 +381,7 @@ success or merge; keep the issue open.
   [D baseline](https://github.com/jaunder-org/jaunder/actions/runs/34670826980),
   and
   [D treatment](https://github.com/jaunder-org/jaunder/actions/runs/34673226997):
-  full-graph temporary-marker evidence and adaptive median calculation.
+  full-graph temporary-marker diagnostics and comparison arithmetic.
 - [#1289 measurement report](2026-09-04-issue-1289-nix-invalidation-boundaries.md),
   [ADR-0178](../../adr/0178-split-hermetic-static-check-boundaries.md), and
   [#1289](https://github.com/jaunder-org/jaunder/issues/1289): controlled

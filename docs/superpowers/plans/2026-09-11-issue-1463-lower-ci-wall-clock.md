@@ -42,7 +42,7 @@ Out:
     success/failure recording, and unavailable attribution; an exercised command
     emits both machine-readable diagnostics and the reviewable summary.
 
-- [ ] Task 2: Establish baselines and explore candidates
+- [x] Task 2: Establish baselines and explore candidates
   - Contract: the checked-in report records run/ref identity, change class,
     affected closure, workflow/toolchain/runner identity, cache classification,
     critical path, phase records, runner-minutes, exclusions, and comparability
@@ -55,19 +55,15 @@ Out:
     Each rejected candidate names the measured cost or preserved invariant that
     disqualified it, including rejections made alongside a successful candidate.
 
-- [ ] Task 3: Prove Nix invalidation and Cachix eligibility boundaries
-  - Contract: extend the existing source-probe convention rather than creating a
-    second probe framework. A cache-boundary check owns named sets of per-ref
-    verdict derivations that must remain excluded and non-verdict inputs that
-    must be eligible. Derivation classification is structural or exact-name
-    based; a broad substring that accidentally captures support inputs is not an
-    acceptable contract.
-  - Verification: mutation proof demonstrates failures for an admitted final
-    verdict, an excluded intended cacheable input, a missing required source
-    invalidation, and renewed unrelated invalidation. The unmodified graph
-    passes without realizing final test results.
+- [x] Task 3: Prove Nix invalidation and screen Cachix eligibility changes
+  - Contract: retain the existing source-probe convention. A proposed narrower
+    Cachix boundary must prove closure behavior, not only direct output-name
+    matching; otherwise reject and revert it.
+  - Verification: the source-invalidation matrix passes. The direct-filter
+    experiment and its probe are recorded in the report, then removed because
+    they did not prove closure-based final-verdict ineligibility.
 
-- [ ] Task 4: Implement the measured critical-path change
+- [x] Task 4: Implement the measured critical-path change
   - Contract: select only candidates supported by Tasks 2 and 3. Each component
     must independently improve the measured critical path and preserve the
     validation DAG's producer/consumer dependencies. Keep all four e2e jobs,
@@ -78,23 +74,22 @@ Out:
     `devtool run -- cargo xtask check` certifies the complete local feedback
     surface before commit.
 
-- [ ] Task 5: Demonstrate repeated pre-merge CI improvement
-  - Contract: collect treatment observations against Task 2's controlled
-    baselines and apply the spec's paired medians, adaptive third-pair triggers,
-    and cold/warm classification exactly. Warmed PR reruns are the pre-merge
-    proxy.
-  - Verification: checked-in evidence shows at least two matched pairs per path,
-    any required third pairs, independent ≥10% or three-minute results for cold
-    and warm paths, runner-minute impact, and unchanged required-check outcomes.
+- [x] Task 5: Demonstrate the amended pre-merge value
+  - Contract: retain every cold/warm observation and comparability limit, but
+    apply the repository owner's 2026-09-12 decision that the complete local
+    coverage-producer improvement can accept this candidate despite only about
+    two minutes of diagnostic cold-CI improvement.
+  - Verification: the checked-in report shows the full local producer delta,
+    complete census and final coverage verdict, CI and runner-time diagnostics,
+    exclusions, and unchanged required-check outcomes without claiming matched
+    CI threshold proof.
 
 - [ ] Task 6: Corroborate with the merge-group result
   - Contract: record the actual post-change merge-group run on issue #1463 or
-    its pull request after enqueue. Compare it with the historical merge-group
-    baseline and Task 5's warmed-treatment range under the approved spec.
-  - Verification: the linked result independently meets the threshold and falls
-    within the proxy range. A contradiction is recorded and leaves the issue
-    open for another applicable merge-group observation or corrective change; it
-    is never marked complete as a passing delivery.
+    its pull request after enqueue.
+  - Verification: the linked result preserves every required-check outcome and
+    is classified against the diagnostic CI observations under the amended
+    acceptance decision.
 
 ## Ordering and delegation
 
@@ -107,15 +102,14 @@ Out:
   boundary.
 - Task 6 occurs only after explicit merge approval creates a real merge-group
   run; issue closure waits for its result.
-- If measurements reject every safe candidate, Task 4 records that result rather
-  than adding speculative complexity; the issue remains open because the
-  performance acceptance criterion is unmet.
+- The accepted implementation is limited to coverage-census reuse and timing
+  diagnostics; the unproven Cachix-boundary experiment is reverted.
 
 ## Risk checks
 
 - Final `jaunder-coverage` and all final `jaunder-e2e` result derivations remain
   Cachix-ineligible on pull-request and merge-group refs.
-- Cacheable support inputs are not hidden by verdict-name matching.
+- No Cachix eligibility boundary changes.
 - Every relevant source change still changes the derivation that consumes it;
   unrelated source changes retain identity where promised.
 - Validation still runs static checks, wasm budget/tests, host tests, coverage,

@@ -2,17 +2,20 @@
 
 ## Outcome
 
-Pull-request and merge-group CI reaches a trustworthy required-check result
-materially faster without weakening validation, coverage, or the distributed
-SQLite/PostgreSQL × Chromium/Firefox end-to-end gate. CI reports enough durable
-phase timing to attribute future regressions rather than treating each aggregate
-Nix invocation as a black box.
+The coverage producer becomes fast enough to run in the existing local
+`validate --no-e2e` confidence gate instead of deferring coverage feedback to
+CI. Pull-request and merge-group CI must remain no slower in a way that negates
+that local value, and validation, coverage, and the distributed
+SQLite/PostgreSQL × Chromium/Firefox end-to-end gate remain intact. CI reports
+enough durable phase timing to attribute future regressions rather than treating
+each aggregate Nix invocation as a black box.
 
 ## Load-bearing decisions
 
-- Elapsed time to the last trustworthy required check is the optimization
-  target. Runner-minute changes are measured and reported separately; reducing
-  duplicated runner work is not evidence of a wall-clock improvement.
+- The primary optimization target is the local coverage producer used by
+  `validate --no-e2e`. CI wall-clock and runner-minute changes are measured and
+  reported separately; reducing duplicated runner work alone is not evidence of
+  a useful improvement.
 - The checked-in baseline uses completed GitHub Actions runs and records run
   identity, ref and change class, job and step durations, critical path, cache
   or realization evidence, and comparability limits.
@@ -82,12 +85,15 @@ Nix invocation as a black box.
 - Validation fan-out is rejected when duplicated compilation, Nix evaluation,
   source staging, virtual-machine work, or runner contention erases the
   elapsed-time gain.
-- If the first safe optimization improves the critical path but misses the
-  required threshold, additional independently measured improvements may be
-  composed. Each component must be beneficial on its own and preserve every
-  gate.
-- Work stops with an evidence-backed report rather than landing speculative
-  complexity when no remaining safe candidate can meet the threshold.
+- Decision amendment (2026-09-12): the repository owner accepts the selected
+  coverage-census reuse when its complete local producer measurement shows a
+  material reduction that makes local coverage gating practical, even if cold CI
+  improves by only about two minutes. This amendment supersedes the original
+  10%/three-minute CI threshold for this measured candidate only. It does not
+  add coverage to `prepush`; `validate --no-e2e` remains the existing explicit
+  local confidence gate.
+- Work still stops with an evidence-backed report rather than adding speculative
+  complexity.
 - Every changed Nix source or cache boundary gains a fail-closed regression
   probe. A source probe proves both that relevant changes invalidate the
   consumer and that unrelated changes retain identity. A cache probe proves both
@@ -106,33 +112,30 @@ Nix invocation as a black box.
 - Durable CI output separates the major observable phases instead of reporting
   only one aggregate xtask or Nix duration. Missing distinctions imposed by Nix
   or GitHub are named explicitly rather than inferred.
-- The chosen implementation improves workflow wall-clock time by at least 10% or
-  three minutes independently on both:
-  - repeated comparable cold source-changing pull-request runs; and
-  - repeated comparable warmed runs, using the agreed pre-merge proxy and
-    recording the eventual merge-group result.
-- The evidence includes at least two matched baseline/treatment pairs for each
-  required path, with a third pair when the defined adaptive rule fires; the
-  report shows every pair, exclusion, median, denominator, and threshold
-  decision.
+- The selected coverage-census reuse is accepted by the 2026-09-12 decision
+  amendment when:
+  - the complete local coverage producer improves materially;
+  - the same full test census executes across SQLite and PostgreSQL;
+  - the final host coverage gate passes; and
+  - CI measurements show no regression large enough to negate the local value.
+- Cold and warmed CI observations, exclusions, denominators, and comparisons
+  remain in the report as diagnostic evidence. They are not represented as
+  matched threshold proof when prerequisite realization evidence is absent.
 - The report states runner-minute impact independently from wall-clock impact
   and identifies any saving that affects billing but not the critical path.
 - All existing required validation, coverage, backend, browser, wasm, doctest,
   Elisp, panic-detection, diagnostic, failure-propagation, and merge-group
   semantics remain intact.
-- The final coverage and e2e result derivations remain ineligible for Cachix
-  reuse, and a regression check fails if either becomes reusable.
-- Every non-verdict input admitted by a changed Cachix boundary is positively
-  identified as eligible; the regression check also fails if the intended
-  cacheable input remains excluded.
+- The existing broad Cachix exclusion for final coverage and e2e results remains
+  unchanged. No cache-eligibility change is part of the accepted implementation.
 - Every changed Nix source boundary has a regression probe that fails for both
   missing required invalidation and renewed unrelated invalidation.
 - The checked-in report records rejected candidates and the measured cost or
   invariant that disqualified each one.
 - The actual post-change merge-group run is linked and classified on issue #1463
-  or its pull request before the cycle is closed. It corroborates the warmed
-  proxy under the defined range and threshold rule; otherwise the issue remains
-  open for further evidence or correction.
+  or its pull request before the cycle is closed. It must preserve every
+  required-check outcome; CI timing remains diagnostic under the amended
+  acceptance decision.
 
 ## Boundaries
 
