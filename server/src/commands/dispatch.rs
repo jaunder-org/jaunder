@@ -9,7 +9,8 @@ use host::{config_key::SiteConfigKey, password::Password};
 use storage::{BackupRestoreOutcome, FeedWindowMutation, StorageFactory};
 
 use crate::cli::{
-    Commands, DeadLetterAction, DeadLetterCursor, SiteConfigAction, StorageArgs, WebsubAction,
+    Commands, DeadLetterAction, DeadLetterCursor, SiteConfigAction, StorageArgs, ThemeAction,
+    WebsubAction,
 };
 
 use super::{
@@ -272,10 +273,10 @@ impl Commands {
             Commands::Restore { storage, path } => backup::cmd_restore(&storage, &path)
                 .await
                 .map(CommandOutput::Restore),
-            // First nested subcommand group: the arm stays a thin delegation to
-            // SiteConfigAction::execute (a sibling match), preserving the low-CRAP
-            // one-arm-per-command dispatch shape. Copy this pattern for future groups.
+            // Nested groups delegate to their sibling leaf dispatchers, preserving the
+            // low-CRAP one-arm-per-command dispatch shape.
             Commands::SiteConfig { action } => action.execute().await.map(|()| CommandOutput::None),
+            Commands::Theme { action } => action.execute().map(|()| CommandOutput::None),
             Commands::Websub { action } => action.execute().await.map(|()| CommandOutput::None),
         }
     }
@@ -304,6 +305,22 @@ impl SiteConfigAction {
             }
             SiteConfigAction::Unset { storage, key } => {
                 execute_site_config_unset(storage, key).await
+            }
+        }
+    }
+}
+
+impl ThemeAction {
+    /// Dispatch a storage-independent repository Theme Package action.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the selected filesystem or package failure.
+    pub fn execute(self) -> anyhow::Result<()> {
+        match self {
+            ThemeAction::Check { repository } => super::cmd_theme_check(&repository),
+            ThemeAction::Package { repository, output } => {
+                super::cmd_theme_package(&repository, &output)
             }
         }
     }

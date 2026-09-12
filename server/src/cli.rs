@@ -407,6 +407,11 @@ pub enum Commands {
         #[command(subcommand)]
         action: WebsubAction,
     },
+    /// Validate or package a portable Theme Package repository without opening storage.
+    Theme {
+        #[command(subcommand)]
+        action: ThemeAction,
+    },
 }
 
 impl Commands {
@@ -464,6 +469,25 @@ pub enum SiteConfigAction {
 
         /// The `site_config` key to delete.
         key: SiteConfigKey,
+    },
+}
+
+/// Repository-local Theme Package actions.
+#[derive(Subcommand, Clone)]
+pub enum ThemeAction {
+    /// Validate and compile a theme repository.
+    Check {
+        /// Repository directory containing `theme.json` and `style.css`.
+        repository: PathBuf,
+    },
+    /// Validate, compile, and atomically create a canonical Theme Package ZIP.
+    Package {
+        /// Repository directory containing `theme.json` and `style.css`.
+        repository: PathBuf,
+
+        /// New ZIP destination. Refuses to overwrite an existing path.
+        #[arg(long)]
+        output: PathBuf,
     },
 }
 
@@ -1403,6 +1427,37 @@ mod tests {
         let cli = parse(&["site-config", "set", "site.title", "Title"]);
         let command = cli.command.expect("site-config subcommand");
         assert!(!command.is_serve());
+    }
+
+    #[test]
+    fn theme_actions_parse_the_explicit_repository_and_output_operands() {
+        let Commands::Theme {
+            action: ThemeAction::Check { repository },
+        } = parse(&["theme", "check", "/tmp/theme"])
+            .command
+            .expect("theme check")
+        else {
+            unreachable!("parse yields ThemeAction::Check")
+        };
+        assert_eq!(repository, PathBuf::from("/tmp/theme"));
+
+        let Commands::Theme {
+            action: ThemeAction::Package { repository, output },
+        } = parse(&[
+            "theme",
+            "package",
+            "/tmp/theme",
+            "--output",
+            "/tmp/theme.zip",
+        ])
+        .command
+        .expect("theme package")
+        else {
+            unreachable!("parse yields ThemeAction::Package")
+        };
+        assert_eq!(repository, PathBuf::from("/tmp/theme"));
+        assert_eq!(output, PathBuf::from("/tmp/theme.zip"));
+        assert!(Cli::try_parse_from(["jaunder", "theme", "package", "/tmp/theme"]).is_err());
     }
 
     #[test]

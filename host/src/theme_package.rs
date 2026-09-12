@@ -45,6 +45,27 @@ pub use css::{CompiledCss, compile_stylesheet};
 
 const SOURCE_DOMAIN: &[u8] = b"jaunder-theme-source-v1";
 const REVISION_DOMAIN: &[u8] = b"jaunder-theme-revision-v1";
+/// Percent-encodes a validated package asset path for use below an HTTP route.
+///
+/// `/` remains a path separator; every other byte outside RFC 3986's unreserved
+/// set is encoded so package names containing URL delimiters preserve their identity.
+#[must_use]
+pub fn percent_encode_asset_path(path: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+
+    let mut encoded = String::with_capacity(path.len());
+    for byte in path.bytes() {
+        if matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/')
+        {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push('%');
+            encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+            encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+    }
+    encoded
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct ThemePackageLimits {
@@ -461,16 +482,26 @@ pub fn export_theme_package(
     css: &[u8],
     assets: &BTreeMap<String, Vec<u8>>,
 ) -> Result<Vec<u8>, ThemePackageError> {
+    export_package_members(
+        manifest,
+        css,
+        assets
+            .iter()
+            .map(|(path, bytes)| (path.as_str(), bytes.as_slice())),
+    )
+}
+
+fn export_package_members<'a>(
+    manifest: &'a [u8],
+    css: &'a [u8],
+    assets: impl Iterator<Item = (&'a str, &'a [u8])>,
+) -> Result<Vec<u8>, ThemePackageError> {
     use zip::{ZipWriter, write::SimpleFileOptions};
 
     let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
     for (path, bytes) in std::iter::once(("theme.json", manifest))
         .chain(std::iter::once(("style.css", css)))
-        .chain(
-            assets
-                .iter()
-                .map(|(path, bytes)| (path.as_str(), bytes.as_slice())),
-        )
+        .chain(assets)
     {
         writer
             .start_file(path, SimpleFileOptions::default())
@@ -507,6 +538,23 @@ impl ValidatedThemePackage {
     /// Enumerates package asset paths in the canonical archive order.
     pub fn asset_paths(&self) -> impl Iterator<Item = &str> {
         self.assets.keys().map(String::as_str)
+    }
+
+    /// Re-exports the validated canonical source without copying asset bytes.
+    ///
+    /// Entries retain canonical member ordering and contain only portable source.
+    ///
+    /// # Errors
+    ///
+    /// Returns an archive error when ZIP construction fails.
+    pub fn export_archive(&self) -> Result<Vec<u8>, ThemePackageError> {
+        export_package_members(
+            &self.manifest,
+            &self.css,
+            self.assets
+                .iter()
+                .map(|(path, asset)| (path.as_str(), asset.bytes.as_slice())),
+        )
     }
     /// Compiles the validated source with storage-chosen immutable asset URLs.
     ///
@@ -1026,6 +1074,14 @@ mod tests {
                 .asset("assets/header.png")
                 .map(|(mime, bytes, _)| (mime, bytes)),
             Some(("image/png", header.as_slice()))
+        );
+        let canonical_export = validated.export_archive().expect("canonical re-export");
+        let canonical = validate_theme_package(&canonical_export, ThemePackageLimits::default())
+            .expect("validate canonical export");
+        assert_eq!(
+            canonical.canonical_manifest(),
+            validated.canonical_manifest(),
+            "re-export uses the validated canonical manifest"
         );
     }
 
