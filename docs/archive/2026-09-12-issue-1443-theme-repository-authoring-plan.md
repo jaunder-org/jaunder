@@ -77,7 +77,7 @@ Out:
     proves byte identity, and asserts that every recorded preview request is the
     fixture document or a validated package-local asset.
 
-- [ ] Task 3: Publish the repository workflow and author guidance
+- [x] Task 3: Publish the repository workflow and author guidance
   - Depends on: Tasks 1 and 2's final CLI and artifact contracts.
   - Contract: a reusable GitHub workflow pins the Jaunder source revision and
     consumes the canonical `themeThumbnailEnvironment`. It checks repository
@@ -100,8 +100,8 @@ Out:
     fixture and caller workflow invoke the reusable workflow on the branch,
     proving thumbnail-drift failure and artifact upload in GitHub Actions.
     Before merge, an exact temporary tag at the reviewed head exercises the tag
-    path into a draft GitHub release; verify the uploaded ZIP bytes against the
-    local deterministic artifact, then delete that exact draft release and tag.
+    path into a GitHub release; verify the uploaded ZIP bytes against the local
+    deterministic artifact, then delete that exact release and tag.
     No workflow source-text assertion stands in for these observations.
 
 ## Cross-task contracts

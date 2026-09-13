@@ -1,0 +1,137 @@
+name: Theme repository
+
+on:
+  workflow_call:
+    inputs:
+      jaunder-revision:
+        description: Immutable Jaunder Git revision that provides the CLI and thumbnail environment.
+        required: true
+        type: string
+      theme-directory:
+        description: Repository-relative directory containing theme.json, style.css, and preview.png.
+        default: .
+        required: false
+        type: string
+
+jobs:
+  package:
+    name: Check, thumbnail, and package theme
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      artifact-name: ${{ steps.artifact.outputs.name }}
+    steps:
+      - name: Validate pinned Jaunder revision
+        env:
+          JAUNDER_REVISION: ${{ inputs.jaunder-revision }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$JAUNDER_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "jaunder-revision must be a lowercase 40-hex commit ID" >&2
+            exit 1
+          fi
+
+      - name: Checkout theme repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Checkout pinned Jaunder source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: jaunder-org/jaunder
+          ref: ${{ inputs.jaunder-revision }}
+          path: .jaunder-workflow
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          extra_nix_config: experimental-features = nix-command flakes
+
+      - name: Build Jaunder and verify canonical preview
+        env:
+          THEME_DIRECTORY: ${{ inputs.theme-directory }}
+        run: |
+          set -euo pipefail
+          workspace="$(realpath -- "$GITHUB_WORKSPACE")"
+          theme_repository="$(realpath -- "$workspace/$THEME_DIRECTORY")"
+          case "$theme_repository" in
+            "$workspace"|"$workspace"/*) ;;
+            *)
+              echo "theme-directory must resolve inside the checked-out repository" >&2
+              exit 1
+              ;;
+          esac
+          case "$theme_repository" in
+            "$workspace/.jaunder-workflow"|"$workspace/.jaunder-workflow"/*)
+              echo "theme-directory must not select Jaunder's checked-out source" >&2
+              exit 1
+              ;;
+          esac
+          test -d "$theme_repository"
+          jaunder_directory="$workspace/.jaunder-workflow"
+          output_directory="$RUNNER_TEMP/jaunder-theme-package"
+          thumbnail="$RUNNER_TEMP/jaunder-theme-thumbnail.png"
+          mkdir -p "$output_directory"
+          jaunder="$(nix build --accept-flake-config --no-link --print-out-paths "$jaunder_directory#jaunder")/bin/jaunder"
+          nix develop "$jaunder_directory#theme-thumbnail" --accept-flake-config -c bash -euo pipefail -c '
+            jaunder="$1"
+            theme_repository="$2"
+            thumbnail="$3"
+            package="$4"
+            "$jaunder" theme check "$theme_repository"
+            "$jaunder" theme thumbnail "$theme_repository" --browser "$JAUNDER_THEME_THUMBNAIL_BROWSER" --output "$thumbnail"
+            cmp -- "$theme_repository/preview.png" "$thumbnail"
+            "$jaunder" theme package "$theme_repository" --output "$package"
+          ' bash "$jaunder" "$theme_repository" "$thumbnail" "$output_directory/theme-package.zip"
+
+      - name: Upload generated thumbnail diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: generated-theme-thumbnail
+          path: ${{ runner.temp }}/jaunder-theme-thumbnail.png
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Name package artifact
+        id: artifact
+        run: echo 'name=theme-package' >>"$GITHUB_OUTPUT"
+
+      - name: Upload theme package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: ${{ runner.temp }}/jaunder-theme-package/theme-package.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Attach package to release
+    if: github.ref_type == 'tag'
+    needs: package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download theme package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.package.outputs.artifact-name }}
+          path: theme-package
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          PACKAGE: theme-package/theme-package.zip
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$PACKAGE#theme-package.zip" --clobber
+            if test "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = "true"; then
+              gh release edit "$TAG" --draft=false
+            fi
+          else
+            gh release create "$TAG" "$PACKAGE#theme-package.zip" --title "$TAG"
+          fi
