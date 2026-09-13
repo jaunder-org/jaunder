@@ -728,6 +728,11 @@ mkPerformanceProducer =
     traceDigest = builtins.hashString "sha256" "performance-${freshnessNonce}-${backend}-${selectedBrowser}";
     performanceTraceId = "1${builtins.substring 1 31 traceDigest}";
     performanceParentId = "1${builtins.substring 33 15 traceDigest}";
+    performanceDiskSize = {
+      small = 2048;
+      medium = 8192;
+      large = 32768;
+    }.${profile};
     performanceTraceParent = "00-${performanceTraceId}-${performanceParentId}-01";
   in
   mkE2eCheck {
@@ -737,6 +742,8 @@ mkPerformanceProducer =
     traceId = performanceTraceId;
     traceParent = performanceTraceParent;
     extraNodeConfig = { lib, ... }: {
+      # Performance fixtures need runtime data capacity beyond the closure-sized test disk.
+      virtualisation.diskSize = performanceDiskSize;
       systemd.services.jaunder.environment.JAUNDER_STORAGE_PATH = "/var/lib/jaunder/media";
     };
     producer = { backendPolicy }: ''
