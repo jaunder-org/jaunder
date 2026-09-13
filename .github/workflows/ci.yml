@@ -17,16 +17,17 @@ on:
 # `ubuntu-24.04` as of image 20260720.247, so the pin is behaviour-neutral today;
 # `ubuntu-26.04` exists but is still public preview.)
 #
-# These jobs must also stay x86_64 on a full VM. The static lane's combined Emacs
+# These jobs must also stay x86_64 on a full VM. The core lane's combined Emacs
 # coverage producer and the browser E2E checks build NixOS test machines hardcoded
 # to `x86_64-linux` (`nix/nixos.nix`'s `interactiveTestingVmSystem` /
 # `postgresTestingVmSystem`), and the jaunder-org cachix cache is populated for that
 # system only — an arm64 runner would emulate the VM and rebuild the world cold. They
 # also need a privileged, long-lived environment for the nix daemon and test VMs,
-# which rules out the container-based `ubuntu-slim` tier that `e2e-gate` uses below.
+# which rules out the container-based `ubuntu-slim` tier that the result-only gates
+# use below.
 jobs:
-  validate-no-e2e:
-    name: Validate (no e2e)
+  validate-core:
+    name: Validation core
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -34,42 +35,86 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      - name: Validate (static + clippy + Rust and Emacs coverage, via xtask)
+      - name: Validate core lane (via xtask)
         run:
-          nix develop .#ci --accept-flake-config -c cargo xtask validate
-          --no-e2e
-      - name: Preserve validation result
+          nix develop .#ci --accept-flake-config -c cargo xtask ci-validate core
+      - name: Preserve core validation result
         if: always()
         run: |
           if test -f .xtask/last-result.json; then
-            cp .xtask/last-result.json .xtask/validate-result.json
+            cp .xtask/last-result.json .xtask/core-result.json
+          fi
+      - name: Nix source-closure drift probe (#1289)
+        if: always()
+        run:
+          nix develop .#ci --accept-flake-config -c cargo xtask nix probe-source
+      - name: Upload core validation diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: validate-core-diagnostics
+          path: |
+            .xtask/diagnostics/
+            .xtask/gcroots/elisp-coverage-producer/elisp-coverage/
+            .xtask/last-result.json
+            .xtask/core-result.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  validate-coverage:
+    name: Validation coverage
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-ci
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Validate Rust coverage lane (via xtask)
+        run:
+          nix develop .#ci --accept-flake-config -c cargo xtask ci-validate
+          coverage
+      - name: Preserve coverage validation result
+        if: always()
+        run: |
+          if test -f .xtask/last-result.json; then
+            cp .xtask/last-result.json .xtask/coverage-result.json
           fi
       # Drift guard for the Nix coverage `src` filter (#241/#37): eval-only, so it
       # reuses this job's nix + cachix + xtask cache for ~seconds. `if: always()` so a
-      # filter-drift signal is not masked by an unrelated `validate` failure.
+      # filter-drift signal is not masked by an unrelated coverage failure.
       - name: Coverage source-drift probe (#241)
         if: always()
         run:
           nix develop .#ci --accept-flake-config -c cargo xtask coverage
           probe-source
-      - name: Nix source-closure drift probe (#1289)
-        if: always()
-        run:
-          nix develop .#ci --accept-flake-config -c cargo xtask nix probe-source
-      - name: Upload coverage diagnostics
+      - name: Upload coverage validation diagnostics
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: validate-diagnostics
+          name: validate-coverage-diagnostics
           path: |
             .xtask/diagnostics/
             .xtask/gcroots/coverage/status.json
             .xtask/gcroots/coverage/diagnostics/
-            .xtask/gcroots/elisp-coverage-producer/elisp-coverage/
             .xtask/last-result.json
-            .xtask/validate-result.json
+            .xtask/coverage-result.json
           if-no-files-found: ignore
           retention-days: 14
+
+  validate-no-e2e:
+    name: Validate (no e2e)
+    runs-on: ubuntu-slim
+    needs: [validate-core, validate-coverage]
+    if: always()
+    steps:
+      - name: Require both validation lanes to pass
+        run: |
+          core="${{ needs.validate-core.result }}"
+          coverage="${{ needs.validate-coverage.result }}"
+          echo "validation lane results: core=$core coverage=$coverage"
+          test "$core" = "success"
+          test "$coverage" = "success"
 
   e2e:
     name: e2e (${{ matrix.backend }}/${{ matrix.browser }})
@@ -106,10 +151,10 @@ jobs:
 
   e2e-gate:
     name: e2e gate
-    # The one job that wants no VM at all: no checkout, no nix, no build — four lines
-    # of shell over the `needs` results, ~3s wall clock. `ubuntu-slim` is 1 vCPU / 5GB
-    # in a *container* on a shared host, so it skips VM boot entirely and is what
-    # GitHub points aggregation jobs like this one at.
+    # Result-only gate: no checkout, nix, or build — four lines of shell over the
+    # `needs` result, ~3s wall clock. `ubuntu-slim` is 1 vCPU / 5GB in a container
+    # on a shared host, so it skips VM boot and is intended for GitHub aggregation
+    # jobs like this one.
     #
     # Its three constraints are all satisfied here, and are what to re-check before
     # adding a step: a hard 15-minute cap (we use ~3s); an unprivileged container, so

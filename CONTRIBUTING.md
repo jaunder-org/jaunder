@@ -636,13 +636,16 @@ is the strict, never-mutating gate. Both commands write a machine-readable
 result to `.xtask/last-result.json` and a `xtask-done:` completion line to
 stderr.
 
-CI does **not** run `cargo xtask validate` as a single job. It runs
-`cargo xtask validate --no-e2e` (static + clippy + coverage) in one job, plus a
-`{backend}×{browser}` e2e matrix where each job runs
-`cargo xtask e2e <backend> <browser>` for one combo, aggregated by an `e2e-gate`
-job. Running every combo in parallel across runners cuts e2e wall-clock;
-`cargo xtask validate` remains the full local equivalent. See
-[ADR-0034](docs/adr/0034-ci-e2e-matrix-distribution.md).
+CI does **not** run `cargo xtask validate` as a single job. It distributes the
+non-e2e surface between independent `cargo xtask ci-validate core` and
+`cargo xtask ci-validate coverage` jobs, aggregated by the stable
+`Validate (no e2e)` result-only job. A separate `{backend}×{browser}` e2e matrix
+runs `cargo xtask e2e <backend> <browser>` once per combination and is
+aggregated by `e2e-gate`. Running independent surfaces across runners cuts
+workflow wall-clock; `cargo xtask validate` remains the full local equivalent
+and `cargo xtask validate --no-e2e` remains its serial non-e2e form. See
+[ADR-0034](docs/adr/0034-ci-e2e-matrix-distribution.md) and the
+[non-e2e validation lane decision](docs/adr/drafts/split-ci-non-e2e-validation-lanes.md).
 
 - `cargo fmt --check` checks Rust formatting.
 - `leptosfmt -x .direnv -x .git -x target --check '**/*.rs'` checks files that
@@ -792,7 +795,9 @@ Jaunder uses OpenTelemetry for deep performance analysis (see
   **de-interleaved** last log lines — not the `nix build -L` firehose that
   interleaves every derivation, the VM console, and app output. The full
   `.xtask/diagnostics/<check>/build.log` beside it stays as the fallback. Both
-  are uploaded by CI's `validate-diagnostics` artifact.
+  are uploaded by the owning CI job's `validate-core-diagnostics`,
+  `validate-coverage-diagnostics`, or `e2e-diagnostics-<backend>-<browser>`
+  artifact.
 
 - **WASM Audit**: Use `cargo xtask audit-wasm` to measure the size of the
   frontend WASM and JS bundles from the deterministic Nix build.
@@ -1193,7 +1198,7 @@ source — a coverage hole the stateless gate can never see, because those lines
 aren't in the report). It evaluates the **committed (HEAD)** filter, so it
 guards what CI/PRs carry, not local uncommitted edits. Subtlety worth knowing: a
 _new_ file must be `git add`-ed to be measured — nix ignores untracked files
-even on a dirty tree. The probe runs in CI (the `validate-no-e2e` job) and on
+even on a dirty tree. The probe runs in CI's `Validation coverage` job and on
 request; it is deliberately **not** part of per-commit `check`/`validate`
 (#241). **Playwright/WASM coverage evidence
 (`cargo xtask wasm-coverage probe`).** This manual host command realizes the
