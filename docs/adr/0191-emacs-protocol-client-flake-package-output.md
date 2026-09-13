@@ -1,22 +1,22 @@
-# ADR-DRAFT: Emacs Protocol Client Flake Package Output
+# ADR-0191: Emacs Protocol Client Flake Package Output
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-12
 - Issue: [#1471](https://github.com/jaunder-org/jaunder/issues/1471)
 
 ## Context
 
 Jaunder's Emacs Protocol Client is a separately tested package under `elisp/`
-([ADR-0031](../0031-elisp-separately-tested-subproject.md)), but the flake has
-no public derivation that a user can place in an Emacs installed-package list.
-The existing `packages.jaunder` name already denotes the deployable server
-binary ([ADR-0142](../0142-declarative-nixos-deployment-package-outputs.md)), so
-reusing that output family would make two different installable roles ambiguous.
+([ADR-0031](0031-elisp-separately-tested-subproject.md)), but the flake has no
+public derivation that a user can place in an Emacs installed-package list. The
+existing `packages.jaunder` name already denotes the deployable server binary
+([ADR-0142](0142-declarative-nixos-deployment-package-outputs.md)), so reusing
+that output family would make two different installable roles ambiguous.
 
 The Protocol Client depends on Nixpkgs's packaged `plz` and a pinned upstream
 `cmark-el` derivation. Packaged `plz` resolves its curl transport executable to
 an immutable Nix-store path, preserving the transport choice from
-[ADR-0038](../0038-emacs-http-transport-plz-not-url-el.md) without a second,
+[ADR-0038](0038-emacs-http-transport-plz-not-url-el.md) without a second,
 PATH-based curl dependency mechanism.
 
 ## Decision
