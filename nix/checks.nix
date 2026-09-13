@@ -37,12 +37,13 @@ let
   # define the recursively discovered local path package build closure.
   coverageMembers = cargoPackageClosure workspaceMembers;
   # Coverage source remains bounded to Cargo-recognized package inputs plus the
-  # explicit nextest profile, SQLx migration trees and rust-embed assets consumed
-  # at compile time, and the immutable backup compatibility corpus consumed at
-  # runtime through CARGO_MANIFEST_DIR.
+  # explicit nextest profile, SQLx migration trees, compile-time rust-embed
+  # assets and CSR shell, and the immutable backup compatibility corpus consumed
+  # at runtime through CARGO_MANIFEST_DIR.
   coverageAuxiliarySource =
     relative:
     relative == ".config/nextest.toml"
+    || relative == "csr/index.html"
     || pkgs.lib.hasPrefix "server/assets/" relative
     || pkgs.lib.hasPrefix "storage/migrations/" relative
     || pkgs.lib.hasPrefix "server/tests/misc/backup_corpus/" relative;
@@ -54,6 +55,7 @@ let
     assert (coverageAuxiliarySource "server/tests/misc/backup_corpus/index.json");
     assert (coverageAuxiliarySource "storage/migrations/sqlite/0001_create_site_config.sql");
     assert (coverageAuxiliarySource "server/assets/jaunder.css");
+    assert (coverageAuxiliarySource "csr/index.html");
     assert builtins.elem "tools/csr_bundle" coverageMembers;
     assert !(builtins.elem "xtask" coverageMembers);
     assert !(builtins.elem "tools/devtool" coverageMembers);
