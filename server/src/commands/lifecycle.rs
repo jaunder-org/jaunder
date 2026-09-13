@@ -591,6 +591,7 @@ fn compose_server_router(
     instance_id: &InstanceId,
     mailer: Arc<dyn common::mailer::MailSender>,
     prod: bool,
+    trace_parent_enabled: bool,
 ) -> Router {
     let storage_path = Arc::new(storage_path);
     let locks = Arc::new(MediaContentLocks::new(Arc::clone(&storage_path)));
@@ -690,7 +691,7 @@ fn compose_server_router(
         Arc::clone(&dependencies.sessions),
         dependencies.write_scope.clone(),
     );
-    crate::create_router(app, instance_id, prod)
+    crate::create_router(app, instance_id, prod, trace_parent_enabled)
 }
 
 async fn reconcile_theme_assets(
@@ -781,6 +782,7 @@ pub async fn prepare_server(
     bind: SocketAddr,
     prod: bool,
     telemetry: &TelemetryConfig,
+    otel_tracing_enabled: bool,
     capture: Option<&ServeCapturePaths>,
 ) -> anyhow::Result<PreparedServer> {
     let (runtime_guard, start_time) = prepare_runtime_identity(&storage.storage_path, bind)?;
@@ -825,6 +827,7 @@ pub async fn prepare_server(
         &instance_id,
         mailer,
         prod,
+        otel_tracing_enabled,
     );
 
     let listener = tokio::net::TcpListener::bind(bind).await?;
@@ -1041,6 +1044,7 @@ pub async fn cmd_serve(
     bind: SocketAddr,
     prod: bool,
     telemetry: &TelemetryConfig,
+    otel_tracing_enabled: bool,
     capture: Option<&ServeCapturePaths>,
 ) -> anyhow::Result<()> {
     // Telemetry is owned by `run`, which holds the TelemetryGuard across this
@@ -1058,7 +1062,15 @@ pub async fn cmd_serve(
         mut workers,
         runtime_guard,
         saturation_metrics,
-    } = prepare_server(storage, bind, prod, telemetry, capture).await?;
+    } = prepare_server(
+        storage,
+        bind,
+        prod,
+        telemetry,
+        otel_tracing_enabled,
+        capture,
+    )
+    .await?;
 
     tracing::info!(bind = %bind, prod, "starting HTTP server");
     #[cfg(unix)]
@@ -1583,7 +1595,7 @@ mod tests {
         );
         let telemetry = test_telemetry(None);
         let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
-        let prepared = prepare_server(&storage, bind, false, &telemetry, None)
+        let prepared = prepare_server(&storage, bind, false, &telemetry, false, None)
             .await
             .expect("prepare server");
 
@@ -1610,7 +1622,7 @@ mod tests {
 
         let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
         let telemetry = test_telemetry(None);
-        let prepared = prepare_server(&storage, bind, false, &telemetry, None)
+        let prepared = prepare_server(&storage, bind, false, &telemetry, false, None)
             .await
             .expect("dev-mode prepare_server must auto-initialize");
 
@@ -1628,7 +1640,7 @@ mod tests {
         let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
 
         let telemetry = test_telemetry(Some("http://127.0.0.1:4318"));
-        let prepared = prepare_server(&storage, bind, false, &telemetry, None)
+        let prepared = prepare_server(&storage, bind, false, &telemetry, false, None)
             .await
             .expect("prepare server");
 
@@ -1646,7 +1658,7 @@ mod tests {
         let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
 
         let telemetry = test_telemetry(None);
-        let prepared = prepare_server(&storage, bind, false, &telemetry, None)
+        let prepared = prepare_server(&storage, bind, false, &telemetry, false, None)
             .await
             .expect("prepare server");
 
@@ -1673,7 +1685,7 @@ mod tests {
         let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
         let runtime_path = temp.path().join("runtime.json");
         let telemetry = test_telemetry(None);
-        let prepared = prepare_server(&storage, bind, false, &telemetry, None)
+        let prepared = prepare_server(&storage, bind, false, &telemetry, false, None)
             .await
             .expect("prepare server after temporary cleanup");
 
@@ -1715,7 +1727,7 @@ mod tests {
 
         let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
         let telemetry = test_telemetry(None);
-        let error = prepare_server(&storage, bind, false, &telemetry, None)
+        let error = prepare_server(&storage, bind, false, &telemetry, false, None)
             .await
             .err()
             .expect("temporary cleanup failure must stop startup");
@@ -1755,7 +1767,7 @@ mod tests {
 
         let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
         let telemetry = test_telemetry(None);
-        let error = prepare_server(&storage, bind, false, &telemetry, None)
+        let error = prepare_server(&storage, bind, false, &telemetry, false, None)
             .await
             .err()
             .expect("a live canonical runtime identity must refuse startup");
@@ -1795,7 +1807,7 @@ mod tests {
 
         let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
         let telemetry = test_telemetry(None);
-        let error = prepare_server(&storage, bind, false, &telemetry, None)
+        let error = prepare_server(&storage, bind, false, &telemetry, false, None)
             .await
             .err()
             .expect("a canonical reservation failure must stop startup");
@@ -1837,7 +1849,7 @@ mod tests {
         let _lock = StartupLockGuard::acquire(temp.path()).expect("hold startup lock");
         let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
         let telemetry = test_telemetry(None);
-        let err = prepare_server(&storage, bind, false, &telemetry, None)
+        let err = prepare_server(&storage, bind, false, &telemetry, false, None)
             .await
             .err();
         assert!(
@@ -1983,7 +1995,9 @@ mod tests {
         let telemetry = test_telemetry(Some("http://127.0.0.1:4317"));
         let bind = "127.0.0.1:0".parse().expect("bind address");
         let mut command =
-            tokio::spawn(async move { cmd_serve(&storage, bind, false, &telemetry, None).await });
+            tokio::spawn(
+                async move { cmd_serve(&storage, bind, false, &telemetry, false, None).await },
+            );
 
         wait_for_ready_or_abort(
             Duration::from_secs(5),

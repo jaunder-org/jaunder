@@ -62,7 +62,7 @@ fn default_host_config() -> (host::telemetry::TelemetryConfig, Option<ServeCaptu
 
 async fn execute_command(command: Commands) -> anyhow::Result<CommandOutput> {
     let (telemetry, capture) = default_host_config();
-    command.execute(&telemetry, capture).await
+    command.execute(&telemetry, false, capture).await
 }
 
 async fn execute_user_create(
@@ -253,7 +253,7 @@ async fn cmd_serve_fails_when_not_initialized(#[case] backend: Backend) {
     let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
 
     let (telemetry, capture) = default_host_config();
-    let result = cmd_serve(&args, bind, true, &telemetry, capture.as_ref()).await;
+    let result = cmd_serve(&args, bind, true, &telemetry, false, capture.as_ref()).await;
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(
@@ -447,7 +447,7 @@ async fn websub_dispatch_lists_and_redrives_the_exact_terminal_selection(#[case]
             },
         },
     }
-    .execute(&telemetry, None)
+    .execute(&telemetry, false, None)
     .await
     .expect("list terminal events");
     assert!(matches!(output, CommandOutput::None));
@@ -470,7 +470,7 @@ async fn websub_dispatch_lists_and_redrives_the_exact_terminal_selection(#[case]
             },
         },
     }
-    .execute(&telemetry, None)
+    .execute(&telemetry, false, None)
     .await
     .expect("redrive exact terminal event");
     assert!(matches!(output, CommandOutput::None));
@@ -503,7 +503,7 @@ async fn websub_dispatch_preserves_database_open_errors(#[case] backend: Backend
             },
         },
     }
-    .execute(&telemetry, None)
+    .execute(&telemetry, false, None)
     .await
     .err()
     .expect("uninitialized storage rejects the command");
@@ -530,6 +530,7 @@ async fn after_init_server_responds_to_health_check(#[case] backend: Backend) {
         "127.0.0.1:0".parse().expect("loopback socket address"),
         true,
         &telemetry,
+        false,
         None,
     )
     .await
@@ -562,7 +563,7 @@ async fn prepare_server_binds_and_builds_serving_router(#[case] backend: Backend
     drop(probe);
 
     let (telemetry, capture) = default_host_config();
-    let prepared = prepare_server(&args, bind, true, &telemetry, capture.as_ref())
+    let prepared = prepare_server(&args, bind, true, &telemetry, false, capture.as_ref())
         .await
         .expect("prepare_server should succeed after init");
     assert_eq!(
@@ -594,7 +595,7 @@ async fn prepare_server_writes_then_removes_runtime_file(#[case] backend: Backen
 
     let rt_path = args.storage_path.join("runtime.json");
     let (telemetry, capture) = default_host_config();
-    let prepared = prepare_server(&args, bind, true, &telemetry, capture.as_ref())
+    let prepared = prepare_server(&args, bind, true, &telemetry, false, capture.as_ref())
         .await
         .expect("prepare_server should succeed after init");
 

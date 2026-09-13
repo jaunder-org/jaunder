@@ -66,11 +66,21 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             mail: directory.path(host::capture::Stream::Mail),
             websub: directory.path(host::capture::Stream::WebSub),
         });
-        let _telemetry = jaunder::observability::init_server_tracing(&telemetry, diag_path);
-        command.execute(&telemetry, capture_paths).await.map(drop)
+        let telemetry_guard = jaunder::observability::init_server_tracing(&telemetry, diag_path);
+        command
+            .execute(
+                &telemetry,
+                telemetry_guard.otel_tracing_enabled(),
+                capture_paths,
+            )
+            .await
+            .map(drop)
     } else {
-        let _telemetry = host::telemetry::init_tracing(&telemetry);
-        command.execute(&telemetry, None).await.map(drop)
+        let telemetry_guard = host::telemetry::init_tracing(&telemetry);
+        command
+            .execute(&telemetry, telemetry_guard.otel_tracing_enabled(), None)
+            .await
+            .map(drop)
     }
 }
 
