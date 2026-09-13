@@ -536,10 +536,13 @@ cargo xtask test-local -- -p jaunder -E 'test(/^web::/)'
 
 After a targeted fix, rerun the same focused command first; it is the fastest
 proof that the regression moved from red to green. Escalate only at boundaries:
-`cargo xtask check --no-test` for host static/precommit-surface confidence,
-`cargo xtask check` before committing implementation work, `cargo xtask prepush`
-through the push hook, and CI/`validate --no-e2e` when hermetic confidence is
-the question. Focused `test-local` is an accelerator, not a certification gate.
+the enforced `pre-commit` hook runs `cargo xtask precommit` when you stage the
+final intended tree and invoke `git commit`; inspect, re-stage, and retry after
+a hook failure or mutation. Use `cargo xtask check --no-test` or
+`cargo xtask check` as explicit broad diagnostic/integration commands,
+`cargo xtask prepush` through the push hook, and CI/`validate --no-e2e` when
+hermetic confidence is the question. Focused `test-local` is an accelerator, not
+a certification gate.
 
 | Command                         | Runs                                                                                                                                                                                                                       | Formatting    |
 | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
