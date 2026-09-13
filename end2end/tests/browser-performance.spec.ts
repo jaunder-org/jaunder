@@ -1,6 +1,8 @@
+import { resolve } from "node:path";
 import { nonBrowserTest as test, expect } from "./fixtures";
 import {
   PERFORMANCE_SAMPLE_COUNT,
+  browserDiagnosticArtifacts,
   browserWorkloads,
   performanceEnabled,
   readPerformanceEnvironment,
@@ -80,6 +82,32 @@ test("plans the six canonical browser measurements from authoritative cursors", 
   expect(PERFORMANCE_SAMPLE_COUNT).toBe(20);
 });
 
+test("maps browser diagnostic references beneath the configured fragment directory", () => {
+  const fragmentDirectory = "/var/lib/jaunder/performance-fragments";
+  const workload = browserWorkloads(validateManifest(manifest))[3]!;
+  const artifacts = browserDiagnosticArtifacts(fragmentDirectory, workload, 7);
+
+  expect(artifacts).toEqual({
+    navigation: {
+      destination:
+        "/var/lib/jaunder/performance-fragments/diagnostics/global_history-deep-7.navigation.json",
+      reference: "diagnostics/global_history-deep-7.navigation.json",
+    },
+    trace: {
+      destination:
+        "/var/lib/jaunder/performance-fragments/diagnostics/global_history-deep-7.zip",
+      reference: "diagnostics/global_history-deep-7.zip",
+    },
+  });
+  for (const artifact of Object.values(artifacts)) {
+    expect(artifact.reference.trim()).not.toBe("");
+    expect(artifact.reference.startsWith("/")).toBe(false);
+    expect(resolve(fragmentDirectory, artifact.reference)).toBe(
+      artifact.destination,
+    );
+  }
+});
+
 test("computes shared midpoint median and nearest-rank p95", () => {
   expect(summarize([1, 2, 4, 100])).toEqual({
     sample_count: 4,
@@ -98,6 +126,12 @@ test("rejects malformed performance environment and manifest", () => {
       JAUNDER_PERF_BUILD_MODE: "debug",
     }),
   ).toThrow("must be release");
+  expect(() =>
+    readPerformanceEnvironment({
+      ...environment,
+      JAUNDER_PERF_FRAGMENT_DIR: "fragments",
+    }),
+  ).toThrow("absolute path");
   expect(() =>
     performanceEnabled({ JAUNDER_PERF_MANIFEST_PATH: "manifest" }),
   ).toThrow("incomplete");

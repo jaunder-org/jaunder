@@ -18,6 +18,7 @@ mod lifecycle;
 pub mod markers;
 mod nix_build;
 mod nix_probe;
+mod performance;
 mod playwright_report;
 pub mod pr;
 pub mod production_baseline;
@@ -81,9 +82,10 @@ mod steps {
 }
 
 pub use cli::{
-    AdrCommand, Cli, Command, CoverageCommand, E2eBackend, E2eBrowser, NixCommand, PrCommand,
-    PrWatchUntil, ProductionBaselineCommand, SandboxProfile, ServerFnCoverageCommand,
-    TracesCommand, WasmCoverageCommand,
+    AdrCommand, Cli, Command, CoverageCommand, E2eBackend, E2eBrowser, NixCommand,
+    PerformanceBackend, PerformanceBrowser, PerformanceCommand, PerformanceProfile,
+    PerformanceRunArgs, PrCommand, PrWatchUntil, ProductionBaselineCommand, SandboxProfile,
+    ServerFnCoverageCommand, TracesCommand, WasmCoverageCommand,
 };
 pub use dispatch::run;
 pub use lifecycle::ensure_hooks_installed;

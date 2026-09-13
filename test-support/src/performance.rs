@@ -31,8 +31,9 @@ use common::{
 };
 use jiff::ToSpan as _;
 use performance::{
-    BrowserInitialRows, Cursor, DatasetManifest, DatasetProfile, HistoryCursor, PersistedCursor,
-    TimelineCursor, Workload, WorkloadSubjects, canonical_plan, validate_manifest,
+    BrowserInitialRows, CountOverrides, Cursor, DatasetManifest, DatasetProfile, HistoryCursor,
+    PersistedCursor, TimelineCursor, Workload, WorkloadSubjects, canonical_plan, plan,
+    validate_manifest,
 };
 use sha2::Digest as _;
 use storage::{
@@ -97,7 +98,7 @@ impl PerformanceSeedAudit {
 struct RevisionTarget {
     post_id: PostId,
     author: UserId,
-    revisions: i32,
+    revisions: u64,
     deleted: bool,
 }
 
@@ -130,11 +131,13 @@ pub struct PerformanceSeedReceipt<'a> {
 pub async fn seed_performance_fixture(
     storage: PerformanceSeedStorage,
     profile: DatasetProfile,
+    overrides: CountOverrides,
     output: &Path,
     storage_path: &Path,
 ) -> anyhow::Result<(DatasetManifest, u64)> {
     let (manifest, _, duration) =
-        seed_performance_fixture_with_audit(storage, profile, output, storage_path).await?;
+        seed_performance_fixture_with_audit(storage, profile, overrides, output, storage_path)
+            .await?;
     Ok((manifest, duration))
 }
 
@@ -147,11 +150,12 @@ pub async fn seed_performance_fixture(
 pub async fn seed_performance_fixture_with_audit(
     storage: PerformanceSeedStorage,
     profile: DatasetProfile,
+    overrides: CountOverrides,
     output: &Path,
     storage_path: &Path,
 ) -> anyhow::Result<(DatasetManifest, PerformanceSeedAudit, u64)> {
     let started = Instant::now();
-    let plan = canonical_plan(profile);
+    let plan = plan(profile, overrides).context("invalid performance fixture counts")?;
     let clock: UtcInstant = FIXED_CLOCK
         .parse()
         .context("fixed fixture clock is invalid")?;
@@ -616,23 +620,37 @@ fn revision_target(
     seeded: SeededPost,
 ) -> RevisionTarget {
     let deleted = bucket(seeded.index as u64, &plan.lifecycle[..4]) == "deleted";
-    let revisions = match bucket(
-        revision_bucket_index(seeded.index as u64, plan),
-        &plan.revision_distribution,
-    )
-    .as_str()
-    {
-        "one" => 1,
-        "five" => 5,
-        "thirty_three" => 33,
-        _ => unreachable!("canonical revision distribution"),
-    };
+    let revisions = revision_count(seeded.index as u64, plan);
     RevisionTarget {
         post_id: seeded.id,
         author: authors[seeded.index % authors.len()].1,
-        revisions: revisions - i32::from(deleted),
+        revisions: revisions - u64::from(deleted),
         deleted,
     }
+}
+
+fn revision_count(index: u64, plan: &performance::DatasetPlan) -> u64 {
+    match revision_bucket(index, plan).as_str() {
+        "one" => 1,
+        "five" => 5,
+        "thirty_three" => 33,
+        "base" => plan.revisions / plan.posts,
+        "one_extra" => plan.revisions / plan.posts + 1,
+        _ => unreachable!("deterministic revision distribution"),
+    }
+}
+
+fn revision_bucket(index: u64, plan: &performance::DatasetPlan) -> String {
+    let index = if *plan == canonical_plan(plan.profile) {
+        revision_bucket_index(index, plan)
+    } else {
+        index
+    };
+    bucket(index, &plan.revision_distribution)
+}
+
+fn maximum_revision_count(plan: &performance::DatasetPlan) -> u64 {
+    plan.revisions / plan.posts + u64::from(!plan.revisions.is_multiple_of(plan.posts))
 }
 fn revision_bucket_index(index: u64, plan: &performance::DatasetPlan) -> u64 {
     let author = index % plan.authors;
@@ -691,7 +709,7 @@ async fn apply_post_revisions(
     Ok(())
 }
 
-fn revised_body(body: PostBody, revision: i32) -> Result<PostBody, storage::UpdatePostError> {
+fn revised_body(body: PostBody, revision: u64) -> Result<PostBody, storage::UpdatePostError> {
     let mut source = String::from(body);
     let marker_position = source.find('x').ok_or_else(|| {
         storage::UpdatePostError::Internal(sqlx::Error::Protocol(
@@ -725,13 +743,8 @@ fn record_confirmed_revisions(
         if bucket(seeded.index as u64, &plan.lifecycle[..4]) == "deleted" {
             audit.record_confirmed("lifecycle.deleted");
         }
-        audit.record_confirmed(format!(
-            "revisions.{}",
-            bucket(
-                revision_bucket_index(seeded.index as u64, plan),
-                &plan.revision_distribution,
-            )
-        ));
+        let revision = revision_bucket(seeded.index as u64, plan);
+        audit.record_confirmed(format!("revisions.{revision}"));
     }
 }
 
@@ -766,7 +779,7 @@ async fn audit_persisted(
             audit.record_persisted("lifecycle.backdated_live");
         }
         let observation = observe_persisted_post(storage, owner, seeded.id, &history).await?;
-        record_persisted_post_shape(&mut audit, plan, &observation, history.len())?;
+        record_persisted_post_shape(&mut audit, plan, *seeded, &observation, history.len())?;
     }
     Ok(audit.persisted)
 }
@@ -811,6 +824,7 @@ async fn observe_persisted_post(
 fn record_persisted_post_shape(
     audit: &mut PerformanceSeedAudit,
     plan: &performance::DatasetPlan,
+    seeded: SeededPost,
     observation: &PersistedPostObservation,
     history_len: usize,
 ) -> anyhow::Result<()> {
@@ -859,6 +873,17 @@ fn record_persisted_post_shape(
             observation.media_count
         ),
     });
+    if *plan != canonical_plan(plan.profile) {
+        let expected = revision_count(seeded.index as u64, plan);
+        if u64::try_from(history_len)? != expected {
+            bail!("persisted post has {history_len} revisions; expected {expected} from the plan");
+        }
+        audit.record_persisted(format!(
+            "revisions.{}",
+            revision_bucket(seeded.index as u64, plan)
+        ));
+        return Ok(());
+    }
     audit.record_persisted(match history_len {
         1 => "revisions.one",
         5 => "revisions.five",
@@ -876,26 +901,25 @@ async fn resolve_manifest(
     clock: UtcInstant,
 ) -> anyhow::Result<DatasetManifest> {
     let (username, owner) = &authors[0];
-    let history_post_id = post_ids
-        .iter()
-        .enumerate()
-        .rev()
-        .find(|(index, _)| {
-            *index % authors.len() == 0
-                && bucket(
-                    revision_bucket_index(*index as u64, plan),
-                    &plan.revision_distribution,
-                ) == "thirty_three"
+    let history_post_id = if *plan == canonical_plan(plan.profile) {
+        post_ids.iter().enumerate().rev().find(|(index, _)| {
+            *index % authors.len() == 0 && revision_bucket(*index as u64, plan) == "thirty_three"
         })
-        .map(|(_, id)| *id)
-        .context("missing 33-revision post")?;
+    } else {
+        post_ids.iter().enumerate().find(|(index, _)| {
+            *index % authors.len() == 0
+                && revision_count(*index as u64, plan) == maximum_revision_count(plan)
+        })
+    }
+    .map(|(_, id)| *id)
+    .context("missing maximum-revision post")?;
     let revision = posts
         .list_post_revision_history(*owner, history_post_id, None, PageSize::default())
         .await?
         .context("history post missing")?
         .revisions
         .first()
-        .context("33-revision post has no history")?
+        .context("maximum-revision post has no history")?
         .revision_id;
     let public = collect_timeline(posts, ViewerIdentity::Anonymous, clock).await?;
     let authenticated = collect_timeline(posts, ViewerIdentity::local(*owner), clock).await?;

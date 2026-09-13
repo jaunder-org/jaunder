@@ -1,4 +1,5 @@
 import { devices, defineConfig } from "@playwright/test";
+import { performanceEnabled } from "./tests/browser-performance";
 
 const traceParent = process.env.JAUNDER_E2E_TRACEPARENT;
 // Worker count is env-driven (#155), default 2: two browser instances per combo
@@ -38,6 +39,7 @@ const chromiumLaunchOptions = {
 const visualTag = /@visual/;
 const diagnosticCoverage = Boolean(process.env.JAUNDER_WASM_COVERAGE_OUT);
 const measurementMode = Boolean(process.env.JAUNDER_WASM_COVERAGE_MODE);
+const runnerTrace = performanceEnabled() ? "off" : "retain-on-failure";
 const productionBaselineTls = process.env.JAUNDER_PRODUCTION_BASELINE_TLS
   ? { ignoreHTTPSErrors: true }
   : {};
@@ -82,8 +84,9 @@ export default defineConfig({
   ],
   use: {
     actionTimeout: 0,
-    // Capture forensics only on failure so a green run writes nothing extra (#123/#49).
-    trace: "retain-on-failure",
+    // Performance measurements own one trace per sample; all other runs retain
+    // failure forensics without writing artifacts for green tests (#123/#49).
+    trace: runnerTrace,
     screenshot: "only-on-failure",
     ...(traceParent ? { extraHTTPHeaders: { traceparent: traceParent } } : {}),
   },

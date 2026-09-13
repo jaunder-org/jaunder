@@ -1,5 +1,13 @@
 import { mkdir, rename, writeFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 
 export const PERFORMANCE_PAGE_SIZE = 50;
 export const PERFORMANCE_SAMPLE_COUNT = 20;
@@ -141,6 +149,10 @@ export function readPerformanceEnvironment(
   const backend = required(env, "JAUNDER_PERF_BACKEND");
   if (backend !== "sqlite" && backend !== "postgres")
     throw new Error("JAUNDER_PERF_BACKEND must be sqlite or postgres");
+  const fragmentDirectory = required(env, "JAUNDER_PERF_FRAGMENT_DIR");
+  if (!isAbsolute(fragmentDirectory)) {
+    throw new Error("JAUNDER_PERF_FRAGMENT_DIR must be an absolute path");
+  }
   const browser = required(env, "JAUNDER_PERF_BROWSER");
   if (browser !== "chromium" && browser !== "firefox")
     throw new Error("JAUNDER_PERF_BROWSER must be chromium or firefox");
@@ -188,7 +200,7 @@ export function readPerformanceEnvironment(
   }
   return {
     manifestPath: required(env, "JAUNDER_PERF_MANIFEST_PATH"),
-    fragmentDirectory: required(env, "JAUNDER_PERF_FRAGMENT_DIR"),
+    fragmentDirectory,
     backend,
     browser,
     setup: {
@@ -306,6 +318,43 @@ export function browserWorkloads(manifest: DatasetManifest): BrowserWorkload[] {
       pageSize: undefined,
     },
   ];
+}
+
+export type BrowserDiagnosticArtifact = {
+  destination: string;
+  reference: string;
+};
+
+export function browserDiagnosticArtifacts(
+  fragmentDirectory: string,
+  workload: BrowserWorkload,
+  sampleIndex: number,
+): {
+  navigation: BrowserDiagnosticArtifact;
+  trace: BrowserDiagnosticArtifact;
+} {
+  const prefix = `${workload.workload}-${workload.position}-${sampleIndex}`;
+  const fragmentRoot = resolve(fragmentDirectory);
+  const diagnosticsDirectory = join(fragmentRoot, "diagnostics");
+  const artifact = (filename: string): BrowserDiagnosticArtifact => {
+    const destination = join(diagnosticsDirectory, filename);
+    const reference = relative(fragmentRoot, destination);
+    if (
+      reference.trim() === "" ||
+      isAbsolute(reference) ||
+      reference === ".." ||
+      reference.startsWith(`..${sep}`)
+    ) {
+      throw new Error(
+        "browser diagnostic artifact must remain beneath fragment directory",
+      );
+    }
+    return { destination, reference };
+  };
+  return {
+    navigation: artifact(`${prefix}.navigation.json`),
+    trace: artifact(`${prefix}.zip`),
+  };
 }
 
 export function summarize(samples: readonly number[]) {

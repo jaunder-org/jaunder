@@ -9,7 +9,7 @@ use crate::{
         AdrCommand, Cli, Command, CoverageCommand, NixCommand, PrCommand,
         ProductionBaselineCommand, ServerFnCoverageCommand, TracesCommand, WasmCoverageCommand,
     },
-    coverage, gate, issue, lifecycle, nix_probe, pr, production_baseline,
+    coverage, gate, issue, lifecycle, nix_probe, performance, pr, production_baseline,
     result::{CommandResult, Mode, StepResult},
     server_fn_coverage, steps, traces, wasm_coverage,
 };
@@ -24,6 +24,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
         );
     }
     match cli.command {
+        Command::Performance(command) => performance::run(command),
         Command::ProductionBaseline(
             command @ (ProductionBaselineCommand::Discover { .. }
             | ProductionBaselineCommand::Accept { .. }),

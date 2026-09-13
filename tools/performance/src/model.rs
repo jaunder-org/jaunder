@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 pub const RESULT_SCHEMA_VERSION: u32 = 1;
 pub const DATASET_SCHEMA_VERSION: u32 = 1;
@@ -106,6 +107,40 @@ pub struct Distribution {
 pub struct CursorRequirement {
     pub workload: Workload,
 }
+/// Optional fixture-count changes from a profile's canonical allocation.
+///
+/// Overrides must remain absent for canonical runs. The planner requires positive
+/// values, a post count divisible by the author count, and at least one revision
+/// per post; those constraints make author assignment and revision allocation
+/// deterministic for every accepted plan.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CountOverrides {
+    pub posts: Option<u64>,
+    pub authors: Option<u64>,
+    pub revisions: Option<u64>,
+}
+
+impl CountOverrides {
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.posts.is_none() && self.authors.is_none() && self.revisions.is_none()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
+pub enum PlanError {
+    #[error("post count must be positive")]
+    Posts,
+    #[error("author count must be positive")]
+    Authors,
+    #[error("post count must be divisible by author count")]
+    AuthorDistribution,
+    #[error("revision count must provide at least one revision per post")]
+    Revisions,
+    #[error("revision count must provide more than 50 history rows per author")]
+    HistoryCursor,
+}
+
 /// Pure allocation plan. It intentionally contains no database-generated identifiers.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DatasetPlan {
@@ -260,12 +295,16 @@ pub struct FragmentEnvelope {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RunSelection {
     pub backends: Vec<Backend>,
+    #[serde(default)]
+    pub count_overrides: CountOverrides,
     pub browsers: Vec<Browser>,
     pub storage: bool,
     pub browser: bool,
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RunEvidence {
+    /// Host observation time; producer setup and workload durations remain separate.
+    pub measured_at_unix_ms: u64,
     pub freshness_nonce: String,
     pub producer_derivation_identities: Vec<NamedDerivationIdentity>,
 }
@@ -274,6 +313,7 @@ pub struct RunEnvelope {
     pub schema_version: u32,
     pub manifest: DatasetManifest,
     pub selection: RunSelection,
+    pub canonical_selection: bool,
     pub provenance: Provenance,
     pub evidence: RunEvidence,
     pub setup: Vec<SetupDuration>,

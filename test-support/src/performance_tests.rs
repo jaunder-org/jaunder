@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use performance::{DatasetProfile, PersistedCursor, Workload, validate_manifest};
+use performance::{CountOverrides, DatasetProfile, PersistedCursor, Workload, validate_manifest};
 use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{Backend, backends};
@@ -25,6 +25,7 @@ async fn small_fixture_resolves_a_valid_manifest_from_persisted_records(#[case] 
             write_scope: env.write_scope(),
         },
         DatasetProfile::Small,
+        CountOverrides::default(),
         output.path(),
         storage_root.path(),
     )
@@ -292,4 +293,44 @@ async fn small_fixture_resolves_a_valid_manifest_from_persisted_records(#[case] 
         ));
         assert!(content.is_file(), "canonical Media bytes exist");
     }
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn overridden_fixture_records_and_validates_exact_requested_totals(#[case] backend: Backend) {
+    let env = backend.setup().pristine().await;
+    let output = tempfile::tempdir().expect("temporary manifest directory");
+    let storage_root = tempfile::tempdir().expect("temporary Media storage root");
+    let overrides = CountOverrides {
+        posts: Some(120),
+        authors: Some(12),
+        revisions: Some(777),
+    };
+    let (manifest, audit, _) = seed_performance_fixture_with_audit(
+        PerformanceSeedStorage {
+            users: env.users(),
+            posts: env.posts(),
+            subscriptions: env.subscriptions(),
+            audiences: env.audiences(),
+            media: env.media(),
+            write_scope: env.write_scope(),
+        },
+        DatasetProfile::Small,
+        overrides,
+        output.path(),
+        storage_root.path(),
+    )
+    .await
+    .expect("overridden fixture seeds through typed storage");
+
+    assert_eq!(
+        (
+            manifest.plan.posts,
+            manifest.plan.authors,
+            manifest.plan.revisions
+        ),
+        (120, 12, 777)
+    );
+    assert_eq!(audit.persisted, audit.confirmed);
+    validate_manifest(&manifest).expect("overridden manifest satisfies shared contract");
 }

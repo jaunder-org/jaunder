@@ -34,6 +34,25 @@ pub struct Cli {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum PerformanceBackend {
+    Sqlite,
+    Postgres,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum PerformanceBrowser {
+    Chromium,
+    Firefox,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum PerformanceProfile {
+    Small,
+    Medium,
+    Large,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum E2eBackend {
     Sqlite,
     Postgres,
@@ -252,6 +271,10 @@ pub enum Command {
     /// Host-only manual command; needs `gh`.
     #[command(subcommand)]
     Issue(issue::IssueCommand),
+    /// Run fresh release-mode performance producers, compare a retained run, or
+    /// import the verified canonical GitHub Actions baseline.
+    #[command(name = "perf", subcommand)]
+    Performance(PerformanceCommand),
     /// Run the opt-in production deployment baseline harness. It validates the
     /// immutable product and clean harness identities before any lifecycle work.
     #[command(subcommand)]
@@ -290,6 +313,41 @@ pub enum ProductionBaselineCommand {
         #[arg(long, value_parser = nonempty)]
         target: String,
     },
+}
+
+/// Host-side performance operations. A run is canonical only when every
+/// selector uses its default matrix and provenance comes from the trusted CI env.
+#[derive(Subcommand)]
+pub enum PerformanceCommand {
+    Small(PerformanceRunArgs),
+    Medium(PerformanceRunArgs),
+    Large(PerformanceRunArgs),
+    Compare {
+        #[arg(long)]
+        result: PathBuf,
+    },
+    ImportBaseline {
+        #[arg(value_parser = clap::value_parser!(u64).range(1..))]
+        run_id: u64,
+    },
+}
+
+#[derive(clap::Args)]
+pub struct PerformanceRunArgs {
+    #[arg(long, value_enum)]
+    pub backend: Vec<PerformanceBackend>,
+    #[arg(long, value_enum)]
+    pub browser: Vec<PerformanceBrowser>,
+    #[arg(long, conflicts_with = "browser_only")]
+    pub storage_only: bool,
+    #[arg(long, conflicts_with = "storage_only")]
+    pub browser_only: bool,
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+    pub posts: Option<u64>,
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+    pub authors: Option<u64>,
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+    pub revisions: Option<u64>,
 }
 
 /// An explicit passive-observation target for `pr watch`.
@@ -543,6 +601,15 @@ impl Cli {
             Command::Adr(AdrCommand::SyncReadme) => "adr-sync-readme",
             Command::Adr(AdrCommand::Promote) => "adr-promote",
             Command::Adr(AdrCommand::Promoter) => "adr-promoter",
+            Command::Performance(
+                PerformanceCommand::Small(_)
+                | PerformanceCommand::Medium(_)
+                | PerformanceCommand::Large(_),
+            ) => "perf",
+            Command::Performance(PerformanceCommand::Compare { .. }) => "perf-compare",
+            Command::Performance(PerformanceCommand::ImportBaseline { .. }) => {
+                "perf-import-baseline"
+            }
             Command::Traces(TracesCommand::Analyze { .. }) => "traces-analyze",
             Command::Traces(TracesCommand::Run { .. }) => "traces-run",
             Command::Traces(TracesCommand::BootPhases { .. }) => "traces-boot-phases",
@@ -644,6 +711,43 @@ mod tests {
         assert!(cli.json);
         assert_eq!(cli.command_name(), "census");
         assert!(matches!(cli.command, Command::Census));
+    }
+
+    #[test]
+    fn perf_profile_and_selectors_parse_without_a_run_subcommand() {
+        let cli = Cli::try_parse_from([
+            "xtask",
+            "perf",
+            "small",
+            "--backend",
+            "sqlite",
+            "--browser",
+            "firefox",
+            "--browser-only",
+            "--posts",
+            "120",
+            "--authors",
+            "12",
+            "--revisions",
+            "777",
+        ])
+        .unwrap();
+        assert_eq!(cli.command_name(), "perf");
+        let Command::Performance(PerformanceCommand::Small(args)) = cli.command else {
+            panic!("expected small performance run");
+        };
+        assert_eq!(args.backend, [PerformanceBackend::Sqlite]);
+        assert_eq!(args.browser, [PerformanceBrowser::Firefox]);
+        assert!(args.browser_only);
+        assert!(!args.storage_only);
+        assert_eq!(args.posts, Some(120));
+        assert_eq!(args.authors, Some(12));
+        assert_eq!(args.revisions, Some(777));
+    }
+
+    #[test]
+    fn perf_count_overrides_reject_zero() {
+        assert!(Cli::try_parse_from(["xtask", "perf", "small", "--posts", "0"]).is_err());
     }
 
     #[test]

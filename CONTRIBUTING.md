@@ -737,6 +737,109 @@ does not rerun live ERT.
 Jaunder uses OpenTelemetry for deep performance analysis (see
 [ADR-0011](docs/adr/0011-unified-observability.md)).
 
+#### Repeatable performance harness
+
+`cargo xtask perf <profile>` produces fresh, versioned performance evidence. The
+default matrix for every profile is direct storage and browser work against
+SQLite and PostgreSQL, with Chromium for browser work; it uses release-mode
+application artifacts and runs the selected workloads in order. The canonical
+comparison run is therefore:
+
+```bash
+cargo xtask perf medium
+```
+
+`small` (100 Posts, 10 authors, 500 revisions) is the fast smoke profile.
+`medium` (5,000 Posts, 100 authors, 25,000 revisions) is the routine comparison
+profile and the only canonical CI baseline matrix. `large` (50,000 Posts, 1,000
+authors, 250,000 revisions) is an intentional stress run, not a routine
+comparison:
+
+```bash
+cargo xtask perf small
+cargo xtask perf medium
+cargo xtask perf large
+```
+
+Count overrides support deterministic dataset-shape exploration without changing
+the canonical profiles:
+
+```bash
+cargo xtask perf small --posts 1000 --authors 20 --revisions 2000
+```
+
+`--posts`, `--authors`, and `--revisions` each take a positive `u64`. A supplied
+plan must have posts divisible by authors, revisions at least posts, and more
+than 50 owner-history rows per author; accepted custom datasets distribute their
+revisions deterministically. Any count override marks the result noncanonical,
+even when its numeric value equals the selected profile default, so it can be
+compared but the baseline importer rejects it.
+
+Use selectors or count overrides only for focused investigation; their results
+are visibly noncanonical and cannot seed the baseline. Select one or more
+backends and browsers with `--backend sqlite`, `--backend postgres`,
+`--browser chromium`, and `--browser firefox`; restrict the producer class with
+`--storage-only` or `--browser-only`:
+
+```bash
+cargo xtask perf small --backend sqlite --storage-only
+cargo xtask perf small --backend postgres --browser chromium --browser-only
+cargo xtask perf medium --browser firefox --browser-only
+```
+
+Firefox remains supported for on-demand browser investigation, but it is not in
+the routine baseline matrix. Storage workloads retain one cold sample then 30
+warm samples for each workload/backend. Browser workloads retain 20 cold
+action-to-semantic-ready samples, each in a fresh context with no pre-warm
+navigation. Dataset provisioning is recorded separately and is not a measured
+workload. The matrix covers initial and 80-percent-deep paginated read paths
+plus revision detail for storage, and semantic-ready browser navigation and
+history pagination. It is a read/rendering harness, not a write-throughput or
+concurrency benchmark.
+
+Each invocation creates a fresh nonce that is part of the producer derivation
+identity; it never restores or publishes measurement derivations or result
+outputs through a cache. Inspect the invocation-owned evidence under
+`.xtask/performance/<nonce>/`: `performance-result-v1.json` is the authoritative
+combined result, `fragments/` holds producer fragments, and the producer
+directories retain derivation evidence and diagnostics. Before xtask reports a
+measured-workload or validation failure, its producer retains
+`producer-status-v1.json` plus the available evidence. The same validated result
+is atomically copied to `.xtask/performance/performance-result-v1.json` as the
+stable CI upload/import entry point. CI uploads that complete tree as the
+`performance-result` artifact, including whatever evidence exists after a
+producer failure.
+
+When `tools/performance/baseline-v1.json` exists, compare a completed result:
+
+```bash
+cargo xtask perf compare --result \
+  .xtask/performance/<nonce>/performance-result-v1.json
+```
+
+Comparison prints absolute median/p95 values and each sample's
+minimum-to-maximum spread. A median or p95 increase of 20% or more is
+highlighted as advisory evidence only: it does not fail the command or CI.
+Missing samples, malformed fragments/results, incompatible identities, and
+producer failures are real failures and must not be dismissed as timing noise.
+
+There is intentionally no local baseline until a maintainer bootstraps one from
+the first successful canonical `main` run. After a scheduled or manual
+**Performance** workflow run succeeds, a maintainer imports its run ID:
+
+```bash
+cargo xtask perf import-baseline <run-id>
+```
+
+The importer fetches the `performance-result` artifact itself and accepts only a
+successful `schedule` or `workflow_dispatch` run from `jaunder-org/jaunder`'s
+`main`, with the exact `Performance` workflow and `performance` job identities
+and a compatible complete result. Review and commit the resulting
+`tools/performance/baseline-v1.json` diff normally; CI never writes the
+baseline. A pull-request artifact, including a run started by the `performance`
+label, may be downloaded and compared but can never be imported as a canonical
+baseline.
+
 - **No PII in telemetry**: span fields and the structured error boundary
   (`error.source`/`error.context`) must never carry user PII or secrets (emails,
   tokens, passwords, post bodies); use stable identifiers like `user_id`,

@@ -388,6 +388,8 @@ mkE2eCheck =
     extraEnv ? "",
     vmMemory ? 2048,
     vmCores ? null,
+    producer ? null,
+    extraNodeConfig ? (_: { }),
   }:
   let
     backendPolicy =
@@ -490,6 +492,7 @@ mkE2eCheck =
         imports = [
           self.nixosModules.jaunder
           (backendPolicy.nodeConfig lib)
+          (extraNodeConfig { inherit pkgs lib; })
         ];
 
         virtualisation.memorySize = vmMemory;
@@ -535,37 +538,41 @@ mkE2eCheck =
         };
       };
 
-    testScript = ''
-      ${e2ePhaseTimingHelpers backend browser}${e2eOtelTestHelpers}${beforeMachineStart}vm_startup_started_at = time.monotonic()
-      machine.start()
-      machine.wait_for_unit("otel-collector.service", timeout=60)
-      # `active` precedes the OTLP receiver binds; seeding immediately can
-      # export into that gap and leave no trace population to verify.
-      wait_for_otel_receivers()${setupBeforeJaunder}machine.succeed("systemctl start jaunder.service")
-      machine.wait_for_unit("jaunder.service", timeout=60)
-      machine.wait_for_open_port(3000, timeout=30)
-      record_e2e_phase(
-        "vm-startup-readiness",
-        vm_startup_started_at,
-        "success",
-        "${backend}/${browser}: VM booted and the Jaunder HTTP readiness port opened.",
-      )
+    testScript =
+      if producer == null then
+        ''
+          ${e2ePhaseTimingHelpers backend browser}${e2eOtelTestHelpers}${beforeMachineStart}vm_startup_started_at = time.monotonic()
+          machine.start()
+          machine.wait_for_unit("otel-collector.service", timeout=60)
+          # `active` precedes the OTLP receiver binds; seeding immediately can
+          # export into that gap and leave no trace population to verify.
+          wait_for_otel_receivers()${setupBeforeJaunder}machine.succeed("systemctl start jaunder.service")
+          machine.wait_for_unit("jaunder.service", timeout=60)
+          machine.wait_for_open_port(3000, timeout=30)
+          record_e2e_phase(
+            "vm-startup-readiness",
+            vm_startup_started_at,
+            "success",
+            "${backend}/${browser}: VM booted and the Jaunder HTTP readiness port opened.",
+          )
 
-      machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")${afterPackageCopy}# Seed a fresh DB and run the one browser this derivation targets.
-      # Browsers run as separate derivations (one VM each) so their state
-      # mutations cannot interfere; that also lets CI fan them out.
-      seed_db()
-      ${e2eRunAndCapture {
-        inherit
-          backend
-          browser
-          traceId
-          traceParent
-          extraEnv
-          ;
-        jaunderDb = backendPolicy.jaunderDb;
-      }}
-    '';
+          machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")${afterPackageCopy}# Seed a fresh DB and run the one browser this derivation targets.
+          # Browsers run as separate derivations (one VM each) so their state
+          # mutations cannot interfere; that also lets CI fan them out.
+          seed_db()
+          ${e2eRunAndCapture {
+            inherit
+              backend
+              browser
+              traceId
+              traceParent
+              extraEnv
+              ;
+            jaunderDb = backendPolicy.jaunderDb;
+          }}
+        ''
+      else
+        producer { inherit backendPolicy; };
   };
 
 # Cache-busting salt for e2e measurement runs (#792). Nix caches the e2e
@@ -692,7 +699,185 @@ e2eSingleWorkerPackages = pkgs.lib.listToAttrs (
     );
   }) e2eCombos
 );
+# A manual producer selects exactly one storage or browser measurement. It
+# reuses the e2e VM's backend lifecycle while keeping the gate's default branch
+# byte-for-byte stable.
+mkPerformanceProducer =
+  {
+    freshnessNonce,
+    profile,
+    backend,
+    producerKind,
+    browser ? null,
+    posts ? null,
+    authors ? null,
+    revisions ? null,
+  }:
+  assert freshnessNonce != "";
+  assert builtins.elem profile [ "small" "medium" "large" ];
+  assert builtins.elem backend [ "sqlite" "postgres" ];
+  assert builtins.elem producerKind [ "storage" "browser" ];
+  assert (producerKind == "browser") == (browser != null);
+  assert browser == null || builtins.elem browser [ "chromium" "firefox" ];
+  assert posts == null || posts > 0;
+  assert authors == null || authors > 0;
+  assert revisions == null || revisions > 0;
+  let
+    selectedBrowser = if browser == null then "chromium" else browser;
+  in
+  mkE2eCheck {
+    inherit backend;
+    checkName = "jaunder-performance-${producerKind}-${backend}-${profile}-${freshnessNonce}";
+    browser = selectedBrowser;
+    traceId = "00000000000000000000000000000000";
+    traceParent = "00-00000000000000000000000000000000-0000000000000000-01";
+    extraNodeConfig = { lib, ... }: {
+      systemd.services.jaunder.environment.JAUNDER_STORAGE_PATH = "/var/lib/jaunder/media";
+    };
+    producer = { backendPolicy }: ''
+      import json
+      import shlex
+      import time
 
+      ${e2eOtelTestHelpers}
+      machine.start()
+      provisioning_started = time.monotonic_ns()
+      machine.wait_for_unit("otel-collector.service", timeout=60)
+      wait_for_otel_receivers()
+      ${backendPolicy.setupBeforeJaunder}
+      machine.succeed("install -d -o jaunder -g jaunder /var/lib/jaunder/data /var/lib/jaunder/media && mkdir -p /var/lib/jaunder/performance/fragments /var/lib/jaunder/performance/diagnostics")
+      machine.succeed("systemctl start jaunder.service")
+      machine.wait_for_unit("jaunder.service", timeout=60)
+      machine.wait_for_open_port(3000, timeout=30)
+      provisioning_us = (time.monotonic_ns() - provisioning_started) // 1000
+
+      seeding_started = time.monotonic_ns()
+      machine.succeed(
+        "JAUNDER_DB=${backendPolicy.jaunderDb}"
+        + " test-support perf-seed --profile ${profile}"
+        + " --output /var/lib/jaunder/performance"
+        + " --storage-path /var/lib/jaunder/media"
+        + "${pkgs.lib.optionalString (posts != null) " --posts ${toString posts}"}"
+        + "${pkgs.lib.optionalString (authors != null) " --authors ${toString authors}"}"
+        + "${pkgs.lib.optionalString (revisions != null) " --revisions ${toString revisions}"}"
+      )
+      setup = {
+        "provisioning_us": provisioning_us,
+        "seeding_us": (time.monotonic_ns() - seeding_started) // 1000,
+      }
+      machine.succeed(
+        "printf %s "
+        + shlex.quote(json.dumps(setup, separators=(",", ":")))
+        + " > /var/lib/jaunder/performance/setup.json"
+      )
+
+      architecture = machine.succeed("uname -m").strip()
+      cpu_model = machine.succeed("awk -F ': ' '/^model name/ { print $2; exit }' /proc/cpuinfo").strip()
+      identity = {
+        "nix_system": "${system}",
+        "runner_image": "nixos-vm",
+        "runner_architecture": architecture,
+        "cpu_model": cpu_model,
+        "database_version": "${backendPolicy.package.version}",
+        "browser_version": "not-applicable",
+        "stable_derivation_identities": [
+          { "name": "client", "identity": "${csrWasmBundle.drvPath}" },
+          { "name": "producer", "identity": "${devtoolBin.drvPath}" },
+          { "name": "server", "identity": "${jaunderBin.drvPath}" },
+        ],
+      }
+
+      ${pkgs.lib.optionalString (producerKind == "storage") ''
+        machine.succeed(
+          "printf %s "
+          + shlex.quote(json.dumps(identity, separators=(",", ":")))
+          + " > /var/lib/jaunder/performance/identity.json"
+        )
+        storage_status, storage_output = machine.execute(
+          "devtool performance storage --db ${backendPolicy.jaunderDb} --backend ${backend}"
+          + " --manifest /var/lib/jaunder/performance/dataset-manifest-v1.json"
+          + " --output /var/lib/jaunder/performance/fragments"
+          + " --provisioning-us " + str(setup["provisioning_us"])
+          + " --seeding-us " + str(setup["seeding_us"])
+          + " --nix-system ${system} --runner-image nixos-vm"
+          + " --runner-architecture " + shlex.quote(architecture)
+          + " --cpu-model " + shlex.quote(cpu_model)
+          + " --database-version ${backendPolicy.package.version}"
+          + " --stable-derivation-identity client=${csrWasmBundle.drvPath}"
+          + " --stable-derivation-identity producer=${devtoolBin.drvPath}"
+          + " --stable-derivation-identity server=${jaunderBin.drvPath} 2>&1"
+        )
+        machine.succeed(
+          "printf %s "
+          + shlex.quote(json.dumps({
+            "schema_version": 1,
+            "ok": storage_status == 0,
+            "detail": storage_output,
+          }, separators=(",", ":")))
+          + " > /var/lib/jaunder/performance/producer-status-v1.json"
+        )
+        machine.copy_from_machine("/var/lib/jaunder/performance", "")
+      ''}
+
+      ${pkgs.lib.optionalString (producerKind == "browser") ''
+        machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")
+        browser_path = machine.succeed(
+          "cd /tmp/e2e && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
+          + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
+          + " ${pkgs.nodejs}/bin/node -e 'const p = require(\"playwright\"); console.log(p.${selectedBrowser}.executablePath())'"
+        ).strip()
+        identity["browser_version"] = machine.succeed(browser_path + " --version").strip()
+        machine.succeed(
+          "printf %s "
+          + shlex.quote(json.dumps(identity, separators=(",", ":")))
+          + " > /var/lib/jaunder/performance/identity.json"
+        )
+        browser_status, browser_output = machine.execute(
+          "cd /tmp/e2e"
+          + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
+          + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
+          + " JAUNDER_DB=${backendPolicy.jaunderDb}"
+          + " JAUNDER_PERF_MANIFEST_PATH=/var/lib/jaunder/performance/dataset-manifest-v1.json"
+          + " JAUNDER_PERF_FRAGMENT_DIR=/var/lib/jaunder/performance/fragments"
+          + " JAUNDER_PERF_BACKEND=${backend}"
+          + " JAUNDER_PERF_BROWSER=${selectedBrowser}"
+          + " JAUNDER_PERF_SETUP_JSON=$(cat /var/lib/jaunder/performance/setup.json)"
+          + " JAUNDER_PERF_IDENTITY_JSON=$(cat /var/lib/jaunder/performance/identity.json)"
+          + " JAUNDER_PERF_BUILD_MODE=release"
+          + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
+          + " tests/browser-performance.measure.spec.ts --config playwright.config.ts --project ${selectedBrowser} --no-deps 2>&1",
+          timeout=2700,
+        )
+        machine.succeed(
+          "mkdir -p /var/lib/jaunder/performance/diagnostics"
+          + " && cp -r /tmp/e2e/test-results"
+          + " /var/lib/jaunder/performance/diagnostics/playwright-test-results 2>/dev/null || true"
+        )
+        if browser_status == 0:
+          browser_validation_status, browser_validation_output = machine.execute(
+            "devtool performance validate-browser"
+            + " --manifest /var/lib/jaunder/performance/dataset-manifest-v1.json"
+            + " --input /var/lib/jaunder/performance/fragments/browser-${backend}-${selectedBrowser}-v1.json"
+            + " --output /var/lib/jaunder/performance/fragments"
+          )
+          producer_ok = browser_validation_status == 0
+          producer_detail = browser_validation_output
+        else:
+          producer_ok = False
+          producer_detail = browser_output
+        machine.succeed(
+          "printf %s "
+          + shlex.quote(json.dumps({
+            "schema_version": 1,
+            "ok": producer_ok,
+            "detail": producer_detail,
+          }, separators=(",", ":")))
+          + " > /var/lib/jaunder/performance/producer-status-v1.json"
+        )
+        machine.copy_from_machine("/var/lib/jaunder/performance", "")
+      ''}
+    '';
+  };
 
 # Each producer owns one browser and one SQLite VM.  They deliberately are
 # separate derivations: evaluating Chromium must neither short-circuit Firefox
@@ -841,6 +1026,9 @@ mkWasmCoverageMeasurementProducer =
 in
 {
 
+  internals = {
+    inherit mkPerformanceProducer;
+  };
   packages = pkgs.lib.optionalAttrs pkgs.stdenv.isLinux (
     {
 # The e2e aggregate: a symlinkJoin of every browser/backend `e2e-*`

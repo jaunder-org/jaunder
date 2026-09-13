@@ -1,10 +1,10 @@
 use crate::model::{
-    Backend, Browser, BuildMode, CompatibilityKey, DatasetManifest, Fragment, FragmentEnvelope,
-    MeasurementFrame, MeasurementPosition, NamedDerivationIdentity, Producer, Provenance,
-    RESULT_SCHEMA_VERSION, RunEnvelope, RunEvidence, RunSelection, SetupDuration, Workload,
-    WorkloadResult,
+    Backend, Browser, BuildMode, CompatibilityKey, CountOverrides, DatasetManifest, DatasetPlan,
+    Fragment, FragmentEnvelope, MeasurementFrame, MeasurementPosition, NamedDerivationIdentity,
+    Producer, Provenance, RESULT_SCHEMA_VERSION, RunEnvelope, RunEvidence, RunSelection,
+    SetupDuration, Workload, WorkloadResult,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
 #[derive(Debug, Error, Eq, PartialEq)]
@@ -21,6 +21,8 @@ pub enum AggregateError {
     SetupBackendMismatch,
     #[error("duplicate setup for {0:?} on {1:?}")]
     DuplicateSetup(Producer, Backend),
+    #[error("run setup records do not match the selected producer matrix")]
+    IncompatibleSetup,
     #[error("browser diagnostics contain a blank artifact path")]
     InvalidDiagnostics,
     #[error("run selection is invalid")]
@@ -131,10 +133,15 @@ pub fn assemble_run(
     let Some(manifest) = manifest else {
         return Err(AggregateError::IncompatibleManifest);
     };
+    if !selection_matches_plan(&selection, &manifest.plan) {
+        return Err(AggregateError::InvalidSelection);
+    }
+    let canonical_selection = is_canonical_selection(&selection);
     Ok(RunEnvelope {
         schema_version: RESULT_SCHEMA_VERSION,
         manifest: manifest.clone(),
         selection,
+        canonical_selection,
         provenance,
         evidence,
         setup,
@@ -160,9 +167,19 @@ pub fn validate_fragment(envelope: &FragmentEnvelope) -> Result<(), AggregateErr
             (false, vec![browser], fragment.setup.backend)
         }
     };
+    let canonical = crate::canonical_plan(envelope.manifest.plan.profile);
+    let count_overrides = CountOverrides {
+        posts: (envelope.manifest.plan.posts != canonical.posts)
+            .then_some(envelope.manifest.plan.posts),
+        authors: (envelope.manifest.plan.authors != canonical.authors)
+            .then_some(envelope.manifest.plan.authors),
+        revisions: (envelope.manifest.plan.revisions != canonical.revisions)
+            .then_some(envelope.manifest.plan.revisions),
+    };
     assemble_run(
         RunSelection {
             backends: vec![backend],
+            count_overrides,
             browsers: browser,
             storage,
             browser: !storage,
@@ -171,6 +188,7 @@ pub fn validate_fragment(envelope: &FragmentEnvelope) -> Result<(), AggregateErr
             git_commit: "single-fragment-validation".to_owned(),
         }),
         RunEvidence {
+            measured_at_unix_ms: 1,
             freshness_nonce: "single-fragment-validation".to_owned(),
             producer_derivation_identities: vec![NamedDerivationIdentity {
                 name: "validator".to_owned(),
@@ -180,6 +198,82 @@ pub fn validate_fragment(envelope: &FragmentEnvelope) -> Result<(), AggregateErr
         std::slice::from_ref(envelope),
     )
     .map(|_| ())
+}
+/// Validates a complete combined run without trusting its source.
+///
+/// # Errors
+///
+/// Returns [`AggregateError`] when the run's schema, manifest, selection,
+/// provenance, evidence, setup matrix, workload identities, or statistics drift
+/// from the versioned contract.
+pub fn validate_run(run: &RunEnvelope) -> Result<(), AggregateError> {
+    if run.schema_version != RESULT_SCHEMA_VERSION {
+        return Err(AggregateError::UnsupportedSchema);
+    }
+    if run.canonical_selection != is_canonical_selection(&run.selection) {
+        return Err(AggregateError::InvalidSelection);
+    }
+    crate::validate_manifest(&run.manifest).map_err(AggregateError::InvalidManifest)?;
+    if !valid_selection(&run.selection)
+        || !selection_matches_plan(&run.selection, &run.manifest.plan)
+    {
+        return Err(AggregateError::InvalidSelection);
+    }
+    if !valid_provenance(&run.provenance) {
+        return Err(AggregateError::InvalidProvenance);
+    }
+    if !valid_evidence(&run.evidence) {
+        return Err(AggregateError::InvalidEvidence);
+    }
+
+    let mut setup_counts = BTreeMap::new();
+    for setup in &run.setup {
+        let selected = run.selection.backends.contains(&setup.backend)
+            && match setup.producer {
+                Producer::Storage => run.selection.storage,
+                Producer::Browser => run.selection.browser,
+            };
+        if !selected {
+            return Err(AggregateError::IncompatibleSetup);
+        }
+        *setup_counts
+            .entry((setup.producer, setup.backend))
+            .or_insert(0_usize) += 1;
+    }
+    for backend in &run.selection.backends {
+        if run.selection.storage && setup_counts.get(&(Producer::Storage, *backend)) != Some(&1) {
+            return Err(AggregateError::IncompatibleSetup);
+        }
+        if run.selection.browser
+            && setup_counts.get(&(Producer::Browser, *backend))
+                != Some(&run.selection.browsers.len())
+        {
+            return Err(AggregateError::IncompatibleSetup);
+        }
+    }
+
+    let expected = required(&run.selection);
+    let mut seen = BTreeSet::new();
+    let mut checked = Vec::with_capacity(run.workloads.len());
+    for item in &run.workloads {
+        let producer = if valid_producer_workload(Producer::Storage, &item.key) {
+            Producer::Storage
+        } else {
+            Producer::Browser
+        };
+        collect(
+            producer,
+            std::slice::from_ref(item),
+            &run.manifest,
+            &expected,
+            &mut seen,
+            &mut checked,
+        )?;
+    }
+    if let Some(key) = expected.difference(&seen).next() {
+        return Err(AggregateError::Missing(key.clone()));
+    }
+    Ok(())
 }
 
 fn valid_selection(selection: &RunSelection) -> bool {
@@ -192,6 +286,30 @@ fn valid_selection(selection: &RunSelection) -> bool {
         && !selection.backends.is_empty()
         && (selection.storage || selection.browser)
         && (selection.browser != selection.browsers.is_empty())
+}
+
+fn selection_matches_plan(selection: &RunSelection, plan: &DatasetPlan) -> bool {
+    let canonical = crate::canonical_plan(plan.profile);
+    selection.count_overrides.posts.unwrap_or(canonical.posts) == plan.posts
+        && selection
+            .count_overrides
+            .authors
+            .unwrap_or(canonical.authors)
+            == plan.authors
+        && selection
+            .count_overrides
+            .revisions
+            .unwrap_or(canonical.revisions)
+            == plan.revisions
+}
+
+#[must_use]
+pub fn is_canonical_selection(selection: &RunSelection) -> bool {
+    selection.backends == [Backend::Sqlite, Backend::Postgres]
+        && selection.browsers == [Browser::Chromium]
+        && selection.storage
+        && selection.browser
+        && selection.count_overrides.is_empty()
 }
 
 fn valid_provenance(provenance: &Provenance) -> bool {
@@ -214,7 +332,8 @@ fn valid_provenance(provenance: &Provenance) -> bool {
 }
 
 fn valid_evidence(evidence: &RunEvidence) -> bool {
-    nonblank(&evidence.freshness_nonce)
+    evidence.measured_at_unix_ms != 0
+        && nonblank(&evidence.freshness_nonce)
         && valid_named_identities(&evidence.producer_derivation_identities)
 }
 
@@ -222,7 +341,7 @@ fn validate_setup(
     producer: Producer,
     setup: &SetupDuration,
     items: &[WorkloadResult],
-    seen: &mut BTreeSet<(Producer, Backend)>,
+    seen: &mut BTreeSet<(Producer, Backend, Option<Browser>)>,
 ) -> Result<(), AggregateError> {
     if setup.producer != producer {
         return Err(AggregateError::SetupProducerMismatch);
@@ -230,7 +349,11 @@ fn validate_setup(
     if items.iter().any(|item| item.key.backend != setup.backend) {
         return Err(AggregateError::SetupBackendMismatch);
     }
-    if !seen.insert((setup.producer, setup.backend)) {
+    let browser = match producer {
+        Producer::Storage => None,
+        Producer::Browser => items.first().and_then(|item| item.key.browser),
+    };
+    if !seen.insert((setup.producer, setup.backend, browser)) {
         return Err(AggregateError::DuplicateSetup(
             setup.producer,
             setup.backend,
@@ -665,10 +788,26 @@ mod tests {
     fn selection() -> RunSelection {
         RunSelection {
             backends: vec![Backend::Sqlite],
+            count_overrides: CountOverrides::default(),
             browsers: vec![],
             storage: true,
             browser: false,
         }
+    }
+
+    #[test]
+    fn count_overrides_make_an_otherwise_default_selection_noncanonical() {
+        assert!(!is_canonical_selection(&RunSelection {
+            backends: vec![Backend::Sqlite, Backend::Postgres],
+            count_overrides: CountOverrides {
+                posts: Some(100),
+                authors: None,
+                revisions: None,
+            },
+            browsers: vec![Browser::Chromium],
+            storage: true,
+            browser: true,
+        }));
     }
 
     fn assemble(fragments: &[FragmentEnvelope]) -> Result<RunEnvelope, AggregateError> {
@@ -678,6 +817,7 @@ mod tests {
                 git_commit: "commit".into(),
             }),
             RunEvidence {
+                measured_at_unix_ms: 1,
                 freshness_nonce: "one".into(),
                 producer_derivation_identities: vec![NamedDerivationIdentity {
                     name: "producer".into(),
@@ -689,10 +829,16 @@ mod tests {
     }
 
     #[test]
-    fn assembles_a_canonical_storage_run() {
-        let run = assemble(&[storage_envelope(storage_workloads())]).unwrap();
+    fn validates_a_complete_run_and_rejects_a_missing_workload() {
+        let mut run = assemble(&[storage_envelope(storage_workloads())]).unwrap();
         assert_eq!(run.workloads.len(), 18);
         assert_eq!(run.setup.len(), 1);
+        assert_eq!(validate_run(&run), Ok(()));
+        run.workloads.pop();
+        assert!(matches!(
+            validate_run(&run),
+            Err(AggregateError::Missing(_))
+        ));
     }
 
     #[test]
@@ -702,12 +848,61 @@ mod tests {
             Ok(())
         );
     }
+
+    #[test]
+    fn validates_a_complete_fragment_with_custom_counts() {
+        let mut envelope = storage_envelope(storage_workloads());
+        envelope.manifest.plan = crate::plan(
+            DatasetProfile::Small,
+            CountOverrides {
+                posts: Some(120),
+                authors: Some(12),
+                revisions: Some(777),
+            },
+        )
+        .expect("custom plan");
+        assert_eq!(validate_fragment(&envelope), Ok(()));
+    }
     #[test]
     fn validates_the_six_canonical_browser_measurements() {
         assert_eq!(
             validate_fragment(&browser_envelope(browser_workloads())),
             Ok(())
         );
+    }
+
+    #[test]
+    fn assembles_both_selected_browsers_without_collapsing_setup() {
+        let chromium = browser_envelope(browser_workloads());
+        let mut firefox_workloads = browser_workloads();
+        for workload in &mut firefox_workloads {
+            workload.key.browser = Some(Browser::Firefox);
+        }
+        let firefox = browser_envelope(firefox_workloads);
+        let run = assemble_run(
+            RunSelection {
+                backends: vec![Backend::Sqlite],
+                count_overrides: CountOverrides::default(),
+                browsers: vec![Browser::Chromium, Browser::Firefox],
+                storage: false,
+                browser: true,
+            },
+            Provenance::Local(LocalProvenance {
+                git_commit: "commit".into(),
+            }),
+            RunEvidence {
+                measured_at_unix_ms: 1,
+                freshness_nonce: "two-browsers".into(),
+                producer_derivation_identities: vec![NamedDerivationIdentity {
+                    name: "producer".into(),
+                    identity: "stable".into(),
+                }],
+            },
+            &[chromium, firefox],
+        )
+        .expect("both browser fragments assemble");
+        assert_eq!(run.setup.len(), 2);
+        assert_eq!(validate_run(&run), Ok(()));
     }
 
     #[test]
@@ -921,6 +1116,7 @@ mod tests {
             git_commit: "commit".into(),
         });
         let evidence = RunEvidence {
+            measured_at_unix_ms: 1,
             freshness_nonce: "nonce".into(),
             producer_derivation_identities: vec![NamedDerivationIdentity {
                 name: "producer".into(),
@@ -931,6 +1127,7 @@ mod tests {
             assemble_run(
                 RunSelection {
                     backends: vec![],
+                    count_overrides: CountOverrides::default(),
                     browsers: vec![],
                     storage: true,
                     browser: false,
@@ -957,6 +1154,7 @@ mod tests {
                 selection(),
                 provenance,
                 RunEvidence {
+                    measured_at_unix_ms: 1,
                     freshness_nonce: " ".into(),
                     producer_derivation_identities: evidence.producer_derivation_identities,
                 },
@@ -975,6 +1173,7 @@ mod tests {
                 git_commit: "commit".into(),
             }),
             RunEvidence {
+                measured_at_unix_ms: 1,
                 freshness_nonce: "one".into(),
                 producer_derivation_identities: vec![NamedDerivationIdentity {
                     name: "producer".into(),
@@ -990,6 +1189,7 @@ mod tests {
                 git_commit: "commit".into(),
             }),
             RunEvidence {
+                measured_at_unix_ms: 1,
                 freshness_nonce: "two".into(),
                 producer_derivation_identities: vec![NamedDerivationIdentity {
                     name: "producer".into(),

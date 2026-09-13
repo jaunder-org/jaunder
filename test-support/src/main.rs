@@ -57,7 +57,7 @@ enum Commands {
         #[arg(long, value_enum)]
         profile: SandboxProfileArg,
     },
-    /// Populate a canonical deterministic performance fixture and atomically write its manifest.
+    /// Populate a deterministic performance fixture and atomically write its manifest.
     PerfSeed {
         /// Database URL (`sqlite:...` or `postgres://...`) for a freshly initialized database.
         #[arg(long, env = "JAUNDER_DB")]
@@ -65,6 +65,15 @@ enum Commands {
         /// Canonical fixture size.
         #[arg(long, value_enum)]
         profile: PerformanceProfileArg,
+        /// Override the canonical post count.
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+        posts: Option<u64>,
+        /// Override the canonical author count.
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+        authors: Option<u64>,
+        /// Override the canonical revision count.
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+        revisions: Option<u64>,
         /// Directory in which to atomically publish `dataset-manifest-v1.json`.
         #[arg(long)]
         output: std::path::PathBuf,
@@ -284,12 +293,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             )
             .await
         }
-        Commands::PerfSeed {
-            db,
-            profile,
-            output,
-            storage_path,
-        } => cmd_perf_seed(&db, profile.into(), &output, &storage_path).await,
+        command @ Commands::PerfSeed { .. } => run_perf_seed(command).await,
         Commands::SeedSandboxProfile {
             db,
             storage_path,
@@ -311,18 +315,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             password,
             display_name,
             operator,
-        } => {
-            let storage_runtime = storage_runtime_config(&db)?;
-            cmd_create_user(
-                &db,
-                &storage_runtime,
-                &username,
-                &password,
-                display_name.as_ref(),
-                operator,
-            )
-            .await
-        }
+        } => run_create_user(db, username, password, display_name, operator).await,
         Commands::ResetMail => {
             let mail_path = capture_directory()?.path(capture::Stream::Mail);
             cmd_reset_mail(&mail_path)
@@ -360,6 +353,52 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             test_support::panic_gate::verify_no_panics(&diag_path, &server_log)
         }
     }
+}
+
+async fn run_perf_seed(command: Commands) -> anyhow::Result<()> {
+    let Commands::PerfSeed {
+        db,
+        profile,
+        posts,
+        authors,
+        revisions,
+        output,
+        storage_path,
+    } = command
+    else {
+        unreachable!("run_perf_seed only receives perf-seed")
+    };
+    cmd_perf_seed(
+        &db,
+        profile.into(),
+        performance::CountOverrides {
+            posts,
+            authors,
+            revisions,
+        },
+        &output,
+        &storage_path,
+    )
+    .await
+}
+
+async fn run_create_user(
+    db: DbConnectOptions,
+    username: String,
+    password: String,
+    display_name: Option<DisplayName>,
+    operator: bool,
+) -> anyhow::Result<()> {
+    let storage_runtime = storage_runtime_config(&db)?;
+    cmd_create_user(
+        &db,
+        &storage_runtime,
+        &username,
+        &password,
+        display_name.as_ref(),
+        operator,
+    )
+    .await
 }
 
 /// Resolves the capture directory only for commands that consume capture paths.
@@ -432,10 +471,11 @@ async fn cmd_seed_posts(
     eprintln!("seeded {} posts for {username}", ids.len());
     Ok(())
 }
-/// Seed one canonical performance dataset and report its atomically published manifest.
+/// Seed one deterministic performance dataset and report its atomically published manifest.
 async fn cmd_perf_seed(
     db: &DbConnectOptions,
     profile: performance::DatasetProfile,
+    overrides: performance::CountOverrides,
     output: &std::path::Path,
     storage_path: &std::path::Path,
 ) -> anyhow::Result<()> {
@@ -451,6 +491,7 @@ async fn cmd_perf_seed(
             write_scope: factory.write_scope(),
         },
         profile,
+        overrides,
         output,
         storage_path,
     )
@@ -591,6 +632,59 @@ mod tests {
 
     fn cli(command: Commands) -> Cli {
         Cli { command }
+    }
+
+    #[test]
+    fn perf_seed_parses_positive_count_overrides() {
+        let cli = Cli::try_parse_from([
+            "test-support",
+            "perf-seed",
+            "--db",
+            "sqlite:/tmp/performance.db",
+            "--profile",
+            "small",
+            "--posts",
+            "120",
+            "--authors",
+            "12",
+            "--revisions",
+            "777",
+            "--output",
+            "/tmp/output",
+            "--storage-path",
+            "/tmp/storage",
+        ])
+        .expect("parse performance overrides");
+        assert!(matches!(
+            cli.command,
+            Commands::PerfSeed {
+                posts: Some(120),
+                authors: Some(12),
+                revisions: Some(777),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn perf_seed_rejects_zero_count_override() {
+        assert!(
+            Cli::try_parse_from([
+                "test-support",
+                "perf-seed",
+                "--db",
+                "sqlite:/tmp/performance.db",
+                "--profile",
+                "small",
+                "--posts",
+                "0",
+                "--output",
+                "/tmp/output",
+                "--storage-path",
+                "/tmp/storage",
+            ])
+            .is_err()
+        );
     }
 
     /// A temp `SQLite` DB, created + migrated. The migrating pool is dropped before

@@ -8,6 +8,7 @@ import {
   PERFORMANCE_PAGE_SIZE,
   PERFORMANCE_SAMPLE_COUNT,
   atomicWriteJson,
+  browserDiagnosticArtifacts,
   browserWorkloads,
   performanceEnabled,
   readPerformanceEnvironment,
@@ -175,22 +176,6 @@ async function prepareDeepPosition(
   return rows;
 }
 
-function artifactPaths(
-  fragmentDirectory: string,
-  workload: BrowserWorkload,
-  sampleIndex: number,
-) {
-  const prefix = `${workload.workload}-${workload.position}-${sampleIndex}`;
-  return {
-    navigationArtifact: join(
-      fragmentDirectory,
-      "diagnostics",
-      `${prefix}.navigation.json`,
-    ),
-    traceArtifact: join(fragmentDirectory, "diagnostics", `${prefix}.zip`),
-  };
-}
-
 async function measureSample(
   tracedContext: NewTracedContext,
   manifest: DatasetManifest,
@@ -199,7 +184,7 @@ async function measureSample(
   sampleIndex: number,
 ): Promise<SampleEvidence> {
   const context = await tracedContext();
-  const { navigationArtifact, traceArtifact } = artifactPaths(
+  const { navigation, trace } = browserDiagnosticArtifacts(
     fragmentDirectory,
     workload,
     sampleIndex,
@@ -243,8 +228,8 @@ async function measureSample(
       return {
         duration_us: Math.round((performance.now() - started) * 1_000),
         rows_returned: observedRows - rows,
-        navigation_artifact: navigationArtifact,
-        trace_artifact: traceArtifact,
+        navigation_artifact: navigation.reference,
+        trace_artifact: trace.reference,
       };
     }
 
@@ -254,15 +239,15 @@ async function measureSample(
     return {
       duration_us: Math.round((performance.now() - started) * 1_000),
       rows_returned: rowsReturned,
-      navigation_artifact: navigationArtifact,
-      trace_artifact: traceArtifact,
+      navigation_artifact: navigation.reference,
+      trace_artifact: trace.reference,
     };
   } finally {
     try {
-      await atomicWriteJson(navigationArtifact, evidence);
+      await atomicWriteJson(navigation.destination, evidence);
     } finally {
       try {
-        await context.tracing.stop({ path: traceArtifact });
+        await context.tracing.stop({ path: trace.destination });
       } finally {
         await context.close();
       }
@@ -293,13 +278,13 @@ test("emits browser performance fragment from the authoritative manifest", async
         sampleIndex < PERFORMANCE_SAMPLE_COUNT;
         sampleIndex += 1
       ) {
-        const paths = artifactPaths(
+        const artifacts = browserDiagnosticArtifacts(
           environment.fragmentDirectory,
           workload,
           sampleIndex,
         );
-        diagnostics.navigation_artifacts.push(paths.navigationArtifact);
-        diagnostics.trace_artifacts.push(paths.traceArtifact);
+        diagnostics.navigation_artifacts.push(artifacts.navigation.reference);
+        diagnostics.trace_artifacts.push(artifacts.trace.reference);
         const result = await measureSample(
           tracedContext,
           manifest,

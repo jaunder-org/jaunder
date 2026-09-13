@@ -1,0 +1,53 @@
+name: Performance
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Mondays 04:23 UTC, outside the usual merge window and off the hour.
+    - cron: "23 4 * * 1"
+  pull_request:
+    # Only PRs carrying the explicit opt-in label pass the job guard below.
+    types: [opened, synchronize, reopened, labeled]
+
+# A benchmark observes shared-runner state. Never overlap runs: concurrent work
+# would make neither result attributable to a stable runner condition.
+concurrency:
+  group: performance
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  performance:
+    name: performance
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'performance')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Keep the CI shell and flake selection identical to the build lanes, but
+      # do not configure Cachix or any action cache: a measurement producer must
+      # realize its invocation-specific derivation rather than restore output.
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+          github_access_token: ${{ github.token }}
+      - name: Measure canonical medium matrix
+        run: nix develop .#ci --accept-flake-config -c cargo xtask perf medium
+      - name: Compare committed baseline
+        if: >-
+          success() && hashFiles('tools/performance/baseline-v1.json') != ''
+        run: >-
+          nix develop .#ci --accept-flake-config -c cargo xtask perf compare
+          --result .xtask/performance/performance-result-v1.json
+      - name: Upload performance result
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: performance-result
+          path: .xtask/performance/
+          if-no-files-found: ignore
+          retention-days: 30

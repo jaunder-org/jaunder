@@ -1,6 +1,6 @@
 use crate::model::{
-    CursorRequirement, DatasetManifest, DatasetPlan, DatasetProfile, Distribution, GENERATOR_SEED,
-    GENERATOR_VERSION, GeneratorIdentity, Workload,
+    CountOverrides, CursorRequirement, DatasetManifest, DatasetPlan, DatasetProfile, Distribution,
+    GENERATOR_SEED, GENERATOR_VERSION, GeneratorIdentity, PlanError, Workload,
 };
 use thiserror::Error;
 
@@ -14,13 +14,49 @@ pub enum ManifestError {
     Cursor,
 }
 
-#[must_use]
-pub fn canonical_plan(profile: DatasetProfile) -> DatasetPlan {
-    let (posts, authors) = match profile {
-        DatasetProfile::Small => (100, 10),
-        DatasetProfile::Medium => (5_000, 100),
-        DatasetProfile::Large => (50_000, 1_000),
-    };
+fn canonical_counts(profile: DatasetProfile) -> (u64, u64, u64) {
+    match profile {
+        DatasetProfile::Small => (100, 10, 500),
+        DatasetProfile::Medium => (5_000, 100, 25_000),
+        DatasetProfile::Large => (50_000, 1_000, 250_000),
+    }
+}
+
+/// Builds a deterministic allocation from a profile and optional count changes.
+///
+/// Every accepted plan has positive post and author counts, distributes posts
+/// evenly across authors, and assigns at least one revision to every post.
+/// Noncanonical plans must also provide more than 50 history rows per author.
+/// These constraints make arbitrary revision totals deterministic: the canonical
+/// shape is retained without changes; otherwise each post receives
+/// `revisions / posts` revisions; the first `revisions % posts` posts receive
+/// one additional revision.
+///
+/// # Errors
+///
+/// Returns [`PlanError`] when the requested counts cannot produce that
+/// deterministic fixture.
+pub fn plan(profile: DatasetProfile, overrides: CountOverrides) -> Result<DatasetPlan, PlanError> {
+    let (canonical_posts, canonical_authors, canonical_revisions) = canonical_counts(profile);
+    let posts = overrides.posts.unwrap_or(canonical_posts);
+    let authors = overrides.authors.unwrap_or(canonical_authors);
+    let revisions = overrides.revisions.unwrap_or(canonical_revisions);
+    if posts == 0 {
+        return Err(PlanError::Posts);
+    }
+    if authors == 0 {
+        return Err(PlanError::Authors);
+    }
+    if !posts.is_multiple_of(authors) {
+        return Err(PlanError::AuthorDistribution);
+    }
+    if revisions < posts {
+        return Err(PlanError::Revisions);
+    }
+    if !overrides.is_empty() && revisions / authors <= 50 {
+        return Err(PlanError::HistoryCursor);
+    }
+
     let mut lifecycle = allocate(
         posts,
         &[
@@ -34,7 +70,7 @@ pub fn canonical_plan(profile: DatasetProfile) -> DatasetPlan {
         bucket: "live_backdated".into(),
         count: lifecycle[0].count / 3,
     });
-    DatasetPlan {
+    Ok(DatasetPlan {
         profile,
         generator: GeneratorIdentity {
             version: GENERATOR_VERSION,
@@ -42,9 +78,23 @@ pub fn canonical_plan(profile: DatasetProfile) -> DatasetPlan {
         },
         posts,
         authors,
-        revisions: posts * 5,
+        revisions,
         lifecycle,
-        revision_distribution: allocate(posts, &[("one", 70), ("five", 20), ("thirty_three", 10)]),
+        revision_distribution: if overrides.is_empty() {
+            allocate(posts, &[("one", 70), ("five", 20), ("thirty_three", 10)])
+        } else {
+            let remainder = revisions % posts;
+            vec![
+                Distribution {
+                    bucket: "one_extra".into(),
+                    count: remainder,
+                },
+                Distribution {
+                    bucket: "base".into(),
+                    count: posts - remainder,
+                },
+            ]
+        },
         tag_distribution: allocate(posts, &[("none", 25), ("two", 50), ("eight", 25)]),
         audience_distribution: allocate(
             posts,
@@ -84,20 +134,51 @@ pub fn canonical_plan(profile: DatasetProfile) -> DatasetPlan {
                 workload: Workload::PostHistory,
             },
         ],
+    })
+}
+
+/// Returns the deterministic fixture plan for a built-in profile.
+///
+/// # Panics
+///
+/// Panics only if a built-in canonical profile violates the fixture invariants.
+#[must_use]
+pub fn canonical_plan(profile: DatasetProfile) -> DatasetPlan {
+    match plan(profile, CountOverrides::default()) {
+        Ok(plan) => plan,
+        Err(error) => panic!("canonical fixture counts must be valid: {error}"),
     }
 }
 
-/// Validates that a dataset manifest matches the canonical profile and cursor contract.
+/// Validates that a dataset manifest matches its deterministic profile plan and cursor contract.
 ///
 /// # Errors
 ///
-/// Returns [`ManifestError`] when the schema, canonical plan, workload subjects,
+/// Returns [`ManifestError`] when the schema, deterministic plan, workload subjects,
 /// or resolved cursors are invalid.
 pub fn validate_manifest(manifest: &DatasetManifest) -> Result<(), ManifestError> {
     if manifest.schema_version != crate::DATASET_SCHEMA_VERSION {
         return Err(ManifestError::Schema);
     }
-    if manifest.plan != canonical_plan(manifest.plan.profile) {
+    let canonical = canonical_plan(manifest.plan.profile);
+    let overrides = CountOverrides {
+        posts: (manifest.plan.posts != canonical.posts).then_some(manifest.plan.posts),
+        authors: (manifest.plan.authors != canonical.authors).then_some(manifest.plan.authors),
+        revisions: (manifest.plan.revisions != canonical.revisions)
+            .then_some(manifest.plan.revisions),
+    };
+    let expected = plan(manifest.plan.profile, overrides);
+    let canonical_count_override = plan(
+        manifest.plan.profile,
+        CountOverrides {
+            posts: Some(manifest.plan.posts),
+            authors: Some(manifest.plan.authors),
+            revisions: Some(manifest.plan.revisions),
+        },
+    );
+    if expected.ok().as_ref() != Some(&manifest.plan)
+        && canonical_count_override.ok().as_ref() != Some(&manifest.plan)
+    {
         return Err(ManifestError::Plan);
     }
     let browser_rows = &manifest.subjects.browser_initial_rows;
@@ -165,14 +246,14 @@ fn allocate(total: u64, buckets: &[(&str, u64)]) -> Vec<Distribution> {
         .iter()
         .map(|(n, w)| Distribution {
             bucket: (*n).into(),
-            count: total * w / d,
+            count: total / d * w + total % d * w / d,
         })
         .collect::<Vec<_>>();
     let assigned = r.iter().map(|b| b.count).sum::<u64>();
     let mut rem = buckets
         .iter()
         .enumerate()
-        .map(|(i, (_, w))| (i, total * w % d))
+        .map(|(i, (_, w))| (i, total % d * w % d))
         .collect::<Vec<_>>();
     rem.sort_by_key(|(i, r)| (std::cmp::Reverse(*r), *i));
     for ((i, _), _) in rem.into_iter().zip(0..(total - assigned)) {
@@ -205,6 +286,7 @@ mod tests {
         let s = canonical_plan(DatasetProfile::Small);
         assert_eq!((s.posts, s.authors, s.revisions), (100, 10, 500));
         assert_eq!(counts(&s.lifecycle), [60, 15, 15, 10, 20]);
+        assert_eq!(counts(&s.revision_distribution), [70, 20, 10]);
         assert_eq!(
             counts(&s.body_distribution),
             [12, 11, 11, 11, 11, 11, 11, 11, 11]
@@ -221,5 +303,135 @@ mod tests {
     #[test]
     fn computes_the_cursor_rank_without_overflow() {
         assert_eq!(rank(u64::MAX), 14_757_395_258_967_641_292);
+    }
+
+    #[test]
+    fn plans_exact_overridden_totals_deterministically() {
+        let overrides = CountOverrides {
+            posts: Some(120),
+            authors: Some(12),
+            revisions: Some(777),
+        };
+        let first = plan(DatasetProfile::Small, overrides).expect("valid explicit counts");
+        let second = plan(DatasetProfile::Small, overrides).expect("valid explicit counts");
+        assert_eq!(
+            (first.posts, first.authors, first.revisions),
+            (120, 12, 777)
+        );
+        assert_eq!(first, second);
+        assert_ne!(first, canonical_plan(DatasetProfile::Small));
+        assert_eq!(
+            first.revision_distribution,
+            vec![
+                Distribution {
+                    bucket: "one_extra".into(),
+                    count: 57,
+                },
+                Distribution {
+                    bucket: "base".into(),
+                    count: 63,
+                },
+            ]
+        );
+        assert_eq!(
+            first
+                .revision_distribution
+                .iter()
+                .map(|item| match item.bucket.as_str() {
+                    "base" => item.count * (first.revisions / first.posts),
+                    "one_extra" => item.count * (first.revisions / first.posts + 1),
+                    _ => unreachable!("uniform revision bucket"),
+                })
+                .sum::<u64>(),
+            first.revisions
+        );
+    }
+
+    #[test]
+    fn rejects_tampered_overridden_plan() {
+        let mut tampered = plan(
+            DatasetProfile::Small,
+            CountOverrides {
+                posts: Some(120),
+                authors: Some(12),
+                revisions: Some(777),
+            },
+        )
+        .expect("valid explicit counts");
+        tampered.lifecycle[0].count += 1;
+        let manifest = DatasetManifest {
+            schema_version: crate::DATASET_SCHEMA_VERSION,
+            plan: tampered,
+            subjects: crate::WorkloadSubjects {
+                username: "fixture".into(),
+                history_post_id: 1,
+                revision_id: 1,
+                browser_initial_rows: crate::BrowserInitialRows {
+                    home: 1,
+                    app: 1,
+                    global_history: 51,
+                    post_history: 1,
+                },
+            },
+            cursors: vec![],
+        };
+        assert_eq!(validate_manifest(&manifest), Err(ManifestError::Plan));
+    }
+
+    #[test]
+    fn rejects_tampered_override_revision_distribution() {
+        let mut tampered = plan(
+            DatasetProfile::Small,
+            CountOverrides {
+                posts: Some(120),
+                authors: Some(12),
+                revisions: Some(777),
+            },
+        )
+        .expect("valid explicit counts");
+        tampered.revision_distribution[0].count -= 1;
+        let manifest = DatasetManifest {
+            schema_version: crate::DATASET_SCHEMA_VERSION,
+            plan: tampered,
+            subjects: crate::WorkloadSubjects {
+                username: "fixture".into(),
+                history_post_id: 1,
+                revision_id: 1,
+                browser_initial_rows: crate::BrowserInitialRows {
+                    home: 1,
+                    app: 1,
+                    global_history: 51,
+                    post_history: 1,
+                },
+            },
+            cursors: vec![],
+        };
+        assert_eq!(validate_manifest(&manifest), Err(ManifestError::Plan));
+    }
+
+    #[test]
+    fn rejects_count_relationships_that_cannot_seed_deterministically() {
+        assert_eq!(
+            plan(
+                DatasetProfile::Small,
+                CountOverrides {
+                    posts: Some(121),
+                    authors: Some(12),
+                    revisions: Some(777),
+                },
+            ),
+            Err(PlanError::AuthorDistribution)
+        );
+        assert_eq!(
+            plan(
+                DatasetProfile::Small,
+                CountOverrides {
+                    posts: Some(120),
+                    authors: Some(12),
+                    revisions: Some(119),
+                },
+            ),
+            Err(PlanError::Revisions)
+        );
     }
 }
