@@ -48,8 +48,7 @@ test("password reset flow completes successfully", async ({
   await fillLoginForm(page, verifiedUser.username, "resetpassword789");
   await waitForSelector(page, SEL.logoutLink, { timeout: 10_000 });
   await waitForMount(page);
-  // Login redirects to `/`, now the enhanced public Local timeline (#181, D10).
-  await expect(page.locator(SEL.topbarHeading)).toHaveText("jaunder.local");
+  await expect(page).toHaveURL(/\/app$/);
 });
 
 // M3.11.14: visiting /reset-password with an invalid token shows an error.

@@ -25,19 +25,18 @@ use maud::{PreEscaped, html};
 use crate::html::Markup;
 
 /// The pre-paint auth-detection script (#181, ADR-0044). A tiny inline, blocking
-/// `<head>` script: reads the localStorage auth marker (`jaunder_auth`, same key
-/// as `auth::marker`) and marks `<html class="authed" data-user=…>` BEFORE first
-/// paint, so CSS reserves the authed layout and the SPA boots already knowing.
-/// Never external/deferred (a round-trip would guarantee paint-then-swap).
-/// The redirect-pref (`jaunder_home_redirect`) read path is present with the
-/// safe stay-default — nothing writes the key yet (ADR-0044 D7/D10). Bytes are
-/// identical for every visitor → cacheability intact. The bundle producer renders
-/// this source template into the static shell after resolving asset identities.
+/// `<head>` script reads a structurally valid localStorage auth marker
+/// (`jaunder_auth`, the same key as `auth::marker`) and redirects root visits to
+/// Home before Local can paint. It carries only the recognized oldest-first order.
+/// The `/app` session gate remains authoritative, so a stale marker reaches login
+/// without exposing private data. Bytes are identical for every visitor, retaining
+/// the public projector's cacheability. The bundle producer renders this source
+/// template into the static shell after resolving asset identities.
 pub const PREPAINT_SCRIPT: &str = concat!(
     "<script>\n",
-    "      // prettier-ignore\n",
-    "      (function () {try {var m = localStorage.getItem('jaunder_auth'); if (m) {var u = JSON.parse(m).username; if (u) {var e = document.documentElement; e.classList.add('authed'); e.setAttribute('data-user', u); if (localStorage.getItem('jaunder_home_redirect') === 'app' && location.pathname === '/') {location.replace('/app');} } } } catch (_) { } })();\n",
-    "    </script>",
+    "  // prettier-ignore\n",
+    "  (function () {try {var m = localStorage.getItem('jaunder_auth'); if (m) {var j = JSON.parse(m), u = j.username, o = j.is_operator; if (typeof u === 'string' && /^[A-Za-z0-9_-]+$/.test(u) && (typeof o === 'undefined' || typeof o === 'boolean')) {var e = document.documentElement; e.classList.add('authed'); e.setAttribute('data-user', u); if (location.pathname === '/') {var q = new URLSearchParams(location.search); location.replace(q.get('order') === 'oldest' ? '/app?order=oldest' : '/app');} } } } catch (_) { } })();\n",
+    " </script>",
 );
 
 /// The document-frame mark emitted immediately before `initMeasured()` consumes
@@ -346,7 +345,7 @@ mod tests {
     }
 
     #[test]
-    fn prepaint_script_is_inline_blocking_and_reads_the_registered_storage_keys() {
+    fn prepaint_script_is_inline_blocking_and_redirects_only_valid_root_markers() {
         let s = PREPAINT_SCRIPT;
         assert!(s.starts_with("<script>") && s.ends_with("</script>"), "{s}");
         // No async/defer/src — a network round-trip would defeat pre-paint.
@@ -354,17 +353,36 @@ mod tests {
             !s.contains("src=") && !s.contains("defer") && !s.contains("async"),
             "{s}"
         );
-        // Reads the same key + field the marker module writes, and the redirect
-        // preference key reserved for the pre-WASM home redirect path.
-        for key in [
-            LocalStorageKey::AuthMarker,
-            LocalStorageKey::HomeRedirectPreference,
-        ] {
-            let read = format!("localStorage.getItem('{}')", key.as_ref());
-            assert!(s.contains(&read), "{s}");
-        }
+        let auth_key = format!(
+            "localStorage.getItem('{}')",
+            LocalStorageKey::AuthMarker.as_ref()
+        );
+        assert!(s.contains(&auth_key), "{s}");
+        assert!(!s.contains("jaunder_home_redirect"), "{s}");
         assert!(s.contains(".username"), "{s}");
+        assert!(
+            s.contains("typeof u === 'string'")
+                && s.contains("/^[A-Za-z0-9_-]+$/.test(u)")
+                && s.contains("typeof o === 'undefined'")
+                && s.contains("typeof o === 'boolean'"),
+            "{s}"
+        );
+        assert!(s.contains("location.pathname === '/'"), "{s}");
+        assert!(
+            s.contains("q.get('order') === 'oldest'")
+                && s.contains("'/app?order=oldest'")
+                && s.contains("'/app'"),
+            "{s}"
+        );
         assert!(s.contains("classList") && s.contains("authed"), "{s}");
+    }
+
+    #[test]
+    fn csr_shell_contains_the_exact_prepaint_script_twin() {
+        assert!(
+            include_str!("../../../csr/index.html").contains(PREPAINT_SCRIPT),
+            "csr/index.html must retain the exact PREPAINT_SCRIPT twin"
+        );
     }
 
     #[test]

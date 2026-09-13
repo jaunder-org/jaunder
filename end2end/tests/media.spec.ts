@@ -68,7 +68,7 @@ function countMediaRequests(page: Page): {
 async function openMediaLibrary(page: Page): Promise<void> {
   await navigateInApp(page, () => click(page, "a[href='/media']"), {
     url: "/media",
-    ready: "button:has-text('Attach media')",
+    ready: '.j-topbar h1:has-text("Media")',
   });
 }
 
@@ -147,7 +147,7 @@ test.describe("Media upload and serving", () => {
     // The display label decodes the canonical filename while the typed request keeps
     // the canonical identity needed by the delete boundary.
     await signInAsNewUser(page);
-    await goto(page, "/");
+    await goto(page, "/app");
 
     await uploadMedia(
       page,
@@ -206,8 +206,8 @@ test.describe("Media upload and serving", () => {
     page,
   }, testInfo) => {
     await signInAsNewUser(page);
-    // Seeded helpers don't navigate (spec D5) — mount `/` so the sidebar exists.
-    await goto(page, "/", {
+    // Seeded helpers don't navigate (spec D5) — mount Home so the sidebar exists.
+    await goto(page, "/app", {
       timeout: slowBrowserFirstNavigationTimeoutMs(testInfo, 30_000),
     });
     await waitForSelector(page, "a[href='/media']");
@@ -217,8 +217,8 @@ test.describe("Media upload and serving", () => {
     page,
   }, testInfo) => {
     await signInAsNewUser(page);
-    // Seeded helpers don't navigate (spec D5) — mount `/` so the sidebar exists.
-    await goto(page, "/", {
+    // Seeded helpers don't navigate (spec D5) — mount Home so the sidebar exists.
+    await goto(page, "/app", {
       timeout: slowBrowserFirstNavigationTimeoutMs(testInfo, 30_000),
     });
     await openMediaLibrary(page);
@@ -285,7 +285,7 @@ test.describe("Media upload capability", () => {
     );
     await seedConfigViaTool("media.uploads_enabled", "false");
 
-    await goto(page, "/");
+    await goto(page, "/app");
     const counts = countMediaRequests(page);
 
     await navigateInApp(page, () => click(page, "a[href='/media']"), {
@@ -334,7 +334,7 @@ test.describe("Media upload capability", () => {
   test("enabled media page retains its upload control", async ({ page }) => {
     await seedConfigViaTool("media.uploads_enabled", "true");
     await signInAsNewUser(page);
-    await goto(page, "/");
+    await goto(page, "/app");
     await openMediaLibrary(page);
 
     const fileInput = page.locator("input[type='file']");
@@ -378,7 +378,7 @@ test.describe("Media delete guard", () => {
    * exactly the state these tests are about.
    */
   async function attemptDelete(page: Page): Promise<void> {
-    await goto(page, "/");
+    await goto(page, "/app");
     await openMediaLibrary(page);
     page.on("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "Delete", exact: true }).click();
@@ -395,7 +395,7 @@ test.describe("Media delete guard", () => {
       body: `![pic](${url})`,
     });
 
-    await goto(page, "/");
+    await goto(page, "/app");
     await openMediaLibrary(page);
     page.on("dialog", (dialog) => dialog.accept());
     const { release, deleteRequests, listRequests, usageRequests } =

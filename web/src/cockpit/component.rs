@@ -1,9 +1,7 @@
-//! The `/app` cockpit (#181, ADR-0044 D6): the authenticated owner's personalized
-//! home Feed, relocated off `/` (which stays the enhanced public timeline, D10). A
-//! first-class, directly-bookmarkable authed-only route — served from the SPA
-//! shell (`no-store`), pre-painted `html.authed`, so a direct hit boots straight
-//! into the feed with zero clicks. An anonymous / expired visitor bounces to
-//! `/login`.
+//! The `/app` cockpit: Home, the authenticated User's publishing surface for their
+//! own published Posts. A first-class, directly-bookmarkable authed-only route,
+//! served from the SPA shell (`no-store`), confirms the session before loading Home.
+//! An anonymous or expired visitor bounces to `/login`.
 
 use common::pagination::PageSize;
 use common::seed::{TimelineOrder, TimelinePageRequest};
@@ -34,13 +32,13 @@ pub fn CockpitPage() -> impl IntoView {
     let invalidator = Invalidator::new();
     let on_mutate = Callback::new(move |()| invalidator.notify());
 
-    // Gate on the shared session's server-confirmed reconcile, then fetch the
-    // personalized feed. Unlike `/`, `/app` is authed-only and served from the SPA
-    // shell (no-store), so an async gate is correct here — there is no cacheable-page
-    // flash constraint. `Ok(None)` means anonymous / expired → bounce to `/login`
-    // (D6). Publish, delete, and unpublish settlements notify the page invalidator;
-    // the reconcile itself is keyed on pathname, so this reuses it rather than
-    // re-hitting the server for identity on every publish (#591).
+    // Gate on the shared session's server-confirmed reconcile, then fetch the Home
+    // timeline. Unlike `/`, `/app` is authed-only and served from the SPA shell
+    // (`no-store`), so an async gate is correct here — there is no cacheable-page flash
+    // constraint. `Ok(None)` means anonymous / expired → bounce to `/login`. Publish,
+    // delete, and unpublish settlements notify the page invalidator; the reconcile is
+    // keyed on pathname, so this reuses it rather than re-hitting the server for
+    // identity on every publish (#591).
     let session = crate::auth::use_session();
     let initial_page = Resource::new(
         move || {
@@ -49,7 +47,7 @@ pub fn CockpitPage() -> impl IntoView {
         },
         move |(order, _)| async move {
             super::resolve_initial_page(session.reconcile.await, || {
-                timeline::list_home_feed(TimelinePageRequest {
+                timeline::list_home_timeline(TimelinePageRequest {
                     order,
                     cursor: None,
                     limit: Some(PageSize::default()),
@@ -74,7 +72,7 @@ pub fn CockpitPage() -> impl IntoView {
     let on_load_more = Callback::new(move |()| {
         let order = order.get_untracked();
         timeline::spawn_load_more(state.timeline, move |cursor, limit| {
-            timeline::list_home_feed(TimelinePageRequest {
+            timeline::list_home_timeline(TimelinePageRequest {
                 order,
                 cursor,
                 limit,
@@ -109,7 +107,7 @@ pub fn CockpitPage() -> impl IntoView {
                 None => view! { <Topbar title="Home" /> }.into_any(),
                 Some(user) => {
                     view! {
-                        <Topbar title="Home" sub="Your home feed" />
+                        <Topbar title="Home" sub="Your published Posts" />
                         <InlineComposer username=user on_publish=on_mutate />
                     }
                         .into_any()

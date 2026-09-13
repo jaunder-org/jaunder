@@ -91,6 +91,7 @@ test("register with open policy succeeds", async ({ page }) => {
   await page.fill(SEL.password, "newpassword123");
   await click(page, SEL.submit);
   await waitForSelector(page, SEL.logoutLink);
+  await expect(page).toHaveURL(`${BASE_URL}/app`);
 
   await expect(page.locator(SEL.error)).not.toBeVisible();
 });
@@ -131,10 +132,13 @@ test("login with valid credentials succeeds", async ({
   await waitForSelector(page, SEL.logoutLink);
   perf.mark("logout_link_visible");
 
-  // No waitForMount: login is a client-side pushState now, so `data-mounted`
-  // (per-document) is already set — assert on content readiness instead (#591).
+  // Login's redirect is client-side pushState, so `data-mounted` (per-document)
+  // is already set — assert directly on the Home destination.
+  await expect(page).toHaveURL(`${BASE_URL}/app`);
   await expect(page.locator(".j-sb-foot")).toContainText(user.username);
   await expect(page.locator(".j-sidebar")).toBeVisible();
+  await expect(page.locator(".j-nav a[href='/app']")).toHaveText("Home");
+  await expect(page.locator('.j-nav a[href="/"]')).toHaveCount(0);
   perf.mark("assertions_complete");
   await perf.log();
 });
@@ -145,7 +149,7 @@ test("login submits with Enter", async ({ page, user }) => {
   await page.fill(SEL.password, user.password);
   await page.locator(SEL.password).press("Enter");
   await waitForSelector(page, SEL.logoutLink);
-  await expect(page).toHaveURL(`${BASE_URL}/`);
+  await expect(page).toHaveURL(`${BASE_URL}/app`);
 });
 
 test("login invalid fields do not dispatch", async ({ page }) => {
@@ -211,7 +215,7 @@ test("login navigates client-side without a full document reload", async ({
       true,
   );
   expect(survived).toBe(true);
-  await expect(page).toHaveURL(`${BASE_URL}/`);
+  await expect(page).toHaveURL(`${BASE_URL}/app`);
 });
 
 test("logout navigates client-side without a full document reload", async ({
@@ -220,7 +224,7 @@ test("logout navigates client-side without a full document reload", async ({
 }) => {
   // Seeded session (login-as-setup); the logout itself is the subject.
   await signInAs(page, user.username);
-  await goto(page, "/");
+  await goto(page, "/app");
   await page.evaluate(() => {
     (window as Window & { __jaunderNoReload?: boolean }).__jaunderNoReload =
       true;
@@ -255,7 +259,7 @@ test("logout page logs out", async ({ page, user }) => {
   // flow ends signed-out at "/"; the LogoutPage render carries no success branch.
   // Seeded session (login-as-setup); the logout itself is the subject.
   await signInAs(page, user.username);
-  await goto(page, "/");
+  await goto(page, "/app");
 
   // Use the rendered logout link to avoid Firefox navigation abort races.
   await click(page, SEL.logoutLink);
@@ -274,7 +278,7 @@ test("sidebar reverts to signed-out state after logout", async ({
 }) => {
   // Seeded session (login-as-setup); the logout itself is the subject.
   await signInAs(page, user.username);
-  await goto(page, "/");
+  await goto(page, "/app");
   // a[href='/logout'] only renders when auth Suspense resolves, confirming the
   // user is shown.
   await expect(page.locator(".j-sb-foot")).toContainText(user.username);
@@ -288,51 +292,40 @@ test("sidebar reverts to signed-out state after logout", async ({
   await expect(page.locator(".j-sb-foot a[href='/login']")).toHaveCount(0);
 });
 
-test("sidebar shows Home only and no Compose link when not logged in", async ({
+test("sidebar shows Local only and no Compose link when not logged in", async ({
   page,
   firstNav,
 }) => {
-  await goto(page, "/", {
-    timeout: firstNav,
-  });
-
-  // Wait for the nav Suspense to resolve.
+  await goto(page, "/", { timeout: firstNav });
   await waitForSelector(page, ".j-nav");
-
-  // Only one <a> inside .j-nav — the Home link.
   const navAnchors = page.locator(".j-nav a");
   await expect(navAnchors).toHaveCount(1);
   await expect(navAnchors.first()).toHaveAttribute("href", "/");
+  await expect(navAnchors.first()).toHaveText("Local");
+  await expect(page.locator('.j-nav a[href="/app"]')).toHaveCount(0);
   await expect(page.locator('.j-nav a[href="/posts/new"]')).toHaveCount(0);
   await expect(page.locator(".j-sidebar")).not.toContainText("Sources");
   await expect(page.locator(".j-sidebar")).not.toContainText("Bluesky");
-
-  // Sidebar footer must not contain a "Sign in" link.
   await expect(page.locator(".j-sb-foot a[href='/login']")).toHaveCount(0);
 });
 
-test("authenticated sidebar orders Compose after Feed", async ({
+test("authenticated sidebar exposes Home and no Local", async ({
   registeredPage,
 }) => {
-  const page = await registeredPage("/");
-  // Wait for the authenticated nav to render from the marker (#181 — synchronous,
-  // no Suspense swap).
+  const page = await registeredPage("/app");
   await waitForSelector(page, '.j-nav a[href="/posts/new"]');
   await waitForSelector(page, '.j-nav a[href="/drafts"]');
   await waitForSelector(page, '.j-nav a[href="/scheduled"]');
-  // Home, Feed (/app cockpit, #181), Compose, Drafts, Scheduled, History, Media,
-  // Audiences, Themes, and Settings have hrefs.
   await waitForSelector(page, '.j-nav a[href="/audiences"]');
   await expect(page.locator(".j-sidebar")).not.toContainText("Sources");
   await expect(page.locator(".j-sidebar")).not.toContainText("Bluesky");
   await waitForSelector(page, '.j-nav a[href="/history"]');
   const navAnchors = page.locator(".j-nav a");
-  await expect(navAnchors).toHaveCount(10);
+  await expect(navAnchors).toHaveCount(9);
   const navHrefs = await navAnchors.evaluateAll((links) =>
     links.map((link) => link.getAttribute("href")),
   );
   expect(navHrefs).toEqual([
-    "/",
     "/app",
     "/posts/new",
     "/drafts",
@@ -343,30 +336,34 @@ test("authenticated sidebar orders Compose after Feed", async ({
     "/themes",
     "/profile",
   ]);
-  await expect(page.locator('.j-nav a[href="/posts/new"]')).toHaveText(
-    "Compose",
+  await expect(page.locator('.j-nav a[href="/app"]')).toHaveText("Home");
+  await expect(page.locator('.j-nav a[href="/"]')).toHaveCount(0);
+  await expect(page.locator('.j-nav a[href="/app"]')).toHaveClass(
+    /\bis-active\b/,
   );
-  await expect(page.locator('.j-nav a[href="/"]')).toHaveClass(/\bis-active\b/);
-
-  // Footer has Sign out.
   await expect(page.locator(SEL.logoutLink)).toBeVisible();
-  // Footer does NOT have Sign in.
   await expect(page.locator(".j-sb-foot a[href='/login']")).toHaveCount(0);
+});
+
+test("authenticated brand navigation targets Home directly", async ({
+  registeredPage,
+}) => {
+  const page = await registeredPage("/posts/new");
+  await navigateInApp(page, () => page.click(".j-brand"), {
+    url: "/app",
+    ready: '.j-topbar h1:has-text("Home")',
+  });
+  await expect(page.locator(".j-nav a[href='/app']")).toHaveClass(
+    /\bis-active\b/,
+  );
 });
 
 test("sidebar active state follows exact in-app destinations", async ({
   registeredPage,
 }) => {
-  const page = await registeredPage("/");
+  const page = await registeredPage("/app");
   const activeItem = page.locator(".j-nav a.is-active");
   await waitForSelector(page, '.j-nav a[href="/posts/new"]');
-  await expect(activeItem).toHaveCount(1);
-  await expect(activeItem).toHaveAttribute("href", "/");
-
-  await navigateInApp(page, () => page.click('.j-nav a[href="/app"]'), {
-    url: "/app",
-    ready: SEL.postBody,
-  });
   await expect(activeItem).toHaveCount(1);
   await expect(activeItem).toHaveAttribute("href", "/app");
 

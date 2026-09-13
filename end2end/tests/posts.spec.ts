@@ -40,8 +40,8 @@ import { expectAccessible } from "./accessibility";
 const TIMELINE_PAGE_SIZE = 50;
 const TIMELINE_OVERFLOW_COUNT = 1;
 const LOCAL_TIMELINE_AUTHOR_COUNT = 26;
-const HOME_FEED_SELF_COUNT = 51;
-const HOME_FEED_OTHER_COUNT = 2;
+const HOME_POST_SELF_COUNT = 51;
+const HOME_POST_OTHER_COUNT = 2;
 
 async function openPostFromDrafts(page: Page, title: string): Promise<string> {
   await navigateInApp(page, () => click(page, '.j-nav a[href="/drafts"]'), {
@@ -225,7 +225,7 @@ test("Post headers use the current display name with a handle-only fallback", as
 
   allowSecondBoot(
     page,
-    "a fresh Home Feed load proves an existing Post reads the updated current Display Name rather than a Post snapshot",
+    "a fresh Home published-Posts load proves an existing Post reads the updated current Display Name rather than a Post snapshot",
   );
   await goto(page, "/app", {
     timeout: slowBrowserTimeoutMs(testInfo, 15_000),
@@ -1052,12 +1052,12 @@ test("per-user timeline lists published posts with pagination", async ({
   await perf.log({ username });
 });
 
-test("home page shows local timeline for unauthenticated users", async ({
+test("Local shows published posts for unauthenticated visitors", async ({
   page,
   tracedContext,
   firstNav,
 }, testInfo) => {
-  const perf = createPerfProbe(testInfo, "home_local_timeline");
+  const perf = createPerfProbe(testInfo, "local_timeline");
 
   const u1 = await signInAsNewUser(page);
   await seedPostsViaTool(u1, LOCAL_TIMELINE_AUTHOR_COUNT, "Local Author One");
@@ -1099,36 +1099,37 @@ test("home page shows local timeline for unauthenticated users", async ({
   await secondContext.close();
 });
 
-test("cockpit /app shows the authenticated home feed with pagination", async ({
+test("Home shows only the authenticated User's published Posts with pagination", async ({
   page,
   tracedContext,
   firstNav,
 }, testInfo) => {
-  const perf = createPerfProbe(testInfo, "home_authenticated_feed");
+  const perf = createPerfProbe(testInfo, "home_published_posts");
 
   const me = await signInAsNewUser(page);
-  await seedPostsViaTool(me, HOME_FEED_SELF_COUNT, "Home Feed Mine");
+  await seedPostsViaTool(me, HOME_POST_SELF_COUNT, "Home Post Mine");
 
   const secondContext = await tracedContext();
   const secondPage = await secondContext.newPage();
   const other = await signInAsNewUser(secondPage);
-  await seedPostsViaTool(other, HOME_FEED_OTHER_COUNT, "Home Feed Other");
+  await seedPostsViaTool(other, HOME_POST_OTHER_COUNT, "Home Post Other");
 
   await goto(page, "/app", { timeout: firstNav });
 
   await expect(page.locator(SEL.topbarHeading)).toHaveText("Home");
+  await expect(page.locator("body")).toContainText("Your published Posts");
   await expect(page.locator("article.j-post")).toHaveCount(TIMELINE_PAGE_SIZE);
   await expect(page.locator("article.j-post").first()).toContainText(
-    `Home Feed Mine ${HOME_FEED_SELF_COUNT - 1}`,
+    `Home Post Mine ${HOME_POST_SELF_COUNT - 1}`,
   );
-  await expect(page.locator("body")).not.toContainText("Home Feed Other");
+  await expect(page.locator("body")).not.toContainText("Home Post Other");
 
   await click(page, 'button:has-text("Load more")');
   perf.mark("load_more_clicked");
   await expect(page.locator("article.j-post")).toHaveCount(
-    HOME_FEED_SELF_COUNT,
+    HOME_POST_SELF_COUNT,
   );
-  await expect(page.locator("body")).not.toContainText("Home Feed Other");
+  await expect(page.locator("body")).not.toContainText("Home Post Other");
   perf.mark("assertions_complete");
   await perf.log();
 

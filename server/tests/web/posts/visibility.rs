@@ -23,7 +23,7 @@ use storage::test_support::{
 };
 
 use super::fixtures::{
-    get_post_form, list_drafts, list_home_feed, list_scheduled, publish_post_form,
+    get_post_form, list_drafts, list_home_timeline, list_scheduled, publish_post_form,
 };
 
 fn utc_permalink_date(timestamp: jiff::Timestamp) -> (i32, u32, u32) {
@@ -87,7 +87,7 @@ async fn get_post_preview_form(
 
 /// Which endpoint a `*_rejects_unauthenticated` case exercises. Each variant
 /// fires the same request the original standalone test fired, with no session
-/// cookie, through that endpoint's existing request builder. The home feed
+/// cookie, through that endpoint's existing request builder. The Home timeline
 /// additionally covers both timeline directions.
 #[derive(Copy, Clone)]
 enum UnauthEndpoint {
@@ -96,7 +96,7 @@ enum UnauthEndpoint {
     ListDrafts,
     ListScheduled,
     PublishPost,
-    ListHomeFeed,
+    ListHomeTimeline,
 }
 
 async fn unauthenticated_requests(
@@ -132,11 +132,11 @@ async fn unauthenticated_requests(
         UnauthEndpoint::PublishPost => {
             vec![publish_post_form(app.clone(), PostId::from(99), None).await]
         }
-        UnauthEndpoint::ListHomeFeed => vec![
-            list_home_feed(app.clone(), None, 50, None).await,
+        UnauthEndpoint::ListHomeTimeline => vec![
+            list_home_timeline(app.clone(), None, 50, None).await,
             post_json(
                 app,
-                <web::timeline::ListHomeFeed as ServerFn>::PATH,
+                <web::timeline::ListHomeTimeline as ServerFn>::PATH,
                 serde_json::json!({
                     "request": { "order": "oldest", "cursor": null, "limit": 50 },
                 }),
@@ -156,7 +156,7 @@ async fn unauthenticated_requests(
 #[case::list_drafts(UnauthEndpoint::ListDrafts)]
 #[case::list_scheduled(UnauthEndpoint::ListScheduled)]
 #[case::publish_post(UnauthEndpoint::PublishPost)]
-#[case::list_home_feed(UnauthEndpoint::ListHomeFeed)]
+#[case::list_home_timeline(UnauthEndpoint::ListHomeTimeline)]
 #[tokio::test]
 async fn endpoint_rejects_unauthenticated(backend: Backend, #[case] endpoint: UnauthEndpoint) {
     let env = backend.setup().await;
@@ -453,31 +453,40 @@ fn timeline_slugs(
 async fn assert_local_timeline_visibility(
     app: Router,
     cookie: Option<&str>,
+    authorization: Option<&str>,
     expected: &std::collections::BTreeSet<String>,
     viewer: &str,
 ) -> Page<RenderedPost, common::seed::TimelineCursor> {
     let mut newest_page = None;
 
     for (order, is_newest) in [("newest", true), ("oldest", false)] {
-        let (status, body) = post_json(
+        let response = post_json_with_credentials(
             app.clone(),
             <web::timeline::ListLocalTimeline as ServerFn>::PATH,
             serde_json::json!({
                 "request": { "order": order, "cursor": null, "limit": 50 },
             }),
             cookie,
+            authorization,
+            true,
         )
         .await;
-        assert_eq!(status, StatusCode::OK, "{viewer} {order}; body: {body}");
+        assert_eq!(
+            response.status,
+            StatusCode::OK,
+            "{viewer} {order}; body: {}",
+            response.body
+        );
         let page: Page<RenderedPost, common::seed::TimelineCursor> = serde_json::from_str::<
             PublicPresentation<Page<RenderedPost, common::seed::TimelineCursor>>,
-        >(&body)
+        >(&response.body)
         .unwrap()
         .page;
         assert_eq!(
             &timeline_slugs(&page),
             expected,
-            "{viewer} {order}; body: {body}"
+            "{viewer} {order}; body: {}",
+            response.body
         );
 
         if is_newest {
@@ -542,21 +551,21 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
         vec![AudienceTarget::Public],
     )
     .await;
-    let subscribers = create_targeted_post(
+    let _subscribers = create_targeted_post(
         Arc::clone(&env.posts()),
         env.write_scope(),
         author,
         vec![AudienceTarget::Subscribers],
     )
     .await;
-    let named = create_targeted_post(
+    let _named = create_targeted_post(
         Arc::clone(&env.posts()),
         env.write_scope(),
         author,
         vec![AudienceTarget::Named(friends)],
     )
     .await;
-    let private =
+    let _private =
         create_targeted_post(Arc::clone(&env.posts()), env.write_scope(), author, vec![]).await;
 
     let author_session = create_session_for(
@@ -585,70 +594,38 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
     let stranger_cookie = stranger_session.cookie();
 
     let public_slugs = [public.slug.to_string()].into_iter().collect();
-    let author_slugs = [
-        public.slug.to_string(),
-        subscribers.slug.to_string(),
-        named.slug.to_string(),
-        private.slug.to_string(),
-    ]
-    .into_iter()
-    .collect();
-    let subscriber_slugs = [
-        public.slug.to_string(),
-        subscribers.slug.to_string(),
-        named.slug.to_string(),
-    ]
-    .into_iter()
-    .collect();
 
-    // Direction changes chronology only: every viewer admits the same post set
-    // through both public local-timeline requests.
-    let mut subscriber_page = None;
-    for (viewer, cookie, expected) in [
-        ("anonymous", None, &public_slugs),
-        ("author", Some(author_cookie.as_str()), &author_slugs),
-        (
-            "subscriber",
-            Some(subscriber_cookie.as_str()),
-            &subscriber_slugs,
-        ),
-        ("stranger", Some(stranger_cookie.as_str()), &public_slugs),
+    // Direction changes chronology only: all valid request identities admit the
+    // same public post set through both public local-timeline requests.
+    for (viewer, cookie) in [
+        ("anonymous", None),
+        ("author", Some(author_cookie.as_str())),
+        ("subscriber", Some(subscriber_cookie.as_str())),
+        ("stranger", Some(stranger_cookie.as_str())),
     ] {
-        let newest_page =
-            assert_local_timeline_visibility(app.clone(), cookie, expected, viewer).await;
-        if viewer == "subscriber" {
-            subscriber_page = Some(newest_page);
-        }
+        let page =
+            assert_local_timeline_visibility(app.clone(), cookie, None, &public_slugs, viewer)
+                .await;
+        assert!(
+            page.posts.iter().all(|post| !post.is_author),
+            "{viewer} receives anonymous Local decoration"
+        );
     }
-    let subscriber_page = subscriber_page.expect("subscriber is part of the visibility matrix");
-    assert!(
-        subscriber_page.posts.iter().all(|post| !post.is_author),
-        "subscriber is not the author"
-    );
 
-    // Explicit Bearer identity is authoritative over an unrelated ambient cookie.
+    // Explicit Bearer identity is authoritative over an unrelated ambient cookie,
+    // but it cannot change Local's anonymous row selection or decoration.
     let authorization = format!("Bearer {}", subscriber_session.token);
-    let response = post_json_with_credentials(
+    let bearer_page = assert_local_timeline_visibility(
         app.clone(),
-        <web::timeline::ListLocalTimeline as ServerFn>::PATH,
-        serde_json::json!({ "request": { "order": "newest", "cursor": null, "limit": 50 } }),
         Some(&stranger_cookie),
         Some(&authorization),
-        true,
+        &public_slugs,
+        "bearer subscriber",
     )
     .await;
-    assert_eq!(response.status, StatusCode::OK, "body: {}", response.body);
-    let bearer_page: Page<RenderedPost, common::seed::TimelineCursor> = serde_json::from_str::<
-        PublicPresentation<Page<RenderedPost, common::seed::TimelineCursor>>,
-    >(&response.body)
-    .unwrap()
-    .page;
-    assert_eq!(timeline_slugs(&bearer_page), subscriber_slugs);
     assert!(
-        response
-            .set_cookies
-            .iter()
-            .any(|value| value.contains("Max-Age=0"))
+        bearer_page.posts.iter().all(|post| !post.is_author),
+        "bearer request receives anonymous Local decoration"
     );
 
     // A present but failed explicit credential rejects instead of becoming

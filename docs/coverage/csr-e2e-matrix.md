@@ -93,7 +93,7 @@ navigation.
 
 **Evidence:**
 [`end2end/tests/timeline-order.spec.ts`](../../end2end/tests/timeline-order.spec.ts)
-proves the shared labelled control is URL-driven on the home feed and a bare
+proves the shared labelled control is URL-driven on the Home timeline and a bare
 `/app` does not retain an earlier Oldest choice.
 [`end2end/tests/authed-flash.spec.ts`](../../end2end/tests/authed-flash.spec.ts)
 asserts the anonymous bounce and authenticated cockpit content;

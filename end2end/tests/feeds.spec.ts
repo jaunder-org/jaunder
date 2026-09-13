@@ -48,9 +48,6 @@ const PING_SETUP_ALLOWANCE_MS = 8_000;
 test("auto-discovery links are present on site home and user timeline, and resolve", async ({
   page,
 }) => {
-  const username = await signInAsNewUser(page);
-
-  // Test site home feed discovery
   await goto(page, "/");
   const homeLinks = await readAlternateLinks(page);
 
@@ -70,6 +67,8 @@ test("auto-discovery links are present on site home and user timeline, and resol
     expect(res.status()).toBe(200);
     expect(res.headers()["content-type"]).toContain(fmt.mime);
   }
+
+  const username = await signInAsNewUser(page);
 
   // Test user timeline feed discovery (canonical user URL is ~-prefixed)
   allowSecondBoot(
@@ -98,6 +97,7 @@ test("auto-discovery links are present on site home and user timeline, and resol
 
 test("head discovery links update across a client-side nav, staying a single set", async ({
   page,
+  tracedContext,
 }) => {
   await signInAsNewUser(page);
   // Seed a public post carrying a tag so its footer renders a clickable tag chip.
@@ -106,30 +106,40 @@ test("head discovery links update across a client-side nav, staying a single set
     tags: ["disco198"],
   });
 
-  await goto(page, "/");
-  await waitForMount(page);
-  const siteHrefs = (await readAlternateLinks(page)).map((link) => link.href);
-  expect(siteHrefs.length).toBe(3); // one set on the Site feed
+  const guestContext = await tracedContext();
+  try {
+    const guestPage = await guestContext.newPage();
+    await goto(guestPage, "/");
+    await waitForMount(guestPage);
+    const siteHrefs = (await readAlternateLinks(guestPage)).map(
+      (link) => link.href,
+    );
+    expect(siteHrefs.length).toBe(3); // one set on the Site feed
 
-  // Client-side nav: click the post's tag chip → /tags/disco198 (leptos_router
-  // intercepts the same-origin <a>, no full document load).
-  await click(page, 'a.j-tag[href="/tags/disco198"]');
-  await page.waitForURL(`${BASE_URL}/tags/disco198`);
+    // Client-side nav: click the post's tag chip → /tags/disco198 (leptos_router
+    // intercepts the same-origin <a>, no full document load).
+    await click(guestPage, 'a.j-tag[href="/tags/disco198"]');
+    await guestPage.waitForURL(`${BASE_URL}/tags/disco198`);
 
-  // The reactive head rewrite (old FeedDiscovery unmounts, SiteTag one mounts) lands in
-  // the batch after the route change — poll until it settles rather than read once and
-  // race: exactly three alternate links, all now the SiteTag feed.
-  await expect
-    .poll(
-      async () =>
-        (await readAlternateLinks(page)).filter((link) =>
-          link.href.includes("disco198"),
-        ).length,
-    )
-    .toBe(3);
-  const tagHrefs = (await readAlternateLinks(page)).map((link) => link.href);
-  expect(tagHrefs.length).toBe(3); // exactly one set (no leftover Site links)
-  expect(tagHrefs).not.toEqual(siteHrefs); // the SiteTag feed, not the Site feed
+    // The reactive head rewrite (old FeedDiscovery unmounts, SiteTag one mounts) lands in
+    // the batch after the route change — poll until it settles rather than read once and
+    // race: exactly three alternate links, all now the SiteTag feed.
+    await expect
+      .poll(
+        async () =>
+          (await readAlternateLinks(guestPage)).filter((link) =>
+            link.href.includes("disco198"),
+          ).length,
+      )
+      .toBe(3);
+    const tagHrefs = (await readAlternateLinks(guestPage)).map(
+      (link) => link.href,
+    );
+    expect(tagHrefs.length).toBe(3); // exactly one set (no leftover Site links)
+    expect(tagHrefs).not.toEqual(siteHrefs); // the SiteTag feed, not the Site feed
+  } finally {
+    await guestContext.close();
+  }
 });
 
 test("crawler path keeps the projector discovery links (no wasm)", async ({

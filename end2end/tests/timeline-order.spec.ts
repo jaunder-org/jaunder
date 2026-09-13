@@ -141,6 +141,7 @@ async function selectOldest(page: Page, path: string): Promise<void> {
 test("timeline order is URL-driven on every post timeline surface", async ({
   page,
   firstNav,
+  tracedContext,
 }) => {
   // Covers five mounted routes plus history restoration and a bare-URL re-entry.
   setTestBudget(60_000);
@@ -154,7 +155,8 @@ test("timeline order is URL-driven on every post timeline surface", async ({
   let userTagPage: Page | undefined;
 
   for (const path of routes) {
-    const routePage = await page.context().newPage();
+    const routeContext = path === "/" ? await tracedContext() : page.context();
+    const routePage = await routeContext.newPage();
     await goto(routePage, path, { timeout: firstNav });
     await expectOrderControl(routePage);
     if (path === "/") {
@@ -173,6 +175,8 @@ test("timeline order is URL-driven on every post timeline surface", async ({
       appPage = routePage;
     } else if (path === userTagPath) {
       userTagPage = routePage;
+    } else if (path === "/") {
+      await routeContext.close();
     } else {
       await routePage.close();
     }

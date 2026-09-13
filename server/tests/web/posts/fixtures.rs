@@ -104,7 +104,7 @@ pub(super) async fn list_local_timeline(
     .await
 }
 
-pub(super) async fn list_home_feed(
+pub(super) async fn list_home_timeline(
     app: Router,
     cursor: Option<TimelineCursor>,
     limit: u32,
@@ -112,7 +112,7 @@ pub(super) async fn list_home_feed(
 ) -> (StatusCode, String) {
     post_json(
         app,
-        <web::timeline::ListHomeFeed as ServerFn>::PATH,
+        <web::timeline::ListHomeTimeline as ServerFn>::PATH,
         serde_json::json!({
             "request": { "order": "newest", "cursor": cursor, "limit": limit },
         }),

@@ -35,13 +35,15 @@ pub fn encode_marker(user: &SessionUser) -> String {
 }
 
 /// Parse a marker value back to its [`SessionUser`], `None` when the JSON is
-/// malformed or the stored username is invalid. The single malformed→`None`
-/// chokepoint: `Username`'s own `Deserialize` routes through its validating
-/// `FromStr` (a `Username` cannot be empty), and a missing `is_operator` defaults
-/// to `false` for backward compatibility.
+/// malformed or the stored fields are invalid. The intermediate JSON value matches
+/// the browser's `JSON.parse` semantics for duplicate object keys (the last value
+/// wins), keeping the Rust and pre-paint decoders aligned. `Username`'s own
+/// `Deserialize` still routes through its validating `FromStr`, and a missing
+/// `is_operator` defaults to `false` for backward compatibility.
 #[must_use]
 pub fn decode_marker(raw: &str) -> Option<SessionUser> {
-    serde_json::from_str(raw).ok()
+    let value = serde_json::from_str(raw).ok()?;
+    serde_json::from_value(value).ok()
 }
 
 #[cfg(test)]
@@ -100,5 +102,18 @@ mod tests {
         // (the codec is the single malformed→`None` chokepoint).
         assert_eq!(decode_marker(r#"{"username":"Has Space"}"#), None);
         assert_eq!(decode_marker(r#"{"username":""}"#), None);
+    }
+
+    #[test]
+    fn decode_matches_browser_duplicate_field_semantics() {
+        assert_eq!(
+            decode_marker(
+                r#"{"username":"ignored","username":"alice","is_operator":"invalid","is_operator":false}"#
+            ),
+            Some(SessionUser {
+                username: parse_username("alice"),
+                is_operator: false,
+            }),
+        );
     }
 }

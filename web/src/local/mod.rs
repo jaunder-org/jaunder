@@ -1,0 +1,13 @@
+//! The Local vertical (#319, ADR-0070): the routed `/` public landing page. Module
+//! wiring only — its host-compiled `render` masthead twin and `page_state`
+//! public-navigation fold keep projector/CSR rendering logic independently testable,
+//! while the wasm-only `component` composes `crate::timeline` and paints that masthead.
+
+mod page_state;
+pub(crate) mod render;
+pub use page_state::{site_destination, site_timeline_base_url, site_timeline_seed};
+
+#[cfg(target_arch = "wasm32")]
+mod component;
+#[cfg(target_arch = "wasm32")]
+pub use component::LocalPage;

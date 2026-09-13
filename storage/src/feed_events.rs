@@ -2022,14 +2022,17 @@ mod tests {
         let env = backend.setup().await;
         let feeds = Arc::clone(&env.feed_events());
         let write_scope = env.write_scope();
-        let ids = futures_util::future::join_all((0..51).map(|index| {
-            enqueue(
-                &write_scope,
-                Arc::clone(&feeds),
-                fp(&format!("/~pagination-{index}/feed.rss")),
-            )
-        }))
-        .await;
+        let mut ids = Vec::with_capacity(51);
+        for index in 0..51 {
+            ids.push(
+                enqueue(
+                    &write_scope,
+                    Arc::clone(&feeds),
+                    fp(&format!("/~pagination-{index}/feed.rss")),
+                )
+                .await,
+            );
+        }
         claim(
             &env.write_scope(),
             Arc::clone(&feeds),

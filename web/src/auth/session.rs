@@ -5,7 +5,8 @@
 //! [`super::api`]; this module is the client context around it.
 
 use leptos::prelude::*;
-use leptos_router::hooks::use_location;
+use leptos_router::NavigateOptions;
+use leptos_router::hooks::{use_location, use_navigate, use_query_map};
 
 use super::{SessionUser, marker_storage};
 use crate::error::WebResult;
@@ -25,20 +26,41 @@ pub struct SessionContext {
 /// Provide the session context. Seeds from the marker synchronously, then
 /// reconciles against `get_session()` on every navigation, writing the result back
 /// into the `current` signal AND the marker (so the next boot stays flash-free).
-/// ADR-0044 D3. Must be called from inside `<Router>` (it reads `use_location`) —
-/// `AppShell` is that owner, and every consumer is a descendant of it.
+/// A live session that lacked a marker can only be detected after Local paints; that
+/// recovery path restores the marker then replaces Local with Home. `/app` remains
+/// the only session-confirming route, so stale markers never take this path.
+/// Must be called from inside `<Router>` (it reads `use_location`) — `AppShell` is
+/// that owner, and every consumer is a descendant of it.
 pub fn provide_session_context() {
     let current = RwSignal::new(marker_storage::get());
     let location = use_location();
+    let navigate = use_navigate();
+    let query = use_query_map();
     let reconcile = Resource::new(move || location.pathname.get(), |_| super::get_session());
     Effect::new(move |_| {
         if let Some(Ok(next)) = reconcile.get() {
+            let missing_marker = current.get_untracked().is_none();
+            let authenticated = next.is_some();
             match &next {
                 Some(user) => marker_storage::set(user),
                 None => marker_storage::remove(),
             }
             if current.get_untracked() != next {
                 current.set(next);
+            }
+            if missing_marker && authenticated && location.pathname.get_untracked() == "/" {
+                let destination = if query.get().get("order").as_deref() == Some("oldest") {
+                    "/app?order=oldest"
+                } else {
+                    "/app"
+                };
+                navigate(
+                    destination,
+                    NavigateOptions {
+                        replace: true,
+                        ..NavigateOptions::default()
+                    },
+                );
             }
         }
     });

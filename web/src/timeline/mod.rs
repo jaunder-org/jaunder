@@ -1,13 +1,13 @@
 //! The timeline vertical (#329, ADR-0070): the cursor-paginated listing
 //! endpoints and the shared timeline machinery used by the public Local timeline
-//! (`home`), the authed `/app` cockpit, and the user/tag pages. Module wiring
+//! (`local`), the authed `/app` cockpit, and the user/tag pages. Module wiring
 //! only.
 //!
 //! The `#[server]` listing fns live in the `api` leaf and their host-only storage
 //! helpers in `server`. Publication order is carried through the cursor type, so
 //! pages from opposite directions cannot mix at the type boundary. Public listing
 //! responses carry `PublicPresentation<Page<RenderedPost, TimelineCursor>>`; the
-//! private home feed retains `Page<RenderedPost, TimelineCursor>`. Both wire types
+//! private Home timeline retains `Page<RenderedPost, TimelineCursor>`. Both wire types
 //! are defined in `common::seed`.
 //! Alongside them sit the pure host-tested `state` and `render` leaves and the
 //! wasm-only reactive `component`. `state` holds the reactive
@@ -32,8 +32,8 @@ pub use state::{
 };
 
 pub use api::{
-    ListByTag, ListByUser, ListByUserAndTag, ListHomeFeed, ListLocalTimeline, list_by_tag,
-    list_by_user, list_by_user_and_tag, list_home_feed, list_local_timeline,
+    ListByTag, ListByUser, ListByUserAndTag, ListHomeTimeline, ListLocalTimeline, list_by_tag,
+    list_by_user, list_by_user_and_tag, list_home_timeline, list_local_timeline,
 };
 
 // Server-only shared fetch helpers, consumed by the `server` crate's public

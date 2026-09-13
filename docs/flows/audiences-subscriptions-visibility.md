@@ -40,8 +40,9 @@ The reader-side subscription control lives on user timelines. It hides itself
 for anonymous viewers and self-profiles, queries the current local-channel
 subscription state for everyone else, and then toggles that state with the
 subscribe/unsubscribe server fns. The public and permalink read surfaces that
-enforce the resulting visibility remain Task 3 docs, but the authoring inputs
-and the viewer subscription toggle already live here.
+enforce the resulting visibility are documented in
+[`public-reading.md`](public-reading.md); the authoring inputs and viewer
+subscription toggle live here.
 
 ## Audience management and subscription toggle
 

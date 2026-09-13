@@ -27,34 +27,36 @@ pub fn cockpit_timeline_base_url() -> RootRelativeUrl {
     url
 }
 
-/// One resolved cockpit load: the session-confirmed viewer paired with the feed page
-/// fetched for them, or `None` when the session resolved to nobody — anonymous or
-/// expired (ADR-0044 D6), which the page turns into the `/login` bounce.
+/// One resolved Home load: the session-confirmed viewer paired with their published
+/// Post page, or `None` when the session resolved to nobody — anonymous or expired,
+/// which the page turns into the `/login` bounce.
 pub type CockpitLoad = Option<(Username, Page<RenderedPost, TimelineCursor>)>;
 
-/// Resolve the cockpit's initial payload: gate the feed fetch on the session's
-/// server-confirmed reconcile, and pair the page with the identity that reconcile
-/// carries.
+/// Resolve Home's initial payload: gate the internal `list_home_timeline` fetch on
+/// the session-confirmed reconcile, and pair the page with the identity that
+/// reconcile carries.
 ///
-/// `fetch_feed` is a parameter rather than a direct `list_home_feed` call so this
-/// fold is host-testable without a server: the wasm caller passes the real server fn,
-/// a test passes a stub — and the stub is what proves an anonymous or failed
-/// reconcile never issues the fetch at all.
+/// `fetch_timeline` is a parameter rather than a direct `list_home_timeline` call so
+/// this fold is host-testable without a server: the wasm caller passes the real
+/// server fn, a test passes a stub — and the stub is what proves an anonymous or
+/// failed reconcile never issues the fetch at all.
 ///
 /// # Errors
 ///
-/// Propagates the reconcile's error unchanged, or the feed fetch's when the viewer
-/// was confirmed but their feed could not be read.
+/// Propagates the reconcile's error unchanged, or the fetch's when the viewer was
+/// confirmed but their Home Posts could not be read.
 pub async fn resolve_initial_page<F, Fut>(
     reconcile: WebResult<Option<SessionUser>>,
-    fetch_feed: F,
+    fetch_timeline: F,
 ) -> WebResult<CockpitLoad>
 where
     F: FnOnce() -> Fut,
     Fut: Future<Output = WebResult<Page<RenderedPost, TimelineCursor>>>,
 {
     match reconcile {
-        Ok(Some(user)) => fetch_feed().await.map(|page| Some((user.username, page))),
+        Ok(Some(user)) => fetch_timeline()
+            .await
+            .map(|page| Some((user.username, page))),
         Ok(None) => Ok(None),
         Err(error) => Err(error),
     }
@@ -132,12 +134,12 @@ mod tests {
         }
     }
 
-    /// A feed fetcher that records whether it ran. **One** helper shared by the
-    /// positive and the negative cases rather than a stub inline per test: an inline
-    /// stub in a "must not fetch" test is by construction never executed, so its own
-    /// body would sit uncovered — which the coverage gate correctly reports and which
-    /// no marker should paper over. Sharing it also makes the negative assertions
-    /// mean something, since the same instrumented fetcher is demonstrably capable of
+    /// A Home-page fetcher that records whether it ran. **One** helper shared by the
+    /// positive and negative cases rather than a stub inline per test: an inline stub
+    /// in a "must not fetch" test is by construction never executed, so its own body
+    /// would sit uncovered — which the coverage gate correctly reports and which no
+    /// marker should paper over. Sharing it also makes the negative assertions mean
+    /// something, since the same instrumented fetcher is demonstrably capable of
     /// running.
     fn recording_fetch(
         fetched: &Cell<bool>,
@@ -155,13 +157,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_confirmed_viewer_gets_their_feed_paired_with_their_name() {
+    async fn a_confirmed_viewer_gets_their_home_posts_paired_with_their_name() {
         let fetched = Cell::new(false);
         let resolved =
             resolve_initial_page(Ok(Some(viewer("bob"))), recording_fetch(&fetched)).await;
-        let (name, feed) = resolved.unwrap().expect("a confirmed viewer yields a page");
+        let (name, posts) = resolved.unwrap().expect("a confirmed viewer yields a page");
         assert_eq!(name, parse_username("bob"));
-        assert_eq!(feed.posts.len(), 1);
+        assert_eq!(posts.posts.len(), 1);
         assert!(
             fetched.get(),
             "a confirmed viewer DOES fetch — which is what makes the \
@@ -174,7 +176,10 @@ mod tests {
         let fetched = Cell::new(false);
         let resolved = resolve_initial_page(Ok(None), recording_fetch(&fetched)).await;
         assert_eq!(resolved, Ok(None));
-        assert!(!fetched.get(), "an anonymous session must not fetch a feed");
+        assert!(
+            !fetched.get(),
+            "an anonymous session must not fetch Home Posts"
+        );
     }
 
     #[tokio::test]
@@ -186,16 +191,22 @@ mod tests {
         )
         .await;
         assert_eq!(resolved, Err(WebError::validation("no session")));
-        assert!(!fetched.get(), "a failed reconcile must not fetch a feed");
+        assert!(
+            !fetched.get(),
+            "a failed reconcile must not fetch Home Posts"
+        );
     }
 
     #[tokio::test]
-    async fn a_failed_feed_fetch_propagates_its_own_error() {
+    async fn a_failed_home_posts_fetch_propagates_its_own_error() {
         let resolved = resolve_initial_page(Ok(Some(viewer("bob"))), || async {
-            Err(WebError::server_message("feed down"))
+            Err(WebError::server_message("Home Posts unavailable"))
         })
         .await;
-        assert_eq!(resolved, Err(WebError::server_message("feed down")));
+        assert_eq!(
+            resolved,
+            Err(WebError::server_message("Home Posts unavailable"))
+        );
     }
 
     #[test]
@@ -245,7 +256,7 @@ mod tests {
             state.apply(Ok(Some((parse_username("bob"), page()))));
             state.apply(Ok(None));
             assert_eq!(state.timeline.status.get(), LoadStatus::Unidentified);
-            assert!(state.timeline.rows.get().is_empty(), "no stale feed");
+            assert!(state.timeline.rows.get().is_empty(), "no stale Home Posts");
             assert_eq!(
                 state.username.get(),
                 Some(parse_username("bob")),

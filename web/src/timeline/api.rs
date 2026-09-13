@@ -2,7 +2,7 @@
 //! listings return
 //! [`PublicPresentation<Page<RenderedPost, TimelineCursor>>`](PublicPresentation)
 //! so a client-side destination commits both its data and server-resolved theme.
-//! The authenticated home feed remains a private `Page` response.
+//! The authenticated Home timeline remains a private `Page` response.
 //!
 //! The wire types they exchange are defined in `common::seed`; the host-only query
 //! helpers these bodies call live in the [`super::server`] leaf. `timeline/mod.rs` is
@@ -92,10 +92,11 @@ pub async fn list_local_timeline(
     request: TimelinePageRequest,
 ) -> WebResult<PublicPresentation<Page<RenderedPost, common::seed::TimelineCursor>>> {
     let posts = expect_context::<Arc<dyn PostStorage>>();
-    let viewer = viewer::viewer_identity().await?;
+    // Resolve request credentials before selecting rows: invalid explicit
+    // credentials still reject, while valid identities cannot affect Local.
+    viewer::viewer_identity().await?;
     let page = server::fetch_local_timeline(
         posts.as_ref(),
-        &viewer,
         storage::timeline_keyset_cursor(request.cursor),
         request.order,
         request.limit,
@@ -106,7 +107,7 @@ pub async fn list_local_timeline(
 
 /// Lists published, non-deleted posts by the authenticated user using cursor pagination.
 #[macros::server(input = Json)]
-pub async fn list_home_feed(
+pub async fn list_home_timeline(
     request: TimelinePageRequest,
 ) -> WebResult<Page<RenderedPost, common::seed::TimelineCursor>> {
     let auth = auth::require_auth().await?;

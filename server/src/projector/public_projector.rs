@@ -174,7 +174,6 @@ impl PublicProjector {
     async fn site_timeline(&self, order: TimelineOrder) -> ProjectionResult {
         let page = match timeline::fetch_local_timeline(
             self.posts.as_ref(),
-            &ViewerIdentity::Anonymous,
             None,
             order,
             Some(PageSize::default()),

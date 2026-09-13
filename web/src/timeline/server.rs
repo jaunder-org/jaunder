@@ -89,25 +89,26 @@ pub async fn fetch_user_posts(
     page_from_rows(rows, page_size, visibility::viewer_user_id(viewer), order)
 }
 
-/// The shared site-wide timeline query, used by both the `list_local_timeline`
-/// server fn and the public projector (anonymous viewer).
+/// The shared public Local query, used by both the `list_local_timeline` server
+/// fn and the public projector. Its rows and rendered decoration are anonymous
+/// so the client continuation cannot diverge from the cacheable first page.
 ///
 /// # Errors
 ///
 /// Returns a storage error if the listing query fails.
 pub async fn fetch_local_timeline(
     posts: &dyn PostStorage,
-    viewer: &ViewerIdentity,
     cursor: Option<PostCursor>,
     order: TimelineOrder,
     limit: Option<PageSize>,
 ) -> InternalResult<Page<RenderedPost, TimelineCursor>> {
     let page_size = limit.unwrap_or_default();
     let page = published_page_request(cursor.as_ref(), order, page_size.fetch_limit())?;
+    let viewer = ViewerIdentity::Anonymous;
     let rows = posts
-        .list_published(page, viewer, UtcInstant::now())
+        .list_published(page, &viewer, UtcInstant::now())
         .await?;
-    page_from_rows(rows, page_size, visibility::viewer_user_id(viewer), order)
+    page_from_rows(rows, page_size, None, order)
 }
 
 /// The shared "posts site-wide carrying a tag" query, used by both the
@@ -299,21 +300,17 @@ mod tests {
         let page_size = PageSize::clamped(5);
         let expected = page_size.fetch_limit();
 
-        // `fetch_local_timeline` — site-wide timeline.
+        // `fetch_local_timeline` — public site timeline.
         let mut posts = MockPostStorage::new();
         posts
             .expect_list_published()
-            .withf(move |request, _v, _n| request.limit() == expected)
-            .returning(|_request, _v, _n| Ok(vec![]));
-        fetch_local_timeline(
-            &posts,
-            &ViewerIdentity::Anonymous,
-            None,
-            TimelineOrder::Newest,
-            Some(page_size),
-        )
-        .await
-        .expect("local timeline succeeds");
+            .withf(move |request, viewer, _now| {
+                request.limit() == expected && matches!(viewer, ViewerIdentity::Anonymous)
+            })
+            .returning(|_request, _viewer, _now| Ok(vec![]));
+        fetch_local_timeline(&posts, None, TimelineOrder::Newest, Some(page_size))
+            .await
+            .expect("local timeline succeeds");
 
         // `fetch_posts_by_tag` — site-wide by-tag.
         let mut posts = MockPostStorage::new();
