@@ -37,7 +37,7 @@ test("valid marker: root redirects to Home before Local paints", async ({
   );
   allowEngineDependentBoot(
     page,
-    "/app",
+    "/",
     "the root document can commit before its blocking head script replaces it, depending on engine timing",
   );
   // e2e-goto-wrapper:allow the blocking root redirect is the behavior under test.
