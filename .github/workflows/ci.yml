@@ -38,6 +38,10 @@ jobs:
       - name: Validate core lane (via xtask)
         run:
           nix develop .#ci --accept-flake-config -c cargo xtask ci-validate core
+      - name: Build Emacs package for Cachix
+        run:
+          nix build --accept-flake-config --no-link
+          .#emacsPackages.x86_64-linux.jaunder
       - name: Preserve core validation result
         if: always()
         run: |
