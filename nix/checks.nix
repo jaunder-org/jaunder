@@ -724,13 +724,17 @@ mkPerformanceProducer =
   assert revisions == null || revisions > 0;
   let
     selectedBrowser = if browser == null then "chromium" else browser;
+    traceDigest = builtins.hashString "sha256" "performance-${freshnessNonce}-${backend}-${selectedBrowser}";
+    performanceTraceId = "1${builtins.substring 1 31 traceDigest}";
+    performanceParentId = "1${builtins.substring 33 15 traceDigest}";
+    performanceTraceParent = "00-${performanceTraceId}-${performanceParentId}-01";
   in
   mkE2eCheck {
     inherit backend;
     checkName = "jaunder-performance-${producerKind}-${backend}-${profile}-${freshnessNonce}";
     browser = selectedBrowser;
-    traceId = "00000000000000000000000000000000";
-    traceParent = "00-00000000000000000000000000000000-0000000000000000-01";
+    traceId = performanceTraceId;
+    traceParent = performanceTraceParent;
     extraNodeConfig = { lib, ... }: {
       systemd.services.jaunder.environment.JAUNDER_STORAGE_PATH = "/var/lib/jaunder/media";
     };
@@ -842,29 +846,44 @@ mkPerformanceProducer =
           + " JAUNDER_PERF_BACKEND=${backend}"
           + " JAUNDER_PERF_BROWSER=${selectedBrowser}"
           + " JAUNDER_PERF_SETUP_JSON=$(cat /var/lib/jaunder/performance/setup.json)"
+          + " JAUNDER_E2E_TRACE_ID=${performanceTraceId}"
+          + " JAUNDER_E2E_TRACEPARENT=${performanceTraceParent}"
+          + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
           + " JAUNDER_PERF_IDENTITY_JSON=$(cat /var/lib/jaunder/performance/identity.json)"
           + " JAUNDER_PERF_BUILD_MODE=release"
           + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
           + " tests/browser-performance.measure.spec.ts --config playwright.config.ts --project ${selectedBrowser} --no-deps 2>&1",
           timeout=2700,
         )
+        machine.execute("systemctl stop otel-collector.service")
+        otel_status, otel_output = machine.execute(
+          "test -s /var/lib/jaunder/capture/otel-traces.jsonl"
+          + " && install -D /var/lib/jaunder/capture/otel-traces.jsonl"
+          + " /var/lib/jaunder/performance/fragments/diagnostics/otel-traces.jsonl 2>&1"
+        )
         machine.succeed(
           "mkdir -p /var/lib/jaunder/performance/diagnostics"
           + " && cp -r /tmp/e2e/test-results"
           + " /var/lib/jaunder/performance/diagnostics/playwright-test-results 2>/dev/null || true"
         )
-        if browser_status == 0:
+        if browser_status != 0:
+          producer_ok = False
+          producer_detail = browser_output
+        elif otel_status != 0:
+          producer_ok = False
+          producer_detail = (
+            "correlated OTLP trace unavailable (exit %d): %s"
+            % (otel_status, otel_output)
+          )
+        else:
           browser_validation_status, browser_validation_output = machine.execute(
             "devtool performance validate-browser"
             + " --manifest /var/lib/jaunder/performance/dataset-manifest-v1.json"
             + " --input /var/lib/jaunder/performance/fragments/browser-${backend}-${selectedBrowser}-v1.json"
-            + " --output /var/lib/jaunder/performance/fragments"
+            + " --output /var/lib/jaunder/performance/fragments 2>&1"
           )
           producer_ok = browser_validation_status == 0
           producer_detail = browser_validation_output
-        else:
-          producer_ok = False
-          producer_detail = browser_output
         machine.succeed(
           "printf %s "
           + shlex.quote(json.dumps({

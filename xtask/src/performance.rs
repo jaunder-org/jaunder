@@ -573,6 +573,7 @@ fn validate_diagnostic_artifacts(
         .navigation_artifacts
         .iter()
         .chain(&diagnostics.trace_artifacts)
+        .chain(std::iter::once(&diagnostics.otel_trace_artifact))
     {
         let path = Path::new(reference);
         ensure!(
@@ -830,9 +831,11 @@ mod tests {
         fs::create_dir_all(&fragments).expect("fragment directory");
         fs::write(fragments.join("navigation.json"), "").expect("navigation artifact");
         fs::write(fragments.join("trace.zip"), "").expect("trace artifact");
+        fs::write(fragments.join("otel-traces.jsonl"), "").expect("OTel trace artifact");
         let diagnostics = BrowserDiagnostics {
             navigation_artifacts: vec!["navigation.json".into()],
             trace_artifacts: vec!["trace.zip".into()],
+            otel_trace_artifact: "otel-traces.jsonl".into(),
         };
 
         validate_diagnostic_artifacts(producer.path(), &diagnostics)
@@ -841,12 +844,14 @@ mod tests {
         let traversal = BrowserDiagnostics {
             navigation_artifacts: vec!["../navigation.json".into()],
             trace_artifacts: vec!["trace.zip".into()],
+            otel_trace_artifact: "otel-traces.jsonl".into(),
         };
         assert!(validate_diagnostic_artifacts(producer.path(), &traversal).is_err());
 
         let missing = BrowserDiagnostics {
             navigation_artifacts: vec!["navigation.json".into()],
             trace_artifacts: vec!["missing.zip".into()],
+            otel_trace_artifact: "otel-traces.jsonl".into(),
         };
         assert!(validate_diagnostic_artifacts(producer.path(), &missing).is_err());
     }

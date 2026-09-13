@@ -273,6 +273,7 @@ pub struct StorageFragment {
 pub struct BrowserDiagnostics {
     pub navigation_artifacts: Vec<String>,
     pub trace_artifacts: Vec<String>,
+    pub otel_trace_artifact: String,
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct BrowserFragment {

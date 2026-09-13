@@ -101,8 +101,10 @@ pub fn assemble_run(
                 let expected_artifacts = fragment.workloads.len() * 20;
                 let navigation = &fragment.diagnostics.navigation_artifacts;
                 let traces = &fragment.diagnostics.trace_artifacts;
+                let otel_trace = &fragment.diagnostics.otel_trace_artifact;
                 if navigation.len() != expected_artifacts
                     || traces.len() != expected_artifacts
+                    || otel_trace.trim().is_empty()
                     || navigation
                         .iter()
                         .chain(traces)
@@ -779,6 +781,7 @@ mod tests {
                     trace_artifacts: (0..workloads.len() * 20)
                         .map(|index| format!("trace-{index}.zip"))
                         .collect(),
+                    otel_trace_artifact: "otel-traces.jsonl".into(),
                 },
                 workloads,
             }),
@@ -1051,10 +1054,17 @@ mod tests {
             BrowserDiagnostics {
                 navigation_artifacts: vec![" ".into()],
                 trace_artifacts: vec!["trace.json".into()],
+                otel_trace_artifact: "otel-traces.jsonl".into(),
             },
             BrowserDiagnostics {
                 navigation_artifacts: vec![],
                 trace_artifacts: vec!["trace.json".into()],
+                otel_trace_artifact: "otel-traces.jsonl".into(),
+            },
+            BrowserDiagnostics {
+                navigation_artifacts: vec![],
+                trace_artifacts: vec![],
+                otel_trace_artifact: " ".into(),
             },
         ] {
             let fragment = FragmentEnvelope {

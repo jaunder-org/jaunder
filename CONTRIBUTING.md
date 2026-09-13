@@ -802,7 +802,8 @@ identity; it never restores or publishes measurement derivations or result
 outputs through a cache. Inspect the invocation-owned evidence under
 `.xtask/performance/<nonce>/`: `performance-result-v1.json` is the authoritative
 combined result, `fragments/` holds producer fragments, and the producer
-directories retain derivation evidence and diagnostics. Before xtask reports a
+directories retain derivation evidence, per-sample navigation/Playwright traces,
+and the correlated server/storage `otel-traces.jsonl`. Before xtask reports a
 measured-workload or validation failure, its producer retains
 `producer-status-v1.json` plus the available evidence. The same validated result
 is atomically copied to `.xtask/performance/performance-result-v1.json` as the

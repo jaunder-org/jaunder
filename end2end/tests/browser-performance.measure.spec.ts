@@ -266,6 +266,7 @@ test("emits browser performance fragment from the authoritative manifest", async
   const diagnostics = {
     navigation_artifacts: [] as string[],
     trace_artifacts: [] as string[],
+    otel_trace_artifact: "diagnostics/otel-traces.jsonl",
   };
   const workloads = [];
 

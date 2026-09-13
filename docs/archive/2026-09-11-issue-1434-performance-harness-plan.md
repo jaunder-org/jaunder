@@ -78,7 +78,7 @@ incompatible formats the integrated design is intended to prevent.
     stored observations, and run the small fixture smoke against SQLite and
     PostgreSQL.
 
-- [ ] Task 3: Produce direct storage measurements in `devtool`
+- [x] Task 3: Produce direct storage measurements in `devtool`
   - Contract: add the sandbox-side `devtool` storage producer, consuming the
     Task 2 manifest and real storage APIs to emit the storage fragment. It
     measures initial-page, 80-percent-cursor, and revision-detail workloads with
@@ -87,7 +87,7 @@ incompatible formats the integrated design is intended to prevent.
     returned, cold/warm separation, point-versus-pagination semantics, failure
     propagation, and schema-valid small fragments against SQLite and PostgreSQL.
 
-- [ ] Task 4: Produce semantic browser measurements
+- [x] Task 4: Produce semantic browser measurements
   - Contract: add a focused performance Playwright surface that consumes the
     Task 2 manifest, uses existing authentication/seeding and `createPerfProbe`
     conventions, and emits 20 fresh-context Node action-to-ready samples for
@@ -100,7 +100,7 @@ incompatible formats the integrated design is intended to prevent.
     every semantic-ready boundary, exact workload/sample identities, trace
     correlation, absence of pre-warming, and PII-safe emitted attributes.
 
-- [ ] Task 5: Orchestrate fresh runs, comparisons, and trusted baseline import
+- [x] Task 5: Orchestrate fresh runs, comparisons, and trusted baseline import
   - Contract: add the approved `cargo xtask perf <profile>` surface with
     backend/browser and storage-only/browser-only selectors. It supplies a
     per-invocation freshness nonce included in the Nix derivation identity,
@@ -117,7 +117,7 @@ incompatible formats the integrated design is intended to prevent.
     identities and fresh measurement timestamps; each selector mode runs as an
     actual smoke path.
 
-- [ ] Task 6: Integrate the pinned performance workflow and operator
+- [x] Task 6: Integrate the pinned performance workflow and operator
       documentation
   - Contract: add a performance workflow for manual dispatch, weekly schedule,
     and explicitly labeled pull requests; serialize benchmark jobs, pass GitHub

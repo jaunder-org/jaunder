@@ -49,5 +49,6 @@ jobs:
         with:
           name: performance-result
           path: .xtask/performance/
-          if-no-files-found: ignore
+          if-no-files-found: error
+          include-hidden-files: true
           retention-days: 30

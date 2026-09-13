@@ -277,7 +277,7 @@ async fn create_audiences(
                 })
             })
             .await
-            .map_err(|error| anyhow::anyhow!("creating audiences: {error:?}"))?;
+            .context("creating audiences")?;
         let common::MutationOutcome::Confirmed(ids) = outcome else {
             bail!("audience creation commit acknowledgement was indeterminate");
         };
@@ -317,7 +317,7 @@ async fn populate_audience_memberships(
                 })
             })
             .await
-            .map_err(|error| anyhow::anyhow!("adding audience members: {error:?}"))?;
+            .context("adding audience members")?;
         if !matches!(outcome, common::MutationOutcome::Confirmed(())) {
             bail!("audience membership commit acknowledgement was indeterminate");
         }
