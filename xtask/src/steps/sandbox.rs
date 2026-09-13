@@ -883,7 +883,7 @@ fn prepare_workspace(
                 .arg(database_url(workspace))
                 .args(["--profile", profile.as_str(), "--storage-path"])
                 .arg(workspace)
-                .stdout(StdioMode::Inherit)
+                .stdout(StdioMode::Null)
                 .stderr(StdioMode::Inherit),
         )
         .context("running sandbox profile seed")?;
