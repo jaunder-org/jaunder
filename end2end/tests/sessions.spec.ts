@@ -24,7 +24,7 @@ test("sessions page revokes another browser session", async ({
   try {
     const otherPage = await otherContext.newPage();
     await signInAs(otherPage, username, REVOKED_SESSION_LABEL);
-    await goto(otherPage, "/");
+    await goto(otherPage, "/profile");
     await waitForSelector(otherPage, SEL.logoutLink);
 
     await goto(page, "/sessions");

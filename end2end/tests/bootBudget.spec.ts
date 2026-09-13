@@ -66,7 +66,7 @@ test("registeredPage refuses a second call", async ({ registeredPage }) => {
 });
 
 test("the fixture arms every test page", async ({ registeredPage }) => {
-  const page = await registeredPage("/");
+  const page = await registeredPage("/app");
   expect(bootCount(page)).toBe(1);
 });
 
@@ -74,7 +74,7 @@ test("a traced second page is armed and explicit arming is idempotent", async ({
   registeredPage,
   tracedContext,
 }) => {
-  await registeredPage("/");
+  await registeredPage("/app");
   const context = await tracedContext();
   try {
     const other = await context.newPage();

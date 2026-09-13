@@ -77,6 +77,7 @@ const ROUTES: {
 for (const route of ROUTES) {
   test(`${route.name} : projector paint does not shift across mount`, async ({
     page,
+    tracedContext,
   }, testInfo) => {
     // Seed a fresh user and publish one short post tagged with their own
     // username. The username is unique per run, so it doubles as a collision-free
@@ -86,35 +87,42 @@ for (const route of ROUTES) {
     const username = await signInAsNewUser(page);
     await createPostViaApi(page, { body: "cls probe", tags: [username] });
 
-    await expectNoShiftAcrossMount(page, {
-      url: route.url(username),
-      targets: (p) => [
-        { name: "chrome", locator: p.locator(route.chrome) },
-        // Scoped by the author handle rendered at `posts/render.rs:203`, so a
-        // concurrent worker's post cannot be measured by mistake.
-        ...(route.measureRow
-          ? [
-              {
-                name: "own post head",
-                locator: p
-                  .locator(".j-post", {
-                    has: p.locator(".j-post-handle", {
-                      hasText: `@${username}`,
-                    }),
-                  })
-                  .locator(".j-post-head"),
-              },
-            ]
-          : []),
-      ],
-      afterMount: async (p) => {
-        // Proves the reactive tree really mounted, so a zero-shift result cannot be
-        // a frozen-projector no-op. `.j-scroll` is emitted only by `TimelineRows`.
-        await expect(p.locator(".j-scroll").first()).toBeVisible({
-          timeout: slowBrowserTimeoutMs(testInfo, 10_000),
-        });
-      },
-      tolerancePx: 0,
-    });
+    const guestContext = route.name === "/" ? await tracedContext() : undefined;
+    const probePage =
+      guestContext === undefined ? page : await guestContext.newPage();
+    try {
+      await expectNoShiftAcrossMount(probePage, {
+        url: route.url(username),
+        targets: (p) => [
+          { name: "chrome", locator: p.locator(route.chrome) },
+          // Scoped by the author handle rendered at `posts/render.rs:203`, so a
+          // concurrent worker's post cannot be measured by mistake.
+          ...(route.measureRow
+            ? [
+                {
+                  name: "own post head",
+                  locator: p
+                    .locator(".j-post", {
+                      has: p.locator(".j-post-handle", {
+                        hasText: `@${username}`,
+                      }),
+                    })
+                    .locator(".j-post-head"),
+                },
+              ]
+            : []),
+        ],
+        afterMount: async (p) => {
+          // Proves the reactive tree really mounted, so a zero-shift result cannot be
+          // a frozen-projector no-op. `.j-scroll` is emitted only by `TimelineRows`.
+          await expect(p.locator(".j-scroll").first()).toBeVisible({
+            timeout: slowBrowserTimeoutMs(testInfo, 10_000),
+          });
+        },
+        tolerancePx: 0,
+      });
+    } finally {
+      await guestContext?.close();
+    }
   });
 }

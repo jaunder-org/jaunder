@@ -37,7 +37,7 @@ test("valid marker: root redirects to Home before Local paints", async ({
   );
   allowEngineDependentBoot(
     page,
-    "/",
+    "/app",
     "the root document can commit before its blocking head script replaces it, depending on engine timing",
   );
   // e2e-goto-wrapper:allow the blocking root redirect is the behavior under test.
@@ -295,7 +295,7 @@ test("recognized oldest order is the only root query state carried to Home", asy
   await signInAsNewUser(page);
   allowEngineDependentBoot(
     page,
-    "/",
+    "/app",
     "the root document can commit before the blocking head script replaces it",
   );
   // e2e-goto-wrapper:allow the blocking root redirect canonicalization is the behavior under test.
@@ -310,7 +310,7 @@ test("unrecognized root order redirects to canonical Home", async ({
   await signInAsNewUser(page);
   allowEngineDependentBoot(
     page,
-    "/",
+    "/app",
     "the root document can commit before the blocking head script replaces it",
   );
   // e2e-goto-wrapper:allow the blocking root redirect canonicalization is the behavior under test.
@@ -384,7 +384,7 @@ test("stale marker reaches login through Home without a redirect loop", async ({
   });
   allowEngineDependentBoot(
     page,
-    "/",
+    "/app",
     "the root document can commit before the blocking stale-marker redirect",
   );
   // e2e-goto-wrapper:allow the stale-marker redirect chain is the behavior under test.

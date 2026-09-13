@@ -24,7 +24,7 @@ const APP_LINK = 'a[href="/app"]';
 test("an in-app move changes route without a document load", async ({
   registeredPage,
 }) => {
-  const page = await registeredPage("/");
+  const page = await registeredPage("/profile");
   let loads = 0;
   page.on("domcontentloaded", () => {
     loads += 1;
@@ -42,7 +42,7 @@ test("an in-app move changes route without a document load", async ({
 test("Compose sidebar navigation reaches the full composer without a document load", async ({
   registeredPage,
 }) => {
-  const page = await registeredPage("/");
+  const page = await registeredPage("/app");
   let loads = 0;
   page.on("domcontentloaded", () => {
     loads += 1;
@@ -62,7 +62,7 @@ test("Compose sidebar navigation reaches the full composer without a document lo
 test("it fails loudly when the destination never renders", async ({
   registeredPage,
 }) => {
-  const page = await registeredPage("/");
+  const page = await registeredPage("/profile");
   await expect(
     navigateInApp(page, () => page.click(APP_LINK), {
       url: "/app",
@@ -75,7 +75,7 @@ test("it fails loudly when the destination never renders", async ({
 test("it rejects a barrier that is already satisfied", async ({
   registeredPage,
 }) => {
-  const page = await registeredPage("/");
+  const page = await registeredPage("/profile");
   await expect(
     navigateInApp(page, () => page.click(APP_LINK), {
       url: "/app",

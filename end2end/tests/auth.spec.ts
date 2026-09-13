@@ -224,7 +224,7 @@ test("logout navigates client-side without a full document reload", async ({
 }) => {
   // Seeded session (login-as-setup); the logout itself is the subject.
   await signInAs(page, user.username);
-  await goto(page, "/");
+  await goto(page, "/app");
   await page.evaluate(() => {
     (window as Window & { __jaunderNoReload?: boolean }).__jaunderNoReload =
       true;
@@ -259,7 +259,7 @@ test("logout page logs out", async ({ page, user }) => {
   // flow ends signed-out at "/"; the LogoutPage render carries no success branch.
   // Seeded session (login-as-setup); the logout itself is the subject.
   await signInAs(page, user.username);
-  await goto(page, "/");
+  await goto(page, "/app");
 
   // Use the rendered logout link to avoid Firefox navigation abort races.
   await click(page, SEL.logoutLink);
@@ -278,7 +278,7 @@ test("sidebar reverts to signed-out state after logout", async ({
 }) => {
   // Seeded session (login-as-setup); the logout itself is the subject.
   await signInAs(page, user.username);
-  await goto(page, "/");
+  await goto(page, "/app");
   // a[href='/logout'] only renders when auth Suspense resolves, confirming the
   // user is shown.
   await expect(page.locator(".j-sb-foot")).toContainText(user.username);

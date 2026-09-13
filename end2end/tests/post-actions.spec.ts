@@ -91,7 +91,7 @@ test("owned Post Actions stay per-Post across supported routes", async ({
   await createPostViaApi(page, {
     body: "# Second route actions probe\n\nSecond",
   });
-  await goto(page, "/", { timeout: firstNav });
+  await goto(page, `/~${username}`, { timeout: firstNav });
 
   const expectRouteActions = async (expectedPosts: number) => {
     const ownPosts = page.locator("article.j-post", {
