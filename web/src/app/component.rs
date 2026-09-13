@@ -8,8 +8,8 @@ use crate::auth::{LoginPage, LogoutPage};
 use crate::backup::{BackupBanner, BackupSettingsPage};
 use crate::cockpit::CockpitPage;
 use crate::email::{EmailPage, VerifyEmailPage};
-use crate::home::HomePage;
 use crate::invites::InvitesPage;
+use crate::local::LocalPage;
 use crate::media::MediaPage;
 use crate::password_reset::{ForgotPasswordPage, ResetPasswordPage};
 use crate::posts::{
@@ -414,9 +414,9 @@ pub fn App() -> impl IntoView {
         <Router>
             <Routes fallback=|| "Page not found.".into_view()>
                 <ParentRoute path=StaticSegment("") view=AppShell>
-                    <Route path=StaticSegment("") view=HomePage />
-                    // The authed-only cockpit (#181, ADR-0044 D6): the relocated
-                    // home Feed. Static "app" wins over the ParamSegment username route.
+                    <Route path=StaticSegment("") view=LocalPage />
+                    // Home is the authenticated publishing cockpit. Static "app" wins
+                    // over the ParamSegment username route.
                     <Route path=StaticSegment("app") view=CockpitPage />
                     <Route path=StaticSegment("register") view=RegisterPage />
                     <Route path=StaticSegment("login") view=LoginPage />

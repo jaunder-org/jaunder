@@ -50,5 +50,5 @@ sequenceDiagram
     Invitee->>Register: submit username/password + invite_code
     Register->>Atomic: create user and redeem invite
     Register->>Sessions: create sign-up session
-    Register-->>Invitee: Set-Cookie + redirect("/")
+    Register-->>Invitee: Set-Cookie + redirect("/app")
 ```

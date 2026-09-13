@@ -130,7 +130,7 @@ wire_contract! {
     web::timeline::ListByTag => "timeline" / "list_by_tag",
     web::timeline::ListByUser => "timeline" / "list_by_user",
     web::timeline::ListByUserAndTag => "timeline" / "list_by_user_and_tag",
-    web::timeline::ListHomeFeed => "timeline" / "list_home_feed",
+    web::timeline::ListHomeTimeline => "timeline" / "list_home_timeline",
     web::timeline::ListLocalTimeline => "timeline" / "list_local_timeline",
 }
 

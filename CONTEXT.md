@@ -33,6 +33,17 @@ uploads (the policy is cross-protocol), magic zero.
 
 ### Presentation
 
+**Local**: The public, viewer-independent web timeline at `/`, containing
+currently published public Posts originating on the Jaunder instance. It is the
+signed-out landing surface; a browser carrying an authentication marker
+redirects to Home before Local content paints. _Avoid_: Home (the authenticated
+publishing cockpit), feed (reserved for syndication).
+
+**Home**: The authenticated publishing cockpit at `/app`, containing the current
+User's own published Posts and inline composer. It is not a followed source or
+reading timeline. _Avoid_: Feed (reserved for Syndication Feeds), Local (the
+public instance timeline).
+
 **Style Contract**: The versioned semantic HTML surface shared by Jaunder's
 built-in and custom public themes. It guarantees accessible source order,
 landmarks, and named concept hooks, not incidental wrapper nesting or sibling

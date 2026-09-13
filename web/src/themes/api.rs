@@ -1096,7 +1096,6 @@ pub async fn preview(scope: OwnershipScope, theme_id: ThemeId) -> WebResult<Them
                 order: common::seed::TimelineOrder::Newest,
                 page: crate::timeline::fetch_local_timeline(
                     expect_context::<Arc<dyn PostStorage>>().as_ref(),
-                    &viewer,
                     None,
                     common::seed::TimelineOrder::Newest,
                     None,

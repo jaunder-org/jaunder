@@ -21,7 +21,7 @@ use crate::posts::PostCard;
 use crate::taglist::TagCtx;
 
 /// wasm-only load-more: fetch the next page with the current cursor and append
-/// it. `fetch` is the page's list fn (`list_local_timeline` / `list_home_feed`).
+/// it. `fetch` is the page's list fn (`list_local_timeline` / `list_home_timeline`).
 pub fn spawn_load_more<F, Fut>(state: TimelineState, fetch: F)
 where
     F: FnOnce(Option<TimelineCursor>, Option<PageSize>) -> Fut + 'static,

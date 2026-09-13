@@ -36,7 +36,7 @@ fn finalize_login(
         MutationOutcome::Confirmed((raw_token, session)) => {
             metrics::login(LoginOutcome::Success);
             server::set_session_cookie(&raw_token);
-            leptos_axum::redirect("/");
+            leptos_axum::redirect("/app");
             MutationOutcome::Confirmed(session)
         }
         MutationOutcome::CommitIndeterminate((raw_token, session)) => {

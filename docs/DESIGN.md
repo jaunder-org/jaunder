@@ -35,8 +35,10 @@ uses cursor-based pagination (see [ADR-0004](adr/0004-pagination-strategy.md))
 and lets the viewer choose Newest or Oldest publication order through URL state
 (see [web Post timeline ordering](adr/0190-web-post-timeline-ordering.md)):
 
-- **Local timeline** (public): Original Posts by local Users.
-- **Home feed** (authenticated): The signed-in User's own published Posts.
+- **Local** (public `/`): Viewer-independent public Posts originating from local
+  Users; it is the signed-out landing surface.
+- **Home** (authenticated `/app`): The signed-in User's own published Posts and
+  inline composer. Auth-marked visits to `/` redirect here before Local paints.
 - **User timeline** (public): Original Posts by a specific local User.
 - **Site-tag timeline** (public): Visible Posts carrying a Tag across the site.
 - **User-tag timeline** (public): Visible Posts carrying a Tag from one local

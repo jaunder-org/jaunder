@@ -102,7 +102,7 @@ fn authed_sidebar(
     let username = username.clone();
     view! {
         <div class="j-contents">
-            <a class="j-brand" href="/">
+            <a class="j-brand" href="/app">
                 <div class="j-brand-mark">"j"</div>
                 <div class="j-brand-text">"Jaunder"</div>
             </a>
@@ -112,7 +112,7 @@ fn authed_sidebar(
                 <span class="j-kbd">"⌘K"</span>
             </div>
             <nav class="j-nav" data-jaunder-part="primary-navigation">
-                {markup::nav_items(policy, is_operator)
+                {markup::nav_items(policy, is_operator, true)
                     .map(|item| {
                         let is_active = item.key == active_key.as_str();
                         view! {

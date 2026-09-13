@@ -13,8 +13,8 @@
 //! coverage-measured; the `#[cfg(test)] mod tests` below are the coincidence
 //! tests that protect the byte-identical output.
 
-use crate::home::render;
 use crate::html::Markup;
+use crate::local::render;
 use crate::taglist::TagCtx;
 use crate::{avatar, taglist, topbar};
 use common::display_name::DisplayName;
@@ -289,10 +289,10 @@ fn post_action_slot(post_id: PostId) -> Markup {
 }
 
 /// A timeline page's `<main>` content: the given leading `chrome` (a `Topbar`, or
-/// home's masthead), then a bare `j-scroll` holding the pure order control
+/// Local's masthead), then a bare `j-scroll` holding the pure order control
 /// immediately above either the empty placeholder or post list and load-more
 /// button — the same structure the shared `TimelineRows` renders, so projector
-/// paint and the reactive `HomePage` / `UserTimelinePage` / `SiteTagPage` /
+/// paint and the reactive `LocalPage` / `UserTimelinePage` / `SiteTagPage` /
 /// `UserTagPage` coincide (the anonymous `SubscribeButton` renders nothing).
 #[must_use]
 fn render_timeline_page(
@@ -634,7 +634,7 @@ mod tests {
     }
 
     #[test]
-    fn home_local_body_has_topbar_hero_signin_and_posts() {
+    fn local_body_has_topbar_hero_signin_and_posts() {
         let html = body(&PageSeed::SiteTimeline {
             order: common::seed::TimelineOrder::Newest,
             page: one_post_page(),

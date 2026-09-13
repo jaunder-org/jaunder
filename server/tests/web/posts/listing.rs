@@ -54,7 +54,7 @@ async fn list_user_posts_by_tag(
     .await
 }
 
-async fn list_home_feed_in_order(
+async fn list_home_timeline_in_order(
     app: Router,
     order: TimelineOrder,
     cursor: Option<TimelineCursor>,
@@ -63,7 +63,7 @@ async fn list_home_feed_in_order(
 ) -> (StatusCode, String) {
     post_json(
         app,
-        <web::timeline::ListHomeFeed as ServerFn>::PATH,
+        <web::timeline::ListHomeTimeline as ServerFn>::PATH,
         serde_json::json!({
             "request": { "order": order, "cursor": cursor, "limit": limit },
         }),
@@ -422,8 +422,8 @@ async fn list_scheduled_returns_current_user_future_posts_ordered_by_schedule(
     serde_json::json!({ "request": { "order": "newest", "cursor": { "published_at": "2026-04-16T10:11:12+00:00" }, "limit": 10 } }),
     serde_json::json!({ "request": { "order": "newest", "cursor": { "published_at": "bad-time", "post_id": 12 }, "limit": 10 } })
 )]
-#[case::list_home_feed(
-    <web::timeline::ListHomeFeed as ServerFn>::PATH,
+#[case::list_home_timeline(
+    <web::timeline::ListHomeTimeline as ServerFn>::PATH,
     serde_json::json!({ "request": { "order": "newest", "cursor": { "published_at": "2026-04-16T10:11:12+00:00" }, "limit": 10 } }),
     serde_json::json!({ "request": { "order": "newest", "cursor": { "published_at": "bad-time", "post_id": 12 }, "limit": 10 } })
 )]
@@ -527,8 +527,8 @@ async fn timeline_rejects_a_cursor_from_the_opposite_order(#[case] backend: Back
             None,
         ),
         (
-            "home feed",
-            <web::timeline::ListHomeFeed as ServerFn>::PATH,
+            "Home timeline",
+            <web::timeline::ListHomeTimeline as ServerFn>::PATH,
             serde_json::json!({
                 "request": {
                     "order": "oldest",
@@ -858,7 +858,9 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
 
 #[apply(backends)]
 #[tokio::test]
-async fn list_home_feed_returns_authenticated_users_published_posts_only(#[case] backend: Backend) {
+async fn list_home_timeline_returns_authenticated_users_published_posts_only(
+    #[case] backend: Backend,
+) {
     let env = backend.setup().await;
     let app = make_app!(&env, &env.base);
     let author = create_user_and_session(
@@ -925,7 +927,7 @@ async fn list_home_feed_returns_authenticated_users_published_posts_only(#[case]
         };
 
         let (status, body) =
-            list_home_feed_in_order(app.clone(), order, None, 50, Some(&author_cookie)).await;
+            list_home_timeline_in_order(app.clone(), order, None, 50, Some(&author_cookie)).await;
         assert_eq!(status, StatusCode::OK, "body: {body}");
         let first_page: Page<RenderedPost, TimelineCursor> = serde_json::from_str(&body).unwrap();
         assert_eq!(first_page.posts.len(), 50, "body: {body}");
@@ -951,7 +953,7 @@ async fn list_home_feed_returns_authenticated_users_published_posts_only(#[case]
         assert_eq!(first_page_ids, expected_ids[..50], "body: {body}");
 
         let (status, body) =
-            list_home_feed_in_order(app.clone(), order, Some(cursor), 50, Some(&author_cookie))
+            list_home_timeline_in_order(app.clone(), order, Some(cursor), 50, Some(&author_cookie))
                 .await;
         assert_eq!(status, StatusCode::OK, "body: {body}");
         let second_page: Page<RenderedPost, TimelineCursor> = serde_json::from_str(&body).unwrap();

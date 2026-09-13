@@ -82,7 +82,7 @@ fn finalize_registration(outcome: MutationOutcome<RawToken>) -> MutationOutcome<
     match outcome {
         MutationOutcome::Confirmed(raw_token) => {
             auth::set_session_cookie(&raw_token);
-            leptos_axum::redirect("/");
+            leptos_axum::redirect("/app");
             MutationOutcome::Confirmed(())
         }
         MutationOutcome::CommitIndeterminate(raw_token) => {

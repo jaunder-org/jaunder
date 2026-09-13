@@ -17,23 +17,21 @@ pub(super) struct NavItem {
     pub(super) requires_operator: bool,
 }
 
-pub(super) static NAV_ITEMS: LazyLock<[NavItem; 19]> = LazyLock::new(|| {
+pub(super) static NAV_ITEMS: LazyLock<[NavItem; 18]> = LazyLock::new(|| {
     [
         NavItem {
-            key: "home",
-            label: "Home",
-            icon_path: Icons::HOME,
+            key: "local",
+            label: "Local",
+            icon_path: Icons::LOCAL,
             href: Some(root_relative_url("/")),
             requires_auth: false,
             requires_operator: false,
         },
-        // The authed-only cockpit (#181, ADR-0044 D6): the owner's personalized feed at
-        // /app. `requires_auth` keeps it out of the cacheable anonymous sidebar
-        // (`render_sidebar` filters `href.is_some() && !requires_auth`) — it appears
-        // only in the authed sidebar, so the projector's anonymous paint is unchanged.
+        // The authenticated cockpit is deliberately absent from the public
+        // projector's navigation; authenticated chrome exposes it as Home.
         NavItem {
-            key: "app",
-            label: "Feed",
+            key: "home",
+            label: "Home",
             icon_path: Icons::HOME,
             href: Some(root_relative_url("/app")),
             requires_auth: true,
@@ -44,14 +42,6 @@ pub(super) static NAV_ITEMS: LazyLock<[NavItem; 19]> = LazyLock::new(|| {
             label: "Compose",
             icon_path: Icons::EDIT,
             href: Some(root_relative_url("/posts/new")),
-            requires_auth: true,
-            requires_operator: false,
-        },
-        NavItem {
-            key: "local",
-            label: "Local",
-            icon_path: Icons::LOCAL,
-            href: None,
             requires_auth: true,
             requires_operator: false,
         },
@@ -187,14 +177,21 @@ fn root_relative_url(path: &'static str) -> RootRelativeUrl {
     url
 }
 
-/// Returns linked items visible to an authenticated viewer for the projected policy and role.
+/// Returns linked items visible to a viewer for the projected authentication,
+/// registration-policy, and operator state.
 pub(super) fn nav_items(
     policy: RegistrationPolicy,
     is_operator: bool,
+    is_authenticated: bool,
 ) -> impl Iterator<Item = &'static NavItem> {
     NAV_ITEMS.iter().filter(move |item| {
-        item.href.is_some()
-            && (!item.requires_operator || is_operator)
+        let has_access = if is_authenticated {
+            item.requires_auth && (!item.requires_operator || is_operator)
+        } else {
+            !item.requires_auth && !item.requires_operator
+        };
+        has_access
+            && item.href.is_some()
             && (item.key != "invites" || policy.may_issue_invitation(is_operator))
     })
 }
@@ -211,11 +208,11 @@ pub(crate) fn active_key(pathname: &str) -> Option<&'static str> {
 }
 
 /// The inner HTML of the **anonymous** `<aside class="j-sidebar">`: brand, search,
-/// the public nav (items with an href and no auth requirement — just "Home"), and
+/// the public nav (items with an href and no auth requirement — just "Local"), and
 /// an empty footer. The reactive [`crate::sidebar::Sidebar`] injects this verbatim
 /// via `inner_html` for the anonymous viewer, so a seeded first paint and the
-/// reactive re-render coincide; authed users get the reactive build (extra nav,
-/// footer avatar) layered on top (#181).
+/// reactive re-render coincide; authenticated users get the reactive build (extra
+/// nav, footer avatar) layered on top (#181).
 #[must_use]
 pub(crate) fn render_sidebar(active_key: &str) -> Markup {
     Markup::new(html! {
@@ -229,15 +226,13 @@ pub(crate) fn render_sidebar(active_key: &str) -> Markup {
             span class="j-kbd" { "\u{2318}K" }
         }
         nav class="j-nav" data-jaunder-part="primary-navigation" {
-            @for item in nav_items(RegistrationPolicy::Closed, false) {
+            @for item in nav_items(RegistrationPolicy::Closed, false, false) {
                 @if let Some(href) = &item.href {
-                    @if !item.requires_auth {
-                        a class={ "j-nav-item" @if item.key == active_key { " is-active" } }
-                            href=(href)
-                        {
-                            (icon::render(item.icon_path, 16))
-                            span { (item.label) }
-                        }
+                    a class={ "j-nav-item" @if item.key == active_key { " is-active" } }
+                        href=(href)
+                    {
+                        (icon::render(item.icon_path, 16))
+                        span { (item.label) }
                     }
                 }
             }
@@ -251,27 +246,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sidebar_renders_brand_public_nav_without_fabricated_sources() {
-        let markup = render_sidebar("home");
+    fn sidebar_renders_local_as_the_sole_anonymous_destination() {
+        let markup = render_sidebar("local");
         let html = markup.as_str();
         assert!(
             html.contains("<div class=\"j-brand-text\">Jaunder</div>"),
             "{html}"
         );
-        // Public nav = Home only; active class applied for the matching key.
         assert!(
             html.contains("<a class=\"j-nav-item is-active\" href=\"/\">"),
             "{html}"
         );
-        assert!(html.contains("<span>Home</span>"), "{html}");
-        // Auth-required items and non-link placeholders must NOT appear for the
-        // anonymous sidebar.
-        assert_eq!(
-            html.matches("data-jaunder-part=\"primary-navigation\"")
-                .count(),
-            1,
-            "{html}"
-        );
+        assert!(html.contains("<span>Local</span>"), "{html}");
+        assert!(!html.contains(">Home<"), "{html}");
         assert!(!html.contains(">Feed<"), "{html}");
         assert!(!html.contains(">Compose<"), "{html}");
         assert!(!html.contains(">Drafts<"), "{html}");
@@ -281,22 +268,17 @@ mod tests {
         assert!(!html.contains(">Configure Backups<"), "{html}");
         assert!(!html.contains(">Site Settings<"), "{html}");
         assert!(!html.contains(">WebSub Recovery<"), "{html}");
-        // No source-following capability is advertised without real source data.
-        let compose = NAV_ITEMS
-            .iter()
-            .find(|item| item.key == "compose")
-            .expect("Compose catalog item");
-        assert_eq!(compose.label, "Compose");
-        assert_eq!(compose.icon_path, Icons::EDIT);
-        assert_eq!(compose.href.as_deref(), Some("/posts/new"));
-
-        assert!(!html.contains(">Sources<"), "{html}");
-        assert!(!html.contains(">Bluesky<"), "{html}");
+        assert_eq!(
+            html.matches("data-jaunder-part=\"primary-navigation\"")
+                .count(),
+            1,
+            "{html}"
+        );
         assert!(html.ends_with("<div class=\"j-sb-foot\"></div>"), "{html}");
     }
 
     #[test]
-    fn sidebar_active_class_absent_for_non_home_route() {
+    fn sidebar_active_class_absent_for_non_local_route() {
         let markup = render_sidebar("tags");
         let html = markup.as_str();
         assert!(
@@ -306,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn nav_catalog_places_compose_after_feed_and_hides_it_from_anonymous_navigation() {
+    fn nav_catalog_exposes_home_only_to_authenticated_navigation() {
         let destinations = NAV_ITEMS
             .iter()
             .filter_map(|item| item.href.as_deref().map(|href| (item.key, href)))
@@ -314,8 +296,8 @@ mod tests {
         assert_eq!(
             destinations,
             [
-                ("home", "/"),
-                ("app", "/app"),
+                ("local", "/"),
+                ("home", "/app"),
                 ("compose", "/posts/new"),
                 ("drafts", "/drafts"),
                 ("scheduled", "/scheduled"),
@@ -332,12 +314,14 @@ mod tests {
             ]
         );
 
-        let viewer_items = nav_items(RegistrationPolicy::Closed, false)
+        let authenticated = nav_items(RegistrationPolicy::Closed, false, true)
             .map(|item| item.key)
             .collect::<Vec<_>>();
-        assert!(viewer_items.contains(&"compose"));
+        assert!(authenticated.contains(&"home"));
+        assert!(!authenticated.contains(&"local"));
         let anonymous = render_sidebar("").into_string();
-        assert!(!anonymous.contains(">Compose<"), "{anonymous}");
+        assert!(anonymous.contains(">Local<"), "{anonymous}");
+        assert!(!anonymous.contains(">Home<"), "{anonymous}");
     }
 
     #[test]
@@ -348,7 +332,7 @@ mod tests {
             };
             assert_eq!(active_key(href), Some(item.key), "{href}");
         }
-        assert_eq!(active_key("/"), Some("home"));
+        assert_eq!(active_key("/"), Some("local"));
         assert_eq!(active_key("/posts/new"), Some("compose"));
         assert_eq!(active_key("/posts/new/revisions"), None);
         assert_eq!(active_key("/unknown"), None);
@@ -356,14 +340,14 @@ mod tests {
 
     #[test]
     fn operator_destinations_are_visible_only_to_operators() {
-        let viewer_items = nav_items(RegistrationPolicy::Closed, false)
+        let viewer_items = nav_items(RegistrationPolicy::Closed, false, true)
             .map(|item| item.key)
             .collect::<Vec<_>>();
         assert!(!viewer_items.contains(&"admin-backups"));
         assert!(!viewer_items.contains(&"admin-site"));
         assert!(!viewer_items.contains(&"admin-smtp"));
 
-        let operator_items = nav_items(RegistrationPolicy::Closed, true)
+        let operator_items = nav_items(RegistrationPolicy::Closed, true, true)
             .map(|item| {
                 let Some(href) = item.href.as_ref() else {
                     unreachable!("nav_items returns linked items");
@@ -400,7 +384,7 @@ mod tests {
         ];
 
         for (policy, is_operator, expected) in cases {
-            let visible = nav_items(policy, is_operator).any(|item| item.key == "invites");
+            let visible = nav_items(policy, is_operator, true).any(|item| item.key == "invites");
             assert_eq!(visible, expected, "{policy:?}, operator={is_operator}");
         }
     }

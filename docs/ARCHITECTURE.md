@@ -1418,17 +1418,30 @@ which shadows `maud::Markup` inside `web`. The single raw door is
 prevents a hand-built `String` from becoming `RenderedHtml` before that raw
 door.
 
-The authenticated owner stays flash-free by _enhancement_
+Browser authentication bootstrap stays flash-free
 ([ADR-0044](adr/0044-authenticated-owner-flash-free-enhancement.md)): an
-advisory localStorage auth marker, read by an inline blocking `<head>` script
-(`web::app::PREPAINT_SCRIPT`, `web/src/app/render.rs:40`), sets
-`<html class="authed">` before first paint. The same constant is emitted by the
-projector (`server/src/projector/document.rs:32`) and embedded verbatim in
-`csr/index.html`, with a host test guarding the drift
-(`web/src/app/render.rs:284`). `current_user()` is only a background reconcile;
-owner affordances are additive decoration in CSS-reserved slots on the untouched
-DOM, never a branch switch. The personalized cockpit is its own route, `/app`;
-`/` stays public.
+advisory localStorage auth marker, read by the inline blocking
+`web::app::PREPAINT_SCRIPT`, sets authenticated document state before first
+paint. The same constant is emitted by the projector and embedded verbatim in
+`csr/index.html`, with a host test guarding drift. On public pages, owner
+affordances remain additive decoration in CSS-reserved slots on the untouched
+projected DOM.
+
+The public root is **Local**, a viewer-independent timeline of public Posts
+originating on the instance. A structurally valid auth marker redirects `/`
+before paint to **Home** at `/app`, preserving only recognized oldest-first
+ordering; `/app` confirms the real session before fetching the current User's
+own published Posts
+([authenticated-root redirect decision](adr/drafts/authenticated-root-redirects-home.md)).
+Anonymous `/` projection remains byte-identical and cacheable. A stale marker is
+bounded by Home's existing unauthenticated redirect to `/login`. A live session
+missing its marker may paint public Local once; background reconciliation
+restores the marker and replaces the route with Home. Login, registration, and
+authenticated brand navigation target `/app` directly, so same-document
+transitions do not rely on the pre-paint script rerunning. The proposed decision
+supersedes only ADR-0044 Decision 5's stay-on-`/` default and deferred redirect
+preference; ADR-0044's cacheability, advisory-marker, pre-paint,
+additive-decoration, and server-confirmation boundaries remain in force.
 
 ### Crates, features, and the build
 

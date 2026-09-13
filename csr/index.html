@@ -6,7 +6,7 @@
          (drift-guarded). Kept formatter-stable so the two copies match. -->
  <script>
   // prettier-ignore
-  (function () {try {var m = localStorage.getItem('jaunder_auth'); if (m) {var u = JSON.parse(m).username; if (u) {var e = document.documentElement; e.classList.add('authed'); e.setAttribute('data-user', u); if (localStorage.getItem('jaunder_home_redirect') === 'app' && location.pathname === '/') {location.replace('/app');} } } } catch (_) { } })();
+  (function () {try {var m = localStorage.getItem('jaunder_auth'); if (m) {var j = JSON.parse(m), u = j.username, o = j.is_operator; if (typeof u === 'string' && /^[A-Za-z0-9_-]+$/.test(u) && (typeof o === 'undefined' || typeof o === 'boolean')) {var e = document.documentElement; e.classList.add('authed'); e.setAttribute('data-user', u); if (location.pathname === '/') {var q = new URLSearchParams(location.search); location.replace(q.get('order') === 'oldest' ? '/app?order=oldest' : '/app');} } } } catch (_) { } })();
  </script>
  <script>
   const __jaunderWasmUrl = "{{WASM_URL}}";

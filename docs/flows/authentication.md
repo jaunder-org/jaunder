@@ -18,24 +18,24 @@ Matrix: `matrix:docs/coverage/csr-e2e-matrix.md#authentication`
 
 `/login` submits one typed username/password request. Success creates an
 `HttpOnly` session cookie, returns only the operator bit needed for immediate
-chrome, and lets the client seed the shared session marker before the server
-redirect lands on `/`.
+chrome, seeds the shared session marker, and navigates directly to Home at
+`/app`.
 
 `/register` first reads the site's registration policy. Open sites render the
 form directly. Invite-only sites reuse the same route but suppress the submit
 form when the URL carries no invite code. Closed sites reject in the server fn.
 A successful registration follows the same cookie-only session-establishment
-rule as login and seeds the shared client session with `is_operator: false`.
+rule as login, seeds the shared client session with `is_operator: false`, and
+navigates directly to Home.
 
 `/logout` is a mount-only action page. It revokes the current session when one
 exists, clears the cookie either way, clears the shared client marker on
-success, and returns the browser to `/` through router-managed same-document
-navigation.
+success, and returns the browser to Local at `/` through router-managed
+same-document navigation.
 
-The authenticated cockpit at `/app` is documented separately, but authentication
-is what makes it reachable: after login or registration the sidebar flips to the
-authenticated chrome, and a Feed navigation can move into `/app` without a fresh
-document load.
+The authenticated cockpit at `/app` is documented separately. Authentication
+makes Home directly reachable without relying on the document-level prepaint
+script to run again.
 
 ## Login to authenticated shell
 
@@ -51,8 +51,8 @@ sequenceDiagram
     Users-->>Auth: user record + operator flag
     Auth->>Sessions: create cookie-backed session
     Sessions-->>Auth: raw session token
-    Auth-->>Browser: Set-Cookie + redirect("/")
+    Auth-->>Browser: Set-Cookie + redirect("/app")
     Browser->>Browser: write shared session marker
     Browser->>Browser: authenticated sidebar renders in place
-    Browser->>Browser: navigate to /app via Feed nav or saved home preference
+    Browser->>Browser: render Home at /app
 ```

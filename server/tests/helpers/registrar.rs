@@ -35,7 +35,7 @@ pub fn ensure_server_fns_registered() {
         server_fn::axum::register_explicit::<web::posts::GetRevisionHistoryDetail>();
         server_fn::axum::register_explicit::<web::timeline::ListByUser>();
         server_fn::axum::register_explicit::<web::timeline::ListLocalTimeline>();
-        server_fn::axum::register_explicit::<web::timeline::ListHomeFeed>();
+        server_fn::axum::register_explicit::<web::timeline::ListHomeTimeline>();
         server_fn::axum::register_explicit::<web::timeline::ListByTag>();
         server_fn::axum::register_explicit::<web::timeline::ListByUserAndTag>();
         server_fn::axum::register_explicit::<web::posts::Delete>();

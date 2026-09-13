@@ -1,15 +1,14 @@
-//! The home vertical's pure, projector-coincident render twin (ADR-0070's extra
-//! leaf beside `component`): non-reactive markup only, so it stays host-tested
-//! and coverage-measured while the reactive `HomePage` injects the very same
-//! bytes.
+//! The Local vertical's pure, projector-coincident render twin (ADR-0070's extra leaf
+//! beside `component`): non-reactive markup only, so it stays host-tested and
+//! coverage-measured while the reactive `LocalPage` injects the very same bytes.
 
 use maud::html;
 
 use crate::html::Markup;
 
-/// The home page hero block (constant copy). Composed into
-/// [`masthead`] — the one source the projector and the reactive
-/// `home::HomePage` both render (ADR-0041 §2), so there is no `view!` twin.
+/// The Local page hero block (constant copy). Composed into [`masthead`] — the one
+/// source the projector and reactive `local::LocalPage` both render (ADR-0041 §2), so
+/// there is no `view!` twin.
 #[must_use]
 fn render_hero() -> Markup {
     Markup::new(html! {
@@ -24,12 +23,11 @@ fn render_hero() -> Markup {
     })
 }
 
-/// The home page masthead — the topbar (with the anonymous Sign-in / Register
-/// links) then the hero. The single source both the projector
-/// (`crate::posts::render::body`) and the reactive `home::HomePage` render,
-/// so coincidence holds by construction (ADR-0041 §2) — no `view!` twin to drift.
-/// The links carry `j-anon-only` so the authed owner's pre-painted masthead hides
-/// them (ADR-0044); an anonymous viewer (no `html.authed`) still sees them.
+/// The Local page masthead — the topbar (with the anonymous Sign-in / Register links)
+/// then the hero. The single source both the projector (`crate::posts::render::body`)
+/// and reactive `local::LocalPage` render, so coincidence holds by construction
+/// (ADR-0041 §2) — no `view!` twin to drift. The links carry `j-anon-only`; an
+/// anonymous viewer still sees them.
 #[must_use]
 pub(crate) fn masthead(logo: &Markup) -> Markup {
     let cta = Markup::new(html! {
@@ -53,7 +51,7 @@ mod tests {
     use crate::html::Markup;
 
     #[test]
-    fn home_masthead_has_topbar_hero_and_anon_only_cta() {
+    fn local_masthead_has_topbar_hero_and_anon_only_cta() {
         let markup = masthead(&Markup::empty());
         let html = markup.as_str();
         assert!(html.contains("<h1>jaunder.local</h1>"), "{html}");

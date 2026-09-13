@@ -1,4 +1,4 @@
-//! Host-compiled public-navigation decision for the home page.
+//! Host-compiled public-navigation decision for Local.
 //!
 //! The site timeline response is a route presentation, not merely rows: the
 //! destination theme and page must commit together when CSR navigation resolves.
@@ -21,8 +21,8 @@ pub fn site_destination(
     (presentation.theme, presentation.page)
 }
 
-/// The home timeline's fixed bare route, kept in the host-compiled navigation
-/// seam so the wasm component only wires it to router navigation.
+/// Local's fixed bare route, kept in the host-compiled navigation seam so the wasm
+/// component only wires it to router navigation.
 #[must_use]
 pub fn site_timeline_base_url() -> RootRelativeUrl {
     let Ok(url) = "/".parse() else {
@@ -31,7 +31,7 @@ pub fn site_timeline_base_url() -> RootRelativeUrl {
     url
 }
 
-/// Selects the matching projector page and its order for the public home timeline.
+/// Selects the matching projector page and its order for public Local.
 ///
 /// A seed from any other route is not adoptable; without a matching projector seed,
 /// CSR starts in the default newest-first order.

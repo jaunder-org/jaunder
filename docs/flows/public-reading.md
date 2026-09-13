@@ -14,10 +14,10 @@ Matrix: `matrix:docs/coverage/csr-e2e-matrix.md#public-reading`
 It is an inbound-only HTTP compatibility alias, not a CSR route or a link
 target.
 
-The four public timelines take one URL-only order state: a bare URL means Newest
-and `?order=oldest` means Oldest. Unknown values fall back to Newest. The same
-control is also present on the authenticated `/app` home feed; it is likewise
-URL-only, so a bare `/app` never inherits a previous selection.
+The public timelines take one URL-only order state: a bare URL means Newest and
+`?order=oldest` means Oldest. Unknown values fall back to Newest. The same
+control is also present on Home at `/app`; it is likewise URL-only, so a bare
+`/app` never inherits a previous selection.
 
 ## Endpoint census
 
@@ -29,7 +29,7 @@ URL-only, so a bare `/app` never inherits a previous selection.
 
 The tag-browsing and authenticated-cockpit flow censuses own the other three
 ordered timeline endpoints: `list_by_tag`, `list_by_user_and_tag`, and
-`list_home_feed`.
+`list_home_timeline`.
 
 ## Canonical navigation and direct HTTP aliases
 
@@ -46,10 +46,13 @@ recorded at `docs/adr/0189-wordpress-compatible-permalink-alias.md`, keeps the
 compatibility route outside the CSR, preserving ADR-0076's `~`-only navigation
 rule.
 
-`/` is always the enhanced public local timeline, even for the signed-in owner.
-The projector seeds the requested URL order for first paint; the CSR timeline
+`/` is Local, the public, viewer-independent timeline for anonymous visitors.
+Its projector seeds the requested URL order for first paint; the CSR timeline
 adopts that seed, keeps the selection through mount, and continues paging in the
-same direction without swapping the route to `/app`.
+same direction. A structurally valid auth marker redirects a root document visit
+to Home at `/app` before Local paints. A live session that lacks its marker may
+paint Local once, then the shared reconcile restores the marker and replaces the
+route with Home.
 
 The mounted user matcher renders a public profile timeline with canonical
 `~username` links, feed discovery, and an optional subscription control for

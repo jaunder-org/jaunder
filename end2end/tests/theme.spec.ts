@@ -21,7 +21,7 @@ test(
     const session = await seedUserViaTool("visualauthor", "visualpassword123");
     await seedPostsViaTool("visualauthor", 2, "Visual Timeline Post");
     await applySeededSession(page.context(), session);
-    await goto(page, "/"); // public projector home; goto() waits for the CSR mount
+    await goto(page, "/app");
 
     const probe = await page.evaluate(() => {
       const root = document.querySelector(".j-root");
@@ -54,7 +54,7 @@ test(
     await expect(firstPost).toContainText("visualauthor");
     await expect(secondPost).toContainText("visualauthor");
     await expect(page.getByRole("button", { name: "Actions" })).toHaveCount(2);
-    await expectVisual(page, "public-timeline.png", {
+    await expectVisual(page, "home-timeline.png", {
       mask: [page.locator(".j-post-time")],
     });
     await expectAccessible(page);

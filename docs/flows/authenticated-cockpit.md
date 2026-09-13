@@ -8,19 +8,19 @@ Matrix: `matrix:docs/coverage/csr-e2e-matrix.md#authenticated-cockpit`
 
 ## Endpoint census
 
-| Endpoint                                | Status  | Surface                                                                                                                   |
-| --------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `endpoint:/api/timeline/list_home_feed` | Covered | Loads `/app` in URL-selected Newest/Oldest order, with viewer visibility filtering and direction-preserving continuation. |
-| `endpoint:/api/tags/list`               | Covered | Powers the debounced tag autocomplete inside the inline composer that lives directly on `/app`.                           |
+| Endpoint                                    | Status  | Surface                                                                                                                           |
+| ------------------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `endpoint:/api/timeline/list_home_timeline` | Covered | Loads Home at `/app` in URL-selected Newest/Oldest order, with viewer visibility filtering and direction-preserving continuation. |
+| `endpoint:/api/tags/list`                   | Covered | Powers the debounced tag autocomplete inside Home's inline composer.                                                              |
 
-`/app` is the directly-bookmarkable authenticated feed. It does not trust the
-advisory local marker by itself: the page waits for the shell's shared session
-reconcile, bounces anonymous or expired visitors to `/login`, and only then
-fetches the viewer's own published-post timeline.
+`/app` is directly-bookmarkable **Home**, the authenticated User's publishing
+cockpit. It does not trust the advisory local marker by itself: the page waits
+for the shell's shared session reconcile, bounces anonymous or expired visitors
+to `/login`, and only then fetches the User's own published Posts.
 
 Once the reconcile resolves, the route keeps one screenful of chrome alive:
-topbar, inline composer, and the feed rows. Publishing or saving from the
-compact composer bumps the feed resource in place instead of remounting the
+topbar, inline composer, and the Post rows. Publishing or saving from the
+compact composer bumps the Home resource in place instead of remounting the
 page.
 
 This doc owns the cockpit-only read path and its inline tag suggestions. Session
