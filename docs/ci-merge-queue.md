@@ -51,6 +51,12 @@ rollback target. `strict_required_status_checks_policy` is `true` and there is
 ]
 ```
 
+`Validate (no e2e)` is a result-only aggregate over the internal
+`Validation core` and `Validation coverage` jobs. Branch protection
+intentionally requires the aggregate rather than either implementation name, so
+the required context remains stable while both lane verdicts are mandatory
+([non-e2e validation lane decision](adr/drafts/split-ci-non-e2e-validation-lanes.md)).
+
 Before doing anything, **re-capture the live baseline** so rollback restores the
 exact current state (it may have drifted since this doc was written):
 
@@ -186,13 +192,14 @@ If that capture is unavailable, reconstruct the body with the **Baseline `rules`
 array** at the top of this doc (strict `true`, no `merge_queue`) and PUT it the
 same way.
 
-**Rollback trigger (#629).** `Validate (no e2e)` intermittently OOMs (~1-in-5 CI
-failures, tracked in #629). **An ejected PR is _not_ requeued automatically** —
-the live `merge_queue` rule has no requeue parameter, so a failed front-of-queue
-`merge_group` drops the PR out of the queue and it stays `OPEN` until someone
-re-enqueues it. So each OOM ejection costs a manual re-enqueue, and **if OOM
-ejections thrash the queue** (PRs repeatedly ejected, batches failing to
-converge), run the rollback above and revisit #629 before re-enabling.
+**Rollback trigger.** A failed internal validation lane makes
+`Validate (no e2e)` fail. Inspect `Validation core` or `Validation coverage` for
+the work-bearing failure; the aggregate itself performs no validation work. **An
+ejected PR is _not_ requeued automatically** — the live `merge_queue` rule has
+no requeue parameter, so a failed front-of-queue `merge_group` drops the PR out
+of the queue and it stays `OPEN` until someone re-enqueues it. If repeated lane
+infrastructure failures thrash the queue, run the rollback above before
+repairing the lane.
 
 **Observing queue state.** Ejection is silent — the queue entry vanishes while
 the PR stays `OPEN`, which looks identical to "still queued". Don't eyeball it:

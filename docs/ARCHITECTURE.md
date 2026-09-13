@@ -2880,15 +2880,19 @@ class at `storage/src/postgres/backup.rs:28`).
 
 Each browser e2e check is a NixOS-test VM running Playwright against a real
 served instance, one derivation per `{backend}×{browser}` combo (`mkE2eCombo`,
-`nix/checks.nix:413-443`). CI runs `cargo xtask validate --no-e2e` in the static
-job, where the authoritative Emacs coverage verdict is decided, plus a
-`{sqlite,postgres}×{chromium,firefox}` matrix — each job
-`cargo xtask e2e <backend> <browser>` — aggregated by an `e2e-gate` that depends
-only on that browser matrix. Branch protection therefore needs two stable names
-([ADR-0034](adr/0034-ci-e2e-matrix-distribution.md)). Local
-`cargo xtask validate` builds the browser-only `e2e-checks` aggregate instead:
-the same derivations on one machine. It inherits the static lane's Emacs verdict
-and does not rerun live ERT.
+`nix/checks.nix:413-443`). CI runs independent `Validation core` and
+`Validation coverage` full-VM jobs, then joins them under the stable,
+result-only `Validate (no e2e)` context. The core lane owns host/static, Nix
+static, wasm, doctest, and Elisp coverage surfaces; the coverage lane owns Rust
+coverage. CI also runs a `{sqlite,postgres}×{chromium,firefox}` matrix — each
+job `cargo xtask e2e <backend> <browser>` — aggregated by an `e2e-gate` that
+depends only on that browser matrix. Branch protection therefore needs the two
+stable aggregate names
+([distributed e2e](adr/0034-ci-e2e-matrix-distribution.md);
+[split non-e2e validation lanes](adr/drafts/split-ci-non-e2e-validation-lanes.md)).
+Local `cargo xtask validate` builds the browser-only `e2e-checks` aggregate
+instead: the same derivations on one machine. It inherits the static lane's
+Emacs verdict and does not rerun live ERT.
 
 `end2end/playwright.config.ts` is the one config, loaded verbatim by both the VM
 and the host loop ([ADR-0051](adr/0051-single-playwright-config.md)). For each
@@ -3113,6 +3117,15 @@ The ladder has four local entrypoints, all driven by `xtask`
   followed by its host consumer. Full **`cargo xtask validate`** inherits that
   verdict and — unless `--no-e2e` — adds the browser/backend e2e aggregate; it
   never reruns live ERT.
+
+CI distributes the same non-e2e surface through `cargo xtask ci-validate core`
+and `cargo xtask ci-validate coverage` on independent runners. Both lane
+commands and local `validate --no-e2e` select from one ordered surface catalog:
+core owns every non-e2e surface except Rust coverage, and coverage owns Rust
+coverage plus its gate. A result-only `Validate (no e2e)` job requires both
+lanes, preserving the stable branch-protection context. The lanes exchange no
+artifacts, and local `validate` remains serial
+([split non-e2e validation lanes](adr/drafts/split-ci-non-e2e-validation-lanes.md)).
 
 Both hook entrypoints select orchestration-owned **fail-fast** execution. At
 every ordered local boundary — individual static checks, host-gate steps, and

@@ -884,12 +884,23 @@ mod tests {
     }
 
     #[test]
-    fn ci_shape_keeps_the_elisp_verdict_in_the_static_lane() {
+    fn ci_shape_keeps_validation_lanes_behind_the_stable_gate() {
         let workflow = include_str!("../../.github/workflows/ci.yml");
 
-        assert!(workflow.contains("validate-no-e2e:"));
-        assert!(workflow.contains("cargo xtask validate\n          --no-e2e"));
+        assert!(workflow.contains("validate-core:"));
+        assert!(workflow.contains("cargo xtask ci-validate core"));
         assert!(workflow.contains(".xtask/gcroots/elisp-coverage-producer/elisp-coverage/"));
+        assert!(workflow.contains("cargo xtask nix probe-source"));
+
+        assert!(workflow.contains("validate-coverage:"));
+        assert!(workflow.contains("cargo xtask ci-validate\n          coverage"));
+        assert!(workflow.contains(".xtask/gcroots/coverage/status.json"));
+        assert!(workflow.contains("cargo xtask coverage\n          probe-source"));
+
+        assert!(workflow.contains("name: Validate (no e2e)"));
+        assert!(workflow.contains("needs: [validate-core, validate-coverage]"));
+        assert!(workflow.contains("needs.validate-core.result"));
+        assert!(workflow.contains("needs.validate-coverage.result"));
         assert!(workflow.contains("needs: [e2e]"));
         assert!(!workflow.contains("elisp-integration"));
     }

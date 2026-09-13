@@ -24,20 +24,14 @@ use crate::result::{CommandResult, NixReport, PhaseName, PhaseOutcome, PhaseReco
 /// the project's CI host is x86_64-linux.
 const SYSTEM: &str = "x86_64-linux";
 
-#[derive(Clone, Copy)]
-enum TestCheck {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TestCheck {
     Wasm,
     Coverage,
     Doctests,
     ElispCoverageProducer,
 }
 
-const TEST_CHECKS: [TestCheck; 4] = [
-    TestCheck::Wasm,
-    TestCheck::Coverage,
-    TestCheck::Doctests,
-    TestCheck::ElispCoverageProducer,
-];
 const CHECK_SUPPORTING_TEST_CHECKS: [TestCheck; 2] = [TestCheck::Wasm, TestCheck::Doctests];
 const STATIC_CHECKS: [(&str, &str); 2] = [
     ("nix-static-docs", "static-docs"),
@@ -74,6 +68,7 @@ impl E2eOutcome {
 }
 
 impl TestCheck {
+    #[cfg(test)]
     const fn name(self) -> &'static str {
         match self {
             Self::Wasm => "wasm-tests",
@@ -83,29 +78,14 @@ impl TestCheck {
         }
     }
 
-    fn run(self, result: &mut CommandResult) {
+    pub(crate) fn run(self, result: &mut CommandResult) {
         match self {
-            Self::Wasm => {
-                let name = self.name();
-                result.push(build_check(name, name));
-            }
+            Self::Wasm => result.push(build_check("wasm-tests", "wasm-tests")),
             Self::Coverage => coverage(result),
             Self::Doctests => doctests(result),
             Self::ElispCoverageProducer => elisp_coverage(result),
         }
     }
-}
-
-fn selected_test_checks(no_test: bool) -> &'static [TestCheck] {
-    if no_test { &[] } else { &TEST_CHECKS }
-}
-
-#[cfg(test)]
-fn test_check_names(no_test: bool) -> impl ExactSizeIterator<Item = &'static str> {
-    selected_test_checks(no_test)
-        .iter()
-        .copied()
-        .map(TestCheck::name)
 }
 
 #[cfg(test)]
@@ -116,27 +96,12 @@ pub(crate) fn check_supporting_test_check_names() -> impl ExactSizeIterator<Item
         .map(TestCheck::name)
 }
 
-#[cfg(test)]
-fn validate_check_names() -> impl Iterator<Item = &'static str> {
-    STATIC_CHECKS
-        .iter()
-        .map(|(_, check)| *check)
-        .chain(TEST_CHECKS.iter().copied().map(TestCheck::name))
-}
-
 /// Run the hermetic static-check derivations. This is validate-only: `check`
 /// already runs the host-local static lane, while CI's required validate job
 /// needs the same definitions proven inside Nix.
 pub fn static_checks(result: &mut CommandResult) {
     for (step, check) in STATIC_CHECKS {
         result.push(build_check(step, check));
-    }
-}
-
-/// Run the Nix-backed test checks unless `--no-test` disables the group.
-pub fn test_checks(result: &mut CommandResult, no_test: bool) {
-    for check in selected_test_checks(no_test) {
-        check.run(result);
     }
 }
 
@@ -1111,9 +1076,10 @@ fn finish_build_with(
 
 /// `nix build -L --keep-failed --accept-flake-config --out-link .xtask/gcroots/<check> .#checks.<system>.<check>`,
 /// fanning the `-L` build log to both the live terminal and
-/// `.xtask/diagnostics/<check>/build.log` (gitignored; uploaded by ci.yml's
-/// `validate-diagnostics` artifact). On failure a completely captured log is
-/// named in the `StepResult`; partial/unavailable diagnostic paths are omitted.
+/// `.xtask/diagnostics/<check>/build.log` (gitignored; uploaded by the owning
+/// core-validation, coverage-validation, or e2e diagnostics artifact in ci.yml).
+/// On failure a completely captured log is named in the `StepResult`;
+/// partial or unavailable diagnostic paths are omitted.
 /// --accept-flake-config honors the jaunder-org cachix substituter for the
 /// untrusted local user; --out-link makes the closure a GC root.
 fn build_check(step_name: &str, check: &str) -> StepResult {
@@ -1383,7 +1349,6 @@ mod tests {
         failed_build_after_diagnostics_with, failed_coverage_status_step, failed_status_step,
         finish_build_with, finish_e2e_combo, lift_elisp_coverage_artifacts,
         prepare_build_dirs_with, report_build_diagnostic_failure, sentinel_detail,
-        test_check_names, validate_check_names,
     };
     use crate::audit_wasm::{ArtifactMetrics, AuditReport};
     use crate::result::{NixRealization, NixReport, PhaseName, PhaseOutcome};
@@ -1401,29 +1366,6 @@ mod tests {
             derivation: Some("/nix/store/check.drv".to_owned()),
             realization,
         }
-    }
-
-    #[test]
-    fn nix_test_checks_include_the_authoritative_elisp_producer_once() {
-        let checks = test_check_names(false).collect::<Vec<_>>();
-
-        assert_eq!(
-            checks,
-            [
-                "wasm-tests",
-                "coverage",
-                "doctests",
-                "elisp-coverage-producer"
-            ]
-        );
-        assert_eq!(
-            checks
-                .iter()
-                .filter(|&&check| check == "elisp-coverage-producer")
-                .count(),
-            1,
-            "full validate inherits test_checks instead of dispatching a second live ERT VM"
-        );
     }
 
     #[test]
@@ -1467,18 +1409,6 @@ mod tests {
     }
 
     #[test]
-    fn validate_check_names_include_static_boundaries_before_test_checks() {
-        assert!(validate_check_names().eq([
-            "static-docs",
-            "static-code",
-            "wasm-tests",
-            "coverage",
-            "doctests",
-            "elisp-coverage-producer"
-        ]));
-    }
-
-    #[test]
     fn static_check_catalog_has_no_aggregate() {
         assert_eq!(
             STATIC_CHECKS,
@@ -1492,11 +1422,6 @@ mod tests {
                 .iter()
                 .any(|(_, check)| *check == "static-checks")
         );
-    }
-
-    #[test]
-    fn nix_test_check_names_omit_all_for_no_test() {
-        assert!(test_check_names(true).next().is_none());
     }
 
     #[test]

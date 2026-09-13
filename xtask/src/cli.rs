@@ -45,6 +45,22 @@ pub enum E2eBrowser {
     Firefox,
 }
 
+/// One independently runnable non-E2E CI validation lane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum CiValidateLane {
+    Core,
+    Coverage,
+}
+
+impl CiValidateLane {
+    pub(crate) const fn command_name(self) -> &'static str {
+        match self {
+            Self::Core => "ci-validate-core",
+            Self::Coverage => "ci-validate-coverage",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum E2eLocalBrowser {
     Chromium,
@@ -135,6 +151,12 @@ pub enum Command {
         /// Run even when the working tree is dirty (skip the clean-tree precheck).
         #[arg(long)]
         allow_dirty: bool,
+    },
+    /// Run one independently schedulable non-E2E CI validation lane. This is
+    /// verify-only and always refuses a dirty working tree.
+    CiValidate {
+        #[arg(value_enum)]
+        lane: CiValidateLane,
     },
     /// Produce a host-side repository census for manual maintenance audits. The
     /// report is informational: candidates are neither findings nor gate failures.
@@ -534,6 +556,7 @@ impl Cli {
             Command::Precommit => "precommit",
             Command::Prepush => "prepush",
             Command::Validate { .. } => "validate",
+            Command::CiValidate { lane } => lane.command_name(),
             Command::Census => "census",
             Command::AuditWasm { .. } => "audit-wasm",
             Command::E2e { .. } => "e2e",
@@ -749,6 +772,19 @@ mod tests {
             Command::Validate { allow_dirty, .. } => assert!(!allow_dirty),
             _ => panic!("expected validate"),
         }
+    }
+
+    #[test]
+    fn ci_validate_parses_the_complete_lane_catalog() {
+        for (argument, lane, name) in [
+            ("core", CiValidateLane::Core, "ci-validate-core"),
+            ("coverage", CiValidateLane::Coverage, "ci-validate-coverage"),
+        ] {
+            let cli = Cli::try_parse_from(["xtask", "ci-validate", argument]).unwrap();
+            assert_eq!(cli.command_name(), name);
+            assert!(matches!(cli.command, Command::CiValidate { lane: parsed } if parsed == lane));
+        }
+        assert!(Cli::try_parse_from(["xtask", "ci-validate", "unknown"]).is_err());
     }
     #[test]
     fn e2e_combo_parses_backend_and_browser() {
