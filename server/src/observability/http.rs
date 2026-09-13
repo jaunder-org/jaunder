@@ -2,7 +2,7 @@
 //! propagates request IDs, and creates the request span that adopts that context.
 
 use axum::Router;
-use axum::extract::Request;
+use axum::extract::{Request, State};
 use axum::http::{HeaderMap, HeaderName};
 use axum::middleware::Next;
 use axum::response::Response;
@@ -19,6 +19,8 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 #[derive(Clone)]
 struct ExtractedTraceContext(Context);
 
+type TraceContextExtractor = fn(&HeaderMap) -> Context;
+
 struct HeaderExtractor<'a>(&'a HeaderMap);
 
 impl Extractor for HeaderExtractor<'_> {
@@ -31,10 +33,18 @@ impl Extractor for HeaderExtractor<'_> {
     }
 }
 
-async fn extract_trace_context(mut request: Request, next: Next) -> Response {
-    let context = opentelemetry::global::get_text_map_propagator(|propagator| {
-        propagator.extract(&HeaderExtractor(request.headers()))
-    });
+fn extract_from_headers(headers: &HeaderMap) -> Context {
+    opentelemetry::global::get_text_map_propagator(|propagator| {
+        propagator.extract(&HeaderExtractor(headers))
+    })
+}
+
+async fn extract_trace_context(
+    State(extract): State<TraceContextExtractor>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let context = extract(request.headers());
     request
         .extensions_mut()
         .insert(ExtractedTraceContext(context));
@@ -60,15 +70,24 @@ fn make_request_span(request: &Request) -> Span {
     span
 }
 
-/// Applies the HTTP observability middleware stack — trace-context extraction,
-/// request-id set/propagate, and the per-request tracing span — to `router`.
-pub fn with_http_observability<S>(router: Router<S>) -> Router<S>
+/// Applies request IDs and tracing to `router`. Inbound W3C trace-context
+/// extraction and parent adoption are enabled only with an installed OTLP tracer.
+pub fn with_http_observability<S>(router: Router<S>, trace_parent_enabled: bool) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    with_http_observability_using(router, trace_parent_enabled.then_some(extract_from_headers))
+}
+
+fn with_http_observability_using<S>(
+    router: Router<S>,
+    trace_context_extractor: Option<TraceContextExtractor>,
+) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
     let request_id_header = HeaderName::from_static("x-request-id");
     let layer = ServiceBuilder::new()
-        .layer(axum::middleware::from_fn(extract_trace_context))
         .layer(SetRequestIdLayer::new(
             request_id_header.clone(),
             MakeRequestUuid,
@@ -79,14 +98,30 @@ where
                 .make_span_with(make_request_span)
                 .on_response(DefaultOnResponse::new().level(Level::INFO)),
         );
-    router.layer(layer)
+    with_trace_context_extraction(router.layer(layer), trace_context_extractor)
 }
 
+fn with_trace_context_extraction<S>(
+    router: Router<S>,
+    trace_context_extractor: Option<TraceContextExtractor>,
+) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    match trace_context_extractor {
+        Some(extractor) => router.layer(axum::middleware::from_fn_with_state(
+            extractor,
+            extract_trace_context,
+        )),
+        None => router,
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::{HeaderMap, Request, StatusCode};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tower::ServiceExt;
 
     #[test]
@@ -107,57 +142,94 @@ mod tests {
         assert!(extractor.keys().contains(&"traceparent"));
     }
 
-    #[tokio::test]
-    async fn trace_context_middleware_inserts_extension() {
-        let app = Router::new()
-            .route(
-                "/",
-                axum::routing::get(|req: axum::extract::Request| async move {
-                    if req.extensions().get::<ExtractedTraceContext>().is_some() {
-                        StatusCode::OK
-                    } else {
-                        unreachable!("extract_trace_context always inserts ExtractedTraceContext");
-                    }
-                }),
-            )
-            .layer(axum::middleware::from_fn(extract_trace_context));
+    #[test]
+    fn production_extractor_parses_valid_trace_parent() {
+        use opentelemetry::trace::TraceContextExt as _;
 
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/")
-                    .header(
-                        "traceparent",
-                        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
-                    )
-                    .body(Body::empty())
-                    .expect("failed to build request"),
-            )
-            .await
-            .expect("failed to get response");
+        opentelemetry::global::set_text_map_propagator(
+            opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "traceparent",
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+                .parse()
+                .expect("valid traceparent header"),
+        );
 
-        assert_eq!(response.status(), StatusCode::OK);
+        let context = extract_from_headers(&headers);
+        let span_context = context.span().span_context().clone();
+        assert!(span_context.is_valid());
+        assert!(span_context.is_remote());
+        assert_eq!(
+            span_context.trace_id().to_string(),
+            "4bf92f3577b34da6a3ce929d0e0e4736"
+        );
+        assert_eq!(span_context.span_id().to_string(), "00f067aa0ba902b7");
+    }
+
+    static EXTRACTION_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    fn counting_extract(_headers: &HeaderMap) -> Context {
+        EXTRACTION_CALLS.fetch_add(1, Ordering::Relaxed);
+        Context::new()
+    }
+
+    async fn extracted_context_status(request: axum::extract::Request) -> StatusCode {
+        if request
+            .extensions()
+            .get::<ExtractedTraceContext>()
+            .is_some()
+        {
+            StatusCode::OK
+        } else {
+            StatusCode::NO_CONTENT
+        }
+    }
+
+    async fn extraction_response(extractor: Option<TraceContextExtractor>) -> Response {
+        with_http_observability_using(
+            Router::new().route("/", axum::routing::get(extracted_context_status)),
+            extractor,
+        )
+        .oneshot(
+            Request::builder()
+                .uri("/")
+                .header(
+                    "traceparent",
+                    "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+                )
+                .body(Body::empty())
+                .expect("failed to build request"),
+        )
+        .await
+        .expect("failed to get response")
     }
 
     #[test]
-    fn make_request_span_builds_span_with_and_without_parent_context() {
-        // No extracted parent: the span is built without adopting a parent.
-        let request = Request::builder()
-            .method("GET")
-            .uri("/x")
-            .body(Body::empty())
-            .expect("request");
-        let _span = make_request_span(&request);
+    fn trace_parent_policy_controls_full_request_path() {
+        EXTRACTION_CALLS.store(0, Ordering::Relaxed);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        let ((disabled, disabled_calls, enabled), output) =
+            super::super::diagnostics::capture_fallbacks(|| {
+                runtime.block_on(async {
+                    let disabled = extraction_response(None).await;
+                    let disabled_calls = EXTRACTION_CALLS.load(Ordering::Relaxed);
+                    let enabled = extraction_response(Some(counting_extract)).await;
+                    (disabled, disabled_calls, enabled)
+                })
+            });
 
-        // Extracted parent present: exercises the `set_parent` branch.
-        let mut request = Request::builder()
-            .method("GET")
-            .uri("/x")
-            .body(Body::empty())
-            .expect("request");
-        request
-            .extensions_mut()
-            .insert(ExtractedTraceContext(opentelemetry::Context::new()));
-        let _span = make_request_span(&request);
+        assert_eq!(disabled.status(), StatusCode::NO_CONTENT);
+        assert_eq!(disabled_calls, 0);
+        assert_eq!(enabled.status(), StatusCode::OK);
+        assert_eq!(EXTRACTION_CALLS.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            output,
+            "server.observability.trace_parent: request trace parent assignment failed\n"
+        );
     }
 }

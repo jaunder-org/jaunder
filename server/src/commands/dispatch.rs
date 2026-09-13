@@ -196,6 +196,7 @@ impl Commands {
     pub async fn execute(
         self,
         telemetry: &host::telemetry::TelemetryConfig,
+        otel_tracing_enabled: bool,
         capture: Option<ServeCapturePaths>,
     ) -> anyhow::Result<CommandOutput> {
         match self {
@@ -221,6 +222,7 @@ impl Commands {
                 bind,
                 environment.is_prod(),
                 telemetry,
+                otel_tracing_enabled,
                 capture.as_ref(),
             )
             .await

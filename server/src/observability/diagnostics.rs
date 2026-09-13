@@ -72,7 +72,7 @@ pub(super) fn with_process_globals<R>(operation: impl FnOnce() -> R) -> R {
 }
 
 #[cfg(test)]
-fn capture_fallbacks<R>(operation: impl FnOnce() -> R) -> (R, String) {
+pub(super) fn capture_fallbacks<R>(operation: impl FnOnce() -> R) -> (R, String) {
     let _serial = TEST_FALLBACK_SERIAL
         .lock()
         .expect("fallback capture serial");

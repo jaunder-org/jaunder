@@ -467,9 +467,15 @@ fn slow_span_report(started_at: Option<SpanStartedAt>, threshold: Duration) -> O
     slow_span_values(started_at?.0.elapsed(), threshold)
 }
 
-fn install_subscriber_with<E>(install: impl FnOnce() -> Result<(), E>, mut warn: impl FnMut()) {
-    if install().is_err() {
+fn install_subscriber_with<E>(
+    install: impl FnOnce() -> Result<(), E>,
+    mut warn: impl FnMut(),
+) -> bool {
+    if install().is_ok() {
+        true
+    } else {
         warn();
+        false
     }
 }
 
@@ -530,7 +536,7 @@ where
         )
     });
 
-    install_subscriber_with(
+    let subscriber_installed = install_subscriber_with(
         || {
             tracing::subscriber::set_global_default(
                 tracing_subscriber::registry()
@@ -548,6 +554,7 @@ where
     TelemetryGuard {
         meter,
         tracer,
+        subscriber_installed,
         meter_shutdown: shutdown_meter,
         tracer_shutdown: shutdown_tracer,
     }
@@ -596,8 +603,18 @@ type TracerShutdownOperation =
 pub struct TelemetryGuard {
     meter: Option<opentelemetry_sdk::metrics::SdkMeterProvider>,
     tracer: Option<opentelemetry_sdk::trace::SdkTracerProvider>,
+    subscriber_installed: bool,
     meter_shutdown: MeterShutdownOperation,
     tracer_shutdown: TracerShutdownOperation,
+}
+
+impl TelemetryGuard {
+    /// Whether initialization installed an OpenTelemetry tracing provider and
+    /// its subscriber layer.
+    #[must_use]
+    pub fn otel_tracing_enabled(&self) -> bool {
+        self.subscriber_installed && self.tracer.is_some()
+    }
 }
 
 fn shutdown_meter(
@@ -1188,7 +1205,8 @@ mod tests {
                 e2e_seed_process: Ok(None),
             },
         );
-        init_tracing_impl(&config);
+        let guard = init_tracing_impl(&config);
+        assert!(!guard.otel_tracing_enabled());
     }
 
     #[test]
@@ -1309,6 +1327,7 @@ mod tests {
         drop(TelemetryGuard {
             meter: Some(provider),
             tracer: None,
+            subscriber_installed: true,
             meter_shutdown: shutdown_meter,
             tracer_shutdown: shutdown_tracer,
         });
@@ -1334,6 +1353,7 @@ mod tests {
         drop(TelemetryGuard {
             meter: None,
             tracer: Some(provider),
+            subscriber_installed: true,
             meter_shutdown: shutdown_meter,
             tracer_shutdown: shutdown_tracer,
         });
@@ -1346,12 +1366,35 @@ mod tests {
     }
 
     #[test]
+    fn guard_requires_provider_and_subscriber_for_otel_tracing() {
+        let installed = TelemetryGuard {
+            meter: None,
+            tracer: Some(SdkTracerProvider::builder().build()),
+            subscriber_installed: true,
+            meter_shutdown: shutdown_meter,
+            tracer_shutdown: shutdown_tracer,
+        };
+        assert!(installed.otel_tracing_enabled());
+        drop(installed);
+
+        let rejected = TelemetryGuard {
+            meter: None,
+            tracer: Some(SdkTracerProvider::builder().build()),
+            subscriber_installed: false,
+            meter_shutdown: shutdown_meter,
+            tracer_shutdown: shutdown_tracer,
+        };
+        assert!(!rejected.otel_tracing_enabled());
+    }
+
+    #[test]
     fn guard_drop_is_noop_when_inert() {
         // No OTLP endpoint configured -> both providers None -> Drop does nothing
         // and must not panic.
         drop(TelemetryGuard {
             meter: None,
             tracer: None,
+            subscriber_installed: true,
             meter_shutdown: shutdown_meter,
             tracer_shutdown: shutdown_tracer,
         });
@@ -1368,6 +1411,7 @@ mod tests {
                 drop(TelemetryGuard {
                     meter: Some(meter),
                     tracer: None,
+                    subscriber_installed: true,
                     meter_shutdown: |_| {
                         Err(opentelemetry_sdk::error::OTelSdkError::InternalFailure(
                             "injected meter shutdown failure".to_owned(),
@@ -1393,6 +1437,7 @@ mod tests {
                 drop(TelemetryGuard {
                     meter: None,
                     tracer: Some(tracer),
+                    subscriber_installed: true,
                     meter_shutdown: shutdown_meter,
                     tracer_shutdown: |_| {
                         Err(opentelemetry_sdk::error::OTelSdkError::InternalFailure(

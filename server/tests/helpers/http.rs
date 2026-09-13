@@ -349,7 +349,7 @@ macro_rules! make_app {
             .layer(axum::Extension(feed_events))
             .layer(axum::Extension(sessions))
             .layer(axum::Extension(write_scope));
-            jaunder::create_router(app, &instance_id, $secure_cookies)
+            jaunder::create_router(app, &instance_id, $secure_cookies, false)
         })
     };
 }

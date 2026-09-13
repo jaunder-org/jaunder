@@ -114,8 +114,14 @@ where
 }
 
 /// Completes a fully composed application router with the common page,
-/// observability, cookie, and instance-identity middleware.
-pub fn create_router(app: Router, instance_id: &InstanceId, secure_cookies: bool) -> Router {
+/// observability, cookie, and instance-identity middleware. `trace_parent_enabled`
+/// reflects whether initialization installed the process's OTLP tracing layer.
+pub fn create_router(
+    app: Router,
+    instance_id: &InstanceId,
+    secure_cookies: bool,
+    trace_parent_enabled: bool,
+) -> Router {
     // A non-header-safe value would violate `InstanceId`'s canonical UUID invariant.
     let instance_header = instance_id
         .to_string()
@@ -126,10 +132,9 @@ pub fn create_router(app: Router, instance_id: &InstanceId, secure_cookies: bool
         retire_session_cookie,
     ));
 
-    crate::observability::with_http_observability(app).layer(axum::middleware::from_fn_with_state(
-        instance_header,
-        set_instance_header,
-    ))
+    crate::observability::with_http_observability(app, trace_parent_enabled).layer(
+        axum::middleware::from_fn_with_state(instance_header, set_instance_header),
+    )
 }
 
 /// Builds client-telemetry routes from their exact storage dependencies.
