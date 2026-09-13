@@ -38,6 +38,10 @@ jobs:
         run:
           nix develop .#ci --accept-flake-config -c cargo xtask validate
           --no-e2e
+      - name: Build Emacs package for Cachix
+        run:
+          nix build --accept-flake-config --no-link
+          .#emacsPackages.x86_64-linux.jaunder
       - name: Preserve validation result
         if: always()
         run: |
