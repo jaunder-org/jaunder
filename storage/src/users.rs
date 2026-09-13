@@ -18,6 +18,7 @@ use host::password::Password;
 use host::stored_password_hash::StoredPasswordHash;
 
 use crate::helpers;
+use crate::passkeys::PasskeyUserHandle;
 
 /// Whether a user has site-wide administrative privileges.
 ///
@@ -512,6 +513,7 @@ where
     for<'q> EmailVerified: Encode<'q, DB> + Type<DB>,
     for<'q> OperatorStatus: Encode<'q, DB> + Type<DB>,
     for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
+    for<'q> PasskeyUserHandle: Encode<'q, DB> + Type<DB>,
     for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
     DB::Arguments: sqlx::IntoArguments<DB>,
@@ -548,13 +550,22 @@ where
         ))
         .await;
 
-        match result {
-            Ok(id) => Ok(id),
+        let user_id = match result {
+            Ok(id) => id,
             Err(Error::Database(error)) if error.is_unique_violation() => {
-                Err(CreateUserError::UsernameTaken)
+                return Err(CreateUserError::UsernameTaken);
             }
-            Err(error) => Err(CreateUserError::Internal(error)),
-        }
+            Err(error) => return Err(CreateUserError::Internal(error)),
+        };
+
+        sqlx::query("INSERT INTO passkey_user_handles (user_id, user_handle) VALUES ($1, $2)")
+            .bind_storage(user_id)
+            .bind_storage(PasskeyUserHandle::generate())
+            .execute(&mut *connection)
+            .await
+            .map_err(CreateUserError::Internal)?;
+
+        Ok(user_id)
     }
 
     async fn prepare_authentication(

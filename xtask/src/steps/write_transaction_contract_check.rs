@@ -16,7 +16,7 @@ use crate::steps::scan::run_source_scan;
 
 const POLICED_ROOTS: &[&str] = &["storage/src", "server/src", "web/src"];
 
-/// The authoritative, closed application-mutation census. Counts add to 74.
+/// The authoritative, closed application-mutation census. Counts add to 81.
 const AUDITED_TRAITS: &[(&str, &[&str])] = &[
     (
         "AudienceStorage",
@@ -55,6 +55,18 @@ const AUDITED_TRAITS: &[(&str, &[&str])] = &[
     (
         "PasswordResetStorage",
         &["create_password_reset", "use_password_reset"],
+    ),
+    (
+        "PasskeyStorage",
+        &[
+            "insert_credential",
+            "delete_credential",
+            "create_registration_ceremony",
+            "claim_registration_ceremony",
+            "create_authentication_ceremony",
+            "claim_authentication_ceremony",
+            "cleanup_ceremonies",
+        ],
     ),
     (
         "PostStorage",
@@ -527,7 +539,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_sixty_one_method_census_passes() {
+    fn exact_eighty_one_method_census_passes() {
         let source = complete_census().replacen(
             "trait MediaStorage {",
             "trait MediaStorage { async fn media_entry_is_reclaimable(&self, transaction: &mut WriteTransaction);",

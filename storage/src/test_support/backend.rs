@@ -8,10 +8,10 @@ use crate::posts::tags::{INSERT_POST_TAG, UPSERT_TAG_RETURNING_ID};
 use crate::sql::QueryStorageExt;
 use crate::{
     AudienceStorage, DbConnectOptions, EmailVerificationStorage, FeedCacheStorage,
-    FeedEventStorage, InviteStorage, MediaStorage, PasswordResetStorage, PostStorage,
-    PublisherStorage, SessionStorage, SiteConfigStorage, StorageFactory, StorageRuntimeConfig,
-    SubscriptionStorage, TaggingError, ThemeStorage, UserConfigStorage, UserStorage, WriteScope,
-    WriteScopeError,
+    FeedEventStorage, InviteStorage, MediaStorage, PasskeyStorage, PasswordResetStorage,
+    PostStorage, PublisherStorage, SessionStorage, SiteConfigStorage, StorageFactory,
+    StorageRuntimeConfig, SubscriptionStorage, TaggingError, ThemeStorage, UserConfigStorage,
+    UserStorage, WriteScope, WriteScopeError,
 };
 
 use common::MutationOutcome;
@@ -463,6 +463,12 @@ impl TestEnv {
     #[must_use]
     pub fn users(&self) -> Arc<dyn UserStorage> {
         self.factory.users()
+    }
+
+    /// Mints Passkey storage for this test's backend.
+    #[must_use]
+    pub fn passkeys(&self) -> Arc<dyn PasskeyStorage> {
+        self.factory.passkeys()
     }
 
     /// Mints session storage for this test's backend.

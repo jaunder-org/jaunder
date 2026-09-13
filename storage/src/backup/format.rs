@@ -13,14 +13,22 @@ use serde_json::{Map, Value};
 use super::{BackupMode, error::BackupError};
 
 const LEGACY_BACKUP_FORMAT_VERSION: u32 = 1;
-pub(crate) const CURRENT_BACKUP_FORMAT_VERSION: u32 = 1;
+pub(crate) const CURRENT_BACKUP_FORMAT_VERSION: u32 = 2;
+const SUPPORTED_BACKUP_FORMAT_VERSIONS: &[u32] =
+    &[LEGACY_BACKUP_FORMAT_VERSION, CURRENT_BACKUP_FORMAT_VERSION];
 
 const fn legacy_backup_format_version() -> u32 {
     LEGACY_BACKUP_FORMAT_VERSION
 }
 
-// Tables deliberately excluded from backup: _sqlx_migrations is schema state and feed_cache is regenerable.
-pub(crate) const TABLES_EXCLUDED_FROM_BACKUP: &[&str] = &["_sqlx_migrations", "feed_cache"];
+// Schema bookkeeping, regenerable cache data, and live ceremony state are not
+// portable backup data. Durable Passkey handles and credentials remain included.
+pub(crate) const TABLES_EXCLUDED_FROM_BACKUP: &[&str] = &[
+    "_sqlx_migrations",
+    "feed_cache",
+    "passkey_registration_ceremonies",
+    "passkey_authentication_ceremonies",
+];
 
 /// The set of tables to back up, derived from the live schema.
 pub(crate) fn table_set(live: impl IntoIterator<Item = String>) -> Vec<String> {
@@ -44,6 +52,7 @@ pub(crate) fn restore_table_order(tables: &[String]) -> Vec<&str> {
     ordered.sort_by_key(|table| match *table {
         "users" | "channels" | "subscription_statuses" | "target_kinds" => 1,
         "audiences"
+        | "passkey_user_handles"
         | "subscriptions"
         | "media"
         | "posts"
@@ -55,6 +64,7 @@ pub(crate) fn restore_table_order(tables: &[String]) -> Vec<&str> {
         "audience_members"
         | "email_verifications"
         | "idempotency_keys"
+        | "passkey_credentials"
         | "password_resets"
         | "post_audiences"
         | "post_tags"
@@ -162,7 +172,7 @@ pub(super) fn read_manifest(source_path: &Path) -> Result<BackupManifest, Backup
 }
 
 pub(super) fn validate_manifest(manifest: &BackupManifest) -> Result<(), BackupError> {
-    if manifest.format_version != CURRENT_BACKUP_FORMAT_VERSION {
+    if !SUPPORTED_BACKUP_FORMAT_VERSIONS.contains(&manifest.format_version) {
         return Err(BackupError::UnsupportedFormatVersion {
             backup_version: manifest.format_version,
             current_version: CURRENT_BACKUP_FORMAT_VERSION,
@@ -285,8 +295,10 @@ mod tests {
     }
 
     #[test]
-    fn restore_table_order_loads_revision_subject_parents_before_media() {
+    fn restore_table_order_loads_required_parents_before_children() {
         let tables = [
+            "passkey_credentials",
+            "passkey_user_handles",
             "post_media",
             "post_revision_tags",
             "post_revisions",
@@ -304,6 +316,9 @@ mod tests {
                 .position(|candidate| *candidate == table)
                 .expect("table remains in restore order")
         };
+        assert!(position("users") < position("passkey_user_handles"));
+        assert!(position("users") < position("passkey_credentials"));
+        assert!(position("passkey_user_handles") < position("passkey_credentials"));
         assert!(position("users") < position("posts"));
         assert!(position("posts") < position("post_revisions"));
         assert!(position("post_revisions") < position("post_revision_tags"));
@@ -315,7 +330,7 @@ mod tests {
     #[test]
     fn backup_manifest_serializes_format_version_and_timestamp() {
         let manifest = BackupManifest {
-            format_version: 1,
+            format_version: CURRENT_BACKUP_FORMAT_VERSION,
             version: "0.1.0".to_owned(),
             schema_version: 1,
             schema_checksum: "checksum".to_owned(),
@@ -327,7 +342,7 @@ mod tests {
         };
 
         let json = serde_json::to_value(&manifest).expect("manifest serializes");
-        assert_eq!(json["format_version"], 1);
+        assert_eq!(json["format_version"], CURRENT_BACKUP_FORMAT_VERSION);
         assert_eq!(json["timestamp"], "2026-08-26T01:02:03.123456Z");
         assert_eq!(
             serde_json::from_value::<BackupManifest>(json)
@@ -451,9 +466,24 @@ mod tests {
     }
 
     #[test]
+    fn validate_manifest_accepts_legacy_format_v1() {
+        let manifest = BackupManifest {
+            format_version: LEGACY_BACKUP_FORMAT_VERSION,
+            version: "legacy-release".to_owned(),
+            schema_version: 11,
+            schema_checksum: "checksum".to_owned(),
+            timestamp: UtcInstant::now(),
+            mode: BackupMode::Directory,
+            tables: Vec::new(),
+        };
+
+        validate_manifest(&manifest).expect("format-1 remains readable");
+    }
+
+    #[test]
     fn validate_manifest_rejects_unsupported_format_version() {
         let manifest = BackupManifest {
-            format_version: 2,
+            format_version: CURRENT_BACKUP_FORMAT_VERSION + 1,
             version: env!("CARGO_PKG_VERSION").to_owned(),
             schema_version: 11,
             schema_checksum: "checksum".to_owned(),
@@ -466,9 +496,9 @@ mod tests {
         assert!(matches!(
             error,
             BackupError::UnsupportedFormatVersion {
-                backup_version: 2,
+                backup_version,
                 current_version: CURRENT_BACKUP_FORMAT_VERSION
-            }
+            } if backup_version == CURRENT_BACKUP_FORMAT_VERSION + 1
         ));
     }
 

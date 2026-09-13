@@ -4,6 +4,9 @@ pub use site_config::PostgresSiteConfigStorage;
 mod users;
 pub use users::PostgresUserStorage;
 
+mod passkeys;
+pub use passkeys::PostgresPasskeyStorage;
+
 mod sessions;
 pub use sessions::PostgresSessionStorage;
 

@@ -4,6 +4,7 @@
 //! stable values without acquiring a cryptographic-policy surface of their own.
 
 use std::error::Error as StdError;
+use std::fmt;
 
 use common::tagged_url::BaseUrl;
 use serde::{Deserialize, Serialize};
@@ -15,7 +16,7 @@ use webauthn_rs::prelude::{
 
 /// A server-persisted discoverable credential. Its representation is deliberately
 /// opaque outside this module so only this adapter selects verification policy.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Credential(Passkey);
 
@@ -31,21 +32,52 @@ impl Credential {
     pub fn counter(&self) -> u32 {
         self.0.counter()
     }
+
+    /// Rehydrates a known-valid serialized credential for storage tests.
+    ///
+    /// This test-support-only seam does not expose the fork type or admit a
+    /// production construction path.
+    ///
+    /// # Errors
+    ///
+    /// Returns the serialization error when `value` is not a valid credential.
+    #[cfg(feature = "test-support")]
+    pub fn deserialize_for_test(value: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(value)
+    }
+}
+
+impl fmt::Debug for Credential {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Credential([REDACTED])")
+    }
 }
 
 /// Server-only registration ceremony state.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct RegistrationState(PasskeyRegistration);
 
 /// Server-only authentication ceremony state.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct AuthenticationState(PasskeyAuthentication);
 
+impl fmt::Debug for RegistrationState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("RegistrationState([REDACTED])")
+    }
+}
+
+impl fmt::Debug for AuthenticationState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("AuthenticationState([REDACTED])")
+    }
+}
+
 /// An opaque `WebAuthn` user handle. Registration currently requires the
 /// fork-supported 16-byte representation; callers must not substitute usernames.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct UserHandle([u8; 16]);
 
@@ -58,6 +90,12 @@ impl UserHandle {
     #[must_use]
     pub fn as_bytes(&self) -> &[u8; 16] {
         &self.0
+    }
+}
+
+impl fmt::Debug for UserHandle {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("UserHandle([REDACTED])")
     }
 }
 

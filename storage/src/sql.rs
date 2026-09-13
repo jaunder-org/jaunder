@@ -14,6 +14,10 @@ use crate::feed_events::{FeedEventAttempts, StoredFeedDiagnostic};
 use crate::helpers::{SerializedPostTags, SessionCreatedAt, SessionLastUsedAt, StoredSessionLabel};
 use crate::invites::{InviteCreatedAt, InviteExpiresAt};
 use crate::media::MediaDeleteMode;
+use crate::passkeys::{
+    PasskeyCredentialId, PasskeyLabel, PasskeyUserHandle, StoredPasskeyCeremonyHandleHash,
+    StoredPasskeySerialization, StoredPasskeyText,
+};
 use crate::posts::{
     lifecycle::IdempotencyAdvisoryLockKey,
     media::{MediaAdvisoryLockKey, MediaReferenceSnapshotLimit, PersistedMediaSubjectKind},
@@ -269,6 +273,12 @@ approve_storage_binds!(
     StoredSiteConfigValue,
     SerializedPostTags,
     StoredUserConfigValue,
+    PasskeyCredentialId,
+    PasskeyLabel,
+    PasskeyUserHandle,
+    StoredPasskeyCeremonyHandleHash,
+    StoredPasskeySerialization,
+    StoredPasskeyText,
 );
 #[cfg(test)]
 use crate::backup::CatalogDatabaseName;

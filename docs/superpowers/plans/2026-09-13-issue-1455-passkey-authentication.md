@@ -67,7 +67,7 @@ Out:
     anomalies. Focused host tests cover state/credential serialization, exact
     origin, anomaly classification, and disabled permissive origin options.
 
-- [ ] Task 2: Add dual-backend Passkey persistence
+- [x] Task 2: Add dual-backend Passkey persistence
   - Contract: add domain values for label, credential identity, random opaque
     User handle, and ceremony handle/hash. Paired next-numbered migrations
     create a durable User-handle table, durable credentials, and separate

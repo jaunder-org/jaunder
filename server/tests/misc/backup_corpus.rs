@@ -1352,7 +1352,7 @@ mod reader_tests {
     fn support_state_classifies_retired_entries_as_typed_unsupported_formats() {
         let retired = CorpusEntry {
             fixture: "retired-format".to_owned(),
-            format_version: 2,
+            format_version: 3,
             support: SupportState::Retired,
             digest: "0".repeat(64),
         };
@@ -1419,7 +1419,7 @@ mod writer_tests {
         };
     }
 
-    const V1_TABLES: &[&str] = &[
+    const V2_TABLES: &[&str] = &[
         "audience_members",
         "audiences",
         "channels",
@@ -1429,6 +1429,8 @@ mod writer_tests {
         "instance_identity",
         "invites",
         "media",
+        "passkey_credentials",
+        "passkey_user_handles",
         "password_resets",
         "post_audiences",
         "post_media",
@@ -1489,6 +1491,10 @@ mod writer_tests {
             seeded_source: "SeedRawPost author, named audience membership, and post audience assignment",
         },
         WriterRole {
+            name: "passkey user handle",
+            seeded_source: "migration 0037 assigns each fixture user a durable Passkey handle",
+        },
+        WriterRole {
             name: "media bytes",
             seeded_source: "storage/media/avatar.txt = media",
         },
@@ -1510,7 +1516,7 @@ mod writer_tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn current_writer_satisfies_independent_v1_raw_wire_oracle(#[case] backend: Backend) {
+    async fn current_writer_satisfies_independent_v2_raw_wire_oracle(#[case] backend: Backend) {
         for output in CorpusIoMode::ALL {
             let source = InitializedCommandEnv::new(backend).await;
             let ids = populate_backup_fixture(&source.args).await;
@@ -1541,7 +1547,7 @@ mod writer_tests {
             };
 
             assert_writer_version_is_uniquely_supported(&extracted);
-            assert_v1_raw_wire_oracle(&extracted, output, &ids);
+            assert_v2_raw_wire_oracle(&extracted, output, &ids);
         }
     }
 
@@ -1573,12 +1579,12 @@ mod writer_tests {
         );
         assert_eq!(
             version,
-            1,
+            2,
             "{}",
-            format_compatibility_diagnostic("format-1 is the sole current writer oracle")
+            format_compatibility_diagnostic("format-2 is the sole current writer oracle")
         );
     }
-    fn assert_v1_raw_wire_oracle(export: &Path, output: CorpusIoMode, ids: &BackupFixtureIds) {
+    fn assert_v2_raw_wire_oracle(export: &Path, output: CorpusIoMode, ids: &BackupFixtureIds) {
         assert_inventory_is_complete();
         let manifest = read_manifest(export);
         let members = compatibility_option(manifest.as_object(), "manifest must be an object");
@@ -1599,7 +1605,7 @@ mod writer_tests {
         );
         assert_eq!(
             manifest["format_version"],
-            Value::from(1),
+            Value::from(2),
             "{}",
             format_compatibility_diagnostic("writer format_version changed")
         );
@@ -1641,7 +1647,7 @@ mod writer_tests {
         );
         assert_eq!(
             tables,
-            &V1_TABLES
+            &V2_TABLES
                 .iter()
                 .map(|table| Value::from(*table))
                 .collect::<Vec<_>>(),
@@ -1651,7 +1657,7 @@ mod writer_tests {
 
         let paths = regular_file_bytes(export);
         let expected_paths = std::iter::once("manifest.json".to_owned())
-            .chain(V1_TABLES.iter().map(|table| format!("db/{table}.ndjson")))
+            .chain(V2_TABLES.iter().map(|table| format!("db/{table}.ndjson")))
             .chain(std::iter::once("media/avatar.txt".to_owned()))
             .collect::<BTreeSet<_>>();
         assert_eq!(
@@ -1721,7 +1727,7 @@ mod writer_tests {
     }
 
     fn parse_ndjson_tables(files: &BTreeMap<String, Vec<u8>>) -> BTreeMap<String, Vec<Value>> {
-        V1_TABLES
+        V2_TABLES
             .iter()
             .map(|table| {
                 let path = format!("db/{table}.ndjson");
@@ -1795,6 +1801,18 @@ mod writer_tests {
             "backup format compatibility: viewer seed must emit its exact boolean and text values"
         );
         assert!(
+            table_rows(rows, "passkey_user_handles").iter().any(|row| {
+                row_id_is(row, "user_id", &author)
+                    && row["user_handle"].as_str().is_some_and(|handle| {
+                        handle.len() == 32
+                            && handle
+                                .bytes()
+                                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+                    })
+            }),
+            "backup format compatibility: author must retain its durable Passkey handle"
+        );
+        assert!(
             table_rows(rows, "media").iter().any(|row| {
                 row_id_is(row, "user_id", &author)
                     && row["sha256"]
@@ -1866,6 +1884,7 @@ mod writer_tests {
                 "integer",
                 "media bytes",
                 "null",
+                "passkey user handle",
                 "relationships",
                 "text",
             ]),

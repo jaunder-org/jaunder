@@ -14,10 +14,11 @@ use crate::backend::WriteScopeFactoryBackend;
 use crate::{
     AudienceStorage, AudienceStore, EmailVerificationStorage, EmailVerificationStore,
     FeedCacheStorage, FeedCacheStore, FeedEventStorage, FeedEventStore, InviteStorage, InviteStore,
-    MediaStorage, MediaStore, PasswordResetStorage, PasswordResetStore, PostStorage, PostStore,
-    PublisherStorage, PublisherStore, SessionStorage, SessionStore, SiteConfigStorage,
-    SiteConfigStore, SubscriptionStorage, SubscriptionStore, ThemeStorage, ThemeStore,
-    UserConfigStorage, UserConfigStore, UserStorage, UserStore, WriteScope,
+    MediaStorage, MediaStore, PasskeyStorage, PasskeyStore, PasswordResetStorage,
+    PasswordResetStore, PostStorage, PostStore, PublisherStorage, PublisherStore, SessionStorage,
+    SessionStore, SiteConfigStorage, SiteConfigStore, SubscriptionStorage, SubscriptionStore,
+    ThemeStorage, ThemeStore, UserConfigStorage, UserConfigStore, UserStorage, UserStore,
+    WriteScope,
 };
 
 /// Pool-owning factory for the storage dependencies assembled at a composition root.
@@ -58,6 +59,15 @@ impl StorageFactory {
         match &self.inner {
             StorageFactoryInner::Sqlite(pool) => Arc::new(UserStore::new(pool.clone())),
             StorageFactoryInner::Postgres(pool) => Arc::new(UserStore::new(pool.clone())),
+        }
+    }
+
+    /// Constructs Passkey storage over the owned pool.
+    #[must_use]
+    pub fn passkeys(&self) -> Arc<dyn PasskeyStorage> {
+        match &self.inner {
+            StorageFactoryInner::Sqlite(pool) => Arc::new(PasskeyStore::new(pool.clone())),
+            StorageFactoryInner::Postgres(pool) => Arc::new(PasskeyStore::new(pool.clone())),
         }
     }
 
