@@ -1092,6 +1092,64 @@ pass.
 
 ### Credentials and sessions
 
+#### Passkeys
+
+A **Passkey** is an additive, discoverable WebAuthn browser credential. Every
+account retains its password and may own multiple required-label Passkeys;
+password registration, login, and reset remain independent paths. Enrollment and
+deletion live on the Passkeys page, accept only the ambient cookie Session,
+reject explicit Authorization without fallback, and require current-password
+verification. Registration requires user verification, requests no attestation,
+and admits synced and device-bound authenticators. Password reset keeps
+Passkeys. Deleting one preserves the password-confirmed current browser Session
+while atomically revoking every other Session for that User
+([Passkeys are additive cookie-Session credentials](adr/drafts/passkeys-are-additive-cookie-session-credentials.md)).
+
+The login page keeps password login and adds an explicit account-discovering
+Passkey action. Each User has a random stable WebAuthn user handle unrelated to
+Username and UserId; the returned handle plus globally unique credential ID
+selects the account without first soliciting a Username. Conditional UI,
+username-first WebAuthn, and passkey enrollment during signup are absent. A
+successful UV-required assertion updates the durable credential and creates the
+same ordinary cookie-only Session as password login. Passkeys never authenticate
+Bearer, Basic, or AtomPub traffic.
+
+`host::passkey` is the sole relying-party adapter over the safe `Webauthn`
+wrapper from the exact-revision 0.5.5 `jaunder-org/webauthn-rs` fork,
+`feature/passkey-policy-apis` at `6d0acc73fbf4436b1ed853fa5c8a219dac304a8e`. The
+fork adds opt-in resident-required/no-attestation registration, explicit
+discoverable authentication with mediation omitted, and verified counter-anomaly
+results; upstream defaults and cryptographic checks remain unchanged.
+Application code does not call the unstable expert core. Remove the Cargo patch
+and paired `deny.toml` rationale when an audited upstream release supplies
+equivalent supported policy doors.
+
+WebAuthn trust derives only from `site.base_url`: its exact origin is the
+expected origin and its hostname is the RP ID. Request headers cannot select
+either. Passkeys fail closed, with a clear unavailable state, when the setting
+is absent or is not HTTPS, except for localhost development. While any Passkey
+exists, every configuration mutation must preserve the canonical RP hostname:
+unsetting or changing it is rejected across individual, aggregate, web, and CLI
+doors. Multi-origin, wildcard-parent, related-origin, and credential-migration
+behavior do not exist.
+
+Registration and authentication ceremony state is database-backed,
+purpose-bound, five-minute transient data excluded from backup and restore. It
+binds the exact origin and RP ID current at start, which must still match
+configuration at finish. The browser receives only a random opaque state handle
+whose stored form is hashed; atomic claim permits one finish, and expiry is
+authoritative independently of cleanup. Finish verifies ceremony type,
+challenge, origin, RP ID hash, credential/account binding, signature, presence,
+and required verification. Typed ceremony payloads carry protocol-required
+material, but it never enters logs, metrics labels, public errors, Session
+bodies, or the advisory local-storage marker.
+
+Durable credentials and user handles are backup data under one SQLite/PostgreSQL
+storage contract; ceremonies are not. Authentication persists mutable backup
+properties and last use. A valid zero or non-monotonic counter remains usable
+because synced authenticators make it a risk signal, but never lowers the stored
+nonzero high-water mark; bounded PII-free telemetry records the anomaly.
+
 - A session token is 32 cryptographically random bytes, base64url-encoded, and
   is minted already-digested by `host::token::generate_hashed`
   (`host/src/token.rs:64`, called at `storage/src/sessions.rs:160`): the raw
@@ -3640,16 +3698,16 @@ workspace member, so the coverage source filter admits it and its expansion
 logic is measured by in-crate `syn::parse_quote!` tests — ADR-0062 records that
 correction itself (`:76-83`, #412).
 
-**Dependency patching.** The workspace carries one temporary git
-`[patch.crates-io]` entry: `lettre`, routed to a `jaunder-org` fork pinned by
-rev until the mailbox-parsing fix lands upstream
-([ADR-0119](adr/0119-lettre-fork-pinned-by-rev.md)). `lettre`'s RFC 2822 mailbox
-grammar cannot re-parse addresses its `Address` type accepts, so
-`MessageBuilder::build` fails for a legal quoted local part or address literal.
-The earlier `atom_syndication`/`rss` fork apparatus was removed under
-[ADR-0089](adr/0089-upstream-atom-document-io.md): no fork entries in
-`[patch.crates-io]`, no `flake = false` fork inputs, and no
-`overrideVendorGitCheckout` in `nix/packages.nix:47-63` remain.
+**Dependency patching.** The workspace carries temporary exact-revision git
+`[patch.crates-io]` entries for lettre
+([ADR-0119](adr/0119-lettre-fork-pinned-by-rev.md)) and the Passkey
+`webauthn-rs`/`webauthn-rs-core` pair
+([Passkeys are additive cookie-Session credentials](adr/drafts/passkeys-are-additive-cookie-session-credentials.md)).
+The latter pins `jaunder-org/webauthn-rs` branch `feature/passkey-policy-apis`
+at `6d0acc73fbf4436b1ed853fa5c8a219dac304a8e`, preserving upstream defaults
+while supplying its narrowly selected safe-wrapper policies. Each patch and its
+paired `deny.toml` source rationale are removed together once its audited
+upstream release supplies the needed behavior.
 
 **A pinned formatter.** The devShell's `leptosfmt` is not a released version:
 the Nix package layer overrides `pkgs.leptosfmt` to a post-fix upstream rev

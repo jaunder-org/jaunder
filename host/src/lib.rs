@@ -24,6 +24,7 @@ pub mod etag;
 pub mod feed;
 pub mod invite;
 pub mod metrics;
+pub mod passkey;
 pub mod password;
 pub mod render;
 pub mod retention;

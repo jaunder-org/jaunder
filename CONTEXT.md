@@ -98,6 +98,13 @@ It is not the user's login password; it is an opaque token presented as the
 password in HTTP Basic auth. _Avoid_: API key, access token (it reuses
 session-token infrastructure but is user-facing as a "password").
 
+**Passkey**: A named, independently revocable WebAuthn credential a User enrolls
+for browser sign-in. It is a discoverable public-key credential that lets the
+authenticator identify the account and must verify the User; it neither replaces
+the account password nor authenticates machine-facing APIs. _Avoid_: security
+key (Passkeys may be synced), passwordless account (password recovery remains),
+Session (a successful Passkey assertion creates a Session).
+
 **Username**: A case-insensitive local account identifier accepted as ASCII
 `[a-z0-9_-]+`. Input is normalized to lowercase; that canonical form is stored,
 compared, serialized, displayed, and used in URLs. _Avoid_: preserving case as a
@@ -188,6 +195,8 @@ second CommonMark parser.
 - A **User** has exactly one canonical **Username**.
 - An AtomPub **Member Entry** is the wire form of exactly one **Post**.
 - A **User** may hold many **App Passwords**, each revocable independently.
+- A **User** may hold many **Passkeys**, each revocable independently; a Passkey
+  authenticates the browser and then creates an ordinary **Session**.
 - A **Post** appears in two unrelated Atom surfaces: the public **Syndication
   Feed** (as rendered HTML) and the user's AtomPub **Collection** (in native
   source form for lossless round-trip).

@@ -59,6 +59,8 @@ area:
 - **Source management**: Adding/removing feeds, AP actors, and AT accounts.
 - **Lists**: Following, Followers, Blocks, and Mutes.
 - **Sessions**: Individual revocation of device tokens.
+- **Passkeys**: Enrollment and independent revocation of named browser
+  credentials; password login and recovery remain available.
 
 ## Functional Architecture
 
