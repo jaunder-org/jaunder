@@ -1341,8 +1341,9 @@ wasm-test closure analogously contains workspace manifests, the resolved
 **evaluates** the flake `.drv` identities without realizing outputs. It fails
 closed unless docs changes affect only `static-docs`; server changes affect
 `static-code` but neither wasm path; web changes affect `static-code` and
-`.#site` but not `wasm-tests`; and `common`/`macros` changes affect every
-dependent checked boundary. CI runs this eval-only drift probe. It neither
+`.#site` but not `wasm-tests`; and `common`, `macros`, and the shared
+performance contract affect the code, site, and wasm-test boundaries without
+invalidating `static-docs`. CI runs this eval-only drift probe. It neither
 builds outputs nor purges the store, and says nothing about remote-cache
 behavior.
 

@@ -427,6 +427,54 @@ let
         || (pkgs.lib.hasPrefix "tools/" relative && craneLib.filterCargoSources path type);
     })
     [ "client" "csr" "server" "test-support" "web" ];
+  docsToolsFilteredSrc = pkgs.lib.cleanSourceWith {
+    src = craneLib.path ../.;
+    filter =
+      path: type:
+      let
+        relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
+        requiredToolRoots = [
+          "tools/coverage"
+          "tools/csr_bundle"
+          "tools/devtool"
+          "tools/doctests"
+        ];
+        requiredToolPath =
+          builtins.any (
+            root: relative == root || pkgs.lib.hasPrefix "${root}/" relative
+          ) requiredToolRoots;
+        requiredDirectory =
+          toString path == toString ../.
+          || relative == "common"
+          || relative == "common/src"
+          || relative == "csr"
+          || relative == "storage"
+          || relative == "storage/src"
+          || relative == "tools"
+          || requiredToolPath;
+      in
+      (type == "directory" && requiredDirectory)
+      || relative == "tools/Cargo.toml"
+      || relative == "tools/Cargo.lock"
+      || relative == "csr/index.html"
+      || (requiredToolPath && craneLib.filterCargoSources path type);
+  };
+  docsToolsSrc = pkgs.runCommand "jaunder-docs-devtool-cargo-source" { } ''
+    cp --no-preserve=mode -r ${docsToolsFilteredSrc}/. "$out/"
+    mkdir -p \
+      "$out/common/src" \
+      "$out/storage/src" \
+      "$out/tools/diagnostic-coverage-runtime/src" \
+      "$out/tools/performance/src"
+    printf '%s\n' '[package]' 'name = "common"' 'version = "0.1.0"' 'edition = "2024"' > "$out/common/Cargo.toml"
+    printf '%s\n' '[package]' 'name = "storage"' 'version = "0.1.0"' 'edition = "2024"' > "$out/storage/Cargo.toml"
+    printf '%s\n' '[package]' 'name = "diagnostic-coverage-runtime"' 'version = "0.1.0"' 'edition = "2024"' > "$out/tools/diagnostic-coverage-runtime/Cargo.toml"
+    printf '%s\n' '[package]' 'name = "performance"' 'version = "0.1.0"' 'edition = "2024"' > "$out/tools/performance/Cargo.toml"
+    printf '%s\n' '# docs-only optional dependency placeholder' > "$out/common/src/lib.rs"
+    printf '%s\n' '# docs-only optional dependency placeholder' > "$out/storage/src/lib.rs"
+    printf '%s\n' '# docs-only workspace placeholder' > "$out/tools/diagnostic-coverage-runtime/src/lib.rs"
+    printf '%s\n' '# docs-only workspace placeholder' > "$out/tools/performance/src/lib.rs"
+  '';
   toolsBaseArgs = {
     src = toolsSrc;
     pname = "jaunder-tools";
@@ -453,29 +501,43 @@ let
       pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
     ];
   };
-  toolsCargoVendorDir = craneLib.vendorCargoDeps (
-    toolsBaseArgs
-    // {
-      overrideVendorGitCheckout =
-        ps: drv:
-        let
-          p = builtins.head ps;
-        in
-        if p.name == "atom_syndication" then
-          pkgs.runCommandLocal "tools-atom-fork-vendor-${p.name}-${p.version}" { } ''
-            dst="$out/${p.name}-${p.version}"
-            mkdir -p "$dst"
-            cp -a ${atom-fork}/. "$dst/"
-            chmod -R u+w "$dst"
-            echo '{"files":{},"package":null}' > "$dst/.cargo-checksum.json"
-          ''
-        else
-          drv;
-    }
-  );
+  toolsVendorArgs = {
+    overrideVendorGitCheckout =
+      ps: drv:
+      let
+        p = builtins.head ps;
+      in
+      if p.name == "atom_syndication" then
+        pkgs.runCommandLocal "tools-atom-fork-vendor-${p.name}-${p.version}" { } ''
+          dst="$out/${p.name}-${p.version}"
+          mkdir -p "$dst"
+          cp -a ${atom-fork}/. "$dst/"
+          chmod -R u+w "$dst"
+          echo '{"files":{},"package":null}' > "$dst/.cargo-checksum.json"
+        ''
+      else
+        drv;
+  };
+  toolsCargoVendorDir = craneLib.vendorCargoDeps (toolsBaseArgs // toolsVendorArgs);
   toolsArgs = toolsBaseArgs // {
     cargoVendorDir = toolsCargoVendorDir;
   };
+  docsToolsBaseArgs = toolsBaseArgs // {
+    src = docsToolsSrc;
+    pname = "jaunder-docs-devtool";
+    cargoExtraArgs = "--manifest-path tools/Cargo.toml -p devtool --no-default-features";
+    cargoLock = "${docsToolsSrc}/tools/Cargo.lock";
+    postPatch = ''
+      ln -sf ../Cargo.lock tools/Cargo.lock
+    '';
+  };
+  docsToolsCargoVendorDir = craneLib.vendorCargoDeps (docsToolsBaseArgs // toolsVendorArgs);
+  docsToolsArgs = docsToolsBaseArgs // {
+    cargoVendorDir = docsToolsCargoVendorDir;
+  };
+  docsToolsCargoArtifacts = craneLib.buildDepsOnly (
+    docsToolsArgs // { dummySrc = docsToolsSrc; }
+  );
   toolsCargoArtifacts = craneLib.buildDepsOnly (toolsArgs // { dummySrc = toolsSrc; });
   toolsOfflineCargoHome = mkOfflineCargoHome {
     name = "jaunder-tools";
@@ -491,6 +553,18 @@ let
       cargoArtifacts = toolsCargoArtifacts;
       pname = "devtool";
       cargoExtraArgs = "${toolsArgs.cargoExtraArgs} -p devtool";
+      doCheck = false;
+      installPhase = ''
+        mkdir -p $out/bin
+        cp tools/target/release/devtool $out/bin/devtool
+      '';
+      doNotPostBuildInstallCargoBinaries = true;
+    }
+  );
+  docsDevtoolBin = craneLib.buildPackage (
+    docsToolsArgs
+    // {
+      cargoArtifacts = docsToolsCargoArtifacts;
       doCheck = false;
       installPhase = ''
         mkdir -p $out/bin
@@ -943,6 +1017,7 @@ in
       diagnosticBaselineCsrWasmBundle
       testSupportBin
       devtoolBin
+      docsDevtoolBin
       cargo-crap
       wasm-bindgen-cli
       wasmTestWebdriverConfig

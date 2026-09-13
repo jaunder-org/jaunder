@@ -23,6 +23,7 @@ let
     jaunderBin
     testSupportBin
     devtoolBin
+    docsDevtoolBin
     cargo-crap
     wasm-bindgen-cli
     wasmTestWebdriverConfig
@@ -1183,8 +1184,8 @@ e2eGateChecks
     '';
   };
 
-# `devtool` owns static-check definitions; separate source boundaries
-# let Markdown-only changes avoid realizing the code-static group.
+# The docs-only build preserves `devtool`'s single command catalog without
+# importing the performance producer's product-storage source closure.
 static-docs =
   let
     staticDocsSrc = pkgs.lib.cleanSourceWith {
@@ -1210,10 +1211,7 @@ static-docs =
   in
   pkgs.runCommand "static-docs"
     {
-      nativeBuildInputs = [
-        devtoolBin
-        pkgs.prettier
-      ];
+      nativeBuildInputs = [ docsDevtoolBin pkgs.prettier ];
     }
     ''
       cp --no-preserve=mode -r ${staticDocsSrc} src

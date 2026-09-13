@@ -7,6 +7,10 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = ["performance"]
+performance = ["dep:common", "dep:jiff", "dep:performance", "dep:storage"]
+
 [dependencies]
 clap = { version = "4.6.6", features = ["derive"] }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -27,7 +31,7 @@ oxc_ast = "0.149.0"
 oxc_ast_visit = "0.149.0"
 oxc_parser = "0.149.0"
 oxc_span = "0.149.0"
-performance = { path = "../performance" }
-storage = { path = "../../storage" }
-common = { path = "../../common" }
-jiff = "0.2.21"
+performance = { path = "../performance", optional = true }
+storage = { path = "../../storage", optional = true }
+common = { path = "../../common", optional = true }
+jiff = { version = "0.2.21", optional = true }
