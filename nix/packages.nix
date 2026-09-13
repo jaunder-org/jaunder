@@ -261,6 +261,9 @@ let
       # only on the host (dev box / CI runner).
       # Nix assembly is not application source; exclude only its top-level root.
       !(type == "directory" && path == "${toString (craneLib.path ../.)}/nix")
+      # Cargo build scripts treat a present `.git` as authoritative metadata.
+      # Never retain the filtered empty directory that crane would otherwise admit.
+      && !(pkgs.lib.hasSuffix "/.git" path || pkgs.lib.hasInfix "/.git/" path)
       && (!pkgs.lib.hasInfix "/xtask/" path)
       && (
         (pkgs.lib.hasSuffix ".sql" path)
