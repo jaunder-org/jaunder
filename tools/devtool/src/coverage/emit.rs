@@ -11,7 +11,8 @@ use coverage::status::{
     TestCensus,
 };
 use coverage::workers::{
-    AggregateEvidence, WORKER_EVIDENCE_VERSION, WorkerEvidence, WorkerPartition, aggregate_workers,
+    AggregateEvidence, ExperimentStrategy, WORKER_EVIDENCE_VERSION, WorkerEvidence,
+    WorkerPartition, aggregate_terminal,
 };
 use serde_json::Value;
 
@@ -615,15 +616,6 @@ pub fn run(out: &str) -> Result<()> {
     }
     write_status(out, &status)
 }
-/// A non-production partitioning treatment selected only by `coverage emit --experiment`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ExperimentStrategy {
-    Baseline,
-    Slice,
-    Hash,
-    Backend,
-}
-
 /// The CPU allocation policy recorded with an experimental observation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConcurrencyPolicy {
@@ -648,7 +640,7 @@ fn experiment_workers(
     let strategy_name = match strategy {
         ExperimentStrategy::Slice => "slice",
         ExperimentStrategy::Hash => "hash",
-        ExperimentStrategy::Backend => "backend-experiment",
+        ExperimentStrategy::Backend => "backend",
         ExperimentStrategy::Baseline => bail!("baseline has no partition workers"),
     };
     let profile_root = std::env::current_dir()?.join("target/llvm-cov-target");
@@ -690,7 +682,7 @@ fn experiment_workers(
             }
             ExperimentWorker {
                 partition: WorkerPartition {
-                    strategy: strategy_name.into(),
+                    strategy,
                     index,
                     total: 2,
                 },
@@ -1216,20 +1208,13 @@ pub fn run_experiment(
     });
     let records = match records {
         Ok(records) => records,
-        Err(_) => {
-            record_infra(
-                &mut coverage_status,
-                RequiredStage::InstrumentedTestRun,
-                "could not start ephemeral PostgreSQL",
-            );
-            record_duration(
-                &mut coverage_status,
-                RequiredStage::InstrumentedTestRun,
-                run_started,
-            );
-            write_status(&out, &coverage_status)?;
-            return Ok(());
-        }
+        Err(_) => workers
+            .iter()
+            .cloned()
+            .map(|worker| {
+                failed_worker(worker, diag.clone(), "could not start ephemeral PostgreSQL")
+            })
+            .collect(),
     };
     record_duration(
         &mut coverage_status,
@@ -1252,24 +1237,7 @@ pub fn run_experiment(
         return Ok(());
     }
     let reconciliation_started = Instant::now();
-    let aggregate = match aggregate_workers(&expected, &records) {
-        Ok(aggregate) => aggregate,
-        Err(error) => {
-            write_diagnostic(&diag, "aggregate-error.txt", &error.to_string());
-            record_evidence_error(
-                &mut coverage_status,
-                RequiredStage::PopulationReconciliation,
-                "worker evidence did not reconcile",
-            );
-            record_duration(
-                &mut coverage_status,
-                RequiredStage::PopulationReconciliation,
-                reconciliation_started,
-            );
-            write_status(&out, &coverage_status)?;
-            return Ok(());
-        }
-    };
+    let aggregate = aggregate_terminal(strategy, &expected, &records);
     coverage_status.population.executed = aggregate.population.executed.len();
     coverage_status.population.ignored = aggregate.population.ignored.len();
     coverage_status.failed_tests = aggregate.population.failed.clone();
@@ -1278,6 +1246,21 @@ pub fn run_experiment(
             &mut coverage_status,
             RequiredStage::PopulationReconciliation,
             "could not write aggregate worker evidence",
+        );
+        record_duration(
+            &mut coverage_status,
+            RequiredStage::PopulationReconciliation,
+            reconciliation_started,
+        );
+        write_status(&out, &coverage_status)?;
+        return Ok(());
+    }
+    if let coverage::workers::Reconciliation::Error { detail } = &aggregate.reconciliation {
+        write_diagnostic(&diag, "aggregate-error.txt", detail);
+        record_evidence_error(
+            &mut coverage_status,
+            RequiredStage::PopulationReconciliation,
+            "worker evidence did not reconcile",
         );
         record_duration(
             &mut coverage_status,
@@ -1676,7 +1659,7 @@ mod tests {
         WorkerEvidence {
             version: WORKER_EVIDENCE_VERSION,
             partition: WorkerPartition {
-                strategy: "slice".into(),
+                strategy: ExperimentStrategy::Slice,
                 index,
                 total: 2,
             },
@@ -1773,9 +1756,10 @@ mod tests {
         ];
         write_worker_evidence(dir.path(), &workers).unwrap();
         let aggregate = AggregateEvidence {
-            strategy: "slice".into(),
+            strategy: ExperimentStrategy::Slice,
             population: TestCensus::default(),
             workers,
+            reconciliation: coverage::workers::Reconciliation::Reconciled,
         };
         write_aggregate_evidence(dir.path(), &aggregate).unwrap();
 

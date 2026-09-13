@@ -1,0 +1,8 @@
+{
+  "excludedNameFragments": [
+    "jaunder-coverage",
+    "jaunder-e2e",
+    "jaunder-wasm-coverage",
+    "jaunder-elisp-coverage"
+  ]
+}

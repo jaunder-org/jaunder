@@ -24,7 +24,7 @@ use std::process::Stdio;
 
 use anyhow::{Context, Result};
 
-use crate::coverage::FileCoverage;
+use crate::coverage::{FileCoverage, cache_safety};
 use crate::git;
 use crate::result::StepResult;
 use crate::steps::nix;
@@ -37,6 +37,7 @@ pub enum DriftError {
     DropsRequiredSource { path: &'static str, base: String },
     AdmitsXtaskSource { base: String, xtask_source: String },
     CoverageDoesNotDependOnRequiredSource { path: &'static str, base: String },
+    SupportDoesNotDependOnRequiredSource { path: &'static str, base: String },
     BuildDependencyInReport { path: String, line: u32 },
 }
 
@@ -104,6 +105,7 @@ const PROBE_ARMS: [ProbeArm; 8] = [
 struct ObservedProbeArm {
     arm: ProbeArm,
     source_identity: String,
+    support_drvpath: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,6 +114,7 @@ struct SourceProbeMatrix {
     arms: Vec<ObservedProbeArm>,
     coverage_drvpath_base: String,
     coverage_drvpath_required_source: String,
+    support_drvpath_base: String,
 }
 
 impl fmt::Display for DriftError {
@@ -132,11 +135,15 @@ impl fmt::Display for DriftError {
             }
             Self::AdmitsXtaskSource { base, xtask_source } => write!(
                 f,
-                "coverage source filter admits host-only xtask source ({base} -> {xtask_source})"
+                "coverage src filter admits host-only xtask source ({base} -> {xtask_source})"
             ),
             Self::CoverageDoesNotDependOnRequiredSource { path, base } => write!(
                 f,
                 "coverage derivation does not depend on required {path} ({base})"
+            ),
+            Self::SupportDoesNotDependOnRequiredSource { path, base } => write!(
+                f,
+                "coverage support derivation does not depend on required {path} ({base})"
             ),
             Self::BuildDependencyInReport { path, line } => write!(
                 f,
@@ -183,6 +190,21 @@ fn source_probe_verdict(matrix: &SourceProbeMatrix) -> Result<(), DriftError> {
             base: matrix.source_base.clone(),
             xtask_source: xtask.source_identity.clone(),
         });
+    }
+    for observed in &matrix.arms {
+        let changed = observed.support_drvpath != matrix.support_drvpath_base;
+        if observed.arm.required && !changed {
+            return Err(DriftError::SupportDoesNotDependOnRequiredSource {
+                path: observed.arm.path,
+                base: matrix.support_drvpath_base.clone(),
+            });
+        }
+        if !observed.arm.required && changed {
+            return Err(DriftError::AdmitsXtaskSource {
+                base: matrix.support_drvpath_base.clone(),
+                xtask_source: observed.support_drvpath.clone(),
+            });
+        }
     }
     let required = matrix
         .arms
@@ -264,12 +286,12 @@ fn git_run(dir: &Path, args: &[&str]) -> Result<()> {
     git::run(dir, &full)
 }
 
-/// The user-facing step: evaluate the bounded source matrix, prove the required
-/// build dependency reaches coverage, then inspect the realized producer report.
+/// The user-facing step: evaluate the bounded source matrix, prove every
+/// support input invalidates, then inspect the realized coverage evidence.
 pub fn probe_source() -> StepResult {
     match run_probe() {
         Ok(()) => StepResult::ok("coverage-probe-source").detail(
-            "coverage source filter contract holds (required Cargo inputs admitted, xtask excluded, build dependency absent from report)",
+            "coverage source and support invalidation hold; only the instrumented archive support is cache-eligible and its realized closure excludes every final coverage/e2e output",
         ),
         Err(e) => StepResult::fail("coverage-probe-source").detail(format!("{e:#}")),
     }
@@ -287,6 +309,7 @@ fn stage_probe_arm(tmp: &Path, arm: ProbeArm) -> Result<()> {
         .with_context(|| format!("writing {} for source probe", arm.path))?;
     git_run(tmp, &["add", arm.path])
 }
+
 fn worktree_registered_with(tmp: &Path, query: impl FnOnce() -> Result<Vec<u8>>) -> Result<bool> {
     let tmp = tmp.to_str().context("worktree path is not UTF-8")?;
     let fields = query()?;
@@ -370,18 +393,21 @@ fn run_probe() -> Result<()> {
     dirty_probe_tree(&tmp)?;
     let source_base = nix::eval_coverage_source_probe_drvpath(&tmp)?;
     let coverage_drvpath_base = nix::eval_coverage_drvpath(&tmp)?;
+    let support_drvpath_base = nix::eval_coverage_support_drvpath(&tmp)?;
     let mut arms = Vec::with_capacity(PROBE_ARMS.len());
     let mut coverage_drvpath_required_source = None;
 
     for arm in PROBE_ARMS {
         stage_probe_arm(&tmp, arm)?;
         let source_identity = nix::eval_coverage_source_probe_drvpath(&tmp)?;
+        let support_drvpath = nix::eval_coverage_support_drvpath(&tmp)?;
         if arm.requires_coverage_derivation {
             coverage_drvpath_required_source = Some(nix::eval_coverage_drvpath(&tmp)?);
         }
         arms.push(ObservedProbeArm {
             arm,
             source_identity,
+            support_drvpath,
         });
     }
 
@@ -391,8 +417,10 @@ fn run_probe() -> Result<()> {
         coverage_drvpath_base,
         coverage_drvpath_required_source: coverage_drvpath_required_source
             .context("missing end-to-end required source probe")?,
+        support_drvpath_base,
     };
     source_probe_verdict(&matrix)?;
+    cache_safety::verify(&tmp)?;
 
     git_run(&tmp, &["reset", "--hard", "HEAD"])?;
     dirty_probe_tree(&tmp)?;
@@ -568,10 +596,16 @@ mod tests {
                     } else {
                         "source-base".into()
                     },
+                    support_drvpath: if arm.required {
+                        format!("support-{}", arm.path)
+                    } else {
+                        "support-base".into()
+                    },
                 })
                 .collect(),
             coverage_drvpath_base: "coverage-base".into(),
             coverage_drvpath_required_source: "coverage-manifest".into(),
+            support_drvpath_base: "support-base".into(),
         }
     }
 
@@ -618,6 +652,27 @@ mod tests {
                 Err(DriftError::DropsRequiredSource {
                     path: arm.path,
                     base: "source-base".into(),
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn source_probe_rejects_each_required_support_identity_that_does_not_invalidate() {
+        for arm in PROBE_ARMS.into_iter().filter(|arm| arm.required) {
+            let mut matrix = complete_matrix();
+            matrix
+                .arms
+                .iter_mut()
+                .find(|observed| observed.arm == arm)
+                .expect("catalog arm")
+                .support_drvpath = "support-base".into();
+
+            assert_eq!(
+                source_probe_verdict(&matrix),
+                Err(DriftError::SupportDoesNotDependOnRequiredSource {
+                    path: arm.path,
+                    base: "support-base".into(),
                 })
             );
         }

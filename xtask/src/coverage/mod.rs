@@ -9,6 +9,7 @@
 //! gated against a fixed threshold (see [`crap`]), minus in-source `crap:allow`
 //! overrides. There is no baseline, anchor, or manifest.
 
+pub mod cache_safety;
 pub mod crap;
 pub mod exempt;
 pub mod gate;

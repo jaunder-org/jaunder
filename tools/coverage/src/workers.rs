@@ -1,6 +1,8 @@
 //! Versioned two-worker coverage evidence and exact population reconciliation.
 
 use std::collections::BTreeSet;
+use std::fmt;
+use std::str::FromStr;
 
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
@@ -10,10 +12,47 @@ use crate::status::{ProcessOutcome, TestCensus};
 pub const WORKER_EVIDENCE_VERSION: u32 = 1;
 const WORKER_COUNT: u8 = 2;
 
+/// The only partitioning strategies that can appear in evidence or the CLI.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExperimentStrategy {
+    Baseline,
+    Slice,
+    Hash,
+    Backend,
+}
+
+impl fmt::Display for ExperimentStrategy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Baseline => "baseline",
+            Self::Slice => "slice",
+            Self::Hash => "hash",
+            Self::Backend => "backend",
+        })
+    }
+}
+
+impl FromStr for ExperimentStrategy {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "baseline" => Ok(Self::Baseline),
+            "slice" => Ok(Self::Slice),
+            "hash" => Ok(Self::Hash),
+            "backend" => Ok(Self::Backend),
+            _ => Err(format!(
+                "unknown coverage experiment strategy `{value}`; expected baseline, slice, hash, or backend"
+            )),
+        }
+    }
+}
+
 /// The fixed position of a worker within one partitioning strategy.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkerPartition {
-    pub strategy: String,
+    pub strategy: ExperimentStrategy,
     pub index: u8,
     pub total: u8,
 }
@@ -53,8 +92,8 @@ impl WorkerEvidence {
             bail!("worker evidence is not terminal");
         }
         validate_worker_census(&self.census)?;
-        if self.profile_artifacts.is_empty() {
-            bail!("missing profile artifact");
+        if self.outcome.is_success() && self.profile_artifacts.is_empty() {
+            bail!("successful worker is missing a profile artifact");
         }
         if self.diagnostics.is_empty() {
             bail!("missing diagnostic");
@@ -65,12 +104,40 @@ impl WorkerEvidence {
     }
 }
 
-/// Fully reconciled evidence from both workers.
+/// Whether the worker evidence was completely reconciled to the expected census.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "kebab-case")]
+pub enum Reconciliation {
+    Reconciled,
+    Error { detail: String },
+}
+
+/// Fully retained evidence from both workers, including failed reconciliation.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AggregateEvidence {
-    pub strategy: String,
+    pub strategy: ExperimentStrategy,
     pub population: TestCensus,
     pub workers: Vec<WorkerEvidence>,
+    pub reconciliation: Reconciliation,
+}
+
+/// Preserve both terminal records even when their evidence cannot reconcile.
+pub fn aggregate_terminal(
+    strategy: ExperimentStrategy,
+    expected: &TestCensus,
+    workers: &[WorkerEvidence],
+) -> AggregateEvidence {
+    match aggregate_workers(expected, workers) {
+        Ok(aggregate) => aggregate,
+        Err(error) => AggregateEvidence {
+            strategy,
+            population: available_population(workers),
+            workers: workers.to_vec(),
+            reconciliation: Reconciliation::Error {
+                detail: error.to_string(),
+            },
+        },
+    }
 }
 
 /// Validate and merge exactly two terminal worker records against one census.
@@ -93,14 +160,20 @@ pub fn aggregate_workers(
 
     for worker in workers {
         worker.validate()?;
+        if worker.profile_artifacts.is_empty() {
+            bail!(
+                "worker {} has no profile artifact for the merged report",
+                worker.partition.index
+            );
+        }
         if !indexes.insert(worker.partition.index) {
             bail!("duplicate worker index");
         }
-        match &strategy {
-            Some(existing) if existing != &worker.partition.strategy => {
+        match strategy {
+            Some(existing) if existing != worker.partition.strategy => {
                 bail!("worker strategies do not match");
             }
-            None => strategy = Some(worker.partition.strategy.clone()),
+            None => strategy = Some(worker.partition.strategy),
             _ => {}
         }
         insert_distinct(
@@ -128,13 +201,30 @@ pub fn aggregate_workers(
         strategy: strategy.expect("two workers have a strategy"),
         population: actual,
         workers: workers.to_vec(),
+        reconciliation: Reconciliation::Reconciled,
     })
 }
 
-fn validate_partition(partition: &WorkerPartition) -> Result<()> {
-    if partition.strategy.is_empty() {
-        bail!("empty worker strategy");
+fn available_population(workers: &[WorkerEvidence]) -> TestCensus {
+    let mut population = TestCensus::default();
+    for worker in workers {
+        population
+            .executed
+            .extend(worker.census.executed.iter().cloned());
+        population
+            .ignored
+            .extend(worker.census.ignored.iter().cloned());
+        population
+            .failed
+            .extend(worker.census.failed.iter().cloned());
     }
+    population.executed.sort();
+    population.ignored.sort();
+    population.failed.sort();
+    population
+}
+
+fn validate_partition(partition: &WorkerPartition) -> Result<()> {
     if partition.total != WORKER_COUNT || !(1..=WORKER_COUNT).contains(&partition.index) {
         bail!("worker partition must be one of two workers");
     }
@@ -254,7 +344,7 @@ mod tests {
         WorkerEvidence {
             version: WORKER_EVIDENCE_VERSION,
             partition: WorkerPartition {
-                strategy: "slice".into(),
+                strategy: ExperimentStrategy::Slice,
                 index,
                 total: 2,
             },
@@ -311,7 +401,7 @@ mod tests {
     #[test]
     fn aggregates_the_exact_two_worker_union() {
         let aggregate = aggregate_workers(&expected(), &[first_worker(), second_worker()]).unwrap();
-        assert_eq!(aggregate.strategy, "slice");
+        assert_eq!(aggregate.strategy, ExperimentStrategy::Slice);
         assert_eq!(
             aggregate.population.executed,
             vec!["bin::first".to_owned(), "bin::second".to_owned()]
@@ -339,7 +429,7 @@ mod tests {
         assert!(aggregate_workers(&expected(), &[first_worker(), wrong_total]).is_err());
 
         let mut mismatched_strategy = second_worker();
-        mismatched_strategy.partition.strategy = "hash".into();
+        mismatched_strategy.partition.strategy = ExperimentStrategy::Hash;
         assert!(aggregate_workers(&expected(), &[first_worker(), mismatched_strategy]).is_err());
     }
 
@@ -393,6 +483,46 @@ mod tests {
             aggregate_workers(&expected(), &[failing.clone(), second_worker()]).unwrap();
         assert_eq!(aggregate.population.failed, vec!["bin::first".to_owned()]);
         assert_eq!(aggregate.workers[0].outcome, failing.outcome);
+    }
+
+    #[test]
+    fn strategy_rejects_unknown_cli_and_wire_values() {
+        assert_eq!(
+            "slice".parse::<ExperimentStrategy>(),
+            Ok(ExperimentStrategy::Slice)
+        );
+        assert!("not-a-strategy".parse::<ExperimentStrategy>().is_err());
+        assert!(serde_json::from_str::<ExperimentStrategy>("\"not-a-strategy\"").is_err());
+    }
+
+    #[test]
+    fn terminal_aggregate_retains_distinct_dual_failures_when_profiles_are_empty() {
+        let mut first = first_worker();
+        first.outcome = ProcessOutcome::SpawnError {
+            spawn_error: "cannot spawn nextest".into(),
+        };
+        first.profile_artifacts.clear();
+        first.diagnostics = vec!["logs/first-spawn.log".into()];
+
+        let mut second = second_worker();
+        second.outcome = ProcessOutcome::Signal;
+        second.profile_artifacts.clear();
+        second.diagnostics = vec!["logs/second-signal.log".into()];
+
+        let aggregate = aggregate_terminal(
+            ExperimentStrategy::Slice,
+            &expected(),
+            &[first.clone(), second.clone()],
+        );
+        assert_eq!(aggregate.workers, vec![first, second]);
+        assert_eq!(
+            aggregate.population.executed,
+            vec!["bin::first".to_owned(), "bin::second".to_owned()]
+        );
+        assert!(matches!(
+            aggregate.reconciliation,
+            Reconciliation::Error { .. }
+        ));
     }
 
     #[test]

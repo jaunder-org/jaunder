@@ -6,6 +6,7 @@
 
 use std::path::PathBuf;
 
+use ::coverage::workers::ExperimentStrategy;
 use anyhow::Result;
 use check::CheckGroup;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -170,8 +171,8 @@ enum CoverageCmd {
         #[arg(long, default_value = ".")]
         out: String,
         /// Non-production two-worker coverage experiment to execute.
-        #[arg(long, value_enum)]
-        experiment: Option<CoverageExperiment>,
+        #[arg(long)]
+        experiment: Option<ExperimentStrategy>,
         /// Worker concurrency policy for a two-worker experiment.
         #[arg(long, value_enum, default_value_t = CoverageConcurrency::Independent)]
         concurrency: CoverageConcurrency,
@@ -185,28 +186,9 @@ enum CoverageCmd {
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
-enum CoverageExperiment {
-    Baseline,
-    Slice,
-    Hash,
-    Backend,
-}
-
-#[derive(Clone, Copy, Debug, ValueEnum)]
 enum CoverageConcurrency {
     Independent,
     Fixed,
-}
-
-impl From<CoverageExperiment> for coverage::emit::ExperimentStrategy {
-    fn from(value: CoverageExperiment) -> Self {
-        match value {
-            CoverageExperiment::Baseline => Self::Baseline,
-            CoverageExperiment::Slice => Self::Slice,
-            CoverageExperiment::Hash => Self::Hash,
-            CoverageExperiment::Backend => Self::Backend,
-        }
-    }
 }
 
 impl From<CoverageConcurrency> for coverage::emit::ConcurrencyPolicy {
@@ -326,7 +308,7 @@ fn main() -> Result<()> {
             concurrency,
         }) => coverage::emit::run_experiment(
             &out,
-            coverage::emit::ExperimentStrategy::from(experiment),
+            experiment,
             coverage::emit::ConcurrencyPolicy::from(concurrency),
         ),
         Command::Coverage(CoverageCmd::ValidateStatus { status }) => {
@@ -533,7 +515,7 @@ mod tests {
         assert!(matches!(
             experiment.command,
             Command::Coverage(CoverageCmd::Emit {
-                experiment: Some(CoverageExperiment::Slice),
+                experiment: Some(ExperimentStrategy::Slice),
                 concurrency: CoverageConcurrency::Fixed,
                 ..
             })

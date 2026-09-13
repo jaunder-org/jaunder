@@ -50,7 +50,7 @@ Out:
     unfiltered census authority, exact partition arguments, path isolation,
     wait-all behavior, and one report/LCOV/CRAP generation after profile union.
 
-- [ ] Task 3: Split and prove the instrumented support boundary
+- [x] Task 3: Split and prove the instrumented support boundary
   - Contract: Nix separates source-complete instrumented test binaries and
     matching coverage metadata from all worker execution, profiles, reports, and
     verdict outputs; every consumed source/config/toolchain input contributes to

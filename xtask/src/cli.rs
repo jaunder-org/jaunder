@@ -492,10 +492,11 @@ pub enum AdrCommand {
 /// `coverage` subcommands.
 #[derive(Subcommand)]
 pub enum CoverageCommand {
-    /// Guard the Nix coverage derivation's source filter against silent drift:
-    /// assert that staging an excluded file leaves `coverage.drvPath` unchanged and
-    /// staging an instrumented `.rs` changes it. Eval-only (no build); runs in CI and
-    /// on request, NOT in per-commit `check`/`validate` (#241, #37).
+    /// Guard the Nix coverage source and cache boundary against silent drift:
+    /// required source/configuration changes must invalidate both coverage and the
+    /// archive support, and the support closure must exclude every enumerated final
+    /// coverage/e2e output. Eval/build probe; runs on request, not in per-commit
+    /// `check`/`validate`.
     #[command(after_help = "EXAMPLES:\n  cargo xtask coverage probe-source")]
     ProbeSource,
 }
