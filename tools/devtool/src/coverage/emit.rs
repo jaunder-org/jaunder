@@ -1,13 +1,17 @@
 use std::fs;
 use std::io::ErrorKind;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
+use std::thread;
 use std::time::Instant;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use coverage::status::{
     self, CoverageStatus, Population, ProcessOutcome, RequiredStage, StageResult, StatusCategory,
     TestCensus,
+};
+use coverage::workers::{
+    AggregateEvidence, WORKER_EVIDENCE_VERSION, WorkerEvidence, WorkerPartition, aggregate_workers,
 };
 use serde_json::Value;
 
@@ -265,6 +269,126 @@ fn report_command(
     command_failure(status, stage, run_capture(command), diag, name).map(|command| command.stdout)
 }
 
+/// Emit the shared merged-profile reports, retaining a valid red status on every
+/// expected report or artifact failure.
+fn emit_reports(
+    out: &Path,
+    diag: &Path,
+    status: &mut CoverageStatus,
+    abs_root: &str,
+) -> Result<()> {
+    let text_started = Instant::now();
+    let Some(text) = report_command(
+        RequiredStage::TextReport,
+        Command::new("sh").args(coverage_report_arguments("--text")),
+        status,
+        diag,
+        "text-report.log",
+    ) else {
+        record_duration(status, RequiredStage::TextReport, text_started);
+        return write_status(out, status);
+    };
+    if fs::write(
+        out.join("coverage-report.txt"),
+        coverage::pathnorm::normalize_report_text(&text, abs_root),
+    )
+    .is_err()
+    {
+        record_evidence_error(
+            status,
+            RequiredStage::TextReport,
+            "could not write text report",
+        );
+        record_duration(status, RequiredStage::TextReport, text_started);
+        return write_status(out, status);
+    }
+    record_duration(status, RequiredStage::TextReport, text_started);
+
+    let lcov_started = Instant::now();
+    let lcov = out.join("coverage-report.lcov");
+    let Some(lcov_path) = lcov.to_str() else {
+        record_evidence_error(
+            status,
+            RequiredStage::LcovReport,
+            "invalid LCOV report path",
+        );
+        record_duration(status, RequiredStage::LcovReport, lcov_started);
+        return write_status(out, status);
+    };
+    if report_command(
+        RequiredStage::LcovReport,
+        Command::new("sh")
+            .args(coverage_report_arguments("--lcov"))
+            .args(["--output-path", lcov_path]),
+        status,
+        diag,
+        "lcov-report.log",
+    )
+    .is_none()
+    {
+        record_duration(status, RequiredStage::LcovReport, lcov_started);
+        return write_status(out, status);
+    }
+    record_duration(status, RequiredStage::LcovReport, lcov_started);
+
+    let crap_started = Instant::now();
+    let raw_crap = out.join("crap-report.raw.json");
+    let Some(raw_crap_path) = raw_crap.to_str() else {
+        record_evidence_error(
+            status,
+            RequiredStage::CrapReport,
+            "invalid CRAP report path",
+        );
+        record_duration(status, RequiredStage::CrapReport, crap_started);
+        return write_status(out, status);
+    };
+    if report_command(
+        RequiredStage::CrapReport,
+        Command::new("cargo").args([
+            "crap",
+            "--workspace",
+            "--lcov",
+            lcov_path,
+            "--exclude",
+            "**/tests/**",
+            "--format",
+            "json",
+            "--output",
+            raw_crap_path,
+        ]),
+        status,
+        diag,
+        "crap-report.log",
+    )
+    .is_none()
+    {
+        record_duration(status, RequiredStage::CrapReport, crap_started);
+        return write_status(out, status);
+    }
+    let crap = match fs::read_to_string(&raw_crap)
+        .ok()
+        .and_then(|raw| normalize_crap_paths(&raw, abs_root).ok())
+    {
+        Some(crap) => crap,
+        None => {
+            record_evidence_error(status, RequiredStage::CrapReport, "invalid CRAP report");
+            record_duration(status, RequiredStage::CrapReport, crap_started);
+            return write_status(out, status);
+        }
+    };
+    if fs::write(out.join("crap-report.json"), crap).is_err() {
+        record_evidence_error(
+            status,
+            RequiredStage::CrapReport,
+            "could not write CRAP report",
+        );
+        record_duration(status, RequiredStage::CrapReport, crap_started);
+        return write_status(out, status);
+    }
+    record_duration(status, RequiredStage::CrapReport, crap_started);
+    Ok(())
+}
+
 /// Run the instrumented suite and emit reports + status + diagnostics into `out`.
 ///
 /// Required stages always leave a validated, red `status.json` when they can be
@@ -463,137 +587,15 @@ pub fn run(out: &str) -> Result<()> {
         return Ok(());
     }
 
-    let text_report_started = Instant::now();
-    let text_report_result = report_command(
-        RequiredStage::TextReport,
-        Command::new("sh").args(coverage_report_arguments("--text")),
-        &mut status,
-        &diag,
-        "text-report.log",
-    );
-    let Some(report) = text_report_result else {
-        record_duration(&mut status, RequiredStage::TextReport, text_report_started);
-        write_status(out, &status)?;
-        return Ok(());
-    };
-    let report = coverage::pathnorm::normalize_report_text(&report, &abs_root);
-    if fs::write(out.join("coverage-report.txt"), report).is_err() {
-        record_evidence_error(
-            &mut status,
-            RequiredStage::TextReport,
-            "could not write text report",
-        );
-        record_duration(&mut status, RequiredStage::TextReport, text_report_started);
-        write_status(out, &status)?;
+    emit_reports(out, &diag, &mut status, &abs_root)?;
+    if status.stages.iter().any(|stage| {
+        matches!(
+            stage.stage,
+            RequiredStage::TextReport | RequiredStage::LcovReport | RequiredStage::CrapReport
+        ) && !stage.outcome.is_success()
+    }) {
         return Ok(());
     }
-    record_duration(&mut status, RequiredStage::TextReport, text_report_started);
-
-    let lcov_report_started = Instant::now();
-    let lcov = out.join("coverage-report.lcov");
-    let lcov_path = match lcov.to_str() {
-        Some(path) => path,
-        None => {
-            record_evidence_error(
-                &mut status,
-                RequiredStage::LcovReport,
-                "invalid LCOV report path",
-            );
-            record_duration(&mut status, RequiredStage::LcovReport, lcov_report_started);
-            write_status(out, &status)?;
-            return Ok(());
-        }
-    };
-    let lcov_result = report_command(
-        RequiredStage::LcovReport,
-        Command::new("sh")
-            .args(coverage_report_arguments("--lcov"))
-            .args(["--output-path", lcov_path]),
-        &mut status,
-        &diag,
-        "lcov-report.log",
-    );
-    let Some(_) = lcov_result else {
-        record_duration(&mut status, RequiredStage::LcovReport, lcov_report_started);
-        write_status(out, &status)?;
-        return Ok(());
-    };
-    record_duration(&mut status, RequiredStage::LcovReport, lcov_report_started);
-
-    let crap_report_started = Instant::now();
-    let raw_crap = out.join("crap-report.raw.json");
-    let raw_crap_path = match raw_crap.to_str() {
-        Some(path) => path,
-        None => {
-            record_evidence_error(
-                &mut status,
-                RequiredStage::CrapReport,
-                "invalid CRAP report path",
-            );
-            record_duration(&mut status, RequiredStage::CrapReport, crap_report_started);
-            write_status(out, &status)?;
-            return Ok(());
-        }
-    };
-    let crap_report_result = report_command(
-        RequiredStage::CrapReport,
-        Command::new("cargo").args([
-            "crap",
-            "--workspace",
-            "--lcov",
-            lcov_path,
-            "--exclude",
-            "**/tests/**",
-            "--format",
-            "json",
-            "--output",
-            raw_crap_path,
-        ]),
-        &mut status,
-        &diag,
-        "crap-report.log",
-    );
-    let Some(_) = crap_report_result else {
-        record_duration(&mut status, RequiredStage::CrapReport, crap_report_started);
-        write_status(out, &status)?;
-        return Ok(());
-    };
-    let crap = match fs::read_to_string(&raw_crap) {
-        Ok(raw) => match normalize_crap_paths(&raw, &abs_root) {
-            Ok(crap) => crap,
-            Err(_) => {
-                record_evidence_error(
-                    &mut status,
-                    RequiredStage::CrapReport,
-                    "invalid CRAP report",
-                );
-                record_duration(&mut status, RequiredStage::CrapReport, crap_report_started);
-                write_status(out, &status)?;
-                return Ok(());
-            }
-        },
-        Err(_) => {
-            record_evidence_error(
-                &mut status,
-                RequiredStage::CrapReport,
-                "could not read CRAP report",
-            );
-            record_duration(&mut status, RequiredStage::CrapReport, crap_report_started);
-            write_status(out, &status)?;
-            return Ok(());
-        }
-    };
-    if fs::write(out.join("crap-report.json"), crap).is_err() {
-        record_evidence_error(
-            &mut status,
-            RequiredStage::CrapReport,
-            "could not write CRAP report",
-        );
-        record_duration(&mut status, RequiredStage::CrapReport, crap_report_started);
-        write_status(out, &status)?;
-        return Ok(());
-    }
-    record_duration(&mut status, RequiredStage::CrapReport, crap_report_started);
 
     // Disk diagnostics are intentionally best-effort and cannot change status.
     if let Ok(disk) = run_capture(Command::new("df").arg("-h")) {
@@ -612,6 +614,739 @@ pub fn run(out: &str) -> Result<()> {
         ),
     }
     write_status(out, &status)
+}
+/// A non-production partitioning treatment selected only by `coverage emit --experiment`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExperimentStrategy {
+    Baseline,
+    Slice,
+    Hash,
+    Backend,
+}
+
+/// The CPU allocation policy recorded with an experimental observation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConcurrencyPolicy {
+    Independent,
+    Fixed,
+}
+
+#[derive(Clone, Debug)]
+struct ExperimentWorker {
+    partition: WorkerPartition,
+    profile: PathBuf,
+    junit: PathBuf,
+    arguments: Vec<String>,
+    threads: Option<String>,
+}
+
+fn experiment_workers(
+    strategy: ExperimentStrategy,
+    policy: ConcurrencyPolicy,
+    backend_identities: Option<&[(String, String)]>,
+) -> Result<Vec<ExperimentWorker>> {
+    let strategy_name = match strategy {
+        ExperimentStrategy::Slice => "slice",
+        ExperimentStrategy::Hash => "hash",
+        ExperimentStrategy::Backend => "backend-experiment",
+        ExperimentStrategy::Baseline => bail!("baseline has no partition workers"),
+    };
+    let profile_root = std::env::current_dir()?.join("target/llvm-cov-target");
+    let fixed_threads = match policy {
+        ConcurrencyPolicy::Independent => None,
+        ConcurrencyPolicy::Fixed => Some(fixed_worker_threads()?.to_string()),
+    };
+    let backend_filters = match strategy {
+        ExperimentStrategy::Backend => Some(backend_filters(
+            backend_identities.context("missing backend identities")?,
+        )?),
+        _ => None,
+    };
+    Ok((1..=2)
+        .map(|index| {
+            let mut arguments = vec![
+                "nextest".into(),
+                "run".into(),
+                "--workspace".into(),
+                "--profile".into(),
+                format!("coverage-worker-{index}"),
+                "--no-fail-fast".into(),
+            ];
+            let threads: Option<String> = fixed_threads.clone();
+            match strategy {
+                ExperimentStrategy::Slice | ExperimentStrategy::Hash => {
+                    arguments.extend(["--partition".into(), format!("{strategy_name}:{index}/2")]);
+                }
+                ExperimentStrategy::Backend => {
+                    arguments.extend([
+                        "-E".into(),
+                        backend_filters.as_ref().expect("filters")[usize::from(index - 1)].clone(),
+                    ]);
+                }
+                ExperimentStrategy::Baseline => unreachable!("baseline has no workers"),
+            }
+            if let Some(threads) = &threads {
+                arguments.extend(["--test-threads".into(), threads.clone()]);
+            }
+            ExperimentWorker {
+                partition: WorkerPartition {
+                    strategy: strategy_name.into(),
+                    index,
+                    total: 2,
+                },
+                profile: profile_root
+                    .join(format!("coverage-experiment-worker-{index}-%m-%p.profraw")),
+                junit: PathBuf::from(format!("/tmp/jaunder-coverage-worker-{index}-junit.xml")),
+                arguments,
+                threads,
+            }
+        })
+        .collect())
+}
+
+/// Classify authoritative binary/test pairs into two complete measurement-only assignments.
+fn backend_filters(identities: &[(String, String)]) -> Result<[String; 2]> {
+    let mut assignments = [Vec::new(), Vec::new()];
+    for (binary, name) in identities {
+        if !filter_atom_is_safe(binary) || !filter_atom_is_safe(name) {
+            bail!("backend experiment cannot safely represent identity {binary}::{name}");
+        }
+        let identity = format!("{binary}::{name}");
+        let worker = if name.ends_with("_sqlite") {
+            0
+        } else if name.ends_with("_postgres") {
+            1
+        } else {
+            usize::from(stable_assignment(&identity))
+        };
+        assignments[worker].push((binary.as_str(), name.as_str()));
+    }
+    if assignments.iter().any(Vec::is_empty) {
+        bail!("backend experiment has an empty worker assignment");
+    }
+    Ok([
+        nextest_test_filter(&assignments[0]),
+        nextest_test_filter(&assignments[1]),
+    ])
+}
+
+fn fixed_worker_threads() -> Result<usize> {
+    let budget = std::thread::available_parallelism()
+        .context("detecting available parallelism")?
+        .get();
+    fixed_threads_for_budget(budget)
+}
+
+fn fixed_threads_for_budget(budget: usize) -> Result<usize> {
+    if budget < 2 {
+        bail!("fixed two-worker concurrency requires at least two CPUs");
+    }
+    Ok(budget / 2)
+}
+
+fn stable_assignment(identity: &str) -> u8 {
+    identity
+        .bytes()
+        .fold(0_u8, |sum, byte| sum.wrapping_add(byte))
+        % 2
+}
+
+fn filter_atom_is_safe(atom: &str) -> bool {
+    !atom.is_empty()
+        && atom.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b':' | b'-' | b'.' | b'/')
+        })
+}
+
+fn nextest_test_filter(tests: &[(&str, &str)]) -> String {
+    tests
+        .iter()
+        .map(|(binary, name)| {
+            let binary = binary.replace('/', r"\/");
+            format!("(binary_id(={binary}) & test(={name}))")
+        })
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+fn parse_backend_identities(input: &str) -> Result<Vec<(String, String)>> {
+    let value: Value = serde_json::from_str(input)?;
+    let suites = value["rust-suites"]
+        .as_object()
+        .context("missing rust-suites")?;
+    let mut identities = Vec::new();
+    for suite in suites.values() {
+        let binary = suite["binary-id"].as_str().context("missing binary-id")?;
+        let tests = suite["testcases"]
+            .as_object()
+            .context("missing testcases")?;
+        identities.extend(
+            tests
+                .keys()
+                .map(|name| (binary.to_owned(), name.to_owned())),
+        );
+    }
+    if identities.is_empty() {
+        bail!("empty backend identity census");
+    }
+    Ok(identities)
+}
+
+fn aggregate_worker_outcome(workers: &[WorkerEvidence]) -> ProcessOutcome {
+    workers
+        .iter()
+        .map(|worker| &worker.outcome)
+        .find(|outcome| {
+            matches!(
+                outcome,
+                ProcessOutcome::Signal
+                    | ProcessOutcome::SpawnError { .. }
+                    | ProcessOutcome::EvidenceError { .. }
+            )
+        })
+        .or_else(|| {
+            workers
+                .iter()
+                .map(|worker| &worker.outcome)
+                .find(|outcome| outcome.is_failure())
+        })
+        .cloned()
+        .unwrap_or_else(ProcessOutcome::success)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WorkerResultProblem {
+    UnclassifiedFailure,
+    FailureReportedAfterSuccess,
+}
+
+fn worker_result_problem(
+    workers: &[WorkerEvidence],
+    failed_tests: &[String],
+) -> Option<WorkerResultProblem> {
+    if workers
+        .iter()
+        .any(|worker| !worker.outcome.is_success() && worker.census.failed.is_empty())
+    {
+        Some(WorkerResultProblem::UnclassifiedFailure)
+    } else if workers.iter().all(|worker| worker.outcome.is_success()) && !failed_tests.is_empty() {
+        Some(WorkerResultProblem::FailureReportedAfterSuccess)
+    } else {
+        None
+    }
+}
+
+fn worker_command(worker: &ExperimentWorker) -> Command {
+    let script = r#"environment="$(cargo llvm-cov show-env --export-prefix)" || exit; eval "$environment" || exit; LLVM_PROFILE_FILE="$1"; export LLVM_PROFILE_FILE; shift; exec "$@""#;
+    let mut command = Command::new("sh");
+    command.arg("-c").arg(script).arg("--").arg(&worker.profile);
+    command.args(["cargo"]);
+    command.args(&worker.arguments);
+    command
+}
+
+fn remove_experiment_paths(workers: &[ExperimentWorker]) -> Result<()> {
+    for worker in workers {
+        if let Err(error) = fs::remove_file(&worker.junit)
+            && error.kind() != ErrorKind::NotFound
+        {
+            return Err(error).context("clearing experimental JUnit report");
+        }
+        let parent = worker
+            .profile
+            .parent()
+            .context("experimental profile parent")?;
+        if !parent.exists() {
+            continue;
+        }
+        let prefix = worker
+            .profile
+            .file_name()
+            .and_then(|name| name.to_str())
+            .context("experimental profile name")?
+            .split('%')
+            .next()
+            .expect("split has a first item");
+        for entry in fs::read_dir(parent)? {
+            let entry = entry?;
+            if entry.file_name().to_string_lossy().starts_with(prefix) {
+                fs::remove_file(entry.path())?;
+            }
+        }
+    }
+    Ok(())
+}
+fn discovered_profiles(pattern: &Path) -> Vec<String> {
+    let Some(parent) = pattern.parent() else {
+        return Vec::new();
+    };
+    let Some(prefix) = pattern
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.split('%').next())
+    else {
+        return Vec::new();
+    };
+    let mut profiles = fs::read_dir(parent)
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            (path.is_file()
+                && path
+                    .extension()
+                    .is_some_and(|extension| extension == "profraw")
+                && path
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with(prefix)))
+            .then(|| path.display().to_string())
+        })
+        .collect::<Vec<_>>();
+    profiles.sort_unstable();
+    profiles
+}
+
+fn run_worker(
+    mut command: Command,
+    worker: ExperimentWorker,
+    diagnostics: PathBuf,
+) -> WorkerEvidence {
+    let started = Instant::now();
+    let captured = run_capture(&mut command);
+    let (outcome, output) = match captured {
+        Ok(captured) => (command_outcome(captured.status), captured.output),
+        Err(_) => (
+            ProcessOutcome::SpawnError {
+                spawn_error: "could not spawn command".into(),
+            },
+            "could not spawn command".into(),
+        ),
+    };
+    let log = diagnostics.join(format!("worker-{}.log", worker.partition.index));
+    write_diagnostic(
+        &diagnostics,
+        &format!("worker-{}.log", worker.partition.index),
+        &output,
+    );
+    let junit_copy = diagnostics.join(format!("worker-{}.junit.xml", worker.partition.index));
+    let census = match fs::read_to_string(&worker.junit)
+        .and_then(|input| status::parse_junit_census(&input).map_err(std::io::Error::other))
+    {
+        Ok(census) => {
+            let _ = fs::copy(&worker.junit, &junit_copy);
+            census
+        }
+        Err(_) => TestCensus::default(),
+    };
+    WorkerEvidence {
+        version: WORKER_EVIDENCE_VERSION,
+        partition: worker.partition,
+        outcome,
+        census,
+        profile_artifacts: discovered_profiles(&worker.profile),
+        duration_ms: started.elapsed().as_millis(),
+        diagnostics: vec![log.display().to_string()],
+    }
+}
+
+fn write_worker_evidence(diag: &Path, workers: &[WorkerEvidence]) -> Result<()> {
+    for worker in workers {
+        fs::write(
+            diag.join(format!("worker-{}.json", worker.partition.index)),
+            worker.to_json(),
+        )
+        .context("writing worker evidence")?;
+    }
+    Ok(())
+}
+
+fn write_aggregate_evidence(diag: &Path, aggregate: &AggregateEvidence) -> Result<()> {
+    fs::write(
+        diag.join("aggregate.json"),
+        format!("{}\n", serde_json::to_string_pretty(aggregate)?),
+    )
+    .context("writing aggregate worker evidence")
+}
+
+fn failed_worker(worker: ExperimentWorker, diagnostics: PathBuf, detail: &str) -> WorkerEvidence {
+    let log = diagnostics.join(format!("worker-{}.log", worker.partition.index));
+    write_diagnostic(
+        &diagnostics,
+        &format!("worker-{}.log", worker.partition.index),
+        detail,
+    );
+    WorkerEvidence {
+        version: WORKER_EVIDENCE_VERSION,
+        partition: worker.partition,
+        outcome: ProcessOutcome::SpawnError {
+            spawn_error: detail.into(),
+        },
+        census: TestCensus::default(),
+        profile_artifacts: discovered_profiles(&worker.profile),
+        duration_ms: 0,
+        diagnostics: vec![log.display().to_string()],
+    }
+}
+
+fn join_worker_handles(
+    handles: Vec<(ExperimentWorker, thread::JoinHandle<WorkerEvidence>)>,
+    diagnostics: &Path,
+) -> Vec<WorkerEvidence> {
+    handles
+        .into_iter()
+        .map(|(worker, handle)| {
+            handle.join().unwrap_or_else(|_| {
+                failed_worker(worker, diagnostics.to_path_buf(), "worker thread panicked")
+            })
+        })
+        .collect()
+}
+
+/// Run one explicitly selected, non-production coverage experiment.
+pub fn run_experiment(
+    out: &str,
+    strategy: ExperimentStrategy,
+    policy: ConcurrencyPolicy,
+) -> Result<()> {
+    if strategy == ExperimentStrategy::Baseline {
+        return run(out);
+    }
+    fs::create_dir_all(out).with_context(|| format!("creating {out}"))?;
+    let out = fs::canonicalize(out).with_context(|| format!("canonicalizing {out}"))?;
+    let diag = out.join("diagnostics");
+    fs::create_dir_all(&diag).with_context(|| format!("creating {}", diag.display()))?;
+    let mut coverage_status = new_status();
+    write_diagnostic(
+        &diag,
+        "experiment-policy.txt",
+        &format!("strategy={strategy:?}\nconcurrency={policy:?}\n"),
+    );
+
+    let commands = required_stage_commands();
+    let workspace = commands
+        .iter()
+        .find(|command| command.stage == RequiredStage::WorkspaceResolution)
+        .expect("coverage workspace command");
+    let workspace_started = Instant::now();
+    let mut workspace_command = Command::new(workspace.program);
+    workspace_command.args(&workspace.arguments);
+    if command_failure(
+        &mut coverage_status,
+        RequiredStage::WorkspaceResolution,
+        run_capture(&mut workspace_command),
+        &diag,
+        "metadata.log",
+    )
+    .is_none()
+    {
+        record_duration(
+            &mut coverage_status,
+            RequiredStage::WorkspaceResolution,
+            workspace_started,
+        );
+        write_status(&out, &coverage_status)?;
+        return Ok(());
+    }
+    record_duration(
+        &mut coverage_status,
+        RequiredStage::WorkspaceResolution,
+        workspace_started,
+    );
+
+    let census_command = commands
+        .iter()
+        .find(|command| command.stage == RequiredStage::TestCensus)
+        .expect("coverage census command");
+    let census_started = Instant::now();
+    let mut command = Command::new(census_command.program);
+    command.args(&census_command.arguments);
+    let Some(census) = command_failure(
+        &mut coverage_status,
+        RequiredStage::TestCensus,
+        run_capture(&mut command),
+        &diag,
+        "nextest-list.json",
+    ) else {
+        record_duration(
+            &mut coverage_status,
+            RequiredStage::TestCensus,
+            census_started,
+        );
+        write_status(&out, &coverage_status)?;
+        return Ok(());
+    };
+    let expected = match status::parse_nextest_census(&census.stdout) {
+        Ok(expected) => expected,
+        Err(_) => {
+            record_evidence_error(
+                &mut coverage_status,
+                RequiredStage::TestCensus,
+                "invalid nextest census",
+            );
+            record_duration(
+                &mut coverage_status,
+                RequiredStage::TestCensus,
+                census_started,
+            );
+            write_status(&out, &coverage_status)?;
+            return Ok(());
+        }
+    };
+    coverage_status.population.expected = expected.expected.len();
+    set_stage(
+        &mut coverage_status,
+        RequiredStage::TestCensus,
+        ProcessOutcome::success(),
+    );
+    record_duration(
+        &mut coverage_status,
+        RequiredStage::TestCensus,
+        census_started,
+    );
+
+    let backend_identities = match strategy {
+        ExperimentStrategy::Backend => match parse_backend_identities(&census.stdout) {
+            Ok(identities) => Some(identities),
+            Err(_) => {
+                record_evidence_error(
+                    &mut coverage_status,
+                    RequiredStage::TestCensus,
+                    "invalid backend identity census",
+                );
+                write_status(&out, &coverage_status)?;
+                return Ok(());
+            }
+        },
+        _ => None,
+    };
+    let workers = match experiment_workers(strategy, policy, backend_identities.as_deref()) {
+        Ok(workers) => workers,
+        Err(_) => {
+            record_evidence_error(
+                &mut coverage_status,
+                RequiredStage::TestCensus,
+                "ambiguous backend experiment assignment",
+            );
+            write_status(&out, &coverage_status)?;
+            return Ok(());
+        }
+    };
+    write_diagnostic(
+        &diag,
+        "experiment-workers.txt",
+        &workers
+            .iter()
+            .map(|worker| {
+                format!(
+                    "worker={} junit={} profile={} test_threads={}\n",
+                    worker.partition.index,
+                    worker.junit.display(),
+                    worker.profile.display(),
+                    worker.threads.as_deref().unwrap_or("nextest-default"),
+                )
+            })
+            .collect::<String>(),
+    );
+    let cleanup_started = Instant::now();
+    if command_failure(
+        &mut coverage_status,
+        RequiredStage::ProfileCleanup,
+        run_capture(Command::new("cargo").args(["llvm-cov", "clean", "--profraw-only"])),
+        &diag,
+        "profile-cleanup.log",
+    )
+    .is_none()
+        || remove_experiment_paths(&workers).is_err()
+    {
+        if coverage_status
+            .stages
+            .iter()
+            .any(|stage| stage.stage == RequiredStage::ProfileCleanup && stage.outcome.is_success())
+        {
+            record_evidence_error(
+                &mut coverage_status,
+                RequiredStage::ProfileCleanup,
+                "could not clear experiment-owned paths",
+            );
+        }
+        record_duration(
+            &mut coverage_status,
+            RequiredStage::ProfileCleanup,
+            cleanup_started,
+        );
+        write_status(&out, &coverage_status)?;
+        return Ok(());
+    }
+    set_stage(
+        &mut coverage_status,
+        RequiredStage::ProfileCleanup,
+        ProcessOutcome::success(),
+    );
+    record_duration(
+        &mut coverage_status,
+        RequiredStage::ProfileCleanup,
+        cleanup_started,
+    );
+
+    let run_started = Instant::now();
+    let records = pg::with_ephemeral(|env| {
+        let mut handles = Vec::with_capacity(workers.len());
+        let mut records = Vec::new();
+        for worker in workers.iter().cloned() {
+            let mut command = worker_command(&worker);
+            env.configure_command(&mut command);
+            let diagnostics = diag.clone();
+            let record_worker = worker.clone();
+            match thread::Builder::new()
+                .name(format!("coverage-worker-{}", worker.partition.index))
+                .spawn(move || run_worker(command, record_worker, diagnostics))
+            {
+                Ok(handle) => handles.push((worker, handle)),
+                Err(_) => records.push(failed_worker(
+                    worker,
+                    diag.clone(),
+                    "could not spawn worker thread",
+                )),
+            }
+        }
+        records.extend(join_worker_handles(handles, &diag));
+        Ok(records)
+    });
+    let records = match records {
+        Ok(records) => records,
+        Err(_) => {
+            record_infra(
+                &mut coverage_status,
+                RequiredStage::InstrumentedTestRun,
+                "could not start ephemeral PostgreSQL",
+            );
+            record_duration(
+                &mut coverage_status,
+                RequiredStage::InstrumentedTestRun,
+                run_started,
+            );
+            write_status(&out, &coverage_status)?;
+            return Ok(());
+        }
+    };
+    record_duration(
+        &mut coverage_status,
+        RequiredStage::InstrumentedTestRun,
+        run_started,
+    );
+    let worker_outcome = aggregate_worker_outcome(&records);
+    set_stage(
+        &mut coverage_status,
+        RequiredStage::InstrumentedTestRun,
+        worker_outcome,
+    );
+    if write_worker_evidence(&diag, &records).is_err() {
+        record_evidence_error(
+            &mut coverage_status,
+            RequiredStage::PopulationReconciliation,
+            "could not write worker evidence",
+        );
+        write_status(&out, &coverage_status)?;
+        return Ok(());
+    }
+    let reconciliation_started = Instant::now();
+    let aggregate = match aggregate_workers(&expected, &records) {
+        Ok(aggregate) => aggregate,
+        Err(error) => {
+            write_diagnostic(&diag, "aggregate-error.txt", &error.to_string());
+            record_evidence_error(
+                &mut coverage_status,
+                RequiredStage::PopulationReconciliation,
+                "worker evidence did not reconcile",
+            );
+            record_duration(
+                &mut coverage_status,
+                RequiredStage::PopulationReconciliation,
+                reconciliation_started,
+            );
+            write_status(&out, &coverage_status)?;
+            return Ok(());
+        }
+    };
+    coverage_status.population.executed = aggregate.population.executed.len();
+    coverage_status.population.ignored = aggregate.population.ignored.len();
+    coverage_status.failed_tests = aggregate.population.failed.clone();
+    if write_aggregate_evidence(&diag, &aggregate).is_err() {
+        record_evidence_error(
+            &mut coverage_status,
+            RequiredStage::PopulationReconciliation,
+            "could not write aggregate worker evidence",
+        );
+        record_duration(
+            &mut coverage_status,
+            RequiredStage::PopulationReconciliation,
+            reconciliation_started,
+        );
+        write_status(&out, &coverage_status)?;
+        return Ok(());
+    }
+    set_stage(
+        &mut coverage_status,
+        RequiredStage::PopulationReconciliation,
+        ProcessOutcome::success(),
+    );
+    record_duration(
+        &mut coverage_status,
+        RequiredStage::PopulationReconciliation,
+        reconciliation_started,
+    );
+    match worker_result_problem(&aggregate.workers, &coverage_status.failed_tests) {
+        Some(WorkerResultProblem::UnclassifiedFailure) => {
+            record_infra(
+                &mut coverage_status,
+                RequiredStage::InstrumentedTestRun,
+                "worker command failed without classified test failure",
+            );
+            write_status(&out, &coverage_status)?;
+            return Ok(());
+        }
+        Some(WorkerResultProblem::FailureReportedAfterSuccess) => {
+            record_evidence_error(
+                &mut coverage_status,
+                RequiredStage::InstrumentedTestRun,
+                "JUnit reported failures after successful worker commands",
+            );
+            write_status(&out, &coverage_status)?;
+            return Ok(());
+        }
+        None => {}
+    }
+    let instrumented_outcome = coverage_status
+        .stages
+        .iter()
+        .find(|stage| stage.stage == RequiredStage::InstrumentedTestRun)
+        .expect("instrumented test stage")
+        .outcome
+        .clone();
+    let root = std::env::current_dir()?.to_string_lossy().into_owned();
+    emit_reports(&out, &diag, &mut coverage_status, &root)?;
+    if coverage_status.stages.iter().any(|stage| {
+        matches!(
+            stage.stage,
+            RequiredStage::TextReport | RequiredStage::LcovReport | RequiredStage::CrapReport
+        ) && !stage.outcome.is_success()
+    }) {
+        return Ok(());
+    }
+    match final_category(&instrumented_outcome, &coverage_status.failed_tests) {
+        category @ (StatusCategory::TestsOk | StatusCategory::TestFailure) => {
+            coverage_status.category = category;
+            coverage_status.infra_detail = None;
+        }
+        StatusCategory::Infra => record_infra(
+            &mut coverage_status,
+            RequiredStage::InstrumentedTestRun,
+            "test command did not exit normally",
+        ),
+    }
+    write_status(&out, &coverage_status)
 }
 
 /// Strip the absolute sandbox prefix and external package entries from CRAP output.
@@ -836,5 +1571,223 @@ mod tests {
             ["tools/csr_bundle_extra/src/lib.rs", "server/src/a.rs"]
         );
         assert!(normalize_crap_paths("{}", "/build/source").is_err());
+    }
+
+    #[test]
+    fn partition_experiment_builds_exact_nextest_commands_and_isolated_paths() {
+        let workers = experiment_workers(ExperimentStrategy::Slice, ConcurrencyPolicy::Fixed, None)
+            .expect("slice workers");
+
+        for (index, worker) in workers.iter().enumerate() {
+            assert_eq!(
+                worker.arguments[..8],
+                [
+                    "nextest",
+                    "run",
+                    "--workspace",
+                    "--profile",
+                    &format!("coverage-worker-{}", index + 1),
+                    "--no-fail-fast",
+                    "--partition",
+                    &format!("slice:{}/2", index + 1),
+                ]
+            );
+            assert_eq!(
+                worker.arguments[8..],
+                [
+                    "--test-threads",
+                    &fixed_worker_threads().unwrap().to_string()
+                ]
+            );
+        }
+        assert_ne!(workers[0].junit, workers[1].junit);
+        assert_ne!(workers[0].profile, workers[1].profile);
+        assert!(workers.iter().all(|worker| worker.junit.is_absolute()));
+        assert!(workers.iter().all(|worker| worker.profile.is_absolute()));
+    }
+
+    #[test]
+    fn independent_workers_preserve_nextest_thread_default() {
+        let workers = experiment_workers(
+            ExperimentStrategy::Hash,
+            ConcurrencyPolicy::Independent,
+            None,
+        )
+        .expect("hash workers");
+
+        assert!(workers.iter().all(|worker| worker.threads.is_none()));
+        assert!(
+            workers
+                .iter()
+                .all(|worker| !worker.arguments.contains(&"--test-threads".into()))
+        );
+        assert_eq!(
+            workers[0].arguments[6..8],
+            ["--partition".to_owned(), "hash:1/2".to_owned()]
+        );
+        assert_eq!(
+            workers[1].arguments[6..8],
+            ["--partition".to_owned(), "hash:2/2".to_owned()]
+        );
+    }
+
+    #[test]
+    fn backend_comparator_rejects_unsafe_identity() {
+        let error = backend_filters(&[
+            ("bin".into(), "case_sqlite".into()),
+            ("bin".into(), "case postgres".into()),
+        ])
+        .expect_err("unsafe identity cannot become an expression filter");
+        assert!(
+            error
+                .to_string()
+                .contains("cannot safely represent identity")
+        );
+    }
+
+    #[test]
+    fn backend_filters_escape_binary_paths_and_assign_every_identity() {
+        let filters = backend_filters(&[
+            ("jaunder::bin/jaunder".into(), "case_sqlite".into()),
+            (
+                "test-support::bin/test-support".into(),
+                "case_postgres".into(),
+            ),
+            ("jaunder::bin/jaunder".into(), "ordinary::case".into()),
+        ])
+        .expect("complete assignments");
+        let combined = format!("{} | {}", filters[0], filters[1]);
+        assert!(combined.contains("binary_id(=jaunder::bin\\/jaunder)"));
+        assert!(combined.contains("(binary_id(="));
+        assert_eq!(combined.matches("case_sqlite").count(), 1);
+        assert_eq!(combined.matches("case_postgres").count(), 1);
+        assert_eq!(combined.matches("ordinary::case").count(), 1);
+    }
+
+    #[test]
+    fn fixed_budget_never_oversubscribes_two_workers() {
+        assert!(fixed_threads_for_budget(1).is_err());
+        assert_eq!(fixed_threads_for_budget(2).unwrap(), 1);
+        assert_eq!(fixed_threads_for_budget(3).unwrap(), 1);
+        assert_eq!(fixed_threads_for_budget(8).unwrap(), 4);
+    }
+
+    fn worker_evidence(index: u8, outcome: ProcessOutcome) -> WorkerEvidence {
+        WorkerEvidence {
+            version: WORKER_EVIDENCE_VERSION,
+            partition: WorkerPartition {
+                strategy: "slice".into(),
+                index,
+                total: 2,
+            },
+            outcome,
+            census: TestCensus::default(),
+            profile_artifacts: vec![format!("worker-{index}.profraw")],
+            duration_ms: 10,
+            diagnostics: vec![format!("worker-{index}.log")],
+        }
+    }
+
+    #[test]
+    fn aggregate_outcome_prioritizes_abnormal_worker_termination() {
+        let workers = [
+            worker_evidence(1, ProcessOutcome::ExitCode { exit_code: 100 }),
+            worker_evidence(2, ProcessOutcome::Signal),
+        ];
+
+        assert_eq!(aggregate_worker_outcome(&workers), ProcessOutcome::Signal);
+        assert_eq!(
+            worker_result_problem(&workers, &["bin::failed".into()]),
+            Some(WorkerResultProblem::UnclassifiedFailure)
+        );
+
+        let successful = [
+            worker_evidence(1, ProcessOutcome::Success),
+            worker_evidence(2, ProcessOutcome::Success),
+        ];
+        assert_eq!(
+            worker_result_problem(&successful, &["bin::failed".into()]),
+            Some(WorkerResultProblem::FailureReportedAfterSuccess)
+        );
+    }
+
+    #[test]
+    fn discovered_profiles_returns_only_sorted_matching_regular_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let pattern = dir.path().join("worker-1-%m-%p.profraw");
+        let first = dir.path().join("worker-1-b.profraw");
+        let second = dir.path().join("worker-1-a.profraw");
+        fs::write(&first, "").unwrap();
+        fs::write(&second, "").unwrap();
+        fs::write(dir.path().join("worker-2-a.profraw"), "").unwrap();
+        fs::write(dir.path().join("worker-1-a.txt"), "").unwrap();
+        fs::create_dir(dir.path().join("worker-1-dir.profraw")).unwrap();
+
+        assert_eq!(
+            discovered_profiles(&pattern),
+            vec![second.display().to_string(), first.display().to_string(),]
+        );
+    }
+
+    #[test]
+    fn joining_workers_retains_a_returned_failure_and_a_thread_panic() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut definitions = experiment_workers(
+            ExperimentStrategy::Slice,
+            ConcurrencyPolicy::Independent,
+            None,
+        )
+        .unwrap();
+        let first = definitions.remove(0);
+        let second = definitions.remove(0);
+        let returned = worker_evidence(1, ProcessOutcome::ExitCode { exit_code: 100 });
+        let returned_handle = thread::spawn(move || returned);
+        let panicked_handle = thread::spawn(|| -> WorkerEvidence {
+            panic!("controlled worker panic");
+        });
+
+        let records = join_worker_handles(
+            vec![(first, returned_handle), (second, panicked_handle)],
+            dir.path(),
+        );
+
+        assert_eq!(records.len(), 2);
+        assert_eq!(
+            records[0].outcome,
+            ProcessOutcome::ExitCode { exit_code: 100 }
+        );
+        assert!(matches!(
+            records[1].outcome,
+            ProcessOutcome::SpawnError { ref spawn_error }
+                if spawn_error == "worker thread panicked"
+        ));
+        assert_ne!(records[0].diagnostics, records[1].diagnostics);
+    }
+
+    #[test]
+    fn worker_and_aggregate_evidence_are_persisted_for_consumers() {
+        let dir = tempfile::tempdir().unwrap();
+        let workers = vec![
+            worker_evidence(1, ProcessOutcome::Success),
+            worker_evidence(2, ProcessOutcome::Success),
+        ];
+        write_worker_evidence(dir.path(), &workers).unwrap();
+        let aggregate = AggregateEvidence {
+            strategy: "slice".into(),
+            population: TestCensus::default(),
+            workers,
+        };
+        write_aggregate_evidence(dir.path(), &aggregate).unwrap();
+
+        let first = fs::read_to_string(dir.path().join("worker-1.json")).unwrap();
+        assert_eq!(
+            WorkerEvidence::from_json(&first).unwrap(),
+            aggregate.workers[0]
+        );
+        let aggregate_json = fs::read_to_string(dir.path().join("aggregate.json")).unwrap();
+        assert_eq!(
+            serde_json::from_str::<AggregateEvidence>(&aggregate_json).unwrap(),
+            aggregate
+        );
     }
 }

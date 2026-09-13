@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use check::CheckGroup;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 mod check;
 mod coverage;
@@ -169,6 +169,12 @@ enum CoverageCmd {
         /// Directory to write emitted artifacts into (defaults to CWD).
         #[arg(long, default_value = ".")]
         out: String,
+        /// Non-production two-worker coverage experiment to execute.
+        #[arg(long, value_enum)]
+        experiment: Option<CoverageExperiment>,
+        /// Worker concurrency policy for a two-worker experiment.
+        #[arg(long, value_enum, default_value_t = CoverageConcurrency::Independent)]
+        concurrency: CoverageConcurrency,
     },
     /// Validate completed coverage producer evidence.
     ValidateStatus {
@@ -178,6 +184,39 @@ enum CoverageCmd {
     },
 }
 
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum CoverageExperiment {
+    Baseline,
+    Slice,
+    Hash,
+    Backend,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum CoverageConcurrency {
+    Independent,
+    Fixed,
+}
+
+impl From<CoverageExperiment> for coverage::emit::ExperimentStrategy {
+    fn from(value: CoverageExperiment) -> Self {
+        match value {
+            CoverageExperiment::Baseline => Self::Baseline,
+            CoverageExperiment::Slice => Self::Slice,
+            CoverageExperiment::Hash => Self::Hash,
+            CoverageExperiment::Backend => Self::Backend,
+        }
+    }
+}
+
+impl From<CoverageConcurrency> for coverage::emit::ConcurrencyPolicy {
+    fn from(value: CoverageConcurrency) -> Self {
+        match value {
+            CoverageConcurrency::Independent => Self::Independent,
+            CoverageConcurrency::Fixed => Self::Fixed,
+        }
+    }
+}
 #[derive(Subcommand)]
 enum WasmCoverageCmd {
     /// Create the sentinel status and retain the content-addressed served module.
@@ -276,7 +315,20 @@ enum PgCmd {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Coverage(CoverageCmd::Emit { out }) => coverage::emit::run(&out),
+        Command::Coverage(CoverageCmd::Emit {
+            out,
+            experiment: None,
+            ..
+        }) => coverage::emit::run(&out),
+        Command::Coverage(CoverageCmd::Emit {
+            out,
+            experiment: Some(experiment),
+            concurrency,
+        }) => coverage::emit::run_experiment(
+            &out,
+            coverage::emit::ExperimentStrategy::from(experiment),
+            coverage::emit::ConcurrencyPolicy::from(concurrency),
+        ),
         Command::Coverage(CoverageCmd::ValidateStatus { status }) => {
             coverage::validate_status::run(&status)
         }
@@ -454,6 +506,37 @@ mod tests {
             .expect("mapping command parses")
             .command,
             Command::WasmCoverage(WasmCoverageCmd::Map { site_src }) if site_src == Path::new("/source/site")
+        ));
+    }
+    #[test]
+    fn coverage_emit_keeps_default_producer_and_parses_experiments() {
+        let default_emit =
+            Cli::try_parse_from(["devtool", "coverage", "emit"]).expect("default coverage emit");
+        assert!(matches!(
+            default_emit.command,
+            Command::Coverage(CoverageCmd::Emit {
+                experiment: None,
+                concurrency: CoverageConcurrency::Independent,
+                ..
+            })
+        ));
+        let experiment = Cli::try_parse_from([
+            "devtool",
+            "coverage",
+            "emit",
+            "--experiment",
+            "slice",
+            "--concurrency",
+            "fixed",
+        ])
+        .expect("experiment coverage emit");
+        assert!(matches!(
+            experiment.command,
+            Command::Coverage(CoverageCmd::Emit {
+                experiment: Some(CoverageExperiment::Slice),
+                concurrency: CoverageConcurrency::Fixed,
+                ..
+            })
         ));
     }
 }

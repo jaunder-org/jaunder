@@ -38,7 +38,7 @@ Out:
     reconciliation plus every single- and dual-worker failure required by the
     spec.
 
-- [ ] Task 2: Add an experiment-capable hermetic producer
+- [x] Task 2: Add an experiment-capable hermetic producer
   - Contract: `devtool coverage emit` remains the producer entry point; an
     explicit experiment mode runs the unpartitioned baseline, slice, hash, or
     identity-derived backend comparator with distinct worker JUnit/profile/log
