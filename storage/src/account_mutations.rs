@@ -6,15 +6,91 @@
 //! transaction. Their dependencies are the exact object-safe stores needed by
 //! each flow so the composition root does not leak into application code.
 
-use common::{display_name::DisplayName, ids::UserId, token::RawToken, username::Username};
-use host::{invite::InviteCode, password::Password};
+use common::{
+    display_name::DisplayName,
+    ids::UserId,
+    session_label::SessionLabel,
+    token::{RawToken, TokenHash},
+    username::Username,
+};
+use host::{invite::InviteCode, passkey::Credential, password::Password, token};
 use thiserror::Error;
 
 use crate::users;
 use crate::{
-    CreateUserError, InviteStorage, OperatorStatus, PasswordResetStorage, SessionStorage,
-    UserStorage, WriteTransaction,
+    CreateUserError, InviteStorage, OperatorStatus, PasskeyCredentialId, PasskeyStorage,
+    PasswordResetStorage, SessionStorage, UserStorage, WriteTransaction,
 };
+
+/// Errors returned by the cross-store Passkey mutation primitives.
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct PasskeyMutationError(#[from] pub sqlx::Error);
+
+/// Applies a verified Passkey assertion, records credential use, and creates its
+/// ordinary `Session` while revoking all earlier `Session`s in the same
+/// caller-owned transaction.
+///
+/// The passed credential is a trusted adapter result: it has already folded
+/// backup flags and retained the counter high-water mark. A missing row is an
+/// error so no `Session` can be minted for a deleted credential.
+///
+/// # Errors
+///
+/// Returns an error if the credential update, `Session` creation, token hashing,
+/// or revocation fails. The caller's write scope then rolls back all mutations.
+pub async fn finalize_passkey_authentication(
+    transaction: &mut WriteTransaction,
+    passkeys: &dyn PasskeyStorage,
+    sessions: &dyn SessionStorage,
+    user_id: UserId,
+    credential: &Credential,
+    session_label: &SessionLabel,
+) -> Result<RawToken, PasskeyMutationError> {
+    if !passkeys
+        .update_credential_after_authentication(transaction, user_id, credential)
+        .await?
+    {
+        return Err(PasskeyMutationError(sqlx::Error::RowNotFound));
+    }
+    let session = sessions
+        .create_session(transaction, user_id, session_label)
+        .await
+        .map_err(PasskeyMutationError)?;
+    let session_hash = token::hash(&session)
+        .map_err(|error| PasskeyMutationError(sqlx::Error::Protocol(error.to_string())))?;
+    sessions
+        .revoke_all_for_user_except(transaction, user_id, &session_hash)
+        .await
+        .map_err(PasskeyMutationError)?;
+    Ok(session)
+}
+
+/// Deletes one owned Passkey and revokes every other `Session` for its User while
+/// retaining the cookie `Session` that authorized the mutation.
+///
+/// # Errors
+///
+/// Returns an error if the credential deletion or `Session` revocation fails.
+/// The caller's write scope then rolls back both mutations.
+pub async fn delete_passkey_and_revoke_other_sessions(
+    transaction: &mut WriteTransaction,
+    passkeys: &dyn PasskeyStorage,
+    sessions: &dyn SessionStorage,
+    user_id: UserId,
+    credential_id: &PasskeyCredentialId,
+    current_session: &TokenHash,
+) -> Result<bool, PasskeyMutationError> {
+    let deleted = passkeys
+        .delete_credential(transaction, user_id, credential_id)
+        .await?;
+    if deleted {
+        sessions
+            .revoke_all_for_user_except(transaction, user_id, current_session)
+            .await?;
+    }
+    Ok(deleted)
+}
 
 /// Errors returned by [`register_with_invite`].
 #[derive(Debug, Error)]
@@ -235,6 +311,16 @@ pub async fn confirm_password_reset(
 
 #[cfg(test)]
 mod tests {
+    use crate::{
+        sql::QueryStorageExt,
+        test_support::{Backend, SeedUser, backends, confirmed},
+    };
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use common::test_support::parse_session_label;
+    use host::token;
+    use rstest::*;
+    use rstest_reuse::*;
+
     use super::*;
     use host::error::{ErrorKind, InternalError};
 
@@ -299,5 +385,100 @@ mod tests {
         let mapped: InternalError =
             ConfirmPasswordResetError::Internal(sqlx::Error::RowNotFound).into();
         assert_eq!(mapped.kind(), ErrorKind::Storage);
+    }
+    #[apply(backends)]
+    #[tokio::test]
+    async fn deleting_a_passkey_and_revoking_sessions_rolls_back_as_one_mutation(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(env.users(), env.write_scope())
+            .await
+            .user_id;
+        let credential_id = URL_SAFE_NO_PAD.encode([7_u8; 32]);
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query(
+                "INSERT INTO passkey_credentials \
+                 (credential_id, user_id, label, credential, created_at) \
+                 VALUES ($1, $2, 'Laptop', '{}', $3)",
+            )
+            .bind(&credential_id)
+            .bind_storage(user_id)
+            .bind_storage(
+                "2026-09-13T12:00:00Z"
+                    .parse::<common::time::UtcInstant>()
+                    .unwrap(),
+            )
+            .execute(pool)
+            .await
+            .unwrap();
+        });
+        let label = parse_session_label("Current browser");
+        let sessions = env.sessions();
+        let current = confirmed(
+            env.write_scope()
+                .run(move |transaction| {
+                    Box::pin(
+                        async move { sessions.create_session(transaction, user_id, &label).await },
+                    )
+                })
+                .await
+                .unwrap(),
+        );
+        let label = parse_session_label("Other browser");
+        let sessions = env.sessions();
+        confirmed(
+            env.write_scope()
+                .run(move |transaction| {
+                    Box::pin(
+                        async move { sessions.create_session(transaction, user_id, &label).await },
+                    )
+                })
+                .await
+                .unwrap(),
+        );
+
+        let passkeys = env.passkeys();
+        let sessions = env.sessions();
+        let credential_id = credential_id.parse().unwrap();
+        let current_hash = token::hash(&current).unwrap();
+        let error = env
+            .write_scope()
+            .run(move |transaction| {
+                Box::pin(async move {
+                    delete_passkey_and_revoke_other_sessions(
+                        transaction,
+                        passkeys.as_ref(),
+                        sessions.as_ref(),
+                        user_id,
+                        &credential_id,
+                        &current_hash,
+                    )
+                    .await?;
+                    Err::<(), PasskeyMutationError>(PasskeyMutationError(sqlx::Error::PoolClosed))
+                })
+            })
+            .await;
+        assert!(error.is_err(), "injected failure aborts the owning scope");
+
+        let passkeys = env.passkeys();
+        let still_enrolled = confirmed(
+            env.write_scope()
+                .run(move |transaction| {
+                    Box::pin(async move { passkeys.has_credentials(transaction).await })
+                })
+                .await
+                .unwrap(),
+        );
+        assert!(
+            still_enrolled,
+            "the credential survives a rolled-back deletion"
+        );
+        assert_eq!(
+            env.sessions().list_sessions(user_id).await.unwrap().len(),
+            2,
+            "sibling-session revocation rolls back with the credential deletion"
+        );
     }
 }

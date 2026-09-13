@@ -36,6 +36,7 @@ macro_rules! password_reset_app {
             false,
             Arc::new(jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new());
             site_config = $site_config,
+            passkeys = ($env).passkeys(),
             users = $users,
             sessions = ($env).sessions(),
             invites = ($env).invites(),

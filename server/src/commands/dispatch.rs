@@ -139,6 +139,7 @@ async fn execute_site_config_set(
             site_config::cmd_site_config_set(
                 factory.site_config(),
                 &factory.write_scope(),
+                factory.passkeys(),
                 key,
                 &value,
             )
@@ -179,8 +180,13 @@ async fn execute_site_config_unset(storage: StorageArgs, key: SiteConfigKey) -> 
             .await
         }
         _ => {
-            site_config::cmd_site_config_unset(factory.site_config(), &factory.write_scope(), key)
-                .await
+            site_config::cmd_site_config_unset(
+                factory.site_config(),
+                &factory.write_scope(),
+                key,
+                factory.passkeys(),
+            )
+            .await
         }
     }
 }

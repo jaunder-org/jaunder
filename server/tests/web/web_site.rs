@@ -6,7 +6,25 @@ use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{create_operator_and_session, create_user_and_session, make_app, post_form};
-use storage::test_support::{Backend, backends};
+use storage::test_support::{Backend, TestEnv, backends, confirmed, passkey_credential_fixture};
+
+async fn enroll_passkey(env: &TestEnv, user_id: common::ids::UserId) {
+    let passkeys = env.passkeys();
+    let credential = passkey_credential_fixture();
+    let label = "Web test Passkey".parse().expect("valid passkey label");
+    confirmed(
+        env.write_scope()
+            .run(move |transaction| {
+                Box::pin(async move {
+                    passkeys
+                        .insert_credential(transaction, user_id, &label, &credential)
+                        .await
+                })
+            })
+            .await
+            .expect("passkey enrollment succeeds"),
+    );
+}
 
 #[apply(backends)]
 #[tokio::test]
@@ -567,4 +585,102 @@ async fn base_url_warning_propagates_storage_error_during_auth(#[case] backend: 
     )
     .await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn update_site_identity_rejects_replacing_or_clearing_enrolled_rp_host(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let operator = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    enroll_passkey(&env, operator.user_id).await;
+    let cookie = operator.cookie();
+
+    let (replacement_status, replacement_body) = post_form(
+        app.clone(),
+        <web::site::UpdateIdentity as ServerFn>::PATH,
+        "title=My+Blog&base_url=https%3A%2F%2Freplacement.example.test%2F",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        replacement_status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "body: {replacement_body}"
+    );
+
+    let (clear_status, clear_body) = post_form(
+        app.clone(),
+        <web::site::UpdateIdentity as ServerFn>::PATH,
+        "title=My+Blog",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        clear_status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "body: {clear_body}"
+    );
+    let (get_status, get_body) = post_form(
+        app.clone(),
+        <web::site::GetIdentity as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(get_status, StatusCode::OK, "body: {get_body}");
+    let identity: SiteIdentity = serde_json::from_str(&get_body).expect("identity");
+    assert_eq!(
+        identity.base_url.as_deref(),
+        Some("https://example.com/"),
+        "rejected mutations preserve the enrolled RP host"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn update_site_identity_allows_scheme_and_port_changes_for_enrolled_rp_host(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let operator = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    enroll_passkey(&env, operator.user_id).await;
+    let cookie = operator.cookie();
+
+    let (update_status, update_body) = post_form(
+        app.clone(),
+        <web::site::UpdateIdentity as ServerFn>::PATH,
+        "title=My+Blog&base_url=http%3A%2F%2Fexample.com%3A8080%2F",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(update_status, StatusCode::OK, "body: {update_body}");
+
+    let (get_status, get_body) = post_form(
+        app.clone(),
+        <web::site::GetIdentity as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(get_status, StatusCode::OK, "body: {get_body}");
+    let identity: SiteIdentity = serde_json::from_str(&get_body).expect("identity");
+    assert_eq!(
+        identity.base_url.as_deref(),
+        Some("http://example.com:8080/"),
+        "the enrolled RP host permits an HTTPS-to-HTTP scheme and port change"
+    );
 }

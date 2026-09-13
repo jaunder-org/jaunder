@@ -33,6 +33,16 @@ use std::pin::Pin;
 use std::sync::Arc;
 use tempfile::TempDir;
 
+/// Returns the pinned valid Passkey adapter fixture shared by storage, server, and web tests.
+///
+/// # Panics
+///
+/// Panics if the pinned adapter fixture no longer deserializes.
+#[cfg(any(test, feature = "test-support"))]
+#[must_use]
+pub fn passkey_credential_fixture() -> host::passkey::Credential {
+    crate::passkeys::credential_fixture_for_test().expect("pinned passkey fixture decodes")
+}
 #[cfg(test)]
 /// Physical post-revision row exposed only to storage tests that assert archival state.
 pub(crate) struct RawPostRevision {

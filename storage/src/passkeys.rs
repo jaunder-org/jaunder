@@ -7,13 +7,18 @@ use std::{fmt, str::FromStr};
 
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use futures_util::TryStreamExt;
 use rand::Rng;
 use sha2::{Digest as _, Sha256};
 use sqlx::{Database, Decode, Encode, Executor, Pool, Type};
 use thiserror::Error;
 
-use crate::{WriteTransaction, backend::Backend, sql::QueryStorageExt};
-use common::{ids::UserId, time::UtcInstant, token::TokenHash};
+use crate::{
+    WriteTransaction,
+    backend::Backend,
+    sql::{Exists, QueryStorageExt},
+};
+use common::{ids::UserId, pagination::RowLimit, time::UtcInstant, token::TokenHash};
 use host::passkey::{AuthenticationState, Credential, RegistrationState, UserHandle};
 use macros::StrNewtype;
 
@@ -293,6 +298,7 @@ fn decode_credential(
 
 /// Object-safe persistence boundary for durable Passkeys and transient ceremonies.
 #[async_trait]
+#[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
 pub trait PasskeyStorage: Send + Sync {
     async fn user_handle(&self, user_id: UserId) -> sqlx::Result<Option<PasskeyUserHandle>>;
     async fn user_for_handle(&self, handle: &PasskeyUserHandle) -> sqlx::Result<Option<UserId>>;
@@ -321,6 +327,19 @@ pub trait PasskeyStorage: Send + Sync {
         &self,
         credential_id: &PasskeyCredentialId,
     ) -> sqlx::Result<Option<PasskeyCredential>>;
+
+    /// Loads a credential for assertion verification while holding its database
+    /// row lock until the surrounding transaction commits or rolls back.
+    ///
+    /// Authentication finalization MUST verify and fold the loaded credential
+    /// before calling `update_credential_after_authentication` in that same
+    /// transaction. `PostgreSQL` uses `FOR UPDATE`; `SQLite`'s immediate
+    /// [`WriteTransaction`] provides the equivalent writer exclusion.
+    async fn credential_for_authentication(
+        &self,
+        transaction: &mut WriteTransaction,
+        credential_id: &PasskeyCredentialId,
+    ) -> sqlx::Result<Option<PasskeyCredential>>;
     async fn create_registration_ceremony(
         &self,
         transaction: &mut WriteTransaction,
@@ -347,11 +366,29 @@ pub trait PasskeyStorage: Send + Sync {
         handle_hash: &StoredPasskeyCeremonyHandleHash,
         now: UtcInstant,
     ) -> sqlx::Result<Option<AuthenticationCeremony>>;
-    async fn cleanup_ceremonies(
+    /// Serializes configuration and registration-finish RP-host decisions for
+    /// this transaction. `SQLite` already holds its immediate writer lock; the
+    /// `PostgreSQL` branch acquires the shared transaction advisory lock.
+    async fn lock_rp_host(&self, transaction: &mut WriteTransaction) -> sqlx::Result<()>;
+    /// Applies a verified assertion's credential backup state and records its
+    /// use. The verified credential already preserves the signature-counter
+    /// high-water mark.
+    async fn update_credential_after_authentication(
+        &self,
+        transaction: &mut WriteTransaction,
+        user_id: UserId,
+        credential: &Credential,
+    ) -> sqlx::Result<bool>;
+    /// Returns whether any durable Passkey credential exists.
+    async fn has_credentials(&self, transaction: &mut WriteTransaction) -> sqlx::Result<bool>;
+    /// Deletes at most `batch_size` consumed or expired ceremony rows from each
+    /// ceremony domain and returns the total removed.
+    async fn prune_ceremonies(
         &self,
         transaction: &mut WriteTransaction,
         now: UtcInstant,
-    ) -> sqlx::Result<()>;
+        batch_size: RowLimit,
+    ) -> sqlx::Result<u64>;
 }
 
 /// Generic, shared-SQL implementation of [`PasskeyStorage`].
@@ -372,7 +409,8 @@ where
     DB: Backend,
     String: Type<DB>,
     for<'q> String: Encode<'q, DB>,
-    for<'q> i64: Encode<'q, DB> + Type<DB>,
+    for<'q> RowLimit: Encode<'q, DB> + Type<DB>,
+    for<'q> PasskeyRpAdvisoryLockKey: Encode<'q, DB> + Type<DB>,
     for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
     for<'q> PasskeyUserHandle: Encode<'q, DB> + Type<DB>,
     for<'q> PasskeyCredentialId: Encode<'q, DB> + Type<DB>,
@@ -391,6 +429,8 @@ where
     for<'r> StoredPasskeySerialization: Decode<'r, DB> + Type<DB>,
     for<'r> StoredPasskeyText: Decode<'r, DB> + Type<DB>,
     for<'r> StoredPasskeyPurpose: Decode<'r, DB> + Type<DB>,
+    for<'r> StoredPasskeyCeremonyHandleHash: Decode<'r, DB> + Type<DB>,
+    for<'r> Exists: Decode<'r, DB> + Type<DB>,
     for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
     DB::Arguments: sqlx::IntoArguments<DB>,
@@ -502,6 +542,39 @@ where
         .transpose()
     }
 
+    async fn credential_for_authentication(
+        &self,
+        transaction: &mut WriteTransaction,
+        credential_id: &PasskeyCredentialId,
+    ) -> sqlx::Result<Option<PasskeyCredential>> {
+        let connection = DB::write_connection(transaction)?;
+        let query = if DB::DB_SYSTEM == "postgres" {
+            "SELECT credential_id, user_id, label, credential, created_at, last_used_at \
+             FROM passkey_credentials WHERE credential_id = $1 FOR UPDATE"
+        } else {
+            "SELECT credential_id, user_id, label, credential, created_at, last_used_at \
+             FROM passkey_credentials WHERE credential_id = $1"
+        };
+        let row = sqlx::query_as::<
+            _,
+            (
+                PasskeyCredentialId,
+                UserId,
+                PasskeyLabel,
+                StoredPasskeySerialization,
+                UtcInstant,
+                Option<UtcInstant>,
+            ),
+        >(query)
+        .bind_storage(credential_id)
+        .fetch_optional(&mut *connection)
+        .await?;
+        row.map(|(id, user_id, label, encoded, created_at, last_used_at)| {
+            decode_credential(id, user_id, label, &encoded.0, created_at, last_used_at)
+        })
+        .transpose()
+    }
+
     async fn create_registration_ceremony(
         &self,
         transaction: &mut WriteTransaction,
@@ -590,16 +663,89 @@ where
         })
         .transpose()
     }
+    async fn lock_rp_host(&self, transaction: &mut WriteTransaction) -> sqlx::Result<()> {
+        if DB::DB_SYSTEM == "postgres" {
+            let connection = DB::write_connection(transaction)?;
+            sqlx::query("SELECT pg_advisory_xact_lock($1)")
+                .bind_storage(PASSKEY_RP_ADVISORY_LOCK_KEY)
+                .execute(&mut *connection)
+                .await?;
+        }
+        Ok(())
+    }
 
-    async fn cleanup_ceremonies(
+    async fn update_credential_after_authentication(
+        &self,
+        transaction: &mut WriteTransaction,
+        user_id: UserId,
+        credential: &Credential,
+    ) -> sqlx::Result<bool> {
+        let connection = DB::write_connection(transaction)?;
+        let encoded = serde_json::to_string(credential).map_err(decode_error)?;
+        let updated = sqlx::query_scalar::<_, PasskeyCredentialId>(
+            "UPDATE passkey_credentials SET credential = $1, last_used_at = $2 \
+             WHERE user_id = $3 AND credential_id = $4 RETURNING credential_id",
+        )
+        .bind_storage(StoredPasskeySerialization(encoded))
+        .bind_storage(UtcInstant::now())
+        .bind_storage(user_id)
+        .bind_storage(PasskeyCredentialId::from_credential(credential))
+        .fetch_optional(&mut *connection)
+        .await?;
+        Ok(updated.is_some())
+    }
+
+    async fn has_credentials(&self, transaction: &mut WriteTransaction) -> sqlx::Result<bool> {
+        let connection = DB::write_connection(transaction)?;
+        sqlx::query_scalar::<_, Exists>("SELECT EXISTS(SELECT 1 FROM passkey_credentials)")
+            .fetch_one(&mut *connection)
+            .await
+            .map(Exists::into_bool)
+    }
+
+    async fn prune_ceremonies(
         &self,
         transaction: &mut WriteTransaction,
         now: UtcInstant,
-    ) -> sqlx::Result<()> {
+        batch_size: RowLimit,
+    ) -> sqlx::Result<u64> {
         let connection = DB::write_connection(transaction)?;
-        sqlx::query("DELETE FROM passkey_registration_ceremonies WHERE claimed_at IS NOT NULL OR expires_at <= $1").bind_storage(now).execute(&mut *connection).await?;
-        sqlx::query("DELETE FROM passkey_authentication_ceremonies WHERE claimed_at IS NOT NULL OR expires_at <= $1").bind_storage(now).execute(&mut *connection).await?;
-        Ok(())
+        let mut registrations = sqlx::query_scalar::<_, StoredPasskeyCeremonyHandleHash>(
+            "WITH doomed AS (
+                SELECT handle_hash FROM passkey_registration_ceremonies
+                WHERE claimed_at IS NOT NULL OR expires_at <= $1
+                ORDER BY handle_hash LIMIT $2
+             )
+             DELETE FROM passkey_registration_ceremonies
+             WHERE handle_hash IN (SELECT handle_hash FROM doomed)
+             RETURNING handle_hash",
+        )
+        .bind_storage(now)
+        .bind_storage(batch_size)
+        .fetch(&mut *connection);
+        let mut pruned = 0;
+        while registrations.try_next().await?.is_some() {
+            pruned += 1;
+        }
+        drop(registrations);
+
+        let mut authentications = sqlx::query_scalar::<_, StoredPasskeyCeremonyHandleHash>(
+            "WITH doomed AS (
+                SELECT handle_hash FROM passkey_authentication_ceremonies
+                WHERE claimed_at IS NOT NULL OR expires_at <= $1
+                ORDER BY handle_hash LIMIT $2
+             )
+             DELETE FROM passkey_authentication_ceremonies
+             WHERE handle_hash IN (SELECT handle_hash FROM doomed)
+             RETURNING handle_hash",
+        )
+        .bind_storage(now)
+        .bind_storage(batch_size)
+        .fetch(&mut *connection);
+        while authentications.try_next().await?.is_some() {
+            pruned += 1;
+        }
+        Ok(pruned)
     }
 }
 
@@ -617,21 +763,31 @@ pub(crate) struct StoredPasskeyText(String);
 #[derive(macros::SqlxBridge)]
 struct StoredPasskeyPurpose(String);
 
+/// The single lock namespace shared by configuration writes and registration
+/// completion on `PostgreSQL`.
+#[derive(Clone, Copy, macros::SqlxBridge)]
+pub(crate) struct PasskeyRpAdvisoryLockKey(i64);
+
+const PASSKEY_RP_ADVISORY_LOCK_KEY: PasskeyRpAdvisoryLockKey = PasskeyRpAdvisoryLockKey(1_455);
+
+#[cfg(any(test, feature = "test-support"))]
+const CREDENTIAL_FIXTURE: &str = r#"{"cred_id":"uZcVDBVS68E_MtAgeQpElJxldF_6cY9sSvbWqx_qRh8wiu42lyRBRmh5yFeD_r9k130dMbFHBHI9RTFgdJQIzQ","cred":{"type_":"ES256","key":{"EC_EC2":{"curve":"SECP256R1","x":[194,126,127,109,252,23,131,21,252,6,223,99,44,254,140,27,230,17,94,5,133,28,104,41,144,69,171,149,161,26,200,243],"y":[143,123,183,156,24,178,21,248,117,159,162,69,171,52,188,252,26,59,6,47,103,92,19,58,117,103,249,0,219,8,95,196]}}},"counter":2,"user_verified":false,"backup_eligible":false,"backup_state":false,"registration_policy":"preferred","extensions":{"cred_protect":"NotRequested","hmac_create_secret":"NotRequested"},"attestation":{"data":{"Basic":["MIICvTCCAaWgAwIBAgIEK_F8eDANBgkqhkiG9w0BAQsFADAuMSwwKgYDVQQDEyNZdWJpY28gVTJGIFJvb3QgQ0EgU2VyaWFsIDQ1NzIwMDYzMTAgFw0xNDA4MDEwMDAwMDBaGA8yMDUwMDkwNDAwMDAwMFowbjELMAkGA1UEBhMCU0UxEjAQBgNVBAoMCVl1YmljbyBBQjEiMCAGA1UECwwZQXV0aGVudGljYXRvciBBdHRlc3RhdGlvbjEnMCUGA1UEAwweWXViaWNvIFUyRiBFRSBTZXJpYWwgNzM3MjQ2MzI4MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEdMLHhCPIcS6bSPJZWGb8cECuTN8H13fVha8Ek5nt-pI8vrSflxb59Vp4bDQlH8jzXj3oW1ZwUDjHC6EnGWB5i6NsMGowIgYJKwYBBAGCxAoCBBUxLjMuNi4xLjQuMS40MTQ4Mi4xLjcwEwYLKwYBBAGC5RwCAQEEBAMCAiQwIQYLKwYBBAGC5RwBAQQEEgQQxe9V_62aS5-1gK3rr-Am0DAMBgNVHRMBAf8EAjAAMA0GCSqGSIb3DQEBCwUAA4IBAQCLbpN2nXhNbunZANJxAn_Cd-S4JuZsObnUiLnLLS0FPWa01TY8F7oJ8bE-aFa4kTe6NQQfi8-yiZrQ8N-JL4f7gNdQPSrH-r3iFd4SvroDe1jaJO4J9LeiFjmRdcVa-5cqNF4G1fPCofvw9W4lKnObuPakr0x_icdVq1MXhYdUtQk6Zr5mBnc4FhN9qi7DXqLHD5G7ZFUmGwfIcD2-0m1f1mwQS8yRD5-_aDCf3vutwddoi3crtivzyromwbKklR4qHunJ75LGZLZA8pJ_mXnUQ6TTsgRqPvPXgQPbSyGMf2z_DIPbQqCD_Bmc4dj9o6LozheBdDtcZCAjSPTAd_ui"]},"metadata":"None"},"attestation_format":"Packed"}"#;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn credential_fixture_for_test() -> Result<Credential, serde_json::Error> {
+    Credential::deserialize_for_test(&format!(r#"{{"cred":{CREDENTIAL_FIXTURE}}}"#))
+}
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use crate::test_support::{Backend, SeedUser, backends};
     use rstest::*;
     use rstest_reuse::*;
     use std::sync::Arc;
 
-    const CREDENTIAL_FIXTURE: &str = r#"{"cred_id":"uZcVDBVS68E_MtAgeQpElJxldF_6cY9sSvbWqx_qRh8wiu42lyRBRmh5yFeD_r9k130dMbFHBHI9RTFgdJQIzQ","cred":{"type_":"ES256","key":{"EC_EC2":{"curve":"SECP256R1","x":[194,126,127,109,252,23,131,21,252,6,223,99,44,254,140,27,230,17,94,5,133,28,104,41,144,69,171,149,161,26,200,243],"y":[143,123,183,156,24,178,21,248,117,159,162,69,171,52,188,252,26,59,6,47,103,92,19,58,117,103,249,0,219,8,95,196]}}},"counter":2,"user_verified":false,"backup_eligible":false,"backup_state":false,"registration_policy":"preferred","extensions":{"cred_protect":"NotRequested","hmac_create_secret":"NotRequested"},"attestation":{"data":{"Basic":["MIICvTCCAaWgAwIBAgIEK_F8eDANBgkqhkiG9w0BAQsFADAuMSwwKgYDVQQDEyNZdWJpY28gVTJGIFJvb3QgQ0EgU2VyaWFsIDQ1NzIwMDYzMTAgFw0xNDA4MDEwMDAwMDBaGA8yMDUwMDkwNDAwMDAwMFowbjELMAkGA1UEBhMCU0UxEjAQBgNVBAoMCVl1YmljbyBBQjEiMCAGA1UECwwZQXV0aGVudGljYXRvciBBdHRlc3RhdGlvbjEnMCUGA1UEAwweWXViaWNvIFUyRiBFRSBTZXJpYWwgNzM3MjQ2MzI4MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEdMLHhCPIcS6bSPJZWGb8cECuTN8H13fVha8Ek5nt-pI8vrSflxb59Vp4bDQlH8jzXj3oW1ZwUDjHC6EnGWB5i6NsMGowIgYJKwYBBAGCxAoCBBUxLjMuNi4xLjQuMS40MTQ4Mi4xLjcwEwYLKwYBBAGC5RwCAQEEBAMCAiQwIQYLKwYBBAGC5RwBAQQEEgQQxe9V_62aS5-1gK3rr-Am0DAMBgNVHRMBAf8EAjAAMA0GCSqGSIb3DQEBCwUAA4IBAQCLbpN2nXhNbunZANJxAn_Cd-S4JuZsObnUiLnLLS0FPWa01TY8F7oJ8bE-aFa4kTe6NQQfi8-yiZrQ8N-JL4f7gNdQPSrH-r3iFd4SvroDe1jaJO4J9LeiFjmRdcVa-5cqNF4G1fPCofvw9W4lKnObuPakr0x_icdVq1MXhYdUtQk6Zr5mBnc4FhN9qi7DXqLHD5G7ZFUmGwfIcD2-0m1f1mwQS8yRD5-_aDCf3vutwddoi3crtivzyromwbKklR4qHunJ75LGZLZA8pJ_mXnUQ6TTsgRqPvPXgQPbSyGMf2z_DIPbQqCD_Bmc4dj9o6LozheBdDtcZCAjSPTAd_ui"]},"metadata":"None"},"attestation_format":"Packed"}"#;
-
     fn credential_fixture() -> Credential {
-        Credential::deserialize_for_test(&format!(r#"{{"cred":{CREDENTIAL_FIXTURE}}}"#))
-            .expect("pinned fork fixture decodes")
+        crate::test_support::passkey_credential_fixture()
     }
-
     async fn seed_user(env: &crate::test_support::TestEnv) -> UserId {
         SeedUser::new()
             .seed(Arc::clone(&env.users()), env.write_scope().clone())
@@ -901,7 +1057,11 @@ mod tests {
         crate::test_support::confirmed(
             env.write_scope()
                 .run(move |transaction| {
-                    Box::pin(async move { passkeys.cleanup_ceremonies(transaction, now).await })
+                    Box::pin(async move {
+                        passkeys
+                            .prune_ceremonies(transaction, now, RowLimit::at_most(100))
+                            .await
+                    })
                 })
                 .await
                 .unwrap(),
@@ -969,6 +1129,21 @@ mod tests {
                 .as_ref(),
             "Laptop"
         );
+        let passkeys = env.passkeys();
+        let locked_id = id.clone();
+        let locked = crate::test_support::confirmed(
+            env.write_scope()
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        passkeys
+                            .credential_for_authentication(transaction, &locked_id)
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
+        assert_eq!(locked.expect("credential exists").id, id);
         assert!(
             env.passkeys()
                 .credential_for_user(other, &id)
@@ -1149,7 +1324,11 @@ mod tests {
         crate::test_support::confirmed(
             env.write_scope()
                 .run(move |transaction| {
-                    Box::pin(async move { passkeys.cleanup_ceremonies(transaction, now).await })
+                    Box::pin(async move {
+                        passkeys
+                            .prune_ceremonies(transaction, now, RowLimit::at_most(100))
+                            .await
+                    })
                 })
                 .await
                 .unwrap(),
@@ -1161,5 +1340,307 @@ mod tests {
                 .unwrap()
         });
         assert_eq!(remaining, 0);
+    }
+    #[apply(backends)]
+    #[tokio::test]
+    async fn ceremony_cleanup_includes_the_expiry_boundary_and_drains_bounded_batches(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let now = "2026-09-13T12:00:00Z".parse::<UtcInstant>().unwrap();
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            for (handle_hash, expires_at, claimed_at) in [
+                (RawPasskeyCeremonyHandle::generate().hash(), now, None),
+                (
+                    RawPasskeyCeremonyHandle::generate().hash(),
+                    "2026-09-13T11:59:59Z".parse::<UtcInstant>().unwrap(),
+                    None,
+                ),
+                (
+                    RawPasskeyCeremonyHandle::generate().hash(),
+                    "2026-09-13T12:05:00Z".parse::<UtcInstant>().unwrap(),
+                    Some("2026-09-13T11:00:00Z".parse::<UtcInstant>().unwrap()),
+                ),
+                (
+                    RawPasskeyCeremonyHandle::generate().hash(),
+                    "2026-09-13T12:05:00Z".parse::<UtcInstant>().unwrap(),
+                    None,
+                ),
+            ] {
+                sqlx::query(
+                    "INSERT INTO passkey_authentication_ceremonies \
+                     (handle_hash, purpose, origin, rp_id, state, expires_at, claimed_at) \
+                     VALUES ($1, 'authentication', 'https://passkeys.example.test', \
+                     'passkeys.example.test', '{}', $2, $3)",
+                )
+                .bind_storage(handle_hash)
+                .bind_storage(expires_at)
+                .bind(claimed_at)
+                .execute(pool)
+                .await
+                .unwrap();
+            }
+        });
+
+        let passkeys = env.passkeys();
+        let first = crate::test_support::confirmed(
+            env.write_scope()
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        passkeys
+                            .prune_ceremonies(transaction, now, RowLimit::at_most(2))
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
+        assert_eq!(first, 2, "cleanup honors its per-domain row limit");
+
+        let passkeys = env.passkeys();
+        let second = crate::test_support::confirmed(
+            env.write_scope()
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        passkeys
+                            .prune_ceremonies(transaction, now, RowLimit::at_most(2))
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
+        assert_eq!(
+            second, 1,
+            "a following pass drains the remaining doomed row"
+        );
+        assert_eq!(
+            env.base
+                .pool()
+                .scalar_i64("SELECT COUNT(*) FROM passkey_authentication_ceremonies")
+                .await
+                .unwrap(),
+            1,
+            "only the unclaimed ceremony after the cutoff survives"
+        );
+    }
+    #[apply(backends)]
+    #[tokio::test]
+    async fn authentication_finalization_rolls_back_credential_use_and_session_revocation(
+        #[case] backend: Backend,
+    ) {
+        use common::test_support::parse_session_label;
+
+        let env = backend.setup().await;
+        let user_id = seed_user(&env).await;
+        let credential = insert_credential(&env, user_id, "Laptop").await;
+        let sessions = env.sessions();
+        let original_label = parse_session_label("Existing browser");
+        crate::test_support::confirmed(
+            env.write_scope()
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        sessions
+                            .create_session(transaction, user_id, &original_label)
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
+        let sessions = env.sessions();
+        let sibling_label = parse_session_label("Sibling browser");
+        crate::test_support::confirmed(
+            env.write_scope()
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        sessions
+                            .create_session(transaction, user_id, &sibling_label)
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
+
+        let passkeys = env.passkeys();
+        let sessions = env.sessions();
+        let session_label = parse_session_label("Passkey authentication");
+        let finalized_credential = credential.clone();
+        let error = env
+            .write_scope()
+            .run(move |transaction| {
+                Box::pin(async move {
+                    crate::account_mutations::finalize_passkey_authentication(
+                        transaction,
+                        passkeys.as_ref(),
+                        sessions.as_ref(),
+                        user_id,
+                        &finalized_credential,
+                        &session_label,
+                    )
+                    .await?;
+                    Err::<(), crate::account_mutations::PasskeyMutationError>(
+                        crate::account_mutations::PasskeyMutationError(sqlx::Error::PoolClosed),
+                    )
+                })
+            })
+            .await;
+        assert!(error.is_err(), "injected failure aborts finalization");
+        assert_eq!(
+            env.sessions().list_sessions(user_id).await.unwrap().len(),
+            2,
+            "the new session and sibling revocation both roll back"
+        );
+        let credential_id = PasskeyCredentialId::from_credential(&credential);
+        assert!(
+            env.passkeys()
+                .credential(&credential_id)
+                .await
+                .unwrap()
+                .expect("credential remains")
+                .last_used_at
+                .is_none(),
+            "credential use is not recorded without a commit"
+        );
+    }
+    #[apply(backends)]
+    #[tokio::test]
+    async fn first_enrollment_serializes_with_a_concurrent_base_url_replacement(
+        #[case] backend: Backend,
+    ) {
+        use common::test_support::parse_url;
+        use tokio::sync::oneshot;
+
+        let env = backend
+            .setup()
+            .base_url(Some(parse_url("https://locked.example.test/")))
+            .await;
+        let user_id = seed_user(&env).await;
+        let credential = credential_fixture();
+        let label = "Laptop".parse().unwrap();
+        let (lock_held, lock_held_rx) = oneshot::channel();
+        let (finish_enrollment, finish_enrollment_rx) = oneshot::channel();
+        let enrollment_passkeys = env.passkeys();
+        let enrollment_scope = env.write_scope();
+        let enrollment = enrollment_scope.run(move |transaction| {
+            Box::pin(async move {
+                enrollment_passkeys.lock_rp_host(transaction).await?;
+                let _ = lock_held.send(());
+                finish_enrollment_rx
+                    .await
+                    .expect("configuration task permits enrollment to finish");
+                enrollment_passkeys
+                    .insert_credential(transaction, user_id, &label, &credential)
+                    .await
+            })
+        });
+        let configuration_passkeys = env.passkeys();
+        let configuration = env.site_config();
+        let configuration_scope = env.write_scope();
+        let configuration = async move {
+            lock_held_rx
+                .await
+                .expect("enrollment holds the shared RP-host lock");
+            let _ = finish_enrollment.send(());
+            configuration_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        crate::set_base_url_with_passkey_guard(
+                            transaction,
+                            configuration.as_ref(),
+                            configuration_passkeys.as_ref(),
+                            Some(parse_url("https://replacement.example.test/")),
+                        )
+                        .await
+                    })
+                })
+                .await
+        };
+        let (enrollment, configuration) = tokio::join!(enrollment, configuration);
+        assert!(enrollment.is_ok(), "first enrollment commits");
+        assert!(
+            configuration.is_err(),
+            "the concurrent replacement observes the committed credential"
+        );
+        assert_eq!(
+            env.site_config().get_identity().await.unwrap().base_url,
+            Some(parse_url("https://locked.example.test/"))
+        );
+        assert_eq!(
+            env.passkeys()
+                .list_credentials(user_id)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+    #[apply(backends)]
+    #[tokio::test]
+    async fn first_enrollment_serializes_with_a_concurrent_base_url_clear(
+        #[case] backend: Backend,
+    ) {
+        use common::test_support::parse_url;
+        use tokio::sync::oneshot;
+
+        let env = backend
+            .setup()
+            .base_url(Some(parse_url("https://locked.example.test/")))
+            .await;
+        let user_id = seed_user(&env).await;
+        let credential = credential_fixture();
+        let label = "Laptop".parse().unwrap();
+        let (lock_held, lock_held_rx) = oneshot::channel();
+        let (finish_enrollment, finish_enrollment_rx) = oneshot::channel();
+        let enrollment_passkeys = env.passkeys();
+        let enrollment_scope = env.write_scope();
+        let enrollment = enrollment_scope.run(move |transaction| {
+            Box::pin(async move {
+                enrollment_passkeys.lock_rp_host(transaction).await?;
+                let _ = lock_held.send(());
+                finish_enrollment_rx.await.expect("release enrollment");
+                enrollment_passkeys
+                    .insert_credential(transaction, user_id, &label, &credential)
+                    .await
+            })
+        });
+        let passkeys = env.passkeys();
+        let site_config = env.site_config();
+        let configuration_scope = env.write_scope();
+        let clear = async move {
+            lock_held_rx.await.expect("enrollment holds RP lock");
+            let _ = finish_enrollment.send(());
+            configuration_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        crate::clear_base_url_with_passkey_guard(
+                            transaction,
+                            site_config.as_ref(),
+                            passkeys.as_ref(),
+                        )
+                        .await
+                    })
+                })
+                .await
+        };
+        let (enrollment, clear) = tokio::join!(enrollment, clear);
+        assert!(enrollment.is_ok(), "first enrollment commits");
+        assert!(
+            clear.is_err(),
+            "the queued clear observes the enrolled credential"
+        );
+        assert_eq!(
+            env.site_config().get_identity().await.unwrap().base_url,
+            Some(parse_url("https://locked.example.test/"))
+        );
+        assert_eq!(
+            env.passkeys()
+                .list_credentials(user_id)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }

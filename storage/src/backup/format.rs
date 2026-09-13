@@ -273,7 +273,7 @@ mod tests {
     }
 
     #[test]
-    fn backup_table_set_drops_internal_and_denylisted_and_sorts() {
+    fn backup_table_set_keeps_durable_passkey_identity_but_excludes_live_ceremonies() {
         let live = [
             "posts",
             "users",
@@ -281,6 +281,10 @@ mod tests {
             "_sqlx_migrations",
             "sqlite_sequence",
             "channels",
+            "passkey_credentials",
+            "passkey_user_handles",
+            "passkey_registration_ceremonies",
+            "passkey_authentication_ceremonies",
         ]
         .into_iter()
         .map(str::to_owned);
@@ -288,8 +292,10 @@ mod tests {
             table_set(live),
             vec![
                 "channels".to_owned(),
+                "passkey_credentials".to_owned(),
+                "passkey_user_handles".to_owned(),
                 "posts".to_owned(),
-                "users".to_owned()
+                "users".to_owned(),
             ]
         );
     }

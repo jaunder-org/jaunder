@@ -1,9 +1,12 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use common::tagged_url::HubUrl;
+use common::tagged_url::{BaseUrl, HubUrl};
 use host::config_key::SiteConfigKey;
-use storage::{FeedWindowMutation, PublisherStorage, SiteConfigStorage, WriteScope};
+use storage::{
+    FeedWindowMutation, PasskeyStorage, PublisherStorage, SiteConfigStorage, WriteScope,
+    clear_base_url_with_passkey_guard, set_base_url_with_passkey_guard,
+};
 
 use crate::publisher::PublisherService;
 
@@ -17,13 +20,31 @@ use super::support;
 pub(super) async fn cmd_site_config_set(
     site_config: Arc<dyn SiteConfigStorage>,
     write_scope: &WriteScope,
+    passkeys: Arc<dyn PasskeyStorage>,
     key: SiteConfigKey,
     value: &str,
 ) -> anyhow::Result<()> {
     let value_for_set = value.to_owned();
     let outcome = write_scope
         .run(move |transaction| {
-            Box::pin(async move { site_config.set(transaction, key, &value_for_set).await })
+            Box::pin(async move {
+                if key == SiteConfigKey::SiteBaseUrl {
+                    let base_url = (!value_for_set.is_empty())
+                        .then(|| value_for_set.parse::<BaseUrl>())
+                        .transpose()
+                        .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+                    set_base_url_with_passkey_guard(
+                        transaction,
+                        site_config.as_ref(),
+                        passkeys.as_ref(),
+                        base_url,
+                    )
+                    .await
+                    .map_err(|error| sqlx::Error::Protocol(error.to_string()))
+                } else {
+                    site_config.set(transaction, key, &value_for_set).await
+                }
+            })
         })
         .await?;
     support::require_confirmed_mutation(outcome, "site_config set")?;
@@ -101,9 +122,24 @@ pub(super) async fn cmd_site_config_unset(
     site_config: Arc<dyn SiteConfigStorage>,
     write_scope: &WriteScope,
     key: SiteConfigKey,
+    passkeys: Arc<dyn PasskeyStorage>,
 ) -> anyhow::Result<()> {
     let outcome = write_scope
-        .run(move |transaction| Box::pin(async move { site_config.delete(transaction, key).await }))
+        .run(move |transaction| {
+            Box::pin(async move {
+                if key == SiteConfigKey::SiteBaseUrl {
+                    clear_base_url_with_passkey_guard(
+                        transaction,
+                        site_config.as_ref(),
+                        passkeys.as_ref(),
+                    )
+                    .await
+                    .map_err(|error| sqlx::Error::Protocol(error.to_string()))
+                } else {
+                    site_config.delete(transaction, key).await
+                }
+            })
+        })
         .await?;
     let removed = support::require_confirmed_mutation(outcome, "site_config unset")?;
     if removed {
@@ -259,6 +295,64 @@ mod tests {
         }
         .execute()
         .await
+    }
+    async fn enroll_passkey(factory: &storage::StorageFactory) {
+        let user_id = storage::test_support::SeedUser::new()
+            .seed(factory.users(), factory.write_scope())
+            .await
+            .user_id;
+        let credential = storage::test_support::passkey_credential_fixture();
+        let label = "CLI test Passkey".parse().unwrap();
+        let passkeys = factory.passkeys();
+        confirmed(
+            factory
+                .write_scope()
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        passkeys
+                            .insert_credential(transaction, user_id, &label, &credential)
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn cli_base_url_set_and_unset_keep_the_enrolled_rp_host(#[case] backend: Backend) {
+        let base = TempDir::new().expect("temp dir");
+        let (args, _pg) = site_config_args(backend, &base).await;
+        execute_set(
+            &args,
+            SiteConfigKey::SiteBaseUrl,
+            "https://locked.example.test/",
+        )
+        .await
+        .unwrap();
+        let factory = storage::open_existing_database(&args.db, &StorageRuntimeConfig::default())
+            .await
+            .unwrap();
+        enroll_passkey(&factory).await;
+
+        execute_set(
+            &args,
+            SiteConfigKey::SiteBaseUrl,
+            "https://replacement.example.test/",
+        )
+        .await
+        .expect_err("CLI set rejects an RP-host replacement after enrollment");
+        execute_set(
+            &args,
+            SiteConfigKey::SiteBaseUrl,
+            "http://locked.example.test:8080/",
+        )
+        .await
+        .expect("CLI set allows scheme and port changes on the enrolled RP host");
+        execute_unset(&args, SiteConfigKey::SiteBaseUrl)
+            .await
+            .expect_err("CLI unset rejects clearing the enrolled RP host");
     }
 
     #[test]

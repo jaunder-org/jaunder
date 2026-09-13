@@ -7,6 +7,7 @@ pub enum Domain {
     Invites,
     EmailVerifications,
     PasswordResets,
+    PasskeyCeremonies,
     FeedEvents,
 }
 
@@ -19,6 +20,7 @@ impl Domain {
             Self::Invites => "invites",
             Self::EmailVerifications => "email_verifications",
             Self::PasswordResets => "password_resets",
+            Self::PasskeyCeremonies => "passkey_ceremonies",
             Self::FeedEvents => "feed_events",
         }
     }
@@ -53,6 +55,7 @@ mod tests {
         assert_eq!(Domain::EmailVerifications.label(), "email_verifications");
         assert_eq!(Domain::PasswordResets.label(), "password_resets");
         assert_eq!(Domain::FeedEvents.label(), "feed_events");
+        assert_eq!(Domain::PasskeyCeremonies.label(), "passkey_ceremonies");
         assert_eq!(CleanupResult::Success.label(), "success");
         assert_eq!(CleanupResult::Failure.label(), "failure");
     }

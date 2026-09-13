@@ -25,10 +25,15 @@ async fn rsd_document_advertises_service_url(#[case] backend: Backend) {
         base_url: Some(common::test_support::parse_url("https://example.test/")),
     };
     let site_config = std::sync::Arc::clone(&env.site_config());
+    let passkeys = std::sync::Arc::clone(&env.passkeys());
     storage::test_support::confirmed(
         env.write_scope()
             .run(move |transaction| {
-                Box::pin(async move { site_config.set_identity(transaction, &identity).await })
+                Box::pin(async move {
+                    site_config
+                        .set_identity(transaction, passkeys, &identity)
+                        .await
+                })
             })
             .await
             .unwrap(),

@@ -86,7 +86,7 @@ Out:
     concurrent claim, and cleanup predicates. Migration, restore-order, and
     schema parity pass on both backends.
 
-- [ ] Task 3: Enforce cross-domain transaction and lifecycle policy
+- [x] Task 3: Enforce cross-domain transaction and lifecycle policy
   - Contract: extend `SessionStorage` with transaction-scoped revoke-all-except-
     current. Authentication updates backup state/high-water counter/last use and
     creates a Session atomically; deletion removes one owned credential and

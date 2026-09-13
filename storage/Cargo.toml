@@ -29,6 +29,7 @@ strum.workspace = true
 tokio = { workspace = true }
 tracing.workspace = true
 uuid.workspace = true
+url.workspace = true
 # Optional deps for the `test_support` module, pulled in by the `test-support`
 # feature (so external test crates like `server` get them); also dev-deps below
 # so `storage`'s own `cfg(test)` build has them without enabling the feature.

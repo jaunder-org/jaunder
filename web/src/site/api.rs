@@ -11,7 +11,7 @@ use {
     },
     leptos::prelude::*,
     std::sync::Arc,
-    storage::{SiteConfigStorage, WriteScope},
+    storage::{PasskeyStorage, SiteConfigStorage, WriteScope, set_base_url_with_passkey_guard},
 };
 
 #[macros::server]
@@ -65,14 +65,30 @@ pub async fn update_identity(
     // no server-side parse/`non_empty` bridge is needed.
     let identity = SiteIdentity { title, base_url };
     let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
+    let passkeys = expect_context::<Arc<dyn PasskeyStorage>>();
     let write_scope = expect_context::<WriteScope>();
     write_scope
         .run(move |transaction| {
             Box::pin(async move {
+                set_base_url_with_passkey_guard(
+                    transaction,
+                    site_config.as_ref(),
+                    passkeys.as_ref(),
+                    identity.base_url,
+                )
+                .await
+                .map_err(|error| {
+                    InternalError::storage(sqlx::Error::Protocol(error.to_string()))
+                })?;
                 site_config
-                    .set_identity(transaction, &identity)
+                    .set(
+                        transaction,
+                        host::config_key::SiteConfigKey::SiteTitle,
+                        &identity.title,
+                    )
                     .await
-                    .map_err(InternalError::storage)
+                    .map_err(InternalError::storage)?;
+                Ok(())
             })
         })
         .await

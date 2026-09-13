@@ -15,8 +15,8 @@ use crate::helpers::{SerializedPostTags, SessionCreatedAt, SessionLastUsedAt, St
 use crate::invites::{InviteCreatedAt, InviteExpiresAt};
 use crate::media::MediaDeleteMode;
 use crate::passkeys::{
-    PasskeyCredentialId, PasskeyLabel, PasskeyUserHandle, StoredPasskeyCeremonyHandleHash,
-    StoredPasskeySerialization, StoredPasskeyText,
+    PasskeyCredentialId, PasskeyLabel, PasskeyRpAdvisoryLockKey, PasskeyUserHandle,
+    StoredPasskeyCeremonyHandleHash, StoredPasskeySerialization, StoredPasskeyText,
 };
 use crate::posts::{
     lifecycle::IdempotencyAdvisoryLockKey,
@@ -274,6 +274,7 @@ approve_storage_binds!(
     SerializedPostTags,
     StoredUserConfigValue,
     PasskeyCredentialId,
+    PasskeyRpAdvisoryLockKey,
     PasskeyLabel,
     PasskeyUserHandle,
     StoredPasskeyCeremonyHandleHash,

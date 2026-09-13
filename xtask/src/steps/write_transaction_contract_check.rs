@@ -61,11 +61,15 @@ const AUDITED_TRAITS: &[(&str, &[&str])] = &[
         &[
             "insert_credential",
             "delete_credential",
+            "credential_for_authentication",
             "create_registration_ceremony",
             "claim_registration_ceremony",
             "create_authentication_ceremony",
             "claim_authentication_ceremony",
-            "cleanup_ceremonies",
+            "lock_rp_host",
+            "update_credential_after_authentication",
+            "has_credentials",
+            "prune_ceremonies",
         ],
     ),
     (
@@ -98,6 +102,7 @@ const AUDITED_TRAITS: &[(&str, &[&str])] = &[
             "authenticate",
             "revoke_session",
             "revoke_all_for_user",
+            "revoke_all_for_user_except",
         ],
     ),
     (
@@ -105,6 +110,7 @@ const AUDITED_TRAITS: &[(&str, &[&str])] = &[
         &[
             "set",
             "delete",
+            "get_base_url_in_transaction",
             "set_identity",
             "set_registration_policy",
             "set_base_url",
