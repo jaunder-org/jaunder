@@ -127,6 +127,8 @@ pub struct ValidatedThemePackage {
     manifest: Vec<u8>,
     css: Vec<u8>,
     assets: BTreeMap<String, ThemeAsset>,
+    default_logo_path: Option<String>,
+    default_header_paths: Option<Vec<String>>,
     source_digest: [u8; 32],
 }
 /// Immutable compiler result. Only the compiler can mint it.
@@ -135,6 +137,8 @@ pub struct CompiledThemeRevision {
     manifest: Vec<u8>,
     css: CompiledCss,
     assets: BTreeMap<String, ThemeAsset>,
+    default_logo_path: Option<String>,
+    default_header_paths: Option<Vec<String>>,
     source_digest: [u8; 32],
     revision_digest: [u8; 32],
 }
@@ -300,6 +304,8 @@ pub fn validate_theme_package(
         manifest: canonical,
         css,
         assets,
+        default_logo_path: manifest.defaults.logo,
+        default_header_paths: manifest.defaults.header,
         source_digest,
     })
 }
@@ -540,6 +546,37 @@ impl ValidatedThemePackage {
         self.assets.keys().map(String::as_str)
     }
 
+    /// Enumerates package asset digests in canonical archive order.
+    pub fn asset_digests(&self) -> impl Iterator<Item = (&str, [u8; 32])> {
+        self.assets
+            .iter()
+            .map(|(path, asset)| (path.as_str(), asset.digest))
+    }
+
+    /// Compiles the served revision while deriving its public identity from a
+    /// second complete asset URL map, without copying package bytes.
+    ///
+    /// Repository previews serve command-local URLs, but public revision
+    /// identity is minted from immutable publication URLs. Both transformations
+    /// validate the same authored source and asset declarations.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ThemePackageError`] when either complete URL map cannot compile
+    /// the stylesheet.
+    pub fn compile_with_identity_asset_urls(
+        self,
+        served_asset_urls: &BTreeMap<String, String>,
+        identity_asset_urls: &BTreeMap<String, String>,
+        limits: ThemePackageLimits,
+    ) -> Result<(CompiledThemeRevision, [u8; 32]), ThemePackageError> {
+        let identity_css = self.compile_css(identity_asset_urls, limits)?;
+        let identity_revision =
+            revision_digest(&self.manifest, identity_css.digest(), &self.assets);
+        let compiled = self.compile(served_asset_urls, limits)?;
+        Ok((compiled, identity_revision))
+    }
+
     /// Re-exports the validated canonical source without copying asset bytes.
     ///
     /// Entries retain canonical member ordering and contain only portable source.
@@ -571,21 +608,31 @@ impl ValidatedThemePackage {
         asset_urls: &BTreeMap<String, String>,
         limits: ThemePackageLimits,
     ) -> Result<CompiledThemeRevision, ThemePackageError> {
-        let css = compile_stylesheet(
-            &self.css,
-            &self.manifest,
-            self.source_digest,
-            asset_urls,
-            limits,
-        )?;
+        let css = self.compile_css(asset_urls, limits)?;
         let revision_digest = revision_digest(&self.manifest, css.digest(), &self.assets);
         Ok(CompiledThemeRevision {
             manifest: self.manifest,
             css,
             assets: self.assets,
+            default_logo_path: self.default_logo_path,
+            default_header_paths: self.default_header_paths,
             source_digest: self.source_digest,
             revision_digest,
         })
+    }
+
+    fn compile_css(
+        &self,
+        asset_urls: &BTreeMap<String, String>,
+        limits: ThemePackageLimits,
+    ) -> Result<CompiledCss, ThemePackageError> {
+        compile_stylesheet(
+            &self.css,
+            &self.manifest,
+            self.source_digest,
+            asset_urls,
+            limits,
+        )
     }
 }
 impl CompiledThemeRevision {
@@ -604,6 +651,14 @@ impl CompiledThemeRevision {
     #[must_use]
     pub fn css(&self) -> &CompiledCss {
         &self.css
+    }
+    #[must_use]
+    pub fn default_logo_path(&self) -> Option<&str> {
+        self.default_logo_path.as_deref()
+    }
+    #[must_use]
+    pub fn default_header_paths(&self) -> Option<&[String]> {
+        self.default_header_paths.as_deref()
     }
     #[must_use]
     pub fn asset(&self, path: &str) -> Option<(&str, &[u8], [u8; 32])> {
@@ -1408,21 +1463,29 @@ mod tests {
 
     #[test]
     fn compile_binds_all_asset_urls_and_exposes_compiled_assets() {
-        let image = raster(ImageFormat::Png, 1, 1);
-        let manifest = r#"{"schema":1,"name":"Paper","style_contract":1,"assets":{"assets/logo.png":"image/png"},"defaults":{"logo":"assets/logo.png"}}"#;
+        let logo = raster(ImageFormat::Png, 1, 1);
+        let header = raster(ImageFormat::Png, 2, 1);
+        let manifest = r#"{"schema":1,"name":"Paper","style_contract":1,"assets":{"assets/logo.png":"image/png","assets/header.png":"image/png"},"defaults":{"logo":"assets/logo.png","header":["assets/header.png"]}}"#;
         let package = archive(&[
             ("theme.json", manifest.as_bytes()),
             (
                 "style.css",
                 b"body { background-image: url(assets/logo.png) }",
             ),
-            ("assets/logo.png", &image),
+            ("assets/logo.png", &logo),
+            ("assets/header.png", &header),
         ]);
         let validated = validate_theme_package(&package, ThemePackageLimits::default()).unwrap();
-        let urls = BTreeMap::from([(
-            "assets/logo.png".to_owned(),
-            "/theme-assets/logo".to_owned(),
-        )]);
+        let urls = BTreeMap::from([
+            (
+                "assets/logo.png".to_owned(),
+                "/theme-assets/logo".to_owned(),
+            ),
+            (
+                "assets/header.png".to_owned(),
+                "/theme-assets/header".to_owned(),
+            ),
+        ]);
         let revision = validated
             .compile(&urls, ThemePackageLimits::default())
             .unwrap();
@@ -1436,9 +1499,13 @@ mod tests {
             revision
                 .asset("assets/logo.png")
                 .map(|(mime, bytes, _)| (mime, bytes)),
-            Some(("image/png", image.as_slice()))
+            Some(("image/png", logo.as_slice()))
         );
-        assert!(revision.asset("assets/missing.png").is_none());
+        assert_eq!(revision.default_logo_path(), Some("assets/logo.png"));
+        assert_eq!(
+            revision.default_header_paths(),
+            Some(&["assets/header.png".to_owned()][..])
+        );
     }
 
     #[test]

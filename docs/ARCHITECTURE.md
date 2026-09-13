@@ -1458,10 +1458,13 @@ workflow, optional preprocessor sources, and committed `preview.png` remain
 outside the package. The database-independent `jaunder theme` commands check
 that source through the same bounded compiler as Studio, emit a deterministic
 ZIP, and render a fixed Style Contract fixture through an externally supplied
-browser. Jaunder owns no preprocessor or browser distribution. A pinned GitHub
-workflow is the canonical thumbnail and release-package authority; discovery
-remains ordinary repository links rather than a registry
-(`docs/adr/drafts/theme-repository-authoring-contract.md`).
+browser. Its CLI-owned preview server is a loopback-only, command-lifetime
+transport with no supported external address; host integration tests cover its
+routes and the pinned repository workflow covers the public browser command
+without a test-only Playwright address. Jaunder owns no preprocessor or browser
+distribution. That workflow is the canonical thumbnail and release-package
+authority; discovery remains ordinary repository links rather than a registry
+([theme repository authoring contract](adr/drafts/theme-repository-authoring-contract.md)).
 
 Public markup exposes a versioned semantic Style Contract shared by built-in and
 custom themes; accessible source order and exact concept hooks are stable while

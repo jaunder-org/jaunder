@@ -5,6 +5,8 @@
 
 mod api;
 mod page_state;
+#[cfg(feature = "server")]
+mod thumbnail;
 
 #[cfg(target_arch = "wasm32")]
 mod component;
@@ -17,6 +19,9 @@ pub use api::{
     get_presentation, get_selection, import_css, import_package, import_zip, list, preview,
     publish, remove, rename, replace_binding, replace_css, replace_pool, select, shuffle,
 };
+
+#[cfg(feature = "server")]
+pub use thumbnail::thumbnail_document;
 
 pub use page_state::{
     Revalidation, ScopeAvailability, ThemePageState, draft_from_editor, revalidation,

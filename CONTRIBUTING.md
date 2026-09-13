@@ -253,9 +253,13 @@ for local full-gate confidence. Never remove functionality to pass tests, and
 never bypass or suppress testing, coverage, or linting without explicit
 approval.
 
-Every HTTP endpoint must have both an integration test and an end-to-end test.
-Unit tests belong in the same file as the code being tested. End-to-end tests
-belong in `end2end/` and use Playwright.
+Every HTTP endpoint exposed by the running Jaunder application must have both an
+integration test and an end-to-end test. Unit tests belong in the same file as
+the code being tested. End-to-end tests belong in `end2end/` and use Playwright.
+A CLI-owned, loopback-only, command-lifetime HTTP transport with no supported
+external address is not an application endpoint: cover its routes with host
+integration tests and its public command through the highest real consumer
+workflow instead of adding a test-only address for Playwright.
 
 ### Wasm-only browser unit tests
 

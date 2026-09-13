@@ -45,6 +45,13 @@ the PNG, and a pinned GitHub workflow fixes the Jaunder/browser/font
 environment, rejects thumbnail drift, builds the deterministic ZIP, and attaches
 that ZIP to tagged releases.
 
+The thumbnail preview's loopback HTTP server is a CLI-owned, command-lifetime
+transport with no supported external address, not a deployed application
+endpoint. Its routes receive host integration coverage, while the public
+thumbnail command receives browser coverage through the pinned repository
+workflow. Jaunder does not expose a test-only preview address solely to attach
+Playwright.
+
 Theme discovery remains ordinary links between GitHub repositories. There is no
 registry or remote package-fetch interface in this decision.
 

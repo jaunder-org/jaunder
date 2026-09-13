@@ -1,4 +1,4 @@
-use std::{io::Write, path::Path};
+use std::path::Path;
 
 use anyhow::Context;
 
@@ -32,31 +32,8 @@ pub fn cmd_theme_package(repository: &Path, output: &Path) -> anyhow::Result<()>
                 repository.display()
             )
         })?;
-    publish_new(output, accepted.package_bytes())?;
+    super::theme_artifact::publish_new(output, accepted.package_bytes(), "theme package")?;
     println!("Theme package created: {}", output.display());
-    Ok(())
-}
-
-fn publish_new(output: &Path, bytes: &[u8]) -> anyhow::Result<()> {
-    let parent = output.parent().unwrap_or_else(|| Path::new("."));
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)
-        .with_context(|| format!("create temporary theme package beside {}", output.display()))?;
-    temporary
-        .write_all(bytes)
-        .with_context(|| format!("write temporary theme package beside {}", output.display()))?;
-    temporary
-        .as_file_mut()
-        .sync_all()
-        .with_context(|| format!("sync temporary theme package beside {}", output.display()))?;
-    temporary
-        .persist_noclobber(output)
-        .map_err(|error| error.error)
-        .with_context(|| {
-            format!(
-                "atomically publish new theme package without replacing {}",
-                output.display()
-            )
-        })?;
     Ok(())
 }
 

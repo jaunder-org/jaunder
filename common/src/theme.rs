@@ -83,6 +83,14 @@ macro_rules! theme_digest_from_str {
                 }
             }
         }
+
+        impl $type {
+            /// Constructs the canonical lowercase representation of a SHA-256 digest.
+            #[must_use]
+            pub fn from_digest(digest: [u8; 32]) -> Self {
+                Self(digest_hex(&digest))
+            }
+        }
     };
 }
 
@@ -444,6 +452,10 @@ mod tests {
         let digest = "a".repeat(64).parse::<ThemeContentDigest>().unwrap();
         assert_eq!(digest.as_ref(), "a".repeat(64));
         assert!("A".repeat(64).parse::<ThemeContentDigest>().is_err());
+        assert_eq!(
+            ThemeRevisionDigest::from_digest([0x0f; 32]).as_ref(),
+            "0f".repeat(32)
+        );
         assert_eq!(ThemeImageRole::Logo.token(), "logo");
         assert_eq!(ThemeImageRole::Header.token(), "header");
     }

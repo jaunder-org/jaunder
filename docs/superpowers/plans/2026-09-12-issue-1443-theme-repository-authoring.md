@@ -47,7 +47,7 @@ Out:
     import boundary and observes a private, unselected draft with the prior
     public selection unchanged.
 
-- [ ] Task 2: Generate canonical thumbnails through an external browser
+- [x] Task 2: Generate canonical thumbnails through an external browser
   - Depends on: Task 1's repository adapter and CLI nesting.
   - Contract:
     `jaunder theme thumbnail <repository> --browser <executable> --output <png>`

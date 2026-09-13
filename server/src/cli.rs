@@ -407,7 +407,7 @@ pub enum Commands {
         #[command(subcommand)]
         action: WebsubAction,
     },
-    /// Validate or package a portable Theme Package repository without opening storage.
+    /// Validate, package, or render a portable Theme Package repository without opening storage.
     Theme {
         #[command(subcommand)]
         action: ThemeAction,
@@ -486,6 +486,19 @@ pub enum ThemeAction {
         repository: PathBuf,
 
         /// New ZIP destination. Refuses to overwrite an existing path.
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Render a canonical public Style Contract thumbnail with an explicit browser.
+    Thumbnail {
+        /// Repository directory containing `theme.json` and `style.css`.
+        repository: PathBuf,
+
+        /// Chromium-compatible executable to drive through its `DevTools` protocol.
+        #[arg(long)]
+        browser: PathBuf,
+
+        /// PNG destination. Atomically replaces an existing path.
         #[arg(long)]
         output: PathBuf,
     },
@@ -1457,7 +1470,33 @@ mod tests {
         };
         assert_eq!(repository, PathBuf::from("/tmp/theme"));
         assert_eq!(output, PathBuf::from("/tmp/theme.zip"));
+
+        let Commands::Theme {
+            action:
+                ThemeAction::Thumbnail {
+                    repository,
+                    browser,
+                    output,
+                },
+        } = parse(&[
+            "theme",
+            "thumbnail",
+            "/tmp/theme",
+            "--browser",
+            "/usr/bin/chromium",
+            "--output",
+            "/tmp/preview.png",
+        ])
+        .command
+        .expect("theme thumbnail")
+        else {
+            unreachable!("parse yields ThemeAction::Thumbnail")
+        };
+        assert_eq!(repository, PathBuf::from("/tmp/theme"));
+        assert_eq!(browser, PathBuf::from("/usr/bin/chromium"));
+        assert_eq!(output, PathBuf::from("/tmp/preview.png"));
         assert!(Cli::try_parse_from(["jaunder", "theme", "package", "/tmp/theme"]).is_err());
+        assert!(Cli::try_parse_from(["jaunder", "theme", "thumbnail", "/tmp/theme"]).is_err());
     }
 
     #[test]

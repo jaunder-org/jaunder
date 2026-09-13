@@ -12,6 +12,14 @@ let
   visualFontConfig = pkgs.makeFontsConf {
     fontDirectories = [ pkgs.dejavu_fonts ];
   };
+
+  # The browser and font closure used by the canonical repository-thumbnail
+  # command. Consumers inherit this one environment instead of pinning a
+  # browser independently in CI or a workflow.
+  themeThumbnailEnvironment = pkgs.buildEnv {
+    name = "jaunder-theme-thumbnail-environment";
+    paths = [ pkgs.chromium pkgs.dejavu_fonts pkgs.fontconfig ];
+  };
   toolchain = fenix.packages.${system}.fromToolchainFile {
     file = ../rust-toolchain.toml;
     sha256 = "sha256-A1abGIbOtcBSdrUMhDGrER3pRM1hQP4fp9gh3Y4PKc8=";
@@ -978,6 +986,7 @@ in
     inherit csrWasm;
     csrBundle = csrWasmBundle;
     devtool = devtoolBin;
+    theme-thumbnail-environment = themeThumbnailEnvironment;
     # The out-of-process e2e seed helper (ADR-0046). Exposed so it is
     # directly buildable/verifiable; it is placed only on the e2e VM PATH,
     # never in the prod artifact or the NixOS module.
@@ -995,6 +1004,7 @@ in
   internals = {
     inherit
       visualFontConfig
+      themeThumbnailEnvironment
       toolchain
       diagnosticToolchain
       craneLib

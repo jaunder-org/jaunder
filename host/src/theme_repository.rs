@@ -13,6 +13,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use common::theme::{ThemeAssetDigest, ThemeRevisionDigest};
 use rustix::fs::{AtFlags, CWD, Dir, FileType, Mode, OFlags, fstat, openat, statat};
 use thiserror::Error;
 
@@ -58,6 +59,7 @@ pub enum ThemeRepositoryError {
 pub struct AcceptedThemeRepository {
     package_bytes: Vec<u8>,
     revision: CompiledThemeRevision,
+    publication_revision: ThemeRevisionDigest,
 }
 
 impl AcceptedThemeRepository {
@@ -71,6 +73,12 @@ impl AcceptedThemeRepository {
     #[must_use]
     pub fn revision(&self) -> &CompiledThemeRevision {
         &self.revision
+    }
+
+    /// Returns the revision identity produced by public immutable asset URLs.
+    #[must_use]
+    pub fn publication_revision(&self) -> &ThemeRevisionDigest {
+        &self.publication_revision
     }
 }
 
@@ -136,7 +144,16 @@ fn accept_theme_repository_with_limits(
     let source = export_theme_package(&manifest, &css, &assets)?;
     let validated = validate_theme_package(&source, limits)?;
     let package_bytes = validated.export_archive()?;
-    let asset_urls = validated
+    let publication_asset_urls = validated
+        .asset_digests()
+        .map(|(path, digest)| {
+            (
+                path.to_owned(),
+                format!("/theme/{}", ThemeAssetDigest::from_digest(digest)),
+            )
+        })
+        .collect();
+    let preview_asset_urls = validated
         .asset_paths()
         .map(|path| {
             (
@@ -145,15 +162,17 @@ fn accept_theme_repository_with_limits(
             )
         })
         .collect();
-    let revision = validated.compile(&asset_urls, limits).map_err(|source| {
-        ThemeRepositoryError::Stylesheet {
+    let (revision, publication_revision) = validated
+        .compile_with_identity_asset_urls(&preview_asset_urls, &publication_asset_urls, limits)
+        .map_err(|source| ThemeRepositoryError::Stylesheet {
             path: root.join("style.css"),
             source,
-        }
-    })?;
+        })?;
+    let publication_revision = ThemeRevisionDigest::from_digest(publication_revision);
     Ok(AcceptedThemeRepository {
         package_bytes,
         revision,
+        publication_revision,
     })
 }
 
@@ -465,6 +484,32 @@ mod tests {
             std::str::from_utf8(accepted.revision().css().bytes())
                 .expect("compiled stylesheet")
                 .contains("/theme-assets/assets/pixel%20%3F%23.avif")
+        );
+        let publication_urls = BTreeMap::from([(
+            "assets/pixel ?#.avif".to_owned(),
+            format!(
+                "/theme/{}",
+                ThemeAssetDigest::from_digest(
+                    accepted
+                        .revision()
+                        .asset("assets/pixel ?#.avif")
+                        .expect("compiled asset")
+                        .2
+                )
+            ),
+        )]);
+        let published =
+            validate_theme_package(accepted.package_bytes(), ThemePackageLimits::default())
+                .expect("validated canonical package")
+                .compile(&publication_urls, ThemePackageLimits::default())
+                .expect("published compilation");
+        assert_eq!(
+            accepted.publication_revision(),
+            &ThemeRevisionDigest::from_digest(published.revision_digest())
+        );
+        assert_ne!(
+            accepted.publication_revision(),
+            &ThemeRevisionDigest::from_digest(accepted.revision().revision_digest())
         );
     }
 
