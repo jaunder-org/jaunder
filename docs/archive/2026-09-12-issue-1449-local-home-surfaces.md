@@ -47,7 +47,7 @@ marker goes from `/` to Home before Local content paints.
 - The unused Home redirect preference is removed. Redirect-to-Home is the one
   policy, with no compatibility key, preference UI, or opt-out path.
 - The
-  [authenticated-root redirect decision](../../adr/drafts/authenticated-root-redirects-home.md)
+  [authenticated-root redirect decision](../../adr/0193-authenticated-root-redirects-home.md)
   supersedes ADR-0044’s stay-on-`/` default and deferred redirect preference
   while retaining its cacheability, additive-enhancement, and
   session-confirmation boundaries.

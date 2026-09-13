@@ -1432,7 +1432,7 @@ originating on the instance. A structurally valid auth marker redirects `/`
 before paint to **Home** at `/app`, preserving only recognized oldest-first
 ordering; `/app` confirms the real session before fetching the current User's
 own published Posts
-([authenticated-root redirect decision](adr/drafts/authenticated-root-redirects-home.md)).
+([authenticated-root redirect decision](adr/0193-authenticated-root-redirects-home.md)).
 Anonymous `/` projection remains byte-identical and cacheable. A stale marker is
 bounded by Home's existing unauthenticated redirect to `/login`. A live session
 missing its marker may paint public Local once; background reconciliation

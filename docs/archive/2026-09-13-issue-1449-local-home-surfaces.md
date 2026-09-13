@@ -15,7 +15,7 @@ In:
 - Cut user-facing navigation, copy, tests, flow docs, glossary, design, and
   architecture prose over to the approved Local/Home vocabulary.
 - Record the authenticated-root redirect as the proposed draft decision at
-  `docs/adr/drafts/authenticated-root-redirects-home.md`.
+  `docs/adr/0193-authenticated-root-redirects-home.md`.
 
 Out:
 

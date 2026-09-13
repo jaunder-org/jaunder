@@ -1,6 +1,6 @@
-# ADR-DRAFT: Authenticated root visits redirect to Home
+# ADR-0193: Authenticated root visits redirect to Home
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-12
 - Issue: [#1449](https://github.com/jaunder-org/jaunder/issues/1449)
 
@@ -10,10 +10,10 @@ Jaunder has two timeline routes with different presentation boundaries. `/` is a
 publicly projected, cacheable timeline of public Posts originating on the
 instance. `/app` is an authenticated cockpit containing the current User's own
 published Posts and inline composer.
-[ADR-0044](../0044-authenticated-owner-flash-free-enhancement.md) separated
-those routes to keep viewer-specific content out of the public projector, but
-retained `/` for authenticated owners by default and reserved an unused local
-redirect preference.
+[ADR-0044](0044-authenticated-owner-flash-free-enhancement.md) separated those
+routes to keep viewer-specific content out of the public projector, but retained
+`/` for authenticated owners by default and reserved an unused local redirect
+preference.
 
 Calling `/` “Home” and `/app` “Feed” hid this distinction. It also overloaded
 “Feed,” which Jaunder otherwise uses for RSS, Atom, and JSON Syndication Feeds.
@@ -56,7 +56,7 @@ not Local. Bare Feed wording is removed from this UI. The unused Home redirect
 preference key and read path are deleted; redirect-to-Home is the sole policy.
 
 This decision supersedes only
-[ADR-0044](../0044-authenticated-owner-flash-free-enhancement.md) Decision 5's
+[ADR-0044](0044-authenticated-owner-flash-free-enhancement.md) Decision 5's
 stay-on-`/` default and deferred redirect preference. ADR-0044's
 public-projector cacheability, advisory-marker, pre-paint, additive-decoration,
 and server-confirmation boundaries remain in force.
