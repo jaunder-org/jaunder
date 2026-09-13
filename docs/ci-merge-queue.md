@@ -55,7 +55,7 @@ rollback target. `strict_required_status_checks_policy` is `true` and there is
 `Validation core` and `Validation coverage` jobs. Branch protection
 intentionally requires the aggregate rather than either implementation name, so
 the required context remains stable while both lane verdicts are mandatory
-([non-e2e validation lane decision](adr/drafts/split-ci-non-e2e-validation-lanes.md)).
+([non-e2e validation lane decision](adr/0192-split-ci-non-e2e-validation-lanes.md)).
 
 Before doing anything, **re-capture the live baseline** so rollback restores the
 exact current state (it may have drifted since this doc was written):

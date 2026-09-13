@@ -1,12 +1,12 @@
-# ADR-DRAFT: Split CI non-e2e validation into core and coverage lanes
+# ADR-0192: Split CI non-e2e validation into core and coverage lanes
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-13
 - Issue: [#1472](https://github.com/jaunder-org/jaunder/issues/1472)
 
 ## Context
 
-[ADR-0034](../0034-ci-e2e-matrix-distribution.md) distributed the e2e matrix but
+[ADR-0034](0034-ci-e2e-matrix-distribution.md) distributed the e2e matrix but
 kept all non-e2e validation in one `cargo xtask validate --no-e2e` CI job. That
 job remained the workflow critical path on both narrow and source-changing
 measurements. Its Rust coverage surface was independent of the other host and
@@ -50,10 +50,9 @@ The `{backend}×{browser}` e2e matrix and `e2e gate` are unchanged. Local
 single-command gates whose non-e2e catalog executes serially; full validation
 retains ADR-0034's Nix-concurrent e2e combinations.
 
-This narrowly supersedes [ADR-0034](../0034-ci-e2e-matrix-distribution.md)
-decision 2 only where it specifies one non-e2e CI job. ADR-0034's distributed
-e2e matrix, stable aggregate contexts, and local full-gate decisions remain
-current.
+This narrowly supersedes [ADR-0034](0034-ci-e2e-matrix-distribution.md) decision
+2 only where it specifies one non-e2e CI job. ADR-0034's distributed e2e matrix,
+stable aggregate contexts, and local full-gate decisions remain current.
 
 ## Consequences
 

@@ -645,7 +645,7 @@ aggregated by `e2e-gate`. Running independent surfaces across runners cuts
 workflow wall-clock; `cargo xtask validate` remains the full local equivalent
 and `cargo xtask validate --no-e2e` remains its serial non-e2e form. See
 [ADR-0034](docs/adr/0034-ci-e2e-matrix-distribution.md) and the
-[non-e2e validation lane decision](docs/adr/drafts/split-ci-non-e2e-validation-lanes.md).
+[non-e2e validation lane decision](docs/adr/0192-split-ci-non-e2e-validation-lanes.md).
 
 - `cargo fmt --check` checks Rust formatting.
 - `leptosfmt -x .direnv -x .git -x target --check '**/*.rs'` checks files that

@@ -219,6 +219,7 @@ convention). See the Status column below for each ADR's current status.
 | [0189](adr/0189-wordpress-compatible-permalink-alias.md)               | WordPress-compatible permalink alias                                                                         | accepted   |
 | [0190](adr/0190-web-post-timeline-ordering.md)                         | Web Post timelines order by publication time                                                                 | accepted   |
 | [0191](adr/0191-emacs-protocol-client-flake-package-output.md)         | Emacs Protocol Client Flake Package Output                                                                   | accepted   |
+| [0192](adr/0192-split-ci-non-e2e-validation-lanes.md)                  | Split CI non-e2e validation into core and coverage lanes                                                     | accepted   |
 
 <!-- adr-table:end -->
 

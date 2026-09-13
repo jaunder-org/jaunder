@@ -2889,7 +2889,7 @@ job `cargo xtask e2e <backend> <browser>` — aggregated by an `e2e-gate` that
 depends only on that browser matrix. Branch protection therefore needs the two
 stable aggregate names
 ([distributed e2e](adr/0034-ci-e2e-matrix-distribution.md);
-[split non-e2e validation lanes](adr/drafts/split-ci-non-e2e-validation-lanes.md)).
+[split non-e2e validation lanes](adr/0192-split-ci-non-e2e-validation-lanes.md)).
 Local `cargo xtask validate` builds the browser-only `e2e-checks` aggregate
 instead: the same derivations on one machine. It inherits the static lane's
 Emacs verdict and does not rerun live ERT.
@@ -3125,7 +3125,7 @@ core owns every non-e2e surface except Rust coverage, and coverage owns Rust
 coverage plus its gate. A result-only `Validate (no e2e)` job requires both
 lanes, preserving the stable branch-protection context. The lanes exchange no
 artifacts, and local `validate` remains serial
-([split non-e2e validation lanes](adr/drafts/split-ci-non-e2e-validation-lanes.md)).
+([split non-e2e validation lanes](adr/0192-split-ci-non-e2e-validation-lanes.md)).
 
 Both hook entrypoints select orchestration-owned **fail-fast** execution. At
 every ordered local boundary — individual static checks, host-gate steps, and
