@@ -150,6 +150,12 @@ e2ePanicGate = backend: ''
 e2ePlaywrightTimeout = 1500;
 e2eGlobalTimeout = 1680;
 
+# Performance producers seed larger profiles before measuring. Their browser
+# step gets 45 minutes; the VM budget leaves 25 minutes for boot, seed, and
+# artifact recovery so the inner timeout remains diagnostic-preserving.
+performanceBrowserTimeout = 2700;
+performanceGlobalTimeout = 4200;
+
 # #123/#49: run Playwright capturing its exit (NOT machine.succeed, which
 # would abort before we copy diagnostics), stream its line-reporter output
 # to the build log, copy ALL artifacts out of the VM unconditionally, then
@@ -391,6 +397,7 @@ mkE2eCheck =
     vmCores ? null,
     producer ? null,
     extraNodeConfig ? (_: { }),
+    vmGlobalTimeout ? e2eGlobalTimeout,
   }:
   let
     backendPolicy =
@@ -479,13 +486,11 @@ mkE2eCheck =
   pkgs.testers.nixosTest {
     name = checkName;
 
-    # Cap the test-driver budget (default is 3600 s) so a boot/infra hang
-    # fails near 28 min instead of burning the full hour. See issue #130.
-    # This is the OUTER budget: `e2ePlaywrightTimeout` above expires first
-    # and is sized against the slowest supported concurrent validation path.
-    globalTimeout =
-      assert e2ePlaywrightTimeout < e2eGlobalTimeout;
-      e2eGlobalTimeout;
+    # Caller-selected outer budget for boot, seed, execution, and artifact
+    # recovery. The ordinary gate defaults to 28 minutes; performance producers
+    # extend it for canonical dataset seeding. Each inner execution timeout must
+    # expire first so diagnostics remain recoverable.
+    globalTimeout = vmGlobalTimeout;
 
     nodes.machine =
       { pkgs, lib, ... }:
@@ -741,6 +746,9 @@ mkPerformanceProducer =
     browser = selectedBrowser;
     traceId = performanceTraceId;
     traceParent = performanceTraceParent;
+    vmGlobalTimeout =
+      assert performanceBrowserTimeout < performanceGlobalTimeout;
+      performanceGlobalTimeout;
     extraNodeConfig = { lib, ... }: {
       # Performance fixtures need runtime data capacity beyond the closure-sized test disk.
       virtualisation.diskSize = performanceDiskSize;
@@ -861,7 +869,7 @@ mkPerformanceProducer =
           + " JAUNDER_PERF_BUILD_MODE=release"
           + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
           + " tests/browser-performance.measure.spec.ts --config playwright.config.ts --project ${selectedBrowser} --no-deps 2>&1",
-          timeout=2700,
+          timeout=${toString performanceBrowserTimeout},
         )
         machine.execute("systemctl stop otel-collector.service")
         otel_status, otel_output = machine.execute(
