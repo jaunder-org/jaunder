@@ -211,9 +211,7 @@ async fn create_authors(
                 })
             })
             .await?;
-        let common::MutationOutcome::Confirmed(id) = outcome else {
-            bail!("author creation commit acknowledgement was indeterminate");
-        };
+        let id = crate::confirmed_fixture_outcome(outcome, "performance author creation")?;
         authors.push((username, id));
     }
     Ok(authors)
@@ -247,9 +245,7 @@ async fn create_follows(
                 })
             })
             .await?;
-        if !matches!(outcome, common::MutationOutcome::Confirmed(())) {
-            bail!("follow creation commit acknowledgement was indeterminate");
-        }
+        crate::confirmed_fixture_outcome(outcome, "performance follow creation")?;
     }
     Ok(())
 }
@@ -278,9 +274,7 @@ async fn create_audiences(
             })
             .await
             .context("creating audiences")?;
-        let common::MutationOutcome::Confirmed(ids) = outcome else {
-            bail!("audience creation commit acknowledgement was indeterminate");
-        };
+        let ids = crate::confirmed_fixture_outcome(outcome, "performance audience creation")?;
         all.push(ids);
     }
     Ok(all)
@@ -318,9 +312,7 @@ async fn populate_audience_memberships(
             })
             .await
             .context("adding audience members")?;
-        if !matches!(outcome, common::MutationOutcome::Confirmed(())) {
-            bail!("audience membership commit acknowledgement was indeterminate");
-        }
+        crate::confirmed_fixture_outcome(outcome, "performance audience membership creation")?;
     }
     Ok(())
 }
@@ -376,9 +368,7 @@ async fn create_media(
                 })
             })
             .await?;
-        if !matches!(outcome, common::MutationOutcome::Confirmed(())) {
-            bail!("media creation commit acknowledgement was indeterminate");
-        }
+        crate::confirmed_fixture_outcome(outcome, "performance Media creation")?;
         all.push(author_media);
     }
     Ok(all)
@@ -407,6 +397,7 @@ fn publish_media_blob(target: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     file.sync_all()?;
     match fs::hard_link(&temporary, target) {
         Ok(()) => fs::remove_file(temporary)?,
+        // cov:ignore-start: deterministically forcing a competing hard-link publication requires an OS race
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             fs::remove_file(temporary)?;
             if fs::read(target)? != bytes {
@@ -416,7 +407,8 @@ fn publish_media_blob(target: &Path, bytes: &[u8]) -> anyhow::Result<()> {
                 );
             }
         }
-        Err(error) => return Err(error.into()),
+        // cov:ignore-stop
+        Err(error) => return Err(error.into()), // cov:ignore: arbitrary hard-link OS failure requires filesystem fault injection
     }
     Ok(())
 }
@@ -450,7 +442,7 @@ fn build_post_input(
         &body_bucket,
         format,
         &media[author_index][..attachment_count],
-    )?;
+    )?; // cov:ignore: validated fixture plans always provide a compatible body bucket and Media slice
     let lifecycle = bucket(index_u64, &plan.lifecycle[..4]);
     let published_at = post_published_at(index, &lifecycle, backdated_count, clock)?;
     let audience_targets = match bucket(index_u64, &plan.audience_distribution).as_str() {
@@ -548,9 +540,8 @@ async fn create_posts(
             .write_scope
             .run(move |tx| Box::pin(async move { posts.create_posts(tx, &inputs).await }))
             .await?;
-        let common::MutationOutcome::Confirmed(batch_ids) = outcome else {
-            bail!("post batch commit acknowledgement was indeterminate");
-        };
+        let batch_ids =
+            crate::confirmed_fixture_outcome(outcome, "performance post batch creation")?;
         for (index, id) in (batch_start..batch_end).zip(batch_ids) {
             let lifecycle = bucket(index as u64, &plan.lifecycle[..4]);
             if lifecycle != "deleted" {
@@ -606,9 +597,7 @@ async fn apply_revisions(
                 })
             })
             .await?;
-        if !matches!(outcome, common::MutationOutcome::Confirmed(())) {
-            bail!("revision batch commit acknowledgement was indeterminate");
-        }
+        crate::confirmed_fixture_outcome(outcome, "performance revision batch creation")?;
         record_confirmed_revisions(audit, plan, batch);
     }
     Ok(())
@@ -716,22 +705,19 @@ fn revised_body(body: PostBody, revision: u64) -> Result<PostBody, storage::Upda
             "performance body has no mutable marker".to_owned(),
         ))
     })?;
-    let revision = u8::try_from(revision % 26).map_err(|_| {
-        storage::UpdatePostError::Internal(sqlx::Error::Protocol(
-            "performance revision marker is out of range".to_owned(),
-        ))
-    })?;
+    let Ok(revision) = u8::try_from(revision % 26) else {
+        unreachable!("modulo 26 always fits in u8")
+    };
     let marker = char::from(b'a' + revision);
     let mut marker_buffer = [0; 4];
     source.replace_range(
         marker_position..=marker_position,
         marker.encode_utf8(&mut marker_buffer),
     );
-    source.parse().map_err(|_| {
-        storage::UpdatePostError::Internal(sqlx::Error::Protocol(
-            "performance body becomes invalid".to_owned(),
-        ))
-    })
+    match source.parse() {
+        Ok(body) => Ok(body),
+        Err(_) => unreachable!("replacing one ASCII body byte preserves a valid PostBody"),
+    }
 }
 
 fn record_confirmed_revisions(
@@ -802,7 +788,8 @@ async fn observe_persisted_post(
             audiences: storage.posts.get_post_audiences(post_id).await?,
             media_count: host::render::extract_media_refs(post.rendered_html.as_ref()).len(),
         });
-    }
+    } // cov:ignore: the covered owner-visible path returns before this defensive fallback boundary
+    // cov:ignore-start: both storage backends retain owner-visible soft-deleted posts; this is a defensive backend fallback
     let revision = history
         .first()
         .context("deleted post has no final revision")?;
@@ -819,6 +806,7 @@ async fn observe_persisted_post(
         audiences: revision.audiences,
         media_count: revision.media.len(),
     })
+    // cov:ignore-stop
 }
 
 fn record_persisted_post_shape(
@@ -969,7 +957,7 @@ async fn collect_timeline(
         cursor = Some(storage::to_post_cursor(
             rows.last().context("nonempty page")?,
             TimelineOrder::Newest,
-        )?);
+        )?); // cov:ignore: persisted timeline records always contain cursor-compatible timestamps and ids
         out.extend(rows);
     }
     Ok(out)
@@ -1139,4 +1127,176 @@ pub fn write_manifest(output: &Path, manifest: &DatasetManifest) -> anyhow::Resu
     fs::write(&temporary, encoded)?;
     fs::rename(&temporary, &destination)?;
     Ok(destination)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn observation() -> PersistedPostObservation {
+        PersistedPostObservation {
+            format: PostFormat::Markdown,
+            body_len: 256,
+            tag_count: 0,
+            audiences: vec![AudienceTarget::Public],
+            media_count: 0,
+        }
+    }
+
+    fn seeded_post() -> SeededPost {
+        SeededPost {
+            id: PostId::from(1_i64),
+            index: 0,
+        }
+    }
+
+    #[test]
+    fn audit_rejects_different_confirmed_and_persisted_counts() {
+        let mut audit = PerformanceSeedAudit::default();
+        audit.record_confirmed("lifecycle.live");
+
+        let error = audit.verify().expect_err("different audits must fail");
+        assert!(error.to_string().contains("audits differ"), "{error}");
+    }
+
+    #[test]
+    fn media_publication_is_idempotent_and_rejects_conflicting_content() {
+        let directory = tempfile::tempdir().expect("Media directory");
+        let target = directory.path().join("blob");
+
+        publish_media_blob(&target, b"expected").expect("publish new content");
+        publish_media_blob(&target, b"expected").expect("accept identical content");
+        let error =
+            publish_media_blob(&target, b"different").expect_err("reject conflicting content");
+        assert!(
+            error.to_string().contains("content differs"),
+            "unexpected conflict error: {error}"
+        );
+
+        let error = publish_media_blob(directory.path(), b"bytes")
+            .expect_err("a directory is not readable Media content");
+        assert!(
+            error.to_string().contains("Is a directory"),
+            "unexpected read error: {error}"
+        );
+    }
+
+    #[test]
+    fn revised_body_rejects_content_without_the_fixture_marker() {
+        let body: PostBody = "no mutable marker".parse().expect("valid body");
+        let error = revised_body(body, 1).expect_err("missing marker must fail");
+        assert!(
+            error.to_string().contains("no mutable marker"),
+            "unexpected revision error: {error}"
+        );
+    }
+
+    #[test]
+    fn body_media_markup_covers_each_supported_post_format() {
+        let bytes = MEDIA_BLOBS[0];
+        let media = MediaRef {
+            source: MediaSource::Upload,
+            sha256: ContentHash::from_digest(sha2::Sha256::digest(bytes).into()),
+            filename: Filename::sanitized("performance.txt").expect("valid filename"),
+        };
+
+        for (format, bucket, marker) in [
+            (
+                PostFormat::Markdown,
+                "markdown_256",
+                "![performance attachment]",
+            ),
+            (PostFormat::Html, "html_256", "<img src="),
+            (PostFormat::Org, "plain_text_256", "[[/media/"),
+        ] {
+            let body = body_with_media(0, bucket, format, std::slice::from_ref(&media))
+                .expect("fixture body");
+            assert!(
+                String::from(body).contains(marker),
+                "{format:?} uses its canonical Media markup"
+            );
+        }
+    }
+
+    #[test]
+    fn persisted_shape_validation_rejects_noncanonical_observations() {
+        let canonical = canonical_plan(DatasetProfile::Small);
+        for (observation, expected) in [
+            (
+                PersistedPostObservation {
+                    tag_count: 3,
+                    ..observation()
+                },
+                "noncanonical tag count",
+            ),
+            (
+                PersistedPostObservation {
+                    audiences: vec![AudienceTarget::Public, AudienceTarget::Public],
+                    ..observation()
+                },
+                "noncanonical audiences",
+            ),
+            (
+                PersistedPostObservation {
+                    media_count: 2,
+                    ..observation()
+                },
+                "noncanonical media reference count",
+            ),
+        ] {
+            let error = record_persisted_post_shape(
+                &mut PerformanceSeedAudit::default(),
+                &canonical,
+                seeded_post(),
+                &observation,
+                1,
+            )
+            .expect_err("noncanonical observation must fail");
+            assert!(
+                error.to_string().contains(expected),
+                "unexpected shape error: {error}"
+            );
+        }
+
+        let error = record_persisted_post_shape(
+            &mut PerformanceSeedAudit::default(),
+            &canonical,
+            seeded_post(),
+            &observation(),
+            2,
+        )
+        .expect_err("canonical revision count must match");
+        assert!(
+            error.to_string().contains("noncanonical revision count"),
+            "unexpected history error: {error}"
+        );
+
+        let custom = plan(
+            DatasetProfile::Small,
+            CountOverrides {
+                posts: Some(120),
+                authors: Some(12),
+                revisions: Some(777),
+            },
+        )
+        .expect("valid custom plan");
+        let error = record_persisted_post_shape(
+            &mut PerformanceSeedAudit::default(),
+            &custom,
+            seeded_post(),
+            &observation(),
+            1,
+        )
+        .expect_err("custom revision count must match");
+        assert!(
+            error.to_string().contains("expected"),
+            "unexpected custom history error: {error}"
+        );
+    }
+
+    #[test]
+    fn cursor_rank_rejects_an_empty_result_set() {
+        let error = rank(0).expect_err("empty rows cannot resolve a cursor");
+        assert_eq!(error.to_string(), "empty matching result set");
+    }
 }

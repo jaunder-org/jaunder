@@ -667,6 +667,26 @@ mod tests {
     }
 
     #[test]
+    fn performance_profiles_map_to_contract_profiles() {
+        for (argument, expected) in [
+            (
+                PerformanceProfileArg::Small,
+                performance::DatasetProfile::Small,
+            ),
+            (
+                PerformanceProfileArg::Medium,
+                performance::DatasetProfile::Medium,
+            ),
+            (
+                PerformanceProfileArg::Large,
+                performance::DatasetProfile::Large,
+            ),
+        ] {
+            assert_eq!(performance::DatasetProfile::from(argument), expected);
+        }
+    }
+
+    #[test]
     fn perf_seed_rejects_zero_count_override() {
         assert!(
             Cli::try_parse_from([
@@ -983,6 +1003,26 @@ mod tests {
         }))
         .await
         .expect("create-session should dispatch and succeed");
+        let performance_output = TempDir::new().expect("performance manifest directory");
+        let performance_storage = TempDir::new().expect("performance Media root");
+        run(cli(Commands::PerfSeed {
+            db: db.clone(),
+            profile: PerformanceProfileArg::Small,
+            posts: Some(30),
+            authors: Some(1),
+            revisions: Some(60),
+            output: performance_output.path().to_owned(),
+            storage_path: performance_storage.path().to_owned(),
+        }))
+        .await
+        .expect("perf-seed should dispatch and succeed");
+        assert!(
+            performance_output
+                .path()
+                .join(performance::DATASET_MANIFEST_FILENAME)
+                .is_file(),
+            "perf-seed publishes its manifest",
+        );
 
         assert_dispatched_command_readback(&db).await;
     }

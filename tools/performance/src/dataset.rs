@@ -146,7 +146,7 @@ pub fn plan(profile: DatasetProfile, overrides: CountOverrides) -> Result<Datase
 pub fn canonical_plan(profile: DatasetProfile) -> DatasetPlan {
     match plan(profile, CountOverrides::default()) {
         Ok(plan) => plan,
-        Err(error) => panic!("canonical fixture counts must be valid: {error}"),
+        Err(error) => unreachable!("built-in canonical counts must be valid: {error}"),
     }
 }
 
@@ -340,7 +340,7 @@ mod tests {
                 .map(|item| match item.bucket.as_str() {
                     "base" => item.count * (first.revisions / first.posts),
                     "one_extra" => item.count * (first.revisions / first.posts + 1),
-                    _ => unreachable!("uniform revision bucket"),
+                    _ => unreachable!("uniform revision bucket"), // cov:ignore: the assertion iterates the planner's closed bucket set
                 })
                 .sum::<u64>(),
             first.revisions

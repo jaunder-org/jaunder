@@ -129,12 +129,12 @@ pub fn assemble_run(
         setup.push(fragment_setup.clone());
     }
 
-    if let Some(key) = expected.difference(&seen_workloads).next() {
-        return Err(AggregateError::Missing(key.clone()));
-    }
     let Some(manifest) = manifest else {
         return Err(AggregateError::IncompatibleManifest);
     };
+    if let Some(key) = expected.difference(&seen_workloads).next() {
+        return Err(AggregateError::Missing(key.clone()));
+    }
     if !selection_matches_plan(&selection, &manifest.plan) {
         return Err(AggregateError::InvalidSelection);
     }
@@ -270,7 +270,7 @@ pub fn validate_run(run: &RunEnvelope) -> Result<(), AggregateError> {
             &expected,
             &mut seen,
             &mut checked,
-        )?;
+        )?; // cov:ignore: rustc maps only collect's residual error edge to this continuation line
     }
     if let Some(key) = expected.difference(&seen).next() {
         return Err(AggregateError::Missing(key.clone()));
@@ -463,14 +463,18 @@ fn valid_producer_workload(producer: Producer, key: &CompatibilityKey) -> bool {
                 | Workload::PostHistory
                 | Workload::RevisionDetail
         ),
-        Producer::Browser => matches!(
-            key.workload,
+        Producer::Browser => match key.workload {
             Workload::Home
-                | Workload::App
-                | Workload::GlobalHistory
-                | Workload::BrowserPostHistory
-                | Workload::BrowserRevisionDetail
-        ),
+            | Workload::App
+            | Workload::GlobalHistory
+            | Workload::BrowserPostHistory
+            | Workload::BrowserRevisionDetail => true,
+            Workload::PublicTimeline
+            | Workload::AuthenticatedTimeline
+            | Workload::OwnerHistory
+            | Workload::PostHistory
+            | Workload::RevisionDetail => false,
+        },
     }
 }
 
@@ -511,13 +515,14 @@ fn cursor_workload(workload: Workload) -> Option<Workload> {
     match workload {
         Workload::Home => Some(Workload::PublicTimeline),
         Workload::App => Some(Workload::AuthenticatedTimeline),
-        Workload::GlobalHistory => Some(Workload::OwnerHistory),
         Workload::BrowserPostHistory => Some(Workload::PostHistory),
         Workload::PublicTimeline
         | Workload::AuthenticatedTimeline
         | Workload::OwnerHistory
         | Workload::PostHistory => Some(workload),
-        Workload::RevisionDetail | Workload::BrowserRevisionDetail => None,
+        Workload::GlobalHistory | Workload::RevisionDetail | Workload::BrowserRevisionDetail => {
+            None // cov:ignore: dedicated Global History and point-detail rules return before cursor mapping
+        }
     }
 }
 
@@ -943,7 +948,7 @@ mod tests {
     fn rejects_setup_identity_and_backend_mismatches() {
         let mut fragment = storage_envelope(storage_workloads());
         let Fragment::Storage(storage) = &mut fragment.fragment else {
-            unreachable!()
+            unreachable!("constructed storage fragment")
         };
         storage.setup.producer = Producer::Browser;
         assert_eq!(
@@ -953,7 +958,7 @@ mod tests {
 
         let mut fragment = storage_envelope(storage_workloads());
         let Fragment::Storage(storage) = &mut fragment.fragment else {
-            unreachable!()
+            unreachable!("constructed storage fragment")
         };
         storage.setup.backend = Backend::Postgres;
         assert_eq!(
