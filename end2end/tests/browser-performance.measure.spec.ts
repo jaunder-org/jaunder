@@ -201,11 +201,13 @@ async function measureSample(
       snapshots: true,
       sources: false,
     });
-    const session = await createSessionViaTool(
-      manifest.subjects.username,
-      `performance-${sampleIndex}`,
-    );
-    await applySeededSession(context, session);
+    if (workload.session === "authenticated") {
+      const session = await createSessionViaTool(
+        manifest.subjects.username,
+        `performance-${sampleIndex}`,
+      );
+      await applySeededSession(context, session);
+    }
     page = await context.newPage();
     page.on("response", (response) => {
       evidence.push({

@@ -70,14 +70,16 @@ test("plans the six canonical browser measurements from authoritative cursors", 
   const workloads = browserWorkloads(validateManifest(manifest));
   expect(workloads).toHaveLength(6);
   expect(
-    workloads.map(({ workload, position }) => `${workload}:${position}`),
+    workloads.map(
+      ({ workload, position, session }) => `${workload}:${position}:${session}`,
+    ),
   ).toEqual([
-    "home:initial",
-    "app:initial",
-    "global_history:initial",
-    "global_history:deep",
-    "browser_post_history:initial",
-    "browser_revision_detail:point",
+    "home:initial:anonymous",
+    "app:initial:authenticated",
+    "global_history:initial:authenticated",
+    "global_history:deep:authenticated",
+    "browser_post_history:initial:authenticated",
+    "browser_revision_detail:point:authenticated",
   ]);
   expect(PERFORMANCE_SAMPLE_COUNT).toBe(20);
 });

@@ -79,6 +79,7 @@ export type BrowserWorkload = {
   workload: WorkloadName;
   position: Position;
   path: string;
+  session: "anonymous" | "authenticated";
   cursor: Cursor | undefined;
   pageSize: number | undefined;
 };
@@ -279,6 +280,7 @@ export function browserWorkloads(manifest: DatasetManifest): BrowserWorkload[] {
       workload: "home",
       position: "initial",
       path: "/",
+      session: "anonymous",
       cursor: undefined,
       pageSize: PERFORMANCE_PAGE_SIZE,
     },
@@ -286,6 +288,7 @@ export function browserWorkloads(manifest: DatasetManifest): BrowserWorkload[] {
       workload: "app",
       position: "initial",
       path: "/app",
+      session: "authenticated",
       cursor: undefined,
       pageSize: PERFORMANCE_PAGE_SIZE,
     },
@@ -293,6 +296,7 @@ export function browserWorkloads(manifest: DatasetManifest): BrowserWorkload[] {
       workload: "global_history",
       position: "initial",
       path: "/history",
+      session: "authenticated",
       cursor: undefined,
       pageSize: PERFORMANCE_PAGE_SIZE,
     },
@@ -300,6 +304,7 @@ export function browserWorkloads(manifest: DatasetManifest): BrowserWorkload[] {
       workload: "global_history",
       position: "deep",
       path: "/history",
+      session: "authenticated",
       cursor: ownerHistory,
       pageSize: PERFORMANCE_PAGE_SIZE,
     },
@@ -307,6 +312,7 @@ export function browserWorkloads(manifest: DatasetManifest): BrowserWorkload[] {
       workload: "browser_post_history",
       position: "initial",
       path: postHistoryPath,
+      session: "authenticated",
       cursor: undefined,
       pageSize: PERFORMANCE_PAGE_SIZE,
     },
@@ -314,6 +320,7 @@ export function browserWorkloads(manifest: DatasetManifest): BrowserWorkload[] {
       workload: "browser_revision_detail",
       position: "point",
       path: `${postHistoryPath}/${manifest.subjects.revision_id}`,
+      session: "authenticated",
       cursor: undefined,
       pageSize: undefined,
     },
