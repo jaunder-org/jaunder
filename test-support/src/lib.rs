@@ -1100,7 +1100,7 @@ async fn upload_sandbox_media(
         let uploaded = confirmed_fixture_outcome(
             upload.map_err(|error| anyhow::anyhow!("sandbox Media upload failed: {error}"))?,
             "sandbox Media upload",
-        )?;
+        )?; // cov:ignore: indeterminate manager commits require a process-boundary fault
         fixtures.push(SandboxMedia {
             author,
             filename: raw_filename,
@@ -1376,6 +1376,34 @@ mod sandbox_profile_tests {
             vec![("site.title".to_owned(), SANDBOX_TITLE.to_owned())]
         );
         assert_sandbox_users(users.as_ref(), &SANDBOX_USER_FIXTURES[..2]).await;
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn sandbox_posts_reject_a_manifest_author_that_was_not_seeded(#[case] backend: Backend) {
+        let env = backend.setup().pristine().await;
+        let manifest = SandboxSeedManifest {
+            version: 2,
+            posts: vec![SandboxPost {
+                author: "missing",
+                title: "Missing author".to_owned(),
+                slug: "missing-author".to_owned(),
+                body: "# Missing author".to_owned(),
+                format: PostFormat::Markdown,
+                published_at: None,
+                visibility: SandboxVisibility::Public,
+            }],
+            media: Vec::new(),
+        };
+
+        let error = seed_sandbox_posts(env.posts(), env.write_scope(), Vec::new(), &manifest)
+            .await
+            .expect_err("unknown manifest author must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("sandbox manifest author missing is not seeded")
+        );
     }
 
     #[apply(backends)]
