@@ -63,6 +63,19 @@ export const OPERATION_MANIFEST = {
   },
 } as const;
 
+const SEEDED_MEDIA_SHA256: Readonly<Record<string, string>> = {
+  "baseline-seeded.txt":
+    "958e3ce706b2891ab01e58e0f180af8ef646dc9d6368f3a2ba6d6cbff3321c5e",
+  "blue-horizon.svg":
+    "81aa7378e6c8ef6a707e281d5a92c646a1ba3c01de428131ecf677763a8cddd9",
+  "warm-workshop.svg":
+    "92c501114a2d5f3b82f50a4ac01ab2c1eeb1223cbc46e7840347adb3e6aa8847",
+  "green-field.svg":
+    "bb2cd32aaa8d6b4bd87af8980a5bb220753bdfafdd953bc4c9b4a861d1e4c233",
+  "violet-night.svg":
+    "2e8d0525784fb6a8b04b82131e9d82cddca52445e21c1faa0baccbc7ad44290c",
+};
+
 const PNG = Buffer.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49,
   0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06,
@@ -776,17 +789,24 @@ export async function verifyProductionBaseline(
   const anonymousContext = await isolatedRequest(tracedContext);
   try {
     expect(state.seededManifest.version).toBe(2);
-    expect(state.seededManifest.media).toHaveLength(1);
-    const [seededMedia] = state.seededManifest.media;
-    const seededContent = await anonymousContext.request.get(
-      `${BASE_URL}${seededMedia.contentUrl}`,
-    );
-    expect(seededContent.status()).toBe(200);
-    expect(
-      createHash("sha256")
-        .update(new Uint8Array(await seededContent.body()))
-        .digest("hex"),
-    ).toBe(seededMedia.sha256);
+    expect(state.seededManifest.media).toHaveLength(5);
+    for (const seededMedia of state.seededManifest.media) {
+      const expectedSha256 = SEEDED_MEDIA_SHA256[seededMedia.filename];
+      expect(expectedSha256, seededMedia.filename).toBeDefined();
+      expect(seededMedia.sha256).toBe(expectedSha256);
+      const seededContent = await anonymousContext.request.get(
+        `${BASE_URL}${seededMedia.contentUrl}`,
+      );
+      expect(seededContent.status(), seededMedia.contentUrl).toBe(200);
+      expect(seededContent.headers()["content-type"]).toBe(
+        seededMedia.filename.endsWith(".svg") ? "image/svg+xml" : "text/plain",
+      );
+      const bytes = new Uint8Array(await seededContent.body());
+      expect(bytes).toHaveLength(seededMedia.sizeBytes);
+      expect(createHash("sha256").update(bytes).digest("hex")).toBe(
+        expectedSha256,
+      );
+    }
     const now = new Date();
     const atomFeed = await fetchFeedContaining(
       anonymousContext.request,

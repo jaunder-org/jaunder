@@ -6,10 +6,11 @@ use common::display_name::DisplayName;
 use host::{capture, feed::FeedEventPhase};
 use storage::DbConnectOptions;
 use test_support::{
-    SandboxProfile, SandboxSeedStorage, create_session_for_user, create_user,
+    SandboxMediaOwnershipResolver, SandboxProfile, create_session_for_user, create_user,
     performance::{PerformanceSeedReceipt, PerformanceSeedStorage, seed_performance_fixture},
     reset_author_theme_fixture, reset_mail, sandbox_profile_anchor, seed_dead_letters,
-    seed_posts_for_user, seed_published_author_theme, seed_sandbox_profile, seed_user,
+    seed_demo_sandbox_profile, seed_posts_for_user, seed_published_author_theme,
+    seed_standard_sandbox_profile, seed_user,
 };
 
 #[derive(Parser)]
@@ -414,7 +415,7 @@ fn cmd_capture_path_for_stream(stream: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Seed one complete fixed sandbox profile and report only after its transaction commits.
+/// Seed one complete fixed sandbox profile and report only after every phase commits.
 async fn cmd_seed_sandbox_profile(
     db: &DbConnectOptions,
     storage_path: &std::path::Path,
@@ -423,21 +424,39 @@ async fn cmd_seed_sandbox_profile(
     let runtime = storage_runtime_config(db)?;
     let opened = storage::open_existing_database_with_observer(db, &runtime).await?;
     let factory = opened.factory;
-    let anchor = sandbox_profile_anchor();
-    let manifest = seed_sandbox_profile(
-        SandboxSeedStorage {
-            site_config: factory.site_config(),
-            users: factory.users(),
-            posts: factory.posts(),
-            media: factory.media(),
-            instance_id: opened.instance_id,
-            write_scope: factory.write_scope(),
-        },
-        storage_path,
-        profile,
-        anchor,
-    )
-    .await?;
+    let manifest = match profile {
+        SandboxProfile::Standard => {
+            seed_standard_sandbox_profile(
+                factory.site_config(),
+                factory.users(),
+                factory.write_scope(),
+            )
+            .await?
+        }
+        SandboxProfile::Demo => {
+            let storage_path = std::sync::Arc::new(storage_path.to_path_buf());
+            let media_manager = storage::MediaManager::new(
+                factory.media(),
+                factory.posts(),
+                factory.site_config(),
+                factory.write_scope(),
+                std::sync::Arc::new(storage::MediaContentLocks::new(std::sync::Arc::clone(
+                    &storage_path,
+                ))),
+                opened.instance_id,
+                std::sync::Arc::new(SandboxMediaOwnershipResolver),
+            );
+            seed_demo_sandbox_profile(
+                factory.site_config(),
+                factory.users(),
+                factory.posts(),
+                factory.write_scope(),
+                &media_manager,
+                sandbox_profile_anchor(),
+            )
+            .await?
+        }
+    };
     println!("{}", serde_json::to_string(&manifest.to_json())?);
     eprintln!("seeded sandbox profile {}", profile_name(profile));
     Ok(())

@@ -46,7 +46,7 @@ intact while the seed manifest accurately describes all seeded Media.
 - Requests to all four curated image URLs through the public Media route return
   success, `image/svg+xml`, and the exact fixture bytes.
 - The demo seed command emits manifest version 2 with all five Media entries;
-  the `standard` and `empty` profiles emit an empty `media` array.
+  Media-free seed manifests emit an empty `media` array.
 - Deterministic failure coverage proves a failed demo replacement publishes no
   partial new workspace and preserves any existing named workspace.
 - Targeted regression coverage proves the profile and serving behavior without

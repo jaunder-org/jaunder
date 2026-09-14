@@ -30,10 +30,10 @@ use host::config_key::SiteConfigKey;
 use host::feed::{FeedEventPhase, FeedPath};
 use jiff::{Timestamp, ToSpan};
 use storage::{
-    FeedEventStorage, ForeignEvidenceSink, InstanceId, LocalMediaSink, MediaContentLocks,
-    MediaManager, MediaReferenceEvidence, MediaReferenceOwnershipResolver, MediaStorage,
-    OperatorStatus, PersistedMediaReference, PostBookkeepingExpectation, PostFormat, PostStorage,
-    PreparedPassword, ProvenLocalMediaRefs, RenderedPostContent, SessionStorage, SiteConfigStorage,
+    FeedEventStorage, ForeignEvidenceSink, InstanceId, LocalMediaSink, MediaManager,
+    MediaReferenceEvidence, MediaReferenceOwnershipResolver, OperatorStatus,
+    PersistedMediaReference, PostBookkeepingExpectation, PostFormat, PostStorage, PreparedPassword,
+    ProvenLocalMediaRefs, RenderedPostContent, SessionStorage, SiteConfigStorage,
     ThemeAssetManager, ThemeOwner, ThemeRoleBinding, ThemeStorage, UserStorage, WriteScope,
     render_post_input, seed_post_input,
 };
@@ -967,16 +967,6 @@ fn sandbox_post_content(
     })
 }
 
-/// Storage dependencies for the staged sandbox profile seed phases.
-pub struct SandboxSeedStorage {
-    pub site_config: Arc<dyn SiteConfigStorage>,
-    pub users: Arc<dyn UserStorage>,
-    pub posts: Arc<dyn PostStorage>,
-    pub media: Arc<dyn MediaStorage>,
-    pub instance_id: InstanceId,
-    pub write_scope: WriteScope,
-}
-
 struct PreparedSandboxUser {
     username_text: &'static str,
     username: Username,
@@ -1150,7 +1140,23 @@ async fn seed_sandbox_posts(
     Ok(())
 }
 
-/// Seeds the exact non-idempotent sandbox profile through typed storage and the
+/// Seeds the fixed standard sandbox profile through its exact storage services.
+///
+/// # Errors
+///
+/// Returns an error when configuration or User creation fails or receives an
+/// indeterminate commit acknowledgement.
+pub async fn seed_standard_sandbox_profile(
+    site_config: Arc<dyn SiteConfigStorage>,
+    users: Arc<dyn UserStorage>,
+    write_scope: WriteScope,
+) -> anyhow::Result<SandboxSeedManifest> {
+    let prepared_users = prepare_sandbox_users(SandboxProfile::Standard).await?;
+    seed_sandbox_users(site_config, users, write_scope, prepared_users).await?;
+    Ok(standard_profile_manifest())
+}
+
+/// Seeds the fixed demo sandbox profile through exact storage services and the
 /// production Media placement abstraction. The staged sandbox workspace owns
 /// cleanup when a later seed phase fails.
 ///
@@ -1158,41 +1164,18 @@ async fn seed_sandbox_posts(
 ///
 /// Returns an error when configuration, User, Media, or Post creation fails or
 /// receives an indeterminate commit acknowledgement.
-pub async fn seed_sandbox_profile(
-    storage: SandboxSeedStorage,
-    storage_path: &Path,
-    profile: SandboxProfile,
+pub async fn seed_demo_sandbox_profile(
+    site_config: Arc<dyn SiteConfigStorage>,
+    users: Arc<dyn UserStorage>,
+    posts: Arc<dyn PostStorage>,
+    write_scope: WriteScope,
+    media_manager: &MediaManager,
     anchor: UtcInstant,
 ) -> anyhow::Result<SandboxSeedManifest> {
-    let prepared_users = prepare_sandbox_users(profile).await?;
-    let SandboxSeedStorage {
-        site_config,
-        users,
-        posts,
-        media,
-        instance_id,
-        write_scope,
-    } = storage;
-    let user_ids = seed_sandbox_users(
-        Arc::clone(&site_config),
-        Arc::clone(&users),
-        write_scope.clone(),
-        prepared_users,
-    )
-    .await?;
-    if profile == SandboxProfile::Standard {
-        return Ok(standard_profile_manifest());
-    }
-    let media_manager = MediaManager::new(
-        media,
-        Arc::clone(&posts),
-        site_config,
-        write_scope.clone(),
-        Arc::new(MediaContentLocks::new(Arc::new(storage_path.to_path_buf()))),
-        instance_id,
-        Arc::new(SandboxMediaOwnershipResolver),
-    );
-    let media = upload_sandbox_media(&media_manager, &user_ids).await?;
+    let prepared_users = prepare_sandbox_users(SandboxProfile::Demo).await?;
+    let user_ids =
+        seed_sandbox_users(site_config, users, write_scope.clone(), prepared_users).await?;
+    let media = upload_sandbox_media(media_manager, &user_ids).await?;
     let manifest = sandbox_demo_manifest(anchor, media)?;
     seed_sandbox_posts(posts, write_scope, user_ids, &manifest).await?;
     Ok(manifest)
@@ -1373,19 +1356,10 @@ mod sandbox_profile_tests {
         let env = backend.setup().pristine().await;
         let site_config = env.site_config();
         let users = env.users();
-        let posts = env.posts();
-        let manifest = seed_sandbox_profile(
-            SandboxSeedStorage {
-                site_config: Arc::clone(&site_config),
-                users: Arc::clone(&users),
-                posts,
-                media: env.media(),
-                instance_id: env.base.instance_id().clone(),
-                write_scope: env.write_scope(),
-            },
-            env.base.path(),
-            SandboxProfile::Standard,
-            "2026-09-06T12:34:00Z".parse().expect("fixed anchor"),
+        let manifest = seed_standard_sandbox_profile(
+            Arc::clone(&site_config),
+            Arc::clone(&users),
+            env.write_scope(),
         )
         .await
         .expect("standard profile seeds");
@@ -1404,17 +1378,23 @@ mod sandbox_profile_tests {
         let users = env.users();
         let posts = env.posts();
         let media = env.media();
-        let actual = seed_sandbox_profile(
-            SandboxSeedStorage {
-                site_config: env.site_config(),
-                users: Arc::clone(&users),
-                posts: Arc::clone(&posts),
-                media: Arc::clone(&media),
-                instance_id: env.base.instance_id().clone(),
-                write_scope: env.write_scope(),
-            },
-            env.base.path(),
-            SandboxProfile::Demo,
+        let media_manager = MediaManager::new(
+            Arc::clone(&media),
+            Arc::clone(&posts),
+            env.site_config(),
+            env.write_scope(),
+            Arc::new(storage::MediaContentLocks::new(Arc::new(
+                env.base.path().to_path_buf(),
+            ))),
+            env.base.instance_id().clone(),
+            Arc::new(SandboxMediaOwnershipResolver),
+        );
+        let actual = seed_demo_sandbox_profile(
+            env.site_config(),
+            Arc::clone(&users),
+            Arc::clone(&posts),
+            env.write_scope(),
+            &media_manager,
             "2026-09-06T12:34:00Z".parse().expect("fixed minute anchor"),
         )
         .await

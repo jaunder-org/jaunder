@@ -50,11 +50,13 @@ Out:
     failure, proves the existing workspace remains intact, and proves the
     unpublished `.reset-new` workspace is removed.
 
-- [ ] Task 4: Prove the reported image links resolve at the serving boundary.
-  - Contract: all four distinct curated SVG URLs are requested through the
-    existing public Media route; no serving or rendering policy changes.
-  - Verification: focused HTTP integration coverage proves status success,
-    `image/svg+xml`, and byte-for-byte fixture bodies, followed by
+- [x] Task 4: Prove the reported image links resolve at the serving boundary.
+  - Contract: the existing out-of-process production-baseline flow requests all
+    four distinct curated SVG URLs through the public Media route; no in-process
+    dependency on the test-support binary and no serving or rendering policy
+    changes.
+  - Verification: fixture-authoritative hashes prove status success,
+    `image/svg+xml`, and exact bodies, followed by
     `devtool run -- cargo xtask check` for the integrated branch.
 
 ## Risk checks
