@@ -176,6 +176,9 @@ enum CoverageCmd {
         /// Worker concurrency policy for a two-worker experiment.
         #[arg(long, value_enum, default_value_t = CoverageConcurrency::Independent)]
         concurrency: CoverageConcurrency,
+        /// Instrumented nextest archive shared read-only by experiment workers.
+        #[arg(long, requires = "experiment")]
+        archive_file: Option<PathBuf>,
     },
     /// Validate completed coverage producer evidence.
     ValidateStatus {
@@ -300,17 +303,30 @@ fn main() -> Result<()> {
         Command::Coverage(CoverageCmd::Emit {
             out,
             experiment: None,
+            archive_file: None,
             ..
         }) => coverage::emit::run(&out),
         Command::Coverage(CoverageCmd::Emit {
             out,
             experiment: Some(experiment),
             concurrency,
+            archive_file: Some(archive_file),
         }) => coverage::emit::run_experiment(
             &out,
             experiment,
             coverage::emit::ConcurrencyPolicy::from(concurrency),
+            &archive_file,
         ),
+        Command::Coverage(CoverageCmd::Emit {
+            experiment: Some(_),
+            archive_file: None,
+            ..
+        }) => anyhow::bail!("coverage experiments require --archive-file"),
+        Command::Coverage(CoverageCmd::Emit {
+            experiment: None,
+            archive_file: Some(_),
+            ..
+        }) => anyhow::bail!("--archive-file requires --experiment"),
         Command::Coverage(CoverageCmd::ValidateStatus { status }) => {
             coverage::validate_status::run(&status)
         }
@@ -510,6 +526,8 @@ mod tests {
             "slice",
             "--concurrency",
             "fixed",
+            "--archive-file",
+            "/tmp/instrumented-tests.tar.zst",
         ])
         .expect("experiment coverage emit");
         assert!(matches!(
@@ -517,8 +535,9 @@ mod tests {
             Command::Coverage(CoverageCmd::Emit {
                 experiment: Some(ExperimentStrategy::Slice),
                 concurrency: CoverageConcurrency::Fixed,
+                archive_file: Some(archive_file),
                 ..
-            })
+            }) if archive_file == Path::new("/tmp/instrumented-tests.tar.zst")
         ));
     }
 }

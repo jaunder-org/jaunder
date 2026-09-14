@@ -628,6 +628,9 @@ struct ExperimentWorker {
     partition: WorkerPartition,
     profile: PathBuf,
     junit: PathBuf,
+    extract: PathBuf,
+    filter_config: Option<PathBuf>,
+    filter_expression: Option<String>,
     arguments: Vec<String>,
     threads: Option<String>,
 }
@@ -636,6 +639,7 @@ fn experiment_workers(
     strategy: ExperimentStrategy,
     policy: ConcurrencyPolicy,
     backend_identities: Option<&[(String, String)]>,
+    archive: &Path,
 ) -> Result<Vec<ExperimentWorker>> {
     let strategy_name = match strategy {
         ExperimentStrategy::Slice => "slice",
@@ -644,6 +648,8 @@ fn experiment_workers(
         ExperimentStrategy::Baseline => bail!("baseline has no partition workers"),
     };
     let profile_root = std::env::current_dir()?.join("target/llvm-cov-target");
+    let extract_root = std::env::current_dir()?.join("target/coverage-experiment-extract");
+    let filter_root = std::env::current_dir()?.join("target/coverage-experiment-filter");
     let fixed_threads = match policy {
         ConcurrencyPolicy::Independent => None,
         ConcurrencyPolicy::Fixed => Some(fixed_worker_threads()?.to_string()),
@@ -659,10 +665,13 @@ fn experiment_workers(
             let mut arguments = vec![
                 "nextest".into(),
                 "run".into(),
-                "--workspace".into(),
                 "--profile".into(),
                 format!("coverage-worker-{index}"),
                 "--no-fail-fast".into(),
+                "--archive-file".into(),
+                archive.display().to_string(),
+                "--extract-to".into(),
+                extract_root.join(index.to_string()).display().to_string(),
             ];
             let threads: Option<String> = fixed_threads.clone();
             match strategy {
@@ -670,9 +679,10 @@ fn experiment_workers(
                     arguments.extend(["--partition".into(), format!("{strategy_name}:{index}/2")]);
                 }
                 ExperimentStrategy::Backend => {
+                    let config = filter_root.join(format!("coverage-worker-{index}.toml"));
                     arguments.extend([
-                        "-E".into(),
-                        backend_filters.as_ref().expect("filters")[usize::from(index - 1)].clone(),
+                        "--tool-config-file".into(),
+                        format!("jaunder:{}", config.display()),
                     ]);
                 }
                 ExperimentStrategy::Baseline => unreachable!("baseline has no workers"),
@@ -689,6 +699,12 @@ fn experiment_workers(
                 profile: profile_root
                     .join(format!("coverage-experiment-worker-{index}-%m-%p.profraw")),
                 junit: PathBuf::from(format!("/tmp/jaunder-coverage-worker-{index}-junit.xml")),
+                extract: extract_root.join(index.to_string()),
+                filter_config: (strategy == ExperimentStrategy::Backend)
+                    .then(|| filter_root.join(format!("coverage-worker-{index}.toml"))),
+                filter_expression: backend_filters
+                    .as_ref()
+                    .map(|filters| filters[usize::from(index - 1)].clone()),
                 arguments,
                 threads,
             }
@@ -837,7 +853,48 @@ fn worker_command(worker: &ExperimentWorker) -> Command {
     command
 }
 
+fn remove_experiment_inputs(workers: &[ExperimentWorker]) -> Result<()> {
+    for worker in workers {
+        if let Err(error) = fs::remove_dir_all(&worker.extract)
+            && error.kind() != ErrorKind::NotFound
+        {
+            return Err(error).context("clearing experimental archive extraction");
+        }
+        if let Some(config) = &worker.filter_config
+            && let Err(error) = fs::remove_file(config)
+            && error.kind() != ErrorKind::NotFound
+        {
+            return Err(error).context("clearing experimental filter config");
+        }
+    }
+    Ok(())
+}
+
+fn create_experiment_inputs(workers: &[ExperimentWorker]) -> Result<()> {
+    for worker in workers {
+        fs::create_dir_all(&worker.extract)
+            .context("creating experimental archive extraction directory")?;
+        if let (Some(config), Some(expression)) = (&worker.filter_config, &worker.filter_expression)
+        {
+            if let Some(parent) = config.parent() {
+                fs::create_dir_all(parent)
+                    .context("creating experimental filter config directory")?;
+            }
+            fs::write(
+                config,
+                format!(
+                    "[profile.coverage-worker-{}]\ndefault-filter = '{}'\n",
+                    worker.partition.index, expression
+                ),
+            )
+            .context("writing experimental filter config")?;
+        }
+    }
+    Ok(())
+}
+
 fn remove_experiment_paths(workers: &[ExperimentWorker]) -> Result<()> {
+    remove_experiment_inputs(workers)?;
     for worker in workers {
         if let Err(error) = fs::remove_file(&worker.junit)
             && error.kind() != ErrorKind::NotFound
@@ -1001,9 +1058,15 @@ pub fn run_experiment(
     out: &str,
     strategy: ExperimentStrategy,
     policy: ConcurrencyPolicy,
+    archive: &Path,
 ) -> Result<()> {
     if strategy == ExperimentStrategy::Baseline {
         return run(out);
+    }
+    let archive = fs::canonicalize(archive)
+        .with_context(|| format!("canonicalizing archive {}", archive.display()))?;
+    if !archive.is_file() {
+        bail!("coverage experiment archive is not a file");
     }
     fs::create_dir_all(out).with_context(|| format!("creating {out}"))?;
     let out = fs::canonicalize(out).with_context(|| format!("canonicalizing {out}"))?;
@@ -1113,18 +1176,19 @@ pub fn run_experiment(
         },
         _ => None,
     };
-    let workers = match experiment_workers(strategy, policy, backend_identities.as_deref()) {
-        Ok(workers) => workers,
-        Err(_) => {
-            record_evidence_error(
-                &mut coverage_status,
-                RequiredStage::TestCensus,
-                "ambiguous backend experiment assignment",
-            );
-            write_status(&out, &coverage_status)?;
-            return Ok(());
-        }
-    };
+    let workers =
+        match experiment_workers(strategy, policy, backend_identities.as_deref(), &archive) {
+            Ok(workers) => workers,
+            Err(_) => {
+                record_evidence_error(
+                    &mut coverage_status,
+                    RequiredStage::TestCensus,
+                    "ambiguous backend experiment assignment",
+                );
+                write_status(&out, &coverage_status)?;
+                return Ok(());
+            }
+        };
     write_diagnostic(
         &diag,
         "experiment-workers.txt",
@@ -1151,6 +1215,7 @@ pub fn run_experiment(
     )
     .is_none()
         || remove_experiment_paths(&workers).is_err()
+        || create_experiment_inputs(&workers).is_err()
     {
         if coverage_status
             .stages
@@ -1216,16 +1281,31 @@ pub fn run_experiment(
             })
             .collect(),
     };
-    record_duration(
-        &mut coverage_status,
-        RequiredStage::InstrumentedTestRun,
-        run_started,
-    );
     let worker_outcome = aggregate_worker_outcome(&records);
     set_stage(
         &mut coverage_status,
         RequiredStage::InstrumentedTestRun,
         worker_outcome,
+    );
+    if remove_experiment_inputs(&workers).is_err() {
+        record_infra(
+            &mut coverage_status,
+            RequiredStage::InstrumentedTestRun,
+            "could not clear experimental worker inputs",
+        );
+        let _ = write_worker_evidence(&diag, &records);
+        record_duration(
+            &mut coverage_status,
+            RequiredStage::InstrumentedTestRun,
+            run_started,
+        );
+        write_status(&out, &coverage_status)?;
+        return Ok(());
+    }
+    record_duration(
+        &mut coverage_status,
+        RequiredStage::InstrumentedTestRun,
+        run_started,
     );
     if write_worker_evidence(&diag, &records).is_err() {
         record_evidence_error(
@@ -1558,25 +1638,34 @@ mod tests {
 
     #[test]
     fn partition_experiment_builds_exact_nextest_commands_and_isolated_paths() {
-        let workers = experiment_workers(ExperimentStrategy::Slice, ConcurrencyPolicy::Fixed, None)
-            .expect("slice workers");
+        let archive = Path::new("/tmp/instrumented-tests.tar.zst");
+        let workers = experiment_workers(
+            ExperimentStrategy::Slice,
+            ConcurrencyPolicy::Fixed,
+            None,
+            archive,
+        )
+        .expect("slice workers");
 
         for (index, worker) in workers.iter().enumerate() {
             assert_eq!(
-                worker.arguments[..8],
+                worker.arguments[..11],
                 [
                     "nextest",
                     "run",
-                    "--workspace",
                     "--profile",
                     &format!("coverage-worker-{}", index + 1),
                     "--no-fail-fast",
+                    "--archive-file",
+                    &archive.display().to_string(),
+                    "--extract-to",
+                    &worker.extract.display().to_string(),
                     "--partition",
                     &format!("slice:{}/2", index + 1),
                 ]
             );
             assert_eq!(
-                worker.arguments[8..],
+                worker.arguments[11..],
                 [
                     "--test-threads",
                     &fixed_worker_threads().unwrap().to_string()
@@ -1585,8 +1674,10 @@ mod tests {
         }
         assert_ne!(workers[0].junit, workers[1].junit);
         assert_ne!(workers[0].profile, workers[1].profile);
+        assert_ne!(workers[0].extract, workers[1].extract);
         assert!(workers.iter().all(|worker| worker.junit.is_absolute()));
         assert!(workers.iter().all(|worker| worker.profile.is_absolute()));
+        assert!(workers.iter().all(|worker| worker.extract.is_absolute()));
     }
 
     #[test]
@@ -1595,6 +1686,7 @@ mod tests {
             ExperimentStrategy::Hash,
             ConcurrencyPolicy::Independent,
             None,
+            Path::new("/tmp/instrumented-tests.tar.zst"),
         )
         .expect("hash workers");
 
@@ -1605,11 +1697,11 @@ mod tests {
                 .all(|worker| !worker.arguments.contains(&"--test-threads".into()))
         );
         assert_eq!(
-            workers[0].arguments[6..8],
+            workers[0].arguments[9..11],
             ["--partition".to_owned(), "hash:1/2".to_owned()]
         );
         assert_eq!(
-            workers[1].arguments[6..8],
+            workers[1].arguments[9..11],
             ["--partition".to_owned(), "hash:2/2".to_owned()]
         );
     }
@@ -1719,6 +1811,7 @@ mod tests {
             ExperimentStrategy::Slice,
             ConcurrencyPolicy::Independent,
             None,
+            Path::new("/tmp/instrumented-tests.tar.zst"),
         )
         .unwrap();
         let first = definitions.remove(0);

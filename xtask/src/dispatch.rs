@@ -207,6 +207,26 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             lifecycle::finalize(&mut result, start);
             Ok(result)
         }
+        Command::Coverage(CoverageCommand::BenchmarkLocal { unloaded_system }) => {
+            let start = Instant::now();
+            let mut result = CommandResult::new("coverage-benchmark-local");
+            let step_start = Instant::now();
+            result.push(
+                match coverage::benchmark::run(&unloaded_system) {
+                    Ok(manifest) => StepResult::ok("coverage-benchmark-local").detail(format!(
+                        "retained {} accepted observations at {}",
+                        manifest.observations.len(),
+                        coverage::benchmark::manifest_path(&manifest.revision).display()
+                    )),
+                    Err(error) => {
+                        StepResult::fail("coverage-benchmark-local").detail(format!("{error:#}"))
+                    }
+                }
+                .with_duration(step_start.elapsed()),
+            );
+            lifecycle::finalize(&mut result, start);
+            Ok(result)
+        }
         Command::WasmCoverage(WasmCoverageCommand::Probe) => {
             let start = Instant::now();
             let mut result = CommandResult::new("wasm-coverage-probe");

@@ -63,7 +63,7 @@ Out:
     cache-only substitution, proves support closures exclude them, and proves
     relevant source/configuration mutations invalidate support identity.
 
-- [ ] Task 4: Measure local strategies under controlled concurrency
+- [x] Task 4: Measure local strategies under controlled concurrency
   - Contract: the measurement manifest records revision, hardware, declared
     cache state, alternating order, partition assignments, concurrency policy,
     compilation, orchestration, execution, merge/report durations, population,
