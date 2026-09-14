@@ -467,8 +467,8 @@ pub struct SandboxSeedManifest {
     pub version: u8,
     /// Seeded Posts and their read-only expectations.
     pub posts: Vec<SandboxPost>,
-    /// Seeded Media, when the selected profile includes it.
-    pub media: Option<SandboxMedia>,
+    /// Seeded Media in stable publication order.
+    pub media: Vec<SandboxMedia>,
 }
 
 /// One canonical Media object created with the sandbox profile.
@@ -505,13 +505,13 @@ impl SandboxSeedManifest {
                     SandboxVisibility::Private => "private",
                 },
             })).collect::<Vec<_>>(),
-            "media": self.media.as_ref().map(|media| serde_json::json!({
+            "media": self.media.iter().map(|media| serde_json::json!({
                 "author": media.author,
                 "filename": media.filename,
                 "sha256": media.sha256,
                 "contentUrl": media.content_url,
                 "sizeBytes": media.size_bytes,
-            })),
+            })).collect::<Vec<_>>(),
         })
     }
 }
@@ -831,9 +831,9 @@ pub fn sandbox_profile_manifest(anchor: UtcInstant) -> SandboxSeedManifest {
     }
     posts.extend(sandbox_extension(anchor));
     SandboxSeedManifest {
-        version: 1,
+        version: 2,
         posts,
-        media: Some(SandboxMedia {
+        media: vec![SandboxMedia {
             author: "alice",
             filename: SANDBOX_SEEDED_MEDIA_FILENAME,
             sha256: SANDBOX_SEEDED_MEDIA_HASH,
@@ -841,7 +841,7 @@ pub fn sandbox_profile_manifest(anchor: UtcInstant) -> SandboxSeedManifest {
                 "/media/upload/95/8e/{SANDBOX_SEEDED_MEDIA_HASH}/{SANDBOX_SEEDED_MEDIA_FILENAME}"
             ),
             size_bytes: SANDBOX_SEEDED_MEDIA_BYTES.len(),
-        }),
+        }],
     }
 }
 
@@ -1063,9 +1063,9 @@ struct PreparedSeededMedia {
 fn profile_manifest(profile: SandboxProfile, anchor: UtcInstant) -> SandboxSeedManifest {
     match profile {
         SandboxProfile::Standard => SandboxSeedManifest {
-            version: 1,
+            version: 2,
             posts: Vec::new(),
-            media: None,
+            media: Vec::new(),
         },
         SandboxProfile::Demo => sandbox_profile_manifest(anchor),
     }
@@ -1640,6 +1640,63 @@ mod sandbox_profile_tests {
 #[cfg(test)]
 mod content_tests {
     use super::*;
+
+    #[test]
+    fn sandbox_seed_manifest_serializes_v2_ordered_media_and_empty_collections() {
+        let media = vec![
+            SandboxMedia {
+                author: "first-author",
+                filename: "first.svg",
+                sha256: "first-supplied-hash",
+                content_url: "/supplied/first".to_owned(),
+                size_bytes: 101,
+            },
+            SandboxMedia {
+                author: "second-author",
+                filename: "second.svg",
+                sha256: "second-supplied-hash",
+                content_url: "/supplied/second".to_owned(),
+                size_bytes: 202,
+            },
+        ];
+        assert_eq!(
+            SandboxSeedManifest {
+                version: 2,
+                posts: Vec::new(),
+                media,
+            }
+            .to_json(),
+            serde_json::json!({
+                "version": 2,
+                "posts": [],
+                "media": [
+                    {
+                        "author": "first-author",
+                        "filename": "first.svg",
+                        "sha256": "first-supplied-hash",
+                        "contentUrl": "/supplied/first",
+                        "sizeBytes": 101,
+                    },
+                    {
+                        "author": "second-author",
+                        "filename": "second.svg",
+                        "sha256": "second-supplied-hash",
+                        "contentUrl": "/supplied/second",
+                        "sizeBytes": 202,
+                    },
+                ],
+            })
+        );
+        let anchor = "2026-09-06T12:34:00Z".parse().expect("fixed anchor");
+        assert_eq!(
+            profile_manifest(SandboxProfile::Standard, anchor).to_json(),
+            serde_json::json!({
+                "version": 2,
+                "posts": [],
+                "media": [],
+            })
+        );
+    }
 
     #[test]
     fn seed_body_renders_prefix_and_index() {

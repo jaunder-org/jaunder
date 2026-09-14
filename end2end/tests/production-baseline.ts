@@ -775,18 +775,18 @@ export async function verifyProductionBaseline(
   }
   const anonymousContext = await isolatedRequest(tracedContext);
   try {
-    expect(state.seededManifest.version).toBe(1);
-    const seededMedia = state.seededManifest.media;
-    expect(seededMedia).not.toBeNull();
+    expect(state.seededManifest.version).toBe(2);
+    expect(state.seededManifest.media).toHaveLength(1);
+    const [seededMedia] = state.seededManifest.media;
     const seededContent = await anonymousContext.request.get(
-      `${BASE_URL}${seededMedia!.contentUrl}`,
+      `${BASE_URL}${seededMedia.contentUrl}`,
     );
     expect(seededContent.status()).toBe(200);
     expect(
       createHash("sha256")
         .update(new Uint8Array(await seededContent.body()))
         .digest("hex"),
-    ).toBe(seededMedia!.sha256);
+    ).toBe(seededMedia.sha256);
     const now = new Date();
     const atomFeed = await fetchFeedContaining(
       anonymousContext.request,
