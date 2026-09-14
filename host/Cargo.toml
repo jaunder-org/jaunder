@@ -39,6 +39,7 @@ serde_jcs = { version = "0.2.0", default-features = false }
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "avif-native"] }
 wuff = "=0.2.9"
 lightningcss = { version = "=1.0.0-alpha.72", default-features = false, features = ["serde", "visitor"] }
+rustix.workspace = true
 mp4parse = "=0.17.0"
 webauthn-rs.workspace = true
 url.workspace = true

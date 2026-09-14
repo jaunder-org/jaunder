@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, fs, sync::Arc};
 
 use axum::{
     body::Body,
@@ -6,7 +6,7 @@ use axum::{
 };
 use common::{
     MutationOutcome,
-    theme::{PublicThemeSelection, ThemeImageRole},
+    theme::{PublicThemeSelection, Theme, ThemeImageRole},
 };
 use host::theme_package::{ThemePackageLimits, export_theme_package, validate_theme_package};
 use rstest::*;
@@ -496,6 +496,74 @@ async fn theme_import_zip_creates_drafts_and_rejects_invalid_packages(#[case] ba
         .expect("draft lookup")
         .expect("imported theme remains");
     assert_eq!(stored.stylesheet, b"body { color: green; }");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn cli_package_import_creates_an_unselected_private_draft_without_changing_selection(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let themes: Arc<dyn storage::ThemeStorage> = Arc::clone(&env.themes());
+    let owner = create_user_and_session(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let (status, body) = post_server_fn(
+        make_app!(&env, &env.base),
+        &web::themes::Select {
+            scope: OwnershipScope::Author,
+            selection: Some(PublicThemeSelection::BuiltIn(Theme::Reader)),
+        },
+        Some(&owner.cookie()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+
+    let repository = TempDir::new().expect("repository");
+    fs::write(
+        repository.path().join("theme.json"),
+        r#"{"defaults":{},"name":"CLI package","schema":1,"style_contract":1,"assets":{}}"#,
+    )
+    .expect("manifest");
+    fs::write(
+        repository.path().join("style.css"),
+        "body { color: rebeccapurple; }",
+    )
+    .expect("stylesheet");
+    let output = repository.path().join("theme.zip");
+    jaunder::commands::cmd_theme_package(repository.path(), &output).expect("CLI package");
+    let archive = fs::read(&output).expect("CLI package bytes");
+
+    let response = multipart_response(
+        make_app!(&env, &env.base),
+        multipart_body("author", "CLI import", &archive),
+        &owner.cookie(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let imported: web::themes::CatalogEntry = confirmed_for(
+        serde_json::from_str::<MutationOutcome<_>>(&body_string(response).await)
+            .expect("import outcome JSON"),
+        "CLI package import",
+    );
+    assert_eq!(
+        themes
+            .selection(ThemeOwner::Author(owner.user_id))
+            .await
+            .expect("selection lookup"),
+        Some(PublicThemeSelection::BuiltIn(Theme::Reader))
+    );
+    assert!(
+        themes
+            .get_draft(ThemeOwner::Author(owner.user_id), imported.id)
+            .await
+            .expect("draft lookup")
+            .is_some(),
+        "the imported package remains a private draft"
+    );
 }
 
 #[apply(backends)]

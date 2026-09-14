@@ -187,24 +187,43 @@ fn resolve_role_with_package_url(
     }
 }
 
-fn resolve_packaged_header_default(
-    packaged_defaults: Option<&[String]>,
-    package_url: &dyn Fn(&str) -> Option<RootRelativeUrl>,
+/// Selects the package-default header path for one public presentation route.
+///
+/// The selection uses the same stable pool ordering and package-default seed as
+/// persisted public and Studio draft presentations.
+#[must_use]
+pub fn select_packaged_header_default<'a>(
+    packaged_defaults: Option<&'a [String]>,
     revision: &ThemeRevisionDigest,
     route: &PublicThemeRoute,
-) -> Option<RootRelativeUrl> {
+) -> Option<&'a str> {
+    let packaged_defaults = packaged_defaults?;
     let pool = ThemeHeaderPool::new(
-        packaged_defaults?
+        packaged_defaults
             .iter()
             .cloned()
             .map(ThemePoolEntry::Package)
             .collect(),
     )
     .ok()?;
-    resolve_pool_entry(
-        pool.select(route, revision, &PACKAGED_DEFAULT_HEADER_SEED),
-        package_url,
-    )
+    let ThemePoolEntry::Package(selected) =
+        pool.select(route, revision, &PACKAGED_DEFAULT_HEADER_SEED)
+    else {
+        unreachable!("a package-default pool contains only package entries")
+    };
+    packaged_defaults
+        .iter()
+        .find(|path| path.as_str() == selected)
+        .map(String::as_str)
+}
+
+fn resolve_packaged_header_default(
+    packaged_defaults: Option<&[String]>,
+    package_url: &dyn Fn(&str) -> Option<RootRelativeUrl>,
+    revision: &ThemeRevisionDigest,
+    route: &PublicThemeRoute,
+) -> Option<RootRelativeUrl> {
+    select_packaged_header_default(packaged_defaults, revision, route).and_then(package_url)
 }
 
 fn resolve_pool_entry(

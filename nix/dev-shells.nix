@@ -6,6 +6,7 @@
 let
   inherit (packageInternals)
     visualFontConfig
+    themeThumbnailEnvironment
     toolchain
     cargo-crap
     devtoolBin
@@ -88,6 +89,9 @@ let
     PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
     FONTCONFIG_FILE = "${visualFontConfig}";
+    JAUNDER_THEME_THUMBNAIL_BROWSER = "${pkgs.chromium}/bin/chromium";
+    LC_ALL = "C.UTF-8";
+    TZ = "UTC";
     # The host `ert` step (run via `nix develop .#ci -c cargo xtask …`)
     # computes timezone->UTC from IANA zone names, which need a zone
     # database for `encode-time` to resolve. A clean CI runner has none
@@ -125,6 +129,13 @@ in
   # tool, so the weekly job gets it without the pull-request path paying
   # for it. See .github/workflows/mutants.yml.
   mutants = pkgs.mkShell (shellEnv // { buildInputs = ciInputs ++ [ pkgs.cargo-mutants ]; });
+  theme-thumbnail = pkgs.mkShell {
+    buildInputs = [ themeThumbnailEnvironment ];
+    FONTCONFIG_FILE = "${visualFontConfig}";
+    JAUNDER_THEME_THUMBNAIL_BROWSER = "${pkgs.chromium}/bin/chromium";
+    LC_ALL = "C.UTF-8";
+    TZ = "UTC";
+  };
   # Full interactive shell for local development.
   default = pkgs.mkShell (shellEnv // { buildInputs = ciInputs ++ devOnly; });
 }

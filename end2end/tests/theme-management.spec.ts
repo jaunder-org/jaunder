@@ -1,6 +1,12 @@
 import { test, expect } from "./fixtures";
-import { goto, signInAs, signInAsNewUser } from "./helpers";
 import { expectAccessible } from "./accessibility";
+import {
+  failServerFn,
+  goto,
+  signInAs,
+  signInAsNewUser,
+  stallServerFn,
+} from "./helpers";
 
 const ASSET_PATH = "assets/pixel.png";
 const ASSET_BYTES = [
@@ -32,6 +38,20 @@ test("theme management mounts as Studio without a public theme stylesheet", asyn
   await signInAsNewUser(page);
   await goto(page, "/themes");
 
+  const guide = page.getByRole("link", {
+    name: "Read the theme repository guide",
+  });
+  await expect(guide).toHaveAttribute(
+    "href",
+    "https://github.com/jaunder-org/jaunder/blob/main/docs/themes.md",
+  );
+  await expect(
+    page.getByText(
+      "No themes in this catalog yet. Create a draft or import a package to start authoring.",
+    ),
+  ).toBeVisible();
+  await expect(page.locator(".j-loading")).toHaveCount(0);
+  await expect(page.locator(".j-theme-catalog-item")).toHaveCount(0);
   await expect(
     page.getByRole("heading", { name: "Catalog scope" }),
   ).toBeVisible();
@@ -43,6 +63,31 @@ test("theme management mounts as Studio without a public theme stylesheet", asyn
     0,
   );
   await expectAccessible(page);
+});
+
+test("theme catalog loading does not offer the empty-catalog next action", async ({
+  page,
+}) => {
+  await signInAsNewUser(page);
+  const release = await stallServerFn(page, "themes/list");
+  await goto(page, "/themes");
+
+  await expect(page.getByText("Loading catalog…")).toBeVisible();
+  await expect(page.locator(".j-theme-catalog-empty")).toHaveCount(0);
+
+  release();
+  await expect(page.locator(".j-theme-catalog-empty")).toBeVisible();
+});
+
+test("theme catalog server failure does not offer the empty-catalog next action", async ({
+  page,
+}) => {
+  await signInAsNewUser(page);
+  await failServerFn(page, "themes/list");
+  await goto(page, "/themes");
+
+  await expect(page.locator("p.error")).toBeVisible();
+  await expect(page.locator(".j-theme-catalog-empty")).toHaveCount(0);
 });
 
 test("invalid authored CSS is rejected before draft persistence", async ({
@@ -163,8 +208,13 @@ test("author completes the custom theme lifecycle through Studio", async ({
   await expect(
     page.getByTitle("Isolated theme preview").contentFrame().locator("body"),
   ).toContainText("Jaunder");
+  const desktopViewport = page.viewportSize();
+  if (desktopViewport === null) {
+    throw new Error("Studio lifecycle requires an explicit desktop viewport");
+  }
   await page.setViewportSize({ width: 375, height: 800 });
   await expect(page.getByTitle("Isolated theme preview")).toBeVisible();
+  await page.setViewportSize(desktopViewport);
   await expect(page.locator("link[data-jaunder-theme-stylesheet]")).toHaveCount(
     0,
   );
@@ -185,6 +235,7 @@ test("author completes the custom theme lifecycle through Studio", async ({
     mutation("select"),
     publicSelection.selectOption(themeId!),
   ]);
+  await expect(publicSelection).toHaveValue(themeId!);
 
   const freshContext = await tracedContext();
   const freshPage = await freshContext.newPage();

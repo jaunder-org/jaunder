@@ -32,6 +32,21 @@ pub fn ThemesPage() -> impl IntoView {
     view! {
         <Topbar title="Themes" sub="Public presentation packages" />
         <div class="j-page j-themes-page" data-theme-management="studio">
+            <section
+                class="j-card j-theme-authoring-guidance"
+                aria-labelledby="theme-authoring-guidance-heading"
+            >
+                <h2 id="theme-authoring-guidance-heading">"Author themes from a repository"</h2>
+                <p class="j-sub">
+                    "Keep your theme source, preview, and release artifacts together, then use Jaunder to validate and package them."
+                </p>
+                <a
+                    href="https://github.com/jaunder-org/jaunder/blob/main/docs/themes.md"
+                    target="_blank"
+                >
+                    "Read the theme repository guide"
+                </a>
+            </section>
             {move || match session.get() {
                 None => {
                     view! {
@@ -384,51 +399,7 @@ fn ThemeCatalog(
                     refresh=refresh
                     status=status
                 />
-                <Suspense fallback=|| {
-                    view! { <p class="j-loading">"Loading catalog…"</p> }
-                }>
-                    {move || Suspend::new(async move {
-                        match catalog.await {
-                            Ok(entries) => {
-                                view! {
-                                    <ul class="j-theme-catalog" aria-label="Theme catalog">
-                                        <For
-                                            each=move || entries.clone()
-                                            key=|entry| entry.id
-                                            children=move |entry| {
-                                                let entry_id = entry.id;
-                                                view! {
-                                                    <li>
-                                                        <button
-                                                            type="button"
-                                                            class="j-theme-catalog-item"
-                                                            aria-pressed=move || {
-                                                                aria_pressed(selected.get() == Some(entry_id))
-                                                            }
-                                                            on:click=move |_| selected.set(Some(entry_id))
-                                                        >
-                                                            {entry.name}
-                                                            {if entry.published { " (published)" } else { " (draft)" }}
-                                                        </button>
-                                                    </li>
-                                                }
-                                            }
-                                        />
-                                    </ul>
-                                }
-                                    .into_any()
-                            }
-                            Err(error) => {
-                                view! {
-                                    <p class="error" role="alert">
-                                        {error.to_string()}
-                                    </p>
-                                }
-                                    .into_any()
-                            }
-                        }
-                    })}
-                </Suspense>
+                {catalog_content(catalog, selected)}
                 <ThemeEditor
                     scope=scope
                     selected=selected
@@ -438,6 +409,64 @@ fn ThemeCatalog(
                 />
             </div>
         </section>
+    }
+}
+
+/// Renders the asynchronous catalog resource without adding state branches to
+/// the catalog card itself.
+fn catalog_content(
+    catalog: ThemeCatalogResource,
+    selected: RwSignal<Option<ThemeId>>,
+) -> impl IntoView {
+    view! {
+        {move || match catalog.get() {
+            None => view! { <p class="j-loading">"Loading catalog…"</p> }.into_any(),
+            Some(Ok(entries)) if entries.is_empty() => {
+                view! {
+                    <p class="j-theme-catalog-empty">
+                        "No themes in this catalog yet. Create a draft or import a package to start authoring."
+                    </p>
+                }
+                    .into_any()
+            }
+            Some(Ok(entries)) => {
+                view! {
+                    <ul class="j-theme-catalog" aria-label="Theme catalog">
+                        <For
+                            each=move || entries.clone()
+                            key=|entry| entry.id
+                            children=move |entry| {
+                                let entry_id = entry.id;
+                                view! {
+                                    <li>
+                                        <button
+                                            type="button"
+                                            class="j-theme-catalog-item"
+                                            aria-pressed=move || {
+                                                aria_pressed(selected.get() == Some(entry_id))
+                                            }
+                                            on:click=move |_| selected.set(Some(entry_id))
+                                        >
+                                            {entry.name}
+                                            {if entry.published { " (published)" } else { " (draft)" }}
+                                        </button>
+                                    </li>
+                                }
+                            }
+                        />
+                    </ul>
+                }
+                    .into_any()
+            }
+            Some(Err(error)) => {
+                view! {
+                    <p class="error" role="alert">
+                        {error.to_string()}
+                    </p>
+                }
+                    .into_any()
+            }
+        }}
     }
 }
 

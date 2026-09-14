@@ -9,7 +9,8 @@ use host::{config_key::SiteConfigKey, password::Password};
 use storage::{BackupRestoreOutcome, FeedWindowMutation, StorageFactory};
 
 use crate::cli::{
-    Commands, DeadLetterAction, DeadLetterCursor, SiteConfigAction, StorageArgs, WebsubAction,
+    Commands, DeadLetterAction, DeadLetterCursor, SiteConfigAction, StorageArgs, ThemeAction,
+    WebsubAction,
 };
 
 use super::{
@@ -272,10 +273,10 @@ impl Commands {
             Commands::Restore { storage, path } => backup::cmd_restore(&storage, &path)
                 .await
                 .map(CommandOutput::Restore),
-            // First nested subcommand group: the arm stays a thin delegation to
-            // SiteConfigAction::execute (a sibling match), preserving the low-CRAP
-            // one-arm-per-command dispatch shape. Copy this pattern for future groups.
+            // Nested groups delegate to their sibling leaf dispatchers, preserving the
+            // low-CRAP one-arm-per-command dispatch shape.
             Commands::SiteConfig { action } => action.execute().await.map(|()| CommandOutput::None),
+            Commands::Theme { action } => action.execute().await.map(|()| CommandOutput::None),
             Commands::Websub { action } => action.execute().await.map(|()| CommandOutput::None),
         }
     }
@@ -305,6 +306,27 @@ impl SiteConfigAction {
             SiteConfigAction::Unset { storage, key } => {
                 execute_site_config_unset(storage, key).await
             }
+        }
+    }
+}
+
+impl ThemeAction {
+    /// Dispatch a storage-independent repository Theme Package action.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the selected filesystem or package failure.
+    pub async fn execute(self) -> anyhow::Result<()> {
+        match self {
+            ThemeAction::Check { repository } => super::cmd_theme_check(&repository),
+            ThemeAction::Package { repository, output } => {
+                super::cmd_theme_package(&repository, &output)
+            }
+            ThemeAction::Thumbnail {
+                repository,
+                browser,
+                output,
+            } => super::cmd_theme_thumbnail(&repository, &browser, &output).await,
         }
     }
 }
@@ -355,5 +377,76 @@ impl DeadLetterAction {
                 .await
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_telemetry() -> host::telemetry::TelemetryConfig {
+        host::telemetry::TelemetryConfig::from_raw(
+            false,
+            host::telemetry::TelemetryRawConfig {
+                log_filter: Ok(None),
+                rust_log: Ok(None),
+                log_format: Ok(None),
+                jaunder_otlp_endpoint: Ok(None),
+                otlp_endpoint: Ok(None),
+                slow_op_ms: Ok(None),
+                e2e_seed_process: Ok(None),
+            },
+        )
+    }
+
+    #[tokio::test]
+    async fn theme_action_rejects_an_invalid_repository() {
+        let repository = tempfile::tempdir().expect("repository");
+
+        let error = ThemeAction::Check {
+            repository: repository.path().to_owned(),
+        }
+        .execute()
+        .await
+        .expect_err("repository lacks theme package files");
+
+        assert!(format!("{error:#}").contains("theme repository validation failed"));
+
+        let package_error = ThemeAction::Package {
+            repository: repository.path().to_owned(),
+            output: repository.path().join("theme.zip"),
+        }
+        .execute()
+        .await
+        .expect_err("package rejects the invalid repository");
+        assert!(format!("{package_error:#}").contains("theme repository validation failed"));
+
+        let thumbnail_error = ThemeAction::Thumbnail {
+            repository: repository.path().to_owned(),
+            browser: repository.path().join("missing-browser"),
+            output: repository.path().join("preview.png"),
+        }
+        .execute()
+        .await
+        .expect_err("thumbnail rejects the invalid repository before browser startup");
+        assert!(format!("{thumbnail_error:#}").contains("theme repository validation failed"));
+    }
+
+    #[tokio::test]
+    async fn top_level_theme_dispatch_rejects_an_invalid_repository() {
+        let repository = tempfile::tempdir().expect("repository");
+
+        let Err(error) = (Commands::Theme {
+            action: ThemeAction::Check {
+                repository: repository.path().to_owned(),
+            },
+        })
+        .execute(&test_telemetry(), false, None)
+        .await
+        else {
+            unreachable!("a repository without required package files cannot pass theme check");
+        };
+
+        assert!(format!("{error:#}").contains("theme repository validation failed"));
     }
 }

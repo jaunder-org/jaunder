@@ -25,6 +25,93 @@ not change any public page.
 Use plain CSS while establishing a layout. Use a Theme Package when the theme
 needs fonts, images, packaged logo/header defaults, or portable source control.
 
+## Maintain a theme repository
+
+Keep the portable Theme Package source at the repository root:
+
+```text
+.
+├── theme.json
+├── style.css
+├── assets/              # optional; every member is declared by theme.json
+│   ├── body.woff2
+│   └── logo.webp
+├── preview.png          # committed canonical thumbnail
+├── .github/
+│   └── workflows/
+│       └── theme.yml    # calls the reusable Jaunder workflow
+├── src/                 # optional authoring or preprocessor source
+└── README.md
+```
+
+Only root `theme.json`, `style.css`, and the optional closed `assets/` tree are
+package input. Documentation, workflow files, `preview.png`, and authoring
+sources are support files and are ignored. The `assets/` tree contains only
+regular, non-symlink files declared by the manifest; see
+[Theme Package format](#theme-package-format) for the complete package and
+security rules.
+
+`style.css` is the portable source of truth. A repository may generate it from
+Sass or another tool, but owns that toolchain and must run it before Jaunder,
+then separately fail its own automation if the generated result differs from the
+committed `style.css`. Jaunder never executes repository build hooks and does
+not standardize a preprocessor or its dependencies.
+
+The database-independent commands operate on the repository directory and use
+the same validation and transformation rules as Studio:
+
+```sh
+jaunder theme check .
+jaunder theme thumbnail . --browser "$BROWSER" --output preview.png
+jaunder theme package . --output theme.zip
+```
+
+`check` consumes only the canonical package members and ignores repository
+support files. `thumbnail` atomically creates or replaces its explicitly named
+PNG so the committed artifact can be regenerated in place. It requires the
+supplied, externally installed Chromium-compatible executable: Jaunder does not
+discover, download, or bundle a browser. `package` then writes a deterministic
+importable ZIP and fails rather than replacing an existing output; keep ZIPs as
+workflow and release artifacts, not repository files. None of these commands
+opens a database, contacts a Jaunder server, or changes catalog state.
+
+The thumbnail is a source-controlled presentation artifact. It renders Jaunder's
+fixed, versioned Style Contract fixture at exactly 1200×800, with deterministic
+fixture content, package-local assets, loaded local fonts, and animation and
+caret rendering disabled. The fixture covers representative navigation,
+masthead, Post, metadata, tag, and continuation hooks; it is not a substitute
+for the manual route, responsive, accessibility, or browser checks below.
+
+Use the reusable
+[`.github/workflows/theme-repository.yml`](../.github/workflows/theme-repository.yml)
+from a caller workflow pinned to an immutable workflow commit. It owns Jaunder's
+canonical `packages.theme-thumbnail-environment` contract (pinned Chromium,
+fonts, fontconfig, locale, time zone, device scale, and browser flags);
+`devShells.theme-thumbnail` exposes the same environment for local work. Callers
+must not recreate those browser or font pins. Run repository-owned preprocessing
+and its committed `style.css` drift check before calling it:
+
+```yaml
+jobs:
+  theme:
+    uses: jaunder-org/jaunder/.github/workflows/theme-repository.yml@<immutable-workflow-commit>
+    with:
+      jaunder-revision: <immutable-jaunder-commit>
+      theme-directory: .
+```
+
+`jaunder-revision` is required; `theme-directory` defaults to `.`. The reusable
+workflow checks source, creates a temporary canonical thumbnail and fails if it
+differs from committed `preview.png`, then uploads the deterministic
+`theme-package.zip` in the `theme-package` artifact on branch and pull-request
+runs. On a release tag it creates or updates a published GitHub release and
+attaches that exact `theme-package.zip`; callers need `contents: write` for this
+path (`contents: read` otherwise).
+
+Importing the ZIP into Studio still creates a private, unselected draft. Preview
+it, explicitly publish it, then explicitly select the published theme;
+repository automation does not import, publish, or select a theme.
+
 ## Theme Package format
 
 A Theme Package is a ZIP archive with exactly this shape:

@@ -8,6 +8,10 @@ mod storage_bootstrap;
 mod support;
 #[cfg(test)]
 mod test_support;
+mod theme;
+mod theme_artifact;
+mod theme_thumbnail;
+
 mod websub;
 
 pub use account::{
@@ -19,3 +23,5 @@ pub use lifecycle::{
     PreparedSaturationMetrics, PreparedServer, ServeCapturePaths, cmd_serve, prepare_server,
 };
 pub use storage_bootstrap::{cmd_create_pg_db, cmd_init};
+pub use theme::{cmd_theme_check, cmd_theme_package};
+pub use theme_thumbnail::cmd_theme_thumbnail;

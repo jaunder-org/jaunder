@@ -1,0 +1,37 @@
+name: Theme repository fixture
+
+on:
+  push:
+    tags:
+      - theme-repository-fixture-*
+  pull_request:
+    paths:
+      - .github/workflows/theme-repository.yml
+      - .github/workflows/theme-repository-fixture.yml
+      - Cargo.lock
+      - Cargo.toml
+      - common/src/seed.rs
+      - common/src/theme.rs
+      - flake.lock
+      - flake.nix
+      - host/src/theme_package.rs
+      - host/src/theme_repository.rs
+      - nix/**
+      - server/assets/**
+      - server/src/assets.rs
+      - server/src/cli.rs
+      - server/src/commands/theme*.rs
+      - storage/src/public_theme.rs
+      - web/src/**
+      - testdata/theme-repository/minimal/**
+  workflow_dispatch:
+
+jobs:
+  package:
+    permissions:
+      contents: write
+    uses: ./.github/workflows/theme-repository.yml
+    with:
+      jaunder-revision: 2c0264492882bf3338394397d70475cbf4023350
+      theme-directory: testdata/theme-repository/minimal
+

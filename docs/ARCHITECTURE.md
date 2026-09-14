@@ -1452,6 +1452,20 @@ theme changes that representation.
 The custom-theme architecture is governed by the accepted
 [`css-package-public-themes` ADR](adr/0184-css-package-public-themes.md).
 
+Theme authors keep the portable package source (`theme.json`, canonical
+`style.css`, and optional declared `assets/`) at a repository root; README,
+workflow, optional preprocessor sources, and committed `preview.png` remain
+outside the package. The database-independent `jaunder theme` commands check
+that source through the same bounded compiler as Studio, emit a deterministic
+ZIP, and render a fixed Style Contract fixture through an externally supplied
+browser. Its CLI-owned preview server is a loopback-only, command-lifetime
+transport with no supported external address; host integration tests cover its
+routes and the pinned repository workflow covers the public browser command
+without a test-only Playwright address. Jaunder owns no preprocessor or browser
+distribution. That workflow is the canonical thumbnail and release-package
+authority; discovery remains ordinary repository links rather than a registry
+([theme repository authoring contract](adr/drafts/theme-repository-authoring-contract.md)).
+
 Public markup exposes a versioned semantic Style Contract shared by built-in and
 custom themes; accessible source order and exact concept hooks are stable while
 incidental wrappers are not. Custom CSS is scoped inside an unthemeable

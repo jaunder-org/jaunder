@@ -100,7 +100,9 @@ use {
     common::{media::MediaRef, theme},
     host::{
         theme_operations::{ThemeOperationCoordinator, ThemeOperationRejected},
-        theme_package::{self, ThemePackageLimits, ValidatedThemePackage},
+        theme_package::{
+            self, ThemePackageLimits, ValidatedThemePackage, percent_encode_asset_path,
+        },
     },
     jiff::Timestamp,
     leptos::prelude::*,
@@ -326,29 +328,11 @@ fn draft_asset_urls(
                 path.to_owned(),
                 format!(
                     "/theme/draft/{theme_id}/{}",
-                    percent_encode_draft_asset_path(path)
+                    percent_encode_asset_path(path)
                 ),
             )
         })
         .collect()
-}
-
-#[cfg(feature = "server")]
-fn percent_encode_draft_asset_path(path: &str) -> String {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-
-    let mut encoded = String::with_capacity(path.len());
-    for byte in path.bytes() {
-        if matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/')
-        {
-            encoded.push(char::from(byte));
-        } else {
-            encoded.push('%');
-            encoded.push(char::from(HEX[usize::from(byte >> 4)]));
-            encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
-        }
-    }
-    encoded
 }
 
 // Storage error variants are projected defensively; backend-specific unique-violation
@@ -1164,9 +1148,9 @@ mod tests {
         CatalogEntry, Draft, OwnershipScope, ThemeBindingInput, ThemeMediaInput, ThemePoolInput,
         admission_error, binding_wire, catalog, create_storage_error, digest_hex, draft_asset_urls,
         draft_from_archive, draft_from_input, draft_wire, get_selection, import_css,
-        import_package, manager_error, media_wire, percent_encode_draft_asset_path,
-        plain_css_manifest, pool_wire, publication_error, publish, remove, rename, replace_binding,
-        replace_css, replace_draft_error, replace_pool, safe_filename, select, shuffle, theme_name,
+        import_package, manager_error, media_wire, plain_css_manifest, pool_wire,
+        publication_error, publish, remove, rename, replace_binding, replace_css,
+        replace_draft_error, replace_pool, safe_filename, select, shuffle, theme_name,
         theme_storage_error,
     };
     use crate::{
@@ -1211,16 +1195,8 @@ mod tests {
     }
 
     #[test]
-    fn digest_and_draft_asset_urls_preserve_byte_identity_and_escape_paths() {
+    fn digest_hex_preserves_byte_identity() {
         assert_eq!(digest_hex(&[0, 15, 16, 255]), "000f10ff");
-        assert_eq!(
-            percent_encode_draft_asset_path("fonts/A B?#.woff2"),
-            "fonts/A%20B%3F%23.woff2"
-        );
-        assert_eq!(
-            percent_encode_draft_asset_path("safe-._~/path"),
-            "safe-._~/path"
-        );
     }
 
     #[test]

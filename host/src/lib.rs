@@ -36,6 +36,7 @@ pub mod telemetry;
 pub mod test_support;
 pub mod theme_operations;
 pub mod theme_package;
+pub mod theme_repository;
 pub mod token;
 
 /// True only when test-only cheap Argon2 parameters are compiled in.
