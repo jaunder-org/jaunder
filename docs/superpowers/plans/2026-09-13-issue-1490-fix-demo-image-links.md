@@ -43,7 +43,7 @@ Out:
     manifest ordering, native Markdown/Org source, rendered HTML, and stored
     references.
 
-- [ ] Task 3: Preserve named sandbox replacement on seed failure.
+- [x] Task 3: Preserve named sandbox replacement on seed failure.
   - Contract: ADR-0180's staged replacement remains the publication boundary;
     failed reset preparation never replaces the current named workspace.
   - Verification: an `xtask` sandbox lifecycle test injects deterministic seed
