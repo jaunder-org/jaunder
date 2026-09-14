@@ -428,7 +428,7 @@ mod tests {
                     .await
                     .unwrap();
             } else {
-                // cov:ignore-start: The coverage derivation exercises SQLite; backend-parity tests execute this PostgreSQL-only fault-injection harness branch.
+                // cov:ignore-start: The backend-parametric PostgreSQL fault test executes this macro-expanded branch, but LLVM source coverage does not attribute that monomorphized execution to these shared source lines.
                 sqlx::query(postgres_function)
                     .execute(backend_pool)
                     .await

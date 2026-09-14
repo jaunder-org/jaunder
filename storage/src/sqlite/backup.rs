@@ -15,9 +15,12 @@ use crate::backup::{
     MigrationVersion, RestoreBindValue, RestoreText, RestoreValidationReport, is_binary_column,
     lowercase_hex,
 };
+
 use crate::helpers;
+use crate::passkeys::PasskeyUserHandle;
 use crate::sql;
 use crate::sql::QueryStorageExt;
+use common::ids::UserId;
 
 fn finish_export_rollback(
     primary: Result<BackupManifest, BackupError>,
@@ -194,6 +197,7 @@ async fn restore_database_transaction(
             )
             .await?;
         }
+        backfill_legacy_passkey_user_handles(&mut connection, manifest).await?;
         // Validate FKs *before* committing so a violation rolls the whole restore
         // back rather than leaving invalid data committed. `foreign_key_check`
         // scans for violations and works with `foreign_keys = OFF`, so it runs
@@ -232,6 +236,36 @@ async fn restore_database_transaction(
             )
         }
     }
+}
+
+/// Format-1 backups predate Passkey handles. Create one for every imported
+/// user before the restore transaction can commit and expose them. A
+/// format-1 manifest that already names the table keeps its imported handles.
+async fn backfill_legacy_passkey_user_handles(
+    connection: &mut SqliteConnection,
+    manifest: &BackupManifest,
+) -> Result<(), BackupError> {
+    if manifest.format_version != backup::LEGACY_BACKUP_FORMAT_VERSION
+        || manifest
+            .tables
+            .iter()
+            .any(|table| table == "passkey_user_handles")
+    {
+        return Ok(());
+    }
+
+    let user_ids = sqlx::query_scalar::<_, UserId>("SELECT user_id FROM users")
+        .fetch_all(&mut *connection)
+        .await?;
+    for user_id in user_ids {
+        sqlx::query("INSERT INTO passkey_user_handles (user_id, user_handle) VALUES ($1, $2)")
+            .bind_storage(user_id)
+            .bind_storage(PasskeyUserHandle::generate())
+            .execute(&mut *connection)
+            .await
+            .map_err(map_restore_error)?;
+    }
+    Ok(())
 }
 
 async fn existing_export_tables(

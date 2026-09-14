@@ -467,7 +467,7 @@ pub async fn finish_authentication(
                 })?;
                 // cov:ignore-stop
                 if ceremony.origin != origin || ceremony.rp_id != rp_id {
-                    return Err(InternalError::validation("authentication failed")); // cov:ignore: Valid signed ceremony state fixes origin and RP ID; malformed-state tests reject before this defensive consistency check.
+                    return Err(InternalError::validation("authentication failed"));
                 }
                 let assertion = AuthenticationResponse::from_json(response);
                 let discovered = rp.identify(&assertion).map_err(|error| {
@@ -604,9 +604,26 @@ mod tests {
     #[cfg(feature = "server")]
     use super::BrowserCredentialId;
     use super::{BrowserPasskeyLabel, CeremonyHandle, InvalidBrowserPasskeyLabel};
+    #[cfg(feature = "server")]
+    use super::{finish_authentication, start_authentication};
     use std::str::FromStr;
     #[cfg(feature = "server")]
     use storage::{PasskeyCredentialId, RawPasskeyCeremonyHandle};
+    #[cfg(feature = "server")]
+    use {
+        crate::error::WebError,
+        common::{MutationOutcome, site::SiteIdentity, test_support::parse_url},
+        leptos::prelude::{Owner, provide_context},
+        std::sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+        storage::{
+            AuthenticationCeremony, MockPasskeyStorage, MockSessionStorage, MockSiteConfigStorage,
+            MockUserStorage, PasskeyStorage, SessionStorage, SiteConfigStorage, UserStorage,
+            test_support::mock_write_scope,
+        },
+    };
 
     #[test]
     fn browser_passkey_label_decode_error_has_safe_bounded_surfaces() {
@@ -644,5 +661,83 @@ mod tests {
         let browser_id = BrowserCredentialId::try_from(id.expose_to_browser().to_owned())
             .expect("generated credential identifier is valid");
         assert_eq!(String::from(browser_id), id.expose_to_browser());
+    }
+
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn authentication_rejects_same_host_origin_drift_before_assertion_parsing() {
+        let owner = Owner::new();
+        owner.set();
+        let original_url = parse_url("https://passkeys.example.test/");
+        let changed_url = parse_url("https://passkeys.example.test:8443/");
+        let identities = [
+            SiteIdentity {
+                title: "Jaunder".parse().expect("valid fixture title"),
+                base_url: Some(original_url),
+            },
+            SiteIdentity {
+                title: "Jaunder".parse().expect("valid fixture title"),
+                base_url: Some(changed_url),
+            },
+        ];
+        let calls = AtomicUsize::new(0);
+        let mut config = MockSiteConfigStorage::new();
+        config.expect_get_identity().times(2).returning(move || {
+            let call = calls.fetch_add(1, Ordering::SeqCst);
+            Ok(identities
+                .get(call)
+                .cloned()
+                .expect("authentication reads identity exactly twice"))
+        });
+
+        let captured_ceremony = Arc::new(Mutex::new(None::<AuthenticationCeremony>));
+        let create_ceremony = Arc::clone(&captured_ceremony);
+        let claim_ceremony = Arc::clone(&captured_ceremony);
+        let mut passkeys = MockPasskeyStorage::new();
+        passkeys
+            .expect_create_authentication_ceremony()
+            .times(1)
+            .returning(move |_, _, ceremony, _| {
+                let captured_ceremony = Arc::clone(&create_ceremony);
+                let ceremony = ceremony.clone();
+                Box::pin(async move {
+                    *captured_ceremony.lock().expect("ceremony capture lock") = Some(ceremony);
+                    Ok(())
+                })
+            });
+        passkeys
+            .expect_claim_authentication_ceremony()
+            .times(1)
+            .returning(move |_, _, _| {
+                let captured_ceremony = Arc::clone(&claim_ceremony);
+                Box::pin(async move {
+                    Ok(captured_ceremony
+                        .lock()
+                        .expect("ceremony capture lock")
+                        .take())
+                })
+            });
+        passkeys
+            .expect_lock_rp_host()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        provide_context(Arc::new(passkeys) as Arc<dyn PasskeyStorage>);
+        provide_context(Arc::new(config) as Arc<dyn SiteConfigStorage>);
+        provide_context(Arc::new(MockUserStorage::new()) as Arc<dyn UserStorage>);
+        provide_context(Arc::new(MockSessionStorage::new()) as Arc<dyn SessionStorage>);
+        provide_context(mock_write_scope());
+
+        let MutationOutcome::Confirmed(start) = start_authentication()
+            .await
+            .expect("authentication starts before configuration changes")
+        else {
+            unreachable!("mock write scope always confirms the authentication start");
+        };
+
+        assert_eq!(
+            finish_authentication(start.handle, serde_json::json!({"not": "an assertion"})).await,
+            Err(WebError::validation("authentication failed")),
+            "origin drift must fail closed before parsing the deliberately malformed assertion"
+        );
     }
 }

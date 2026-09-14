@@ -1221,13 +1221,21 @@ mod reader_tests {
             "read restored passkey credential",
         );
         if format_version == 1 {
+            let handle = compatibility_option(
+                handle,
+                "format-1 restored user receives a durable Passkey handle",
+            );
             assert_eq!(
-                handle, None,
-                "format-1 predates durable Passkeys and must not invent a handle"
+                compatibility_result(
+                    factory.passkeys().user_for_handle(&handle).await,
+                    "resolve format-1 restored Passkey handle",
+                ),
+                Some(user_id),
+                "format-1 restored Passkey handle remains uniquely owned by its user"
             );
             assert!(
                 credential.is_none(),
-                "format-1 predates durable Passkeys and must not invent a credential"
+                "format-1 predates durable Passkey credentials"
             );
             return;
         }
