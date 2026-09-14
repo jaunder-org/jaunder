@@ -6,15 +6,83 @@
 //! transaction. Their dependencies are the exact object-safe stores needed by
 //! each flow so the composition root does not leak into application code.
 
-use common::{display_name::DisplayName, ids::UserId, token::RawToken, username::Username};
-use host::{invite::InviteCode, password::Password};
+use common::{
+    display_name::DisplayName,
+    ids::UserId,
+    session_label::SessionLabel,
+    token::{RawToken, TokenHash},
+    username::Username,
+};
+use host::{invite::InviteCode, passkey::Credential, password::Password};
 use thiserror::Error;
 
 use crate::users;
 use crate::{
-    CreateUserError, InviteStorage, OperatorStatus, PasswordResetStorage, SessionStorage,
-    UserStorage, WriteTransaction,
+    CreateUserError, InviteStorage, OperatorStatus, PasskeyCredentialId, PasskeyStorage,
+    PasswordResetStorage, SessionStorage, UserStorage, WriteTransaction,
 };
+
+/// Errors returned by the cross-store Passkey mutation primitives.
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct PasskeyMutationError(#[from] pub sqlx::Error);
+
+/// Applies a verified Passkey assertion, records credential use, and creates its
+/// ordinary `Session` in the same caller-owned transaction.
+///
+/// The passed credential is a trusted adapter result: it has already folded
+/// backup flags and retained the counter high-water mark. A missing row is an
+/// error so no `Session` can be minted for a deleted credential.
+///
+/// # Errors
+///
+/// Returns an error if the credential update or `Session` creation fails. The
+/// caller's write scope then rolls back all mutations.
+pub async fn finalize_passkey_authentication(
+    transaction: &mut WriteTransaction,
+    passkeys: &dyn PasskeyStorage,
+    sessions: &dyn SessionStorage,
+    user_id: UserId,
+    credential: &Credential,
+    session_label: &SessionLabel,
+) -> Result<RawToken, PasskeyMutationError> {
+    if !passkeys
+        .update_credential_after_authentication(transaction, user_id, credential)
+        .await?
+    {
+        return Err(PasskeyMutationError(sqlx::Error::RowNotFound));
+    }
+    sessions
+        .create_session(transaction, user_id, session_label)
+        .await
+        .map_err(PasskeyMutationError)
+}
+
+/// Deletes one owned Passkey and revokes every other `Session` for its User while
+/// retaining the cookie `Session` that authorized the mutation.
+///
+/// # Errors
+///
+/// Returns an error if the credential deletion or `Session` revocation fails.
+/// The caller's write scope then rolls back both mutations.
+pub async fn delete_passkey_and_revoke_other_sessions(
+    transaction: &mut WriteTransaction,
+    passkeys: &dyn PasskeyStorage,
+    sessions: &dyn SessionStorage,
+    user_id: UserId,
+    credential_id: &PasskeyCredentialId,
+    current_session: &TokenHash,
+) -> Result<bool, PasskeyMutationError> {
+    let deleted = passkeys
+        .delete_credential(transaction, user_id, credential_id)
+        .await?;
+    if deleted {
+        sessions
+            .revoke_all_for_user_except(transaction, user_id, current_session)
+            .await?;
+    }
+    Ok(deleted)
+}
 
 /// Errors returned by [`register_with_invite`].
 #[derive(Debug, Error)]
@@ -235,6 +303,12 @@ pub async fn confirm_password_reset(
 
 #[cfg(test)]
 mod tests {
+    use crate::test_support::{Backend, SeedUser, backends, confirmed};
+    use common::test_support::parse_session_label;
+    use host::token;
+    use rstest::*;
+    use rstest_reuse::*;
+
     use super::*;
     use host::error::{ErrorKind, InternalError};
 
@@ -299,5 +373,422 @@ mod tests {
         let mapped: InternalError =
             ConfirmPasswordResetError::Internal(sqlx::Error::RowNotFound).into();
         assert_eq!(mapped.kind(), ErrorKind::Storage);
+    }
+    #[derive(Clone, Copy)]
+    enum PasskeyMutationFault {
+        CredentialUpdate,
+        SessionCreation,
+        CredentialDeletion,
+        OtherSessionRevocation,
+    }
+
+    async fn install_passkey_mutation_fault(
+        pool: &crate::test_support::CloseablePool,
+        fault: PasskeyMutationFault,
+    ) {
+        let (sqlite_trigger, postgres_function, postgres_trigger) = match fault {
+            PasskeyMutationFault::CredentialUpdate => (
+                "CREATE TRIGGER passkey_mutation_fault BEFORE UPDATE ON passkey_credentials \
+                 BEGIN SELECT RAISE(ABORT, 'test-injected passkey mutation fault'); END",
+                "CREATE FUNCTION passkey_mutation_fault() RETURNS trigger LANGUAGE plpgsql AS \
+                 $$ BEGIN RAISE EXCEPTION 'test-injected passkey mutation fault'; END; $$",
+                "CREATE TRIGGER passkey_mutation_fault BEFORE UPDATE ON passkey_credentials \
+                 FOR EACH ROW EXECUTE FUNCTION passkey_mutation_fault()",
+            ),
+            PasskeyMutationFault::SessionCreation => (
+                "CREATE TRIGGER passkey_mutation_fault BEFORE INSERT ON sessions \
+                 BEGIN SELECT RAISE(ABORT, 'test-injected passkey mutation fault'); END",
+                "CREATE FUNCTION passkey_mutation_fault() RETURNS trigger LANGUAGE plpgsql AS \
+                 $$ BEGIN RAISE EXCEPTION 'test-injected passkey mutation fault'; END; $$",
+                "CREATE TRIGGER passkey_mutation_fault BEFORE INSERT ON sessions \
+                 FOR EACH ROW EXECUTE FUNCTION passkey_mutation_fault()",
+            ),
+            PasskeyMutationFault::CredentialDeletion => (
+                "CREATE TRIGGER passkey_mutation_fault BEFORE DELETE ON passkey_credentials \
+                 BEGIN SELECT RAISE(ABORT, 'test-injected passkey mutation fault'); END",
+                "CREATE FUNCTION passkey_mutation_fault() RETURNS trigger LANGUAGE plpgsql AS \
+                 $$ BEGIN RAISE EXCEPTION 'test-injected passkey mutation fault'; END; $$",
+                "CREATE TRIGGER passkey_mutation_fault BEFORE DELETE ON passkey_credentials \
+                 FOR EACH ROW EXECUTE FUNCTION passkey_mutation_fault()",
+            ),
+            PasskeyMutationFault::OtherSessionRevocation => (
+                "CREATE TRIGGER passkey_mutation_fault BEFORE DELETE ON sessions \
+                 BEGIN SELECT RAISE(ABORT, 'test-injected passkey mutation fault'); END",
+                "CREATE FUNCTION passkey_mutation_fault() RETURNS trigger LANGUAGE plpgsql AS \
+                 $$ BEGIN RAISE EXCEPTION 'test-injected passkey mutation fault'; END; $$",
+                "CREATE TRIGGER passkey_mutation_fault BEFORE DELETE ON sessions \
+                 FOR EACH ROW EXECUTE FUNCTION passkey_mutation_fault()",
+            ),
+        };
+
+        crate::with_closeable_pool!(pool, backend_pool, {
+            if matches!(pool, crate::test_support::CloseablePool::Sqlite(_)) {
+                sqlx::query(sqlite_trigger)
+                    .execute(backend_pool)
+                    .await
+                    .unwrap();
+            } else {
+                // cov:ignore-start: The backend-parametric PostgreSQL fault test executes this macro-expanded branch, but LLVM source coverage does not attribute that monomorphized execution to these shared source lines.
+                sqlx::query(postgres_function)
+                    .execute(backend_pool)
+                    .await
+                    .unwrap();
+                sqlx::query(postgres_trigger)
+                    .execute(backend_pool)
+                    .await
+                    .unwrap();
+                // cov:ignore-stop
+            }
+        });
+    }
+
+    async fn seed_passkey(
+        env: &crate::test_support::TestEnv,
+    ) -> (UserId, Credential, PasskeyCredentialId) {
+        let user_id = SeedUser::new()
+            .seed(env.users(), env.write_scope())
+            .await
+            .user_id;
+        let credential = crate::test_support::passkey_credential_fixture();
+        let credential_id = PasskeyCredentialId::from_credential(&credential);
+        let stored_credential = credential.clone();
+        let label = "Laptop".parse().unwrap();
+        let passkeys = env.passkeys();
+        confirmed(
+            env.write_scope()
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        passkeys
+                            .insert_credential(transaction, user_id, &label, &stored_credential)
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
+        (user_id, credential, credential_id)
+    }
+
+    async fn create_session(
+        env: &crate::test_support::TestEnv,
+        user_id: UserId,
+        label: &str,
+    ) -> common::token::RawToken {
+        let label = parse_session_label(label);
+        let sessions = env.sessions();
+        confirmed(
+            env.write_scope()
+                .run(move |transaction| {
+                    Box::pin(
+                        async move { sessions.create_session(transaction, user_id, &label).await },
+                    )
+                })
+                .await
+                .unwrap(),
+        )
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn passkey_authentication_missing_credential_for_user_mints_no_session(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let (_, credential, _) = seed_passkey(&env).await;
+        let absent_user = SeedUser::new()
+            .seed(env.users(), env.write_scope())
+            .await
+            .user_id;
+        let passkeys = env.passkeys();
+        let sessions = env.sessions();
+        let label = parse_session_label("Passkey test");
+        let error = env
+            .write_scope()
+            .run(move |transaction| {
+                Box::pin(async move {
+                    finalize_passkey_authentication(
+                        transaction,
+                        passkeys.as_ref(),
+                        sessions.as_ref(),
+                        absent_user,
+                        &credential,
+                        &label,
+                    )
+                    .await
+                })
+            })
+            .await
+            .expect_err("an absent credential/user pairing is rejected");
+
+        assert!(matches!(
+            error,
+            crate::WriteScopeError::Operation(PasskeyMutationError(sqlx::Error::RowNotFound))
+        ));
+        assert!(
+            env.sessions()
+                .list_sessions(absent_user)
+                .await
+                .unwrap()
+                .is_empty(),
+            "a failed credential update must not mint a Session"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn passkey_authentication_credential_update_failure_leaves_no_session_or_update(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let (user_id, credential, credential_id) = seed_passkey(&env).await;
+        install_passkey_mutation_fault(env.base.pool(), PasskeyMutationFault::CredentialUpdate)
+            .await;
+
+        let passkeys = env.passkeys();
+        let sessions = env.sessions();
+        let label = parse_session_label("Passkey test");
+        assert!(
+            env.write_scope()
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        finalize_passkey_authentication(
+                            transaction,
+                            passkeys.as_ref(),
+                            sessions.as_ref(),
+                            user_id,
+                            &credential,
+                            &label,
+                        )
+                        .await
+                    })
+                })
+                .await
+                .is_err()
+        );
+
+        assert_eq!(
+            env.sessions().list_sessions(user_id).await.unwrap().len(),
+            0
+        );
+        assert_eq!(
+            env.passkeys()
+                .credential_for_user(user_id, &credential_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .last_used_at,
+            None,
+            "a failed credential update cannot leave authentication metadata behind"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn passkey_authentication_session_creation_failure_rolls_back_credential_update(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let (user_id, credential, credential_id) = seed_passkey(&env).await;
+        install_passkey_mutation_fault(env.base.pool(), PasskeyMutationFault::SessionCreation)
+            .await;
+
+        let passkeys = env.passkeys();
+        let sessions = env.sessions();
+        let label = parse_session_label("Passkey test");
+        assert!(
+            env.write_scope()
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        finalize_passkey_authentication(
+                            transaction,
+                            passkeys.as_ref(),
+                            sessions.as_ref(),
+                            user_id,
+                            &credential,
+                            &label,
+                        )
+                        .await
+                    })
+                })
+                .await
+                .is_err()
+        );
+
+        assert_eq!(
+            env.sessions().list_sessions(user_id).await.unwrap().len(),
+            0
+        );
+        assert_eq!(
+            env.passkeys()
+                .credential_for_user(user_id, &credential_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .last_used_at,
+            None,
+            "the completed credential update rolls back when Session creation fails"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn passkey_authentication_commit_acknowledgement_loss_preserves_both_mutations(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let (user_id, credential, credential_id) = seed_passkey(&env).await;
+        let scope = env
+            .write_scope()
+            .with_commit_acknowledgement_loss_after_commit_for_test();
+        let passkeys = env.passkeys();
+        let sessions = env.sessions();
+        let label = parse_session_label("Passkey test");
+
+        let outcome = scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    finalize_passkey_authentication(
+                        transaction,
+                        passkeys.as_ref(),
+                        sessions.as_ref(),
+                        user_id,
+                        &credential,
+                        &label,
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            outcome,
+            common::MutationOutcome::CommitIndeterminate(_)
+        ));
+        assert_eq!(
+            env.sessions().list_sessions(user_id).await.unwrap().len(),
+            1
+        );
+        assert!(
+            env.passkeys()
+                .credential_for_user(user_id, &credential_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .last_used_at
+                .is_some(),
+            "the completed credential update remains durable despite acknowledgement loss"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn passkey_deletion_failure_leaves_credential_and_sessions_intact(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let (user_id, _, credential_id) = seed_passkey(&env).await;
+        let current = create_session(&env, user_id, "Current browser").await;
+        create_session(&env, user_id, "Other browser").await;
+        install_passkey_mutation_fault(env.base.pool(), PasskeyMutationFault::CredentialDeletion)
+            .await;
+        let current_hash = token::hash(&current).unwrap();
+        let preserved_current_hash = current_hash.clone();
+        let preserved_credential_id = credential_id.clone();
+        let passkeys = env.passkeys();
+        let sessions = env.sessions();
+
+        assert!(
+            env.write_scope()
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        delete_passkey_and_revoke_other_sessions(
+                            transaction,
+                            passkeys.as_ref(),
+                            sessions.as_ref(),
+                            user_id,
+                            &credential_id,
+                            &current_hash,
+                        )
+                        .await
+                    })
+                })
+                .await
+                .is_err()
+        );
+        assert!(
+            env.passkeys()
+                .credential_for_user(user_id, &preserved_credential_id)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        let sessions = env.sessions().list_sessions(user_id).await.unwrap();
+        assert_eq!(sessions.len(), 2);
+        assert!(
+            sessions
+                .iter()
+                .any(|session| session.token_hash == preserved_current_hash),
+            "the authorizing Session remains active"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn passkey_session_revocation_failure_rolls_back_credential_deletion(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let (user_id, _, credential_id) = seed_passkey(&env).await;
+        let current = create_session(&env, user_id, "Current browser").await;
+        create_session(&env, user_id, "Other browser").await;
+        install_passkey_mutation_fault(
+            env.base.pool(),
+            PasskeyMutationFault::OtherSessionRevocation,
+        )
+        .await;
+        let current_hash = token::hash(&current).unwrap();
+        let preserved_current_hash = current_hash.clone();
+        let preserved_credential_id = credential_id.clone();
+        let passkeys = env.passkeys();
+        let sessions = env.sessions();
+
+        assert!(
+            env.write_scope()
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        delete_passkey_and_revoke_other_sessions(
+                            transaction,
+                            passkeys.as_ref(),
+                            sessions.as_ref(),
+                            user_id,
+                            &credential_id,
+                            &current_hash,
+                        )
+                        .await
+                    })
+                })
+                .await
+                .is_err()
+        );
+        assert!(
+            env.passkeys()
+                .credential_for_user(user_id, &preserved_credential_id)
+                .await
+                .unwrap()
+                .is_some(),
+            "the deletion before revocation is rolled back"
+        );
+        let sessions = env.sessions().list_sessions(user_id).await.unwrap();
+        assert_eq!(
+            sessions.len(),
+            2,
+            "the other Session remains active after failed revocation"
+        );
+        assert!(
+            sessions
+                .iter()
+                .any(|session| session.token_hash == preserved_current_hash),
+            "the authorizing Session remains active"
+        );
     }
 }

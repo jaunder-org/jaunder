@@ -6,8 +6,9 @@
 //! **Two signals, unioned.** A span identifies a `#[server]` fn when either:
 //!
 //! 1. its **name** is one of that fn's [`candidate_span_names`] *and* its
-//!    `code.namespace` is that fn's module (the primary signal — needs no URL
-//!    parsing and survives any endpoint rename); or
+//!    `code.module.name` (falling back to legacy `code.namespace`) is that fn's
+//!    module (the primary signal — needs no URL parsing and survives any endpoint
+//!    rename); or
 //! 2. its **`uri`** path resolves to an inventory fn's *derived endpoint* (the
 //!    complement).
 //!
@@ -34,18 +35,19 @@
 //! the candidates from the inventory is what makes a regime change a code update
 //! rather than a silent outage; the per-signal tests are what make it visible.
 //!
-//! **`code.namespace` corroborates the current name and disambiguates compatibility
-//! names.** `#[macros::server]` enforces valid server functions live in
-//! `web/src/<vertical>/api.rs`, so its current `web.<vertical>.<ident>` name is
-//! unique. Matching `code.namespace` remains conservative corroboration: it rejects
+//! **The module attribute corroborates the current name and disambiguates
+//! compatibility names.** `#[macros::server]` enforces valid server functions live
+//! in `web/src/<vertical>/api.rs`, so its current `web.<vertical>.<ident>` name is
+//! unique. Matching the module remains conservative corroboration: it rejects
 //! foreign or malformed trace evidence without making this extractor depend
 //! indirectly on that compile-time placement rule. The retained
 //! `__server_<ident>` and bare-`<ident>` compatibility names omit the vertical, so
-//! their namespace match remains the load-bearing disambiguator.
+//! their module match remains the load-bearing disambiguator.
 //!
-//! `code.namespace` is where `tracing-opentelemetry` records a span's module;
-//! `target` exists only on *events*, so matching that would find nothing on any span
-//! — and would fail silently in the same way.
+//! `tracing-opentelemetry` currently records a span's module in `code.module.name`;
+//! earlier captures use `code.namespace`, which remains supported as a fallback.
+//! `target` exists only on *events*, so matching that would find nothing on any
+//! span — and would fail silently in the same way.
 //!
 //! **Attribution is an ancestor walk, not a parent check.** Only the *request*
 //! span carries the test's span id as its parent; an instrument span's parent is
@@ -62,12 +64,11 @@ use crate::traces::parse::Span;
 
 /// The `#[server]` route prefix every server-fn request lands under.
 const API_PREFIX: &str = "/api/";
-/// The span attribute `tracing-opentelemetry` records a span's module in.
-// `pub(crate)` so the seed cross-check in `server_fn_coverage_check` can locate a
-// fn by the same signal this module uses, rather than restating the attribute name
-// — a second copy is precisely the drift that check exists to catch (#714).
-pub(crate) const MODULE_ATTR: &str = "code.namespace";
-/// The crate prefix `code.namespace` carries but [`ServerFn::module`] does not.
+/// The current OpenTelemetry span attribute recording a module.
+const CURRENT_MODULE_ATTR: &str = "code.module.name";
+/// The legacy span attribute recording a module.
+const LEGACY_MODULE_ATTR: &str = "code.namespace";
+/// The crate prefix module attributes carry but [`ServerFn::module`] does not.
 const CRATE_PREFIX: &str = "web::";
 /// The prefix `#[server]` gives the fn it relocates the annotated body into, so a
 /// span whose name `#[tracing::instrument]` *derived* carries it.
@@ -120,7 +121,7 @@ pub struct Coverage {
 ///   It omits the vertical, so the module check disambiguates it.
 /// - `<ident>` — what derivation would yield if `#[server]` stopped relocating. It
 ///   likewise omits the vertical, so the module check disambiguates it.
-// `pub(crate)` for the same reason as [`MODULE_ATTR`]: the seed cross-check must
+// `pub(crate)` for the same reason as [`span_module`]: the seed cross-check must
 // locate a fn by *this* rule, not a paraphrase of it.
 pub(crate) fn candidate_span_names(f: &ServerFn) -> [String; 3] {
     let vertical = f.vertical();
@@ -131,18 +132,32 @@ pub(crate) fn candidate_span_names(f: &ServerFn) -> [String; 3] {
     ]
 }
 
+/// The module recorded for `span`: current `code.module.name` first, then legacy
+/// `code.namespace`.
+///
+/// An empty current attribute is treated as absent so valid legacy captures remain
+/// usable. Callers still reject an empty result rather than guessing a module.
+pub(crate) fn span_module(span: &Span) -> String {
+    let module = crate::traces::parse::get_attr(&span.raw, CURRENT_MODULE_ATTR);
+    if module.is_empty() {
+        crate::traces::parse::get_attr(&span.raw, LEGACY_MODULE_ATTR)
+    } else {
+        module
+    }
+}
+
 /// The fn a span identifies, by either signal, or `None` if it identifies none.
 fn identify<'a>(span: &Span, inventory: &'a [ServerFn]) -> Option<&'a ServerFn> {
-    // Primary: span name + module. `code.namespace` holds the plain module the fn
-    // was declared in (`web::auth::api` for `session`) — verified against a real
-    // capture, not assumed. It defensively corroborates the unique current
-    // `web.<vertical>.<ident>` form and disambiguates compatibility forms that omit
-    // the vertical.
-    let namespace = crate::traces::parse::get_attr(&span.raw, MODULE_ATTR);
-    // An empty namespace cannot be confirmed to be the right module, so it does not
+    // Primary: span name + module. `code.module.name` holds the plain module the fn
+    // was declared in (`web::auth::api` for `session`); legacy `code.namespace`
+    // remains accepted for existing captures. It defensively corroborates the unique
+    // current `web.<vertical>.<ident>` form and disambiguates compatibility forms
+    // that omit the vertical.
+    let module = span_module(span);
+    // An empty module cannot be confirmed to be the right module, so it does not
     // count — better to fall through to `uri` than to guess.
-    if !namespace.is_empty() {
-        let relative = namespace.strip_prefix(CRATE_PREFIX).unwrap_or(&namespace);
+    if !module.is_empty() {
+        let relative = module.strip_prefix(CRATE_PREFIX).unwrap_or(&module);
         if let Some(f) = inventory
             .iter()
             .find(|f| relative == f.module && candidate_span_names(f).contains(&span.name))
@@ -392,8 +407,8 @@ mod tests {
     }
 
     #[test]
-    fn span_name_with_foreign_code_namespace_is_not_counted() {
-        // A span named `__server_update_post` with a foreign code.namespace is not
+    fn span_name_with_foreign_legacy_module_is_not_counted() {
+        // A span named `__server_update_post` with a foreign legacy module is not
         // confirmed as this inventory fn; it carries no `uri`, so nothing else
         // matches it.
         let c = extract(&sample_spans(), &[fnf("update_post", "storage::posts")]);
@@ -402,17 +417,17 @@ mod tests {
     }
 
     #[test]
-    fn code_namespace_crate_prefix_is_stripped_before_comparing() {
-        // code.namespace is `web::posts::api`; ServerFn.module is `posts::api`.
-        // Comparing them raw would reject every span-name hit — silently, since
-        // `uri` would still carry the fn.
+    fn legacy_module_crate_prefix_is_stripped_before_comparing() {
+        // Legacy `code.namespace` is `web::posts::api`; ServerFn.module is
+        // `posts::api`. Comparing them raw would reject every span-name hit —
+        // silently, since `uri` would still carry the fn.
         let c = extract(&sample_spans(), &[fnf("update_post", "posts::api")]);
         assert_eq!(titles(&c, "posts::update_post"), vec!["creates a post"]);
     }
 
     #[test]
-    fn span_name_hit_with_missing_code_namespace_is_not_counted() {
-        // A missing namespace leaves this span-name hit unconfirmed, so it must not
+    fn span_name_hit_with_missing_module_is_not_counted() {
+        // A missing module leaves this span-name hit unconfirmed, so it must not
         // count as trace evidence for the inventory fn.
         // One JSON object per line — this is JSONL, so the literal must not wrap.
         let line = concat!(
@@ -427,7 +442,7 @@ mod tests {
         let c = extract(&spans, &[fnf("update_post", "posts::api")]);
         assert!(
             c.covered.is_empty(),
-            "a missing namespace must not confirm the span-name hit"
+            "a missing module must not confirm the span-name hit"
         );
     }
 
@@ -440,22 +455,42 @@ mod tests {
         assert_eq!(titles(&c, "posts::create_post").len(), 1);
     }
 
-    /// One `e2e.test` span with a single child span of `name`, declaring `namespace`.
-    fn one_named_span(name: &str, namespace: &str) -> Vec<Span> {
+    /// One `e2e.test` span with a single child span of `name`, declaring a legacy
+    /// `code.namespace` module.
+    fn one_named_span(name: &str, module: &str) -> Vec<Span> {
+        one_named_span_with_module_attr(name, "code.namespace", module)
+    }
+
+    /// One `e2e.test` span with a single child span declaring `module` in `attr`.
+    fn one_named_span_with_module_attr(name: &str, attr: &str, module: &str) -> Vec<Span> {
         let line = format!(
             concat!(
                 r#"{{"resourceSpans":[{{"scopeSpans":[{{"spans":["#,
                 r#"{{"traceId":"aa","spanId":"t1","name":"e2e.test","#,
                 r#""attributes":[{{"key":"e2e.test","value":{{"stringValue":"t"}}}}]}},"#,
                 r#"{{"traceId":"aa","spanId":"i1","parentSpanId":"t1","name":"{name}","#,
-                r#""attributes":[{{"key":"code.namespace","#,
-                r#""value":{{"stringValue":"{namespace}"}}}}]}}"#,
+                r#""attributes":[{{"key":"{attr}","#,
+                r#""value":{{"stringValue":"{module}"}}}}]}}"#,
                 r#"]}}]}}]}}"#,
             ),
             name = name,
-            namespace = namespace,
+            attr = attr,
+            module = module,
         );
         parse_spans(&line, &Filters::default(), "t").expect("parses")
+    }
+
+    #[test]
+    fn current_code_module_name_identifies_a_span() {
+        let c = extract(
+            &one_named_span_with_module_attr(
+                "__server_update_post",
+                "code.module.name",
+                "web::posts::api",
+            ),
+            &[fnf("update_post", "posts::api")],
+        );
+        assert_eq!(titles(&c, "posts::update_post"), vec!["t"]);
     }
 
     #[test]

@@ -245,11 +245,13 @@ allow-git = []
 [sources.allow-org]
 # github.com organizations to allow git sources for
 #
-# `jaunder-org` carries the `[patch.crates-io]` entry for lettre (#297;
-# docs/adr/0119-lettre-fork-pinned-by-rev.md). `unknown-git` is only "warn"
-# above, so this entry is not what makes the gate pass — it is what makes the
-# exception deliberate, and its removal the signal that the patch is gone. Drop
-# both together once the fix is released upstream.
+# `jaunder-org` carries exact-revision `[patch.crates-io]` entries for lettre
+# (#297; docs/adr/0119-lettre-fork-pinned-by-rev.md) and WebAuthn Passkey policy
+# (#1455; docs/adr/0194-passkeys-are-additive-cookie-session-credentials.md).
+# `unknown-git` is only "warn" above, so this entry is not what makes the gate
+# pass — it makes both exceptions deliberate. Remove the matching source
+# allowance rationale and Cargo patches together when upstream releases the
+# audited equivalent APIs.
 github = ["jaunder-org"]
 # gitlab.com organizations to allow git sources for
 gitlab = []

@@ -117,7 +117,7 @@ export default defineConfig({
     {
       name: "chromium",
       testIgnore: ignoreUnavailableSpecializedSpecs(
-        /(admin-site|smtp|theme|invite|media|production-baseline-flow)\.spec\.ts/,
+        /(admin-site|smtp|theme|invite|media|passkeys|production-baseline-flow)\.spec\.ts/,
       ),
       grepInvert: visualTag,
       ...(diagnosticCoverage
@@ -132,7 +132,7 @@ export default defineConfig({
     {
       name: "chromium-admin-site",
       testMatch:
-        /(admin-site|smtp|theme|media|production-baseline-flow)\.spec\.ts/,
+        /(admin-site|smtp|theme|media|passkeys|production-baseline-flow)\.spec\.ts/,
       grepInvert: visualTag,
       fullyParallel: false,
       workers: 1,

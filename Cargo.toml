@@ -120,18 +120,18 @@ urlencoding = "2.1.3"
 percent-encoding = "2.3.2"
 url = "2.5.8"
 uuid = { version = "1.26.0", features = ["v4"] }
+webauthn-rs = { version = "0.5.5", default-features = false, features = ["danger-allow-state-serialisation"] }
 
 # proc-macro toolchain for the `macros` crate (build-time only)
 syn = "2"
 quote = "1.0.47"
 proc-macro2 = "1.0.107"
 
-# Jaunder #813 / docs/adr/0172-temporary-atom-namespace-fork.md pin the
-# upstream AtomPub namespace fix until upstream releases the same complete
-# namespace-aware API and behavior; use an exact rev so Cargo and Nix consume
-# reviewed source rather than a moving branch.
+# The Passkey relying-party policy fork until an audited upstream release exposes
+# the resident-registration, explicit-discovery, and counter-anomaly policy doors.
+# Update both revisions together, then remove both patches and deny rationale.
 #
-# rev 921118c = recursively preserve extension expanded names and namespace scopes.
+# rev 6d0acc7 = feature/passkey-policy-apis
 # Our lettre fork, until the mailbox-grammar fix lands upstream; pinned by rev,
 # not branch, and paired with a deny.toml allow entry — the why, the removal
 # condition, and how to move the rev are in
@@ -141,6 +141,8 @@ proc-macro2 = "1.0.107"
 [patch.crates-io]
 atom_syndication = { git = "https://github.com/jaunder-org/atom", rev = "921118c311d2117956d86e25052918e7c549ef00" }
 lettre = { git = "https://github.com/jaunder-org/lettre", rev = "cb9e5747e5ed4012d41b5ff4bba8dd503fc148e2" }
+webauthn-rs = { git = "https://github.com/jaunder-org/webauthn-rs", rev = "6d0acc73fbf4436b1ed853fa5c8a219dac304a8e" }
+webauthn-rs-core = { git = "https://github.com/jaunder-org/webauthn-rs", rev = "6d0acc73fbf4436b1ed853fa5c8a219dac304a8e" }
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }

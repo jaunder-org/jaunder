@@ -88,6 +88,13 @@ pub fn ensure_server_fns_registered() {
         server_fn::axum::register_explicit::<web::themes::ReplacePool>();
         server_fn::axum::register_explicit::<web::themes::Shuffle>();
         server_fn::axum::register_explicit::<web::themes::Preview>();
+        server_fn::axum::register_explicit::<web::passkeys::Availability>();
+        server_fn::axum::register_explicit::<web::passkeys::StartRegistration>();
+        server_fn::axum::register_explicit::<web::passkeys::FinishRegistration>();
+        server_fn::axum::register_explicit::<web::passkeys::StartAuthentication>();
+        server_fn::axum::register_explicit::<web::passkeys::FinishAuthentication>();
+        server_fn::axum::register_explicit::<web::passkeys::List>();
+        server_fn::axum::register_explicit::<web::passkeys::Delete>();
     });
     LazyLock::force(&REGISTRATIONS);
 }
@@ -104,4 +111,4 @@ pub fn ensure_server_fns_registered() {
 /// fn in `web/src`; this constant tracks the list; and
 /// `server_fn_wire::every_server_fn_path_is_api_vertical_ident_and_distinct`
 /// checks itself against the constant. Each link is short enough to keep honest.
-pub const REGISTERED_SERVER_FN_COUNT: usize = 86;
+pub const REGISTERED_SERVER_FN_COUNT: usize = 93;

@@ -121,6 +121,16 @@ pub trait SessionStorage: Send + Sync {
         transaction: &mut WriteTransaction,
         user_id: UserId,
     ) -> sqlx::Result<()>;
+    /// Revokes every active session for `user_id` except `current_token_hash`.
+    ///
+    /// The caller must have established ownership of the preserved cookie
+    /// Session before entering its write scope.
+    async fn revoke_all_for_user_except(
+        &self,
+        transaction: &mut WriteTransaction,
+        user_id: UserId,
+        current_token_hash: &TokenHash,
+    ) -> sqlx::Result<()>;
 
     /// Returns a list of all active sessions for a user.
     async fn list_sessions(&self, user_id: UserId) -> Result<Vec<SessionRecord>>;
@@ -278,6 +288,21 @@ where
         let connection = DB::write_connection(transaction)?;
         sqlx::query("DELETE FROM sessions WHERE user_id = $1")
             .bind_storage(user_id)
+            .execute(&mut *connection)
+            .await?;
+        Ok(())
+    }
+
+    async fn revoke_all_for_user_except(
+        &self,
+        transaction: &mut WriteTransaction,
+        user_id: UserId,
+        current_token_hash: &TokenHash,
+    ) -> Result<()> {
+        let connection = DB::write_connection(transaction)?;
+        sqlx::query("DELETE FROM sessions WHERE user_id = $1 AND token_hash != $2")
+            .bind_storage(user_id)
+            .bind_storage(current_token_hash)
             .execute(&mut *connection)
             .await?;
         Ok(())

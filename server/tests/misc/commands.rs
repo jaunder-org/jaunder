@@ -899,6 +899,8 @@ async fn cmd_backup_covers_every_table_or_deliberately_excludes_it(#[case] backe
             "instance_identity",
             "invites",
             "media",
+            "passkey_credentials",
+            "passkey_user_handles",
             "password_resets",
             "post_audiences",
             "post_media",
@@ -961,7 +963,7 @@ async fn cmd_backup_covers_every_table_or_deliberately_excludes_it(#[case] backe
         }
     };
     assert_eq!(
-        live_table_count, 42,
+        live_table_count, 46,
         "a table was added or removed — update the golden set and denylist deliberately"
     );
 }
@@ -1416,7 +1418,7 @@ async fn cmd_restore_rejects_unsupported_format_before_mutating_target(#[case] b
     let mut manifest: BackupManifest =
         serde_json::from_str(&std::fs::read_to_string(&manifest_path).expect("read manifest"))
             .expect("parse manifest");
-    manifest.format_version = 2;
+    manifest.format_version = 3;
     std::fs::write(
         &manifest_path,
         serde_json::to_string_pretty(&manifest).expect("serialize manifest"),
@@ -1431,8 +1433,8 @@ async fn cmd_restore_rejects_unsupported_format_before_mutating_target(#[case] b
     assert!(matches!(
         error.downcast_ref::<BackupError>(),
         Some(BackupError::UnsupportedFormatVersion {
-            backup_version: 2,
-            current_version: 1
+            backup_version: 3,
+            current_version: 2
         })
     ));
     assert_target_unmodified(&target_args).await;

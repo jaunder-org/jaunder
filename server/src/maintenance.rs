@@ -10,14 +10,15 @@ use std::time::Duration;
 
 use crate::scheduled_worker::{ScheduledWorkerGuard, WorkTracker};
 use anyhow::Result;
-use common::time::UtcInstant;
+use common::{MutationOutcome, pagination::RowLimit, time::UtcInstant};
 use host::{
     error::{self, ErrorClass, ErrorKind, SwallowedSource},
     metrics,
     retention::{CleanupResult, Domain},
 };
 use storage::{
-    EmailVerificationStorage, FeedEventStorage, InviteStorage, PasswordResetStorage, PostStorage,
+    EmailVerificationStorage, FeedEventStorage, InviteStorage, PasskeyStorage,
+    PasswordResetStorage, PostStorage, WriteScope,
 };
 use tokio_cron_scheduler::{Job, JobScheduler};
 
@@ -33,6 +34,7 @@ pub(crate) struct DatabaseMaintenance {
     email_verifications: Arc<dyn EmailVerificationStorage>,
     password_resets: Arc<dyn PasswordResetStorage>,
     feed_events: Arc<dyn FeedEventStorage>,
+    passkeys: Option<(Arc<dyn PasskeyStorage>, WriteScope)>,
 }
 
 impl DatabaseMaintenance {
@@ -49,7 +51,19 @@ impl DatabaseMaintenance {
             email_verifications,
             password_resets,
             feed_events,
+            passkeys: None,
         }
+    }
+
+    /// Adds the Passkey ceremony retention domain at the production composition root.
+    #[must_use]
+    pub(crate) fn with_passkeys(
+        mut self,
+        passkeys: Arc<dyn PasskeyStorage>,
+        write_scope: WriteScope,
+    ) -> Self {
+        self.passkeys = Some((passkeys, write_scope));
+        self
     }
 
     /// Runs every cleanup domain against one frozen eligibility instant.
@@ -73,6 +87,12 @@ impl DatabaseMaintenance {
             Domain::FeedEvents,
             self.feed_events.prune_terminal_events(now).await,
         );
+        if let Some((passkeys, write_scope)) = &self.passkeys {
+            report_cleanup(
+                Domain::PasskeyCeremonies,
+                prune_passkey_ceremonies(passkeys, write_scope, now).await,
+            );
+        }
     }
 
     /// Runs startup maintenance, then schedules subsequent runs at `interval`.
@@ -105,6 +125,47 @@ impl DatabaseMaintenance {
         ScheduledWorkerGuard::start(scheduler, tracker).await
     }
 }
+async fn prune_passkey_ceremonies(
+    passkeys: &Arc<dyn PasskeyStorage>,
+    write_scope: &WriteScope,
+    now: UtcInstant,
+) -> Result<u64, sqlx::Error> {
+    const BATCH_SIZE: RowLimit = RowLimit::at_most(100);
+    let mut pruned = 0;
+    loop {
+        let passkeys = Arc::clone(passkeys);
+        let outcome = write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    passkeys
+                        .prune_ceremonies(transaction, now, BATCH_SIZE)
+                        .await
+                })
+            })
+            .await
+            .map_err(|error| match error {
+                storage::WriteScopeError::Begin(error)
+                | storage::WriteScopeError::Operation(error) => error,
+            })?;
+        let batch = confirmed_passkey_prune(&outcome)?;
+        if batch != 0 {
+            metrics::retention_pruned(Domain::PasskeyCeremonies, batch);
+        }
+        pruned += batch;
+        if batch < BATCH_SIZE.value().unsigned_abs() {
+            return Ok(pruned);
+        }
+    }
+}
+
+fn confirmed_passkey_prune(outcome: &MutationOutcome<u64>) -> Result<u64, sqlx::Error> {
+    match outcome {
+        MutationOutcome::Confirmed(batch) => Ok(*batch),
+        MutationOutcome::CommitIndeterminate(_) => Err(sqlx::Error::Protocol(
+            "passkey ceremony cleanup commit acknowledgement was indeterminate".to_owned(),
+        )),
+    }
+}
 
 fn report_cleanup<E>(domain: Domain, result: Result<u64, E>)
 where
@@ -135,11 +196,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::*;
+    use rstest_reuse::*;
     use sqlx::Error as SqlxError;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use storage::{
         FeedEventError, MockEmailVerificationStorage, MockFeedEventStorage, MockInviteStorage,
-        MockPasswordResetStorage, MockPostStorage,
+        MockPasskeyStorage, MockPasswordResetStorage, MockPostStorage,
+        test_support::{Backend, backends, mock_write_scope},
     };
     use tokio::time;
     #[derive(Clone)]
@@ -196,6 +260,105 @@ mod tests {
             Arc::new(password_resets),
             Arc::new(feed_events),
         )
+    }
+
+    #[tokio::test]
+    async fn passkey_cleanup_retries_when_one_ceremony_domain_fills_a_batch() {
+        let now = "2026-09-13T12:00:00Z".parse().unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let expected_calls = Arc::clone(&calls);
+        let mut passkeys = MockPasskeyStorage::new();
+        passkeys
+            .expect_prune_ceremonies()
+            .times(2)
+            .returning(move |_, actual_now, batch_size| {
+                assert_eq!(actual_now, now);
+                assert_eq!(batch_size, RowLimit::at_most(100));
+                let pruned = if expected_calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    100_u64
+                } else {
+                    0_u64
+                };
+                Box::pin(async move { Ok(pruned) })
+            });
+        let passkeys: Arc<dyn PasskeyStorage> = Arc::new(passkeys);
+        let pruned = prune_passkey_ceremonies(&passkeys, &mock_write_scope(), now)
+            .await
+            .unwrap();
+
+        assert_eq!(pruned, 100);
+    }
+
+    #[tokio::test]
+    async fn passkey_cleanup_surfaces_a_prune_operation_failure() {
+        let mut passkeys = MockPasskeyStorage::new();
+        passkeys
+            .expect_prune_ceremonies()
+            .times(1)
+            .returning(|_, _, _| Box::pin(async { Err(SqlxError::PoolClosed) }));
+        let passkeys: Arc<dyn PasskeyStorage> = Arc::new(passkeys);
+
+        let error = prune_passkey_ceremonies(
+            &passkeys,
+            &mock_write_scope(),
+            "2026-09-13T12:00:00Z".parse().unwrap(),
+        )
+        .await
+        .expect_err("a pruning operation failure escapes the write scope");
+
+        assert!(matches!(error, SqlxError::PoolClosed));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn passkey_cleanup_surfaces_a_write_scope_begin_failure(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        env.base.close_pool().await;
+        let passkeys = env.passkeys();
+
+        let error = prune_passkey_ceremonies(
+            &passkeys,
+            &env.write_scope(),
+            "2026-09-13T12:00:00Z".parse().unwrap(),
+        )
+        .await
+        .expect_err("a closed pool prevents starting a write scope");
+
+        assert!(matches!(error, SqlxError::PoolClosed));
+    }
+
+    #[test]
+    fn passkey_cleanup_keeps_indeterminate_commits_error_like() {
+        let error = confirmed_passkey_prune(&MutationOutcome::CommitIndeterminate(3))
+            .expect_err("an unconfirmed cleanup is not successful");
+        assert!(
+            error
+                .to_string()
+                .contains("commit acknowledgement was indeterminate")
+        );
+    }
+    #[tokio::test]
+    async fn run_at_composes_passkey_cleanup_with_every_existing_domain() {
+        let now = "2026-09-13T12:00:00Z".parse().unwrap();
+        let stores = successful_stores(now);
+        let mut passkeys = MockPasskeyStorage::new();
+        passkeys
+            .expect_prune_ceremonies()
+            .withf(move |_, actual_now, batch_size| {
+                *actual_now == now && *batch_size == RowLimit::at_most(100)
+            })
+            .times(1)
+            .returning(|_, _, _| Box::pin(async { Ok(3) }));
+        DatabaseMaintenance::new(
+            Arc::new(stores.0),
+            Arc::new(stores.1),
+            Arc::new(stores.2),
+            Arc::new(stores.3),
+            Arc::new(stores.4),
+        )
+        .with_passkeys(Arc::new(passkeys), mock_write_scope())
+        .run_at(now)
+        .await;
     }
 
     fn successful_stores(
@@ -461,6 +624,20 @@ mod tests {
             !trace.contains(r#""error":"#),
             "a successful cleanup must not produce an error field: {trace}"
         );
+    }
+    #[test]
+    fn report_cleanup_emits_passkey_ceremony_telemetry() {
+        let (guard, output) = trace_capture();
+
+        report_cleanup(Domain::PasskeyCeremonies, Ok::<u64, std::io::Error>(4));
+
+        drop(guard);
+        let trace = trace_text(&output);
+        assert!(
+            trace.contains(r#""retention.domain":"passkey_ceremonies""#),
+            "trace: {trace}"
+        );
+        assert!(trace.contains(r#""pruned":4"#), "trace: {trace}");
     }
 
     #[test]

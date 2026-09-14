@@ -5,6 +5,12 @@
       "format_version": 1,
       "support": "supported",
       "digest": "b55707c7537a81f523d096116dc36b98556a0c3a96be38a8f02e0c2d76de197b"
+    },
+    {
+      "fixture": "format-2",
+      "format_version": 2,
+      "support": "supported",
+      "digest": "ded577312114f3a72a39a4dda05932facf167ae1ea52458eac5759d16dd2907e"
     }
   ]
 }

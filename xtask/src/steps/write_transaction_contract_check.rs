@@ -16,7 +16,7 @@ use crate::steps::scan::run_source_scan;
 
 const POLICED_ROOTS: &[&str] = &["storage/src", "server/src", "web/src"];
 
-/// The authoritative, closed application-mutation census. Counts add to 74.
+/// The authoritative, closed application-mutation census. Counts add to 81.
 const AUDITED_TRAITS: &[(&str, &[&str])] = &[
     (
         "AudienceStorage",
@@ -57,6 +57,22 @@ const AUDITED_TRAITS: &[(&str, &[&str])] = &[
         &["create_password_reset", "use_password_reset"],
     ),
     (
+        "PasskeyStorage",
+        &[
+            "insert_credential",
+            "delete_credential",
+            "credential_for_authentication",
+            "create_registration_ceremony",
+            "claim_registration_ceremony",
+            "create_authentication_ceremony",
+            "claim_authentication_ceremony",
+            "lock_rp_host",
+            "update_credential_after_authentication",
+            "has_credentials",
+            "prune_ceremonies",
+        ],
+    ),
+    (
         "PostStorage",
         &[
             "create_post",
@@ -86,6 +102,7 @@ const AUDITED_TRAITS: &[(&str, &[&str])] = &[
             "authenticate",
             "revoke_session",
             "revoke_all_for_user",
+            "revoke_all_for_user_except",
         ],
     ),
     (
@@ -93,6 +110,7 @@ const AUDITED_TRAITS: &[(&str, &[&str])] = &[
         &[
             "set",
             "delete",
+            "get_base_url_in_transaction",
             "set_identity",
             "set_registration_policy",
             "set_base_url",
@@ -153,6 +171,7 @@ const INTERNAL_CAPABILITY_EXCLUSIONS: &[(&str, &str)] = &[
 const INTERNAL_CAPABILITY_TRAITS: &[&str] = &[
     "Backend",
     "FeedEventDialect",
+    "PasskeyDialect",
     "PostDialect",
     "SessionDialect",
 ];
@@ -527,7 +546,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_sixty_one_method_census_passes() {
+    fn exact_eighty_one_method_census_passes() {
         let source = complete_census().replacen(
             "trait MediaStorage {",
             "trait MediaStorage { async fn media_entry_is_reclaimable(&self, transaction: &mut WriteTransaction);",

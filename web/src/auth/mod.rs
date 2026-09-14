@@ -57,4 +57,4 @@ pub use server::{
     require_operator,
 };
 #[cfg(feature = "server")]
-pub(crate) use server::{optional_auth, set_session_cookie};
+pub(crate) use server::{optional_auth, require_cookie_auth, set_session_cookie};

@@ -884,6 +884,7 @@ mod reader_tests {
         media::MediaSource,
         pagination::PageSize,
         test_support::{parse_content_hash, parse_filename},
+        time::UtcInstant,
         username::Username,
         visibility::ViewerIdentity,
     };
@@ -895,7 +896,8 @@ mod reader_tests {
     use rstest_reuse::apply;
     use serde_json::Value;
     use storage::{
-        BackupError, BackupMode, StorageRuntimeConfig, open_existing_database,
+        BackupError, BackupMode, PasskeyCredentialId, PasskeyLabel, PasskeyUserHandle,
+        StorageRuntimeConfig, open_existing_database,
         test_support::{Backend, backends},
     };
     macro_rules! assert_eq {
@@ -1154,15 +1156,116 @@ mod reader_tests {
             );
         }
     }
-    async fn assert_reader_inventory(args: &StorageArgs) {
+    fn reader_fixture_ids() -> (UserId, PostId, Username) {
+        (
+            UserId::from(41),
+            PostId::from(71),
+            compatibility_result("legacyuser".parse(), "parse fixture username"),
+        )
+    }
+
+    fn fixture_passkey_expectations() -> (PasskeyUserHandle, PasskeyCredentialId, PasskeyLabel) {
+        (
+            "0123456789abcdef0123456789abcdef"
+                .parse()
+                .expect("parse fixture passkey handle"),
+            "uZcVDBVS68E_MtAgeQpElJxldF_6cY9sSvbWqx_qRh8wiu42lyRBRmh5yFeD_r9k130dMbFHBHI9RTFgdJQIzQ"
+                .parse()
+                .expect("parse fixture passkey credential identifier"),
+            "Backup corpus Passkey"
+                .parse()
+                .expect("parse fixture passkey label"),
+        )
+    }
+
+    fn fixture_passkey_created_at() -> UtcInstant {
+        "2026-09-12T13:14:15.123456Z"
+            .parse()
+            .expect("parse fixture passkey created time")
+    }
+
+    fn fixture_passkey_last_used_at() -> UtcInstant {
+        "2026-09-12T13:15:16.234567Z"
+            .parse()
+            .expect("parse fixture passkey last-used time")
+    }
+
+    fn assert_passkey_backup_values(serialized: &Value) {
+        assert_eq!(serialized.pointer("/cred/counter"), Some(&Value::from(2)));
+        assert_eq!(
+            serialized.pointer("/cred/backup_eligible"),
+            Some(&Value::Bool(true))
+        );
+        assert_eq!(
+            serialized.pointer("/cred/backup_state"),
+            Some(&Value::Bool(true))
+        );
+    }
+
+    async fn assert_reader_passkey_inventory(
+        factory: &storage::StorageFactory,
+        user_id: UserId,
+        format_version: u32,
+    ) {
+        let (expected_handle, expected_credential_id, expected_label) =
+            fixture_passkey_expectations();
+        let handle = compatibility_result(
+            factory.passkeys().user_handle(user_id).await,
+            "read restored passkey handle",
+        );
+        let credential = compatibility_result(
+            factory
+                .passkeys()
+                .credential_for_user(user_id, &expected_credential_id)
+                .await,
+            "read restored passkey credential",
+        );
+        if format_version == 1 {
+            let handle = compatibility_option(
+                handle,
+                "format-1 restored user receives a durable Passkey handle",
+            );
+            assert_eq!(
+                compatibility_result(
+                    factory.passkeys().user_for_handle(&handle).await,
+                    "resolve format-1 restored Passkey handle",
+                ),
+                Some(user_id),
+                "format-1 restored Passkey handle remains uniquely owned by its user"
+            );
+            assert!(
+                credential.is_none(),
+                "format-1 predates durable Passkey credentials"
+            );
+            return;
+        }
+        assert_eq!(
+            handle,
+            Some(expected_handle),
+            "fixture user must retain its durable Passkey handle"
+        );
+        let credential =
+            compatibility_option(credential, "fixture durable passkey credential exists");
+        assert_eq!(credential.id, expected_credential_id);
+        assert_eq!(credential.user_id, user_id);
+        assert_eq!(credential.label, expected_label);
+        assert_eq!(credential.created_at, fixture_passkey_created_at());
+        assert_eq!(
+            credential.last_used_at,
+            Some(fixture_passkey_last_used_at())
+        );
+        assert_passkey_backup_values(&compatibility_result(
+            serde_json::to_value(&credential.credential),
+            "serialize restored passkey",
+        ));
+    }
+
+    async fn assert_reader_inventory(args: &StorageArgs, format_version: u32) {
         let factory = compatibility_result(
             open_existing_database(&args.db, &StorageRuntimeConfig::default()).await,
             "open restored database",
         );
-        let user_id = UserId::from(41);
-        let post_id = PostId::from(71);
-        let username: Username =
-            compatibility_result("legacyuser".parse(), "parse fixture username");
+        let (user_id, post_id, username) = reader_fixture_ids();
         let user = compatibility_option(
             compatibility_result(
                 factory.users().get_user_by_username(&username).await,
@@ -1170,6 +1273,7 @@ mod reader_tests {
             ),
             "fixture user exists",
         );
+        assert_reader_passkey_inventory(&factory, user_id, format_version).await;
         let post = compatibility_option(
             compatibility_result(
                 factory
@@ -1266,7 +1370,7 @@ mod reader_tests {
                                     ))
                                 )
                             });
-                        assert_reader_inventory(&target.args).await;
+                        assert_reader_inventory(&target.args, entry.format_version).await;
                     }
                     RestoreExpectation::TypedUnsupportedFormat => {
                         let before =
@@ -1352,7 +1456,7 @@ mod reader_tests {
     fn support_state_classifies_retired_entries_as_typed_unsupported_formats() {
         let retired = CorpusEntry {
             fixture: "retired-format".to_owned(),
-            format_version: 2,
+            format_version: 3,
             support: SupportState::Retired,
             digest: "0".repeat(64),
         };
@@ -1419,7 +1523,7 @@ mod writer_tests {
         };
     }
 
-    const V1_TABLES: &[&str] = &[
+    const V2_TABLES: &[&str] = &[
         "audience_members",
         "audiences",
         "channels",
@@ -1429,6 +1533,8 @@ mod writer_tests {
         "instance_identity",
         "invites",
         "media",
+        "passkey_credentials",
+        "passkey_user_handles",
         "password_resets",
         "post_audiences",
         "post_media",
@@ -1489,6 +1595,14 @@ mod writer_tests {
             seeded_source: "SeedRawPost author, named audience membership, and post audience assignment",
         },
         WriterRole {
+            name: "passkey user handle",
+            seeded_source: "migration 0037 assigns each fixture user a durable Passkey handle",
+        },
+        WriterRole {
+            name: "passkey credential",
+            seeded_source: "PasskeyStorage inserts and uses a durable credential with counter and backup state",
+        },
+        WriterRole {
             name: "media bytes",
             seeded_source: "storage/media/avatar.txt = media",
         },
@@ -1510,7 +1624,7 @@ mod writer_tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn current_writer_satisfies_independent_v1_raw_wire_oracle(#[case] backend: Backend) {
+    async fn current_writer_satisfies_independent_v2_raw_wire_oracle(#[case] backend: Backend) {
         for output in CorpusIoMode::ALL {
             let source = InitializedCommandEnv::new(backend).await;
             let ids = populate_backup_fixture(&source.args).await;
@@ -1541,7 +1655,7 @@ mod writer_tests {
             };
 
             assert_writer_version_is_uniquely_supported(&extracted);
-            assert_v1_raw_wire_oracle(&extracted, output, &ids);
+            assert_v2_raw_wire_oracle(&extracted, output, &ids);
         }
     }
 
@@ -1573,12 +1687,12 @@ mod writer_tests {
         );
         assert_eq!(
             version,
-            1,
+            2,
             "{}",
-            format_compatibility_diagnostic("format-1 is the sole current writer oracle")
+            format_compatibility_diagnostic("format-2 is the sole current writer oracle")
         );
     }
-    fn assert_v1_raw_wire_oracle(export: &Path, output: CorpusIoMode, ids: &BackupFixtureIds) {
+    fn assert_v2_raw_wire_oracle(export: &Path, output: CorpusIoMode, ids: &BackupFixtureIds) {
         assert_inventory_is_complete();
         let manifest = read_manifest(export);
         let members = compatibility_option(manifest.as_object(), "manifest must be an object");
@@ -1599,7 +1713,7 @@ mod writer_tests {
         );
         assert_eq!(
             manifest["format_version"],
-            Value::from(1),
+            Value::from(2),
             "{}",
             format_compatibility_diagnostic("writer format_version changed")
         );
@@ -1641,7 +1755,7 @@ mod writer_tests {
         );
         assert_eq!(
             tables,
-            &V1_TABLES
+            &V2_TABLES
                 .iter()
                 .map(|table| Value::from(*table))
                 .collect::<Vec<_>>(),
@@ -1651,7 +1765,7 @@ mod writer_tests {
 
         let paths = regular_file_bytes(export);
         let expected_paths = std::iter::once("manifest.json".to_owned())
-            .chain(V1_TABLES.iter().map(|table| format!("db/{table}.ndjson")))
+            .chain(V2_TABLES.iter().map(|table| format!("db/{table}.ndjson")))
             .chain(std::iter::once("media/avatar.txt".to_owned()))
             .collect::<BTreeSet<_>>();
         assert_eq!(
@@ -1659,6 +1773,16 @@ mod writer_tests {
             expected_paths,
             "{}",
             format_compatibility_diagnostic("export path set changed")
+        );
+        assert!(
+            !paths
+                .keys()
+                .any(|path| path.contains("passkey_registration_ceremonies")
+                    || path.contains("passkey_authentication_ceremonies")),
+            "{}",
+            format_compatibility_diagnostic(
+                "transient Passkey ceremony state must never enter a backup"
+            )
         );
         assert_eq!(
             compatibility_option(paths.get("media/avatar.txt"), "media member is missing"),
@@ -1721,7 +1845,7 @@ mod writer_tests {
     }
 
     fn parse_ndjson_tables(files: &BTreeMap<String, Vec<u8>>) -> BTreeMap<String, Vec<Value>> {
-        V1_TABLES
+        V2_TABLES
             .iter()
             .map(|table| {
                 let path = format!("db/{table}.ndjson");
@@ -1771,14 +1895,10 @@ mod writer_tests {
         )
     }
 
-    fn assert_writer_roles(rows: &BTreeMap<String, Vec<Value>>, ids: &BackupFixtureIds) {
-        let author = ids.author.to_string();
-        let viewer = ids.viewer.to_string();
-        let audience = ids.audience.to_string();
-        let subscription = ids.subscription.to_string();
+    fn assert_writer_user_roles(rows: &BTreeMap<String, Vec<Value>>, author: &str, viewer: &str) {
         assert!(
             table_rows(rows, "users").iter().any(|row| {
-                row_id_is(row, "user_id", &author)
+                row_id_is(row, "user_id", author)
                     && row["username"] == "backupuser"
                     && row["display_name"] == "Backup User"
                     && row["is_operator"] == true
@@ -1787,16 +1907,64 @@ mod writer_tests {
         );
         assert!(
             table_rows(rows, "users").iter().any(|row| {
-                row_id_is(row, "user_id", &viewer)
+                row_id_is(row, "user_id", viewer)
                     && row["username"] == "viewer"
                     && row["display_name"] == "Viewer"
                     && row["is_operator"] == false
             }),
             "backup format compatibility: viewer seed must emit its exact boolean and text values"
         );
+    }
+
+    fn assert_writer_passkey_roles(
+        rows: &BTreeMap<String, Vec<Value>>,
+        ids: &BackupFixtureIds,
+        author: &str,
+    ) {
+        assert!(
+            table_rows(rows, "passkey_user_handles").iter().any(|row| {
+                row_id_is(row, "user_id", author)
+                    && row["user_handle"] == ids.passkey_user_handle.as_ref()
+                    && row["user_handle"].as_str().is_some_and(|handle| {
+                        handle.len() == 32
+                            && handle
+                                .bytes()
+                                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+                    })
+            }),
+            "backup format compatibility: author must retain its durable Passkey handle"
+        );
+        assert!(
+            table_rows(rows, "passkey_credentials").iter().any(|row| {
+                row_id_is(
+                    row,
+                    "credential_id",
+                    ids.passkey_credential_id.expose_to_browser(),
+                ) && row_id_is(row, "user_id", author)
+                    && row["label"] == ids.passkey_label.as_ref()
+                    && row["created_at"].as_str().is_some_and(|timestamp| {
+                        timestamp
+                            .parse::<common::time::UtcInstant>()
+                            .is_ok_and(|actual| actual == ids.passkey_created_at)
+                    })
+                    && row["last_used_at"].as_str().is_some_and(|timestamp| {
+                        timestamp
+                            .parse::<common::time::UtcInstant>()
+                            .is_ok_and(|actual| actual == ids.passkey_last_used_at)
+                    })
+                    && row["credential"].as_str().is_some_and(|serialized| {
+                        serde_json::from_str::<Value>(serialized)
+                            .is_ok_and(|actual| actual == ids.passkey_serialization)
+                    })
+            }),
+            "backup format compatibility: durable Passkey credential must retain its identity, owner, label, serialized counter and backup state, and timestamps"
+        );
+    }
+
+    fn assert_writer_media_and_config_roles(rows: &BTreeMap<String, Vec<Value>>, author: &str) {
         assert!(
             table_rows(rows, "media").iter().any(|row| {
-                row_id_is(row, "user_id", &author)
+                row_id_is(row, "user_id", author)
                     && row["sha256"]
                         == "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
                     && row["filename"] == "my%20photo.jpg"
@@ -1809,23 +1977,31 @@ mod writer_tests {
         );
         assert!(
             table_rows(rows, "user_config").iter().any(|row| {
-                row_id_is(row, "user_id", &author)
+                row_id_is(row, "user_id", author)
                     && row["key"] == "posts.default_format"
                     && row["value"] == "org"
             }),
             "backup format compatibility: user-config seed must emit its exact text value"
         );
+    }
+
+    fn assert_writer_relationship_roles(
+        rows: &BTreeMap<String, Vec<Value>>,
+        ids: &BackupFixtureIds,
+        author: &str,
+        audience: &str,
+        subscription: &str,
+    ) {
         assert!(
             table_rows(rows, "posts").iter().any(|row| {
                 row_id_is(row, "post_id", &ids.public_post.to_string())
-                    && row_id_is(row, "user_id", &author)
+                    && row_id_is(row, "user_id", author)
             }),
             "backup format compatibility: public post must retain its author relationship"
         );
         assert!(
             table_rows(rows, "audiences").iter().any(|row| {
-                row_id_is(row, "audience_id", &audience)
-                    && row_id_is(row, "author_user_id", &author)
+                row_id_is(row, "audience_id", audience) && row_id_is(row, "author_user_id", author)
             }),
             "{}",
             format_compatibility_diagnostic(
@@ -1834,9 +2010,9 @@ mod writer_tests {
         );
         assert!(
             table_rows(rows, "audience_members").iter().any(|row| {
-                row_id_is(row, "audience_id", &audience)
-                    && row_id_is(row, "author_user_id", &author)
-                    && row_id_is(row, "subscription_id", &subscription)
+                row_id_is(row, "audience_id", audience)
+                    && row_id_is(row, "author_user_id", author)
+                    && row_id_is(row, "subscription_id", subscription)
             }),
             "{}",
             format_compatibility_diagnostic(
@@ -1846,13 +2022,25 @@ mod writer_tests {
         assert!(
             table_rows(rows, "post_audiences").iter().any(|row| {
                 row_id_is(row, "post_id", &ids.named_post.to_string())
-                    && row_id_is(row, "audience_id", &audience)
+                    && row_id_is(row, "audience_id", audience)
             }),
             "{}",
             format_compatibility_diagnostic(
                 "named post must retain its exact post and audience IDs"
             )
         );
+    }
+
+    fn assert_writer_roles(rows: &BTreeMap<String, Vec<Value>>, ids: &BackupFixtureIds) {
+        let author = ids.author.to_string();
+        let viewer = ids.viewer.to_string();
+        let audience = ids.audience.to_string();
+        let subscription = ids.subscription.to_string();
+
+        assert_writer_user_roles(rows, &author, &viewer);
+        assert_writer_passkey_roles(rows, ids, &author);
+        assert_writer_media_and_config_roles(rows, &author);
+        assert_writer_relationship_roles(rows, ids, &author, &audience, &subscription);
     }
 
     fn assert_inventory_is_complete() {
@@ -1866,6 +2054,8 @@ mod writer_tests {
                 "integer",
                 "media bytes",
                 "null",
+                "passkey credential",
+                "passkey user handle",
                 "relationships",
                 "text",
             ]),

@@ -25,6 +25,102 @@ use host::smtp_password::SmtpPassword;
 use sqlx::{Database, Encode, Executor, Pool, Result, Type};
 use thiserror::Error;
 
+/// Refuses a resulting absent or different canonical RP host while Passkeys
+/// exist. Scheme and port deliberately do not contribute to this comparison.
+#[derive(Debug, Error)]
+#[error("site.base_url hostname is locked while Passkeys exist")]
+pub struct PasskeyRpHostLocked;
+
+/// A typed outcome from a `site.base_url` mutation guarded by durable Passkeys.
+#[derive(Debug, Error)]
+pub enum BaseUrlMutationError {
+    /// Durable credentials prohibit the requested relying-party host change.
+    #[error(transparent)]
+    RpHostLocked(#[from] PasskeyRpHostLocked),
+    /// A parsed base URL is inconsistent with its validation contract.
+    #[error("site base URL validation error")]
+    Validation(#[source] Box<dyn std::error::Error + Send + Sync>),
+    /// The guarded operation's database failure.
+    #[error("site base URL database error")]
+    Database(#[from] sqlx::Error),
+}
+
+// cov:ignore-start: InvalidUrl construction is covered at the BaseUrl boundary; this conversion only preserves its typed validation classification.
+impl From<common::tagged_url::InvalidUrl> for BaseUrlMutationError {
+    fn from(error: common::tagged_url::InvalidUrl) -> Self {
+        Self::Validation(Box::new(error))
+    }
+}
+// cov:ignore-stop
+
+// cov:ignore-start: BaseUrl validates the serialized URL at construction, so reparsing it for its host cannot fail through this typed boundary.
+impl From<url::ParseError> for BaseUrlMutationError {
+    fn from(error: url::ParseError) -> Self {
+        Self::Validation(Box::new(error))
+    }
+}
+// cov:ignore-stop
+
+/// Changes `site.base_url` only when the resulting relying-party hostname stays
+/// compatible with the durable Passkey set.
+///
+/// # Errors
+///
+/// Returns an error when the RP-host lock, transaction-scoped configuration
+/// read, credential check, URL parsing, or configuration update fails, or when
+/// durable Passkeys make the requested hostname invalid.
+pub async fn set_base_url_with_passkey_guard<S>(
+    transaction: &mut WriteTransaction,
+    site_config: &S,
+    passkeys: &dyn crate::PasskeyStorage,
+    base_url: Option<BaseUrl>,
+) -> std::result::Result<(), BaseUrlMutationError>
+where
+    S: SiteConfigStorage + ?Sized,
+{
+    passkeys.lock_rp_host(transaction).await?;
+    let current = site_config.get_base_url_in_transaction(transaction).await?;
+    if passkeys.has_credentials(transaction).await? {
+        let same_host = match current.as_ref().zip(base_url.as_ref()) {
+            Some((current, requested)) => {
+                let current = url::Url::parse(current.as_ref())?;
+                let requested = url::Url::parse(requested.as_ref())?;
+                current.host_str() == requested.host_str()
+            }
+            None => false,
+        };
+        if !same_host {
+            return Err(PasskeyRpHostLocked.into());
+        }
+    }
+    site_config.set_base_url(transaction, base_url).await?;
+    Ok(())
+}
+
+/// Deletes the physical `site.base_url` row only when that resulting absent RP
+/// host remains compatible with the durable Passkey set.
+///
+/// # Errors
+///
+/// Returns an error when the RP-host lock, transaction-scoped configuration
+/// read, credential check, or deletion fails, or when durable Passkeys exist.
+pub async fn clear_base_url_with_passkey_guard<S>(
+    transaction: &mut WriteTransaction,
+    site_config: &S,
+    passkeys: &dyn crate::PasskeyStorage,
+) -> std::result::Result<bool, BaseUrlMutationError>
+where
+    S: SiteConfigStorage + ?Sized,
+{
+    passkeys.lock_rp_host(transaction).await?;
+    let _current = site_config.get_base_url_in_transaction(transaction).await?;
+    if passkeys.has_credentials(transaction).await? {
+        return Err(PasskeyRpHostLocked.into());
+    }
+    Ok(site_config
+        .delete(transaction, SiteConfigKey::SiteBaseUrl)
+        .await?)
+}
 #[cfg(test)]
 use std::sync::Arc;
 #[cfg(test)]
@@ -39,6 +135,14 @@ use tokio::sync::{Notify, RwLock};
 pub trait SiteConfigStorage: Send + Sync {
     /// Returns the raw stored text for a specific configuration key.
     async fn get_raw(&self, key: SiteConfigKey) -> Result<Option<String>>;
+
+    /// Reads `site.base_url` through the caller-owned transaction. Policy
+    /// decisions that must share a lock with configuration writes use this
+    /// rather than the pool-backed identity accessor.
+    async fn get_base_url_in_transaction(
+        &self,
+        transaction: &mut WriteTransaction,
+    ) -> Result<Option<BaseUrl>>;
 
     /// Sets or updates the value for a configuration key within the caller-owned write scope.
     async fn set(
@@ -305,18 +409,23 @@ pub trait SiteConfigStorage: Send + Sync {
         };
         Ok(SiteIdentity { title, base_url })
     }
-    /// Stores the site identity (title and base URL).
-    /// For `base_url`, an empty string is stored when `None` is provided; a set
-    /// value is stored in its canonical form (the `BaseUrl` normalized it).
+    /// Stores the site title and base URL through the Passkey RP-host gate.
     async fn set_identity(
         &self,
         transaction: &mut WriteTransaction,
+        passkeys: std::sync::Arc<dyn crate::PasskeyStorage>,
         config: &SiteIdentity,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), BaseUrlMutationError> {
+        set_base_url_with_passkey_guard(
+            transaction,
+            self,
+            passkeys.as_ref(),
+            config.base_url.clone(),
+        )
+        .await?;
         self.set(transaction, SiteConfigKey::SiteTitle, &config.title)
             .await?;
-        self.set_base_url(transaction, config.base_url.clone())
-            .await
+        Ok(())
     }
 
     async fn set_backup_config(
@@ -576,6 +685,22 @@ where
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.map(|(value,)| value.into_inner()))
+    }
+
+    async fn get_base_url_in_transaction(
+        &self,
+        transaction: &mut WriteTransaction,
+    ) -> Result<Option<BaseUrl>> {
+        let connection = DB::write_connection(transaction)?;
+        let raw = sqlx::query_as::<_, (StoredSiteConfigValue,)>(
+            "SELECT value FROM site_config WHERE key = $1",
+        )
+        .bind_storage(SiteConfigKey::SiteBaseUrl)
+        .fetch_optional(&mut *connection)
+        .await?
+        .map(|(value,)| value.into_inner())
+        .and_then(text::non_empty_owned);
+        Ok(raw.and_then(|value| value.parse::<BaseUrl>().ok()))
     }
 
     async fn get_feeds_config(&self) -> Result<FeedsConfig> {
@@ -882,8 +1007,12 @@ mod tests {
     use crate::publisher::FeedWindowMutation;
     use std::sync::Arc;
 
-    use super::{FeedsConfigReadGate, SMTP_CONFIG_KEYS, SiteConfigKey, SmtpConfigUpdateError};
-    use crate::test_support::{Backend, backends, backends_matrix, confirmed};
+    use super::{
+        FeedsConfigReadGate, SMTP_CONFIG_KEYS, SiteConfigKey, SmtpConfigUpdateError,
+        clear_base_url_with_passkey_guard, set_base_url_with_passkey_guard,
+    };
+    use crate::sql::QueryStorageExt;
+    use crate::test_support::{Backend, SeedUser, backends, backends_matrix, confirmed};
     use common::backup::{BackupConfig, BackupMode, RetentionCount};
     use common::media::{MaxFileSize, UserQuota};
     use common::registration::RegistrationPolicy;
@@ -1998,19 +2127,220 @@ mod tests {
             base_url: Some(parse_url("https://test.example.com/")),
         };
         let config_storage = std::sync::Arc::clone(&env.site_config());
+        let passkeys = env.passkeys();
         let expected = original.clone();
         confirmed(
             env.write_scope()
                 .run(move |transaction| {
-                    Box::pin(
-                        async move { config_storage.set_identity(transaction, &original).await },
-                    )
+                    Box::pin(async move {
+                        config_storage
+                            .set_identity(transaction, passkeys, &original)
+                            .await
+                    })
                 })
                 .await
                 .unwrap(),
         );
+
         let retrieved = storage.get_identity().await.expect("get_identity");
         assert_eq!(retrieved, expected);
+    }
+    #[apply(backends)]
+    #[tokio::test]
+    async fn base_url_policy_read_uses_the_owned_transaction(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let site_config = env.site_config();
+        let expected = parse_url("https://locked.example.test/");
+        let read = confirmed(
+            env.write_scope()
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        site_config
+                            .set_base_url(transaction, Some(expected.clone()))
+                            .await?;
+                        site_config.get_base_url_in_transaction(transaction).await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
+        assert_eq!(read, Some(parse_url("https://locked.example.test/")));
+    }
+    #[apply(backends)]
+    #[tokio::test]
+    async fn base_url_guard_preserves_rp_host_but_rejects_replacement_after_enrollment(
+        #[case] backend: Backend,
+    ) {
+        let env = backend
+            .setup()
+            .base_url(Some(parse_url("https://locked.example.test/")))
+            .await;
+        let user_id = SeedUser::new()
+            .seed(Arc::clone(&env.users()), env.write_scope())
+            .await
+            .user_id;
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query(
+                "INSERT INTO passkey_credentials \
+                 (credential_id, user_id, label, credential, created_at) \
+                 VALUES ($1, $2, 'Laptop', '{}', $3)",
+            )
+            .bind("opaque-credential-for-host-guard")
+            .bind_storage(user_id)
+            .bind_storage(
+                "2026-09-13T12:00:00Z"
+                    .parse::<common::time::UtcInstant>()
+                    .unwrap(),
+            )
+            .execute(pool)
+            .await
+            .unwrap();
+        });
+
+        let site_config = env.site_config();
+        let passkeys = env.passkeys();
+        let host_preserving = parse_url("https://locked.example.test:8443/");
+        confirmed(
+            env.write_scope()
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        set_base_url_with_passkey_guard(
+                            transaction,
+                            site_config.as_ref(),
+                            passkeys.as_ref(),
+                            Some(host_preserving),
+                        )
+                        .await
+                    })
+                })
+                .await
+                .expect("scheme or port change remains compatible"),
+        );
+        let site_config = env.site_config();
+        let passkeys = env.passkeys();
+        confirmed(
+            env.write_scope()
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        set_base_url_with_passkey_guard(
+                            transaction,
+                            site_config.as_ref(),
+                            passkeys.as_ref(),
+                            Some(parse_url("http://locked.example.test:8080/")),
+                        )
+                        .await
+                    })
+                })
+                .await
+                .expect("HTTPS to HTTP remains compatible when the RP host is unchanged"),
+        );
+
+        let site_config = env.site_config();
+        let passkeys = env.passkeys();
+        let error = env
+            .write_scope()
+            .run(move |transaction| {
+                Box::pin(async move {
+                    set_base_url_with_passkey_guard(
+                        transaction,
+                        site_config.as_ref(),
+                        passkeys.as_ref(),
+                        Some(parse_url("https://replacement.example.test/")),
+                    )
+                    .await
+                })
+            })
+            .await
+            .expect_err("a durable credential fixes the RP host");
+        assert!(
+            error.to_string().contains("hostname is locked"),
+            "unexpected host-guard error: {error}"
+        );
+        let site_config = env.site_config();
+        let passkeys = env.passkeys();
+        assert!(
+            env.write_scope()
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        set_base_url_with_passkey_guard(
+                            transaction,
+                            site_config.as_ref(),
+                            passkeys.as_ref(),
+                            None,
+                        )
+                        .await
+                    })
+                })
+                .await
+                .is_err(),
+            "unsetting the base URL also changes the RP host and is rejected"
+        );
+        assert_eq!(
+            env.site_config().get_identity().await.unwrap().base_url,
+            Some(parse_url("http://locked.example.test:8080/"))
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn guarded_base_url_clear_deletes_present_row_and_reports_absence(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().base_url(None).await;
+
+        let site_config = env.site_config();
+        let passkeys = env.passkeys();
+        let absent = confirmed(
+            env.write_scope()
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        clear_base_url_with_passkey_guard(
+                            transaction,
+                            site_config.as_ref(),
+                            passkeys.as_ref(),
+                        )
+                        .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
+        assert!(!absent);
+
+        set_config(
+            Arc::clone(&env.publisher()),
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::SiteBaseUrl,
+            "https://clear.example.test/",
+        )
+        .await
+        .unwrap();
+        let site_config = env.site_config();
+        let passkeys = env.passkeys();
+        let removed = confirmed(
+            env.write_scope()
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        clear_base_url_with_passkey_guard(
+                            transaction,
+                            site_config.as_ref(),
+                            passkeys.as_ref(),
+                        )
+                        .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
+        assert!(removed);
+        assert_eq!(
+            env.site_config()
+                .get_raw(SiteConfigKey::SiteBaseUrl)
+                .await
+                .unwrap(),
+            None
+        );
     }
 
     #[apply(backends)]

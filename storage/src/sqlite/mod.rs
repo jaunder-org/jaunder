@@ -4,6 +4,9 @@ pub use site_config::SqliteSiteConfigStorage;
 mod users;
 pub use users::SqliteUserStorage;
 
+mod passkeys;
+pub use passkeys::SqlitePasskeyStorage;
+
 mod sessions;
 pub use sessions::SqliteSessionStorage;
 

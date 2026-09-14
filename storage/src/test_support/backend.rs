@@ -8,10 +8,10 @@ use crate::posts::tags::{INSERT_POST_TAG, UPSERT_TAG_RETURNING_ID};
 use crate::sql::QueryStorageExt;
 use crate::{
     AudienceStorage, DbConnectOptions, EmailVerificationStorage, FeedCacheStorage,
-    FeedEventStorage, InviteStorage, MediaStorage, PasswordResetStorage, PostStorage,
-    PublisherStorage, SessionStorage, SiteConfigStorage, StorageFactory, StorageRuntimeConfig,
-    SubscriptionStorage, TaggingError, ThemeStorage, UserConfigStorage, UserStorage, WriteScope,
-    WriteScopeError,
+    FeedEventStorage, InviteStorage, MediaStorage, PasskeyStorage, PasswordResetStorage,
+    PostStorage, PublisherStorage, SessionStorage, SiteConfigStorage, StorageFactory,
+    StorageRuntimeConfig, SubscriptionStorage, TaggingError, ThemeStorage, UserConfigStorage,
+    UserStorage, WriteScope, WriteScopeError,
 };
 
 use common::MutationOutcome;
@@ -33,6 +33,16 @@ use std::pin::Pin;
 use std::sync::Arc;
 use tempfile::TempDir;
 
+/// Returns the pinned valid Passkey adapter fixture shared by storage, server, and web tests.
+///
+/// # Panics
+///
+/// Panics if the pinned adapter fixture no longer deserializes.
+#[cfg(any(test, feature = "test-support"))]
+#[must_use]
+pub fn passkey_credential_fixture() -> host::passkey::Credential {
+    crate::passkeys::credential_fixture_for_test().expect("pinned passkey fixture decodes")
+}
 #[cfg(test)]
 /// Physical post-revision row exposed only to storage tests that assert archival state.
 pub(crate) struct RawPostRevision {
@@ -88,6 +98,16 @@ pub fn mock_write_scope() -> WriteScope {
 #[must_use]
 pub fn mock_write_scope_with_commit_acknowledgement_loss() -> WriteScope {
     WriteScope::mock().with_commit_acknowledgement_loss_after_commit_for_test()
+}
+
+/// Clones a real test backend scope while injecting a lost commit acknowledgement.
+///
+/// This preserves the backend transaction so HTTP integration tests can observe durable writes
+/// whose acknowledgement was lost.
+#[cfg(any(test, feature = "test-utils"))]
+#[must_use]
+pub fn write_scope_with_commit_acknowledgement_loss(scope: &WriteScope) -> WriteScope {
+    scope.with_commit_acknowledgement_loss_after_commit_for_test()
 }
 
 /// Mints a SQLite-backed write scope for a test fixture that owns its pool.
@@ -463,6 +483,12 @@ impl TestEnv {
     #[must_use]
     pub fn users(&self) -> Arc<dyn UserStorage> {
         self.factory.users()
+    }
+
+    /// Mints Passkey storage for this test's backend.
+    #[must_use]
+    pub fn passkeys(&self) -> Arc<dyn PasskeyStorage> {
+        self.factory.passkeys()
     }
 
     /// Mints session storage for this test's backend.

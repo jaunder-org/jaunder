@@ -258,7 +258,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            36
+            37
         );
         assert_eq!(
             db.pool
@@ -386,7 +386,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            36,
+            37,
         );
     }
 
@@ -858,7 +858,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            36
+            37
         );
         assert_eq!(
             db.pool
@@ -1006,6 +1006,49 @@ mod tests {
                 .await
                 .unwrap(),
             1,
+        );
+    }
+    #[apply(backends)]
+    #[tokio::test]
+    async fn migration_0037_backfills_one_valid_unique_handle_for_existing_users(
+        #[case] backend: Backend,
+    ) {
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(36).await.unwrap();
+        let insert = match backend {
+            Backend::Sqlite => {
+                "INSERT INTO users (user_id, username, password_hash, created_at) VALUES \
+                 (901, 'passkey-migration-a', 'hash', CURRENT_TIMESTAMP), \
+                 (902, 'passkey-migration-b', 'hash', CURRENT_TIMESTAMP)"
+            }
+            Backend::Postgres => {
+                "INSERT INTO users (user_id, username, password_hash, created_at) \
+                 OVERRIDING SYSTEM VALUE VALUES \
+                 (901, 'passkey-migration-a', 'hash', CURRENT_TIMESTAMP), \
+                 (902, 'passkey-migration-b', 'hash', CURRENT_TIMESTAMP)"
+            }
+        };
+        db.pool.execute(insert).await.unwrap();
+        db.migrate_current().await.unwrap();
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM passkey_user_handles \
+                     WHERE user_id IN (901, 902) AND length(user_handle) = 32",
+                )
+                .await
+                .unwrap(),
+            2,
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(DISTINCT user_handle) FROM passkey_user_handles \
+                     WHERE user_id IN (901, 902)",
+                )
+                .await
+                .unwrap(),
+            2,
         );
     }
 }

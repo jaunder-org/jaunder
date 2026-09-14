@@ -47,6 +47,11 @@ pub mod reactive;
 #[cfg(all(target_arch = "wasm32", feature = "csr"))]
 pub mod upload;
 
+/// Raw browser `WebAuthn` ceremony bridge. It accepts and returns the protocol
+/// JSON owned by the server adapter without importing domain types.
+#[cfg(target_arch = "wasm32")]
+pub mod webauthn;
+
 /// Diagnostic-only browser export for raw LLVM profiles and their module
 /// signature. The target-independent capture contract lives in `common`.
 #[cfg(all(target_arch = "wasm32", feature = "diagnostic-coverage"))]

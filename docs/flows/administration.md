@@ -44,5 +44,15 @@ URL, and the independently persisted Media Upload Capability; `/admin/backups`
 owns storage destination, schedule, retention, and backup mode; `/admin/smtp`
 owns persisted outbound relay and paired credential intent; and `/admin/websub`
 owns the publisher hub plus regeneration and publication dead-letter recovery.
-Runtime mailer reload, execution of backup jobs, and publisher delivery live
-outside this CSR flow.
+
+For Passkeys, the canonical base URL is a credential-binding WebAuthn origin:
+its exact origin is checked by the browser and its hostname is the RP ID.
+Operators must use HTTPS, apart from browser-trustworthy `http` localhost-domain
+development; IP literals are not valid RP IDs. A scheme and port are part of the
+origin, and a nondefault HTTPS port is valid. Once any credential exists, the
+hostname cannot be changed or unset through the site form, aggregate
+configuration, or CLI; the guard deliberately permits a scheme or port change
+because it compares hostname only. To move to another hostname, delete every
+Passkey first. Password login and email reset remain the recovery route, and a
+password reset does not delete Passkeys. Runtime mailer reload, execution of
+backup jobs, and publisher delivery live outside this CSR flow.

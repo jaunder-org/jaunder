@@ -42,6 +42,7 @@ struct ServeStorage {
     site_config: Arc<dyn SiteConfigStorage>,
     users: Arc<dyn UserStorage>,
     sessions: Arc<dyn SessionStorage>,
+    passkeys: Arc<dyn storage::PasskeyStorage>,
     invites: Arc<dyn InviteStorage>,
     email_verifications: Arc<dyn EmailVerificationStorage>,
     password_resets: Arc<dyn PasswordResetStorage>,
@@ -63,6 +64,7 @@ impl ServeStorage {
             site_config: factory.site_config(),
             users: factory.users(),
             sessions: factory.sessions(),
+            passkeys: factory.passkeys(),
             invites: factory.invites(),
             email_verifications: factory.email_verifications(),
             password_resets: factory.password_resets(),
@@ -521,6 +523,8 @@ fn database_maintenance(
     email_verifications: Arc<dyn storage::EmailVerificationStorage>,
     password_resets: Arc<dyn storage::PasswordResetStorage>,
     feed_events: Arc<dyn FeedEventStorage>,
+    passkeys: Arc<dyn storage::PasskeyStorage>,
+    write_scope: WriteScope,
 ) -> DatabaseMaintenance {
     DatabaseMaintenance::new(
         posts,
@@ -529,6 +533,7 @@ fn database_maintenance(
         password_resets,
         feed_events,
     )
+    .with_passkeys(passkeys, write_scope)
 }
 
 fn feed_worker(
@@ -641,6 +646,7 @@ fn compose_server_router(
             Arc::clone(&dependencies.media),
             Arc::clone(&dependencies.user_config),
             Arc::clone(&dependencies.site_config),
+            Arc::clone(&dependencies.passkeys),
         ),
         crate::context::theme_context_provider(Arc::clone(&dependencies.themes)),
         crate::context::post_media_ownership_context_provider(ownership.clone()),
@@ -738,6 +744,8 @@ fn prepare_background_worker_setup_from_dependencies(
         Arc::clone(&dependencies.email_verifications),
         Arc::clone(&dependencies.password_resets),
         Arc::clone(&dependencies.feed_events),
+        Arc::clone(&dependencies.passkeys),
+        dependencies.write_scope.clone(),
     );
     let websub_capture = capture.map(|paths| paths.websub.clone());
     let feed_interval = feed_worker_interval(websub_capture.is_some());

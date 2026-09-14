@@ -12,9 +12,9 @@ use host::theme_operations::ThemeOperationCoordinator;
 use leptos::prelude::provide_context;
 use storage::{
     AudienceStorage, EmailVerificationStorage, FeedEventStorage, InviteStorage, MediaContentLocks,
-    MediaManager, MediaStorage, PasswordResetStorage, PostMediaOwnership, PostStorage,
-    SessionStorage, SiteConfigStorage, SubscriptionStorage, ThemeAssetManager, ThemeManager,
-    ThemeStorage, UserConfigStorage, UserStorage, WriteScope,
+    MediaManager, MediaStorage, PasskeyStorage, PasswordResetStorage, PostMediaOwnership,
+    PostStorage, SessionStorage, SiteConfigStorage, SubscriptionStorage, ThemeAssetManager,
+    ThemeManager, ThemeStorage, UserConfigStorage, UserStorage, WriteScope,
 };
 
 /// Places the shared media filesystem coordinator in the current Leptos
@@ -88,11 +88,13 @@ pub fn media_configuration_context_provider(
     media: Arc<dyn MediaStorage>,
     user_config: Arc<dyn UserConfigStorage>,
     site_config: Arc<dyn SiteConfigStorage>,
+    passkeys: Arc<dyn PasskeyStorage>,
 ) -> impl Fn() + Clone + Send + Sync + 'static {
     move || {
         provide_context::<Arc<dyn MediaStorage>>(media.clone());
         provide_context::<Arc<dyn UserConfigStorage>>(user_config.clone());
         provide_context::<Arc<dyn SiteConfigStorage>>(site_config.clone());
+        provide_context::<Arc<dyn PasskeyStorage>>(passkeys.clone());
     }
 }
 
@@ -222,8 +224,12 @@ mod tests {
             env.audiences(),
             env.feed_events(),
         );
-        let media_configuration =
-            media_configuration_context_provider(env.media(), env.user_config(), env.site_config());
+        let media_configuration = media_configuration_context_provider(
+            env.media(),
+            env.user_config(),
+            env.site_config(),
+            env.passkeys(),
+        );
         let themes = theme_context_provider(env.themes());
         let owner = Owner::new();
 
@@ -244,6 +250,7 @@ mod tests {
             expect_context::<Arc<dyn AudienceStorage>>();
             expect_context::<Arc<dyn FeedEventStorage>>();
             expect_context::<Arc<dyn MediaStorage>>();
+            expect_context::<Arc<dyn PasskeyStorage>>();
             expect_context::<Arc<dyn UserConfigStorage>>();
             expect_context::<Arc<dyn SiteConfigStorage>>();
             expect_context::<Arc<dyn ThemeStorage>>();

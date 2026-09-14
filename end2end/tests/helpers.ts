@@ -499,28 +499,27 @@ export async function expectFlash(
 /**
  * Follow a token-bearing link from a captured email on the live test server.
  *
- * Asserts the emitted link is **absolute** (composed from the seeded
- * `site.base_url` `https://example.com`) — a relative `/…?token=` is unusable in
- * a real mail client, so this catches a relative-link regression — then re-bases
- * the link's own path onto the running server (the seeded base URL is
- * deliberately not the test server's address) and navigates via `goto`.
- * `pathPrefix` is the expected URL path, e.g. `"/reset-password"`.
+ * Asserts the emitted link is absolute and uses the expected configured site
+ * origin. The default is the suite's seeded `site.base_url`; tests that
+ * deliberately configure the live server origin pass that origin explicitly.
+ * The link's path is then re-based onto the running server and opened via
+ * `goto`.
  */
 export async function followEmailLink(
   page: Page,
   email: CapturedEmail,
   pathPrefix: string,
+  expectedBaseUrl = "https://example.com",
 ): Promise<void> {
   await withTimedAction(page, "flow.follow_email_link", async () => {
-    const link = extractLink(email);
-    expect(link).toMatch(
-      new RegExp(`^https://example\\.com${pathPrefix}\\?token=`),
-    );
-    const { pathname, search } = new URL(link);
+    const link = new URL(extractLink(email));
+    expect(link.origin).toBe(new URL(expectedBaseUrl).origin);
+    expect(link.pathname).toBe(pathPrefix);
+    expect(link.searchParams.has("token")).toBe(true);
     allowSecondBoot(
       page,
       "following the emailed reset link is an arrival from outside the app, exactly as a real recipient does",
     );
-    await goto(page, `${pathname}${search}`);
+    await goto(page, `${link.pathname}${link.search}`);
   });
 }

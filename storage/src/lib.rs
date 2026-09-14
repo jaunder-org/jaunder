@@ -28,6 +28,7 @@ mod media_manager;
 mod media_ownership;
 #[cfg(test)]
 mod migrations;
+mod passkeys;
 mod password;
 mod post_service;
 mod postgres;
@@ -85,15 +86,16 @@ pub use media_ownership::{
     ForeignEvidenceSink, LocalMediaSink, MediaReferenceOwnershipResolver, PostMediaOwnership,
     ProvenLocalMediaRefs, resolve_local_media_references, resolve_media_reference_ownership,
 };
+pub use passkeys::*;
 pub use password::*;
 pub use post_service::*;
 pub use postgres::{
     PgBootstrapError, PostgresAudienceStorage, PostgresEmailVerificationStorage,
     PostgresFeedCacheStorage, PostgresFeedEventStorage, PostgresInviteStorage,
-    PostgresMediaStorage, PostgresPasswordResetStorage, PostgresPostStorage,
-    PostgresSessionStorage, PostgresSiteConfigStorage, PostgresSubscriptionStorage,
-    PostgresUserConfigStorage, PostgresUserStorage, create_postgres_database_and_role,
-    resolved_postgres_options,
+    PostgresMediaStorage, PostgresPasskeyStorage, PostgresPasswordResetStorage,
+    PostgresPostStorage, PostgresSessionStorage, PostgresSiteConfigStorage,
+    PostgresSubscriptionStorage, PostgresUserConfigStorage, PostgresUserStorage,
+    create_postgres_database_and_role, resolved_postgres_options,
 };
 pub use posts::*;
 pub use public_theme::*;
@@ -103,9 +105,9 @@ pub use site_config::*;
 pub use smtp::*;
 pub use sqlite::{
     SqliteAudienceStorage, SqliteEmailVerificationStorage, SqliteFeedCacheStorage,
-    SqliteFeedEventStorage, SqliteInviteStorage, SqliteMediaStorage, SqlitePasswordResetStorage,
-    SqlitePostStorage, SqliteSessionStorage, SqliteSiteConfigStorage, SqliteSubscriptionStorage,
-    SqliteUserConfigStorage, SqliteUserStorage,
+    SqliteFeedEventStorage, SqliteInviteStorage, SqliteMediaStorage, SqlitePasskeyStorage,
+    SqlitePasswordResetStorage, SqlitePostStorage, SqliteSessionStorage, SqliteSiteConfigStorage,
+    SqliteSubscriptionStorage, SqliteUserConfigStorage, SqliteUserStorage,
 };
 pub use storage_factory::*;
 pub use subscriptions::*;

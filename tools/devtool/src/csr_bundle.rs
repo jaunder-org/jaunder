@@ -20,14 +20,14 @@ const IN_JS: &str = "csr.js";
 const IN_WASM: &str = "csr_bg.wasm";
 const EXPERIMENT_SHAPE_SECTION_NAME: &str = "jaunder.shape";
 
-/// The `wasm-opt` optimisation level, pinned by measurement after the custom
-/// Theme Package management surface landed (#836, #1052, #1272, #1341):
+/// The `wasm-opt` optimisation level, pinned by measurement after Passkey
+/// authentication landed (#836, #1052, #1272, #1341, #1455):
 ///
 /// | level        | raw bytes |
 /// | ------------ | --------- |
-/// | `-O2`        | 3 522 092 |
-/// | `-Os`        | 3 474 240 |
-/// | **`-Oz`**    | **3 335 708** |
+/// | `-O2`        | 3 724 527 |
+/// | `-Os`        | 3 672 807 |
+/// | **`-Oz`**    | **3 516 938** |
 ///
 /// Size is the objective, not speed: firefox spends ~88 ms compiling each MiB of
 /// this file (#818), while the Rust-side mount path it produces measures
