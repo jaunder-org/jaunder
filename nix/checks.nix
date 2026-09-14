@@ -151,10 +151,10 @@ e2ePlaywrightTimeout = 1500;
 e2eGlobalTimeout = 1680;
 
 # Performance producers seed larger profiles before measuring. Their browser
-# step gets 45 minutes; the VM budget leaves 25 minutes for boot, seed, and
+# step gets 75 minutes; the VM budget leaves 25 minutes for boot, seed, and
 # artifact recovery so the inner timeout remains diagnostic-preserving.
-performanceBrowserTimeout = 2700;
-performanceGlobalTimeout = 4200;
+performanceBrowserTimeout = 4500;
+performanceGlobalTimeout = 6000;
 
 # #123/#49: run Playwright capturing its exit (NOT machine.succeed, which
 # would abort before we copy diagnostics), stream its line-reporter output

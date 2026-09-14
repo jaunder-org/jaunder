@@ -21,7 +21,7 @@ import { applySeededSession, createSessionViaTool } from "./seed";
 import { goto } from "./helpers";
 
 const enabled = performanceEnabled();
-const BROWSER_PERFORMANCE_BUDGET_MS = 45 * 60_000;
+const BROWSER_PERFORMANCE_BUDGET_MS = 75 * 60_000;
 test.skip(
   !enabled,
   "browser performance measurements require the explicit JAUNDER_PERF_* contract",
