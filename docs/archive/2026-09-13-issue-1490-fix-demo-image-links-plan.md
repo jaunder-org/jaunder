@@ -32,12 +32,13 @@ Out:
 - [x] Task 2: Publish every demo Media object and materialize dependent content.
   - Contract: the demo seed places the baseline text fixture and each SVG
     through the production Media placement abstraction before Post creation,
-    creates each Media Record for its declared owner, and constructs both the
-    complete manifest and curated Post source from returned canonical
-    identities.
+    retaining the baseline record's anchored creation time, creates each Media
+    Record for its declared owner, and constructs both the complete manifest and
+    curated Post source from returned canonical identities.
   - Contract: no fixture independently maintains or rederives a
-    content-addressed URL; newly placed files are cleaned up when the seed write
-    fails without erasing the unexpected failure.
+    content-addressed URL. Each placement phase cleans up its own failed write;
+    ADR-0180's staged workspace owns cleanup across successfully committed seed
+    phases when any later phase fails.
   - Verification: `#[apply(backends)]` profile tests prove four Users, 73 Posts,
     five owner-correct Media Records, exact stored bytes and metadata, complete
     manifest ordering, native Markdown/Org source, rendered HTML, and stored

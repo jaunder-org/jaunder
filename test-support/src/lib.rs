@@ -1061,6 +1061,7 @@ async fn seed_sandbox_users(
 async fn upload_sandbox_media(
     media_manager: &MediaManager,
     user_ids: &[(&str, UserId)],
+    anchor: UtcInstant,
 ) -> anyhow::Result<Vec<SandboxMedia>> {
     let mut fixtures = Vec::with_capacity(5);
     let uploads = std::iter::once((
@@ -1087,11 +1088,17 @@ async fn upload_sandbox_media(
             .ok_or_else(|| anyhow::anyhow!("sandbox Media owner {author} is missing"))?;
         let filename = MediaManager::validate_filename(Some(raw_filename))
             .map_err(|error| anyhow::anyhow!("invalid fixed sandbox Media filename: {error}"))?;
-        let uploaded = confirmed_fixture_outcome(
+        let upload = if raw_filename == SANDBOX_SEEDED_MEDIA_FILENAME {
+            media_manager
+                .upload_seed_bytes_at(user_id, &filename, content_type.clone(), bytes, anchor)
+                .await
+        } else {
             media_manager
                 .upload_bytes(user_id, &filename, content_type.clone(), bytes)
                 .await
-                .map_err(|error| anyhow::anyhow!("sandbox Media upload failed: {error}"))?,
+        };
+        let uploaded = confirmed_fixture_outcome(
+            upload.map_err(|error| anyhow::anyhow!("sandbox Media upload failed: {error}"))?,
             "sandbox Media upload",
         )?;
         fixtures.push(SandboxMedia {
@@ -1175,7 +1182,7 @@ pub async fn seed_demo_sandbox_profile(
     let prepared_users = prepare_sandbox_users(SandboxProfile::Demo).await?;
     let user_ids =
         seed_sandbox_users(site_config, users, write_scope.clone(), prepared_users).await?;
-    let media = upload_sandbox_media(media_manager, &user_ids).await?;
+    let media = upload_sandbox_media(media_manager, &user_ids, anchor).await?;
     let manifest = sandbox_demo_manifest(anchor, media)?;
     seed_sandbox_posts(posts, write_scope, user_ids, &manifest).await?;
     Ok(manifest)
@@ -1389,13 +1396,14 @@ mod sandbox_profile_tests {
             env.base.instance_id().clone(),
             Arc::new(SandboxMediaOwnershipResolver),
         );
+        let anchor = "2026-09-06T12:34:00Z".parse().expect("fixed minute anchor");
         let actual = seed_demo_sandbox_profile(
             env.site_config(),
             Arc::clone(&users),
             Arc::clone(&posts),
             env.write_scope(),
             &media_manager,
-            "2026-09-06T12:34:00Z".parse().expect("fixed minute anchor"),
+            anchor,
         )
         .await
         .expect("demo profile seeds");
@@ -1438,6 +1446,9 @@ mod sandbox_profile_tests {
                 .expect("owner-correct Media Record");
             assert_eq!(record.user_id, user.user_id);
             assert_eq!(record.filename.as_ref(), filename);
+            if filename == SANDBOX_SEEDED_MEDIA_FILENAME {
+                assert_eq!(record.created_at, anchor);
+            }
             assert_eq!(
                 record.content_type.as_ref(),
                 if filename == SANDBOX_SEEDED_MEDIA_FILENAME {

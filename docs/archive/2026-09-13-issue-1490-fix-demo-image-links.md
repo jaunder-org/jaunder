@@ -37,7 +37,8 @@ intact while the seed manifest accurately describes all seeded Media.
   same counts on both SQLite and PostgreSQL.
 - Every demo User owns the expected SVG Media Record with the fixture filename,
   SHA-256 digest, `image/svg+xml` content type, byte length, and exact durable
-  bytes. Alice's baseline text Media Record remains unchanged.
+  bytes. Alice's baseline text Media Record remains unchanged, including its
+  deterministic profile-anchor `created_at` value.
 - Each curated Markdown and Org Post retains its expected source body and
   renders an image whose canonical root-relative URL identifies its author's SVG
   Media Record.
