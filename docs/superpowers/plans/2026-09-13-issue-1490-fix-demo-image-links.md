@@ -29,7 +29,7 @@ Out:
     ordered Media metadata, and empty-array behavior using supplied manifest
     values without assuming any content-addressed URL.
 
-- [ ] Task 2: Publish every demo Media object and materialize dependent content.
+- [x] Task 2: Publish every demo Media object and materialize dependent content.
   - Contract: the demo seed places the baseline text fixture and each SVG
     through the production Media placement abstraction before Post creation,
     creates each Media Record for its declared owner, and constructs both the

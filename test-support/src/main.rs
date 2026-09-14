@@ -421,7 +421,8 @@ async fn cmd_seed_sandbox_profile(
     profile: SandboxProfile,
 ) -> anyhow::Result<()> {
     let runtime = storage_runtime_config(db)?;
-    let factory = storage::open_existing_database(db, &runtime).await?;
+    let opened = storage::open_existing_database_with_observer(db, &runtime).await?;
+    let factory = opened.factory;
     let anchor = sandbox_profile_anchor();
     let manifest = seed_sandbox_profile(
         SandboxSeedStorage {
@@ -429,6 +430,7 @@ async fn cmd_seed_sandbox_profile(
             users: factory.users(),
             posts: factory.posts(),
             media: factory.media(),
+            instance_id: opened.instance_id,
             write_scope: factory.write_scope(),
         },
         storage_path,
@@ -1149,6 +1151,6 @@ mod tests {
                 .len();
         }
         assert_eq!(post_count, 73);
-        assert_eq!(media_count, 1);
+        assert_eq!(media_count, 5);
     }
 }
