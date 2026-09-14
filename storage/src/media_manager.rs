@@ -580,6 +580,18 @@ impl MediaManager {
         tmp_path: &Path,
         user_quota: UserQuota,
     ) -> anyhow::Result<MutationOutcome<ManagedUpload>> {
+        self.finalize_upload_with_created_at(user_id, metadata, tmp_path, user_quota, None)
+            .await
+    }
+
+    async fn finalize_upload_with_created_at(
+        &self,
+        user_id: UserId,
+        metadata: UploadMetadata,
+        tmp_path: &Path,
+        user_quota: UserQuota,
+        created_at: Option<UtcInstant>,
+    ) -> anyhow::Result<MutationOutcome<ManagedUpload>> {
         if let Err(error) = self
             .check_quota(user_id, metadata.size_bytes, user_quota)
             .await
@@ -615,7 +627,7 @@ impl MediaManager {
             content_type: metadata.content_type.clone(),
             size_bytes: metadata.size_bytes,
             source_url: None,
-            created_at: UtcInstant::now(),
+            created_at: created_at.unwrap_or_else(UtcInstant::now),
         };
         let (target_disposition, outcome) = self
             .place_and_register(
@@ -669,6 +681,28 @@ impl MediaManager {
             .map(|outcome| outcome.map(|upload| upload.media))
     }
 
+    /// Uploads deterministic fixture bytes through the production placement pipeline while
+    /// retaining their supplied creation timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns `anyhow::Error` under the same conditions as [`Self::upload_bytes`].
+    #[cfg(feature = "seed-posts")]
+    pub async fn upload_seed_bytes_at(
+        &self,
+        user_id: UserId,
+        filename: &Filename,
+        content_type: ContentType,
+        bytes: &[u8],
+        created_at: UtcInstant,
+    ) -> anyhow::Result<MutationOutcome<UploadedMedia>> {
+        let result = self
+            .upload_bytes_inner_at(user_id, filename, content_type, bytes, Some(created_at))
+            .await;
+        Self::emit_failure_metric(&result);
+        result.map(|outcome| outcome.map(|upload| upload.media))
+    }
+
     /// Uploads raw bytes and retains the manager-owned idempotency disposition.
     ///
     /// # Errors
@@ -695,6 +729,18 @@ impl MediaManager {
         content_type: ContentType,
         bytes: &[u8],
     ) -> anyhow::Result<MutationOutcome<ManagedUpload>> {
+        self.upload_bytes_inner_at(user_id, filename, content_type, bytes, None)
+            .await
+    }
+
+    async fn upload_bytes_inner_at(
+        &self,
+        user_id: UserId,
+        filename: &Filename,
+        content_type: ContentType,
+        bytes: &[u8],
+        created_at: Option<UtcInstant>,
+    ) -> anyhow::Result<MutationOutcome<ManagedUpload>> {
         self.ensure_uploads_enabled().await?;
         let (max_file_size, user_quota) = self.get_limits().await?;
         // `filename` and `content_type` were validated at their respective inbound
@@ -717,7 +763,7 @@ impl MediaManager {
             sha256_hex,
             size_bytes,
         };
-        self.finalize_upload(user_id, metadata, &tmp_path, user_quota)
+        self.finalize_upload_with_created_at(user_id, metadata, &tmp_path, user_quota, created_at)
             .await
     }
 

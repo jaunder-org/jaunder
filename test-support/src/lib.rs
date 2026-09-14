@@ -11,15 +11,12 @@
 //! content-shaped slugs/bodies that the module helper's fixed `seed-{i}` /
 //! `# Post {i}` scheme cannot give.
 
-use std::{fmt::Write as _, fs::OpenOptions, io::Write as _, path::Path, sync::Arc};
+use std::{fmt::Write as _, path::Path, sync::Arc};
 
 use async_trait::async_trait;
 use common::display_name::DisplayName;
 use common::ids::{FeedEventId, PostId, UserId};
-use common::media::{
-    ByteSize, ContentHash, Filename, MediaReference, MediaSource, detect_content_type,
-    path as media_path,
-};
+use common::media::{ContentType, MediaReference};
 use common::post_body::PostBody;
 use common::post_title::PostTitle;
 use common::root_relative_url::RootRelativeUrl;
@@ -33,8 +30,8 @@ use host::config_key::SiteConfigKey;
 use host::feed::{FeedEventPhase, FeedPath};
 use jiff::{Timestamp, ToSpan};
 use storage::{
-    FeedEventStorage, ForeignEvidenceSink, InstanceId, LocalMediaSink, MediaRecord,
-    MediaReferenceEvidence, MediaReferenceOwnershipResolver, MediaStorage, OperatorStatus,
+    FeedEventStorage, ForeignEvidenceSink, InstanceId, LocalMediaSink, MediaManager,
+    MediaReferenceEvidence, MediaReferenceOwnershipResolver, OperatorStatus,
     PersistedMediaReference, PostBookkeepingExpectation, PostFormat, PostStorage, PreparedPassword,
     ProvenLocalMediaRefs, RenderedPostContent, SessionStorage, SiteConfigStorage,
     ThemeAssetManager, ThemeOwner, ThemeRoleBinding, ThemeStorage, UserStorage, WriteScope,
@@ -467,8 +464,8 @@ pub struct SandboxSeedManifest {
     pub version: u8,
     /// Seeded Posts and their read-only expectations.
     pub posts: Vec<SandboxPost>,
-    /// Seeded Media, when the selected profile includes it.
-    pub media: Option<SandboxMedia>,
+    /// Seeded Media in stable publication order.
+    pub media: Vec<SandboxMedia>,
 }
 
 /// One canonical Media object created with the sandbox profile.
@@ -479,7 +476,7 @@ pub struct SandboxMedia {
     /// Original filename.
     pub filename: &'static str,
     /// SHA-256 digest of the exact bytes.
-    pub sha256: &'static str,
+    pub sha256: String,
     /// Public content-addressed URL path.
     pub content_url: String,
     /// Exact byte count.
@@ -505,13 +502,13 @@ impl SandboxSeedManifest {
                     SandboxVisibility::Private => "private",
                 },
             })).collect::<Vec<_>>(),
-            "media": self.media.as_ref().map(|media| serde_json::json!({
+            "media": self.media.iter().map(|media| serde_json::json!({
                 "author": media.author,
                 "filename": media.filename,
                 "sha256": media.sha256,
                 "contentUrl": media.content_url,
                 "sizeBytes": media.size_bytes,
-            })),
+            })).collect::<Vec<_>>(),
         })
     }
 }
@@ -712,8 +709,6 @@ const SANDBOX_USER_FIXTURES: [SandboxUserFixture; 4] = [
     },
 ];
 const SANDBOX_SEEDED_MEDIA_BYTES: &[u8] = b"baseline seeded media\n";
-const SANDBOX_SEEDED_MEDIA_HASH: &str =
-    "958e3ce706b2891ab01e58e0f180af8ef646dc9d6368f3a2ba6d6cbff3321c5e";
 const SANDBOX_SEEDED_MEDIA_FILENAME: &str = "baseline-seeded.txt";
 const SHORT_MARKDOWN: &str = "A short sandbox note with one clear idea.";
 const MEDIUM_MARKDOWN: &str = "A medium sandbox note has enough detail to make a timeline card feel lived in.\n\nIt remains concise enough to scan.";
@@ -728,28 +723,28 @@ pub fn sandbox_profile_anchor() -> UtcInstant {
     UtcInstant::from(Timestamp::from_second(minute).map_or(now, std::convert::identity))
 }
 
-fn sandbox_asset_urls() -> [RootRelativeUrl; 4] {
-    [
-        "/media/upload/81/aa/81aa7378e6c8ef6a707e281d5a92c646a1ba3c01de428131ecf677763a8cddd9/blue-horizon.svg",
-        "/media/upload/92/c5/92c501114a2d5f3b82f50a4ac01ab2c1eeb1223cbc46e7840347adb3e6aa8847/warm-workshop.svg",
-        "/media/upload/bb/2c/bb2cd32aaa8d6b4bd87af8980a5bb220753bdfafdd953bc4c9b4a861d1e4c233/green-field.svg",
-        "/media/upload/2e/8d/2e8d0525784fb6a8b04b82131e9d82cddca52445e21c1faa0baccbc7ad44290c/violet-night.svg",
-    ]
-    .map(|url| {
-        let Ok(url) = url.parse() else {
-            unreachable!("fixed sandbox Media URL is root-relative");
-        };
-        url
-    })
-}
-
-/// Produces the complete versioned typed fixture manifest for a profile creation
-/// anchor. The historical corpus retains globally distinct timestamps; the
-/// canonical extension adds explicit HTML, scheduling, non-public, and
-/// Media-reference records without backend-specific identities.
-#[must_use]
-pub fn sandbox_profile_manifest(anchor: UtcInstant) -> SandboxSeedManifest {
-    let asset_urls = sandbox_asset_urls();
+/// Produces the demo Post collection after Media publication has returned its
+/// canonical identities. The historical corpus retains globally distinct
+/// timestamps; the canonical extension adds explicit HTML, scheduling,
+/// non-public, and Media-reference records without backend-specific identities.
+fn sandbox_demo_manifest(
+    anchor: UtcInstant,
+    media: Vec<SandboxMedia>,
+) -> anyhow::Result<SandboxSeedManifest> {
+    let asset_urls: [RootRelativeUrl; 4] = media
+        .iter()
+        .skip(1)
+        .map(|media| {
+            media
+                .content_url
+                .parse()
+                .map_err(|error| anyhow::anyhow!("sandbox Media returned an invalid URL: {error}"))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()
+        .and_then(|urls| {
+            urls.try_into()
+                .map_err(|_| anyhow::anyhow!("demo profile did not upload four SVG Media objects"))
+        })?;
     let mut posts = Vec::with_capacity(73);
     let mut first_offset = 1_i64;
     for (fixture, asset_url) in SANDBOX_USER_FIXTURES.iter().zip(&asset_urls) {
@@ -829,24 +824,19 @@ pub fn sandbox_profile_manifest(anchor: UtcInstant) -> SandboxSeedManifest {
             visibility: SandboxVisibility::Public,
         });
     }
-    posts.extend(sandbox_extension(anchor));
-    SandboxSeedManifest {
-        version: 1,
+    posts.extend(sandbox_extension(anchor, &media)?);
+    Ok(SandboxSeedManifest {
+        version: 2,
         posts,
-        media: Some(SandboxMedia {
-            author: "alice",
-            filename: SANDBOX_SEEDED_MEDIA_FILENAME,
-            sha256: SANDBOX_SEEDED_MEDIA_HASH,
-            content_url: format!(
-                "/media/upload/95/8e/{SANDBOX_SEEDED_MEDIA_HASH}/{SANDBOX_SEEDED_MEDIA_FILENAME}"
-            ),
-            size_bytes: SANDBOX_SEEDED_MEDIA_BYTES.len(),
-        }),
-    }
+        media,
+    })
 }
 
-fn sandbox_extension(anchor: UtcInstant) -> [SandboxPost; 5] {
-    [
+fn sandbox_extension(
+    anchor: UtcInstant,
+    media: &[SandboxMedia],
+) -> anyhow::Result<[SandboxPost; 5]> {
+    Ok([
         SandboxPost {
             author: "alice",
             title: "Alice canonical HTML".to_owned(),
@@ -892,12 +882,23 @@ fn sandbox_extension(anchor: UtcInstant) -> [SandboxPost; 5] {
             author: "alice",
             title: "Alice media reference".to_owned(),
             slug: "baseline-seeded-media-reference".to_owned(),
-            body: "![Canonical seeded Media](/media/upload/95/8e/958e3ce706b2891ab01e58e0f180af8ef646dc9d6368f3a2ba6d6cbff3321c5e/baseline-seeded.txt)".to_owned(),
+            body: format!(
+                "![Canonical seeded Media]({})",
+                media_url(media, SANDBOX_SEEDED_MEDIA_FILENAME)?
+            ),
             format: PostFormat::Markdown,
             published_at: Some(anchor),
             visibility: SandboxVisibility::Public,
         },
-    ]
+    ])
+}
+
+fn media_url<'a>(media: &'a [SandboxMedia], filename: &str) -> anyhow::Result<&'a str> {
+    media
+        .iter()
+        .find(|media| media.filename == filename)
+        .map(|media| media.content_url.as_str())
+        .ok_or_else(|| anyhow::anyhow!("sandbox Media {filename} was not published"))
 }
 
 /// Sandbox-local proof policy: root-relative stored-Media references are
@@ -966,86 +967,6 @@ fn sandbox_post_content(
     })
 }
 
-/// Seeds the fixed standard sandbox profile through its exact storage services.
-///
-/// Publishes fixed fixture bytes through the production content-address layout.
-/// The temporary file is durable before an atomic hard-link claim, so a failed
-/// seed never exposes a partial canonical object. Existing content must exactly
-/// match the immutable fixture rather than silently being trusted.
-fn publish_seeded_media(target: &Path) -> anyhow::Result<bool> {
-    let parent = target
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("canonical Media path has no parent"))?;
-    std::fs::create_dir_all(parent)
-        .map_err(|error| anyhow::anyhow!("creating seeded Media directory failed: {error}"))?;
-    match std::fs::read(target) {
-        Ok(bytes) => {
-            anyhow::ensure!(
-                bytes == SANDBOX_SEEDED_MEDIA_BYTES,
-                "existing seeded Media bytes do not match the canonical fixture"
-            );
-            return Ok(false);
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(anyhow::anyhow!(
-                "reading seeded Media content failed: {error}"
-            ));
-        }
-    }
-    let temporary = parent.join(format!(".seeded-media-{}.tmp", std::process::id()));
-    let write_result = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)?;
-        file.write_all(SANDBOX_SEEDED_MEDIA_BYTES)?;
-        file.sync_all()?;
-        drop(file);
-        std::fs::hard_link(&temporary, target)?;
-        std::fs::remove_file(&temporary)?;
-        std::fs::File::open(parent)?.sync_all()?;
-        Ok::<_, std::io::Error>(true)
-    })();
-    resolve_seeded_media_write_result(write_result, target, &temporary)
-}
-
-fn resolve_seeded_media_write_result(
-    write_result: std::io::Result<bool>,
-    target: &Path,
-    temporary: &Path,
-) -> anyhow::Result<bool> {
-    match write_result {
-        Ok(created) => Ok(created),
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            let _ = std::fs::remove_file(temporary);
-            let bytes = std::fs::read(target).map_err(|read_error| {
-                anyhow::anyhow!("reading concurrent seeded Media content failed: {read_error}")
-            })?;
-            anyhow::ensure!(
-                bytes == SANDBOX_SEEDED_MEDIA_BYTES,
-                "concurrent seeded Media bytes do not match the canonical fixture"
-            );
-            Ok(false)
-        }
-        Err(error) => {
-            let _ = std::fs::remove_file(temporary);
-            Err(anyhow::anyhow!(
-                "publishing seeded Media content failed: {error}"
-            ))
-        }
-    }
-}
-
-/// Storage dependencies for one atomic sandbox profile seed.
-pub struct SandboxSeedStorage {
-    pub site_config: Arc<dyn SiteConfigStorage>,
-    pub users: Arc<dyn UserStorage>,
-    pub posts: Arc<dyn PostStorage>,
-    pub media: Arc<dyn MediaStorage>,
-    pub write_scope: WriteScope,
-}
-
 struct PreparedSandboxUser {
     username_text: &'static str,
     username: Username,
@@ -1053,21 +974,11 @@ struct PreparedSandboxUser {
     password: PreparedPassword,
 }
 
-struct PreparedSeededMedia {
-    filename: Filename,
-    sha256: ContentHash,
-    size_bytes: ByteSize,
-    path: std::path::PathBuf,
-}
-
-fn profile_manifest(profile: SandboxProfile, anchor: UtcInstant) -> SandboxSeedManifest {
-    match profile {
-        SandboxProfile::Standard => SandboxSeedManifest {
-            version: 1,
-            posts: Vec::new(),
-            media: None,
-        },
-        SandboxProfile::Demo => sandbox_profile_manifest(anchor),
+fn standard_profile_manifest() -> SandboxSeedManifest {
+    SandboxSeedManifest {
+        version: 2,
+        posts: Vec::new(),
+        media: Vec::new(),
     }
 }
 
@@ -1103,90 +1014,16 @@ async fn prepare_sandbox_users(
     Ok(prepared)
 }
 
-fn prepare_seeded_media(
-    profile: SandboxProfile,
-    storage_path: &Path,
-) -> anyhow::Result<Option<PreparedSeededMedia>> {
-    if profile == SandboxProfile::Standard {
-        return Ok(None);
-    }
-    let filename = Filename::sanitized(SANDBOX_SEEDED_MEDIA_FILENAME)
-        .map_err(|error| anyhow::anyhow!("invalid fixed Media filename: {error}"))?;
-    let sha256 = SANDBOX_SEEDED_MEDIA_HASH
-        .parse::<ContentHash>()
-        .map_err(|error| anyhow::anyhow!("invalid fixed Media hash: {error}"))?;
-    let size_bytes = SANDBOX_SEEDED_MEDIA_BYTES
-        .len()
-        .to_string()
-        .parse::<ByteSize>()
-        .map_err(|error| anyhow::anyhow!("invalid fixed Media size: {error}"))?;
-    let path =
-        storage_path
-            .join("media")
-            .join(media_path(&MediaSource::Upload, &sha256, &filename));
-    Ok(Some(PreparedSeededMedia {
-        filename,
-        sha256,
-        size_bytes,
-        path,
-    }))
-}
-
-fn cleanup_newly_published_media(created: bool, path: Option<&Path>) {
-    if let (true, Some(path)) = (created, path) {
-        let _ = std::fs::remove_file(path);
-    }
-}
-
-enum SandboxProfileWriteError {
-    Failed(anyhow::Error),
-    CommitIndeterminate,
-}
-
-fn project_sandbox_profile_write_outcome<T>(
-    outcome: &common::MutationOutcome<T>,
-) -> Result<(), SandboxProfileWriteError> {
-    match outcome {
-        common::MutationOutcome::Confirmed(_) => Ok(()),
-        common::MutationOutcome::CommitIndeterminate(_) => {
-            Err(SandboxProfileWriteError::CommitIndeterminate)
-        }
-    }
-}
-
-fn resolve_sandbox_profile_write(
-    write_result: Result<(), SandboxProfileWriteError>,
-    manifest: SandboxSeedManifest,
-    created_media: bool,
-    seeded_media_path: Option<&Path>,
-) -> anyhow::Result<SandboxSeedManifest> {
-    match write_result {
-        Ok(()) => Ok(manifest),
-        Err(SandboxProfileWriteError::Failed(error)) => {
-            cleanup_newly_published_media(created_media, seeded_media_path);
-            Err(error)
-        }
-        Err(SandboxProfileWriteError::CommitIndeterminate) => Err(anyhow::anyhow!(
-            "sandbox profile write commit acknowledgement was indeterminate; retained seeded Media for revalidation"
-        )),
-    }
-}
-
-async fn write_sandbox_profile(
-    storage: SandboxSeedStorage,
-    title: String,
+async fn seed_sandbox_users(
+    site_config: Arc<dyn SiteConfigStorage>,
+    users: Arc<dyn UserStorage>,
+    write_scope: WriteScope,
     prepared_users: Vec<PreparedSandboxUser>,
-    seeded_media: Option<PreparedSeededMedia>,
-    manifest: SandboxSeedManifest,
-    anchor: UtcInstant,
-) -> Result<(), SandboxProfileWriteError> {
-    let SandboxSeedStorage {
-        site_config,
-        users,
-        posts,
-        media,
-        write_scope,
-    } = storage;
+) -> anyhow::Result<Vec<(&'static str, UserId)>> {
+    let title = SANDBOX_TITLE
+        .parse::<SiteTitle>()
+        .map_err(|error| anyhow::anyhow!("invalid fixed sandbox title: {error}"))?
+        .to_string();
     let outcome = write_scope
         .run(move |transaction| {
             Box::pin(async move {
@@ -1200,39 +1037,99 @@ async fn write_sandbox_profile(
                     } else {
                         OperatorStatus::STANDARD
                     };
-                    let user_id = users
-                        .create_user(
-                            transaction,
-                            &prepared.username,
-                            &prepared.password,
-                            None,
-                            role,
-                        )
-                        .await?;
-                    user_ids.push((prepared.username_text, user_id));
+                    user_ids.push((
+                        prepared.username_text,
+                        users
+                            .create_user(
+                                transaction,
+                                &prepared.username,
+                                &prepared.password,
+                                None,
+                                role,
+                            )
+                            .await?,
+                    ));
                 }
-                if let Some(seeded) = seeded_media {
+                Ok::<_, anyhow::Error>(user_ids)
+            })
+        })
+        .await
+        .map_err(|error| anyhow::anyhow!("sandbox Users write failed: {error}"))?;
+    confirmed_fixture_outcome(outcome, "sandbox Users write")
+}
+
+async fn upload_sandbox_media(
+    media_manager: &MediaManager,
+    user_ids: &[(&str, UserId)],
+    anchor: UtcInstant,
+) -> anyhow::Result<Vec<SandboxMedia>> {
+    let mut fixtures = Vec::with_capacity(5);
+    let uploads = std::iter::once((
+        "alice",
+        SANDBOX_SEEDED_MEDIA_FILENAME,
+        "text/plain",
+        SANDBOX_SEEDED_MEDIA_BYTES,
+    ))
+    .chain(SANDBOX_USER_FIXTURES.iter().map(|fixture| {
+        (
+            fixture.username,
+            fixture.media.filename,
+            "image/svg+xml",
+            fixture.media.bytes,
+        )
+    }));
+    for (author, raw_filename, raw_content_type, bytes) in uploads {
+        let Ok(content_type) = raw_content_type.parse::<ContentType>() else {
+            unreachable!("fixed sandbox content type is valid");
+        };
+        let user_id = user_ids
+            .iter()
+            .find_map(|(username, user_id)| (*username == author).then_some(*user_id))
+            .ok_or_else(|| anyhow::anyhow!("sandbox Media owner {author} is missing"))?;
+        let filename = MediaManager::validate_filename(Some(raw_filename))
+            .map_err(|error| anyhow::anyhow!("invalid fixed sandbox Media filename: {error}"))?;
+        let upload = if raw_filename == SANDBOX_SEEDED_MEDIA_FILENAME {
+            media_manager
+                .upload_seed_bytes_at(user_id, &filename, content_type.clone(), bytes, anchor)
+                .await
+        } else {
+            media_manager
+                .upload_bytes(user_id, &filename, content_type.clone(), bytes)
+                .await
+        };
+        let uploaded = confirmed_fixture_outcome(
+            upload.map_err(|error| anyhow::anyhow!("sandbox Media upload failed: {error}"))?,
+            "sandbox Media upload",
+        )?; // cov:ignore: indeterminate manager commits require a process-boundary fault
+        fixtures.push(SandboxMedia {
+            author,
+            filename: raw_filename,
+            sha256: uploaded.sha256.to_string(),
+            content_url: uploaded.url.to_string(),
+            size_bytes: usize::try_from(uploaded.size_bytes.value())
+                .map_err(|_| anyhow::anyhow!("sandbox Media size is negative"))?,
+        });
+    }
+    Ok(fixtures)
+}
+
+async fn seed_sandbox_posts(
+    posts: Arc<dyn PostStorage>,
+    write_scope: WriteScope,
+    user_ids: Vec<(&'static str, UserId)>,
+    manifest: &SandboxSeedManifest,
+) -> anyhow::Result<()> {
+    let fixtures = manifest.posts.clone();
+    let outcome = write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                let mut inputs = Vec::with_capacity(fixtures.len());
+                for fixture in fixtures {
                     let user_id = user_ids
                         .iter()
-                        .find_map(|(username, id)| (*username == "alice").then_some(*id))
-                        .ok_or_else(|| anyhow::anyhow!("seeded Media owner is missing"))?;
-                    let record = MediaRecord {
-                        user_id,
-                        sha256: seeded.sha256,
-                        content_type: detect_content_type(&seeded.filename),
-                        filename: seeded.filename,
-                        source: MediaSource::Upload,
-                        size_bytes: seeded.size_bytes,
-                        source_url: None,
-                        created_at: anchor,
-                    };
-                    media.create_media(transaction, &record).await?;
-                }
-                let mut inputs = Vec::with_capacity(manifest.posts.len());
-                for fixture in manifest.posts {
-                    let user_id = user_ids
-                        .iter()
-                        .find_map(|(username, id)| (*username == fixture.author).then_some(*id))
+                        .find_map(|(username, user_id)| {
+                            (*username == fixture.author).then_some(*user_id)
+                        })
                         .ok_or_else(|| {
                             anyhow::anyhow!(
                                 "sandbox manifest author {} is not seeded",
@@ -1241,59 +1138,54 @@ async fn write_sandbox_profile(
                         })?;
                     inputs.push(render_post_input(sandbox_post_content(&fixture, user_id)?));
                 }
-                let post_outcome = posts.create_posts(transaction, &inputs).await?;
-                Ok::<_, anyhow::Error>(post_outcome)
+                Ok::<_, anyhow::Error>(posts.create_posts(transaction, &inputs).await?)
             })
         })
         .await
-        .map_err(|error| {
-            SandboxProfileWriteError::Failed(anyhow::anyhow!(
-                "sandbox profile write failed: {error}"
-            ))
-        })?;
-    project_sandbox_profile_write_outcome(&outcome)
+        .map_err(|error| anyhow::anyhow!("sandbox Posts write failed: {error}"))?;
+    confirmed_fixture_outcome(outcome, "sandbox Posts write")?;
+    Ok(())
 }
 
-/// Seeds the exact non-idempotent sandbox profile through the normal typed
-/// storage write services. All profile rows share one write scope, so a failed
-/// creation cannot leave a workspace with a partial fixture.
+/// Seeds the fixed standard sandbox profile through its exact storage services.
 ///
 /// # Errors
 ///
-/// the single profile transaction fails. Newly published Media is removed only
-/// after a confirmed rollback; an indeterminate commit retains it because the
-/// database may already reference the canonical content.
-pub async fn seed_sandbox_profile(
-    storage: SandboxSeedStorage,
-    storage_path: &Path,
-    profile: SandboxProfile,
+/// Returns an error when configuration or User creation fails or receives an
+/// indeterminate commit acknowledgement.
+pub async fn seed_standard_sandbox_profile(
+    site_config: Arc<dyn SiteConfigStorage>,
+    users: Arc<dyn UserStorage>,
+    write_scope: WriteScope,
+) -> anyhow::Result<SandboxSeedManifest> {
+    let prepared_users = prepare_sandbox_users(SandboxProfile::Standard).await?;
+    seed_sandbox_users(site_config, users, write_scope, prepared_users).await?;
+    Ok(standard_profile_manifest())
+}
+
+/// Seeds the fixed demo sandbox profile through exact storage services and the
+/// production Media placement abstraction. The staged sandbox workspace owns
+/// cleanup when a later seed phase fails.
+///
+/// # Errors
+///
+/// Returns an error when configuration, User, Media, or Post creation fails or
+/// receives an indeterminate commit acknowledgement.
+pub async fn seed_demo_sandbox_profile(
+    site_config: Arc<dyn SiteConfigStorage>,
+    users: Arc<dyn UserStorage>,
+    posts: Arc<dyn PostStorage>,
+    write_scope: WriteScope,
+    media_manager: &MediaManager,
     anchor: UtcInstant,
 ) -> anyhow::Result<SandboxSeedManifest> {
-    let manifest = profile_manifest(profile, anchor);
-    let prepared_users = prepare_sandbox_users(profile).await?;
-    let seeded_media = prepare_seeded_media(profile, storage_path)?;
-    let seeded_media_path = seeded_media.as_ref().map(|media| media.path.clone());
-    let created_media = seeded_media
-        .as_ref()
-        .map_or(Ok(false), |media| publish_seeded_media(&media.path))?;
-    let title = SANDBOX_TITLE
-        .parse::<SiteTitle>()
-        .map_err(|error| anyhow::anyhow!("invalid fixed sandbox title: {error}"))?
-        .to_string();
-    resolve_sandbox_profile_write(
-        write_sandbox_profile(
-            storage,
-            title,
-            prepared_users,
-            seeded_media,
-            manifest.clone(),
-            anchor,
-        )
-        .await,
-        manifest,
-        created_media,
-        seeded_media_path.as_deref(),
-    )
+    let prepared_users = prepare_sandbox_users(SandboxProfile::Demo).await?;
+    let user_ids =
+        seed_sandbox_users(site_config, users, write_scope.clone(), prepared_users).await?;
+    let media = upload_sandbox_media(media_manager, &user_ids, anchor).await?;
+    let manifest = sandbox_demo_manifest(anchor, media)?;
+    seed_sandbox_posts(posts, write_scope, user_ids, &manifest).await?;
+    Ok(manifest)
 }
 
 /// Reset the mail-capture file: delete `path` if it exists. A missing file is
@@ -1436,7 +1328,7 @@ pub async fn create_session_for_user(
 #[cfg(test)]
 mod sandbox_profile_tests {
     use super::*;
-    use common::media::MediaRef;
+    use common::media::{Filename, MediaRef, MediaSource};
     use rstest::*;
     use rstest_reuse::*;
     use storage::test_support::{Backend, backends};
@@ -1471,21 +1363,14 @@ mod sandbox_profile_tests {
         let env = backend.setup().pristine().await;
         let site_config = env.site_config();
         let users = env.users();
-        let posts = env.posts();
-        seed_sandbox_profile(
-            SandboxSeedStorage {
-                site_config: Arc::clone(&site_config),
-                users: Arc::clone(&users),
-                posts: Arc::clone(&posts),
-                media: env.media(),
-                write_scope: env.write_scope(),
-            },
-            env.base.path(),
-            SandboxProfile::Standard,
-            "2026-09-06T12:34:00Z".parse().expect("fixed anchor"),
+        let manifest = seed_standard_sandbox_profile(
+            Arc::clone(&site_config),
+            Arc::clone(&users),
+            env.write_scope(),
         )
         .await
         .expect("standard profile seeds");
+        assert_eq!(manifest, standard_profile_manifest());
         assert_eq!(
             site_config.list().await.expect("site config list"),
             vec![("site.title".to_owned(), SANDBOX_TITLE.to_owned())]
@@ -1495,151 +1380,240 @@ mod sandbox_profile_tests {
 
     #[apply(backends)]
     #[tokio::test]
+    async fn sandbox_posts_reject_a_manifest_author_that_was_not_seeded(#[case] backend: Backend) {
+        let env = backend.setup().pristine().await;
+        let manifest = SandboxSeedManifest {
+            version: 2,
+            posts: vec![SandboxPost {
+                author: "missing",
+                title: "Missing author".to_owned(),
+                slug: "missing-author".to_owned(),
+                body: "# Missing author".to_owned(),
+                format: PostFormat::Markdown,
+                published_at: None,
+                visibility: SandboxVisibility::Public,
+            }],
+            media: Vec::new(),
+        };
+
+        let error = seed_sandbox_posts(env.posts(), env.write_scope(), Vec::new(), &manifest)
+            .await
+            .expect_err("unknown manifest author must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("sandbox manifest author missing is not seeded")
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
     async fn demo_profile_matches_the_typed_manifest_and_seeded_media(#[case] backend: Backend) {
         let env = backend.setup().pristine().await;
         let users = env.users();
         let posts = env.posts();
         let media = env.media();
+        let media_manager = MediaManager::new(
+            Arc::clone(&media),
+            Arc::clone(&posts),
+            env.site_config(),
+            env.write_scope(),
+            Arc::new(storage::MediaContentLocks::new(Arc::new(
+                env.base.path().to_path_buf(),
+            ))),
+            env.base.instance_id().clone(),
+            Arc::new(SandboxMediaOwnershipResolver),
+        );
         let anchor = "2026-09-06T12:34:00Z".parse().expect("fixed minute anchor");
-        let expected = sandbox_profile_manifest(anchor);
-        let actual = seed_sandbox_profile(
-            SandboxSeedStorage {
-                site_config: env.site_config(),
-                users: Arc::clone(&users),
-                posts: Arc::clone(&posts),
-                media: Arc::clone(&media),
-                write_scope: env.write_scope(),
-            },
-            env.base.path(),
-            SandboxProfile::Demo,
+        let actual = seed_demo_sandbox_profile(
+            env.site_config(),
+            Arc::clone(&users),
+            Arc::clone(&posts),
+            env.write_scope(),
+            &media_manager,
             anchor,
         )
         .await
         .expect("demo profile seeds");
-        assert_eq!(actual, expected);
-        assert_sandbox_users(users.as_ref(), &SANDBOX_USER_FIXTURES).await;
 
-        let seeded_media = MediaRef {
-            source: MediaSource::Upload,
-            sha256: SANDBOX_SEEDED_MEDIA_HASH.parse().expect("fixed Media hash"),
-            filename: Filename::sanitized(SANDBOX_SEEDED_MEDIA_FILENAME)
-                .expect("fixed Media filename"),
-        };
-        let alice = users
-            .get_user_by_username(&"alice".parse().expect("fixed username"))
-            .await
-            .expect("alice lookup")
-            .expect("alice exists");
-        assert!(
-            media
+        assert_eq!(actual.version, 2);
+        assert_eq!(actual.posts.len(), 73);
+        assert_eq!(actual.media.len(), 5);
+        let expected = std::iter::once((
+            "alice",
+            SANDBOX_SEEDED_MEDIA_FILENAME,
+            SANDBOX_SEEDED_MEDIA_BYTES,
+        ))
+        .chain(SANDBOX_USER_FIXTURES.iter().map(|fixture| {
+            (
+                fixture.username,
+                fixture.media.filename,
+                fixture.media.bytes,
+            )
+        }));
+        for (manifest, (author, filename, bytes)) in actual.media.iter().zip(expected) {
+            let user = users
+                .get_user_by_username(&author.parse().expect("fixed username"))
+                .await
+                .expect("user lookup")
+                .expect("fixture user exists");
+            let media_ref = MediaRef {
+                source: MediaSource::Upload,
+                sha256: manifest.sha256.parse().expect("manager returned hash"),
+                filename: Filename::sanitized(filename).expect("fixed Media filename"),
+            };
+            let record = media
                 .get_media(
-                    alice.user_id,
-                    &seeded_media.sha256,
-                    &seeded_media.filename,
-                    &seeded_media.source,
+                    user.user_id,
+                    &media_ref.sha256,
+                    &media_ref.filename,
+                    &media_ref.source,
                 )
                 .await
-                .expect("seeded Media lookup")
-                .is_some()
-        );
-        assert_eq!(
-            posts
-                .list_media_references(&seeded_media)
-                .await
-                .expect("seeded Media references")
-                .references()
-                .len(),
-            1
-        );
-    }
-
-    #[apply(backends)]
-    #[tokio::test]
-    async fn failed_profile_write_removes_newly_published_seeded_media(#[case] backend: Backend) {
-        let env = backend.setup().pristine().await;
-        let users = env.users();
-        let filename =
-            Filename::sanitized(SANDBOX_SEEDED_MEDIA_FILENAME).expect("fixed Media filename");
-        let sha256 = SANDBOX_SEEDED_MEDIA_HASH
-            .parse::<ContentHash>()
-            .expect("fixed Media hash");
-        let target = env.base.path().join("media").join(media_path(
-            &MediaSource::Upload,
-            &sha256,
-            &filename,
-        ));
-        create_user(
-            Arc::clone(&users),
-            env.write_scope(),
-            "alice",
-            SANDBOX_PASSWORD,
-            None,
-            false,
-        )
-        .await
-        .expect("duplicate fixture user setup");
-
-        seed_sandbox_profile(
-            SandboxSeedStorage {
-                site_config: env.site_config(),
-                users,
-                posts: env.posts(),
-                media: env.media(),
-                write_scope: env.write_scope(),
-            },
-            env.base.path(),
-            SandboxProfile::Demo,
-            "2026-09-06T12:34:00Z".parse().expect("fixed anchor"),
-        )
-        .await
-        .expect_err("duplicate user makes profile write fail");
-        assert!(!target.exists());
-    }
-    #[apply(backends)]
-    #[tokio::test]
-    async fn profile_write_rejects_a_manifest_author_absent_from_prepared_users(
-        #[case] backend: Backend,
-    ) {
-        let env = backend.setup().pristine().await;
-        let anchor = "2026-09-06T12:34:00Z".parse().expect("fixed anchor");
-        let mut manifest = sandbox_profile_manifest(anchor);
-        manifest.posts[0].author = "nobody";
-
-        let error = match write_sandbox_profile(
-            SandboxSeedStorage {
-                site_config: env.site_config(),
-                users: env.users(),
-                posts: env.posts(),
-                media: env.media(),
-                write_scope: env.write_scope(),
-            },
-            SANDBOX_TITLE.to_owned(),
-            prepare_sandbox_users(SandboxProfile::Demo)
-                .await
-                .expect("fixed users prepare"),
-            None,
-            manifest,
-            anchor,
-        )
-        .await
-        {
-            Err(SandboxProfileWriteError::Failed(error)) => error,
-            Err(SandboxProfileWriteError::CommitIndeterminate) => {
-                panic!("backend acknowledged no indeterminate commit")
+                .expect("Media lookup")
+                .expect("owner-correct Media Record");
+            assert_eq!(record.user_id, user.user_id);
+            assert_eq!(record.filename.as_ref(), filename);
+            if filename == SANDBOX_SEEDED_MEDIA_FILENAME {
+                assert_eq!(record.created_at, anchor);
             }
-            Ok(()) => panic!("missing manifest author rejects the profile write"),
-        };
-
-        assert_eq!(
-            error.to_string(),
-            "sandbox profile write failed: write operation failed: sandbox manifest author nobody is not seeded"
-        );
+            assert_eq!(
+                record.content_type.as_ref(),
+                if filename == SANDBOX_SEEDED_MEDIA_FILENAME {
+                    "text/plain"
+                } else {
+                    "image/svg+xml"
+                }
+            );
+            assert_eq!(
+                record.size_bytes.value(),
+                i64::try_from(bytes.len()).expect("fixture size fits")
+            );
+            assert_eq!(manifest.size_bytes, bytes.len());
+            assert_eq!(
+                manifest.content_url,
+                common::media::url(&record.source, &record.sha256, &record.filename).as_ref()
+            );
+            assert_eq!(
+                std::fs::read(env.base.path().join("media").join(common::media::path(
+                    &record.source,
+                    &record.sha256,
+                    &record.filename
+                )))
+                .expect("stored bytes"),
+                bytes
+            );
+            assert_eq!(
+                posts
+                    .list_media_references(&media_ref)
+                    .await
+                    .expect("stored references")
+                    .references()
+                    .len(),
+                if author == "alice" && filename == SANDBOX_SEEDED_MEDIA_FILENAME {
+                    1
+                } else {
+                    2
+                }
+            );
+        }
+        for fixture in SANDBOX_USER_FIXTURES {
+            let curated = actual
+                .posts
+                .iter()
+                .filter(|post| {
+                    post.author == fixture.username
+                        && (post.slug == fixture.markdown.slug || post.slug == fixture.org.slug)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(curated.len(), 2);
+            let user = users
+                .get_user_by_username(&fixture.username.parse().expect("fixed username"))
+                .await
+                .expect("user lookup")
+                .expect("fixture user exists");
+            let media = actual
+                .media
+                .iter()
+                .find(|media| media.filename == fixture.media.filename)
+                .expect("fixture media");
+            let url = media
+                .content_url
+                .parse::<RootRelativeUrl>()
+                .expect("manager returned a root-relative URL");
+            let expected = fixture.materialize_curated_posts(&url);
+            for (post, expected) in curated.into_iter().zip(expected) {
+                assert_eq!(post.body, expected.body);
+                assert_eq!(post.format, expected.format);
+                let rendered = render_post_input(
+                    sandbox_post_content(post, user.user_id).expect("curated Post input"),
+                )
+                .rendered;
+                assert!(rendered.html().contains(&format!("src=\"{url}\"")));
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod content_tests {
     use super::*;
+
+    #[test]
+    fn sandbox_seed_manifest_serializes_v2_ordered_media_and_empty_collections() {
+        let media = vec![
+            SandboxMedia {
+                author: "first-author",
+                filename: "first.svg",
+                sha256: "first-supplied-hash".to_owned(),
+                content_url: "/supplied/first".to_owned(),
+                size_bytes: 101,
+            },
+            SandboxMedia {
+                author: "second-author",
+                filename: "second.svg",
+                sha256: "second-supplied-hash".to_owned(),
+                content_url: "/supplied/second".to_owned(),
+                size_bytes: 202,
+            },
+        ];
+        assert_eq!(
+            SandboxSeedManifest {
+                version: 2,
+                posts: Vec::new(),
+                media,
+            }
+            .to_json(),
+            serde_json::json!({
+                "version": 2,
+                "posts": [],
+                "media": [
+                    {
+                        "author": "first-author",
+                        "filename": "first.svg",
+                        "sha256": "first-supplied-hash",
+                        "contentUrl": "/supplied/first",
+                        "sizeBytes": 101,
+                    },
+                    {
+                        "author": "second-author",
+                        "filename": "second.svg",
+                        "sha256": "second-supplied-hash",
+                        "contentUrl": "/supplied/second",
+                        "sizeBytes": 202,
+                    },
+                ],
+            })
+        );
+        assert_eq!(
+            standard_profile_manifest().to_json(),
+            serde_json::json!({
+                "version": 2,
+                "posts": [],
+                "media": [],
+            })
+        );
+    }
 
     #[test]
     fn seed_body_renders_prefix_and_index() {
@@ -1661,13 +1635,15 @@ mod content_tests {
 
     #[test]
     fn sandbox_post_content_rejects_invalid_fixed_fixture_fields() {
-        let anchor = "2026-09-06T12:34:00Z"
-            .parse::<UtcInstant>()
-            .expect("fixed anchor");
-        let mut fixture = sandbox_profile_manifest(anchor)
-            .posts
-            .pop()
-            .expect("manifest contains posts");
+        let mut fixture = SandboxPost {
+            author: "alice",
+            title: "valid title".to_owned(),
+            slug: "valid-slug".to_owned(),
+            body: "valid body".to_owned(),
+            format: PostFormat::Markdown,
+            published_at: None,
+            visibility: SandboxVisibility::Public,
+        };
         fixture.title.clear();
         let title_error = sandbox_post_content(&fixture, UserId::from(1))
             .err()
@@ -1680,146 +1656,6 @@ mod content_tests {
             .err()
             .expect("blank fixture slug is invalid");
         assert!(slug_error.to_string().contains("sandbox Post slug"));
-    }
-
-    #[test]
-    fn seeded_media_publication_persists_exact_bytes_and_rejects_mismatched_existing_content() {
-        let root = tempfile::tempdir().expect("temporary storage root");
-        let target = root
-            .path()
-            .join("media/upload/95/8e/fixture/baseline-seeded.txt");
-        assert!(publish_seeded_media(&target).expect("fixture publication succeeds"));
-        assert_eq!(
-            std::fs::read(&target).expect("fixture content exists"),
-            SANDBOX_SEEDED_MEDIA_BYTES
-        );
-        assert!(!publish_seeded_media(&target).expect("existing fixture is reused"));
-        let directory_target = root.path().join("media-directory");
-        std::fs::create_dir(&directory_target).expect("directory target");
-        assert!(
-            publish_seeded_media(&directory_target)
-                .expect_err("a directory cannot be read as Media content")
-                .to_string()
-                .contains("reading seeded Media content failed")
-        );
-        std::fs::write(&target, b"wrong bytes").expect("tamper fixture");
-        assert!(publish_seeded_media(&target).is_err());
-    }
-
-    #[test]
-    fn seeded_media_write_result_projector_handles_races_and_failures() {
-        let root = tempfile::tempdir().expect("temporary storage root");
-        let target = root.path().join("seeded-media");
-        let temporary = root.path().join("seeded-media.tmp");
-
-        assert!(
-            resolve_seeded_media_write_result(Ok(true), &target, &temporary)
-                .expect("successful write result")
-        );
-
-        std::fs::write(&target, SANDBOX_SEEDED_MEDIA_BYTES).expect("concurrent exact target");
-        std::fs::write(&temporary, b"temporary").expect("temporary file");
-        assert!(
-            !resolve_seeded_media_write_result(
-                Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists)),
-                &target,
-                &temporary,
-            )
-            .expect("exact concurrent target is reused")
-        );
-        assert!(!temporary.exists());
-
-        std::fs::write(&target, b"wrong bytes").expect("concurrent mismatched target");
-        std::fs::write(&temporary, b"temporary").expect("temporary file");
-        let mismatch = resolve_seeded_media_write_result(
-            Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists)),
-            &target,
-            &temporary,
-        )
-        .expect_err("mismatched concurrent target rejects publication");
-        assert_eq!(
-            mismatch.to_string(),
-            "concurrent seeded Media bytes do not match the canonical fixture"
-        );
-        assert!(!temporary.exists());
-
-        std::fs::remove_file(&target).expect("remove target");
-        std::fs::write(&temporary, b"temporary").expect("temporary file");
-        let missing = resolve_seeded_media_write_result(
-            Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists)),
-            &target,
-            &temporary,
-        )
-        .expect_err("missing concurrent target rejects publication");
-        assert!(
-            missing
-                .to_string()
-                .contains("reading concurrent seeded Media content failed")
-        );
-        assert!(!temporary.exists());
-
-        std::fs::write(&temporary, b"temporary").expect("temporary file");
-        let write_error = resolve_seeded_media_write_result(
-            Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
-            &target,
-            &temporary,
-        )
-        .expect_err("generic publication failure propagates");
-        assert_eq!(
-            write_error.to_string(),
-            "publishing seeded Media content failed: permission denied"
-        );
-        assert!(!temporary.exists());
-    }
-
-    #[test]
-    fn sandbox_profile_result_projectors_preserve_commit_cleanup_semantics() {
-        assert!(
-            project_sandbox_profile_write_outcome(&common::MutationOutcome::Confirmed(())).is_ok()
-        );
-        assert!(matches!(
-            project_sandbox_profile_write_outcome(
-                &common::MutationOutcome::CommitIndeterminate(())
-            ),
-            Err(SandboxProfileWriteError::CommitIndeterminate)
-        ));
-
-        let root = tempfile::tempdir().expect("temporary storage root");
-        let media = root.path().join("seeded-media");
-        let anchor = "2026-09-06T12:34:00Z".parse().expect("fixed anchor");
-        let manifest = profile_manifest(SandboxProfile::Standard, anchor);
-        assert_eq!(
-            resolve_sandbox_profile_write(Ok(()), manifest.clone(), true, Some(&media))
-                .expect("confirmed profile write returns manifest"),
-            manifest
-        );
-
-        std::fs::write(&media, SANDBOX_SEEDED_MEDIA_BYTES).expect("seeded media");
-        let failed = resolve_sandbox_profile_write(
-            Err(SandboxProfileWriteError::Failed(anyhow::anyhow!(
-                "write failed"
-            ))),
-            manifest.clone(),
-            true,
-            Some(&media),
-        )
-        .expect_err("confirmed write failure propagates");
-        assert_eq!(failed.to_string(), "write failed");
-        assert!(!media.exists());
-
-        std::fs::write(&media, SANDBOX_SEEDED_MEDIA_BYTES).expect("seeded media");
-        let indeterminate = resolve_sandbox_profile_write(
-            Err(SandboxProfileWriteError::CommitIndeterminate),
-            manifest,
-            true,
-            Some(&media),
-        )
-        .expect_err("indeterminate commit propagates");
-        assert_eq!(
-            indeterminate.to_string(),
-            "sandbox profile write commit acknowledgement was indeterminate; retained seeded Media for revalidation"
-        );
-        assert!(media.exists());
     }
 
     #[test]

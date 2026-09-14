@@ -27,7 +27,7 @@ export type SeedRecord = {
 
 /** Stable Rust-owned manifest emitted by `seed-sandbox-profile`. */
 export type SandboxSeedManifest = {
-  version: number;
+  version: 2;
   posts: Array<{
     author: string;
     title: string;
@@ -37,13 +37,13 @@ export type SandboxSeedManifest = {
     publishedAt: string | null;
     visibility: "public" | "subscribers" | "private";
   }>;
-  media: {
+  media: Array<{
     author: string;
     filename: string;
     sha256: string;
     contentUrl: string;
     sizeBytes: number;
-  } | null;
+  }>;
 };
 
 /** The subset `applySeededSession` needs — `fixtures.ts`'s `TestUser` also
