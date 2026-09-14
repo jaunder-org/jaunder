@@ -222,13 +222,15 @@ let
         ) excludedMembers
       }
     '';
+  siteCargoMembers = [ "csr" "web" "client" "common" "macros" "tools/csr_bundle" "tools/performance" ];
+  wasmTestCargoMembers = [ "client" "common" "macros" "tools/csr_bundle" "tools/performance" ];
   siteSrc = withWorkspacePlaceholders
     "jaunder-site-cargo-source"
     (pkgs.lib.cleanSourceWith {
       src = craneLib.path ../.;
       filter =
         path: type:
-        cargoTargetSource [ "csr" "web" "client" "common" "macros" "tools/csr_bundle" ] path type
+        cargoTargetSource siteCargoMembers path type
         || pkgs.lib.hasSuffix "csr/index.html" path;
     })
     [ "host" "server" "storage" "test-support" ];
@@ -241,7 +243,7 @@ let
         let
           relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
         in
-        cargoTargetSource [ "client" "common" "macros" "tools/csr_bundle" ] path type
+        cargoTargetSource wasmTestCargoMembers path type
         || pkgs.lib.hasPrefix "client/tests/" relative;
     })
     [ "csr" "host" "server" "storage" "test-support" "web" ];
@@ -259,6 +261,9 @@ let
       # only on the host (dev box / CI runner).
       # Nix assembly is not application source; exclude only its top-level root.
       !(type == "directory" && path == "${toString (craneLib.path ../.)}/nix")
+      # Cargo build scripts treat a present `.git` as authoritative metadata.
+      # Never retain the filtered empty directory that crane would otherwise admit.
+      && !(pkgs.lib.hasSuffix "/.git" path || pkgs.lib.hasInfix "/.git/" path)
       && (!pkgs.lib.hasInfix "/xtask/" path)
       && (
         (pkgs.lib.hasSuffix ".sql" path)
@@ -404,44 +409,171 @@ let
   );
 
   # The auxiliary tools workspace is separate from the product workspace
-  # (ADR-0141). Keep its source and cargo artifacts separate from
-  # `commonArgs`/`cargoArtifacts`: `tools/Cargo.lock` owns these deps, while
-  # `xtask/` remains host-only and outside the flake source (ADR-0028).
-  toolsSrc = pkgs.lib.cleanSourceWith {
-    src = craneLib.path ../tools;
-    filter = craneLib.filterCargoSources;
+  # (ADR-0141): its lockfile and cargo artifacts stay independent, while the
+  # performance producer links the selected typed product-storage closure.
+  # Keep `xtask/` absent; it is host-only under ADR-0028.
+  toolsSrc = withWorkspacePlaceholders
+    "jaunder-tools-cargo-source"
+    (pkgs.lib.cleanSourceWith {
+      src = craneLib.path ../.;
+      filter =
+        path: type:
+        let
+          relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
+        in
+        type == "directory"
+        || relative == "tools/Cargo.lock"
+        || relative == "csr/index.html"
+        || pkgs.lib.hasPrefix "storage/migrations/" relative
+        || cargoMemberSource [ "common" "host" "macros" "storage" ] path type
+        || pkgs.lib.hasPrefix "tools/doctests/testdata/" relative
+        || (pkgs.lib.hasPrefix "tools/" relative && craneLib.filterCargoSources path type);
+    })
+    [ "client" "csr" "server" "test-support" "web" ];
+  docsToolsFilteredSrc = pkgs.lib.cleanSourceWith {
+    src = craneLib.path ../.;
+    filter =
+      path: type:
+      let
+        relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
+        requiredToolRoots = [
+          "tools/coverage"
+          "tools/csr_bundle"
+          "tools/devtool"
+          "tools/doctests"
+        ];
+        requiredToolPath =
+          builtins.any (
+            root: relative == root || pkgs.lib.hasPrefix "${root}/" relative
+          ) requiredToolRoots;
+        requiredDirectory =
+          toString path == toString ../.
+          || relative == "common"
+          || relative == "common/src"
+          || relative == "csr"
+          || relative == "storage"
+          || relative == "storage/src"
+          || relative == "tools"
+          || requiredToolPath;
+      in
+      (type == "directory" && requiredDirectory)
+      || relative == "tools/Cargo.toml"
+      || relative == "tools/Cargo.lock"
+      || relative == "csr/index.html"
+      || (requiredToolPath && craneLib.filterCargoSources path type);
   };
-  toolsArgs = {
+  docsToolsSrc = pkgs.runCommand "jaunder-docs-devtool-cargo-source" { } ''
+    cp --no-preserve=mode -r ${docsToolsFilteredSrc}/. "$out/"
+    mkdir -p \
+      "$out/common/src" \
+      "$out/storage/src" \
+      "$out/tools/diagnostic-coverage-runtime/src" \
+      "$out/tools/performance/src"
+    printf '%s\n' '[package]' 'name = "common"' 'version = "0.1.0"' 'edition = "2024"' > "$out/common/Cargo.toml"
+    printf '%s\n' '[package]' 'name = "storage"' 'version = "0.1.0"' 'edition = "2024"' > "$out/storage/Cargo.toml"
+    printf '%s\n' '[package]' 'name = "diagnostic-coverage-runtime"' 'version = "0.1.0"' 'edition = "2024"' > "$out/tools/diagnostic-coverage-runtime/Cargo.toml"
+    printf '%s\n' '[package]' 'name = "performance"' 'version = "0.1.0"' 'edition = "2024"' > "$out/tools/performance/Cargo.toml"
+    printf '%s\n' '# docs-only optional dependency placeholder' > "$out/common/src/lib.rs"
+    printf '%s\n' '# docs-only optional dependency placeholder' > "$out/storage/src/lib.rs"
+    printf '%s\n' '# docs-only workspace placeholder' > "$out/tools/diagnostic-coverage-runtime/src/lib.rs"
+    printf '%s\n' '# docs-only workspace placeholder' > "$out/tools/performance/src/lib.rs"
+  '';
+  toolsBaseArgs = {
     src = toolsSrc;
     pname = "jaunder-tools";
     version = "0.1.0";
     strictDeps = true;
+    cargoExtraArgs = "--manifest-path tools/Cargo.toml";
+    cargoLock = "${toolsSrc}/tools/Cargo.lock";
+    postPatch = ''
+      ln -sf ../Cargo.lock tools/Cargo.lock
+      substituteInPlace Cargo.toml \
+        --replace-fail '  "client",' "" \
+        --replace-fail '  "csr",' "" \
+        --replace-fail '  "server",' "" \
+        --replace-fail '  "test-support",' "" \
+        --replace-fail '  "web"' "";
+    '';
+    nativeBuildInputs = [ pkgs.pkg-config ];
+    buildInputs = [
+      pkgs.openssl
+      pkgs.sqlite
+      pkgs.dav1d
+    ]
+    ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
+      pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
+    ];
   };
-  toolsCargoArtifacts = craneLib.buildDepsOnly toolsArgs;
-  toolsCargoVendorDir = craneLib.vendorCargoDeps toolsArgs;
+  toolsVendorArgs = {
+    overrideVendorGitCheckout =
+      ps: drv:
+      let
+        p = builtins.head ps;
+      in
+      if p.name == "atom_syndication" then
+        pkgs.runCommandLocal "tools-atom-fork-vendor-${p.name}-${p.version}" { } ''
+          dst="$out/${p.name}-${p.version}"
+          mkdir -p "$dst"
+          cp -a ${atom-fork}/. "$dst/"
+          chmod -R u+w "$dst"
+          echo '{"files":{},"package":null}' > "$dst/.cargo-checksum.json"
+        ''
+      else
+        drv;
+  };
+  toolsCargoVendorDir = craneLib.vendorCargoDeps (toolsBaseArgs // toolsVendorArgs);
+  toolsArgs = toolsBaseArgs // {
+    cargoVendorDir = toolsCargoVendorDir;
+  };
+  docsToolsBaseArgs = toolsBaseArgs // {
+    src = docsToolsSrc;
+    pname = "jaunder-docs-devtool";
+    cargoExtraArgs = "--manifest-path tools/Cargo.toml -p devtool --no-default-features";
+    cargoLock = "${docsToolsSrc}/tools/Cargo.lock";
+    postPatch = ''
+      ln -sf ../Cargo.lock tools/Cargo.lock
+    '';
+  };
+  docsToolsCargoVendorDir = craneLib.vendorCargoDeps (docsToolsBaseArgs // toolsVendorArgs);
+  docsToolsArgs = docsToolsBaseArgs // {
+    cargoVendorDir = docsToolsCargoVendorDir;
+  };
+  docsToolsCargoArtifacts = craneLib.buildDepsOnly (
+    docsToolsArgs // { dummySrc = docsToolsSrc; }
+  );
+  toolsCargoArtifacts = craneLib.buildDepsOnly (toolsArgs // { dummySrc = toolsSrc; });
   toolsOfflineCargoHome = mkOfflineCargoHome {
     name = "jaunder-tools";
     vendorDir = toolsCargoVendorDir;
   };
 
-  # The in-sandbox dev tool (tools/ workspace: devtool + its coverage and
-  # doctests path-deps). The offline coverage/doctests sandboxes run it
-  # from PATH (nativeBuildInputs) instead of an in-sandbox `cargo run`,
-  # whose deps would not be vendored. `csr/index.html` remains the one
-  # tracked shell template; materialize the declared store input at the
-  # relative compile-time include path without widening toolsSrc to product
-  # sources or copying another tracked template.
+  # The in-sandbox dev tool. Offline coverage/doctest sandboxes run it from
+  # PATH instead of an in-sandbox `cargo run`, whose dependencies would not be
+  # vendored. The CSR shell is retained directly in toolsSrc for include_str!.
   devtoolBin = craneLib.buildPackage (
     toolsArgs
     // {
       cargoArtifacts = toolsCargoArtifacts;
       pname = "devtool";
-      cargoExtraArgs = "-p devtool";
-      preBuild = (toolsArgs.preBuild or "") + ''
-        mkdir -p ../csr
-        cp ${../csr/index.html} ../csr/index.html
-      '';
+      cargoExtraArgs = "${toolsArgs.cargoExtraArgs} -p devtool";
       doCheck = false;
+      installPhase = ''
+        mkdir -p $out/bin
+        cp tools/target/release/devtool $out/bin/devtool
+      '';
+      doNotPostBuildInstallCargoBinaries = true;
+    }
+  );
+  docsDevtoolBin = craneLib.buildPackage (
+    docsToolsArgs
+    // {
+      cargoArtifacts = docsToolsCargoArtifacts;
+      doCheck = false;
+      installPhase = ''
+        mkdir -p $out/bin
+        cp tools/target/release/devtool $out/bin/devtool
+      '';
+      doNotPostBuildInstallCargoBinaries = true;
     }
   );
 
@@ -870,6 +1002,8 @@ in
       hostArgs
       wasmTestSrc
       siteSrc
+      siteCargoMembers
+      wasmTestCargoMembers
       workspaceMembers
       cargoTargetSource
       cargoMemberSource
@@ -886,6 +1020,7 @@ in
       diagnosticBaselineCsrWasmBundle
       testSupportBin
       devtoolBin
+      docsDevtoolBin
       cargo-crap
       wasm-bindgen-cli
       wasmTestWebdriverConfig

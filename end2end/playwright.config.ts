@@ -1,4 +1,5 @@
 import { devices, defineConfig } from "@playwright/test";
+import { performanceEnabled } from "./tests/browser-performance";
 
 const traceParent = process.env.JAUNDER_E2E_TRACEPARENT;
 // Worker count is env-driven (#155), default 2: two browser instances per combo
@@ -38,20 +39,25 @@ const chromiumLaunchOptions = {
 const visualTag = /@visual/;
 const diagnosticCoverage = Boolean(process.env.JAUNDER_WASM_COVERAGE_OUT);
 const measurementMode = Boolean(process.env.JAUNDER_WASM_COVERAGE_MODE);
+const performanceMode = performanceEnabled();
+const runnerTrace = performanceMode ? "off" : "retain-on-failure";
 const productionBaselineTls = process.env.JAUNDER_PRODUCTION_BASELINE_TLS
   ? { ignoreHTTPSErrors: true }
   : {};
 const diagnosticCoverageSpec = /wasm-coverage\.spec\.ts/;
 const measurementSpec = /wasm-coverage-measure\.spec\.ts/;
+const performanceMeasurementSpec = /browser-performance\.measure\.spec\.ts/;
 const diagnosticSpec = measurementMode
   ? measurementSpec
   : diagnosticCoverageSpec;
-const ignoreDiagnosticCoverage = (pattern: RegExp) =>
-  diagnosticCoverage
-    ? pattern
-    : new RegExp(
-        `${pattern.source}|${diagnosticCoverageSpec.source}|${measurementSpec.source}`,
-      );
+const ignoreUnavailableSpecializedSpecs = (pattern: RegExp) => {
+  const sources = [pattern.source];
+  if (!diagnosticCoverage) {
+    sources.push(diagnosticCoverageSpec.source, measurementSpec.source);
+  }
+  if (!performanceMode) sources.push(performanceMeasurementSpec.source);
+  return new RegExp(sources.join("|"));
+};
 
 export default defineConfig({
   testDir: "./tests",
@@ -82,8 +88,9 @@ export default defineConfig({
   ],
   use: {
     actionTimeout: 0,
-    // Capture forensics only on failure so a green run writes nothing extra (#123/#49).
-    trace: "retain-on-failure",
+    // Performance measurements own one trace per sample; all other runs retain
+    // failure forensics without writing artifacts for green tests (#123/#49).
+    trace: runnerTrace,
     screenshot: "only-on-failure",
     ...(traceParent ? { extraHTTPHeaders: { traceparent: traceParent } } : {}),
   },
@@ -97,7 +104,7 @@ export default defineConfig({
   projects: [
     {
       name: "chromium-visual",
-      testIgnore: ignoreDiagnosticCoverage(
+      testIgnore: ignoreUnavailableSpecializedSpecs(
         /(admin-site|smtp|invite|media|production-baseline-flow)\.spec\.ts/,
       ),
       grep: visualTag,
@@ -109,7 +116,7 @@ export default defineConfig({
     },
     {
       name: "chromium",
-      testIgnore: ignoreDiagnosticCoverage(
+      testIgnore: ignoreUnavailableSpecializedSpecs(
         /(admin-site|smtp|theme|invite|media|production-baseline-flow)\.spec\.ts/,
       ),
       grepInvert: visualTag,
@@ -148,7 +155,7 @@ export default defineConfig({
     },
     {
       name: "firefox-visual",
-      testIgnore: ignoreDiagnosticCoverage(
+      testIgnore: ignoreUnavailableSpecializedSpecs(
         /(admin-site|smtp|invite|media|production-baseline-flow)\.spec\.ts/,
       ),
       grep: visualTag,
@@ -160,7 +167,7 @@ export default defineConfig({
     },
     {
       name: "firefox",
-      testIgnore: ignoreDiagnosticCoverage(
+      testIgnore: ignoreUnavailableSpecializedSpecs(
         /(admin-site|smtp|theme|invite|media|production-baseline-flow)\.spec\.ts/,
       ),
       grepInvert: visualTag,
@@ -198,7 +205,7 @@ export default defineConfig({
     },
     {
       name: "webkit",
-      testIgnore: ignoreDiagnosticCoverage(
+      testIgnore: ignoreUnavailableSpecializedSpecs(
         /(admin-site|smtp|theme|invite|media|production-baseline-flow)\.spec\.ts/,
       ),
       grepInvert: visualTag,

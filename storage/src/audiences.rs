@@ -18,6 +18,7 @@ use common::ids::{AudienceId, SubscriptionId, UserId};
 use common::time::UtcInstant;
 use sqlx::{Database, Pool, Row};
 use std::collections::BTreeSet;
+use thiserror::Error;
 
 use crate::backend::Backend;
 
@@ -54,14 +55,17 @@ where
 }
 
 /// Failure modes for the mutating audience operations.
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum AudienceError {
     /// An audience with the same `(author_user_id, name)` already exists.
+    #[error("audience name already exists")]
     DuplicateName,
     /// No audience matched the `(author_user_id, audience_id)` scope.
+    #[error("audience not found")]
     NotFound,
     /// Any other storage-layer failure.
-    Storage(sqlx::Error),
+    #[error("database error: {0}")]
+    Storage(#[source] sqlx::Error),
 }
 
 impl From<sqlx::Error> for AudienceError {

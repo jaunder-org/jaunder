@@ -76,16 +76,43 @@ the host coverage denominator
 Two sibling trees are outside the root workspace, each its own cargo workspace:
 `xtask/` (the host-only dev/CI driver, also named in the root
 `exclude = ["xtask"]`) and `tools/` (members `devtool`, `coverage`,
-`diagnostic-coverage-runtime`, and `doctests`). The diagnostic coverage runtime
-is a target-only auxiliary member that is also copied into the diagnostic Nix
-source closure; its manifest therefore keeps direct package metadata so that the
-copied crate remains independently parseable. Those boundaries are
-execution/ownership boundaries, not a claim that every `tools/` crate is absent
-from every Nix derivation
+`diagnostic-coverage-runtime`, `doctests`, and `performance`). `performance` is
+the pure versioned dataset, producer-artifact, statistics, and comparison
+contract shared by sandbox producers and host analysis under
+[ADR-0028](adr/0028-devtool-vs-xtask-boundary.md). The diagnostic coverage
+runtime is a target-only auxiliary member that is also copied into the
+diagnostic Nix source closure; its manifest therefore keeps direct package
+metadata so that the copied crate remains independently parseable. Those
+boundaries are execution/ownership boundaries, not a claim that every `tools/`
+crate is absent from every Nix derivation
 ([Cargo workspace execution boundaries](adr/0141-cargo-workspace-execution-boundaries.md)).
 `elisp/` (the Emacs client,
 [ADR-0031](adr/0031-elisp-separately-tested-subproject.md)) and `end2end/`
 (Playwright) are covered in their sections.
+
+**Performance evidence.** `cargo xtask perf <small|medium|large>` is a
+host-owned orchestration boundary. It gives every measurement a fresh nonce in
+the Nix derivation identity, invokes sandbox producers serially, validates their
+versioned fragments, and atomically retains the combined
+`.xtask/performance/<nonce>/performance-result-v1.json` with producer
+diagnostics. `--posts`, `--authors`, and `--revisions` are positive optional
+`u64` exploration overrides: accepted plans require posts divisible by authors,
+revisions at least posts, and more than 50 owner-history rows per author, then
+distribute revisions deterministically. Any override makes a result
+noncanonical, including a value equal to its profile default, and baseline
+import rejects it. The default matrix is storage plus Chromium browser work over
+SQLite and PostgreSQL; `medium` is the release-mode canonical comparison
+profile, while `small` is smoke-only and `large` is intentional stress. Raw
+samples, statistics, compatibility identities, and CI provenance remain
+machine-readable. The `Performance` workflow is manual, weekly, and
+performance-labeled-PR only; it runs one canonical benchmark job at a time,
+uploads the complete evidence tree, and never caches measurement output or
+changes the baseline. A producer writes `producer-status-v1.json` and retains
+available evidence before xtask reports a measured-workload or validation
+failure. A committed baseline is imported only from a verified successful `main`
+schedule/manual artifact with the exact workflow/job identity; PR evidence can
+be compared but cannot seed it. Timing deltas, including 20-percent median/p95
+warnings, are advisory; invalid artifacts and producer failures are not.
 
 **Package-metadata ownership is deliberately partial.** The root
 `[workspace.package]` owns the version, edition, and license inherited by its

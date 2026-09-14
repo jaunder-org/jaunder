@@ -7,6 +7,7 @@ use host::{capture, feed::FeedEventPhase};
 use storage::DbConnectOptions;
 use test_support::{
     SandboxProfile, SandboxSeedStorage, create_session_for_user, create_user,
+    performance::{PerformanceSeedReceipt, PerformanceSeedStorage, seed_performance_fixture},
     reset_author_theme_fixture, reset_mail, sandbox_profile_anchor, seed_dead_letters,
     seed_posts_for_user, seed_published_author_theme, seed_sandbox_profile, seed_user,
 };
@@ -55,6 +56,30 @@ enum Commands {
         /// Fixed sandbox profile to create.
         #[arg(long, value_enum)]
         profile: SandboxProfileArg,
+    },
+    /// Populate a deterministic performance fixture and atomically write its manifest.
+    PerfSeed {
+        /// Database URL (`sqlite:...` or `postgres://...`) for a freshly initialized database.
+        #[arg(long, env = "JAUNDER_DB")]
+        db: DbConnectOptions,
+        /// Canonical fixture size.
+        #[arg(long, value_enum)]
+        profile: PerformanceProfileArg,
+        /// Override the canonical post count.
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+        posts: Option<u64>,
+        /// Override the canonical author count.
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+        authors: Option<u64>,
+        /// Override the canonical revision count.
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+        revisions: Option<u64>,
+        /// Directory in which to atomically publish `dataset-manifest-v1.json`.
+        #[arg(long)]
+        output: std::path::PathBuf,
+        /// Canonical immutable Media-content root used by the live server.
+        #[arg(long, env = "JAUNDER_STORAGE_PATH")]
+        storage_path: std::path::PathBuf,
     },
     /// Publish and select the compiled custom-theme fixture for public browser proof.
     SeedTheme {
@@ -166,6 +191,23 @@ impl From<SandboxProfileArg> for SandboxProfile {
         }
     }
 }
+/// CLI spelling for canonical performance dataset profiles.
+#[derive(Clone, Copy, ValueEnum)]
+enum PerformanceProfileArg {
+    Small,
+    Medium,
+    Large,
+}
+
+impl From<PerformanceProfileArg> for performance::DatasetProfile {
+    fn from(profile: PerformanceProfileArg) -> Self {
+        match profile {
+            PerformanceProfileArg::Small => Self::Small,
+            PerformanceProfileArg::Medium => Self::Medium,
+            PerformanceProfileArg::Large => Self::Large,
+        }
+    }
+}
 
 fn inherited(name: &str) -> Result<Option<String>, std::env::VarError> {
     match std::env::var(name) {
@@ -251,6 +293,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             )
             .await
         }
+        command @ Commands::PerfSeed { .. } => run_perf_seed(command).await,
         Commands::SeedSandboxProfile {
             db,
             storage_path,
@@ -272,18 +315,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             password,
             display_name,
             operator,
-        } => {
-            let storage_runtime = storage_runtime_config(&db)?;
-            cmd_create_user(
-                &db,
-                &storage_runtime,
-                &username,
-                &password,
-                display_name.as_ref(),
-                operator,
-            )
-            .await
-        }
+        } => run_create_user(db, username, password, display_name, operator).await,
         Commands::ResetMail => {
             let mail_path = capture_directory()?.path(capture::Stream::Mail);
             cmd_reset_mail(&mail_path)
@@ -312,13 +344,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             let storage_runtime = storage_runtime_config(&db)?;
             cmd_create_session(&db, &storage_runtime, &username, label.as_deref()).await
         }
-        Commands::CapturePath { stream } => {
-            let stream = capture::Stream::parse(&stream)
-                .ok_or_else(|| anyhow::anyhow!("unknown capture stream {stream:?}"))?;
-            let path = capture_directory()?.path(stream);
-            cmd_capture_path(&path);
-            Ok(())
-        }
+        Commands::CapturePath { stream } => cmd_capture_path_for_stream(&stream),
         Commands::VerifyNoPanics {
             capture_dir,
             server_log,
@@ -329,10 +355,63 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
     }
 }
 
+async fn run_perf_seed(command: Commands) -> anyhow::Result<()> {
+    let Commands::PerfSeed {
+        db,
+        profile,
+        posts,
+        authors,
+        revisions,
+        output,
+        storage_path,
+    } = command
+    else {
+        unreachable!("run_perf_seed only receives perf-seed")
+    };
+    cmd_perf_seed(
+        &db,
+        profile.into(),
+        performance::CountOverrides {
+            posts,
+            authors,
+            revisions,
+        },
+        &output,
+        &storage_path,
+    )
+    .await
+}
+
+async fn run_create_user(
+    db: DbConnectOptions,
+    username: String,
+    password: String,
+    display_name: Option<DisplayName>,
+    operator: bool,
+) -> anyhow::Result<()> {
+    let storage_runtime = storage_runtime_config(&db)?;
+    cmd_create_user(
+        &db,
+        &storage_runtime,
+        &username,
+        &password,
+        display_name.as_ref(),
+        operator,
+    )
+    .await
+}
+
 /// Resolves the capture directory only for commands that consume capture paths.
 fn capture_directory() -> anyhow::Result<capture::CaptureDirectory> {
     capture::CaptureDirectory::from_raw(std::env::var_os(capture::DIR_ENV))?
         .ok_or_else(|| anyhow::anyhow!("JAUNDER_CAPTURE_DIR is not set"))
+}
+fn cmd_capture_path_for_stream(stream: &str) -> anyhow::Result<()> {
+    let stream = capture::Stream::parse(stream)
+        .ok_or_else(|| anyhow::anyhow!("unknown capture stream {stream:?}"))?;
+    let path = capture_directory()?.path(stream);
+    cmd_capture_path(&path);
+    Ok(())
 }
 
 /// Seed one complete fixed sandbox profile and report only after its transaction commits.
@@ -392,6 +471,39 @@ async fn cmd_seed_posts(
     eprintln!("seeded {} posts for {username}", ids.len());
     Ok(())
 }
+/// Seed one deterministic performance dataset and report its atomically published manifest.
+async fn cmd_perf_seed(
+    db: &DbConnectOptions,
+    profile: performance::DatasetProfile,
+    overrides: performance::CountOverrides,
+    output: &std::path::Path,
+    storage_path: &std::path::Path,
+) -> anyhow::Result<()> {
+    let runtime = storage_runtime_config(db)?;
+    let factory = storage::open_existing_database(db, &runtime).await?;
+    let (_, duration_us) = seed_performance_fixture(
+        PerformanceSeedStorage {
+            users: factory.users(),
+            posts: factory.posts(),
+            subscriptions: factory.subscriptions(),
+            audiences: factory.audiences(),
+            media: factory.media(),
+            write_scope: factory.write_scope(),
+        },
+        profile,
+        overrides,
+        output,
+        storage_path,
+    )
+    .await?;
+    let receipt = PerformanceSeedReceipt {
+        manifest_path: &output.join(performance::DATASET_MANIFEST_FILENAME),
+        seeding_duration_us: duration_us,
+    };
+    println!("{}", serde_json::to_string(&receipt)?);
+    Ok(())
+}
+
 /// Publish and select the compiled custom-theme fixture through the real storage path.
 async fn cmd_seed_theme(
     db: &DbConnectOptions,
@@ -520,6 +632,79 @@ mod tests {
 
     fn cli(command: Commands) -> Cli {
         Cli { command }
+    }
+
+    #[test]
+    fn perf_seed_parses_positive_count_overrides() {
+        let cli = Cli::try_parse_from([
+            "test-support",
+            "perf-seed",
+            "--db",
+            "sqlite:/tmp/performance.db",
+            "--profile",
+            "small",
+            "--posts",
+            "120",
+            "--authors",
+            "12",
+            "--revisions",
+            "777",
+            "--output",
+            "/tmp/output",
+            "--storage-path",
+            "/tmp/storage",
+        ])
+        .expect("parse performance overrides");
+        assert!(matches!(
+            cli.command,
+            Commands::PerfSeed {
+                posts: Some(120),
+                authors: Some(12),
+                revisions: Some(777),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn performance_profiles_map_to_contract_profiles() {
+        for (argument, expected) in [
+            (
+                PerformanceProfileArg::Small,
+                performance::DatasetProfile::Small,
+            ),
+            (
+                PerformanceProfileArg::Medium,
+                performance::DatasetProfile::Medium,
+            ),
+            (
+                PerformanceProfileArg::Large,
+                performance::DatasetProfile::Large,
+            ),
+        ] {
+            assert_eq!(performance::DatasetProfile::from(argument), expected);
+        }
+    }
+
+    #[test]
+    fn perf_seed_rejects_zero_count_override() {
+        assert!(
+            Cli::try_parse_from([
+                "test-support",
+                "perf-seed",
+                "--db",
+                "sqlite:/tmp/performance.db",
+                "--profile",
+                "small",
+                "--posts",
+                "0",
+                "--output",
+                "/tmp/output",
+                "--storage-path",
+                "/tmp/storage",
+            ])
+            .is_err()
+        );
     }
 
     /// A temp `SQLite` DB, created + migrated. The migrating pool is dropped before
@@ -818,6 +1003,26 @@ mod tests {
         }))
         .await
         .expect("create-session should dispatch and succeed");
+        let performance_output = TempDir::new().expect("performance manifest directory");
+        let performance_storage = TempDir::new().expect("performance Media root");
+        run(cli(Commands::PerfSeed {
+            db: db.clone(),
+            profile: PerformanceProfileArg::Small,
+            posts: Some(30),
+            authors: Some(1),
+            revisions: Some(60),
+            output: performance_output.path().to_owned(),
+            storage_path: performance_storage.path().to_owned(),
+        }))
+        .await
+        .expect("perf-seed should dispatch and succeed");
+        assert!(
+            performance_output
+                .path()
+                .join(performance::DATASET_MANIFEST_FILENAME)
+                .is_file(),
+            "perf-seed publishes its manifest",
+        );
 
         assert_dispatched_command_readback(&db).await;
     }

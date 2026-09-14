@@ -22,7 +22,10 @@ anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 jiff.workspace = true
+performance = { path = "../tools/performance" }
 async-trait.workspace = true
+sqlx = { workspace = true }
+sha2.workspace = true
 
 [dev-dependencies]
 storage = { workspace = true, features = ["test-support"] }

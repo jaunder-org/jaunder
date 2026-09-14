@@ -3504,6 +3504,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
+name = "performance"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "phc"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5406,10 +5415,13 @@ dependencies = [
  "common",
  "host",
  "jiff",
+ "performance",
  "rstest",
  "rstest_reuse",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
+ "sqlx",
  "storage",
  "tempfile",
  "tokio",
