@@ -31,6 +31,36 @@ use thiserror::Error;
 #[error("site.base_url hostname is locked while Passkeys exist")]
 pub struct PasskeyRpHostLocked;
 
+/// A typed outcome from a `site.base_url` mutation guarded by durable Passkeys.
+#[derive(Debug, Error)]
+pub enum BaseUrlMutationError {
+    /// Durable credentials prohibit the requested relying-party host change.
+    #[error(transparent)]
+    RpHostLocked(#[from] PasskeyRpHostLocked),
+    /// A parsed base URL is inconsistent with its validation contract.
+    #[error("site base URL validation error")]
+    Validation(#[source] Box<dyn std::error::Error + Send + Sync>),
+    /// The guarded operation's database failure.
+    #[error("site base URL database error")]
+    Database(#[from] sqlx::Error),
+}
+
+// cov:ignore-start: InvalidUrl construction is covered at the BaseUrl boundary; this conversion only preserves its typed validation classification.
+impl From<common::tagged_url::InvalidUrl> for BaseUrlMutationError {
+    fn from(error: common::tagged_url::InvalidUrl) -> Self {
+        Self::Validation(Box::new(error))
+    }
+}
+// cov:ignore-stop
+
+// cov:ignore-start: BaseUrl validates the serialized URL at construction, so reparsing it for its host cannot fail through this typed boundary.
+impl From<url::ParseError> for BaseUrlMutationError {
+    fn from(error: url::ParseError) -> Self {
+        Self::Validation(Box::new(error))
+    }
+}
+// cov:ignore-stop
+
 /// Changes `site.base_url` only when the resulting relying-party hostname stays
 /// compatible with the durable Passkey set.
 ///
@@ -44,7 +74,7 @@ pub async fn set_base_url_with_passkey_guard<S>(
     site_config: &S,
     passkeys: &dyn crate::PasskeyStorage,
     base_url: Option<BaseUrl>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+) -> std::result::Result<(), BaseUrlMutationError>
 where
     S: SiteConfigStorage + ?Sized,
 {
@@ -60,7 +90,7 @@ where
             None => false,
         };
         if !same_host {
-            return Err(Box::new(PasskeyRpHostLocked));
+            return Err(PasskeyRpHostLocked.into());
         }
     }
     site_config.set_base_url(transaction, base_url).await?;
@@ -78,19 +108,18 @@ pub async fn clear_base_url_with_passkey_guard<S>(
     transaction: &mut WriteTransaction,
     site_config: &S,
     passkeys: &dyn crate::PasskeyStorage,
-) -> Result<bool, Box<dyn std::error::Error + Send + Sync>>
+) -> std::result::Result<bool, BaseUrlMutationError>
 where
     S: SiteConfigStorage + ?Sized,
 {
     passkeys.lock_rp_host(transaction).await?;
     let _current = site_config.get_base_url_in_transaction(transaction).await?;
     if passkeys.has_credentials(transaction).await? {
-        return Err(Box::new(PasskeyRpHostLocked));
+        return Err(PasskeyRpHostLocked.into());
     }
-    site_config
+    Ok(site_config
         .delete(transaction, SiteConfigKey::SiteBaseUrl)
-        .await
-        .map_err(Into::into)
+        .await?)
 }
 #[cfg(test)]
 use std::sync::Arc;
@@ -386,7 +415,7 @@ pub trait SiteConfigStorage: Send + Sync {
         transaction: &mut WriteTransaction,
         passkeys: std::sync::Arc<dyn crate::PasskeyStorage>,
         config: &SiteIdentity,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    ) -> std::result::Result<(), BaseUrlMutationError> {
         set_base_url_with_passkey_guard(
             transaction,
             self,

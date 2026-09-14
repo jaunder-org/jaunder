@@ -28,6 +28,7 @@ mod mail;
 pub mod media;
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) mod mutation_feedback;
+pub mod passkeys;
 pub mod password_reset;
 pub mod posts;
 pub mod profile;

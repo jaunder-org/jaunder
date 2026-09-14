@@ -9,6 +9,7 @@ use std::fmt;
 use common::tagged_url::BaseUrl;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use url::Host;
 use webauthn_rs::prelude::{
     AuthenticationResult, Passkey, PasskeyAuthentication, PasskeyRegistration, PublicKeyCredential,
     RegisterPublicKeyCredential, Url, Uuid, Webauthn, WebauthnBuilder,
@@ -133,6 +134,22 @@ pub struct RegistrationResponse(serde_json::Value);
 #[serde(transparent)]
 pub struct AuthenticationResponse(serde_json::Value);
 
+impl RegistrationResponse {
+    /// Reconstitutes the untrusted browser JSON at the server boundary.
+    #[must_use]
+    pub fn from_json(value: serde_json::Value) -> Self {
+        Self(value)
+    }
+}
+
+impl AuthenticationResponse {
+    /// Reconstitutes the untrusted browser JSON at the server boundary.
+    #[must_use]
+    pub fn from_json(value: serde_json::Value) -> Self {
+        Self(value)
+    }
+}
+
 /// The opaque identifiers supplied by a discoverable assertion.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DiscoveredCredential {
@@ -164,6 +181,35 @@ pub fn classify_counter(stored: u32, returned: u32) -> CounterOutcome {
     }
 }
 
+/// Returns the exact trusted `WebAuthn` origin and RP hostname for a configured
+/// base URL. HTTP is limited to browser-trustworthy `localhost` domains. IP
+/// addresses are not valid RP IDs at the safe wrapper boundary.
+///
+/// # Errors
+///
+/// Returns an error when the URL has no domain hostname or is neither HTTPS nor
+/// an accepted localhost HTTP origin.
+pub fn webauthn_identity(base_url: &BaseUrl) -> Result<(String, String), PasskeyError> {
+    let mut origin = Url::parse(base_url.as_ref()).map_err(|_| PasskeyError::InvalidOrigin)?;
+    let host = origin.host().ok_or(PasskeyError::MissingHostname)?;
+    let (rp_id, http_loopback) = match host {
+        Host::Domain(domain) => {
+            let rp_id = domain.to_owned();
+            (
+                rp_id.clone(),
+                rp_id == "localhost" || rp_id.ends_with(".localhost"),
+            )
+        }
+        Host::Ipv4(_) | Host::Ipv6(_) => return Err(PasskeyError::InvalidOrigin),
+    };
+    if origin.scheme() != "https" && !(origin.scheme() == "http" && http_loopback) {
+        return Err(PasskeyError::InvalidOrigin);
+    }
+    origin.set_path("");
+    origin.set_query(None);
+    origin.set_fragment(None);
+    Ok((origin.to_string().trim_end_matches('/').to_owned(), rp_id))
+}
 /// Failures constructing the exact relying-party identity or translating trusted
 /// `WebAuthn` protocol values.
 #[derive(Debug, Error)]
@@ -196,14 +242,8 @@ impl RelyingParty {
     /// Returns an error when `site.base_url` has no valid hostname/origin or the
     /// safe `WebAuthn` wrapper rejects the resulting relying-party configuration.
     pub fn from_base_url(base_url: &BaseUrl) -> Result<Self, PasskeyError> {
-        let mut origin = Url::parse(base_url.as_ref()).map_err(|_| PasskeyError::InvalidOrigin)?;
-        let rp_id = origin
-            .host_str()
-            .ok_or(PasskeyError::MissingHostname)?
-            .to_owned();
-        origin.set_path("");
-        origin.set_query(None);
-        origin.set_fragment(None);
+        let (exact_origin, rp_id) = webauthn_identity(base_url)?;
+        let origin = Url::parse(&exact_origin).map_err(|_| PasskeyError::InvalidOrigin)?;
         let webauthn = WebauthnBuilder::new(&rp_id, &origin)
             .map_err(|error| PasskeyError::Protocol(Box::new(error)))?
             .build()
@@ -255,12 +295,15 @@ impl RelyingParty {
         response: RegistrationResponse,
         state: &RegistrationState,
     ) -> Result<Credential, PasskeyError> {
+        // cov:ignore-start: Browser credential deserialization is exercised by malformed-response unit tests and successful Chromium virtual-authenticator E2E; source coverage cannot combine those target-specific paths.
         let response: RegisterPublicKeyCredential =
             serde_json::from_value(response.0).map_err(PasskeyError::Json)?;
+        // Successful attestation verification is proved by Chromium virtual-authenticator E2E; host fixtures cannot forge a valid attestation.
         self.webauthn
             .finish_passkey_registration(&response, &state.0)
             .map(Credential)
             .map_err(|error| PasskeyError::Protocol(Box::new(error)))
+        // cov:ignore-stop
     }
 
     /// Start a user-invoked discoverable assertion with empty allowCredentials.
@@ -320,8 +363,10 @@ impl RelyingParty {
         state: AuthenticationState,
         credential: &Credential,
     ) -> Result<VerifiedAuthentication, PasskeyError> {
+        // cov:ignore-start: Browser assertion deserialization and verification are exercised across malformed-response unit tests and successful Chromium virtual-authenticator E2E; source coverage cannot combine those target-specific paths.
         let response: PublicKeyCredential =
             serde_json::from_value(response.0).map_err(PasskeyError::Json)?;
+        // Chromium virtual-authenticator E2E proves successful assertion cryptography; host fixtures cannot forge one, and the singleton credential invariant makes mismatch construction unreachable.
         let result: AuthenticationResult = self
             .webauthn
             .finish_discoverable_passkey_authentication(
@@ -342,6 +387,7 @@ impl RelyingParty {
             credential,
             counter,
         })
+        // cov:ignore-stop
     }
 }
 
@@ -369,6 +415,11 @@ mod tests {
         let (request, state) = relying_party
             .start_registration(&UserHandle::new([7; 16]), "account", "Account", &[])
             .unwrap();
+        assert_eq!(format!("{state:?}"), "RegistrationState([REDACTED])");
+        assert_eq!(
+            format!("{:?}", UserHandle::new([7; 16])),
+            "UserHandle([REDACTED])"
+        );
 
         assert_eq!(
             request.json()["publicKey"]["rp"]["id"],
@@ -393,6 +444,7 @@ mod tests {
         let base_url: BaseUrl = "https://passkeys.example.test:8443/".parse().unwrap();
         let relying_party = RelyingParty::from_base_url(&base_url).unwrap();
         let (request, state) = relying_party.start_authentication().unwrap();
+        assert_eq!(format!("{state:?}"), "AuthenticationState([REDACTED])");
 
         assert_eq!(request.json()["publicKey"]["rpId"], "passkeys.example.test");
         assert_eq!(
@@ -403,5 +455,48 @@ mod tests {
         let encoded = serde_json::to_value(&state).unwrap();
         let decoded: AuthenticationState = serde_json::from_value(encoded.clone()).unwrap();
         assert_eq!(serde_json::to_value(decoded).unwrap(), encoded);
+    }
+
+    #[test]
+    fn browser_response_constructors_keep_untrusted_json_at_the_adapter_boundary() {
+        let value = serde_json::json!({"id": "browser-supplied"});
+
+        assert_eq!(RegistrationResponse::from_json(value.clone()).0, value);
+        assert_eq!(AuthenticationResponse::from_json(value.clone()).0, value);
+    }
+
+    #[test]
+    fn registration_finish_rejects_malformed_browser_json() {
+        let base_url: BaseUrl = "https://passkeys.example.test:8443/".parse().unwrap();
+        let relying_party = RelyingParty::from_base_url(&base_url).unwrap();
+        let (_, state) = relying_party
+            .start_registration(&UserHandle::new([7; 16]), "account", "Account", &[])
+            .unwrap();
+
+        let result = relying_party.finish_registration(
+            RegistrationResponse::from_json(serde_json::json!({})),
+            &state,
+        );
+
+        assert!(matches!(result, Err(PasskeyError::Json(_))));
+    }
+
+    #[test]
+    fn webauthn_identity_matches_safe_wrapper_origin_boundaries() {
+        for value in [
+            "https://example.test/",
+            "http://localhost/",
+            "http://dev.localhost:8080/",
+        ] {
+            let base_url = value.parse().unwrap();
+            assert!(webauthn_identity(&base_url).is_ok(), "{value}");
+            assert!(RelyingParty::from_base_url(&base_url).is_ok(), "{value}");
+        }
+        for value in ["http://example.test/", "http://127.0.0.1/", "http://[::1]/"] {
+            assert!(
+                webauthn_identity(&value.parse().unwrap()).is_err(),
+                "{value}"
+            );
+        }
     }
 }

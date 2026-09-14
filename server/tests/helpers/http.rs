@@ -148,6 +148,17 @@ macro_rules! make_app {
             publisher = ($env).publisher(),
         )
     };
+    ($env:expr, $storage:expr; override_write_scope = $write_scope:expr) => {
+        make_app!(@build $storage, storage::InstanceId::new(), storage::test_support::noop_mailer(), false, std::sync::Arc::new(jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new());
+            site_config = ($env).site_config(), passkeys = ($env).passkeys(), users = ($env).users(), sessions = ($env).sessions(),
+            invites = ($env).invites(), email_verifications = ($env).email_verifications(),
+            password_resets = ($env).password_resets(), posts = ($env).posts(),
+            write_scope = $write_scope, subscriptions = ($env).subscriptions(),
+            audiences = ($env).audiences(), media = ($env).media(), user_config = ($env).user_config(),
+            themes = ($env).themes(), feed_cache = ($env).feed_cache(),
+            feed_events = ($env).feed_events(), publisher = ($env).publisher(),
+        )
+    };
     ($env:expr, $storage:expr; override_sessions = $sessions:expr) => {
         make_app!(@build $storage, storage::InstanceId::new(), storage::test_support::noop_mailer(), false, std::sync::Arc::new(jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new());
             site_config = ($env).site_config(), passkeys = ($env).passkeys(), users = ($env).users(), sessions = $sessions,

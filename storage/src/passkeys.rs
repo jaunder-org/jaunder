@@ -70,6 +70,13 @@ impl PasskeyCredentialId {
     pub fn from_bytes(bytes: &[u8]) -> Self {
         Self(URL_SAFE_NO_PAD.encode(bytes))
     }
+
+    /// Returns the credential identifier for the owner-only browser management
+    /// API.  It remains non-serializable so callers must opt in at that boundary.
+    #[must_use]
+    pub fn expose_to_browser(&self) -> &str {
+        &self.0
+    }
 }
 
 impl FromStr for PasskeyCredentialId {
@@ -110,7 +117,9 @@ impl PasskeyUserHandle {
             match byte {
                 b'0'..=b'9' => Some(byte - b'0'),
                 b'a'..=b'f' => Some(byte - b'a' + 10),
+                // cov:ignore-start: FromStr admits only lowercase hexadecimal, so this defensive invalid-nibble arm cannot cross the validated typed boundary.
                 _ => None,
+                // cov:ignore-stop
             }
         }
 
@@ -198,9 +207,11 @@ impl FromStr for RawPasskeyCeremonyHandle {
         if bytes.len() != 32 {
             return Err(InvalidRawPasskeyCeremonyHandle::Length);
         }
+        // cov:ignore-start: URL_SAFE_NO_PAD rejects non-zero trailing bits during decode, so a decoded 32-byte value cannot differ when canonically re-encoded.
         if URL_SAFE_NO_PAD.encode(&bytes) != value {
             return Err(InvalidRawPasskeyCeremonyHandle::NonCanonical);
         }
+        // cov:ignore-stop
         Ok(Self(value.to_owned()))
     }
 }
@@ -274,7 +285,7 @@ fn decode_error(error: impl std::error::Error + Send + Sync + 'static) -> sqlx::
     sqlx::Error::Decode(Box::new(error))
 }
 
-fn decode_credential(
+pub(crate) fn decode_credential(
     id: PasskeyCredentialId,
     user_id: UserId,
     label: PasskeyLabel,
@@ -282,7 +293,8 @@ fn decode_credential(
     created_at: UtcInstant,
     last_used_at: Option<UtcInstant>,
 ) -> Result<PasskeyCredential, sqlx::Error> {
-    let credential = serde_json::from_str::<Credential>(encoded).map_err(decode_error)?;
+    let credential = serde_json::from_str(encoded)
+        .map_err(|error| decode_error(PasskeyDecodeError::Serialization(error)))?;
     if PasskeyCredentialId::from_credential(&credential) != id {
         return Err(decode_error(PasskeyDecodeError::CredentialIdentityMismatch));
     }
@@ -391,6 +403,25 @@ pub trait PasskeyStorage: Send + Sync {
     ) -> sqlx::Result<u64>;
 }
 
+/// Per-backend Passkey operations whose locking SQL differs.
+///
+/// `credential_for_authentication` holds the credential lock until the
+/// surrounding transaction completes: `PostgreSQL` uses `FOR UPDATE`, while
+/// `SQLite`'s immediate [`WriteTransaction`] already excludes concurrent writers.
+/// `lock_rp_host` likewise uses `PostgreSQL`'s shared advisory lock and `SQLite`'s
+/// existing writer lock. See ADR-0019.
+#[async_trait]
+pub trait PasskeyDialect: Backend {
+    /// Load an assertion credential while retaining this transaction's lock.
+    async fn credential_for_authentication(
+        transaction: &mut WriteTransaction,
+        credential_id: &PasskeyCredentialId,
+    ) -> sqlx::Result<Option<PasskeyCredential>>;
+
+    /// Serialize configuration and registration-finish RP-host decisions.
+    async fn lock_rp_host(transaction: &mut WriteTransaction) -> sqlx::Result<()>;
+}
+
 /// Generic, shared-SQL implementation of [`PasskeyStorage`].
 pub struct PasskeyStore<DB: Database> {
     pool: Pool<DB>,
@@ -406,11 +437,10 @@ impl<DB: Database> PasskeyStore<DB> {
 #[async_trait]
 impl<DB> PasskeyStorage for PasskeyStore<DB>
 where
-    DB: Backend,
+    DB: PasskeyDialect,
     String: Type<DB>,
     for<'q> String: Encode<'q, DB>,
     for<'q> RowLimit: Encode<'q, DB> + Type<DB>,
-    for<'q> PasskeyRpAdvisoryLockKey: Encode<'q, DB> + Type<DB>,
     for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
     for<'q> PasskeyUserHandle: Encode<'q, DB> + Type<DB>,
     for<'q> PasskeyCredentialId: Encode<'q, DB> + Type<DB>,
@@ -547,32 +577,7 @@ where
         transaction: &mut WriteTransaction,
         credential_id: &PasskeyCredentialId,
     ) -> sqlx::Result<Option<PasskeyCredential>> {
-        let connection = DB::write_connection(transaction)?;
-        let query = if DB::DB_SYSTEM == "postgres" {
-            "SELECT credential_id, user_id, label, credential, created_at, last_used_at \
-             FROM passkey_credentials WHERE credential_id = $1 FOR UPDATE"
-        } else {
-            "SELECT credential_id, user_id, label, credential, created_at, last_used_at \
-             FROM passkey_credentials WHERE credential_id = $1"
-        };
-        let row = sqlx::query_as::<
-            _,
-            (
-                PasskeyCredentialId,
-                UserId,
-                PasskeyLabel,
-                StoredPasskeySerialization,
-                UtcInstant,
-                Option<UtcInstant>,
-            ),
-        >(query)
-        .bind_storage(credential_id)
-        .fetch_optional(&mut *connection)
-        .await?;
-        row.map(|(id, user_id, label, encoded, created_at, last_used_at)| {
-            decode_credential(id, user_id, label, &encoded.0, created_at, last_used_at)
-        })
-        .transpose()
+        DB::credential_for_authentication(transaction, credential_id).await
     }
 
     async fn create_registration_ceremony(
@@ -610,9 +615,11 @@ where
         ).bind_storage(now).bind_storage(handle_hash).fetch_optional(&mut *connection).await?;
         row.map(
             |(purpose, user_id, session_token_hash, label, origin, rp_id, state)| {
+                // cov:ignore-start: SQL restricts this claim to registration and the ceremony table CHECK permits only its matching purpose.
                 if purpose.0 != "registration" {
                     return Err(decode_error(PasskeyDecodeError::CeremonyPurposeMismatch));
                 }
+                // cov:ignore-stop
                 Ok(RegistrationCeremony {
                     user_id,
                     session_token_hash,
@@ -652,9 +659,11 @@ where
             "UPDATE passkey_authentication_ceremonies SET claimed_at = $1 WHERE handle_hash = $2 AND purpose = 'authentication' AND claimed_at IS NULL AND expires_at > $1 RETURNING purpose, origin, rp_id, state",
         ).bind_storage(now).bind_storage(handle_hash).fetch_optional(&mut *connection).await?;
         row.map(|(purpose, origin, rp_id, state)| {
+            // cov:ignore-start: SQL restricts this claim to authentication and the ceremony table CHECK permits only its matching purpose.
             if purpose.0 != "authentication" {
                 return Err(decode_error(PasskeyDecodeError::CeremonyPurposeMismatch));
             }
+            // cov:ignore-stop
             Ok(AuthenticationCeremony {
                 origin: origin.0,
                 rp_id: rp_id.0,
@@ -664,14 +673,7 @@ where
         .transpose()
     }
     async fn lock_rp_host(&self, transaction: &mut WriteTransaction) -> sqlx::Result<()> {
-        if DB::DB_SYSTEM == "postgres" {
-            let connection = DB::write_connection(transaction)?;
-            sqlx::query("SELECT pg_advisory_xact_lock($1)")
-                .bind_storage(PASSKEY_RP_ADVISORY_LOCK_KEY)
-                .execute(&mut *connection)
-                .await?;
-        }
-        Ok(())
+        DB::lock_rp_host(transaction).await
     }
 
     async fn update_credential_after_authentication(
@@ -752,9 +754,7 @@ where
 /// Trusted JSON copied from the adapter; only this private role is SQL-bindable.
 
 #[derive(macros::SqlxBridge)]
-pub(crate) struct StoredPasskeySerialization(String);
-
-/// Trusted exact origin/RP strings copied from configuration; only this private role is SQL-bindable.
+pub(crate) struct StoredPasskeySerialization(pub(crate) String);
 #[derive(macros::SqlxBridge)]
 pub(crate) struct StoredPasskeyText(String);
 
@@ -768,7 +768,8 @@ struct StoredPasskeyPurpose(String);
 #[derive(Clone, Copy, macros::SqlxBridge)]
 pub(crate) struct PasskeyRpAdvisoryLockKey(i64);
 
-const PASSKEY_RP_ADVISORY_LOCK_KEY: PasskeyRpAdvisoryLockKey = PasskeyRpAdvisoryLockKey(1_455);
+pub(crate) const PASSKEY_RP_ADVISORY_LOCK_KEY: PasskeyRpAdvisoryLockKey =
+    PasskeyRpAdvisoryLockKey(1_455);
 
 #[cfg(any(test, feature = "test-support"))]
 const CREDENTIAL_FIXTURE: &str = r#"{"cred_id":"uZcVDBVS68E_MtAgeQpElJxldF_6cY9sSvbWqx_qRh8wiu42lyRBRmh5yFeD_r9k130dMbFHBHI9RTFgdJQIzQ","cred":{"type_":"ES256","key":{"EC_EC2":{"curve":"SECP256R1","x":[194,126,127,109,252,23,131,21,252,6,223,99,44,254,140,27,230,17,94,5,133,28,104,41,144,69,171,149,161,26,200,243],"y":[143,123,183,156,24,178,21,248,117,159,162,69,171,52,188,252,26,59,6,47,103,92,19,58,117,103,249,0,219,8,95,196]}}},"counter":2,"user_verified":false,"backup_eligible":false,"backup_state":false,"registration_policy":"preferred","extensions":{"cred_protect":"NotRequested","hmac_create_secret":"NotRequested"},"attestation":{"data":{"Basic":["MIICvTCCAaWgAwIBAgIEK_F8eDANBgkqhkiG9w0BAQsFADAuMSwwKgYDVQQDEyNZdWJpY28gVTJGIFJvb3QgQ0EgU2VyaWFsIDQ1NzIwMDYzMTAgFw0xNDA4MDEwMDAwMDBaGA8yMDUwMDkwNDAwMDAwMFowbjELMAkGA1UEBhMCU0UxEjAQBgNVBAoMCVl1YmljbyBBQjEiMCAGA1UECwwZQXV0aGVudGljYXRvciBBdHRlc3RhdGlvbjEnMCUGA1UEAwweWXViaWNvIFUyRiBFRSBTZXJpYWwgNzM3MjQ2MzI4MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEdMLHhCPIcS6bSPJZWGb8cECuTN8H13fVha8Ek5nt-pI8vrSflxb59Vp4bDQlH8jzXj3oW1ZwUDjHC6EnGWB5i6NsMGowIgYJKwYBBAGCxAoCBBUxLjMuNi4xLjQuMS40MTQ4Mi4xLjcwEwYLKwYBBAGC5RwCAQEEBAMCAiQwIQYLKwYBBAGC5RwBAQQEEgQQxe9V_62aS5-1gK3rr-Am0DAMBgNVHRMBAf8EAjAAMA0GCSqGSIb3DQEBCwUAA4IBAQCLbpN2nXhNbunZANJxAn_Cd-S4JuZsObnUiLnLLS0FPWa01TY8F7oJ8bE-aFa4kTe6NQQfi8-yiZrQ8N-JL4f7gNdQPSrH-r3iFd4SvroDe1jaJO4J9LeiFjmRdcVa-5cqNF4G1fPCofvw9W4lKnObuPakr0x_icdVq1MXhYdUtQk6Zr5mBnc4FhN9qi7DXqLHD5G7ZFUmGwfIcD2-0m1f1mwQS8yRD5-_aDCf3vutwddoi3crtivzyromwbKklR4qHunJ75LGZLZA8pJ_mXnUQ6TTsgRqPvPXgQPbSyGMf2z_DIPbQqCD_Bmc4dj9o6LozheBdDtcZCAjSPTAd_ui"]},"metadata":"None"},"attestation_format":"Packed"}"#;
@@ -837,8 +838,21 @@ mod tests {
             PasskeyUserHandle::from_adapter_handle(&adapter_handle),
             handle
         );
+        for invalid in [
+            "0123456789abcdef0123456789abcde",
+            "0123456789abcdef0123456789abcdef0",
+            "0123456789abcdef0123456789abcdeF",
+            "0123456789abcdef0123456789abcdeg",
+        ] {
+            assert!(
+                invalid.parse::<PasskeyUserHandle>().is_err(),
+                "{invalid:?} must not be a durable user handle"
+            );
+        }
 
         let credential = credential_fixture();
+        assert_eq!(credential.counter(), 2);
+        assert_eq!(format!("{credential:?}"), "Credential([REDACTED])");
         let credential_id = PasskeyCredentialId::from_credential(&credential);
         assert_eq!(
             format!("{credential_id:?}"),
@@ -856,6 +870,11 @@ mod tests {
         assert_eq!(format!("{raw:?}"), "RawPasskeyCeremonyHandle([REDACTED])");
         let hash = raw.hash();
         assert_eq!(
+            URL_SAFE_NO_PAD.decode(hash.to_string()).unwrap().len(),
+            32,
+            "stored lookup keys are SHA-256 digests"
+        );
+        assert_eq!(
             hash.to_string()
                 .parse::<StoredPasskeyCeremonyHandleHash>()
                 .unwrap(),
@@ -866,17 +885,22 @@ mod tests {
             .parse::<RawPasskeyCeremonyHandle>()
             .unwrap();
         assert_eq!(reparsed.hash(), hash);
-        assert!(
-            "not a ceremony handle"
-                .parse::<RawPasskeyCeremonyHandle>()
-                .is_err()
-        );
-        assert!(
+        assert!(matches!(
+            "not a ceremony handle".parse::<RawPasskeyCeremonyHandle>(),
+            Err(InvalidRawPasskeyCeremonyHandle::Encoding(_))
+        ));
+        assert!(matches!(
             URL_SAFE_NO_PAD
                 .encode([0_u8; 31])
-                .parse::<RawPasskeyCeremonyHandle>()
-                .is_err()
-        );
+                .parse::<RawPasskeyCeremonyHandle>(),
+            Err(InvalidRawPasskeyCeremonyHandle::Length)
+        ));
+        assert!(matches!(
+            URL_SAFE_NO_PAD
+                .encode([0_u8; 31])
+                .parse::<StoredPasskeyCeremonyHandleHash>(),
+            Err(InvalidStoredPasskeyCeremonyHandleHash::Length)
+        ));
     }
 
     #[test]
@@ -1209,6 +1233,24 @@ mod tests {
         let error = env.passkeys().list_credentials(user_id).await.unwrap_err();
         assert!(matches!(error, sqlx::Error::Decode(_)));
     }
+    #[test]
+    fn authentication_rejects_malformed_browser_json_before_cryptographic_verification() {
+        use host::passkey::{AuthenticationResponse, PasskeyError, RelyingParty};
+
+        let base_url = "https://passkeys.example.test/".parse().unwrap();
+        let relying_party = RelyingParty::from_base_url(&base_url).unwrap();
+        let (_, state) = relying_party.start_authentication().unwrap();
+        let error = relying_party
+            .finish_authentication(
+                AuthenticationResponse::from_json(serde_json::json!({"not": "an assertion"})),
+                state,
+                &credential_fixture(),
+            )
+            .expect_err("malformed browser JSON is rejected before authentication");
+
+        assert!(matches!(error, PasskeyError::Json(_)));
+    }
+
     #[apply(backends)]
     #[tokio::test]
     async fn authentication_ceremonies_enforce_expiry_claim_once_and_cleanup(
@@ -1426,7 +1468,7 @@ mod tests {
     }
     #[apply(backends)]
     #[tokio::test]
-    async fn authentication_finalization_rolls_back_credential_use_and_session_revocation(
+    async fn authentication_finalization_rolls_back_credential_use_and_session_creation(
         #[case] backend: Backend,
     ) {
         use common::test_support::parse_session_label;
@@ -1490,7 +1532,7 @@ mod tests {
         assert_eq!(
             env.sessions().list_sessions(user_id).await.unwrap().len(),
             2,
-            "the new session and sibling revocation both roll back"
+            "the new session and credential update both roll back"
         );
         let credential_id = PasskeyCredentialId::from_credential(&credential);
         assert!(

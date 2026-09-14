@@ -22,6 +22,16 @@ pub struct SessionContext {
     /// (cookie-checked) session for gates that must not trust a stale marker.
     pub reconcile: Resource<WebResult<Option<SessionUser>>>,
 }
+impl SessionContext {
+    /// Optimistically publish an authenticated user through this captured context.
+    ///
+    /// Capturing the context before spawning an asynchronous browser ceremony
+    /// avoids consulting the reactive owner after the ceremony yields.
+    pub fn set(self, user: SessionUser) {
+        marker_storage::set(&user);
+        self.current.set(Some(user));
+    }
+}
 
 /// Provide the session context. Seeds from the marker synchronously, then
 /// reconciles against `get_session()` on every navigation, writing the result back
@@ -77,9 +87,7 @@ pub fn use_session() -> SessionContext {
 /// Optimistically set the session (login/register) — `current` signal + marker, so
 /// the chrome flips without waiting for the reconcile round-trip.
 pub fn set_session(user: SessionUser) {
-    let ctx = use_session();
-    marker_storage::set(&user);
-    ctx.current.set(Some(user));
+    use_session().set(user);
 }
 
 /// Optimistically clear the session (logout) — `current` signal + marker.

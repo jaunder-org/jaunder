@@ -4,6 +4,8 @@ Matrix: `matrix:docs/coverage/csr-e2e-matrix.md#theme-management-api-transport`
 
 ## Routes
 
+- `route:/themes`
+
 `/themes` is an authenticated Studio route. It begins in the session owner's
 author catalog; an operator may deliberately switch to the distinct site
 catalog. The server remains authoritative for the selected scope and returns an

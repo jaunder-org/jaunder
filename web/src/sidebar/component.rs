@@ -23,7 +23,7 @@ fn SidebarNavItem(
     } else {
         "j-nav-item"
     };
-    let test_selector = (test_key == "history").then_some("history-nav-link");
+    let test_selector = markup::test_selector(test_key);
     let inner = view! {
         <Icon path=icon_path size=16 />
         <span>{label}</span>

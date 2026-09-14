@@ -174,6 +174,23 @@ pub async fn require_auth_with_parts(parts: Option<Parts>) -> InternalResult<Use
 pub async fn require_auth() -> InternalResult<User> {
     require_auth_with_parts(context::use_context::<Parts>()).await
 }
+/// Extracts a browser-session identity for operations which must never accept
+/// an explicit credential.  An Authorization header is an intentional request
+/// mode, so it is rejected even when a valid ambient cookie is also present.
+pub(crate) async fn require_cookie_auth() -> InternalResult<User> {
+    let mut parts = context::use_context::<Parts>()
+        .ok_or_else(|| InternalError::server_message("missing request Parts context"))?;
+    if parts
+        .headers
+        .contains_key(axum::http::header::AUTHORIZATION)
+    {
+        return Err(InternalError::unauthorized("cookie session required"));
+    }
+    // Without Authorization, User can only have resolved a cookie.
+    User::from_request_parts(&mut parts, &())
+        .await
+        .map_err(auth_rejection_error)
+}
 
 /// Resolves an optional authenticated user inside a Leptos server function.
 ///

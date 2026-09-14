@@ -20,6 +20,15 @@ web-sys = { workspace = true, features = [
   "Element",
   "Node",
   "NodeList",
+  # `client::webauthn` invokes explicit WebAuthn ceremonies (#1455).
+  "Navigator",
+  "CredentialsContainer",
+  "Credential",
+  "PublicKeyCredential",
+  "CredentialCreationOptions",
+  "CredentialRequestOptions",
+  "PublicKeyCredentialCreationOptions",
+  "PublicKeyCredentialRequestOptions",
   # `client::perf` marks the CSR boot phases through `window.performance` (#794).
   "Performance",
   # The media file-picker + click-to-select glue relocated from `web` (#520).
@@ -48,8 +57,10 @@ leptos = { workspace = true, optional = true }
 server_fn = { workspace = true, features = ["multipart"], optional = true }
 
 
-[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+[dev-dependencies]
 wasm-bindgen-test = "=0.3.78"
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 jiff = { workspace = true, features = ["js"] }
 
 [features]

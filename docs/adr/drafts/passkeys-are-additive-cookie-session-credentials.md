@@ -46,14 +46,16 @@ retains the library credential representation and the creation, last-use, label,
 counter, and backup properties required to verify and manage multiple
 credentials on both SQLite and PostgreSQL.
 
-The WebAuthn origin is exactly the configured `site.base_url` origin and the RP
-ID is its hostname. Request Host and forwarding headers never select trust.
-Passkeys fail closed and their UI is clearly unavailable when the setting is
-absent or is not HTTPS, except for the browser's localhost development case.
-While any Passkey exists, every configuration mutation must preserve the
-canonical RP hostname: unsetting or changing it is rejected, including through
-aggregate and CLI writes. Jaunder supports neither wildcard/multiple origins nor
-credential migration between RP hostnames.
+The WebAuthn origin is exactly the configured `site.base_url` origin, including
+scheme and port, and the RP ID is its hostname. Request Host and forwarding
+headers never select trust. Passkeys fail closed and their UI is clearly
+unavailable when the setting is absent or is not HTTPS, except for
+browser-trustworthy `http` localhost-domain development; IP literals are not
+valid RP IDs. While any Passkey exists, every configuration mutation must
+preserve the canonical RP hostname: unsetting or changing it is rejected,
+including through aggregate and CLI writes; scheme and port changes remain
+legal. Jaunder supports neither wildcard/multiple origins nor credential
+migration between RP hostnames.
 
 Ceremony state is database-backed, purpose-bound, expires after five minutes,
 and is atomically claimable once. It binds the exact origin and RP ID used at

@@ -17,7 +17,7 @@ pub(super) struct NavItem {
     pub(super) requires_operator: bool,
 }
 
-pub(super) static NAV_ITEMS: LazyLock<[NavItem; 18]> = LazyLock::new(|| {
+pub(super) static NAV_ITEMS: LazyLock<[NavItem; 19]> = LazyLock::new(|| {
     [
         NavItem {
             key: "local",
@@ -118,6 +118,14 @@ pub(super) static NAV_ITEMS: LazyLock<[NavItem; 18]> = LazyLock::new(|| {
             requires_operator: false,
         },
         NavItem {
+            key: "passkeys",
+            label: "Passkeys",
+            icon_path: Icons::COG,
+            href: Some(root_relative_url("/passkeys")),
+            requires_auth: true,
+            requires_operator: false,
+        },
+        NavItem {
             key: "settings",
             label: "Settings",
             icon_path: Icons::COG,
@@ -206,6 +214,14 @@ pub(crate) fn active_key(pathname: &str) -> Option<&'static str> {
         .find(|item| item.href.as_deref() == Some(pathname))
         .map(|item| item.key)
 }
+/// Returns the stable browser-test selector for navigation contracts that need one.
+pub(super) fn test_selector(key: &str) -> Option<&'static str> {
+    match key {
+        "history" => Some("history-nav-link"),
+        "passkeys" => Some("passkeys-nav-link"),
+        _ => None,
+    }
+}
 
 /// The inner HTML of the **anonymous** `<aside class="j-sidebar">`: brand, search,
 /// the public nav (items with an href and no auth requirement — just "Local"), and
@@ -230,6 +246,7 @@ pub(crate) fn render_sidebar(active_key: &str) -> Markup {
                 @if let Some(href) = &item.href {
                     a class={ "j-nav-item" @if item.key == active_key { " is-active" } }
                         href=(href)
+                        data-test=[test_selector(item.key)]
                     {
                         (icon::render(item.icon_path, 16))
                         span { (item.label) }
@@ -305,6 +322,7 @@ mod tests {
                 ("media", "/media"),
                 ("audiences", "/audiences"),
                 ("themes", "/themes"),
+                ("passkeys", "/passkeys"),
                 ("settings", "/profile"),
                 ("invites", "/invites"),
                 ("admin-backups", "/admin/backups"),
@@ -336,6 +354,13 @@ mod tests {
         assert_eq!(active_key("/posts/new"), Some("compose"));
         assert_eq!(active_key("/posts/new/revisions"), None);
         assert_eq!(active_key("/unknown"), None);
+    }
+
+    #[test]
+    fn browser_test_selectors_exist_only_for_navigation_contracts() {
+        assert_eq!(test_selector("history"), Some("history-nav-link"));
+        assert_eq!(test_selector("passkeys"), Some("passkeys-nav-link"));
+        assert_eq!(test_selector("home"), None);
     }
 
     #[test]

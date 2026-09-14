@@ -636,8 +636,8 @@ mod tests {
     // extractor actually reads: one hit-chain per (span name + URI path, test)
     // pair, at most two orphan examples per key, eight non-`/api/` spans, and only
     // the handful of attributes `parse_spans`/`extract` consume. That keeps it
-    // ~610 KiB instead of 25 MB while preserving the hit set exactly — the same 911
-    // (fn, test) pairs the full capture yields. That preservation is what AC11
+    // ~1.2 MiB instead of the full capture while preserving its (fn, test) hit
+    // set exactly. That preservation is what AC11
     // rests on, which is why the reduction is committed and re-runnable rather than
     // described: a reader can regenerate the fixture and diff instead of taking it
     // on trust. Per-fn orphan *counts* are NOT preserved by the dedup — the
@@ -715,18 +715,14 @@ mod tests {
         let mut mismatches: Vec<String> = Vec::new();
 
         for span in &spans {
-            // Signal 1 — span name plus `code.namespace`. Independent of the URI,
-            // which is the value under test.
-            let namespace = crate::traces::parse::get_attr(
-                &span.raw,
-                crate::server_fn_coverage::extract::MODULE_ATTR,
-            );
-            if namespace.is_empty() {
+            // Signal 1 — span name plus module. Independent of the URI, which is
+            // the value under test. `span_module` owns current-then-legacy attribute
+            // precedence so this contract cannot drift from extraction.
+            let module = crate::server_fn_coverage::extract::span_module(span);
+            if module.is_empty() {
                 continue;
             }
-            let relative = namespace
-                .strip_prefix("web::")
-                .unwrap_or(namespace.as_str());
+            let relative = module.strip_prefix("web::").unwrap_or(module.as_str());
             let Some(f) = inv.iter().find(|f| {
                 relative == f.module
                     && crate::server_fn_coverage::extract::candidate_span_names(f)
@@ -856,7 +852,7 @@ mod tests {
     fn the_span_names_carry_the_module_the_check_compares() {
         // Guards the reduction as much as the extractor: signal 1 refuses a hit it
         // cannot place in the right module, so a fixture that kept the instrument
-        // spans but dropped their `code.namespace` would silently fall back to `uri`
+        // spans but dropped their module attributes would silently fall back to `uri`
         // for everything — and, per the test above, look identical while doing it.
         let inv = inventory(&repo_root().join(WEB_SRC)).expect("inventory enumerates");
         let verticals: std::collections::BTreeSet<&str> = inv
@@ -869,10 +865,10 @@ mod tests {
                 .iter()
                 .any(|v| s.name.starts_with(&format!("web.{v}.")))
         }) {
-            let namespace = crate::traces::parse::get_attr(&span.raw, "code.namespace");
+            let module = crate::server_fn_coverage::extract::span_module(span);
             assert!(
-                namespace.starts_with("web::"),
-                "{} lost its web:: code.namespace: {namespace:?}",
+                module.starts_with("web::"),
+                "{} lost its web:: module attribute: {module:?}",
                 span.name
             );
             checked += 1;

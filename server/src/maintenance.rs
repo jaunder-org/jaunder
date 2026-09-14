@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use crate::scheduled_worker::{ScheduledWorkerGuard, WorkTracker};
 use anyhow::Result;
-use common::{pagination::RowLimit, time::UtcInstant};
+use common::{MutationOutcome, pagination::RowLimit, time::UtcInstant};
 use host::{
     error::{self, ErrorClass, ErrorKind, SwallowedSource},
     metrics,
@@ -147,19 +147,23 @@ async fn prune_passkey_ceremonies(
                 storage::WriteScopeError::Begin(error)
                 | storage::WriteScopeError::Operation(error) => error,
             })?;
-        let batch = match outcome {
-            common::MutationOutcome::Confirmed(batch) => {
-                if batch != 0 {
-                    metrics::retention_pruned(Domain::PasskeyCeremonies, batch);
-                }
-                batch
-            }
-            common::MutationOutcome::CommitIndeterminate(batch) => batch,
-        };
+        let batch = confirmed_passkey_prune(&outcome)?;
+        if batch != 0 {
+            metrics::retention_pruned(Domain::PasskeyCeremonies, batch);
+        }
         pruned += batch;
         if batch < BATCH_SIZE.value().unsigned_abs() {
             return Ok(pruned);
         }
+    }
+}
+
+fn confirmed_passkey_prune(outcome: &MutationOutcome<u64>) -> Result<u64, sqlx::Error> {
+    match outcome {
+        MutationOutcome::Confirmed(batch) => Ok(*batch),
+        MutationOutcome::CommitIndeterminate(_) => Err(sqlx::Error::Protocol(
+            "passkey ceremony cleanup commit acknowledgement was indeterminate".to_owned(),
+        )),
     }
 }
 
@@ -192,12 +196,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::*;
+    use rstest_reuse::*;
     use sqlx::Error as SqlxError;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use storage::{
         FeedEventError, MockEmailVerificationStorage, MockFeedEventStorage, MockInviteStorage,
         MockPasskeyStorage, MockPasswordResetStorage, MockPostStorage,
-        test_support::mock_write_scope,
+        test_support::{Backend, backends, mock_write_scope},
     };
     use tokio::time;
     #[derive(Clone)]
@@ -281,6 +287,55 @@ mod tests {
             .unwrap();
 
         assert_eq!(pruned, 100);
+    }
+
+    #[tokio::test]
+    async fn passkey_cleanup_surfaces_a_prune_operation_failure() {
+        let mut passkeys = MockPasskeyStorage::new();
+        passkeys
+            .expect_prune_ceremonies()
+            .times(1)
+            .returning(|_, _, _| Box::pin(async { Err(SqlxError::PoolClosed) }));
+        let passkeys: Arc<dyn PasskeyStorage> = Arc::new(passkeys);
+
+        let error = prune_passkey_ceremonies(
+            &passkeys,
+            &mock_write_scope(),
+            "2026-09-13T12:00:00Z".parse().unwrap(),
+        )
+        .await
+        .expect_err("a pruning operation failure escapes the write scope");
+
+        assert!(matches!(error, SqlxError::PoolClosed));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn passkey_cleanup_surfaces_a_write_scope_begin_failure(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        env.base.close_pool().await;
+        let passkeys = env.passkeys();
+
+        let error = prune_passkey_ceremonies(
+            &passkeys,
+            &env.write_scope(),
+            "2026-09-13T12:00:00Z".parse().unwrap(),
+        )
+        .await
+        .expect_err("a closed pool prevents starting a write scope");
+
+        assert!(matches!(error, SqlxError::PoolClosed));
+    }
+
+    #[test]
+    fn passkey_cleanup_keeps_indeterminate_commits_error_like() {
+        let error = confirmed_passkey_prune(&MutationOutcome::CommitIndeterminate(3))
+            .expect_err("an unconfirmed cleanup is not successful");
+        assert!(
+            error
+                .to_string()
+                .contains("commit acknowledgement was indeterminate")
+        );
     }
     #[tokio::test]
     async fn run_at_composes_passkey_cleanup_with_every_existing_domain() {

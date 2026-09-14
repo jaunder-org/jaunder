@@ -32,7 +32,10 @@ pub use backend::{
     sqlite_only, sqlite_url, sqlite_write_scope,
 };
 #[cfg(any(test, feature = "test-utils"))]
-pub use backend::{mock_write_scope, mock_write_scope_with_commit_acknowledgement_loss};
+pub use backend::{
+    mock_write_scope, mock_write_scope_with_commit_acknowledgement_loss,
+    write_scope_with_commit_acknowledgement_loss,
+};
 
 pub use feed_cache::SeedFeedCache;
 pub use feeds::fp;

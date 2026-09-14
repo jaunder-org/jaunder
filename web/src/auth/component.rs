@@ -6,9 +6,11 @@
 use super::{Login, Logout, SessionUser};
 use crate::error::WebError;
 use crate::forms::{self, Field, ValidatedInput};
+use crate::passkeys;
 use crate::topbar::Topbar;
 use common::{MutationOutcome, password::PasswordShape, username::Username};
 use leptos::prelude::*;
+use leptos_router::{NavigateOptions, hooks::use_navigate};
 
 /// Login page.
 #[component]
@@ -35,6 +37,7 @@ pub fn LoginPage() -> impl IntoView {
         <div class="j-scroll">
             <div class="j-page-narrow">
                 <LoginForm action=login_action />
+                <PasskeyLogin />
                 {move || {
                     login_action
                         .value()
@@ -103,6 +106,165 @@ fn LoginForm(action: ServerAction<Login>) -> impl IntoView {
                 </button>
             </div>
         </form>
+    }
+}
+/// Browser passkey sign-in. The cookie established by finish_authentication is
+/// reconciled through the same shared session authority as password login.
+#[component]
+fn PasskeyLogin() -> impl IntoView {
+    let navigate = use_navigate();
+    let availability = Resource::new(|| (), |()| passkeys::availability());
+    let status = RwSignal::new(None::<String>);
+    let working = RwSignal::new(false);
+    let supported = client::webauthn::is_supported();
+    let session_context = super::use_session();
+    let sign_in = move |_| {
+        if !supported || !matches!(availability.get_untracked(), Some(Ok(true))) {
+            return;
+        }
+        let navigate = navigate.clone();
+        working.set(true);
+        status.set(None);
+        leptos::task::spawn_local(async move {
+            let message = match authenticate_passkey().await {
+                PasskeyAuthentication::Confirmed(session) => {
+                    session_context.set(session);
+                    session_context.reconcile.refetch();
+                    navigate("/", NavigateOptions::default());
+                    "Signed in with your passkey.".to_owned()
+                }
+                PasskeyAuthentication::Indeterminate(session) => {
+                    session_context.set(session);
+                    session_context.reconcile.refetch();
+                    "Your sign-in may have succeeded. Refresh to confirm your session.".to_owned()
+                }
+                PasskeyAuthentication::Message(message) => message,
+            };
+            working.set(false);
+            status.set(Some(message));
+        });
+    };
+
+    view! {
+        <section class="j-card" data-test="passkey-login">
+            <div class="j-card-head">
+                <h2>"Sign in with a passkey"</h2>
+            </div>
+            <div class="j-form-body">
+                <p>"Use a passkey from this device or a connected security key."</p>
+                <PasskeyLoginAvailability availability=availability supported=supported />
+            </div>
+            <div class="j-form-actions">
+                <button
+                    type="button"
+                    class="j-btn"
+                    data-test="passkey-login-button"
+                    prop:disabled=move || {
+                        working.get() || !supported || !matches!(availability.get(), Some(Ok(true)))
+                    }
+                    on:click=sign_in
+                >
+                    {move || if working.get() { "Waiting for passkey…" } else { "Use a passkey" }}
+                </button>
+            </div>
+            {move || {
+                status
+                    .get()
+                    .map(|message| {
+                        view! {
+                            <p role="status" aria-live="polite" data-test="passkey-login-status">
+                                {message}
+                            </p>
+                        }
+                    })
+            }}
+        </section>
+    }
+}
+
+#[component]
+fn PasskeyLoginAvailability(
+    availability: Resource<Result<bool, WebError>>,
+    supported: bool,
+) -> impl IntoView {
+    view! {
+        {move || match availability.get() {
+            None => {
+                view! {
+                    <p role="status" aria-live="polite" data-test="passkey-login-loading">
+                        "Checking passkey availability…"
+                    </p>
+                }
+                    .into_any()
+            }
+            Some(Ok(false)) => {
+                view! {
+                    <p class="error" role="alert" data-test="passkey-login-site-unavailable">
+                        "Passkeys are not available on this site."
+                    </p>
+                }
+                    .into_any()
+            }
+            Some(Ok(true)) if !supported => {
+                view! {
+                    <p class="error" role="alert" data-test="passkey-login-unsupported">
+                        "Passkeys are not supported by this browser."
+                    </p>
+                }
+                    .into_any()
+            }
+            Some(Ok(true)) => ().into_any(),
+            Some(Err(_)) => {
+                view! {
+                    <p class="error" role="alert" data-test="passkey-login-availability-failed">
+                        "Passkey availability could not be checked. Try again."
+                    </p>
+                }
+                    .into_any()
+            }
+        }}
+    }
+}
+
+enum PasskeyAuthentication {
+    Confirmed(SessionUser),
+    Indeterminate(SessionUser),
+    Message(String),
+}
+
+async fn authenticate_passkey() -> PasskeyAuthentication {
+    // crap:allow: WebAuthn browser ceremony and generated client transport are wasm-only and covered by browser tests.
+    let start = match passkeys::start_authentication().await {
+        Ok(MutationOutcome::Confirmed(start)) => start,
+        Ok(MutationOutcome::CommitIndeterminate(_)) => {
+            return PasskeyAuthentication::Message(
+                "Passkey sign-in could not be confirmed. Try again.".to_owned(),
+            );
+        }
+        Err(error) => return PasskeyAuthentication::Message(error.to_string()),
+    };
+    let response = match client::webauthn::get(&start.request).await {
+        client::webauthn::CeremonyOutcome::Success(response) => response,
+        client::webauthn::CeremonyOutcome::Cancelled => {
+            return PasskeyAuthentication::Message("Passkey sign-in cancelled.".to_owned());
+        }
+        client::webauthn::CeremonyOutcome::Unsupported => {
+            return PasskeyAuthentication::Message(
+                "Passkeys are not supported by this browser.".to_owned(),
+            );
+        }
+        client::webauthn::CeremonyOutcome::Failed => {
+            return PasskeyAuthentication::Message("Passkey sign-in failed. Try again.".to_owned());
+        }
+    };
+    match passkeys::finish_authentication(start.handle, response).await {
+        Ok(MutationOutcome::Confirmed(session)) => PasskeyAuthentication::Confirmed(session),
+        Ok(MutationOutcome::CommitIndeterminate(session)) => {
+            PasskeyAuthentication::Indeterminate(session)
+        }
+        Err(_) => {
+            PasskeyAuthentication::Message("Passkey sign-in could not be completed.".to_owned())
+        }
     }
 }
 

@@ -63,6 +63,7 @@ enum_attr!(IdempotencyEvent { Created => "created", Replayed => "replayed", Expi
 struct Instruments {
     logins: Counter<u64>,
     session_validations: Counter<u64>,
+    passkey_counter_anomalies: Counter<u64>,
     registrations: Counter<u64>,
     invites: Counter<u64>,
     password_resets: Counter<u64>,
@@ -125,6 +126,9 @@ static M: LazyLock<Instruments> = LazyLock::new(|| {
     Instruments {
         logins: m.u64_counter("jaunder.auth.logins").build(),
         session_validations: m.u64_counter("jaunder.auth.session_validations").build(),
+        passkey_counter_anomalies: m
+            .u64_counter("jaunder.auth.passkey_counter_anomalies")
+            .build(),
         registrations: m.u64_counter("jaunder.auth.registrations").build(),
         invites: m.u64_counter("jaunder.auth.invites").build(),
         password_resets: m.u64_counter("jaunder.auth.password_resets").build(),
@@ -279,6 +283,13 @@ pub fn session_validation(outcome: SessionOutcome) {
         .add(1, &kv("outcome", outcome.as_str()));
 }
 
+/// Records a verified assertion whose signature counter did not advance.
+///
+/// This intentionally has no credential, account, or ceremony attributes.
+pub fn passkey_counter_anomaly() {
+    M.passkey_counter_anomalies.add(1, &[]);
+}
+
 pub fn registration(
     source: RegistrationSource,
     policy: RegistrationPolicy,
@@ -421,6 +432,7 @@ mod tests {
     const EXPECTED_INSTRUMENTS: &[&str] = &[
         "jaunder.auth.logins",
         "jaunder.auth.session_validations",
+        "jaunder.auth.passkey_counter_anomalies",
         "jaunder.auth.registrations",
         "jaunder.auth.invites",
         "jaunder.auth.password_resets",
@@ -457,6 +469,7 @@ mod tests {
     fn emit_one_of_everything() {
         login(LoginOutcome::InvalidCredentials);
         session_validation(SessionOutcome::InvalidToken);
+        passkey_counter_anomaly();
         registration(
             RegistrationSource::Web,
             RegistrationPolicy::OperatorInvites,
@@ -713,6 +726,14 @@ mod tests {
         assert!(
             logins.contains(&attrs1([("outcome", "invalid_credentials")])),
             "login did not record outcome=invalid_credentials; got {logins:?}"
+        );
+
+        let passkey_counter_anomalies =
+            counter_attributes(&metrics, "jaunder.auth.passkey_counter_anomalies");
+        assert_eq!(
+            passkey_counter_anomalies,
+            vec![BTreeSet::new()],
+            "counter anomalies must not carry credential, account, or ceremony attributes"
         );
 
         let errors = counter_attributes(&metrics, "jaunder.errors");

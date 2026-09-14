@@ -316,12 +316,14 @@ test("authenticated sidebar exposes Home and no Local", async ({
   await waitForSelector(page, '.j-nav a[href="/posts/new"]');
   await waitForSelector(page, '.j-nav a[href="/drafts"]');
   await waitForSelector(page, '.j-nav a[href="/scheduled"]');
+  // Home, Compose, Drafts, Scheduled, History, Media, Audiences, Themes,
+  // Passkeys, and Settings have hrefs.
   await waitForSelector(page, '.j-nav a[href="/audiences"]');
   await expect(page.locator(".j-sidebar")).not.toContainText("Sources");
   await expect(page.locator(".j-sidebar")).not.toContainText("Bluesky");
   await waitForSelector(page, '.j-nav a[href="/history"]');
   const navAnchors = page.locator(".j-nav a");
-  await expect(navAnchors).toHaveCount(9);
+  await expect(navAnchors).toHaveCount(10);
   const navHrefs = await navAnchors.evaluateAll((links) =>
     links.map((link) => link.getAttribute("href")),
   );
@@ -334,6 +336,7 @@ test("authenticated sidebar exposes Home and no Local", async ({
     "/media",
     "/audiences",
     "/themes",
+    "/passkeys",
     "/profile",
   ]);
   await expect(page.locator('.j-nav a[href="/app"]')).toHaveText("Home");

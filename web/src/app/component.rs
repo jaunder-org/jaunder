@@ -11,6 +11,7 @@ use crate::email::{EmailPage, VerifyEmailPage};
 use crate::invites::InvitesPage;
 use crate::local::LocalPage;
 use crate::media::MediaPage;
+use crate::passkeys::PasskeysPage;
 use crate::password_reset::{ForgotPasswordPage, ResetPasswordPage};
 use crate::posts::{
     CreatePostPage, DraftsPage, EditPostPage, HistoryPage, PostHistoryPage, PostPage,
@@ -424,6 +425,7 @@ pub fn App() -> impl IntoView {
                     <Route path=(StaticSegment("profile"), StaticSegment("email")) view=EmailPage />
                     <Route path=StaticSegment("profile") view=ProfilePage />
                     <Route path=StaticSegment("sessions") view=SessionsPage />
+                    <Route path=StaticSegment("passkeys") view=PasskeysPage />
                     <Route path=StaticSegment("audiences") view=AudiencesPage />
                     <Route path=StaticSegment("invites") view=InvitesPage />
                     <Route

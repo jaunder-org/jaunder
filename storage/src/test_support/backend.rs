@@ -100,6 +100,16 @@ pub fn mock_write_scope_with_commit_acknowledgement_loss() -> WriteScope {
     WriteScope::mock().with_commit_acknowledgement_loss_after_commit_for_test()
 }
 
+/// Clones a real test backend scope while injecting a lost commit acknowledgement.
+///
+/// This preserves the backend transaction so HTTP integration tests can observe durable writes
+/// whose acknowledgement was lost.
+#[cfg(any(test, feature = "test-utils"))]
+#[must_use]
+pub fn write_scope_with_commit_acknowledgement_loss(scope: &WriteScope) -> WriteScope {
+    scope.with_commit_acknowledgement_loss_after_commit_for_test()
+}
+
 /// Mints a SQLite-backed write scope for a test fixture that owns its pool.
 #[must_use]
 pub fn sqlite_write_scope(pool: SqlitePool) -> WriteScope {

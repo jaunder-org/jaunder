@@ -107,7 +107,7 @@ Out:
     states; maintenance tests cover cutoffs, batches, composition, and
     telemetry.
 
-- [ ] Task 4: Implement typed ceremony and management server functions
+- [x] Task 4: Implement typed ceremony and management server functions
   - Contract: add typed start/finish registration and authentication plus list,
     delete, and availability operations. A dedicated cookie-only guard protects
     list/delete and both registration endpoints, rejecting Bearer/Basic without
@@ -134,7 +134,7 @@ Out:
     Passkey; password registration/login, invitations, forgot-password,
     Bearer/Basic/AtomPub, and explicit-auth cookie retirement remain covered.
 
-- [ ] Task 5: Add browser WebAuthn and Passkeys UX
+- [x] Task 5: Add browser WebAuthn and Passkeys UX
   - Contract: domain-free `client::webauthn` code capability-checks the
     standards API, converts typed JSON options/results, invokes explicit
     `navigator.credentials.create/get` without conditional mediation, and
@@ -150,7 +150,7 @@ Out:
     unsupported messaging, cancellation, validation, and navigation. Successful
     real ceremonies wait for Task 6's authenticator fixture.
 
-- [ ] Task 6: Close integration, browser, and documentation proof
+- [x] Task 6: Close integration, browser, and documentation proof
   - Contract: add a Chromium Playwright CDP virtual-authenticator fixture using
     the repository's wrapped interaction/readiness helpers, then cover real
     enrollment, account-picker assertion, two credentials, metadata refresh,

@@ -171,6 +171,7 @@ const INTERNAL_CAPABILITY_EXCLUSIONS: &[(&str, &str)] = &[
 const INTERNAL_CAPABILITY_TRAITS: &[&str] = &[
     "Backend",
     "FeedEventDialect",
+    "PasskeyDialect",
     "PostDialect",
     "SessionDialect",
 ];

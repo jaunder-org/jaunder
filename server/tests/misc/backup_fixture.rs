@@ -11,13 +11,18 @@ use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::{AudienceTarget, ViewerIdentity};
 use host::config_key::UserConfigKey;
+use host::passkey::Credential;
 use host::password::Password;
 use jaunder::cli::StorageArgs;
+use serde_json::Value;
+use sqlx::{postgres::PgPoolOptions, sqlite::SqlitePoolOptions};
 use std::sync::Arc;
-use storage::test_support::{SeedRawPost, confirmed_for, fp, seed_local_subscription};
+use storage::test_support::{
+    SeedRawPost, confirmed_for, fp, passkey_credential_fixture, seed_local_subscription,
+};
 use storage::{
-    HubMutationOutcome, MediaRecord, OperatorStatus, PublisherGeneration, StorageRuntimeConfig,
-    open_existing_database,
+    HubMutationOutcome, MediaRecord, OperatorStatus, PasskeyCredentialId, PasskeyLabel,
+    PasskeyUserHandle, PublisherGeneration, StorageRuntimeConfig, open_existing_database,
 };
 
 /// SHA-256 the media-table fixture row is keyed by; any stable value works, since
@@ -51,6 +56,13 @@ pub struct BackupFixtureIds {
     /// The publisher generation, advanced from its migration-seeded value to prove
     /// backup and restore replace the target singleton row.
     pub publisher_generation: PublisherGeneration,
+    pub passkey_user_handle: PasskeyUserHandle,
+    /// The durable Passkey created for the author and verified after restore.
+    pub passkey_credential_id: PasskeyCredentialId,
+    pub passkey_label: PasskeyLabel,
+    pub passkey_serialization: Value,
+    pub passkey_created_at: UtcInstant,
+    pub passkey_last_used_at: UtcInstant,
 }
 
 /// Fixed microsecond-precision publish time: deterministic and safe from
@@ -59,6 +71,74 @@ pub fn fixture_published_at() -> UtcInstant {
     "2026-04-29T12:34:56.789012Z"
         .parse()
         .expect("valid fixture timestamp")
+}
+
+/// A credential whose serialized counter and backup-state values are both
+/// non-default, so a backup cannot silently omit either value.
+fn backup_passkey_credential() -> Credential {
+    let mut serialized =
+        serde_json::to_value(passkey_credential_fixture()).expect("serialize passkey fixture");
+    let credential = serialized
+        .get_mut("cred")
+        .and_then(Value::as_object_mut)
+        .expect("passkey fixture credential fields");
+    credential.insert("backup_eligible".to_owned(), Value::Bool(true));
+    credential.insert("backup_state".to_owned(), Value::Bool(true));
+    Credential::deserialize_for_test(&serialized.to_string())
+        .expect("passkey fixture with backup state decodes")
+}
+
+fn fixture_passkey_created_at() -> UtcInstant {
+    "2026-09-12T13:14:15.123456Z"
+        .parse()
+        .expect("valid Passkey fixture created time")
+}
+
+fn fixture_passkey_last_used_at() -> UtcInstant {
+    "2026-09-12T13:15:16.234567Z"
+        .parse()
+        .expect("valid Passkey fixture last-used time")
+}
+
+/// Timestamps are fixed at microsecond precision because the interop fixture
+/// traverses both backends and `PostgreSQL` quantizes timestamps to microseconds.
+async fn set_backup_passkey_timestamps(args: &StorageArgs, credential_id: &PasskeyCredentialId) {
+    let created_at = fixture_passkey_created_at();
+    let last_used_at = fixture_passkey_last_used_at();
+    match &args.db {
+        storage::DbConnectOptions::Sqlite(options) => {
+            let pool = SqlitePoolOptions::new()
+                .connect_with(options.clone())
+                .await
+                .expect("connect SQLite for Passkey fixture timestamps");
+            sqlx::query(
+                "UPDATE passkey_credentials SET created_at = $1, last_used_at = $2 \
+                 WHERE credential_id = $3",
+            )
+            .bind(created_at)
+            .bind(last_used_at)
+            .bind(credential_id)
+            .execute(&pool)
+            .await
+            .expect("set SQLite Passkey fixture timestamps");
+        }
+        storage::DbConnectOptions::Postgres { options, .. } => {
+            let pool = PgPoolOptions::new()
+                .connect_with(options.clone())
+                .await
+                .expect("connect PostgreSQL for Passkey fixture timestamps");
+            sqlx::query(
+                "UPDATE passkey_credentials SET created_at = $1, last_used_at = $2 \
+                 WHERE credential_id = $3",
+            )
+            .bind(created_at)
+            .bind(last_used_at)
+            .bind(credential_id)
+            .execute(&pool)
+            .await
+            .expect("set PostgreSQL Passkey fixture timestamps");
+        }
+    }
 }
 
 /// Immutable pre-Jiff NDJSON spelling captured from the deployed Chrono backup
@@ -195,10 +275,61 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
         .await
         .expect("open database");
     let write_scope = factory.write_scope();
+    let publisher_generation =
+        configure_backup_publisher(factory.publisher(), write_scope.clone()).await;
+    let (author, password) = create_backup_author(factory.users(), write_scope.clone()).await;
+    let passkey = seed_backup_passkey(args, factory.passkeys(), write_scope.clone(), author).await;
+    let public = SeedRawPost::new(author)
+        .published_at(fixture_published_at())
+        .tags(["Backup-Test"])
+        .seed(factory.posts(), write_scope.clone())
+        .await;
+    let (viewer, audience, subscription, named_post) = seed_named_audience_post(
+        factory.users(),
+        factory.subscriptions(),
+        factory.audiences(),
+        factory.posts(),
+        write_scope.clone(),
+        author,
+        &password,
+    )
+    .await;
+    seed_side_tables(
+        factory.user_config(),
+        factory.media(),
+        factory.feed_events(),
+        write_scope,
+        author,
+    )
+    .await;
+    std::fs::write(args.storage_path.join("media").join("avatar.txt"), "media")
+        .expect("write media");
+    BackupFixtureIds {
+        author,
+        viewer,
+        public_post: public.post_id,
+        public_post_slug: public.slug,
+        public_post_title: public.title,
+        named_post,
+        audience,
+        subscription,
+        publisher_generation,
+        passkey_user_handle: passkey.user_handle,
+        passkey_credential_id: passkey.credential_id,
+        passkey_label: passkey.label,
+        passkey_serialization: passkey.serialization,
+        passkey_created_at: passkey.created_at,
+        passkey_last_used_at: passkey.last_used_at,
+    }
+}
+
+async fn configure_backup_publisher(
+    publisher: Arc<dyn storage::PublisherStorage>,
+    write_scope: storage::WriteScope,
+) -> PublisherGeneration {
     let hub: HubUrl = "https://hub.example.test/"
         .parse()
         .expect("valid fixture WebSub hub");
-    let publisher = factory.publisher();
     let publisher_mutation = confirmed_for(
         write_scope
             .run(move |transaction| {
@@ -208,13 +339,18 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
             .expect("configure fixture WebSub hub"),
         "configure fixture WebSub hub",
     );
-    let publisher_generation = match publisher_mutation {
+    match publisher_mutation {
         HubMutationOutcome::Changed { generation } => generation,
         HubMutationOutcome::Unchanged { .. } => panic!("initial WebSub hub must change"),
-    };
+    }
+}
+
+async fn create_backup_author(
+    users: Arc<dyn storage::UserStorage>,
+    write_scope: storage::WriteScope,
+) -> (UserId, Password) {
     let username: Username = "backupuser".parse().expect("valid username");
     let password: Password = "password123".parse().expect("valid password");
-    let users = factory.users();
     let display_name = parse_display_name("Backup User");
     let password_for_author = storage::prepare_password(password.clone())
         .await
@@ -235,44 +371,71 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
         })
         .await
         .expect("create user");
-    let author = confirmed_for(outcome, "backup fixture user");
-    let public = SeedRawPost::new(author)
-        .published_at(fixture_published_at())
-        .tags(["Backup-Test"])
-        .seed(factory.posts(), write_scope.clone())
-        .await;
+    (confirmed_for(outcome, "backup fixture user"), password)
+}
 
-    let (viewer, audience, subscription, named_post) = seed_named_audience_post(
-        factory.users(),
-        factory.subscriptions(),
-        factory.audiences(),
-        factory.posts(),
-        write_scope.clone(),
-        author,
-        &password,
-    )
-    .await;
-    seed_side_tables(
-        factory.user_config(),
-        factory.media(),
-        factory.feed_events(),
-        write_scope,
-        author,
-    )
-    .await;
+struct BackupPasskeyFixture {
+    user_handle: PasskeyUserHandle,
+    credential_id: PasskeyCredentialId,
+    label: PasskeyLabel,
+    serialization: Value,
+    created_at: UtcInstant,
+    last_used_at: UtcInstant,
+}
 
-    std::fs::write(args.storage_path.join("media").join("avatar.txt"), "media")
-        .expect("write media");
-    BackupFixtureIds {
-        author,
-        viewer,
-        public_post: public.post_id,
-        public_post_slug: public.slug,
-        public_post_title: public.title,
-        named_post,
-        audience,
-        subscription,
-        publisher_generation,
+async fn seed_backup_passkey(
+    args: &StorageArgs,
+    passkeys: Arc<dyn storage::PasskeyStorage>,
+    write_scope: storage::WriteScope,
+    author: UserId,
+) -> BackupPasskeyFixture {
+    let credential = backup_passkey_credential();
+    let credential_id = PasskeyCredentialId::from_credential(&credential);
+    let label: PasskeyLabel = "Backup corpus Passkey"
+        .parse()
+        .expect("valid passkey fixture label");
+    let passkeys_for_insert = Arc::clone(&passkeys);
+    let credential_for_insert = credential.clone();
+    let label_for_insert = label.clone();
+    confirmed_for(
+        write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    passkeys_for_insert
+                        .insert_credential(
+                            transaction,
+                            author,
+                            &label_for_insert,
+                            &credential_for_insert,
+                        )
+                        .await
+                })
+            })
+            .await
+            .expect("insert backup fixture passkey"),
+        "insert backup fixture passkey",
+    );
+    set_backup_passkey_timestamps(args, &credential_id).await;
+    let passkey = passkeys
+        .credential(&credential_id)
+        .await
+        .expect("read backup fixture passkey")
+        .expect("inserted backup fixture passkey");
+    let user_handle = passkeys
+        .user_handle(author)
+        .await
+        .expect("read backup fixture Passkey handle")
+        .expect("backup fixture user has a Passkey handle");
+    BackupPasskeyFixture {
+        user_handle,
+        credential_id,
+        label,
+        serialization: serde_json::to_value(&passkey.credential)
+            .expect("serialize backup fixture passkey"),
+        created_at: passkey.created_at,
+        last_used_at: passkey
+            .last_used_at
+            .expect("used backup fixture passkey has last-used time"),
     }
 }
 
@@ -406,11 +569,14 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
     let factory = open_existing_database(&args.db, &StorageRuntimeConfig::default())
         .await
         .expect("open restored database");
-    let users = factory.users();
-    let publisher = factory.publisher();
-    let posts = factory.posts();
-    let user_config = factory.user_config();
-    let media = factory.media();
+    assert_restored_backup_author(factory.users()).await;
+    assert_restored_publisher(factory.publisher(), ids).await;
+    assert_restored_public_post_and_passkey(factory.posts(), factory.passkeys(), ids).await;
+    assert_restored_named_post(factory.posts(), ids).await;
+    assert_restored_side_tables(factory.user_config(), factory.media(), args, ids).await;
+}
+
+async fn assert_restored_backup_author(users: Arc<dyn storage::UserStorage>) {
     let username: Username = "backupuser".parse().expect("valid username");
     let user = users
         .get_user_by_username(&username)
@@ -419,7 +585,12 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
         .expect("restored user");
     assert_eq!(user.is_operator, OperatorStatus::OPERATOR);
     assert_eq!(user.display_name.as_deref(), Some("Backup User"));
+}
 
+async fn assert_restored_publisher(
+    publisher: Arc<dyn storage::PublisherStorage>,
+    ids: &BackupFixtureIds,
+) {
     assert_eq!(
         publisher
             .snapshot()
@@ -429,7 +600,13 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
         ids.publisher_generation,
         "restore must replace the migration-seeded publisher generation"
     );
+}
 
+async fn assert_restored_public_post_and_passkey(
+    posts: Arc<dyn storage::PostStorage>,
+    passkeys: Arc<dyn storage::PasskeyStorage>,
+    ids: &BackupFixtureIds,
+) {
     // The public post resolves for its author.
     let post = posts
         .get_post_by_id(ids.public_post, &ViewerIdentity::local(ids.author))
@@ -441,6 +618,41 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
     // Restore preserves the instant, its UTC civil date, microsecond precision,
     // and timezone meaning across source/target backends.
     let published_at = post.published_at.expect("restored published timestamp");
+    assert_eq!(
+        passkeys
+            .user_handle(ids.author)
+            .await
+            .expect("read restored Passkey handle"),
+        Some(ids.passkey_user_handle.clone())
+    );
+    let passkey = passkeys
+        .credential_for_user(ids.author, &ids.passkey_credential_id)
+        .await
+        .expect("read restored passkey")
+        .expect("restored passkey");
+    assert_eq!(passkey.id, ids.passkey_credential_id);
+    assert_eq!(passkey.user_id, ids.author);
+    assert_eq!(passkey.label, ids.passkey_label);
+    assert_eq!(passkey.created_at, ids.passkey_created_at);
+    assert_eq!(passkey.last_used_at, Some(ids.passkey_last_used_at));
+    let serialized =
+        serde_json::to_value(&passkey.credential).expect("serialize restored passkey credential");
+    assert_eq!(serialized, ids.passkey_serialization);
+    assert_eq!(
+        serialized.pointer("/cred/counter"),
+        Some(&Value::from(2)),
+        "restored passkey credential must retain its signature counter"
+    );
+    assert_eq!(
+        serialized.pointer("/cred/backup_eligible"),
+        Some(&Value::Bool(true)),
+        "restored passkey credential must retain backup eligibility"
+    );
+    assert_eq!(
+        serialized.pointer("/cred/backup_state"),
+        Some(&Value::Bool(true)),
+        "restored passkey credential must retain backup state"
+    );
     assert_eq!(published_at, fixture_published_at());
     assert_fixture_timestamp_meaning(published_at);
 
@@ -449,7 +661,9 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
     assert_eq!(tags.len(), 1);
     assert_eq!(tags[0].tag_slug, "backup-test");
     assert_eq!(tags[0].tag_display, "Backup-Test");
+}
 
+async fn assert_restored_named_post(posts: Arc<dyn storage::PostStorage>, ids: &BackupFixtureIds) {
     // #4 closed: the Named-audience post survives restore visible to its
     // non-author subscriber — its post_audiences / subscriptions / audience_members
     // rows are carried — and correctly invisible to an anonymous viewer.
@@ -469,7 +683,14 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
             .is_none(),
         "a Named-audience post must not be visible to anonymous"
     );
+}
 
+async fn assert_restored_side_tables(
+    user_config: Arc<dyn storage::UserConfigStorage>,
+    media: Arc<dyn storage::MediaStorage>,
+    args: &StorageArgs,
+    ids: &BackupFixtureIds,
+) {
     // The side tables (`user_config`, media, `feed_events`) survived the round trip.
     assert_eq!(
         user_config
@@ -492,7 +713,6 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
             .is_some(),
         "restored media table row must be present"
     );
-
     assert_eq!(
         std::fs::read_to_string(args.storage_path.join("media").join("avatar.txt"))
             .expect("read restored media"),

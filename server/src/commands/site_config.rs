@@ -4,8 +4,8 @@ use std::sync::Arc;
 use common::tagged_url::{BaseUrl, HubUrl};
 use host::config_key::SiteConfigKey;
 use storage::{
-    FeedWindowMutation, PasskeyStorage, PublisherStorage, SiteConfigStorage, WriteScope,
-    clear_base_url_with_passkey_guard, set_base_url_with_passkey_guard,
+    BaseUrlMutationError, FeedWindowMutation, PasskeyStorage, PublisherStorage, SiteConfigStorage,
+    WriteScope, clear_base_url_with_passkey_guard, set_base_url_with_passkey_guard,
 };
 
 use crate::publisher::PublisherService;
@@ -32,7 +32,7 @@ pub(super) async fn cmd_site_config_set(
                     let base_url = (!value_for_set.is_empty())
                         .then(|| value_for_set.parse::<BaseUrl>())
                         .transpose()
-                        .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+                        .map_err(BaseUrlMutationError::from)?;
                     set_base_url_with_passkey_guard(
                         transaction,
                         site_config.as_ref(),
@@ -40,9 +40,11 @@ pub(super) async fn cmd_site_config_set(
                         base_url,
                     )
                     .await
-                    .map_err(|error| sqlx::Error::Protocol(error.to_string()))
                 } else {
-                    site_config.set(transaction, key, &value_for_set).await
+                    site_config
+                        .set(transaction, key, &value_for_set)
+                        .await
+                        .map_err(BaseUrlMutationError::from)
                 }
             })
         })
@@ -134,9 +136,11 @@ pub(super) async fn cmd_site_config_unset(
                         passkeys.as_ref(),
                     )
                     .await
-                    .map_err(|error| sqlx::Error::Protocol(error.to_string()))
                 } else {
-                    site_config.delete(transaction, key).await
+                    site_config
+                        .delete(transaction, key)
+                        .await
+                        .map_err(BaseUrlMutationError::from)
                 }
             })
         })

@@ -56,6 +56,18 @@ fn collector_endpoints() -> anyhow::Result<(SocketAddr, SocketAddr)> {
         http.local_addr().context("reading OTLP HTTP endpoint")?,
     ))
 }
+/// Advertise the loopback server through `localhost`, whose registrable domain
+/// semantics let browser WebAuthn use it as an RP ID. The server remains bound
+/// to `127.0.0.1`; only the browser-facing origin changes.
+fn playwright_base_url(server_base_url: &str) -> String {
+    let Ok(mut url) = url::Url::parse(server_base_url) else {
+        return server_base_url.to_owned();
+    };
+    if url.host_str() == Some("127.0.0.1") && url.set_host(Some("localhost")).is_ok() {
+        return url.as_str().trim_end_matches('/').to_owned();
+    }
+    server_base_url.to_owned()
+}
 
 fn start_collector(
     root: &Path,
@@ -746,7 +758,7 @@ fn run_lifecycle(
             return;
         }
     };
-    let base_url = server.base_url.clone();
+    let base_url = playwright_base_url(&server.base_url);
     result.push(StepResult::ok(&server_step).with_duration(server_start.elapsed()));
     let verification = LifecycleVerification {
         browser,
@@ -985,6 +997,18 @@ mod tests {
                 "{browser:?} must let Playwright fail when no selected project matches"
             );
         }
+    }
+
+    #[test]
+    fn browser_origin_uses_localhost_for_loopback_webauthn() {
+        assert_eq!(
+            playwright_base_url("http://127.0.0.1:4312"),
+            "http://localhost:4312"
+        );
+        assert_eq!(
+            playwright_base_url("https://example.test:4312"),
+            "https://example.test:4312"
+        );
     }
 
     #[test]

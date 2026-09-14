@@ -1124,14 +1124,16 @@ Application code does not call the unstable expert core. Remove the Cargo patch
 and paired `deny.toml` rationale when an audited upstream release supplies
 equivalent supported policy doors.
 
-WebAuthn trust derives only from `site.base_url`: its exact origin is the
-expected origin and its hostname is the RP ID. Request headers cannot select
-either. Passkeys fail closed, with a clear unavailable state, when the setting
-is absent or is not HTTPS, except for localhost development. While any Passkey
-exists, every configuration mutation must preserve the canonical RP hostname:
-unsetting or changing it is rejected across individual, aggregate, web, and CLI
-doors. Multi-origin, wildcard-parent, related-origin, and credential-migration
-behavior do not exist.
+WebAuthn trust derives only from `site.base_url`: its exact origin, including
+scheme and port, is the expected origin and its hostname is the RP ID. Request
+headers cannot select either. Passkeys fail closed, with a clear unavailable
+state, when the setting is absent or is not HTTPS, except for
+browser-trustworthy `http` localhost-domain development. IP literals are not
+valid RP IDs. While any Passkey exists, every configuration mutation must
+preserve the canonical RP hostname: unsetting or changing it is rejected across
+individual, aggregate, web, and CLI doors. The hostname guard deliberately
+permits scheme and port changes. Multi-origin, wildcard-parent, related-origin,
+and credential-migration behavior do not exist.
 
 Registration and authentication ceremony state is database-backed,
 purpose-bound, five-minute transient data excluded from backup and restore. It

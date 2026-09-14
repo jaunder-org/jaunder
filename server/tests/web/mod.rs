@@ -8,6 +8,7 @@ mod web_auth;
 mod web_backup;
 mod web_email;
 mod web_media;
+mod web_passkeys;
 mod web_password_reset;
 mod web_sessions;
 mod web_site;
