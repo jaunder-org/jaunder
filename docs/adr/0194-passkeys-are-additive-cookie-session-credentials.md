@@ -1,6 +1,6 @@
-# ADR-DRAFT: Passkeys are additive cookie-Session credentials
+# ADR-0194: Passkeys are additive cookie-Session credentials
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-12
 - Issue: [#1455](https://github.com/jaunder-org/jaunder/issues/1455)
 

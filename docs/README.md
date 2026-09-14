@@ -221,6 +221,7 @@ convention). See the Status column below for each ADR's current status.
 | [0191](adr/0191-emacs-protocol-client-flake-package-output.md)         | Emacs Protocol Client Flake Package Output                                                                   | accepted   |
 | [0192](adr/0192-split-ci-non-e2e-validation-lanes.md)                  | Split CI non-e2e validation into core and coverage lanes                                                     | accepted   |
 | [0193](adr/0193-authenticated-root-redirects-home.md)                  | Authenticated root visits redirect to Home                                                                   | accepted   |
+| [0194](adr/0194-passkeys-are-additive-cookie-session-credentials.md)   | Passkeys are additive cookie-Session credentials                                                             | accepted   |
 
 <!-- adr-table:end -->
 

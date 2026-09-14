@@ -247,7 +247,7 @@ allow-git = []
 #
 # `jaunder-org` carries exact-revision `[patch.crates-io]` entries for lettre
 # (#297; docs/adr/0119-lettre-fork-pinned-by-rev.md) and WebAuthn Passkey policy
-# (#1455; docs/adr/drafts/passkeys-are-additive-cookie-session-credentials.md).
+# (#1455; docs/adr/0194-passkeys-are-additive-cookie-session-credentials.md).
 # `unknown-git` is only "warn" above, so this entry is not what makes the gate
 # pass — it makes both exceptions deliberate. Remove the matching source
 # allowance rationale and Cargo patches together when upstream releases the

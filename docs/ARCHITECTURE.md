@@ -1103,7 +1103,7 @@ verification. Registration requires user verification, requests no attestation,
 and admits synced and device-bound authenticators. Password reset keeps
 Passkeys. Deleting one preserves the password-confirmed current browser Session
 while atomically revoking every other Session for that User
-([Passkeys are additive cookie-Session credentials](adr/drafts/passkeys-are-additive-cookie-session-credentials.md)).
+([Passkeys are additive cookie-Session credentials](adr/0194-passkeys-are-additive-cookie-session-credentials.md)).
 
 The login page keeps password login and adds an explicit account-discovering
 Passkey action. Each User has a random stable WebAuthn user handle unrelated to
@@ -3704,7 +3704,7 @@ correction itself (`:76-83`, #412).
 `[patch.crates-io]` entries for lettre
 ([ADR-0119](adr/0119-lettre-fork-pinned-by-rev.md)) and the Passkey
 `webauthn-rs`/`webauthn-rs-core` pair
-([Passkeys are additive cookie-Session credentials](adr/drafts/passkeys-are-additive-cookie-session-credentials.md)).
+([Passkeys are additive cookie-Session credentials](adr/0194-passkeys-are-additive-cookie-session-credentials.md)).
 The latter pins `jaunder-org/webauthn-rs` branch `feature/passkey-policy-apis`
 at `6d0acc73fbf4436b1ed853fa5c8a219dac304a8e`, preserving upstream defaults
 while supplying its narrowly selected safe-wrapper policies. Each patch and its
