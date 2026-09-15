@@ -274,15 +274,21 @@ mod tests {
         assert!(!no_full_reload.cache_rustc);
         let fix_specs = specs(Mode::Fix);
         let prettier_fix = find(&fix_specs, "prettier-markdown");
-        assert!(
-            prettier_fix.args.contains(&"--locked"),
-            "fix mode locks the tools workspace: {:?}",
-            prettier_fix.args
-        );
-        assert!(
-            prettier_fix.args.contains(&"--fix"),
-            "fix mode passes --fix: {:?}",
-            prettier_fix.args
+        assert_eq!(
+            prettier_fix.args,
+            [
+                "run",
+                "--locked",
+                "--quiet",
+                "--manifest-path",
+                "tools/Cargo.toml",
+                "-p",
+                "devtool",
+                "--",
+                "check",
+                "prettier-markdown",
+                "--fix",
+            ]
         );
         // tsc-deps is gone — folded into `devtool check tsc`.
         assert!(specs(Mode::Check).iter().all(|s| s.name != "tsc-deps"));
