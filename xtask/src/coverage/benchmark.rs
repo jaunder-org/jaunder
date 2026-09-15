@@ -12,7 +12,9 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use coverage::status::{CoverageStatus, StageResult};
-use coverage::workers::{AggregateEvidence, ExperimentStrategy, WorkerEvidence};
+use coverage::workers::{
+    AggregateEvidence, ExperimentStrategy, WorkerConcurrencyPolicy, WorkerEvidence,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -23,30 +25,12 @@ const MANIFEST_VERSION: &str = "coverage-local-benchmark-v6";
 const ROOT: &str = ".xtask/coverage/benchmark-local";
 const TIME_FORMAT: &str = "elapsed_seconds=%e\nuser_seconds=%U\nsystem_seconds=%S\ncpu_percent=%P\nmajor_page_faults=%F\nminor_page_faults=%R\nmax_rss_kib=%M\nexit_status=%x";
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum ConcurrencyPolicy {
-    NotApplicable,
-    Independent,
-    Fixed,
-}
-
-impl ConcurrencyPolicy {
-    const fn argument(self) -> Option<&'static str> {
-        match self {
-            Self::NotApplicable => None,
-            Self::Independent => Some("independent"),
-            Self::Fixed => Some("fixed"),
-        }
-    }
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ScheduleEntry {
     pub ordinal: usize,
     pub strategy: ExperimentStrategy,
-    pub concurrency: ConcurrencyPolicy,
+    pub concurrency: Option<WorkerConcurrencyPolicy>,
 }
 
 /// All host facts needed to decide whether two observations are comparable.
@@ -324,21 +308,37 @@ fn build_live_devtool() -> Result<String> {
 /// warming without pretending that baseline has a two-worker concurrency policy.
 fn schedule() -> Vec<ScheduleEntry> {
     let treatments = [
-        (ExperimentStrategy::Slice, ConcurrencyPolicy::Independent),
-        (ExperimentStrategy::Slice, ConcurrencyPolicy::Fixed),
-        (ExperimentStrategy::Hash, ConcurrencyPolicy::Independent),
-        (ExperimentStrategy::Hash, ConcurrencyPolicy::Fixed),
-        (ExperimentStrategy::Backend, ConcurrencyPolicy::Independent),
-        (ExperimentStrategy::Backend, ConcurrencyPolicy::Fixed),
+        (
+            ExperimentStrategy::Slice,
+            Some(WorkerConcurrencyPolicy::Independent),
+        ),
+        (
+            ExperimentStrategy::Slice,
+            Some(WorkerConcurrencyPolicy::Fixed),
+        ),
+        (
+            ExperimentStrategy::Hash,
+            Some(WorkerConcurrencyPolicy::Independent),
+        ),
+        (
+            ExperimentStrategy::Hash,
+            Some(WorkerConcurrencyPolicy::Fixed),
+        ),
+        (
+            ExperimentStrategy::Backend,
+            Some(WorkerConcurrencyPolicy::Independent),
+        ),
+        (
+            ExperimentStrategy::Backend,
+            Some(WorkerConcurrencyPolicy::Fixed),
+        ),
     ];
     let mut arms = Vec::with_capacity(14);
     for pair in 0..2 {
-        arms.push((
-            ExperimentStrategy::Baseline,
-            ConcurrencyPolicy::NotApplicable,
-        ));
-        let order: Box<dyn Iterator<Item = &(ExperimentStrategy, ConcurrencyPolicy)>> = if pair == 0
-        {
+        arms.push((ExperimentStrategy::Baseline, None));
+        let order: Box<
+            dyn Iterator<Item = &(ExperimentStrategy, Option<WorkerConcurrencyPolicy>)>,
+        > = if pair == 0 {
             Box::new(treatments.iter())
         } else {
             Box::new(treatments.iter().rev())
@@ -392,16 +392,10 @@ fn observation_name(entry: &ScheduleEntry) -> String {
         "{:02}-{}-{}",
         entry.ordinal,
         entry.strategy.as_str(),
-        concurrency_name(entry.concurrency)
+        entry
+            .concurrency
+            .map_or("not-applicable", WorkerConcurrencyPolicy::as_str)
     )
-}
-
-fn concurrency_name(policy: ConcurrencyPolicy) -> &'static str {
-    match policy {
-        ConcurrencyPolicy::NotApplicable => "not-applicable",
-        ConcurrencyPolicy::Independent => "independent",
-        ConcurrencyPolicy::Fixed => "fixed",
-    }
 }
 
 fn warm_host_target(root: &Path, tools: &ToolIdentity) -> Result<()> {
@@ -490,7 +484,10 @@ fn observe(root: &Path, tools: &ToolIdentity, observation: &mut Observation) {
         &output,
         (observation.schedule.strategy != ExperimentStrategy::Baseline)
             .then_some(observation.schedule.strategy),
-        observation.schedule.concurrency.argument(),
+        observation
+            .schedule
+            .concurrency
+            .map(WorkerConcurrencyPolicy::as_str),
         archive.as_deref(),
         &resource,
         &log,
@@ -761,7 +758,7 @@ fn validate_accepted_observation(observation: &Observation) -> Result<()> {
     }
     match observation.schedule.strategy {
         ExperimentStrategy::Baseline => {
-            if observation.schedule.concurrency != ConcurrencyPolicy::NotApplicable
+            if observation.schedule.concurrency.is_some()
                 || !observation.workers.is_empty()
                 || observation.aggregate.is_some()
             {
@@ -769,9 +766,10 @@ fn validate_accepted_observation(observation: &Observation) -> Result<()> {
             }
         }
         strategy => {
-            if observation.schedule.concurrency == ConcurrencyPolicy::NotApplicable {
-                bail!("two-worker treatment lacks a concurrency policy")
-            }
+            observation
+                .schedule
+                .concurrency
+                .context("two-worker treatment lacks a concurrency policy")?;
             let aggregate = observation
                 .aggregate
                 .as_ref()
@@ -1105,12 +1103,30 @@ mod tests {
             2
         );
         for (strategy, concurrency) in [
-            (ExperimentStrategy::Slice, ConcurrencyPolicy::Independent),
-            (ExperimentStrategy::Slice, ConcurrencyPolicy::Fixed),
-            (ExperimentStrategy::Hash, ConcurrencyPolicy::Independent),
-            (ExperimentStrategy::Hash, ConcurrencyPolicy::Fixed),
-            (ExperimentStrategy::Backend, ConcurrencyPolicy::Independent),
-            (ExperimentStrategy::Backend, ConcurrencyPolicy::Fixed),
+            (
+                ExperimentStrategy::Slice,
+                Some(WorkerConcurrencyPolicy::Independent),
+            ),
+            (
+                ExperimentStrategy::Slice,
+                Some(WorkerConcurrencyPolicy::Fixed),
+            ),
+            (
+                ExperimentStrategy::Hash,
+                Some(WorkerConcurrencyPolicy::Independent),
+            ),
+            (
+                ExperimentStrategy::Hash,
+                Some(WorkerConcurrencyPolicy::Fixed),
+            ),
+            (
+                ExperimentStrategy::Backend,
+                Some(WorkerConcurrencyPolicy::Independent),
+            ),
+            (
+                ExperimentStrategy::Backend,
+                Some(WorkerConcurrencyPolicy::Fixed),
+            ),
         ] {
             assert_eq!(
                 schedule
@@ -1169,7 +1185,7 @@ mod tests {
         let mut missing_digest = observation;
         missing_digest.artifact_digests = None;
         assert!(validate_accepted_observation(&missing_digest).is_err());
-        bad_baseline.schedule.concurrency = ConcurrencyPolicy::Fixed;
+        bad_baseline.schedule.concurrency = Some(WorkerConcurrencyPolicy::Fixed);
         assert!(validate_accepted_observation(&bad_baseline).is_err());
     }
     #[test]

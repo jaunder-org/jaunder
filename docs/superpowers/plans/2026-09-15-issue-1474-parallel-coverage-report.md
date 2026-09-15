@@ -76,9 +76,12 @@ All 14 observations produced the same normalized LCOV line-hit digest
 (`0b1527d001ffd5f2164ff76293102e9a3f2b40e00640bd5fb9956e5d2493215b`), normalized
 CRAP digest
 (`27723816c336319506de40edb624312c7197ae119602c645ab8c96d0fde2aa8d`),
-executable-source membership, exclusions, and passing verdict. Raw positive hit
-counts varied between rounds; boolean line-hit normalization removed that
-harmless repetition-count difference.
+executable-source membership, exclusions, and failing final verdict: each
+recorded `gate_passed: false` with the same 30 coverage/CRAP failures. The
+experiment compares equivalence rather than claiming that the historical source
+revision met the current gate. Raw positive hit counts varied between rounds;
+boolean line-hit normalization removed that harmless repetition-count
+difference.
 
 The producer's stage contract folds LLVM profile merging into `text-report`; the
 separate-runner aggregate likewise measured profile merge and report generation

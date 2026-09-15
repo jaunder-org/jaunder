@@ -56,6 +56,44 @@ impl FromStr for ExperimentStrategy {
     }
 }
 
+/// The CPU allocation policy for a two-worker coverage experiment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkerConcurrencyPolicy {
+    Independent,
+    Fixed,
+}
+
+impl WorkerConcurrencyPolicy {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Independent => "independent",
+            Self::Fixed => "fixed",
+        }
+    }
+}
+
+impl fmt::Display for WorkerConcurrencyPolicy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for WorkerConcurrencyPolicy {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "independent" => Ok(Self::Independent),
+            "fixed" => Ok(Self::Fixed),
+            _ => Err(format!(
+                "unknown coverage worker concurrency `{value}`; expected independent or fixed"
+            )),
+        }
+    }
+}
+
 /// The fixed position of a worker within one partitioning strategy.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkerPartition {

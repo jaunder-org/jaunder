@@ -11,8 +11,8 @@ use coverage::status::{
     TestCensus,
 };
 use coverage::workers::{
-    AggregateEvidence, ExperimentStrategy, WORKER_EVIDENCE_VERSION, WorkerEvidence,
-    WorkerPartition, aggregate_terminal,
+    AggregateEvidence, ExperimentStrategy, WORKER_EVIDENCE_VERSION, WorkerConcurrencyPolicy,
+    WorkerEvidence, WorkerPartition, aggregate_terminal,
 };
 use serde_json::Value;
 
@@ -638,12 +638,6 @@ pub fn run(out: &str) -> Result<()> {
     );
     write_status(out, &status)
 }
-/// The CPU allocation policy recorded with an experimental observation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ConcurrencyPolicy {
-    Independent,
-    Fixed,
-}
 
 #[derive(Clone, Debug)]
 struct ExperimentWorker {
@@ -659,7 +653,7 @@ struct ExperimentWorker {
 
 fn experiment_workers(
     strategy: ExperimentStrategy,
-    policy: ConcurrencyPolicy,
+    policy: WorkerConcurrencyPolicy,
     backend_identities: Option<&[(String, String)]>,
     archive: &Path,
 ) -> Result<Vec<ExperimentWorker>> {
@@ -672,8 +666,8 @@ fn experiment_workers(
     let extract_root = workspace_root.join("target/coverage-experiment-extract");
     let filter_root = workspace_root.join("target/coverage-experiment-filter");
     let fixed_threads = match policy {
-        ConcurrencyPolicy::Independent => None,
-        ConcurrencyPolicy::Fixed => Some(fixed_worker_threads()?.to_string()),
+        WorkerConcurrencyPolicy::Independent => None,
+        WorkerConcurrencyPolicy::Fixed => Some(fixed_worker_threads()?.to_string()),
     };
     let backend_filters = match strategy {
         ExperimentStrategy::Backend => Some(backend_filters(
@@ -1098,7 +1092,7 @@ fn join_worker_handles(
 pub fn run_experiment(
     out: &str,
     strategy: ExperimentStrategy,
-    policy: ConcurrencyPolicy,
+    policy: WorkerConcurrencyPolicy,
     archive: &Path,
 ) -> Result<()> {
     if strategy == ExperimentStrategy::Baseline {
@@ -1456,7 +1450,7 @@ pub fn run_experiment_worker(
     out: &str,
     strategy: ExperimentStrategy,
     index: u8,
-    policy: ConcurrencyPolicy,
+    policy: WorkerConcurrencyPolicy,
     census: &Path,
     archive: &Path,
 ) -> Result<()> {
@@ -1929,7 +1923,7 @@ mod tests {
         let archive = Path::new("/tmp/instrumented-tests.tar.zst");
         let workers = experiment_workers(
             ExperimentStrategy::Slice,
-            ConcurrencyPolicy::Fixed,
+            WorkerConcurrencyPolicy::Fixed,
             None,
             archive,
         )
@@ -1975,7 +1969,7 @@ mod tests {
     fn independent_workers_preserve_nextest_thread_default() {
         let workers = experiment_workers(
             ExperimentStrategy::Hash,
-            ConcurrencyPolicy::Independent,
+            WorkerConcurrencyPolicy::Independent,
             None,
             Path::new("/tmp/instrumented-tests.tar.zst"),
         )
@@ -2100,7 +2094,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut definitions = experiment_workers(
             ExperimentStrategy::Slice,
-            ConcurrencyPolicy::Independent,
+            WorkerConcurrencyPolicy::Independent,
             None,
             Path::new("/tmp/instrumented-tests.tar.zst"),
         )

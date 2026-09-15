@@ -6,10 +6,10 @@
 
 use std::path::PathBuf;
 
-use ::coverage::workers::ExperimentStrategy;
+use ::coverage::workers::{ExperimentStrategy, WorkerConcurrencyPolicy};
 use anyhow::Result;
 use check::CheckGroup;
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 
 mod check;
 mod coverage;
@@ -174,8 +174,8 @@ enum CoverageCmd {
         #[arg(long)]
         experiment: Option<ExperimentStrategy>,
         /// Worker concurrency policy for a two-worker experiment.
-        #[arg(long, value_enum, default_value_t = CoverageConcurrency::Independent)]
-        concurrency: CoverageConcurrency,
+        #[arg(long, default_value_t = WorkerConcurrencyPolicy::Independent)]
+        concurrency: WorkerConcurrencyPolicy,
         /// Instrumented nextest archive shared read-only by experiment workers.
         #[arg(long, requires = "experiment")]
         archive_file: Option<PathBuf>,
@@ -188,8 +188,8 @@ enum CoverageCmd {
         strategy: ExperimentStrategy,
         #[arg(long, value_parser = clap::value_parser!(u8).range(1..=2))]
         worker: u8,
-        #[arg(long, value_enum, default_value_t = CoverageConcurrency::Independent)]
-        concurrency: CoverageConcurrency,
+        #[arg(long, default_value_t = WorkerConcurrencyPolicy::Independent)]
+        concurrency: WorkerConcurrencyPolicy,
         #[arg(long)]
         census: PathBuf,
         #[arg(long)]
@@ -214,20 +214,6 @@ enum CoverageCmd {
     },
 }
 
-#[derive(Clone, Copy, Debug, ValueEnum)]
-enum CoverageConcurrency {
-    Independent,
-    Fixed,
-}
-
-impl From<CoverageConcurrency> for coverage::emit::ConcurrencyPolicy {
-    fn from(value: CoverageConcurrency) -> Self {
-        match value {
-            CoverageConcurrency::Independent => Self::Independent,
-            CoverageConcurrency::Fixed => Self::Fixed,
-        }
-    }
-}
 #[derive(Subcommand)]
 enum WasmCoverageCmd {
     /// Create the sentinel status and retain the content-addressed served module.
@@ -337,12 +323,7 @@ fn main() -> Result<()> {
             experiment: Some(experiment),
             concurrency,
             archive_file: Some(archive_file),
-        }) => coverage::emit::run_experiment(
-            &out,
-            experiment,
-            coverage::emit::ConcurrencyPolicy::from(concurrency),
-            &archive_file,
-        ),
+        }) => coverage::emit::run_experiment(&out, experiment, concurrency, &archive_file),
         Command::Coverage(CoverageCmd::Emit {
             experiment: Some(_),
             archive_file: None,
@@ -364,7 +345,7 @@ fn main() -> Result<()> {
             &out,
             strategy,
             worker,
-            coverage::emit::ConcurrencyPolicy::from(concurrency),
+            concurrency,
             &census,
             &archive_file,
         ),
@@ -566,7 +547,7 @@ mod tests {
             default_emit.command,
             Command::Coverage(CoverageCmd::Emit {
                 experiment: None,
-                concurrency: CoverageConcurrency::Independent,
+                concurrency: WorkerConcurrencyPolicy::Independent,
                 ..
             })
         ));
@@ -587,7 +568,7 @@ mod tests {
             experiment.command,
             Command::Coverage(CoverageCmd::Emit {
                 experiment: Some(ExperimentStrategy::Slice),
-                concurrency: CoverageConcurrency::Fixed,
+                concurrency: WorkerConcurrencyPolicy::Fixed,
                 archive_file: Some(archive_file),
                 ..
             }) if archive_file == Path::new("/tmp/instrumented-tests.tar.zst")
