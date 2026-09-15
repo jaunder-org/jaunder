@@ -56,8 +56,11 @@ measurement-only.
 ## Local results
 
 Elapsed includes per-observation instrumented archive preparation plus
-execution, profile merge, text/LCOV/CRAP generation, and verdict. RSS is the
-median of each observation's larger preparation/producer maximum.
+execution, profile processing, text/LCOV/CRAP generation, and verdict. The
+checked evidence records preparation (incremental compilation plus archive
+creation) resource usage separately for every ordinal, followed by each producer
+stage and both worker durations. RSS is the median of each observation's larger
+preparation/producer maximum.
 
 | Treatment             | Ordinals | Median elapsed | Delta from baseline | Median max RSS |
 | --------------------- | -------: | -------------: | ------------------: | -------------: |
@@ -76,6 +79,15 @@ CRAP digest
 executable-source membership, exclusions, and passing verdict. Raw positive hit
 counts varied between rounds; boolean line-hit normalization removed that
 harmless repetition-count difference.
+
+The producer's stage contract folds LLVM profile merging into `text-report`; the
+separate-runner aggregate likewise measured profile merge and report generation
+as one aggregate duration. No accepted observation therefore isolates
+profile-merge time. Correcting that instrumentation would require another
+controlled benchmark, which is not justified after the treatment already failed
+the adoption threshold and exact semantic equivalence. This timing-resolution
+gap is an additional production-eligibility failure, not an estimated
+measurement.
 
 ## Experimental cache boundary
 
@@ -108,20 +120,21 @@ boundary and restores the broad production exclusion filter.
 
 ## CI timing results
 
-Internal critical path is baseline producer elapsed, or fan-out preparation +
-slower worker elapsed + aggregate elapsed. Job critical path uses GitHub job
-timestamps and therefore includes checkout, setup, artifact transfer, upload,
-and scheduling overhead. Runner consumption is the sum of all treatment job
-intervals.
+Internal critical path is baseline producer elapsed, or fan-out support
+preparation/compilation + slower worker elapsed + aggregate elapsed.
+Orchestration/transfer overhead is the complete job critical path minus that
+internal path; it includes checkout, setup, artifact transfer, upload, and
+scheduling because Actions does not expose those as one narrower timer. Runner
+consumption is the sum of all treatment job intervals.
 
-| Observation     | Cache                       | Internal stages (s)                                        | Internal critical path | Job critical path | Runner consumption |
-| --------------- | --------------------------- | ---------------------------------------------------------- | ---------------------: | ----------------: | -----------------: |
-| Baseline cold A | cold final                  | producer 1,974.328                                         |            1,974.328 s |           2,094 s |            2,094 s |
-| Fan-out cold A  | cold support                | prep 305.267; workers 169.832 / 163.011; aggregate 123.810 |              598.909 s |           1,040 s |            1,313 s |
-| Fan-out warm A  | warm support                | prep 19.855; workers 180.925 / 157.337; aggregate 85.608   |              286.388 s |             633 s |              903 s |
-| Baseline warm A | warm inputs, uncached final | producer 566.527                                           |              566.527 s |             692 s |              692 s |
-| Baseline warm B | warm inputs, uncached final | producer 566.187                                           |              566.187 s |             704 s |              704 s |
-| Fan-out warm B  | warm support                | prep 19.343; workers 273.108 / 150.793; aggregate 89.878   |              382.329 s |             702 s |              935 s |
+| Observation     | Cache                       | Internal stages (s)                                        | Internal critical path | Orchestration / transfer | Job critical path | Runner consumption |
+| --------------- | --------------------------- | ---------------------------------------------------------- | ---------------------: | -----------------------: | ----------------: | -----------------: |
+| Baseline cold A | cold final                  | producer 1,974.328                                         |            1,974.328 s |                119.672 s |           2,094 s |            2,094 s |
+| Fan-out cold A  | cold support                | prep 305.267; workers 169.832 / 163.011; aggregate 123.810 |              598.909 s |                441.091 s |           1,040 s |            1,313 s |
+| Fan-out warm A  | warm support                | prep 19.855; workers 180.925 / 157.337; aggregate 85.608   |              286.388 s |                346.612 s |             633 s |              903 s |
+| Baseline warm A | warm inputs, uncached final | producer 566.527                                           |              566.527 s |                125.473 s |             692 s |              692 s |
+| Baseline warm B | warm inputs, uncached final | producer 566.187                                           |              566.187 s |                137.813 s |             704 s |              704 s |
+| Fan-out warm B  | warm support                | prep 19.343; workers 273.108 / 150.793; aggregate 89.878   |              382.329 s |                319.671 s |             702 s |              935 s |
 
 Warm medians:
 
@@ -166,6 +179,8 @@ inputs equivalent.
   improved 3.56%.
 - Exact merged coverage semantics: **fail**.
 - Runner consumption: **regressed 31.66%** on warm medians.
+- Required profile-merge timing isolation: **fail** (bundled with report
+  generation).
 - Selectable strategy: hash is selectable in principle; backend grouping was not
   considered for adoption.
 
