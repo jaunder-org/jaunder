@@ -2300,7 +2300,7 @@ test("unseeded client-nav to / paints Loading with the masthead intact", async (
   // because `TimelineRows` alone emits `.j-scroll` and it does not exist here.
   await waitForSelector(page, ".j-loading");
   await expect(page.locator(".j-loading")).toBeVisible();
-  const masthead = page.locator(".j-hero");
+  const masthead = page.locator(".j-topbar");
   await expect(masthead).toBeVisible();
   await expect(page.locator(".j-scroll")).toHaveCount(0);
 
@@ -2323,17 +2323,17 @@ test("unseeded client-nav to / paints Loading with the masthead intact", async (
   // inside each match arm would have torn it down and rebuilt it, losing the stamp —
   // the #653 hazard class, on projector-coincident markup.
   await waitForSelector(page, ".j-scroll");
-  await expect(page.locator(".j-hero[data-j-probe='1']")).toHaveCount(1);
+  await expect(page.locator(".j-topbar[data-j-probe='1']")).toHaveCount(1);
   await expect(page.locator(".j-loading")).toHaveCount(0);
 
   // ...and still precedes the rows. Playwright locators do not express document
   // order, so ask the DOM directly.
   const mastheadFirst = await page.evaluate(() => {
-    const hero = document.querySelector(".j-hero");
+    const masthead = document.querySelector(".j-topbar");
     const scroll = document.querySelector(".j-scroll");
-    if (!hero || !scroll) return false;
+    if (!masthead || !scroll) return false;
     // DOCUMENT_POSITION_FOLLOWING === 4
-    return (hero.compareDocumentPosition(scroll) & 4) !== 0;
+    return (masthead.compareDocumentPosition(scroll) & 4) !== 0;
   });
   expect(mastheadFirst).toBe(true);
 });
