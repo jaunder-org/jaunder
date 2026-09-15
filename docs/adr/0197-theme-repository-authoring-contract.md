@@ -1,6 +1,6 @@
-# ADR-DRAFT: Theme repositories use the Jaunder CLI for canonical artifacts
+# ADR-0197: Theme repositories use the Jaunder CLI for canonical artifacts
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-12
 - Issue: [#1443](https://github.com/jaunder-org/jaunder/issues/1443)
 

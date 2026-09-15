@@ -224,6 +224,7 @@ convention). See the Status column below for each ADR's current status.
 | [0194](adr/0194-passkeys-are-additive-cookie-session-credentials.md)   | Passkeys are additive cookie-Session credentials                                                             | accepted   |
 | [0195](adr/0195-dynamic-pr-check-classification.md)                    | Classify PR check failures from the workflow dependency graph                                                | accepted   |
 | [0196](adr/0196-single-host-nixos-deployment-stack.md)                 | Single-Host NixOS Deployment Stack                                                                           | accepted   |
+| [0197](adr/0197-theme-repository-authoring-contract.md)                | Theme repositories use the Jaunder CLI for canonical artifacts                                               | accepted   |
 
 <!-- adr-table:end -->
 
