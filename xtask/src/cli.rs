@@ -281,6 +281,10 @@ pub enum Command {
     /// Nix maintenance commands that evaluate repository derivation boundaries.
     #[command(subcommand)]
     Nix(NixCommand),
+    /// Prove the cache policy admits only support closures and excludes every
+    /// coverage/e2e verdict, aggregate, and lifted equivalent.
+    #[command(subcommand)]
+    CacheSafety(CacheSafetyCommand),
     /// Trace-derived `#[server]` fn flow coverage (#681): which server entry
     /// points the e2e suite actually drives.
     #[command(subcommand)]
@@ -529,6 +533,15 @@ pub enum WasmCoverageCommand {
     },
 }
 
+/// `cache-safety` subcommands.
+#[derive(Subcommand)]
+pub enum CacheSafetyCommand {
+    /// Reconcile `nix/cache-policy.json` with the Nix-derived output inventory,
+    /// then inspect admitted support closures without building final verdicts.
+    #[command(after_help = "EXAMPLES:\n  devtool run -- cargo xtask cache-safety probe")]
+    Probe,
+}
+
 /// `nix` subcommands.
 #[derive(Subcommand)]
 pub enum NixCommand {
@@ -652,6 +665,7 @@ impl Cli {
             Command::WasmCoverage(WasmCoverageCommand::Probe) => "wasm-coverage-probe",
             Command::WasmCoverage(WasmCoverageCommand::Measure { .. }) => "wasm-coverage-measure",
             Command::Nix(NixCommand::ProbeSource) => "nix-probe-source",
+            Command::CacheSafety(CacheSafetyCommand::Probe) => "cache-safety-probe",
             Command::ServerFnCoverage(ServerFnCoverageCommand::Regenerate) => {
                 steps::server_fn_coverage_check::REGENERATE_STEP
             }
@@ -1083,6 +1097,16 @@ mod tests {
         let cli = Cli::try_parse_from(["xtask", "nix", "probe-source"]).unwrap();
         assert_eq!(cli.command_name(), "nix-probe-source");
         assert!(matches!(cli.command, Command::Nix(NixCommand::ProbeSource)));
+    }
+
+    #[test]
+    fn cache_safety_probe_parses_as_closed_subcommand() {
+        let cli = Cli::try_parse_from(["xtask", "cache-safety", "probe"]).unwrap();
+        assert_eq!(cli.command_name(), "cache-safety-probe");
+        assert!(matches!(
+            cli.command,
+            Command::CacheSafety(CacheSafetyCommand::Probe)
+        ));
     }
 
     #[test]

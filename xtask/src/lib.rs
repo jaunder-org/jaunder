@@ -1,6 +1,7 @@
 mod adr;
 mod adr_readme;
 mod audit_wasm;
+mod cache_safety;
 mod census;
 mod cli;
 mod compile_cache;
@@ -82,8 +83,8 @@ mod steps {
 }
 
 pub use cli::{
-    AdrCommand, Cli, Command, CoverageCommand, E2eBackend, E2eBrowser, NixCommand,
-    PerformanceBackend, PerformanceBrowser, PerformanceCommand, PerformanceProfile,
+    AdrCommand, CacheSafetyCommand, Cli, Command, CoverageCommand, E2eBackend, E2eBrowser,
+    NixCommand, PerformanceBackend, PerformanceBrowser, PerformanceCommand, PerformanceProfile,
     PerformanceRunArgs, PrCommand, PrWatchUntil, ProductionBaselineCommand, SandboxProfile,
     ServerFnCoverageCommand, TracesCommand, WasmCoverageCommand,
 };

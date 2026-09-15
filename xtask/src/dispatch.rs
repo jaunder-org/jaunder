@@ -4,10 +4,11 @@ use std::time::Instant;
 use xshell::Shell;
 
 use crate::{
-    adr, adr_readme, audit_wasm, census,
+    adr, adr_readme, audit_wasm, cache_safety, census,
     cli::{
-        AdrCommand, CiValidateLane, Cli, Command, CoverageCommand, NixCommand, PrCommand,
-        ProductionBaselineCommand, ServerFnCoverageCommand, TracesCommand, WasmCoverageCommand,
+        AdrCommand, CacheSafetyCommand, CiValidateLane, Cli, Command, CoverageCommand, NixCommand,
+        PrCommand, ProductionBaselineCommand, ServerFnCoverageCommand, TracesCommand,
+        WasmCoverageCommand,
     },
     coverage, gate, issue, lifecycle, nix_probe, performance, pr, production_baseline,
     result::{CommandResult, Mode, StepResult},
@@ -185,6 +186,14 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                 backend.as_str(),
                 browser.as_str(),
             );
+            lifecycle::finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::CacheSafety(CacheSafetyCommand::Probe) => {
+            let start = Instant::now();
+            let mut result = CommandResult::new("cache-safety-probe");
+            let step_start = Instant::now();
+            result.push(cache_safety::probe().with_duration(step_start.elapsed()));
             lifecycle::finalize(&mut result, start);
             Ok(result)
         }

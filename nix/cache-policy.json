@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "outputs": [
+    { "attr": "checks.x86_64-linux.coverage", "classification": "final" },
+    { "attr": "checks.x86_64-linux.coverage-gate", "classification": "final" },
+    {
+      "attr": "checks.x86_64-linux.coverage-source-probe",
+      "classification": "support"
+    },
+    {
+      "attr": "checks.x86_64-linux.e2e",
+      "classification": "final",
+      "equivalentTo": "packages.x86_64-linux.e2e-checks"
+    },
+    {
+      "attr": "checks.x86_64-linux.e2e-postgres-chromium",
+      "classification": "final"
+    },
+    {
+      "attr": "checks.x86_64-linux.e2e-postgres-firefox",
+      "classification": "final"
+    },
+    {
+      "attr": "checks.x86_64-linux.e2e-sqlite-chromium",
+      "classification": "final"
+    },
+    {
+      "attr": "checks.x86_64-linux.e2e-sqlite-firefox",
+      "classification": "final"
+    },
+    {
+      "attr": "packages.x86_64-linux.e2e-checks",
+      "classification": "final",
+      "equivalentTo": "checks.x86_64-linux.e2e"
+    },
+    {
+      "attr": "packages.x86_64-linux.e2e-postgres-chromium-driver",
+      "classification": "support"
+    },
+    {
+      "attr": "packages.x86_64-linux.e2e-postgres-chromium-single-worker-driver",
+      "classification": "support"
+    },
+    {
+      "attr": "packages.x86_64-linux.e2e-postgres-firefox-driver",
+      "classification": "support"
+    },
+    {
+      "attr": "packages.x86_64-linux.e2e-postgres-firefox-single-worker-driver",
+      "classification": "support"
+    },
+    {
+      "attr": "packages.x86_64-linux.e2e-npm-deps",
+      "classification": "support"
+    },
+    {
+      "attr": "packages.x86_64-linux.e2e-postgres-chromium-single-worker",
+      "classification": "final"
+    },
+    {
+      "attr": "packages.x86_64-linux.e2e-postgres-firefox-single-worker",
+      "classification": "final"
+    },
+    {
+      "attr": "packages.x86_64-linux.e2e-sqlite-chromium-single-worker",
+      "classification": "final"
+    },
+    {
+      "attr": "packages.x86_64-linux.e2e-sqlite-firefox-single-worker",
+      "classification": "final"
+    },
+    {
+      "attr": "packages.x86_64-linux.e2e-sqlite-firefox-single-worker-driver",
+      "classification": "support"
+    },
+    {
+      "attr": "packages.x86_64-linux.e2e-sqlite-firefox-driver",
+      "classification": "support"
+    },
+    {
+      "attr": "packages.x86_64-linux.e2e-sqlite-chromium-single-worker-driver",
+      "classification": "support"
+    },
+    {
+      "attr": "packages.x86_64-linux.e2e-sqlite-chromium-driver",
+      "classification": "support"
+    },
+    { "attr": "packages.x86_64-linux.e2e-support", "classification": "support" }
+  ]
+}

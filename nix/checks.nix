@@ -1644,6 +1644,114 @@ mkWasmCoverageMeasurementProducer =
         ''}
       '';
     };
+  # These are the existing cache-filtered support derivations in the e2e
+  # graph. Exposing them does not create work: e2e checks already depend on
+  # both derivations, whose output names match the current broad filter.
+  e2eTestDriverPackages =
+    let
+      drivers = checks:
+        pkgs.lib.mapAttrs' (name: check: {
+          name = "${name}-driver";
+          value = check.driver;
+        }) checks;
+    in
+    drivers e2eGateChecks // drivers e2eSingleWorkerPackages;
+  e2eSupportPackages = {
+    # These derivations already sit beneath each NixOS test result and have
+    # names caught by the broad Cachix exclusion. They contain test machinery,
+    # not test evidence.
+    e2e-support = e2ePackage;
+    e2e-npm-deps = e2ePackage.npmDeps;
+  }
+  // e2eTestDriverPackages;
+  # This concern-owned attrset is the sole definition of Rust coverage outputs.
+  # The source probe is preparation only; the producer and its consumer are
+  # verdict-bearing and therefore final.
+  coverageCacheChecks = rec {
+    coverage = craneLib.mkCargoDerivation (
+      hostArgs
+      // {
+        src = coverageSrc;
+        inherit cargoArtifacts;
+        pname = "jaunder-coverage";
+        # Source-based coverage uses LLVM's embedded coverage map
+        # (-Cinstrument-coverage), not DWARF, so dropping debuginfo
+        # shrinks the instrumented test binaries dramatically with no
+        # loss of line coverage. Without this the instrumented link
+        # exhausts the build filesystem and rust-lld dies with SIGBUS
+        # writing its mmap'd output on the CI runner.
+        CARGO_PROFILE_DEV_DEBUG = "0";
+        CARGO_PROFILE_TEST_DEBUG = "0";
+        # Stage the real CSR bundle + public assets so `server`'s
+        # `build.rs` embeds a POPULATED `site::Site` under instrumentation
+        # (#237). Without this the coverage sandbox has no bundle, and the
+        # `serve_site` handler's asset-serving branch could only be
+        # `cov:ignore`d; with it, the handler is exercised end-to-end by
+        # its integration tests and genuinely measured. Same env the
+        # release `jaunderBin` uses; `build.rs` copies from these paths.
+        JAUNDER_CSR_BUNDLE_DIR = "${csrWasmBundle}";
+        JAUNDER_PUBLIC_DIR = "${../public}";
+        nativeBuildInputs = hostArgs.nativeBuildInputs ++ [
+          devtoolBin
+          cargo-crap
+          pkgs.cargo-llvm-cov
+          pkgs.cargo-nextest
+          # devtool runs the whole test suite under an ephemeral
+          # PostgreSQL (via devtool pg) so
+          # storage/src/postgres/* gets instrumented coverage. The
+          # throwaway cluster needs initdb/pg_ctl/psql available inside
+          # the build sandbox.
+          pkgs.postgresql_18
+        ];
+        buildPhaseCargoCommand = ''
+          export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}:''${LD_LIBRARY_PATH:-}"
+          mkdir -p emit-out
+          # The producer emits checked stage evidence; the Nix gate and host xtask
+          # consume its status and reports as separate authoritative boundaries.
+          devtool coverage emit --out emit-out
+        '';
+        installPhaseCommand = ''
+          mkdir -p $out
+          # Preserve controlled-red producer status and diagnostics even when report
+          # stages did not run. Reports are copied only when their producer stages
+          # produced them; their host consumer rejects missing or empty evidence.
+          if test -e emit-out/status.json; then
+            cp emit-out/status.json $out/status.json
+          fi
+          if test -d emit-out/diagnostics; then
+            cp -r emit-out/diagnostics $out/diagnostics
+          fi
+          # emit-out/coverage-report.lcov is intentionally NOT copied: it is an
+          # intermediate consumed only by `cargo crap`, not a gate output the host reads.
+          if test -e emit-out/coverage-report.txt; then
+            cp emit-out/coverage-report.txt $out/coverage-report.txt
+          fi
+          if test -e emit-out/crap-report.json; then
+            cp emit-out/crap-report.json $out/crap-report.json
+          fi
+        '';
+      }
+    );
+    # Probe-only identity: its sole varying input is the filtered coverage
+    # source. Keep this separate from coverage.drvPath, which also includes the
+    # coverage producer's tooling and runtime inputs.
+    coverage-source-probe = pkgs.runCommand "jaunder-coverage-source-probe" { src = coverageSrc; } ''
+      touch $out
+    '';
+    # Belt-and-suspenders: this sandbox consumer validates completed producer
+    # evidence through the shared Rust contract, while host xtask consumes its
+    # reports separately. Its `jaunder-coverage-gate` name stays broad-filtered.
+    coverage-gate = pkgs.runCommand "jaunder-coverage-gate" { nativeBuildInputs = [ devtoolBin ]; } ''
+      devtool coverage validate-status --status ${coverage}/status.json
+      touch $out
+    '';
+  };
+  cacheSafetyOutputAttrs =
+    (map (name: "checks.${system}.${name}") (builtins.attrNames coverageCacheChecks))
+    ++ (map (name: "checks.${system}.${name}") (builtins.attrNames e2eGateChecks))
+    ++ [ "checks.${system}.e2e" "packages.${system}.e2e-checks" ]
+    ++ (map (name: "packages.${system}.${name}") (builtins.attrNames e2eSingleWorkerPackages))
+    ++ (map (name: "packages.${system}.${name}") (builtins.attrNames e2eSupportPackages));
 in
 {
 
@@ -1651,7 +1759,16 @@ in
     inherit mkPerformanceProducer;
   };
   packages = pkgs.lib.optionalAttrs pkgs.stdenv.isLinux (
-    {
+    e2eSupportPackages
+    // {
+      # The probe realizes only this declarative inventory before it evaluates
+      # closures. The inventory is not a cache-policy output.
+      cache-safety-inventory = pkgs.writeText "jaunder-cache-safety-inventory.json" (
+        builtins.toJSON {
+          schemaVersion = 1;
+          outputs = cacheSafetyOutputAttrs;
+        }
+      );
 # The e2e aggregate: a symlinkJoin of every browser/backend `e2e-*`
 # check, exposed as `checks.e2e` and built by `cargo xtask validate`.
 # Adding a new browser/backend combo automatically joins it here. Its
@@ -1706,6 +1823,7 @@ wasm-coverage-measure-firefox-instrumented = mkWasmCoverageMeasurementProducer {
 
   checks = pkgs.lib.optionalAttrs pkgs.stdenv.isLinux (
 e2eGateChecks
+// coverageCacheChecks
 // {
   wasm-tests = assert sourceMembershipAssertions; craneLib.cargoTest (
     commonArgs
@@ -1921,90 +2039,6 @@ static-code =
       devtool check --group code --sandbox-cargo
       touch $out
     '';
-coverage = craneLib.mkCargoDerivation (
-  hostArgs
-  // {
-    src = coverageSrc;
-    inherit cargoArtifacts;
-    pname = "jaunder-coverage";
-    # Source-based coverage uses LLVM's embedded coverage map
-    # (-Cinstrument-coverage), not DWARF, so dropping debuginfo
-    # shrinks the instrumented test binaries dramatically with no
-    # loss of line coverage. Without this the instrumented link
-    # exhausts the build filesystem and rust-lld dies with SIGBUS
-    # writing its mmap'd output on the CI runner.
-    CARGO_PROFILE_DEV_DEBUG = "0";
-    CARGO_PROFILE_TEST_DEBUG = "0";
-    # Stage the real CSR bundle + public assets so `server`'s
-    # `build.rs` embeds a POPULATED `site::Site` under instrumentation
-    # (#237). Without this the coverage sandbox has no bundle, and the
-    # `serve_site` handler's asset-serving branch could only be
-    # `cov:ignore`d; with it, the handler is exercised end-to-end by
-    # its integration tests and genuinely measured. Same env the
-    # release `jaunderBin` uses; `build.rs` copies from these paths.
-    JAUNDER_CSR_BUNDLE_DIR = "${csrWasmBundle}";
-    JAUNDER_PUBLIC_DIR = "${../public}";
-    nativeBuildInputs = hostArgs.nativeBuildInputs ++ [
-      devtoolBin
-      cargo-crap
-      pkgs.cargo-llvm-cov
-      pkgs.cargo-nextest
-      # devtool runs the whole test suite under an ephemeral
-      # PostgreSQL (via devtool pg) so
-      # storage/src/postgres/* gets instrumented coverage. The
-      # throwaway cluster needs initdb/pg_ctl/psql available inside
-      # the build sandbox.
-      pkgs.postgresql_18
-    ];
-    buildPhaseCargoCommand = ''
-      export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}:''${LD_LIBRARY_PATH:-}"
-      mkdir -p emit-out
-      # The producer emits checked stage evidence; the Nix gate and host xtask
-      # consume its status and reports as separate authoritative boundaries.
-      devtool coverage emit --out emit-out
-    '';
-    installPhaseCommand = ''
-      mkdir -p $out
-      # Preserve controlled-red producer status and diagnostics even when report
-      # stages did not run. Reports are copied only when their producer stages
-      # produced them; their host consumer rejects missing or empty evidence.
-      if test -e emit-out/status.json; then
-        cp emit-out/status.json $out/status.json
-      fi
-      if test -d emit-out/diagnostics; then
-        cp -r emit-out/diagnostics $out/diagnostics
-      fi
-      # emit-out/coverage-report.lcov is intentionally NOT copied: it is an
-      # intermediate consumed only by `cargo crap`, not a gate output the host reads.
-      if test -e emit-out/coverage-report.txt; then
-        cp emit-out/coverage-report.txt $out/coverage-report.txt
-      fi
-      if test -e emit-out/crap-report.json; then
-        cp emit-out/crap-report.json $out/crap-report.json
-      fi
-    '';
-  }
-);
-  # Probe-only identity: its sole varying input is the filtered coverage source.
-  # Keep this separate from coverage.drvPath, which also includes producer inputs.
-  coverage-source-probe = pkgs.runCommand "jaunder-coverage-source-probe" { src = coverageSrc; } ''
-    touch $out
-  '';
-# Belt-and-suspenders: the sandbox gate validates completed producer evidence
-# through the shared Rust contract, while the host separately consumes reports.
-# Named `jaunder-coverage-gate` so the cachix pushFilter
-# (jaunder-coverage|jaunder-e2e) excludes it.
-coverage-gate =
-  pkgs.runCommand "jaunder-coverage-gate"
-    {
-      nativeBuildInputs = [ devtoolBin ];
-    }
-    ''
-      devtool coverage validate-status \
-        --status ${self.checks.${system}.coverage}/status.json
-      touch $out
-    '';
-
 # Doctests: the one suite nextest structurally cannot run, so the
 # `coverage` check above never sees them (#763). The producer runs
 # `cargo test --workspace --doc` AND reconciles what ran against the
