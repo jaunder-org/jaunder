@@ -199,17 +199,39 @@ pub fn execute_with<
         .as_ref()
         .map_or_else(|_| Progress::default(), Progress::from_snapshot);
     let mut report = watch::watch_with_progress(source, clock, &subject, cfg, progress, sink);
-    if report.outcome == Outcome::ChecksFailed
-        && let Some(failure) = report.subject_failure.as_ref()
-        && let Ok(evidence) = source.shared_failure_evidence(&subject, failure)
-    {
-        report.shared_failure = super::shared_failure::shared_failure(
-            &evidence.subject_log,
-            evidence.selected_runs,
-            evidence.jobs,
+    if report.outcome == Outcome::ChecksFailed && report.subject_failure.is_some() {
+        enrich_shared_failure(
+            source,
+            &subject,
+            &mut report,
+            super::gh::Deadline::ten_seconds(),
         );
     }
     Ok(report)
+}
+fn enrich_shared_failure<S: SharedFailureEvidenceSource>(
+    source: &S,
+    subject: &super::Subject,
+    report: &mut PrReport,
+    deadline: super::gh::Deadline,
+) {
+    if deadline.check().is_err() {
+        return;
+    }
+    let Some(failure) = report.subject_failure.as_ref() else {
+        return;
+    };
+    let Ok(evidence) = source.shared_failure_evidence(subject, failure, &deadline) else {
+        return;
+    };
+    if let Ok(annotation) = super::shared_failure::shared_failure_with_deadline(
+        &evidence.subject_log,
+        evidence.selected_runs,
+        evidence.jobs,
+        &deadline,
+    ) {
+        report.shared_failure = annotation;
+    }
 }
 
 /// Wrap a report in the command envelope.
@@ -599,6 +621,32 @@ mod tests {
             assert_eq!(report.events[0].kind, EventKind::Terminal, "{case}");
             assert_eq!(source.shared_failure_evidence_requests(), 1, "{case}");
         }
+    }
+
+    #[test]
+    fn expiry_after_evidence_discards_the_annotation_during_policy_work() {
+        let git = GitFacts::default();
+        let bare_source = FakeSource::new(vec![Ok(failed_actions_snapshot())], queue_rules())
+            .with_shared_failure_evidence_script(vec![]);
+        let mut report = execute_with(
+            &bare_source,
+            &SpyArmer::new(),
+            &clock(),
+            invocation(&git, false),
+            &mut |_| {},
+        )
+        .unwrap();
+        let evidence_source = FakeSource::new(vec![], queue_rules())
+            .with_shared_failure_evidence(matching_evidence())
+            .with_shared_failure_evidence_delay(std::time::Duration::from_millis(20));
+        enrich_shared_failure(
+            &evidence_source,
+            &crate::pr::test_support::subject(),
+            &mut report,
+            crate::pr::gh::Deadline::after(std::time::Duration::from_millis(1)),
+        );
+        assert!(report.shared_failure.is_none());
+        assert_eq!(evidence_source.shared_failure_evidence_requests(), 1);
     }
 
     #[test]

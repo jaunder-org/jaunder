@@ -104,14 +104,20 @@ impl ApiError {
 #[derive(Debug)]
 pub struct Deadline(Instant);
 
+const MAX_JSON_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+
 impl Deadline {
     pub fn ten_seconds() -> Self {
         Self(Instant::now() + Duration::from_secs(10))
     }
 
     #[cfg(test)]
-    fn after(duration: Duration) -> Self {
+    pub(crate) fn after(duration: Duration) -> Self {
         Self(Instant::now() + duration)
+    }
+
+    pub fn check(&self) -> Result<(), ApiError> {
+        self.remaining().map(|_| ())
     }
 
     fn remaining(&self) -> Result<Duration, ApiError> {
@@ -329,19 +335,34 @@ pub fn run_gh(args: &[&str]) -> Result<Value, ApiError> {
 /// A deadline-bound JSON-producing `gh api` call for best-effort enrichment.
 pub fn run_gh_deadline(args: &[&str], deadline: &Deadline) -> Result<Value, ApiError> {
     let (exit, stdout, stderr) = spawn_deadline(args, deadline)?;
+    parse_deadline_json(exit, stdout, &stderr, deadline)
+}
+
+fn parse_deadline_json(
+    exit: i32,
+    stdout: Vec<u8>,
+    stderr: &str,
+    deadline: &Deadline,
+) -> Result<Value, ApiError> {
+    deadline.check()?;
+    if stdout.len() > MAX_JSON_RESPONSE_BYTES {
+        return Err(ApiError::Malformed(format!(
+            "gh JSON response exceeds {MAX_JSON_RESPONSE_BYTES} bytes"
+        )));
+    }
     let stdout = String::from_utf8(stdout)
         .map_err(|error| ApiError::Malformed(format!("gh JSON stdout is not UTF-8: {error}")))?;
-    classify(exit, &stdout, &stderr)
+    deadline.check()?;
+    let value = classify(exit, &stdout, stderr)?;
+    deadline.check()?;
+    Ok(value)
 }
 
 /// A deadline-bound raw `gh api` call for Actions logs.
-///
-/// Unlike [`run_gh_deadline`], this deliberately never treats successful stdout as
-/// JSON: logs are bytes first and only the evidence parser may decide whether UTF-8
-/// is supported.
 pub fn run_gh_raw_deadline(args: &[&str], deadline: &Deadline) -> Result<Vec<u8>, ApiError> {
     let (exit, stdout, stderr) = spawn_deadline(args, deadline)?;
     if exit == 0 {
+        deadline.check()?;
         return Ok(stdout);
     }
     let text = String::from_utf8_lossy(&stdout);
@@ -534,6 +555,18 @@ mod tests {
             classify(0, "not json", "").unwrap_err(),
             ApiError::Malformed(_)
         ));
+    }
+
+    #[test]
+    fn deadline_json_rejects_oversized_bytes_before_decoding() {
+        let error = parse_deadline_json(
+            0,
+            vec![b'{'; MAX_JSON_RESPONSE_BYTES + 1],
+            "",
+            &Deadline::ten_seconds(),
+        )
+        .unwrap_err();
+        assert!(matches!(error, ApiError::Malformed(message) if message.contains("exceeds")));
     }
 
     #[test]

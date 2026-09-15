@@ -9,6 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+use super::gh::{ApiError, Deadline};
+
 /// The selected failed Actions check, retained internally until enrichment can use it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubjectFailure {
@@ -105,10 +107,22 @@ const MAX_MATCHES: usize = 10;
 
 /// Remove presentation noise while preserving all substantive error text.
 pub fn normalize_log(log: &str) -> String {
-    let no_ansi = strip_ansi(log);
+    normalize_log_checked(log, None).expect("an unchecked normalization cannot expire")
+}
+
+fn normalize_log_checked(log: &str, deadline: Option<&Deadline>) -> Result<String, ApiError> {
+    let no_ansi = strip_ansi(log, deadline)?;
     let mut normalized = String::new();
     let mut previous_blank = false;
-    for line in no_ansi.replace("\r\n", "\n").replace('\r', "\n").lines() {
+    for (index, line) in no_ansi
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .lines()
+        .enumerate()
+    {
+        if index % 64 == 0 {
+            check_deadline(deadline)?;
+        }
         let line = strip_actions_prefix(line).trim_end();
         let blank = line.is_empty();
         if blank && previous_blank {
@@ -120,16 +134,38 @@ pub fn normalize_log(log: &str) -> String {
         normalized.push_str(line);
         previous_blank = blank;
     }
-    normalized
+    check_deadline(deadline)?;
+    Ok(normalized)
 }
 
 /// Extract the final qualifying bounded error block from an Actions log.
 pub fn extract_error_block(log: &str) -> Option<String> {
-    let normalized = normalize_log(log);
+    extract_error_block_checked(log, None).expect("an unchecked extraction cannot expire")
+}
+
+fn extract_error_block_checked(
+    log: &str,
+    deadline: Option<&Deadline>,
+) -> Result<Option<String>, ApiError> {
+    let normalized = normalize_log_checked(log, deadline)?;
     let lines = normalized.lines().collect::<Vec<_>>();
-    let anchor = lines.iter().rposition(is_anchor)?;
+    let mut anchor = None;
+    for (index, line) in lines.iter().enumerate() {
+        if index % 64 == 0 {
+            check_deadline(deadline)?;
+        }
+        if is_anchor(line) {
+            anchor = Some(index);
+        }
+    }
+    let Some(anchor) = anchor else {
+        return Ok(None);
+    };
     let mut block = vec![lines[anchor]];
-    for line in &lines[anchor + 1..] {
+    for (index, line) in lines[anchor + 1..].iter().enumerate() {
+        if index % 64 == 0 {
+            check_deadline(deadline)?;
+        }
         let trimmed = line.trim_start_matches(|ch: char| ch.is_ascii_whitespace());
         if line.is_empty() || trimmed.starts_with("Caused by:") || starts_indented(line) {
             block.push(line);
@@ -139,7 +175,7 @@ pub fn extract_error_block(log: &str) -> Option<String> {
     }
     let line_count = block.len();
     let block = block.join("\n");
-    (line_count <= MAX_BLOCK_LINES && block.len() <= MAX_BLOCK_BYTES).then_some(block)
+    Ok((line_count <= MAX_BLOCK_LINES && block.len() <= MAX_BLOCK_BYTES).then_some(block))
 }
 
 /// Build the versioned signature of one raw failed-job log.
@@ -197,37 +233,71 @@ pub fn shared_failure(
     selected_runs: impl IntoIterator<Item = SelectedRun>,
     jobs: impl IntoIterator<Item = (u64, Vec<CandidateJob>)>,
 ) -> Option<SharedFailure> {
-    let (excerpt, digest_sha256) = signature(subject_log)?;
-    let subject_excerpt = excerpt.as_str();
-    let jobs = jobs.into_iter().collect::<BTreeMap<_, _>>();
-    let mut matches = selected_runs
-        .into_iter()
-        .flat_map(|selected| {
-            jobs.get(&selected.run.id)
-                .into_iter()
-                .flatten()
-                .filter(|job| extract_error_block(&job.log).as_deref() == Some(subject_excerpt))
-                .map(move |job| {
-                    (
-                        selected.run.created_at.clone(),
-                        selected.run.id,
-                        SharedFailureMatch {
-                            source: selected.source.clone(),
-                            head_sha: selected.run.head_sha.clone(),
-                            run: SharedFailureRun {
-                                id: selected.run.id,
-                                url: selected.run.url.clone(),
-                            },
-                            job: SharedFailureJob {
-                                id: job.id,
-                                name: job.name.clone(),
-                                url: job.url.clone(),
-                            },
-                        },
-                    )
-                })
-        })
-        .collect::<Vec<_>>();
+    shared_failure_checked(subject_log, selected_runs, jobs, None)
+        .expect("an unchecked comparison cannot expire")
+}
+
+/// Deadline-aware counterpart to [`shared_failure`] for enrichment execution.
+pub fn shared_failure_with_deadline(
+    subject_log: &str,
+    selected_runs: impl IntoIterator<Item = SelectedRun>,
+    jobs: impl IntoIterator<Item = (u64, Vec<CandidateJob>)>,
+    deadline: &Deadline,
+) -> Result<Option<SharedFailure>, ApiError> {
+    shared_failure_checked(subject_log, selected_runs, jobs, Some(deadline))
+}
+
+fn shared_failure_checked(
+    subject_log: &str,
+    selected_runs: impl IntoIterator<Item = SelectedRun>,
+    candidate_jobs: impl IntoIterator<Item = (u64, Vec<CandidateJob>)>,
+    deadline: Option<&Deadline>,
+) -> Result<Option<SharedFailure>, ApiError> {
+    check_deadline(deadline)?;
+    let Some(excerpt) = extract_error_block_checked(subject_log, deadline)? else {
+        return Ok(None);
+    };
+    let digest_sha256 = Sha256::digest(excerpt.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let mut jobs = BTreeMap::new();
+    for (run_id, run_jobs) in candidate_jobs {
+        check_deadline(deadline)?;
+        jobs.insert(run_id, run_jobs);
+    }
+    let mut matches = Vec::new();
+    for selected in selected_runs {
+        check_deadline(deadline)?;
+        let Some(candidate_jobs) = jobs.get(&selected.run.id) else {
+            continue;
+        };
+        for job in candidate_jobs {
+            check_deadline(deadline)?;
+            if extract_error_block_checked(&job.log, deadline)?.as_deref() != Some(excerpt.as_str())
+            {
+                continue;
+            }
+            matches.push((
+                selected.run.created_at.clone(),
+                selected.run.id,
+                SharedFailureMatch {
+                    source: selected.source.clone(),
+                    head_sha: selected.run.head_sha.clone(),
+                    run: SharedFailureRun {
+                        id: selected.run.id,
+                        url: selected.run.url.clone(),
+                    },
+                    job: SharedFailureJob {
+                        id: job.id,
+                        name: job.name.clone(),
+                        url: job.url.clone(),
+                    },
+                },
+            ));
+        }
+    }
+    check_deadline(deadline)?;
     matches.sort_by(|left, right| {
         right
             .0
@@ -235,18 +305,19 @@ pub fn shared_failure(
             .then_with(|| right.1.cmp(&left.1))
             .then_with(|| left.2.job.id.cmp(&right.2.job.id))
     });
+    check_deadline(deadline)?;
     let matches = matches
         .into_iter()
         .take(MAX_MATCHES)
         .map(|(_, _, value)| value)
         .collect::<Vec<_>>();
-    (!matches.is_empty()).then_some(SharedFailure {
+    Ok((!matches.is_empty()).then_some(SharedFailure {
         version: 1,
         algorithm: ALGORITHM.into(),
         digest_sha256,
         excerpt,
         matches,
-    })
+    }))
 }
 
 fn starts_indented(line: &str) -> bool {
@@ -288,25 +359,82 @@ fn is_timestamp(value: &str) -> bool {
         })
 }
 
-fn strip_ansi(input: &str) -> String {
+fn check_deadline(deadline: Option<&Deadline>) -> Result<(), ApiError> {
+    deadline.map_or(Ok(()), Deadline::check)
+}
+
+fn strip_ansi(input: &str, deadline: Option<&Deadline>) -> Result<String, ApiError> {
     let mut output = String::with_capacity(input.len());
     let bytes = input.as_bytes();
     let mut index = 0;
     while index < bytes.len() {
-        if bytes[index] == 0x1b && bytes.get(index + 1) == Some(&b'[') {
-            index += 2;
-            while index < bytes.len() && !(0x40..=0x7e).contains(&bytes[index]) {
-                index += 1;
-            }
-            index += usize::from(index < bytes.len());
-        } else if let Some(ch) = input[index..].chars().next() {
+        if index % 1024 == 0 {
+            check_deadline(deadline)?;
+        }
+        if bytes[index] != 0x1b {
+            let ch = input[index..].chars().next().expect("index is in bounds");
             output.push(ch);
             index += ch.len_utf8();
-        } else {
+            continue;
+        }
+
+        index += 1;
+        let Some(kind) = bytes.get(index).copied() else {
             break;
+        };
+        index += 1;
+        match kind {
+            b'[' => {
+                while index < bytes.len() && !(0x40..=0x7e).contains(&bytes[index]) {
+                    if index % 1024 == 0 {
+                        check_deadline(deadline)?;
+                    }
+                    index += 1;
+                }
+                index += usize::from(index < bytes.len());
+            }
+            b']' => {
+                while index < bytes.len()
+                    && bytes[index] != 0x07
+                    && !(bytes[index] == 0x1b && bytes.get(index + 1) == Some(&b'\\'))
+                {
+                    if index % 1024 == 0 {
+                        check_deadline(deadline)?;
+                    }
+                    index += 1;
+                }
+                index += match bytes.get(index) {
+                    Some(0x07) => 1,
+                    Some(0x1b) => 2,
+                    _ => 0,
+                };
+            }
+            b'P' | b'X' | b'^' | b'_' => {
+                while index < bytes.len()
+                    && !(bytes[index] == 0x1b && bytes.get(index + 1) == Some(&b'\\'))
+                {
+                    if index % 1024 == 0 {
+                        check_deadline(deadline)?;
+                    }
+                    index += 1;
+                }
+                if index < bytes.len() {
+                    index += 2;
+                }
+            }
+            intermediate if (0x20..=0x2f).contains(&intermediate) => {
+                while index < bytes.len() && (0x20..=0x2f).contains(&bytes[index]) {
+                    index += 1;
+                }
+                if index < bytes.len() && (0x30..=0x7e).contains(&bytes[index]) {
+                    index += 1;
+                }
+            }
+            _ => {}
         }
     }
-    output
+    check_deadline(deadline)?;
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -317,6 +445,17 @@ mod tests {
         let first = "Validate (no e2e)\tValidate (static + clippy + Rust and Emacs coverage, via xtask)\t2026-09-12T18:47:55.2254816Z error: failed to download `jiff v0.2.35`\r\nValidate (no e2e)\tValidate (static + clippy + Rust and Emacs coverage, via xtask)\t2026-09-12T18:47:55.2255010Z \r\nValidate (no e2e)\tValidate (static + clippy + Rust and Emacs coverage, via xtask)\t2026-09-12T18:47:55.2255098Z Caused by:\r\nValidate (no e2e)\tValidate (static + clippy + Rust and Emacs coverage, via xtask)\t2026-09-12T18:47:55.2255381Z   attempting to make an HTTP request, but --offline was specified";
         let second = "\u{1b}[31mValidate (no e2e)\tValidate (static + clippy + Rust and Emacs coverage, via xtask)\t2026-09-12T18:49:09.002Z error: failed to download `jiff v0.2.35`\u{1b}[0m\nValidate (no e2e)\tValidate (static + clippy + Rust and Emacs coverage, via xtask)\t2026-09-12T18:49:12.400Z \nValidate (no e2e)\tValidate (static + clippy + Rust and Emacs coverage, via xtask)\t2026-09-12T18:49:13.100Z Caused by:\nValidate (no e2e)\tValidate (static + clippy + Rust and Emacs coverage, via xtask)\t2026-09-12T18:49:15.600Z   attempting to make an HTTP request, but --offline was specified";
         assert_eq!(extract_error_block(first), extract_error_block(second));
+    }
+    #[test]
+    fn normalization_removes_osc_hyperlinks_and_other_escape_families() {
+        let log = concat!(
+            "\u{1b}]8;;https://example.test\u{1b}\\error: linked\u{1b}]8;;\x07\n",
+            "\u{1b}Pignored\u{1b}\\\u{1b}Xdiscard\u{1b}\\\u{1b}(B\u{1b}7  cause"
+        );
+        assert_eq!(
+            extract_error_block(log).as_deref(),
+            Some("error: linked\n  cause")
+        );
     }
 
     #[test]

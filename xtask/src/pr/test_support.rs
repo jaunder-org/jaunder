@@ -222,6 +222,7 @@ pub struct FakeSource {
     last_actions_evidence: RefCell<Option<Result<ActionsEvidence, ApiError>>>,
     resolve: Result<Subject, ApiError>,
     shared_failure_evidence: RefCell<VecDeque<Result<SharedFailureEvidence, ApiError>>>,
+    shared_failure_evidence_delay: std::time::Duration,
     shared_failure_subject_failures: RefCell<Vec<SubjectFailure>>,
     shared_failure_evidence_requests: Cell<u32>,
 }
@@ -241,6 +242,7 @@ impl FakeSource {
             shared_failure_evidence: RefCell::new(VecDeque::from([Err(ApiError::Malformed(
                 "fake shared-failure evidence was not scripted".into(),
             ))])),
+            shared_failure_evidence_delay: std::time::Duration::ZERO,
             shared_failure_subject_failures: RefCell::new(Vec::new()),
             shared_failure_evidence_requests: Cell::new(0),
         }
@@ -287,6 +289,12 @@ impl FakeSource {
         self.shared_failure_evidence = RefCell::new(script.into());
         self.shared_failure_evidence_requests = Cell::new(0);
         self.shared_failure_subject_failures = RefCell::new(Vec::new());
+        self
+    }
+
+    /// Delay the annotation response to exercise deadline handling after transport.
+    pub fn with_shared_failure_evidence_delay(mut self, delay: std::time::Duration) -> Self {
+        self.shared_failure_evidence_delay = delay;
         self
     }
 
@@ -358,12 +366,14 @@ impl SharedFailureEvidenceSource for FakeSource {
         &self,
         _subject: &Subject,
         failure: &SubjectFailure,
+        _deadline: &super::gh::Deadline,
     ) -> Result<SharedFailureEvidence, ApiError> {
         self.shared_failure_evidence_requests
             .set(self.shared_failure_evidence_requests.get() + 1);
         self.shared_failure_subject_failures
             .borrow_mut()
             .push(failure.clone());
+        std::thread::sleep(self.shared_failure_evidence_delay);
         self.shared_failure_evidence
             .borrow_mut()
             .pop_front()

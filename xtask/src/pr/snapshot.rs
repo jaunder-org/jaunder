@@ -444,6 +444,7 @@ pub trait SharedFailureEvidenceSource {
         &self,
         subject: &Subject,
         failure: &SubjectFailure,
+        deadline: &gh::Deadline,
     ) -> Result<SharedFailureEvidence, ApiError>;
 }
 
@@ -536,19 +537,23 @@ impl SharedFailureEvidenceSource for GhSource {
         &self,
         subject: &Subject,
         failure: &SubjectFailure,
+        deadline: &gh::Deadline,
     ) -> Result<SharedFailureEvidence, ApiError> {
-        let deadline = gh::Deadline::ten_seconds();
+        deadline.check()?;
         let not_before = rfc3339_24_hours_ago()?;
+        deadline.check()?;
         collect_shared_failure_evidence_with(
             subject,
             failure,
             &not_before,
-            |args| gh::run_gh_deadline(args, &deadline),
-            |args| gh::run_gh_raw_deadline(args, &deadline),
+            deadline,
+            |args| gh::run_gh_deadline(args, deadline),
+            |args| gh::run_gh_raw_deadline(args, deadline),
         )
     }
 }
 
+const MAX_LOG_EVIDENCE_BYTES: usize = 16 * 1024 * 1024;
 /// Coordinate the fixed observation sequence while keeping transport injectable for
 /// request/parser tests.  Every path is repository-scoped from `Subject`; callers
 /// supply only the primary workflow's newest-first, 24-hour-bounded population.
@@ -556,25 +561,33 @@ fn collect_shared_failure_evidence_with(
     subject: &Subject,
     failure: &SubjectFailure,
     not_before: &str,
+    deadline: &gh::Deadline,
     mut json: impl FnMut(&[&str]) -> Result<Value, ApiError>,
     mut raw: impl FnMut(&[&str]) -> Result<Vec<u8>, ApiError>,
 ) -> Result<SharedFailureEvidence, ApiError> {
+    deadline.check()?;
     let slug = format!("{}/{}", subject.owner, subject.repo);
     let subject_jobs_path = format!(
         "/repos/{slug}/actions/runs/{}/jobs?filter=latest&per_page=100",
         failure.workflow_run_id
     );
-    let subject_job =
-        find_job_for_check(&json(&["api", &subject_jobs_path])?, failure.check_run_id)?;
+    let subject_job = find_job_for_check(
+        &json(&["api", &subject_jobs_path])?,
+        failure.check_run_id,
+        deadline,
+    )?;
+    deadline.check()?;
     let subject_log_path = format!("/repos/{slug}/actions/jobs/{}/logs", subject_job.id);
-    let subject_log = String::from_utf8(raw(&["api", &subject_log_path])?)
-        .map_err(|error| ApiError::Malformed(format!("Actions log is not UTF-8: {error}")))?;
+    let mut log_bytes = 0;
+    let subject_log =
+        decode_evidence_log(raw(&["api", &subject_log_path])?, &mut log_bytes, deadline)?;
 
     let mut eligible_heads = Vec::new();
     let mut page = 1;
     loop {
+        deadline.check()?;
         let pulls_path = format!("/repos/{slug}/pulls?state=open&per_page=100&page={page}");
-        let heads = parse_open_heads(&json(&["api", &pulls_path])?)?;
+        let heads = parse_open_heads(&json(&["api", &pulls_path])?, deadline)?;
         let complete = heads.len() < 100;
         eligible_heads.extend(heads);
         if complete {
@@ -588,32 +601,40 @@ fn collect_shared_failure_evidence_with(
             SharedFailureSource::PullRequest { number, .. } if *number == subject.number.0
         )
     });
+    deadline.check()?;
     let main_path = format!("/repos/{slug}/commits/main");
+    deadline.check()?;
     eligible_heads.push(EligibleHead {
         sha: required_string(&json(&["api", &main_path])?, "sha")?,
         source: SharedFailureSource::Main,
     });
+    deadline.check()?;
 
     let runs_path =
         format!("/repos/{slug}/actions/workflows/ci.yml/runs?created=>={not_before}&per_page=50");
-    let runs = parse_candidate_runs(&json(&["api", &runs_path])?)?;
+    let runs = parse_candidate_runs(&json(&["api", &runs_path])?, deadline)?;
+    deadline.check()?;
     let selected_runs = select_runs(runs, &eligible_heads, failure.workflow_run_id, not_before);
+    deadline.check()?;
     let mut jobs = Vec::with_capacity(selected_runs.len());
     for selected in &selected_runs {
+        deadline.check()?;
         let jobs_path = format!(
             "/repos/{slug}/actions/runs/{}/jobs?filter=latest&per_page=100",
             selected.run.id
         );
-        let failed = parse_failed_jobs(&json(&["api", &jobs_path])?)?;
+        let failed = parse_failed_jobs(&json(&["api", &jobs_path])?, deadline)?;
+        deadline.check()?;
         let mut with_logs = Vec::with_capacity(failed.len());
         for job in failed {
+            deadline.check()?;
             let logs_path = format!("/repos/{slug}/actions/jobs/{}/logs", job.id);
-            let log = String::from_utf8(raw(&["api", &logs_path])?).map_err(|error| {
-                ApiError::Malformed(format!("Actions log is not UTF-8: {error}"))
-            })?;
+            let log = decode_evidence_log(raw(&["api", &logs_path])?, &mut log_bytes, deadline)?;
             with_logs.push(CandidateJob { log, ..job });
+            deadline.check()?;
         }
         jobs.push((selected.run.id, with_logs));
+        deadline.check()?;
     }
     Ok(SharedFailureEvidence {
         subject_log,
@@ -622,67 +643,117 @@ fn collect_shared_failure_evidence_with(
     })
 }
 
-fn parse_open_heads(value: &Value) -> Result<Vec<EligibleHead>, ApiError> {
+fn parse_open_heads(value: &Value, deadline: &gh::Deadline) -> Result<Vec<EligibleHead>, ApiError> {
     let pulls = value
         .as_array()
         .ok_or_else(|| ApiError::Malformed("open PR response is not an array".into()))?;
-    pulls
-        .iter()
-        .map(|pull| {
-            Ok(EligibleHead {
-                sha: pull
-                    .pointer("/head/sha")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-                    .ok_or_else(|| ApiError::Malformed("open PR omitted head SHA".into()))?,
-                source: SharedFailureSource::PullRequest {
-                    number: required_u64(pull, "number")?,
-                    url: required_string(pull, "html_url")?,
-                },
-            })
-        })
-        .collect()
-}
-
-fn parse_candidate_runs(value: &Value) -> Result<Vec<CandidateRun>, ApiError> {
-    required_array(value, "workflow_runs")?
-        .iter()
-        .map(|run| {
-            Ok(CandidateRun {
-                id: required_u64(run, "id")?,
-                url: required_string(run, "html_url")?,
-                head_sha: required_string(run, "head_sha")?,
-                created_at: required_string(run, "created_at")?,
-                conclusion: run
-                    .get("conclusion")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
-            })
-        })
-        .collect()
-}
-
-fn find_job_for_check(value: &Value, check_run_id: u64) -> Result<CandidateJob, ApiError> {
-    let jobs = required_array(value, "jobs")?;
-    jobs.iter()
-        .find(|job| {
-            job.get("check_run_url")
+    let mut heads = Vec::with_capacity(pulls.len());
+    for pull in pulls {
+        deadline.check()?;
+        heads.push(EligibleHead {
+            sha: pull
+                .pointer("/head/sha")
                 .and_then(Value::as_str)
-                .and_then(|url| url.rsplit('/').next())
-                .and_then(|id| id.parse::<u64>().ok())
-                == Some(check_run_id)
-        })
-        .map(parse_job)
-        .transpose()?
-        .ok_or_else(|| ApiError::Malformed(format!("check run {check_run_id} has no REST job")))
+                .map(str::to_owned)
+                .ok_or_else(|| ApiError::Malformed("open PR omitted head SHA".into()))?,
+            source: SharedFailureSource::PullRequest {
+                number: required_u64(pull, "number")?,
+                url: required_string(pull, "html_url")?,
+            },
+        });
+    }
+    Ok(heads)
 }
 
-fn parse_failed_jobs(value: &Value) -> Result<Vec<CandidateJob>, ApiError> {
-    required_array(value, "jobs")?
-        .iter()
-        .filter(|job| job.get("conclusion").and_then(Value::as_str) == Some("failure"))
-        .map(parse_job)
-        .collect()
+fn decode_evidence_log(
+    bytes: Vec<u8>,
+    total: &mut usize,
+    deadline: &gh::Deadline,
+) -> Result<String, ApiError> {
+    deadline.check()?;
+    *total = total
+        .checked_add(bytes.len())
+        .ok_or_else(|| ApiError::Malformed("Actions log evidence size overflow".into()))?;
+    if *total > MAX_LOG_EVIDENCE_BYTES {
+        return Err(ApiError::Malformed(format!(
+            "Actions log evidence exceeds {MAX_LOG_EVIDENCE_BYTES} bytes"
+        )));
+    }
+    let log = String::from_utf8(bytes)
+        .map_err(|error| ApiError::Malformed(format!("Actions log is not UTF-8: {error}")))?;
+    deadline.check()?;
+    Ok(log)
+}
+
+fn parse_candidate_runs(
+    value: &Value,
+    deadline: &gh::Deadline,
+) -> Result<Vec<CandidateRun>, ApiError> {
+    let runs = required_array(value, "workflow_runs")?;
+    let mut parsed = Vec::with_capacity(runs.len());
+    for run in runs {
+        deadline.check()?;
+        let conclusion = match run.get("conclusion") {
+            Some(Value::Null) => None,
+            Some(Value::String(value)) => Some(value.clone()),
+            _ => {
+                return Err(ApiError::Malformed(
+                    "workflow run omitted string-or-null conclusion".into(),
+                ));
+            }
+        };
+        parsed.push(CandidateRun {
+            id: required_u64(run, "id")?,
+            url: required_string(run, "html_url")?,
+            head_sha: required_string(run, "head_sha")?,
+            created_at: required_string(run, "created_at")?,
+            conclusion,
+        });
+    }
+    Ok(parsed)
+}
+
+fn find_job_for_check(
+    value: &Value,
+    check_run_id: u64,
+    deadline: &gh::Deadline,
+) -> Result<CandidateJob, ApiError> {
+    let jobs = required_array(value, "jobs")?;
+    for job in jobs {
+        deadline.check()?;
+        if job
+            .get("check_run_url")
+            .and_then(Value::as_str)
+            .and_then(|url| url.rsplit('/').next())
+            .and_then(|id| id.parse::<u64>().ok())
+            == Some(check_run_id)
+        {
+            return parse_job(job);
+        }
+    }
+    Err(ApiError::Malformed(format!(
+        "check run {check_run_id} has no REST job"
+    )))
+}
+fn parse_failed_jobs(
+    value: &Value,
+    deadline: &gh::Deadline,
+) -> Result<Vec<CandidateJob>, ApiError> {
+    let jobs = required_array(value, "jobs")?;
+    let mut failed = Vec::new();
+    for job in jobs {
+        deadline.check()?;
+        let conclusion = job
+            .get("conclusion")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                ApiError::Malformed("comparison job omitted string conclusion".into())
+            })?;
+        if conclusion == "failure" {
+            failed.push(parse_job(job)?);
+        }
+    }
+    Ok(failed)
 }
 
 fn parse_job(value: &Value) -> Result<CandidateJob, ApiError> {
@@ -1329,6 +1400,7 @@ mod tests {
                 name: "subject".into(),
             },
             "2026-09-14T00:00:00Z",
+            &gh::Deadline::ten_seconds(),
             |args| {
                 requests.borrow_mut().push(args.join(" "));
                 responses.borrow_mut().pop_front().expect("scripted JSON")
@@ -1386,6 +1458,7 @@ mod tests {
             &crate::pr::test_support::subject(),
             &failure,
             "2026-09-14T00:00:00Z",
+            &gh::Deadline::ten_seconds(),
             |_| {
                 Ok(serde_json::json!({"jobs": [{
                     "id": 71, "name": "subject", "html_url": "job/71",
@@ -1406,11 +1479,75 @@ mod tests {
             &crate::pr::test_support::subject(),
             &failure,
             "2026-09-14T00:00:00Z",
+            &gh::Deadline::ten_seconds(),
             |_| responses.borrow_mut().pop_front().expect("subject jobs"),
             |_| Ok(vec![0xff]),
         );
         assert!(matches!(bad_log, Err(ApiError::Malformed(_))));
     }
+    #[test]
+    fn malformed_conclusions_degrade_instead_of_silently_excluding_a_match() {
+        let deadline = gh::Deadline::ten_seconds();
+        for conclusion in [serde_json::json!("failure"), serde_json::json!(42)] {
+            let value = serde_json::json!({"workflow_runs": [{
+                "id": 88, "html_url": "run/88", "head_sha": "other",
+                "created_at": "2026-09-15T00:00:00Z", "conclusion": conclusion
+            }]});
+            if value["workflow_runs"][0]["conclusion"].is_string() {
+                assert!(parse_candidate_runs(&value, &deadline).is_ok());
+            } else {
+                assert!(matches!(
+                    parse_candidate_runs(&value, &deadline),
+                    Err(ApiError::Malformed(_))
+                ));
+            }
+        }
+        assert!(matches!(
+            parse_candidate_runs(
+                &serde_json::json!({"workflow_runs": [{
+                    "id": 88, "html_url": "run/88", "head_sha": "other",
+                    "created_at": "2026-09-15T00:00:00Z"
+                }]}),
+                &deadline
+            ),
+            Err(ApiError::Malformed(_))
+        ));
+        assert!(
+            parse_candidate_runs(
+                &serde_json::json!({"workflow_runs": [{
+                    "id": 88, "html_url": "run/88", "head_sha": "other",
+
+                    "created_at": "2026-09-15T00:00:00Z", "conclusion": null
+                }]}),
+                &deadline
+            )
+            .unwrap()[0]
+                .conclusion
+                .is_none()
+        );
+        assert!(matches!(
+            parse_failed_jobs(
+                &serde_json::json!({"jobs": [{
+                    "id": 90, "name": "match", "html_url": "job/90", "conclusion": null
+                }]}),
+                &deadline
+            ),
+            Err(ApiError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn oversized_log_evidence_is_rejected_before_normalization() {
+        let mut total = 0;
+        let error = decode_evidence_log(
+            vec![b'x'; MAX_LOG_EVIDENCE_BYTES + 1],
+            &mut total,
+            &gh::Deadline::ten_seconds(),
+        )
+        .unwrap_err();
+        assert!(matches!(error, ApiError::Malformed(message) if message.contains("exceeds")));
+    }
+
     #[test]
     fn shared_failure_collection_preserves_query_failures_as_typed_errors() {
         let error = collect_shared_failure_evidence_with(
@@ -1421,6 +1558,7 @@ mod tests {
                 name: "subject".into(),
             },
             "2026-09-14T00:00:00Z",
+            &gh::Deadline::ten_seconds(),
             |_| Err(ApiError::GraphQlErrors("bad query".into())),
             |_| unreachable!(),
         )
