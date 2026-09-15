@@ -2361,7 +2361,7 @@ only.
 
 `nixosModules.jaunder-stack` imports the minimal module and exposes
 `services.jaunder.stack` as a complete single-host composition
-([single-host NixOS deployment stack](adr/drafts/single-host-nixos-deployment-stack.md)).
+([single-host NixOS deployment stack](adr/0196-single-host-nixos-deployment-stack.md)).
 Its required application `hostName` puts Caddy alone on public ports 80 and 443
 for automatic HTTPS. Application and optional observability host names are DNS
 hostnames of at most 253 ASCII characters: dot-separated, nonempty labels of at

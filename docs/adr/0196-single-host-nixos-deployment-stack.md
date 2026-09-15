@@ -1,22 +1,22 @@
-# ADR-DRAFT: Single-Host NixOS Deployment Stack
+# ADR-0196: Single-Host NixOS Deployment Stack
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-15
 - Issue: [#1489](https://github.com/jaunder-org/jaunder/issues/1489)
 
 ## Context
 
-[ADR-0142](../0142-declarative-nixos-deployment-package-outputs.md) defines
+[ADR-0142](0142-declarative-nixos-deployment-package-outputs.md) defines
 `nixosModules.jaunder` as a deliberately narrow adapter from Jaunder's process
 configuration to one systemd service. That boundary is valuable for operators
 who already own their reverse proxy, database, and observability architecture,
 but it leaves a new operator to assemble every production dependency.
 
-[ADR-0008](../0008-deployment-model.md) requires an external reverse proxy, and
-[ADR-0011](../0011-unified-observability.md) makes OpenTelemetry the
-application's trace and metrics interface. A production-shaped single-host
-deployment can compose those external responsibilities without moving them into
-the Jaunder binary or expanding the minimal module's compatibility surface.
+[ADR-0008](0008-deployment-model.md) requires an external reverse proxy, and
+[ADR-0011](0011-unified-observability.md) makes OpenTelemetry the application's
+trace and metrics interface. A production-shaped single-host deployment can
+compose those external responsibilities without moving them into the Jaunder
+binary or expanding the minimal module's compatibility surface.
 
 The chosen observability stores must remain practical for a small self-hosted
 instance. The Victoria family provides persistent single-node metrics, logs, and
