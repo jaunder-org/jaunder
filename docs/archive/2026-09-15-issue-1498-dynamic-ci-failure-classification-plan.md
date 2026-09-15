@@ -74,7 +74,7 @@ Out:
     the e2e matrix at `strategy.fail-fast: false`; observation continues to own
     no workflow mutation capability.
   - Contract: Update `CONTRIBUTING.md` and the architecture projection; retain
-    the proposed ADR at `docs/adr/drafts/dynamic-pr-check-classification.md` for
+    the proposed ADR at `docs/adr/0195-dynamic-pr-check-classification.md` for
     serialized post-merge promotion.
   - Verification: The workflow-shape test reads `.github/workflows/ci.yml` and
     fails if e2e becomes fail-fast; focused xtask tests pass with

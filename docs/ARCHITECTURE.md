@@ -3798,7 +3798,7 @@ optional. A non-Actions status context has no Actions ancestry, so exact ruleset
 membership makes it direct and every other such context is optional. Thus a
 directly or transitively required failure is immediately actionable, while an
 optional failure is reported without becoming merge-blocking
-([dynamic PR check classification](adr/drafts/dynamic-pr-check-classification.md)).
+([dynamic PR check classification](adr/0195-dynamic-pr-check-classification.md)).
 This classification contains no maintained job-name or matrix-value allowlist.
 Distinguishing outcomes — including `ready-to-land`, `ejected`, `dequeued`,
 `timed-out` ("GitHub never finished"), and `watcher-error` ("we could not tell")

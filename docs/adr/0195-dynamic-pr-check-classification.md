@@ -1,12 +1,12 @@
-# ADR-DRAFT: Classify PR check failures from the workflow dependency graph
+# ADR-0195: Classify PR check failures from the workflow dependency graph
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-15
 - Issue: [#1498](https://github.com/jaunder-org/jaunder/issues/1498)
 
 ## Context
 
-[ADR-0087](../0087-xtask-github-pr-observation.md) makes the branch ruleset the
+[ADR-0087](0087-xtask-github-pr-observation.md) makes the branch ruleset the
 per-run authority for required contexts and keeps optional checks outside the
 merge verdict. CI now exposes substantive failures in validation lanes and e2e
 matrix jobs before their required result-only aggregates can settle. Waiting for

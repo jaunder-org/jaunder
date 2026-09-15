@@ -53,7 +53,7 @@ them as merge-blocking.
 - Observation never cancels workflow jobs. The CI workflow retains exhaustive
   diagnostics, including the e2e matrix's `strategy.fail-fast: false` behavior.
 - This policy is recorded in
-  `docs/adr/drafts/dynamic-pr-check-classification.md`.
+  `docs/adr/0195-dynamic-pr-check-classification.md`.
 
 ## Acceptance
 
