@@ -1191,6 +1191,273 @@ mkWasmCoverageMeasurementProducer =
     pkgs.runCommand "jaunder-stack-module" { } ''
       touch $out
     '';
+  mkJaunderStackVmCheck =
+    {
+      checkName,
+      passwordHash,
+      captureSignals ? false,
+    }:
+    pkgs.testers.nixosTest {
+      name = checkName;
+      globalTimeout = 600;
+      nodes.machine =
+        { lib, pkgs, ... }:
+        {
+          imports = [ self.nixosModules.jaunder-stack ];
+          virtualisation.memorySize = 2048;
+          boot.loader.grub.devices = [ "nodev" ];
+          environment.systemPackages = [
+            pkgs.curl
+            pkgs.gnugrep
+            pkgs.gawk
+            pkgs.iproute2
+            pkgs.jq
+            pkgs.procps
+          ];
+          services.jaunder.stack = {
+            enable = true;
+            hostName = "jaunder.stack.test";
+            observability = {
+              hostName = "observe.stack.test";
+              basicAuth = {
+                username = "operator";
+                inherit passwordHash;
+              };
+            };
+          };
+          # Public ACME is an operator contract. The VM has no public DNS, so
+          # only this test replaces it with Caddy's deterministic local CA.
+          services.caddy.virtualHosts."jaunder.stack.test".extraConfig = lib.mkAfter ''
+            tls internal
+          '';
+          services.caddy.virtualHosts."observe.stack.test".extraConfig = lib.mkAfter ''
+            tls internal
+          '';
+          # The production default is intentionally quiet; the test drives an
+          # INFO request event so the journald parser has a named field to prove.
+          systemd.services.jaunder.environment.RUST_LOG = "info";
+          system.stateVersion = "26.05";
+        };
+      testScript = ''
+        import json
+        ${pkgs.lib.optionalString captureSignals ''
+        import shlex
+        import urllib.parse
+        ''}
+        curl_options = "--connect-timeout 5 --max-time 20"
+
+        def caddy_status(path, credentials=""):
+          return machine.succeed(
+            "curl " + curl_options + " -ksS -o /dev/null -w '%{http_code}'"
+            + " --resolve observe.stack.test:443:127.0.0.1"
+            + credentials
+            + " https://observe.stack.test" + path
+          )
+
+        def curl_json(command):
+          status, output = machine.execute(command)
+          assert status == 0, "request failed: %s\n%s" % (command, output)
+          try:
+            return json.loads(output)
+          except json.JSONDecodeError as error:
+            raise AssertionError("invalid JSON from %s: %s\n%s" % (command, error, output)) from error
+
+        def assert_ingress():
+          for path in ["/metrics/", "/logs/", "/traces/"]:
+            assert caddy_status(path) == "401", "unauthenticated ingress unexpectedly allowed %s" % path
+          for path in [
+            "/metrics/",
+            "/metrics/api/v1/query?query=jaunder_db_pool_max",
+            "/logs/",
+            "/logs/select/logsql/query?query=uri:*",
+            "/traces/",
+            "/traces/select/jaeger/api/services",
+          ]:
+            assert caddy_status(path, " -u operator:stack-password") == "200", path
+
+        def assert_local_uis():
+          for port, prefix in [(8428, "metrics"), (9428, "logs"), (10428, "traces")]:
+            machine.succeed("curl " + curl_options + " -fsS http://127.0.0.1:%d/%s/ > /dev/null" % (port, prefix))
+
+        def wait_for_stack_ready():
+          for unit in [
+            "caddy.service",
+            "jaunder.service",
+            "opentelemetry-collector.service",
+            "victoriametrics.service",
+            "victorialogs.service",
+            "victoriatraces.service",
+          ]:
+            machine.wait_for_unit(unit, timeout=90)
+          for port in [80, 443, 3000, 4317, 4318, 8428, 9428, 10428]:
+            machine.wait_for_open_port(port, timeout=60)
+
+        def assert_listener_contract():
+          listeners = machine.succeed("ss -ltnpH").splitlines()
+
+          def port(local_address):
+            return int(local_address.rsplit(":", 1)[1])
+
+          def loopback(local_address):
+            return local_address.startswith("127.") or local_address.startswith("[::1]")
+
+          loopback_ports = [3000, 4317, 4318, 8428, 9428, 10428]
+          for expected_port in loopback_ports:
+            rows = [row for row in listeners if port(row.split()[3]) == expected_port]
+            assert rows, "no listener found for required loopback port %d" % expected_port
+            exposed = [row for row in rows if not loopback(row.split()[3])]
+            assert not exposed, "non-loopback listener on port %d:\n%s" % (expected_port, "\n".join(exposed))
+
+          non_loopback = [row for row in listeners if not loopback(row.split()[3])]
+          unexpected = [
+            row for row in non_loopback
+            if port(row.split()[3]) not in [80, 443] or "caddy" not in row
+          ]
+          assert not unexpected, "unexpected non-loopback TCP listeners:\n%s" % "\n".join(unexpected)
+          for caddy_port in [80, 443]:
+            rows = [row for row in non_loopback if port(row.split()[3]) == caddy_port]
+            assert rows, "no non-loopback Caddy listener found on port %d" % caddy_port
+
+        def log_records(command):
+          status, output = machine.execute(command)
+          assert status == 0, "log query failed: %s\n%s" % (command, output)
+          try:
+            return [json.loads(line) for line in output.splitlines() if line]
+          except json.JSONDecodeError as error:
+            raise AssertionError("invalid VictoriaLogs record: %s\n%s" % (error, output)) from error
+
+        machine.start(allow_reboot=True)
+        wait_for_stack_ready()
+
+        # The application request crosses the public Caddy seam, rather than
+        # reaching Jaunder's loopback listener directly.
+        machine.succeed(
+          "curl " + curl_options + " -ksSf --resolve jaunder.stack.test:443:127.0.0.1"
+          + " https://jaunder.stack.test/ > /dev/null"
+        )
+        assert_local_uis()
+        assert_ingress()
+
+        assert_listener_contract()
+        collector_pid = machine.succeed(
+          "systemctl show --value --property MainPID opentelemetry-collector.service"
+        ).strip()
+        machine.succeed("test \"%s\" -gt 0" % collector_pid)
+        machine.succeed("test \"$(ps -o uid= -p %s | tr -d ' ')\" != 0" % collector_pid)
+        machine.succeed(
+          "journal_gid=$(getent group systemd-journal | cut -d: -f3)"
+          + "; grep -Eq \"^Groups:.*(^|[[:space:]])$journal_gid([[:space:]]|$)\""
+          + " /proc/%s/status" % collector_pid
+        )
+        machine.succeed(
+          "systemctl show --property SupplementaryGroups --value opentelemetry-collector.service"
+          + " | grep -Fx systemd-journal"
+        )
+
+        ${pkgs.lib.optionalString captureSignals ''
+          trace_id = "0123456789abcdef0123456789abcdef"
+          request_id = "jaunder-stack-telemetry-request"
+          telemetry_uri = "/atompub/nonexistent/posts"
+          status, output = machine.execute(
+            "curl " + curl_options + " -ksS -o /dev/null -w '%{http_code}'"
+            + " --resolve jaunder.stack.test:443:127.0.0.1"
+            + " -H " + shlex.quote("traceparent: 00-" + trace_id + "-0123456789abcdef-01")
+            + " -H " + shlex.quote("x-request-id: " + request_id)
+            + " https://jaunder.stack.test" + telemetry_uri
+          )
+          assert status == 0 and output == "401", "telemetry request did not return 401:\n%s" % output
+
+          metric_command = (
+            "curl " + curl_options + " -fsSG"
+            + " --data-urlencode " + shlex.quote('query=jaunder_atompub_requests_total{op="collection_get",result="client_error"}')
+            + " http://127.0.0.1:8428/metrics/api/v1/query"
+          )
+          metric_sample = None
+          for _ in range(120):
+            candidate = curl_json(metric_command)
+            results = candidate.get("data", {}).get("result", [])
+            if candidate.get("status") == "success" and len(results) == 1:
+              metric_sample = results[0]
+              break
+            machine.sleep(1)
+          assert metric_sample is not None, "driven AtomPub metric never appeared before reboot"
+          metric_identity = metric_sample["metric"]
+          metric_value = metric_sample["value"]
+          assert all(metric_identity.get(label) == value for label, value in {
+            "__name__": "jaunder_atompub_requests_total",
+            "op": "collection_get",
+            "result": "client_error",
+          }.items()), "unexpected driven metric identity: %s" % metric_identity
+          assert len(metric_value) == 2, "metric sample lacks timestamp/value: %s" % metric_sample
+
+          log_command = (
+            "curl " + curl_options + " -fsSG --data-urlencode 'query=* | limit 10000'"
+            + " http://127.0.0.1:9428/logs/select/logsql/query"
+          )
+          target_log = None
+          for _ in range(120):
+            records = log_records(log_command)
+            target_log = next((
+              record for record in records
+              if record.get("jaunder.target") == "tower_http::trace::on_response"
+              and record.get("jaunder.request.uri") == telemetry_uri
+              and request_id in record.get("jaunder.request.headers", "")
+            ), None)
+            if target_log is not None:
+              break
+            machine.sleep(1)
+          assert target_log is not None, "driven structured response log never appeared before reboot:\n%s" % records[-10:]
+          assert "_time" in target_log, "structured response log lacks a timestamp: %s" % target_log
+          target_log_identity = json.dumps(target_log, sort_keys=True, separators=(",", ":"))
+
+          trace_command = (
+            "curl " + curl_options + " -fsS http://127.0.0.1:10428/traces/select/jaeger/api/traces/"
+            + urllib.parse.quote(trace_id, safe="")
+          )
+          trace_payload = None
+          for _ in range(120):
+            candidate = curl_json(trace_command)
+            if any(trace.get("traceID") == trace_id for trace in candidate.get("data", [])):
+              trace_payload = candidate
+              break
+            machine.sleep(1)
+          assert trace_payload is not None, "driven trace ID %s never appeared before reboot" % trace_id
+
+          machine.reboot()
+          wait_for_stack_ready()
+          machine.succeed(
+            "curl " + curl_options + " -ksSf --resolve jaunder.stack.test:443:127.0.0.1"
+            + " https://jaunder.stack.test/ > /dev/null"
+          )
+          assert_local_uis()
+          assert_ingress()
+          assert_listener_contract()
+
+          metric_at_capture_time = curl_json(
+            "curl " + curl_options + " -fsSG"
+            + " --data-urlencode " + shlex.quote('query=jaunder_atompub_requests_total{op="collection_get",result="client_error"}')
+            + " --data-urlencode " + shlex.quote("time=" + str(metric_value[0]))
+            + " http://127.0.0.1:8428/metrics/api/v1/query"
+          )
+          persisted_metrics = metric_at_capture_time.get("data", {}).get("result", [])
+          assert any(
+            result.get("metric") == metric_identity and result.get("value") == metric_value
+            for result in persisted_metrics
+          ), "driven pre-reboot metric sample is absent at its captured timestamp"
+
+          persisted_logs = log_records(log_command)
+          assert any(
+            json.dumps(record, sort_keys=True, separators=(",", ":")) == target_log_identity
+            for record in persisted_logs
+          ), "exact driven pre-reboot response log is absent"
+
+          trace_payload = curl_json(trace_command)
+          assert any(trace.get("traceID") == trace_id for trace in trace_payload.get("data", [])), (
+            "driven pre-reboot trace ID %s is absent" % trace_id
+          )
+        ''}
+      '';
+    };
 in
 {
 
@@ -1299,6 +1566,15 @@ e2eGateChecks
   e2e = self.packages.${system}.e2e-checks;
 
   jaunder-stack-module = jaunderStackModuleCheck;
+  jaunder-stack-sqlite-bcrypt = mkJaunderStackVmCheck {
+    checkName = "jaunder-stack-sqlite-bcrypt";
+    passwordHash = "$2a$14$3XbcVHEiOPQs7JeFsE4L6.viyrrG.5pCGkdC5yzH5WK4pGCIm4u4S";
+    captureSignals = true;
+  };
+  jaunder-stack-sqlite-argon2id = mkJaunderStackVmCheck {
+    checkName = "jaunder-stack-sqlite-argon2id";
+    passwordHash = "$argon2id$v=19$m=47104,t=1,p=1$lF4nDRbJX4Fmyz51MRZ4+Q$YArAYMGOutNEtB7Pv8Fa9CNZ75tfV+5W3kUvP8m+7gQ";
+  };
 
   # The producer combines pure and server-backed ERT observations in
   # one VM, returning controlled outcomes as fixed artifacts for the

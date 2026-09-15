@@ -52,7 +52,7 @@ Out:
     minimal-module options. Run
     `devtool run -- nix build -L --accept-flake-config .#checks.x86_64-linux.jaunder-stack-module`.
 
-- [ ] Task 2: Prove the complete SQLite deployment and observability lifecycle.
+- [x] Task 2: Prove the complete SQLite deployment and observability lifecycle.
   - Contract: `mkJaunderStackVmCheck` in `nix/checks.nix` owns the shared
     stack-test node and fixture contract; its SQLite bcrypt case owns signal
     production and reboot persistence, while its Argon2id case reuses the same

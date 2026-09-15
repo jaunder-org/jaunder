@@ -282,7 +282,12 @@ let
               "transform/jaunder-json".log_statements = [
                 {
                   context = "log";
-                  statements = [ "merge_maps(attributes, ParseJSON(body), \"upsert\") where IsMatch(body, \"^\\\\{\")" ];
+                  statements = [
+                    "merge_maps(attributes, ParseJSON(body[\"MESSAGE\"]), \"upsert\") where IsMatch(body[\"MESSAGE\"], \"^\\\\{\")"
+                    "set(attributes[\"jaunder.target\"], ParseJSON(body[\"MESSAGE\"])[\"target\"]) where IsMatch(body[\"MESSAGE\"], \"^\\\\{\")"
+                    "set(attributes[\"jaunder.request.uri\"], ParseJSON(body[\"MESSAGE\"])[\"span\"][\"uri\"]) where IsMatch(body[\"MESSAGE\"], \"\\\"span\\\":\")"
+                    "set(attributes[\"jaunder.request.headers\"], ParseJSON(body[\"MESSAGE\"])[\"span\"][\"headers\"]) where IsMatch(body[\"MESSAGE\"], \"\\\"span\\\":\")"
+                  ];
                 }
               ];
             };
