@@ -25,7 +25,7 @@ The staged implementation passed:
 
 - `devtool run -- cargo xtask cache-safety probe` in 746,022 ms;
 - `devtool run -- cargo xtask check --no-test` in 222,627 ms;
-- 17 focused `cache_safety` tests;
+- 19 focused `cache_safety` tests;
 - the repository pre-commit gate when commit `3af6f6fb` was created.
 
 The probe freezes the Git index once and uses that immutable detached snapshot

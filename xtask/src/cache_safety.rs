@@ -25,7 +25,7 @@ const INVENTORY_ATTR: &str = "packages.x86_64-linux.cache-safety-inventory";
 const WORKTREE_DIR: &str = ".xtask/cache-safety-source-probe.worktree";
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Policy {
     schema_version: u32,
     cache_boundary: CacheBoundary,
@@ -41,7 +41,7 @@ enum CacheBoundary {
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PolicyOutput {
     attr: String,
     classification: Classification,
@@ -52,11 +52,13 @@ struct PolicyOutput {
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 struct SourceFamily {
     categories: Vec<SourceCategory>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 struct SourceCategory {
     name: String,
     relevant: String,
@@ -64,6 +66,7 @@ struct SourceCategory {
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 struct SupportFamily {
     attr: String,
     family: String,
@@ -77,7 +80,7 @@ enum Classification {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct NixInventory {
     schema_version: u32,
     final_attrs: Vec<String>,
@@ -861,6 +864,55 @@ mod tests {
             .is_err()
         );
         assert!(parse_policy(r#"{"schemaVersion":1,"outputs":[{"attr":"x","classification":"final"},{"attr":"x","classification":"support"}]}"#).is_err());
+    }
+
+    #[test]
+    fn rejects_unknown_policy_fields() {
+        assert!(
+            parse_policy(
+                r#"{"schemaVersion":1,"cacheBoundary":"broad","sourceFamilies":{"family":["category"]},"outputs":[{"attr":"final","classification":"final"}],"unexpected":true}"#
+            )
+            .is_err()
+        );
+        assert!(
+            parse_policy(
+                r#"{"schemaVersion":1,"cacheBoundary":"broad","sourceFamilies":{"family":["category"]},"outputs":[{"attr":"final","classification":"final","equivalantTo":"other"}]}"#
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_inventory_fields() {
+        let inventory = || {
+            serde_json::json!({
+                "schemaVersion": 1,
+                "finalAttrs": ["final"],
+                "supportAttrs": ["support"],
+                "supportFamilies": [{"attr": "support", "family": "family"}],
+                "sourceFamilies": {"family": {"categories": [
+                    {"name": "category", "relevant": "relevant", "excluded": "excluded"}
+                ]}}
+            })
+        };
+
+        let mut top = inventory();
+        top.as_object_mut()
+            .unwrap()
+            .insert("unexpected".into(), true.into());
+        assert!(serde_json::from_value::<NixInventory>(top).is_err());
+
+        let mut support = inventory();
+        support["supportFamilies"][0]["unexpected"] = true.into();
+        assert!(serde_json::from_value::<NixInventory>(support).is_err());
+
+        let mut family = inventory();
+        family["sourceFamilies"]["family"]["unexpected"] = true.into();
+        assert!(serde_json::from_value::<NixInventory>(family).is_err());
+
+        let mut category = inventory();
+        category["sourceFamilies"]["family"]["categories"][0]["unexpected"] = true.into();
+        assert!(serde_json::from_value::<NixInventory>(category).is_err());
     }
 
     #[test]
