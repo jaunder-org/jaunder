@@ -1,7 +1,6 @@
 import { reenterAdminSettings } from "./admin-settings";
 import { test, expect } from "./fixtures";
 import { goto, signInAs, waitForSelector } from "./helpers";
-import { allowSecondBoot } from "./bootBudget";
 import { SEL } from "./selectors";
 import { seedConfigViaTool } from "./seed";
 
@@ -176,42 +175,107 @@ test("non-operator user is denied access to /admin/site", async ({ page }) => {
   await expect(errors.nth(1)).toContainText("unauthorized");
 });
 
-// #575: the site base-URL warning banner appears in the authed admin chrome when
-// `base_url` is unset and disappears once it is configured. After #326 both banners
-// share the `.j-warn-banner` class, and the backup banner is *also* visible for
-// operators (backup unconfigured by default) — so the site banner is located by its
-// copy text, never by class/role. States are driven explicitly (set → hidden, clear →
-// visible via the ADR-0065 clear-to-None path) rather than relying on a seed default.
-test("site base URL warning banner shows when unset and hides once configured", async ({
+// #575: the site base-URL warning is a persisted-condition projection in mounted
+// authenticated chrome. Each save waits for its write and a fresh warning read;
+// request counts prove site saves do not revalidate the backup warning.
+test("site base URL warning banner revalidates in place after relevant settings saves", async ({
   page,
 }) => {
   await signInAs(page, "testoperator");
   await goto(page, "/admin/site");
   await waitForSelector(page, "input[name='base_url']");
 
+  const title = page.locator('input[name="title"]');
+  const baseUrl = page.locator('input[name="base_url"]');
   const banner = page.getByText("Site base URL is not configured");
   const saveButton = page.locator('button:has-text("Save Site Settings")');
+  const initialTitle = await title.inputValue();
+  const initialBaseUrl = await baseUrl.inputValue();
+  let siteWarningRequests = 0;
+  let backupWarningRequests = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/api/site/is_base_url_warning_visible")) {
+      siteWarningRequests += 1;
+    }
+    if (request.url().includes("/api/backup/is_warning_visible")) {
+      backupWarningRequests += 1;
+    }
+  });
 
-  // Configure a base URL → banner hidden after reload.
-  await page.fill('input[name="title"]', "Banner Site");
-  await page.fill('input[name="base_url"]', "https://example.com");
-  await saveButton.click();
-  await waitForSelector(page, ".j-settings-saved");
-  allowSecondBoot(
-    page,
-    "the warning banner is painted from the boot-time site config, so a fresh load is what proves it hides once configured",
-  );
-  await goto(page, "/admin/site");
-  await expect(banner).toBeHidden();
+  try {
+    // Establish the unresolved predicate through the UI before the first assertion.
+    await baseUrl.fill("");
+    await Promise.all([
+      page.waitForResponse((response) =>
+        response.url().includes("/api/site/update_identity"),
+      ),
+      page.waitForResponse((response) =>
+        response.url().includes("/api/site/is_base_url_warning_visible"),
+      ),
+      saveButton.click(),
+    ]);
+    await expect(banner).toBeVisible();
 
-  // Clear the base URL (dispatches `None`) → banner visible after reload.
-  await page.fill('input[name="base_url"]', "");
-  await page.locator('button:has-text("Save Site Settings")').click();
-  await waitForSelector(page, ".j-settings-saved");
-  allowSecondBoot(
-    page,
-    "the warning banner is painted from the boot-time site config, so a fresh load is what proves it reappears once cleared",
-  );
-  await goto(page, "/admin/site");
-  await expect(banner).toBeVisible();
+    let expectedSiteWarnings = siteWarningRequests;
+    const expectedBackupWarnings = backupWarningRequests;
+    await title.fill("Banner Site");
+    await baseUrl.fill("https://example.com");
+    await Promise.all([
+      page.waitForResponse((response) =>
+        response.url().includes("/api/site/update_identity"),
+      ),
+      page.waitForResponse((response) =>
+        response.url().includes("/api/site/is_base_url_warning_visible"),
+      ),
+      saveButton.click(),
+    ]);
+    expectedSiteWarnings += 1;
+    expect(siteWarningRequests).toBe(expectedSiteWarnings);
+    expect(backupWarningRequests).toBe(expectedBackupWarnings);
+    await expect(banner).toBeHidden();
+
+    await baseUrl.fill("");
+    await Promise.all([
+      page.waitForResponse((response) =>
+        response.url().includes("/api/site/update_identity"),
+      ),
+      page.waitForResponse((response) =>
+        response.url().includes("/api/site/is_base_url_warning_visible"),
+      ),
+      saveButton.click(),
+    ]);
+    expectedSiteWarnings += 1;
+    expect(siteWarningRequests).toBe(expectedSiteWarnings);
+    expect(backupWarningRequests).toBe(expectedBackupWarnings);
+    await expect(banner).toBeVisible();
+
+    // A title-only save completes a fresh warning read but preserves the unresolved predicate.
+    await title.fill("Banner Site Renamed");
+    await Promise.all([
+      page.waitForResponse((response) =>
+        response.url().includes("/api/site/update_identity"),
+      ),
+      page.waitForResponse((response) =>
+        response.url().includes("/api/site/is_base_url_warning_visible"),
+      ),
+      saveButton.click(),
+    ]);
+    expectedSiteWarnings += 1;
+    expect(siteWarningRequests).toBe(expectedSiteWarnings);
+    expect(backupWarningRequests).toBe(expectedBackupWarnings);
+    await expect(banner).toBeVisible();
+  } finally {
+    // Restore this test's initial global configuration through the same persisted path.
+    await title.fill(initialTitle);
+    await baseUrl.fill(initialBaseUrl);
+    await Promise.all([
+      page.waitForResponse((response) =>
+        response.url().includes("/api/site/update_identity"),
+      ),
+      page.waitForResponse((response) =>
+        response.url().includes("/api/site/is_base_url_warning_visible"),
+      ),
+      saveButton.click(),
+    ]);
+  }
 });

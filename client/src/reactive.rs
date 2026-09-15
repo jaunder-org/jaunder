@@ -67,6 +67,34 @@ where
     action
 }
 
+/// A [`ServerAction`] that evaluates a settlement predicate after dispatch settles.
+///
+/// The predicate receives the full transport settlement, so callers whose output has
+/// its own outcome algebra can distinguish a commit-indeterminate result from an
+/// outer transport failure without duplicating an `Effect`. It notifies only when
+/// the predicate accepts the settlement.
+#[must_use]
+pub fn action_result_if<A>(
+    notify: impl Fn() + Send + Sync + 'static,
+    predicate: impl Fn(&Result<A::Output, A::Error>) -> bool + Send + Sync + 'static,
+) -> ServerAction<A>
+where
+    A: ServerFn + Send + Sync + Clone + 'static,
+    A::Output: Send + Sync + 'static,
+    A::Error: Send + Sync + 'static,
+{
+    let action = ServerAction::<A>::new();
+    Effect::new(move |_| {
+        if action
+            .value()
+            .with(|value| value.as_ref().is_some_and(&predicate))
+        {
+            notify();
+        }
+    });
+    action
+}
+
 /// Drives a keyed [`reactive_stores`](https://docs.rs/reactive_stores) list from a refetch of
 /// `fetch` (revalidated by `track`). On each successful refetch it hands the rows to `patch` —
 /// supplied as a closure so the caller's concrete keyed field runs its **in-place** `patch` (a
