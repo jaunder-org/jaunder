@@ -2,6 +2,8 @@ use crate::backup::{self, UpdateSettings};
 use crate::error::WebError;
 use crate::forms::{self, Field, ValidatedBareInput, ValidatedInput};
 use crate::topbar::Topbar;
+use crate::warning_revalidation::{BackupWarning, revalidates_warning};
+use client::reactive;
 use common::MutationOutcome;
 use common::backup::{BackupConfig, BackupMode, BackupSchedule, DestinationPath, RetentionCount};
 use leptos::prelude::*;
@@ -9,11 +11,11 @@ use strum::VariantArray;
 
 #[component]
 pub fn BackupSettingsPage() -> impl IntoView {
-    let update_action = ServerAction::<UpdateSettings>::new();
-    let settings = Resource::new(
-        move || update_action.version().get(),
-        |_| backup::get_settings(),
-    );
+    let warning = expect_context::<BackupWarning>();
+    let update_action = reactive::action_result_if(move || warning.notify(), revalidates_warning);
+    // The same typed scope drives the form and its shell warning, so a settled
+    // backup-settings mutation re-reads both persisted projections together.
+    let settings = reactive::resource(move || warning.track(), backup::get_settings);
 
     view! {
         <Topbar title="Backup Settings" sub="Operations" />
@@ -181,7 +183,8 @@ fn backup_settings_form(
 
 #[component]
 pub fn BackupBanner() -> impl IntoView {
-    let visible = Resource::new(|| (), |()| backup::is_warning_visible());
+    let warning = expect_context::<BackupWarning>();
+    let visible = reactive::resource(move || warning.track(), backup::is_warning_visible);
     view! {
         <crate::banner::WarnBanner
             visible=visible

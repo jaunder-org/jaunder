@@ -139,3 +139,107 @@ test("backup destination round-trips and clears via omission", async ({
   await reenterAdminSettings(page, "backups");
   await expect(page.locator('input[name="destination_path"]')).toHaveValue("");
 });
+
+// The shell banner reads the persisted destination after a backup save. Each save
+// waits for its write and fresh warning read; request counts prove it leaves the
+// site-base-URL warning resource alone.
+test("backup warning banner revalidates in place after relevant settings saves", async ({
+  page,
+}) => {
+  await signInAs(page, "testoperator");
+  await goto(page, "/admin/backups");
+  await waitForSelector(page, 'input[name="destination_path"]');
+
+  const destination = page.locator('input[name="destination_path"]');
+  const schedule = page.locator('input[name="schedule"]');
+  const banner = page.getByText("Backups are not configured");
+  const saveButton = page.locator('button:has-text("Save Backup Settings")');
+  const initialDestination = await destination.inputValue();
+  const initialSchedule = await schedule.inputValue();
+  let siteWarningRequests = 0;
+  let backupWarningRequests = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/api/site/is_base_url_warning_visible")) {
+      siteWarningRequests += 1;
+    }
+    if (request.url().includes("/api/backup/is_warning_visible")) {
+      backupWarningRequests += 1;
+    }
+  });
+
+  try {
+    // Establish the unresolved predicate through the UI before the first assertion.
+    await destination.fill("");
+    await Promise.all([
+      page.waitForResponse((response) =>
+        response.url().includes("/api/backup/update_settings"),
+      ),
+      page.waitForResponse((response) =>
+        response.url().includes("/api/backup/is_warning_visible"),
+      ),
+      saveButton.click(),
+    ]);
+    await expect(banner).toBeVisible();
+
+    const expectedSiteWarnings = siteWarningRequests;
+    let expectedBackupWarnings = backupWarningRequests;
+    await destination.fill("/srv/jaunder/backups");
+    await Promise.all([
+      page.waitForResponse((response) =>
+        response.url().includes("/api/backup/update_settings"),
+      ),
+      page.waitForResponse((response) =>
+        response.url().includes("/api/backup/is_warning_visible"),
+      ),
+      saveButton.click(),
+    ]);
+    expectedBackupWarnings += 1;
+    expect(backupWarningRequests).toBe(expectedBackupWarnings);
+    expect(siteWarningRequests).toBe(expectedSiteWarnings);
+    await expect(banner).toBeHidden();
+
+    await destination.fill("");
+    await Promise.all([
+      page.waitForResponse((response) =>
+        response.url().includes("/api/backup/update_settings"),
+      ),
+      page.waitForResponse((response) =>
+        response.url().includes("/api/backup/is_warning_visible"),
+      ),
+      saveButton.click(),
+    ]);
+    expectedBackupWarnings += 1;
+    expect(backupWarningRequests).toBe(expectedBackupWarnings);
+    expect(siteWarningRequests).toBe(expectedSiteWarnings);
+    await expect(banner).toBeVisible();
+
+    // A schedule-only save completes a fresh warning read but preserves the unresolved predicate.
+    await schedule.fill("0 30 2 * * *");
+    await Promise.all([
+      page.waitForResponse((response) =>
+        response.url().includes("/api/backup/update_settings"),
+      ),
+      page.waitForResponse((response) =>
+        response.url().includes("/api/backup/is_warning_visible"),
+      ),
+      saveButton.click(),
+    ]);
+    expectedBackupWarnings += 1;
+    expect(backupWarningRequests).toBe(expectedBackupWarnings);
+    expect(siteWarningRequests).toBe(expectedSiteWarnings);
+    await expect(banner).toBeVisible();
+  } finally {
+    // Restore the test's initial persisted fields before the shared fixture continues.
+    await destination.fill(initialDestination);
+    await schedule.fill(initialSchedule);
+    await Promise.all([
+      page.waitForResponse((response) =>
+        response.url().includes("/api/backup/update_settings"),
+      ),
+      page.waitForResponse((response) =>
+        response.url().includes("/api/backup/is_warning_visible"),
+      ),
+      saveButton.click(),
+    ]);
+  }
+});

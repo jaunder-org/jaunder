@@ -1,7 +1,10 @@
 use super::{UpdateIdentity, UpdateMediaUploadsEnabled};
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
+use crate::reactive::Invalidator;
 use crate::topbar::Topbar;
+use crate::warning_revalidation::{SiteBaseUrlWarning, revalidates_warning};
+use client::reactive;
 use common::MutationOutcome;
 use common::site::{SiteIdentity, SiteTitle};
 use common::tagged_url::BaseUrl;
@@ -9,11 +12,11 @@ use leptos::prelude::*;
 
 #[component]
 pub fn SiteSettingsPage() -> impl IntoView {
-    let update_action = ServerAction::<UpdateIdentity>::new();
-    let settings = Resource::new(
-        move || update_action.version().get(),
-        |_| super::get_identity(),
-    );
+    let warning = expect_context::<SiteBaseUrlWarning>();
+    let update_action = reactive::action_result_if(move || warning.notify(), revalidates_warning);
+    // The same typed scope drives the form and its shell warning, so a settled
+    // site-identity mutation re-reads both persisted projections together.
+    let settings = reactive::resource(move || warning.track(), super::get_identity);
 
     view! {
         <Topbar title="Site Settings" sub="Operations" />
@@ -64,11 +67,12 @@ pub fn SiteSettingsPage() -> impl IntoView {
 }
 #[component]
 fn MediaUploadsCard() -> impl IntoView {
-    let update_action = ServerAction::<UpdateMediaUploadsEnabled>::new();
-    let uploads_enabled = Resource::new(
-        move || update_action.version().get(),
-        |_| super::get_media_uploads_enabled(),
-    );
+    // This card is a local scope: its action and persisted capability resource
+    // share one bare Invalidator rather than a cross-component context newtype.
+    let uploads = Invalidator::new();
+    let update_action = reactive::action(move || uploads.notify());
+    let uploads_enabled =
+        reactive::resource(move || uploads.track(), super::get_media_uploads_enabled);
 
     view! {
         <Suspense fallback=|| {
@@ -227,7 +231,8 @@ fn media_uploads_form(
 /// and once a base URL is set.
 #[component]
 pub fn SiteBaseUrlBanner() -> impl IntoView {
-    let visible = Resource::new(|| (), |()| super::is_base_url_warning_visible());
+    let warning = expect_context::<SiteBaseUrlWarning>();
+    let visible = reactive::resource(move || warning.track(), super::is_base_url_warning_visible);
     view! {
         <crate::banner::WarnBanner
             visible=visible

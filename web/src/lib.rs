@@ -51,4 +51,6 @@ pub mod themes;
 pub mod timeline;
 pub mod topbar;
 pub mod viewer;
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) mod warning_revalidation;
 pub mod websub;

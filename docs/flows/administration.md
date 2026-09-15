@@ -37,7 +37,11 @@ write-only and persisted SMTP changes require an external restart.
 The warning endpoints belong here even though their banners render in shared
 authenticated chrome. They are soft checks, not authorization challenges:
 non-operators and stale cookie-only sessions simply hide the banners, while
-operators get links into the exact admin page that resolves the warning.
+operators get links into the exact admin page that resolves the warning. A
+confirmed or commit-indeterminate site-identity save re-reads only the persisted
+site-base-URL predicate; the equivalent backup-settings save independently
+re-reads only the backup-destination predicate. Rollback-confirmed failures do
+not revalidate either warning.
 
 The routes themselves stay narrow. `/admin/site` owns site title, canonical base
 URL, and the independently persisted Media Upload Capability; `/admin/backups`

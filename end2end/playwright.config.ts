@@ -94,18 +94,19 @@ export default defineConfig({
     screenshot: "only-on-failure",
     ...(traceParent ? { extraHTTPHeaders: { traceparent: traceParent } } : {}),
   },
-  // admin-site, SMTP, theme, media, invite, and production-baseline mutate global
+  // admin-site, backup, SMTP, theme, media, invite, and production-baseline mutate global
   // site configuration or must restore it before dependent projects. Playwright's
   // `fullyParallel: false` is only intra-file, so these files live in dependent
   // projects to prevent cross-file overlap under workers=2. Each gated browser
   // runs visual contracts first, parallel ordinary tests second, then the serial
-  // admin-site group, then invite. Reciprocal filters run every spec exactly once.
-  // WebKit excludes the baseline because no serial dependency chain owns it.
+  // configuration group, then invite. Reciprocal filters run every spec exactly once.
+  // WebKit's dependent configuration project owns backup alongside its existing
+  // theme, SMTP, and media coverage; production baseline remains excluded there.
   projects: [
     {
       name: "chromium-visual",
       testIgnore: ignoreUnavailableSpecializedSpecs(
-        /(admin-site|smtp|invite|media|production-baseline-flow)\.spec\.ts/,
+        /(admin-site|backup|smtp|invite|media|production-baseline-flow)\.spec\.ts/,
       ),
       grep: visualTag,
       retries: 0,
@@ -117,7 +118,7 @@ export default defineConfig({
     {
       name: "chromium",
       testIgnore: ignoreUnavailableSpecializedSpecs(
-        /(admin-site|smtp|theme|invite|media|passkeys|production-baseline-flow)\.spec\.ts/,
+        /(admin-site|backup|smtp|theme|invite|media|passkeys|production-baseline-flow)\.spec\.ts/,
       ),
       grepInvert: visualTag,
       ...(diagnosticCoverage
@@ -132,7 +133,7 @@ export default defineConfig({
     {
       name: "chromium-admin-site",
       testMatch:
-        /(admin-site|smtp|theme|media|passkeys|production-baseline-flow)\.spec\.ts/,
+        /(admin-site|backup|smtp|theme|media|passkeys|production-baseline-flow)\.spec\.ts/,
       grepInvert: visualTag,
       fullyParallel: false,
       workers: 1,
@@ -156,7 +157,7 @@ export default defineConfig({
     {
       name: "firefox-visual",
       testIgnore: ignoreUnavailableSpecializedSpecs(
-        /(admin-site|smtp|invite|media|production-baseline-flow)\.spec\.ts/,
+        /(admin-site|backup|smtp|invite|media|production-baseline-flow)\.spec\.ts/,
       ),
       grep: visualTag,
       retries: 0,
@@ -168,7 +169,7 @@ export default defineConfig({
     {
       name: "firefox",
       testIgnore: ignoreUnavailableSpecializedSpecs(
-        /(admin-site|smtp|theme|invite|media|production-baseline-flow)\.spec\.ts/,
+        /(admin-site|backup|smtp|theme|invite|media|production-baseline-flow)\.spec\.ts/,
       ),
       grepInvert: visualTag,
       ...(diagnosticCoverage
@@ -182,7 +183,7 @@ export default defineConfig({
     {
       name: "firefox-admin-site",
       testMatch:
-        /(admin-site|smtp|theme|media|production-baseline-flow)\.spec\.ts/,
+        /(admin-site|backup|smtp|theme|media|production-baseline-flow)\.spec\.ts/,
       grepInvert: visualTag,
       fullyParallel: false,
       workers: 1,
@@ -206,14 +207,14 @@ export default defineConfig({
     {
       name: "webkit",
       testIgnore: ignoreUnavailableSpecializedSpecs(
-        /(admin-site|smtp|theme|invite|media|production-baseline-flow)\.spec\.ts/,
+        /(admin-site|backup|smtp|theme|invite|media|production-baseline-flow)\.spec\.ts/,
       ),
       grepInvert: visualTag,
       use: { ...devices["Desktop Safari"] },
     },
     {
       name: "webkit-theme",
-      testMatch: /(smtp|theme|media)\.spec\.ts/,
+      testMatch: /(backup|smtp|theme|media)\.spec\.ts/,
       grepInvert: visualTag,
       fullyParallel: false,
       workers: 1,

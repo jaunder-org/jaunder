@@ -324,6 +324,13 @@ fn reconcile_theme_stylesheet(presentation: &PublishedThemePresentation) {
 
 #[component]
 fn AppShell() -> impl IntoView {
+    let site_warning =
+        crate::warning_revalidation::SiteBaseUrlWarning(crate::reactive::Invalidator::new());
+    let backup_warning =
+        crate::warning_revalidation::BackupWarning(crate::reactive::Invalidator::new());
+    provide_context(site_warning);
+    provide_context(backup_warning);
+
     // The shared session context lives here, not in `App`: it reads `use_location`
     // (per-navigation reconcile), which requires the `<Router>` context, and every
     // consumer renders under this shell (#591).
