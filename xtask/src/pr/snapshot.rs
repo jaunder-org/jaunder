@@ -50,7 +50,10 @@ pub enum CheckState {
 /// is its only requirement evidence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CheckProvider {
-    GitHubActions { check_run_id: u64 },
+    GitHubActions {
+        check_run_id: u64,
+        workflow_run_id: u64,
+    },
     StatusContext,
     OtherCheckRun,
 }
@@ -225,7 +228,8 @@ pub fn parse_snapshot(v: &Value) -> Result<PrSnapshot, ApiError> {
         .and_then(|r| r.get("contexts"))
         .and_then(|c| c.get("nodes"))
         .and_then(Value::as_array)
-        .map(|nodes| nodes.iter().filter_map(parse_check).collect())
+        .map(|nodes| parse_checks(nodes))
+        .transpose()?
         .unwrap_or_default();
 
     Ok(PrSnapshot {
@@ -265,7 +269,17 @@ pub fn parse_snapshot(v: &Value) -> Result<PrSnapshot, ApiError> {
 
 /// Flatten one rollup node. `CheckRun` carries `name`/`conclusion`/`status`;
 /// `StatusContext` carries `context`/`state`. Both become a `CheckEntry`.
-fn parse_check(node: &Value) -> Option<CheckEntry> {
+fn parse_checks(nodes: &[Value]) -> Result<Vec<CheckEntry>, ApiError> {
+    Ok(nodes
+        .iter()
+        .map(parse_check)
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+        .collect())
+}
+
+fn parse_check(node: &Value) -> Result<Option<CheckEntry>, ApiError> {
     if let Some(name) = str_at(node, &["name"]) {
         let completed = str_at(node, &["status"]) == Some("COMPLETED");
         let state = if !completed {
@@ -281,27 +295,30 @@ fn parse_check(node: &Value) -> Option<CheckEntry> {
             str_at(node, &["checkSuite", "app", "slug"]),
             node.get("databaseId").and_then(Value::as_u64),
         ) {
-            (Some("github-actions"), Some(check_run_id)) => {
-                CheckProvider::GitHubActions { check_run_id }
-            }
+            (Some("github-actions"), Some(check_run_id)) => CheckProvider::GitHubActions {
+                check_run_id,
+                workflow_run_id: workflow_run_id(required_string(node, "detailsUrl")?)?,
+            },
             _ => CheckProvider::OtherCheckRun,
         };
-        return Some(CheckEntry {
+        return Ok(Some(CheckEntry {
             name: name.to_string(),
             provider,
             state,
             details_url: owned(node, &["detailsUrl"]),
             started_at: owned(node, &["startedAt"]),
             completed_at: owned(node, &["completedAt"]),
-        });
+        }));
     }
-    let context = str_at(node, &["context"])?;
+    let Some(context) = str_at(node, &["context"]) else {
+        return Ok(None);
+    };
     let state = match str_at(node, &["state"]).unwrap_or("") {
         "SUCCESS" => CheckState::Success,
         "FAILURE" | "ERROR" => CheckState::Failure,
         _ => CheckState::Pending,
     };
-    Some(CheckEntry {
+    Ok(Some(CheckEntry {
         name: context.to_string(),
         provider: CheckProvider::StatusContext,
         state,
@@ -311,7 +328,43 @@ fn parse_check(node: &Value) -> Option<CheckEntry> {
             CheckState::Pending => None,
             _ => owned(node, &["createdAt"]),
         },
+    }))
+}
+
+/// Parse the stable workflow run identity from an Actions check's job URL.
+/// Missing or malformed URLs fail closed rather than merging distinct workflows.
+fn workflow_run_id(details_url: String) -> Result<u64, ApiError> {
+    let Some((_, suffix)) = details_url.split_once("/actions/runs/") else {
+        return Err(ApiError::Malformed(
+            "Actions check detailsUrl has no workflow run".into(),
+        ));
+    };
+    let Some((run_id, job)) = suffix.split_once("/job/") else {
+        return Err(ApiError::Malformed(
+            "Actions check detailsUrl has no job segment".into(),
+        ));
+    };
+    let job_id = job.split('?').next().unwrap_or_default();
+    if run_id.is_empty()
+        || job_id.is_empty()
+        || job_id.contains('/')
+        || job_id.parse::<u64>().is_err()
+    {
+        return Err(ApiError::Malformed(
+            "Actions check detailsUrl is malformed".into(),
+        ));
+    }
+    run_id.parse().map_err(|_| {
+        ApiError::Malformed("Actions check detailsUrl has invalid workflow run ID".into())
     })
+}
+
+fn required_string(value: &Value, name: &str) -> Result<String, ApiError> {
+    value
+        .get(name)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| ApiError::Malformed(format!("response omitted string {name}")))
 }
 
 pub fn parse_commit_checks(v: &Value) -> Result<CommitChecks, ApiError> {
@@ -328,7 +381,8 @@ pub fn parse_commit_checks(v: &Value) -> Result<CommitChecks, ApiError> {
         .and_then(|rollup| rollup.get("contexts"))
         .and_then(|contexts| contexts.get("nodes"))
         .and_then(Value::as_array)
-        .map(|nodes| nodes.iter().filter_map(parse_check).collect())
+        .map(|nodes| parse_checks(nodes))
+        .transpose()?
         .unwrap_or_default();
     Ok(CommitChecks { sha, checks })
 }
@@ -671,13 +725,30 @@ mod tests {
             "name": "job",
             "status": "COMPLETED",
             "conclusion": "FAILURE",
+            "detailsUrl": "https://github.com/o/r/actions/runs/30580548519/job/9",
             "checkSuite": { "app": { "slug": "github-actions" } }
         });
-        let check = parse_check(&value).expect("check run parses");
+        let check = parse_check(&value).expect("check run parses").unwrap();
         assert_eq!(
             check.provider,
-            CheckProvider::GitHubActions { check_run_id: 42 }
+            CheckProvider::GitHubActions {
+                check_run_id: 42,
+                workflow_run_id: 30580548519,
+            }
         );
+    }
+
+    #[test]
+    fn malformed_actions_details_url_fails_closed() {
+        let value = serde_json::json!({
+            "databaseId": 42,
+            "name": "job",
+            "status": "COMPLETED",
+            "conclusion": "FAILURE",
+            "detailsUrl": "https://github.com/o/r/actions/runs/not-a-number/job/9",
+            "checkSuite": { "app": { "slug": "github-actions" } }
+        });
+        assert!(matches!(parse_check(&value), Err(ApiError::Malformed(_))));
     }
 
     #[test]

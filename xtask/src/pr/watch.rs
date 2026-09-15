@@ -225,7 +225,7 @@ fn classified_failures<S: PrSource>(
         .into_iter()
         .map(|check| {
             let required = match check.provider {
-                CheckProvider::GitHubActions { check_run_id } => {
+                CheckProvider::GitHubActions { check_run_id, .. } => {
                     let evidence = evidence.as_ref().ok_or_else(|| {
                         ApiError::Malformed("GitHub Actions evidence unexpectedly absent".into())
                     })?;
@@ -254,7 +254,10 @@ fn classified_failures<S: PrSource>(
 
 fn failure_identity(head_sha: &str, check: &super::snapshot::CheckEntry) -> String {
     let provider = match check.provider {
-        CheckProvider::GitHubActions { check_run_id } => format!("actions:{check_run_id}"),
+        CheckProvider::GitHubActions {
+            check_run_id,
+            workflow_run_id,
+        } => format!("actions:{workflow_run_id}:{check_run_id}"),
         CheckProvider::StatusContext => "status-context".into(),
         CheckProvider::OtherCheckRun => "other-check-run".into(),
     };
@@ -659,7 +662,9 @@ fn finish(subject: &Subject, head_sha: String, end: Terminal, events: Vec<Event>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pr::snapshot::{CheckState, MergeStateStatus, Mergeable, RequiredChecks};
+    use crate::pr::snapshot::{
+        CheckProvider, CheckState, MergeStateStatus, Mergeable, RequiredChecks,
+    };
     use crate::pr::test_support::*;
 
     #[test]
@@ -1020,6 +1025,31 @@ mod tests {
     }
 
     #[test]
+    fn superseded_head_failure_cannot_terminate_after_evidence_switches() {
+        let first = open(vec![check("Aggregate verdict", CheckState::Pending, "")]);
+        let mut second = open(vec![
+            actions_check(
+                "Renamed validation lane",
+                11,
+                CheckState::Failure,
+                "2026-07-30T14:10:00Z",
+            ),
+            check("Aggregate verdict", CheckState::Pending, ""),
+        ]);
+        second.head_sha = "def".into();
+        let src = FakeSource::new(
+            vec![Ok(first), Ok(second), Ok(merged_snapshot())],
+            aggregate_rules(),
+        )
+        .with_actions_evidence_script(vec![Ok(evidence_for("abc"))]);
+        let report = watch(&src, &clock(), &subject(), cfg(), &mut |_| {});
+        assert_eq!(report.outcome, Outcome::Merged);
+        assert!(!report.events.iter().any(|event| {
+            event.kind == EventKind::Terminal && event.detail == Outcome::ChecksFailed.as_str()
+        }));
+    }
+
+    #[test]
     fn empty_required_set_fails_closed_in_every_watch_mode() {
         let empty = RequiredChecks {
             contexts: Vec::new(),
@@ -1210,6 +1240,32 @@ mod tests {
                 assert_eq!(report.pointer.as_deref(), Some("https://x/1"));
             }
         }
+    }
+
+    #[test]
+    fn unrelated_same_named_actions_pending_does_not_suppress_transitive_failure() {
+        let failed = actions_check(
+            "Renamed validation lane",
+            11,
+            CheckState::Failure,
+            "2026-07-30T14:10:00Z",
+        );
+        let mut unrelated = actions_check("Renamed validation lane", 22, CheckState::Pending, "");
+        unrelated.provider = CheckProvider::GitHubActions {
+            check_run_id: 22,
+            workflow_run_id: 2,
+        };
+        let snap = open(vec![
+            failed,
+            unrelated,
+            check("Aggregate verdict", CheckState::Pending, ""),
+        ]);
+        let src = FakeSource::new(vec![Ok(snap)], aggregate_rules())
+            .with_actions_evidence(evidence_for("abc"));
+        assert_eq!(
+            watch(&src, &clock(), &subject(), cfg(), &mut |_| {}).outcome,
+            Outcome::ChecksFailed
+        );
     }
 
     #[test]

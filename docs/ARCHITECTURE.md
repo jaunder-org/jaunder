@@ -3787,10 +3787,17 @@ the merge and watches it home
 CLI as a subprocess (`xtask/src/pr/gh.rs`), with `snapshot` turning its JSON
 into typed values and `decide` holding the pure verdict logic (`xtask/src/pr/`).
 The ruleset supplies directly required contexts and the positive readiness
-verdict. For early failure, the observer derives each check's relationship to a
-required aggregate from the exact workflow run's dependency graph: a directly or
-transitively required failure is immediately actionable, while an optional
-failure is reported without becoming merge-blocking
+verdict. For early failure, the observer joins a stable Actions check-run ID to
+its job, workflow run and attempt, then reads the immutable workflow source at
+that run's commit. The exact dependency graph (including resolvable pinned local
+reusable workflows) supplies matrix expansion and `needs` ancestry. Runtime jobs
+and required contexts must each join exactly one graph node; missing or
+ambiguous correlation, unavailable source, remote reuse, and unsupported
+expressions fail closed through poll-error handling rather than being guessed
+optional. A non-Actions status context has no Actions ancestry, so exact ruleset
+membership makes it direct and every other such context is optional. Thus a
+directly or transitively required failure is immediately actionable, while an
+optional failure is reported without becoming merge-blocking
 ([dynamic PR check classification](adr/drafts/dynamic-pr-check-classification.md)).
 This classification contains no maintained job-name or matrix-value allowlist.
 Distinguishing outcomes — including `ready-to-land`, `ejected`, `dequeued`,

@@ -135,16 +135,42 @@ fn required_states<'a>(
 /// A context that has not appeared at all is neither success nor failure — which is
 /// what keeps a late-appearing aggregate check (the `e2e gate` case) from letting an
 /// incomplete set read as complete.
-/// Settled failures by logical check name, using the same rerun precedence as
-/// required-context resolution.
+/// Settled failures by logical runtime check, using rerun precedence.
+///
+/// Required-context readiness remains name-based because branch rulesets name
+/// contexts. Actions constituent checks additionally carry a workflow-run ID, so
+/// an unrelated workflow's same-named pending job cannot suppress a failure from
+/// the run whose graph proves it required.
 pub fn resolved_failures(snap: &PrSnapshot) -> Vec<&CheckEntry> {
-    let mut names = std::collections::BTreeSet::new();
+    let mut identities = std::collections::BTreeSet::new();
     snap.checks
         .iter()
-        .filter(|check| names.insert(check.name.as_str()))
-        .filter_map(|check| resolve_context(&snap.checks, &check.name))
+        .filter(|check| identities.insert(failure_identity(check)))
+        .filter_map(|check| resolve_failure(&snap.checks, check))
         .filter(|check| check.state == CheckState::Failure)
         .collect()
+}
+
+fn failure_identity(check: &CheckEntry) -> String {
+    match check.provider {
+        super::snapshot::CheckProvider::GitHubActions {
+            workflow_run_id, ..
+        } => format!("actions:{workflow_run_id}:{}", check.name),
+        super::snapshot::CheckProvider::StatusContext => format!("status:{}", check.name),
+        super::snapshot::CheckProvider::OtherCheckRun => format!("check-run:{}", check.name),
+    }
+}
+
+fn resolve_failure<'a>(checks: &'a [CheckEntry], exemplar: &CheckEntry) -> Option<&'a CheckEntry> {
+    let matching = || {
+        checks
+            .iter()
+            .filter(|check| failure_identity(check) == failure_identity(exemplar))
+    };
+    matching()
+        .filter(|check| check.state == CheckState::Pending)
+        .max_by(|a, b| a.started_at.cmp(&b.started_at))
+        .or_else(|| matching().max_by(|a, b| a.completed_at.cmp(&b.completed_at)))
 }
 
 fn all_required_green(snap: &PrSnapshot, req: &RequiredChecks) -> bool {
@@ -352,7 +378,9 @@ fn merge_state_label(status: MergeStateStatus) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pr::snapshot::{CheckState, MergeStateStatus, Mergeable, PrState, RequiredChecks};
+    use crate::pr::snapshot::{
+        CheckProvider, CheckState, MergeStateStatus, Mergeable, PrState, RequiredChecks,
+    };
     use crate::pr::test_support::*;
 
     // ---- terminal outcomes ----
@@ -604,6 +632,25 @@ mod tests {
     }
 
     // ---- ejection ----
+
+    #[test]
+    fn unrelated_actions_pending_check_does_not_suppress_a_failed_run() {
+        let failed = actions_check(
+            "shared display name",
+            11,
+            CheckState::Failure,
+            "2026-07-30T14:10:00Z",
+        );
+        let mut unrelated_pending =
+            actions_check("shared display name", 22, CheckState::Pending, "");
+        unrelated_pending.provider = CheckProvider::GitHubActions {
+            check_run_id: 22,
+            workflow_run_id: 2,
+        };
+        let snapshot = open(vec![failed, unrelated_pending]);
+        assert_eq!(resolved_failures(&snapshot).len(), 1);
+        assert_eq!(resolved_failures(&snapshot)[0].name, "shared display name");
+    }
 
     #[test]
     fn failed_merge_group_run_newer_than_head_is_ejected_without_history() {

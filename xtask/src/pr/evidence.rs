@@ -360,9 +360,17 @@ fn paged_jobs(
 }
 
 fn parse_runtime_job(value: &Value) -> Result<RuntimeJob, ApiError> {
+    let check_run_url = required_string(value, "check_run_url")?;
+    let check_run_id = check_run_url
+        .rsplit_once("/check-runs/")
+        .and_then(|(_, id)| (!id.is_empty() && !id.contains('/')).then_some(id))
+        .and_then(|id| id.parse().ok())
+        .ok_or_else(|| {
+            ApiError::Malformed("Actions job check_run_url has invalid check-run ID".into())
+        })?;
     Ok(RuntimeJob {
         name: required_string(value, "name")?,
-        check_run_id: Some(required_u64(value, "id")?),
+        check_run_id: Some(check_run_id),
         job_key: None,
         matrix: BTreeMap::new(),
     })
@@ -455,11 +463,11 @@ mod tests {
         let mut replies = vec![
             serde_json::json!({"total_count": 2, "workflow_runs": [{"id": 1, "head_sha": "head", "run_attempt": 2, "path": ".github/workflows/main.yml"}]}),
             serde_json::json!({"total_count": 2, "workflow_runs": [{"id": 2, "head_sha": "head", "run_attempt": 1, "path": ".github/workflows/other.yml"}]}),
-            serde_json::json!({"total_count": 2, "jobs": [{"id": 11, "name": "caller / nested"}]}),
-            serde_json::json!({"total_count": 2, "jobs": [{"id": 12, "name": "caller / sibling"}]}),
+            serde_json::json!({"total_count": 2, "jobs": [{"id": 1011, "check_run_url": "https://api.github.com/repos/o/r/check-runs/11", "name": "caller / nested"}]}),
+            serde_json::json!({"total_count": 2, "jobs": [{"id": 1012, "check_run_url": "https://api.github.com/repos/o/r/check-runs/12", "name": "caller / sibling"}]}),
             serde_json::json!({"encoding": "base64", "content": "am9iczoKICBjYWxsZXI6CiAgICB1c2VzOiAuL2xvY2FsLnltbAogIGFnZ3JlZ2F0ZToKICAgIG5hbWU6IEFnZ3JlZ2F0ZQogICAgbmVlZHM6IGNhbGxlcgo="}),
             serde_json::json!({"encoding": "base64", "content": "am9iczoKICBib2R5OgogICAgbmFtZTogYm9keQogICAgcnVucy1vbjogdWJ1bnR1LTI0LjA0Cg=="}),
-            serde_json::json!({"total_count": 1, "jobs": [{"id": 22, "name": "other"}]}),
+            serde_json::json!({"total_count": 1, "jobs": [{"id": 1022, "check_run_url": "https://api.github.com/repos/o/r/check-runs/22", "name": "other"}]}),
             serde_json::json!({"encoding": "base64", "content": "am9iczoKICBvdGhlcjoKICAgIG5hbWU6IG90aGVyCiAgICBydW5zLW9uOiB1YnVudHUtMjQuMDQK"}),
         ].into_iter();
         let evidence = collect_with(&subject(), &snapshot(), |args| {
@@ -504,21 +512,21 @@ mod tests {
         let mut responses = vec![
             // First collection: dynamic run/jobs plus immutable root/local sources.
             serde_json::json!({"total_count": 1, "workflow_runs": [{"id": 1, "head_sha": "head", "run_attempt": 1, "path": ".github/workflows/main.yml"}]}),
-            serde_json::json!({"total_count": 1, "jobs": [{"id": 11, "name": "caller / body"}]}),
+            serde_json::json!({"total_count": 1, "jobs": [{"id": 1011, "check_run_url": "https://api.github.com/repos/o/r/check-runs/11", "name": "caller / body"}]}),
             serde_json::json!({"encoding": "base64", "content": root_content}),
             serde_json::json!({"encoding": "base64", "content": nested_content}),
             // Same path/SHA: only dynamic observations are fetched.
             serde_json::json!({"total_count": 1, "workflow_runs": [{"id": 1, "head_sha": "head", "run_attempt": 2, "path": ".github/workflows/main.yml"}]}),
-            serde_json::json!({"total_count": 1, "jobs": [{"id": 12, "name": "caller / body"}]}),
+            serde_json::json!({"total_count": 1, "jobs": [{"id": 1012, "check_run_url": "https://api.github.com/repos/o/r/check-runs/12", "name": "caller / body"}]}),
             // A different SHA cannot reuse source or graph evidence.
             serde_json::json!({"total_count": 1, "workflow_runs": [{"id": 2, "head_sha": "next", "run_attempt": 1, "path": ".github/workflows/main.yml"}]}),
-            serde_json::json!({"total_count": 1, "jobs": [{"id": 21, "name": "caller / body"}]}),
+            serde_json::json!({"total_count": 1, "jobs": [{"id": 1021, "check_run_url": "https://api.github.com/repos/o/r/check-runs/21", "name": "caller / body"}]}),
             serde_json::json!({"encoding": "base64", "content": root_content}),
             serde_json::json!({"encoding": "base64", "content": nested_content}),
             // A different path at the same SHA needs a distinct root graph/source,
             // while its shared pinned local reusable source remains reusable.
             serde_json::json!({"total_count": 1, "workflow_runs": [{"id": 3, "head_sha": "next", "run_attempt": 1, "path": ".github/workflows/other.yml"}]}),
-            serde_json::json!({"total_count": 1, "jobs": [{"id": 31, "name": "caller / body"}]}),
+            serde_json::json!({"total_count": 1, "jobs": [{"id": 1031, "check_run_url": "https://api.github.com/repos/o/r/check-runs/31", "name": "caller / body"}]}),
             serde_json::json!({"encoding": "base64", "content": root_content}),
         ]
         .into_iter();
@@ -621,6 +629,26 @@ mod tests {
             evidence.classify_check(1, &["Required elsewhere".into()]),
             Ok(Requirement::Optional)
         );
+    }
+
+    #[test]
+    fn job_check_run_url_is_required_and_distinct_from_job_id() {
+        let job = parse_runtime_job(&serde_json::json!({
+            "id": 700,
+            "name": "lane",
+            "check_run_url": "https://api.github.com/repos/o/r/check-runs/42"
+        }))
+        .unwrap();
+        assert_eq!(job.check_run_id, Some(42));
+        for value in [
+            serde_json::json!({"id": 700, "name": "lane"}),
+            serde_json::json!({"id": 700, "name": "lane", "check_run_url": "https://api.github.com/repos/o/r/jobs/42"}),
+        ] {
+            assert!(matches!(
+                parse_runtime_job(&value),
+                Err(ApiError::Malformed(_))
+            ));
+        }
     }
 
     #[test]

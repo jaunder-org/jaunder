@@ -54,7 +54,10 @@ pub fn actions_check(
     completed: &str,
 ) -> CheckEntry {
     CheckEntry {
-        provider: CheckProvider::GitHubActions { check_run_id },
+        provider: CheckProvider::GitHubActions {
+            check_run_id,
+            workflow_run_id: 1,
+        },
         ..check(name, state, completed)
     }
 }
