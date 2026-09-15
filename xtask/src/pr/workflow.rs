@@ -251,6 +251,31 @@ impl WorkflowGraph {
         Ok(())
     }
 
+    /// Returns required contexts that uniquely identify a node in this graph.
+    ///
+    /// A context absent from this immutable workflow belongs to another workflow;
+    /// ambiguous graph names are unsafe to guess and fail closed.
+    pub fn required_targets(
+        &self,
+        required_contexts: &[String],
+    ) -> Result<Vec<String>, GraphError> {
+        required_contexts
+            .iter()
+            .filter_map(|name| {
+                match self.correlate(&RuntimeJob {
+                    name: name.clone(),
+                    check_run_id: None,
+                    job_key: None,
+                    matrix: BTreeMap::new(),
+                }) {
+                    Ok(_) => Some(Ok(name.clone())),
+                    Err(GraphError::MissingJoin { .. }) => None,
+                    Err(error) => Some(Err(error)),
+                }
+            })
+            .collect()
+    }
+
     /// Classifies one runtime job using exact display-name and matrix identity joins.
     ///
     /// Direct ruleset contexts take precedence. Other jobs are transitive only when

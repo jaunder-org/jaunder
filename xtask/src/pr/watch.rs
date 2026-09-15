@@ -9,9 +9,14 @@
 //! outcome that most needs to be legible cannot become an error that never gets
 //! written down.
 
-use super::decide::{self, Phase, Progress, Step};
+use std::collections::BTreeSet;
+
+use super::decide::{self, ClassifiedFailure, OptionalFailure, Phase, Progress, Step};
 use super::gh::ApiError;
-use super::snapshot::{CheckState, PrSnapshot, PrSource, RequiredChecks, RunRef};
+use super::snapshot::{
+    CheckProvider, CheckState, PrSnapshot, PrSource, PrState, RequiredChecks, RunRef,
+};
+use super::workflow::Requirement;
 use super::{Event, EventKind, Outcome, PrReport, Subject};
 
 pub trait Clock {
@@ -118,10 +123,17 @@ struct Rendered {
     checks: Vec<(String, String)>,
     queue: String,
     warn: Option<String>,
+    optional_failures: Vec<OptionalFailure>,
 }
 
 impl Rendered {
-    fn of(snap: &PrSnapshot, req: &RequiredChecks, phase: Phase, warn: Option<String>) -> Self {
+    fn of(
+        snap: &PrSnapshot,
+        req: &RequiredChecks,
+        phase: Phase,
+        warn: Option<String>,
+        optional_failures: Vec<OptionalFailure>,
+    ) -> Self {
         Self {
             phase,
             checks: req
@@ -131,12 +143,20 @@ impl Rendered {
                 .collect(),
             queue: format!("{}:{:?}", snap.queue.in_queue, snap.queue.position),
             warn,
+            optional_failures,
         }
     }
 }
 
 /// Everything the loop carries between polls, kept in one place so the emit logic can
 /// borrow it without fighting the event sink.
+struct Polled {
+    required: RequiredChecks,
+    snapshot: PrSnapshot,
+    step: Step,
+    optional_failures: Vec<OptionalFailure>,
+}
+
 struct Emitter<'a> {
     events: Vec<Event>,
     sink: &'a mut dyn FnMut(&Event),
@@ -150,6 +170,100 @@ impl Emitter<'_> {
         self.events.push(event);
         self.last_event_at = now;
     }
+}
+
+/// Classify one snapshot without turning uncertain Actions ancestry into an optional
+/// failure. Kept at the watch boundary because evidence acquisition is fallible while
+/// `decide` remains pure.
+pub(super) fn classify_snapshot<S: PrSource>(
+    source: &S,
+    subject: &Subject,
+    snap: &PrSnapshot,
+    req: &RequiredChecks,
+    ejection: Option<&RunRef>,
+    progress: &Progress,
+) -> Result<(Step, Vec<OptionalFailure>), ApiError> {
+    let failures = classified_failures(source, subject, snap, req)?;
+    let optional_failures = decide::optional_failures(&failures);
+    Ok((
+        decide::classify_with_failures(snap, req, ejection, progress, &failures),
+        optional_failures,
+    ))
+}
+
+fn classified_failures<S: PrSource>(
+    source: &S,
+    subject: &Subject,
+    snap: &PrSnapshot,
+    req: &RequiredChecks,
+) -> Result<Vec<ClassifiedFailure>, ApiError> {
+    if snap.state != PrState::Open || snap.mergeable == super::snapshot::Mergeable::Conflicting {
+        return Ok(Vec::new());
+    }
+    let failures = decide::resolved_failures(snap)
+        .into_iter()
+        .filter(|check| !req.contexts.iter().any(|context| context == &check.name))
+        .collect::<Vec<_>>();
+    if failures.is_empty() {
+        return Ok(Vec::new());
+    }
+    let actions = failures
+        .iter()
+        .any(|check| matches!(check.provider, CheckProvider::GitHubActions { .. }));
+    let evidence = actions
+        .then(|| source.actions_evidence(subject, snap))
+        .transpose()?;
+    if evidence
+        .as_ref()
+        .is_some_and(|evidence| evidence.head_sha != snap.head_sha)
+    {
+        return Err(ApiError::Malformed(
+            "Actions evidence belongs to a different PR head".into(),
+        ));
+    }
+    failures
+        .into_iter()
+        .map(|check| {
+            let required = match check.provider {
+                CheckProvider::GitHubActions { check_run_id } => {
+                    let evidence = evidence.as_ref().ok_or_else(|| {
+                        ApiError::Malformed("GitHub Actions evidence unexpectedly absent".into())
+                    })?;
+                    matches!(
+                        evidence.classify_check(check_run_id, &req.contexts)?,
+                        Requirement::Direct | Requirement::Transitive
+                    )
+                }
+                CheckProvider::StatusContext | CheckProvider::OtherCheckRun => false,
+            };
+            Ok(if required {
+                ClassifiedFailure::Required {
+                    name: check.name.clone(),
+                    pointer: check.details_url.clone(),
+                }
+            } else {
+                ClassifiedFailure::Optional {
+                    id: failure_identity(&snap.head_sha, check),
+                    name: check.name.clone(),
+                    pointer: check.details_url.clone(),
+                }
+            })
+        })
+        .collect()
+}
+
+fn failure_identity(head_sha: &str, check: &super::snapshot::CheckEntry) -> String {
+    let provider = match check.provider {
+        CheckProvider::GitHubActions { check_run_id } => format!("actions:{check_run_id}"),
+        CheckProvider::StatusContext => "status-context".into(),
+        CheckProvider::OtherCheckRun => "other-check-run".into(),
+    };
+    format!(
+        "{head_sha}:{provider}:{}:{}:{}",
+        check.name,
+        check.started_at.as_deref().unwrap_or(""),
+        check.completed_at.as_deref().unwrap_or("")
+    )
 }
 
 /// Poll until the next actionable outcome, timeout, or watcher failure.
@@ -171,7 +285,27 @@ pub(super) fn watch_with_progress<S: PrSource, C: Clock>(
     clock: &C,
     subject: &Subject,
     cfg: WatchConfig,
+    progress: Progress,
+    sink: &mut dyn FnMut(&Event),
+) -> PrReport {
+    watch_with_progress_and_optional_failures(
+        source,
+        clock,
+        subject,
+        cfg,
+        progress,
+        BTreeSet::new(),
+        sink,
+    )
+}
+
+pub(super) fn watch_with_progress_and_optional_failures<S: PrSource, C: Clock>(
+    source: &S,
+    clock: &C,
+    subject: &Subject,
+    cfg: WatchConfig,
     mut progress: Progress,
+    mut emitted_optional_failure_ids: BTreeSet<String>,
     sink: &mut dyn FnMut(&Event),
 ) -> PrReport {
     let start = clock.now_unix();
@@ -228,7 +362,7 @@ pub(super) fn watch_with_progress<S: PrSource, C: Clock>(
         // the state where ejection is possible — the merge-group probe. A probe
         // failure is a poll failure, never a silent `None`, which would read as "not
         // ejected".
-        let polled = (|| -> Result<(RequiredChecks, PrSnapshot, Option<RunRef>), ApiError> {
+        let polled = (|| -> Result<Polled, ApiError> {
             let req = match &required {
                 Some(r) => r.clone(),
                 None => source.required_checks(subject)?,
@@ -239,10 +373,22 @@ pub(super) fn watch_with_progress<S: PrSource, C: Clock>(
             } else {
                 None
             };
-            Ok((req, snap, ejection))
+            let (step, optional_failures) =
+                classify_snapshot(source, subject, &snap, &req, ejection.as_ref(), &progress)?;
+            Ok(Polled {
+                required: req,
+                snapshot: snap,
+                step,
+                optional_failures,
+            })
         })();
 
-        let (req, snap, ejection) = match polled {
+        let Polled {
+            required: req,
+            snapshot: snap,
+            step,
+            optional_failures,
+        } = match polled {
             Ok(v) => {
                 strikes = 0;
                 ever_read = true;
@@ -332,7 +478,6 @@ pub(super) fn watch_with_progress<S: PrSource, C: Clock>(
             progress.queued_head_sha = None;
         }
 
-        let step = decide::classify(&snap, &req, ejection.as_ref(), &progress);
         let phase = match &step {
             Step::Continue { phase, .. } => *phase,
             Step::Ready => Phase::ReadyToLand,
@@ -345,7 +490,7 @@ pub(super) fn watch_with_progress<S: PrSource, C: Clock>(
             Step::Continue { warn, .. } => warn.clone(),
             Step::Ready | Step::Terminal { .. } => None,
         };
-        let current = Rendered::of(&snap, &req, phase, warn);
+        let current = Rendered::of(&snap, &req, phase, warn, optional_failures);
         let now = clock.now_unix();
         let at = clock.now_rfc3339();
 
@@ -387,10 +532,15 @@ pub(super) fn watch_with_progress<S: PrSource, C: Clock>(
                 }
             }
         }
-        if let Some(text) = current.warn.as_ref().filter(|_| !stopping)
+        if let Some(text) = current.warn.as_ref()
             && prev.as_ref().and_then(|p| p.warn.as_ref()) != Some(text)
         {
             em.emit(at.clone(), now, EventKind::Warning, text.clone());
+        }
+        for failure in &current.optional_failures {
+            if emitted_optional_failure_ids.insert(failure.id.clone()) {
+                em.emit(at.clone(), now, EventKind::Warning, failure.detail.clone());
+            }
         }
         prev = Some(current);
 
@@ -999,6 +1149,371 @@ mod tests {
         assert_eq!(
             watch(&src, &clock(), &subject(), config, &mut |_| {}).outcome,
             Outcome::Merged
+        );
+    }
+
+    fn aggregate_rules() -> RequiredChecks {
+        RequiredChecks {
+            contexts: vec!["Aggregate verdict".into()],
+            strict: false,
+            queue_present: false,
+        }
+    }
+
+    fn workflow_with_optional() -> &'static str {
+        r#"
+            jobs:
+              renamed-lane:
+                name: Renamed validation lane
+              matrix-like:
+                name: Arbitrary browser arm
+              aggregate:
+                name: Aggregate verdict
+                needs: [renamed-lane, matrix-like]
+              optional:
+                name: Unrelated diagnostic
+        "#
+    }
+
+    fn evidence_for(head: &str) -> super::super::evidence::ActionsEvidence {
+        actions_evidence(
+            head,
+            workflow_with_optional(),
+            vec![
+                ("Renamed validation lane", 11),
+                ("Arbitrary browser arm", 12),
+                ("Aggregate verdict", 13),
+                ("Unrelated diagnostic", 14),
+            ],
+        )
+    }
+
+    #[test]
+    fn transitive_failures_stop_every_watch_mode_before_the_aggregate() {
+        for (name, id) in [
+            ("Renamed validation lane", 11),
+            ("Arbitrary browser arm", 12),
+        ] {
+            for (once, stop_at_ready) in [(false, true), (true, true), (false, false)] {
+                let snap = open(vec![
+                    actions_check(name, id, CheckState::Failure, "2026-07-30T14:10:00Z"),
+                    check("Aggregate verdict", CheckState::Pending, ""),
+                ]);
+                let src = FakeSource::new(vec![Ok(snap)], aggregate_rules())
+                    .with_actions_evidence(evidence_for("abc"));
+                let mut config = cfg();
+                config.once = once;
+                config.stop_at_ready = stop_at_ready;
+                let report = watch(&src, &clock(), &subject(), config, &mut |_| {});
+                assert_eq!(report.outcome, Outcome::ChecksFailed);
+                assert!(report.detail.unwrap().contains(name));
+                assert_eq!(report.pointer.as_deref(), Some("https://x/1"));
+            }
+        }
+    }
+
+    #[test]
+    fn optional_failure_is_emitted_once_and_does_not_block_readiness() {
+        let pending = open(vec![
+            actions_check(
+                "Unrelated diagnostic",
+                14,
+                CheckState::Failure,
+                "2026-07-30T14:10:00Z",
+            ),
+            check("Aggregate verdict", CheckState::Pending, ""),
+        ]);
+        let ready = open(vec![
+            actions_check(
+                "Unrelated diagnostic",
+                14,
+                CheckState::Failure,
+                "2026-07-30T14:10:00Z",
+            ),
+            check(
+                "Aggregate verdict",
+                CheckState::Success,
+                "2026-07-30T14:20:00Z",
+            ),
+        ]);
+        let src = FakeSource::new(vec![Ok(pending), Ok(ready)], aggregate_rules())
+            .with_actions_evidence_script(vec![Ok(evidence_for("abc")), Ok(evidence_for("abc"))]);
+        let report = watch(&src, &clock(), &subject(), cfg(), &mut |_| {});
+        assert_eq!(report.outcome, Outcome::ReadyToLand);
+        let warnings = report
+            .events
+            .iter()
+            .filter(|event| event.kind == EventKind::Warning)
+            .collect::<Vec<_>>();
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            warnings[0]
+                .detail
+                .contains("optional check failed: Unrelated diagnostic")
+        );
+        assert!(warnings[0].detail.contains("https://x/1"));
+    }
+
+    #[test]
+    fn non_actions_optional_failure_needs_no_invented_actions_evidence() {
+        let snap = open(vec![
+            check(
+                "External advisory",
+                CheckState::Failure,
+                "2026-07-30T14:10:00Z",
+            ),
+            check("Aggregate verdict", CheckState::Pending, ""),
+        ]);
+        let src = FakeSource::new(vec![Ok(snap)], aggregate_rules());
+        let mut once = cfg();
+        once.once = true;
+        let report = watch(&src, &clock(), &subject(), once, &mut |_| {});
+        assert_eq!(report.outcome, Outcome::Pending);
+        assert!(report.events.iter().any(|event| {
+            event.kind == EventKind::Warning && event.detail.contains("External advisory")
+        }));
+    }
+
+    #[test]
+    fn a_then_b_optional_failures_emit_exactly_once_each() {
+        let source = r#"
+            jobs:
+              aggregate:
+                name: Aggregate verdict
+              first:
+                name: Optional A
+              second:
+                name: Optional B
+        "#;
+        let failure = |name, id, at| actions_check(name, id, CheckState::Failure, at);
+        let first = open(vec![
+            failure("Optional A", 31, "2026-07-30T14:10:00Z"),
+            check("Aggregate verdict", CheckState::Pending, ""),
+        ]);
+        let second = open(vec![
+            failure("Optional A", 31, "2026-07-30T14:10:00Z"),
+            failure("Optional B", 32, "2026-07-30T14:20:00Z"),
+            check("Aggregate verdict", CheckState::Pending, ""),
+        ]);
+        let evidence = || {
+            actions_evidence(
+                "abc",
+                source,
+                vec![
+                    ("Aggregate verdict", 30),
+                    ("Optional A", 31),
+                    ("Optional B", 32),
+                ],
+            )
+        };
+        let src = FakeSource::new(
+            vec![Ok(first), Ok(second), Ok(merged_snapshot())],
+            aggregate_rules(),
+        )
+        .with_actions_evidence_script(vec![Ok(evidence()), Ok(evidence())]);
+        let report = watch(&src, &clock(), &subject(), cfg(), &mut |_| {});
+        let warnings = report
+            .events
+            .iter()
+            .filter(|event| event.kind == EventKind::Warning)
+            .map(|event| event.detail.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(warnings.len(), 2, "A then B emits two warnings total");
+        assert_eq!(
+            warnings
+                .iter()
+                .filter(|detail| detail.contains("optional check failed: Optional A"))
+                .count(),
+            1,
+            "adding B must not re-emit A"
+        );
+        assert_eq!(
+            warnings
+                .iter()
+                .filter(|detail| detail.contains("optional check failed: Optional B"))
+                .count(),
+            1,
+            "B emits once"
+        );
+    }
+
+    #[test]
+    fn optional_failure_rerun_emits_a_new_attempt() {
+        let source = r#"
+            jobs:
+              aggregate:
+                name: Aggregate verdict
+              optional:
+                name: Optional A
+        "#;
+        let first = open(vec![
+            actions_check(
+                "Optional A",
+                31,
+                CheckState::Failure,
+                "2026-07-30T14:10:00Z",
+            ),
+            check("Aggregate verdict", CheckState::Pending, ""),
+        ]);
+        let rerun = open(vec![
+            actions_check(
+                "Optional A",
+                31,
+                CheckState::Failure,
+                "2026-07-30T14:10:00Z",
+            ),
+            actions_check(
+                "Optional A",
+                33,
+                CheckState::Failure,
+                "2026-07-30T14:30:00Z",
+            ),
+            check("Aggregate verdict", CheckState::Pending, ""),
+        ]);
+        let evidence = || {
+            actions_evidence(
+                "abc",
+                source,
+                vec![
+                    ("Aggregate verdict", 30),
+                    ("Optional A", 31),
+                    ("Optional A", 33),
+                ],
+            )
+        };
+        let src = FakeSource::new(
+            vec![Ok(first), Ok(rerun), Ok(merged_snapshot())],
+            aggregate_rules(),
+        )
+        .with_actions_evidence_script(vec![Ok(evidence()), Ok(evidence())]);
+        let report = watch(&src, &clock(), &subject(), cfg(), &mut |_| {});
+        assert_eq!(
+            report
+                .events
+                .iter()
+                .filter(|event| {
+                    event.kind == EventKind::Warning
+                        && event.detail.contains("optional check failed: Optional A")
+                })
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn pending_or_successful_rerun_suppresses_a_superseded_failure() {
+        let mut pending_rerun =
+            actions_check("Renamed validation lane", 11, CheckState::Pending, "");
+        pending_rerun.started_at = Some("2026-07-30T14:30:00Z".into());
+        let pending = open(vec![
+            actions_check(
+                "Renamed validation lane",
+                11,
+                CheckState::Failure,
+                "2026-07-30T14:10:00Z",
+            ),
+            pending_rerun,
+            check("Aggregate verdict", CheckState::Pending, ""),
+        ]);
+        let src = FakeSource::new(vec![Ok(pending)], aggregate_rules());
+        let mut once = cfg();
+        once.once = true;
+        let report = watch(&src, &clock(), &subject(), once, &mut |_| {});
+        assert_eq!(report.outcome, Outcome::Pending);
+
+        let mut successful_rerun = actions_check(
+            "Renamed validation lane",
+            11,
+            CheckState::Success,
+            "2026-07-30T14:40:00Z",
+        );
+        successful_rerun.completed_at = Some("2026-07-30T14:40:00Z".into());
+        let successful = open(vec![
+            actions_check(
+                "Renamed validation lane",
+                11,
+                CheckState::Failure,
+                "2026-07-30T14:10:00Z",
+            ),
+            successful_rerun,
+            check(
+                "Aggregate verdict",
+                CheckState::Success,
+                "2026-07-30T14:50:00Z",
+            ),
+        ]);
+        let src = FakeSource::new(vec![Ok(successful)], aggregate_rules());
+        assert_eq!(
+            watch(&src, &clock(), &subject(), cfg(), &mut |_| {}).outcome,
+            Outcome::ReadyToLand
+        );
+    }
+
+    #[test]
+    fn classification_error_is_a_poll_error_that_can_recover() {
+        let failed = open(vec![
+            actions_check(
+                "Renamed validation lane",
+                11,
+                CheckState::Failure,
+                "2026-07-30T14:10:00Z",
+            ),
+            check("Aggregate verdict", CheckState::Pending, ""),
+        ]);
+        let src = FakeSource::new(vec![Ok(failed), Ok(merged_snapshot())], aggregate_rules())
+            .with_actions_evidence_error(ApiError::Transport("evidence unavailable".into()));
+        let report = watch(&src, &clock(), &subject(), cfg(), &mut |_| {});
+        assert_eq!(report.outcome, Outcome::Merged);
+        assert!(report.events.iter().any(|event| {
+            event.kind == EventKind::PollError && event.detail.contains("evidence unavailable")
+        }));
+    }
+
+    #[test]
+    fn a_new_head_emits_the_same_shaped_non_actions_failure_again() {
+        let old = open(vec![
+            check(
+                "External advisory",
+                CheckState::Failure,
+                "2026-07-30T14:10:00Z",
+            ),
+            check("Aggregate verdict", CheckState::Pending, ""),
+        ]);
+        let mut new = open(vec![
+            check(
+                "External advisory",
+                CheckState::Failure,
+                "2026-07-30T14:10:00Z",
+            ),
+            check(
+                "Aggregate verdict",
+                CheckState::Success,
+                "2026-07-30T14:20:00Z",
+            ),
+        ]);
+        new.head_sha = "def".into();
+        new.head_committed_at = "2026-07-30T14:20:00Z".into();
+        let src = FakeSource::new(
+            vec![Ok(old), Ok(new), Ok(merged_snapshot())],
+            aggregate_rules(),
+        );
+        let mut passive = cfg();
+        passive.stop_at_ready = false;
+        let report = watch(&src, &clock(), &subject(), passive, &mut |_| {});
+        assert_eq!(report.outcome, Outcome::Merged);
+        assert_eq!(
+            report
+                .events
+                .iter()
+                .filter(|event| {
+                    event.kind == EventKind::Warning
+                        && event
+                            .detail
+                            .contains("optional check failed: External advisory")
+                })
+                .count(),
+            2,
+            "a current-head identity must not suppress the same-shaped failure after a push"
         );
     }
 

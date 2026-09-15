@@ -3,7 +3,9 @@
 //! Running this command *is* the merge approval — which is why arming lives here and
 //! not in `watch`. `watch` cannot merge anything no matter how it is invoked.
 
-use super::decide::{self, Progress, Step};
+use std::collections::BTreeSet;
+
+use super::decide::{self, OptionalFailure, Progress, Step};
 use super::gh::{self, ApiError};
 use super::snapshot::{PrSnapshot, PrSource, RequiredChecks, RunRef};
 use super::watch::{self, Clock, WatchConfig};
@@ -91,6 +93,26 @@ fn probe<S: PrSource>(
     }
 }
 
+fn push_optional_failures(
+    events: &mut Vec<Event>,
+    sink: &mut dyn FnMut(&Event),
+    at: &str,
+    failures: &[OptionalFailure],
+    emitted: &mut BTreeSet<String>,
+) {
+    for failure in failures {
+        if emitted.insert(failure.id.clone()) {
+            push(
+                events,
+                sink,
+                at.to_string(),
+                EventKind::Warning,
+                failure.detail.clone(),
+            );
+        }
+    }
+}
+
 fn push(
     events: &mut Vec<Event>,
     sink: &mut dyn FnMut(&Event),
@@ -135,6 +157,7 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
     sink: &mut dyn FnMut(&Event),
 ) -> PrReport {
     let mut events: Vec<Event> = Vec::new();
+    let mut emitted_optional_failure_ids = BTreeSet::new();
 
     let req = match source.required_checks(subject) {
         Ok(r) => r,
@@ -185,11 +208,41 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
             );
         }
     };
+    let (step, optional_failures) = match watch::classify_snapshot(
+        source,
+        subject,
+        &snap,
+        &req,
+        ejection.as_ref(),
+        &Progress::default(),
+    ) {
+        Ok(result) => result,
+        Err(e) => {
+            return report(
+                subject,
+                snap.head_sha,
+                Outcome::WatcherError,
+                Some(format!(
+                    "could not classify failed checks, so refusing to arm: {}",
+                    e.detail()
+                )),
+                None,
+                events,
+            );
+        }
+    };
+    push_optional_failures(
+        &mut events,
+        sink,
+        &clock.now_rfc3339(),
+        &optional_failures,
+        &mut emitted_optional_failure_ids,
+    );
     if let Step::Terminal {
         outcome,
         detail,
         pointer,
-    } = decide::classify(&snap, &req, ejection.as_ref(), &Progress::default())
+    } = step
     {
         push(
             &mut events,
@@ -261,8 +314,15 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
             let mut watch_cfg = cfg;
             watch_cfg.stop_at_ready = false;
             let progress = Progress::from_snapshot(&after);
-            let mut result =
-                watch::watch_with_progress(source, clock, subject, watch_cfg, progress, sink);
+            let mut result = watch::watch_with_progress_and_optional_failures(
+                source,
+                clock,
+                subject,
+                watch_cfg,
+                progress,
+                emitted_optional_failure_ids,
+                sink,
+            );
             // One log: the prologue happened first, so it reads first.
             events.extend(std::mem::take(&mut result.events));
             result.events = events;
@@ -288,11 +348,41 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
                 );
             }
         };
+        let (after_step, optional_failures) = match watch::classify_snapshot(
+            source,
+            subject,
+            &after,
+            &req,
+            after_ejection.as_ref(),
+            &Progress::default(),
+        ) {
+            Ok(result) => result,
+            Err(e) => {
+                return report(
+                    subject,
+                    head_sha,
+                    Outcome::WatcherError,
+                    Some(format!(
+                        "could not classify failed checks after arming: {}",
+                        e.detail()
+                    )),
+                    None,
+                    events,
+                );
+            }
+        };
+        push_optional_failures(
+            &mut events,
+            sink,
+            &clock.now_rfc3339(),
+            &optional_failures,
+            &mut emitted_optional_failure_ids,
+        );
         if let Step::Terminal {
             outcome,
             detail,
             pointer,
-        } = decide::classify(&after, &req, after_ejection.as_ref(), &Progress::default())
+        } = after_step
         {
             push(
                 &mut events,
@@ -324,7 +414,7 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pr::snapshot::{Mergeable, RequiredChecks};
+    use crate::pr::snapshot::{CheckState, Mergeable, RequiredChecks};
     use crate::pr::test_support::*;
 
     // ---- the divergence guard ----
@@ -514,6 +604,154 @@ mod tests {
         let report = land(&src, &armer, &clock(), &subject(), cfg(), &mut |_| {});
         assert_eq!(report.outcome, Outcome::WatcherError);
         assert_eq!(armer.calls.get(), 0);
+    }
+
+    #[test]
+    fn transitive_failure_refuses_to_arm_without_a_workflow_mutation() {
+        let rules = RequiredChecks {
+            contexts: vec!["Aggregate verdict".into()],
+            strict: false,
+            queue_present: false,
+        };
+        let snap = open(vec![
+            actions_check(
+                "Arbitrarily renamed lane",
+                9,
+                CheckState::Failure,
+                "2026-07-30T14:10:00Z",
+            ),
+            check("Aggregate verdict", CheckState::Pending, ""),
+        ]);
+        let source = r#"
+            jobs:
+              lane:
+                name: Arbitrarily renamed lane
+              aggregate:
+                name: Aggregate verdict
+                needs: lane
+        "#;
+        let src = FakeSource::new(vec![Ok(snap)], rules).with_actions_evidence(actions_evidence(
+            "abc",
+            source,
+            vec![("Arbitrarily renamed lane", 9), ("Aggregate verdict", 10)],
+        ));
+        let armer = CountingArmer::new();
+        let report = land(&src, &armer, &clock(), &subject(), cfg(), &mut |_| {});
+        assert_eq!(report.outcome, Outcome::ChecksFailed);
+        assert_eq!(
+            armer.calls.get(),
+            0,
+            "watch evidence must not arm or cancel anything"
+        );
+    }
+
+    #[test]
+    fn land_reports_optional_failures_before_and_after_arming_once() {
+        let rules = RequiredChecks {
+            contexts: vec!["Aggregate verdict".into()],
+            strict: false,
+            queue_present: false,
+        };
+        let optional = || {
+            open(vec![
+                actions_check(
+                    "Optional diagnostics",
+                    41,
+                    CheckState::Failure,
+                    "2026-07-30T14:10:00Z",
+                ),
+                check("Aggregate verdict", CheckState::Pending, ""),
+            ])
+        };
+        let source = r#"
+            jobs:
+              aggregate:
+                name: Aggregate verdict
+              diagnostics:
+                name: Optional diagnostics
+        "#;
+        let evidence = || {
+            actions_evidence(
+                "abc",
+                source,
+                vec![("Aggregate verdict", 40), ("Optional diagnostics", 41)],
+            )
+        };
+        let src = FakeSource::new(
+            vec![
+                Ok(optional()),
+                Ok(optional()),
+                Ok(PrSnapshot {
+                    auto_merge_armed: true,
+                    ..open(vec![check("Aggregate verdict", CheckState::Pending, "")])
+                }),
+                Ok(merged_snapshot()),
+            ],
+            rules,
+        )
+        .with_actions_evidence_script(vec![Ok(evidence()), Ok(evidence())]);
+        let armer = CountingArmer::new();
+        let report = land(&src, &armer, &clock(), &subject(), cfg(), &mut |_| {});
+        assert_eq!(report.outcome, Outcome::Merged);
+        assert_eq!(armer.calls.get(), 2);
+        assert_eq!(
+            report
+                .events
+                .iter()
+                .filter(|event| {
+                    event.kind == EventKind::Warning
+                        && event
+                            .detail
+                            .contains("optional check failed: Optional diagnostics")
+                })
+                .count(),
+            1,
+            "the same optional attempt is visible but never duplicated"
+        );
+    }
+
+    #[test]
+    fn post_arm_watch_stops_for_a_transitive_failure_without_rearming() {
+        let rules = RequiredChecks {
+            contexts: vec!["Aggregate verdict".into()],
+            strict: false,
+            queue_present: false,
+        };
+        let pending = open(vec![check("Aggregate verdict", CheckState::Pending, "")]);
+        let failed_after_arm = PrSnapshot {
+            auto_merge_armed: true,
+            ..open(vec![
+                actions_check(
+                    "Renamed post-arm lane",
+                    19,
+                    CheckState::Failure,
+                    "2026-07-30T14:10:00Z",
+                ),
+                check("Aggregate verdict", CheckState::Pending, ""),
+            ])
+        };
+        let source = r#"
+            jobs:
+              lane:
+                name: Renamed post-arm lane
+              aggregate:
+                name: Aggregate verdict
+                needs: lane
+        "#;
+        let src = FakeSource::new(vec![Ok(pending), Ok(failed_after_arm)], rules)
+            .with_actions_evidence(actions_evidence(
+                "abc",
+                source,
+                vec![("Renamed post-arm lane", 19), ("Aggregate verdict", 20)],
+            ));
+        let armer = CountingArmer::new();
+        let report = land(&src, &armer, &clock(), &subject(), cfg(), &mut |_| {});
+        assert_eq!(report.outcome, Outcome::ChecksFailed);
+        assert_eq!(
+            armer.calls.get(),
+            1,
+            "the watcher must not retry or mutate CI"
+        );
     }
 
     #[test]

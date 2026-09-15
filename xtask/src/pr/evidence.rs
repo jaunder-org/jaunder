@@ -13,7 +13,7 @@ use serde_json::Value;
 use super::Subject;
 use super::gh::ApiError;
 use super::snapshot::{CheckEntry, CheckProvider, PrSnapshot};
-use super::workflow::{RuntimeJob, WorkflowGraph};
+use super::workflow::{Requirement, RuntimeJob, WorkflowGraph};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct WorkflowKey {
@@ -80,6 +80,44 @@ impl ActionsEvidence {
                 "GitHub Actions check run {check_run_id} appears in multiple run attempts"
             ))),
         }
+    }
+
+    /// Classifies one Actions check against only the required contexts that the
+    /// same workflow run can prove it produced. A ruleset context from another
+    /// workflow has no edge in this graph and must not make this job look required.
+    pub fn classify_check(
+        &self,
+        check_run_id: u64,
+        required_contexts: &[String],
+    ) -> Result<Requirement, ApiError> {
+        let (run, job) = self.job_for_check(check_run_id)?;
+        let graph_targets = run
+            .graph
+            .required_targets(required_contexts)
+            .map_err(|error| ApiError::Malformed(format!("workflow graph: {error}")))?;
+        for target in &graph_targets {
+            let matches = run
+                .jobs
+                .iter()
+                .filter(|candidate| candidate.name == *target)
+                .count();
+            match matches {
+                1 => {}
+                0 => {
+                    return Err(ApiError::Malformed(format!(
+                        "required workflow target {target} is absent from current-attempt jobs"
+                    )));
+                }
+                _ => {
+                    return Err(ApiError::Malformed(format!(
+                        "required workflow target {target} is ambiguous in current-attempt jobs"
+                    )));
+                }
+            }
+        }
+        run.graph
+            .classify(job, &graph_targets)
+            .map_err(|error| ApiError::Malformed(format!("workflow graph: {error}")))
     }
 }
 
@@ -380,6 +418,7 @@ fn required_u64(value: &Value, name: &str) -> Result<u64, ApiError> {
 mod tests {
     use super::*;
     use crate::pr::snapshot::{CheckState, MergeStateStatus, Mergeable, PrState, QueueState};
+    use crate::pr::test_support::actions_evidence;
     use crate::pr::{PrNumber, Subject};
 
     fn subject() -> Subject {
@@ -528,6 +567,59 @@ mod tests {
             source_requests
                 .iter()
                 .any(|request| request.contains("ref=next"))
+        );
+    }
+
+    #[test]
+    fn missing_or_ambiguous_runtime_required_target_fails_closed() {
+        let source = r#"
+            jobs:
+              lane:
+                name: Arbitrary lane
+              aggregate:
+                name: Required aggregate
+                needs: lane
+        "#;
+        let missing = actions_evidence("head", source, vec![("Arbitrary lane", 1)]);
+        let error = missing
+            .classify_check(1, &["Required aggregate".into()])
+            .unwrap_err();
+        assert!(
+            error
+                .detail()
+                .contains("Required aggregate is absent from current-attempt jobs")
+        );
+
+        let ambiguous = actions_evidence(
+            "head",
+            source,
+            vec![
+                ("Arbitrary lane", 1),
+                ("Required aggregate", 2),
+                ("Required aggregate", 3),
+            ],
+        );
+        let error = ambiguous
+            .classify_check(1, &["Required aggregate".into()])
+            .unwrap_err();
+        assert!(
+            error
+                .detail()
+                .contains("Required aggregate is ambiguous in current-attempt jobs")
+        );
+    }
+
+    #[test]
+    fn graph_without_a_required_target_is_optional() {
+        let source = r#"
+            jobs:
+              diagnostic:
+                name: Diagnostic
+        "#;
+        let evidence = actions_evidence("head", source, vec![("Diagnostic", 1)]);
+        assert_eq!(
+            evidence.classify_check(1, &["Required elsewhere".into()]),
+            Ok(Requirement::Optional)
         );
     }
 

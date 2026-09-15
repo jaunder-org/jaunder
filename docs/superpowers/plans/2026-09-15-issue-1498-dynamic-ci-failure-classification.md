@@ -55,7 +55,7 @@ Out:
     responses, and unavailable workflow source; transport tests prove no
     mutation endpoint or subprocess invocation is introduced.
 
-- [ ] Task 3: Integrate classified failures into decision and watch behavior
+- [x] Task 3: Integrate classified failures into decision and watch behavior
   - Contract: Conflict remains higher precedence; directly or transitively
     required failure returns `checks-failed` with job name and log URL before
     aggregate settlement. Optional failure emits one explicitly optional event
