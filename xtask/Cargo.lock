@@ -2062,6 +2062,7 @@ dependencies = [
  "proc-macro2",
  "processkit",
  "quote",
+ "regex",
  "rustc-demangle",
  "serde",
  "serde_json",

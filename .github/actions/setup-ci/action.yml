@@ -22,10 +22,9 @@ runs:
       with:
         name: jaunder-org
         authToken: ${{ inputs.cachix-auth-token }}
-        # Push build products to the cache, but NOT the test-result check
-        # derivations (jaunder-coverage / jaunder-e2e): CI must always re-run
-        # the tests and never trust a cached green check (flaky-pass / impurity
-        # protection).
+        # Push build products to the cache, but not coverage or e2e outputs.
+        # The structural probe proves which support outputs could be admitted;
+        # the measured decision report records why the broad boundary remains.
         pushFilter: "jaunder-coverage|jaunder-e2e"
     # xtask is host-only, so cachix can't cover it; cache its compiled deps
     # between runs.
