@@ -1,0 +1,614 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PROTOTYPE — Composer columns</title>
+    <!--
+      THROWAWAY PROTOTYPE for issue #1513.
+      Question: does one body-with-actions | extra-controls layout work for
+      both routes when /posts/new adds fields to the controls rail, and the
+      complete rail stacks beneath the body side on narrow screens?
+    -->
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f5f3ef;
+        --surface: #fffefa;
+        --surface-alt: #f0ede6;
+        --ink: #262421;
+        --muted: #706c65;
+        --line: #d9d4ca;
+        --accent: #b8452f;
+        --accent-soft: #f7e5df;
+        --radius: 8px;
+        font-family: ui-sans-serif, system-ui, sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      [hidden] {
+        display: none !important;
+      }
+
+      body {
+        margin: 0;
+        color: var(--ink);
+        background: #242321;
+      }
+
+      button,
+      input,
+      textarea,
+      select {
+        font: inherit;
+      }
+
+      .prototype-shell {
+        width: min(1440px, 100%);
+        min-height: 100vh;
+        margin: 0 auto;
+        background: var(--bg);
+        transition: width 160ms ease;
+      }
+
+      .prototype-shell[data-width="portrait"] {
+        width: min(900px, 100%);
+      }
+
+      .prototype-shell[data-width="mobile"] {
+        width: min(430px, 100%);
+      }
+
+      .app-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        height: 58px;
+        padding: 0 24px;
+        color: white;
+        background: #292724;
+      }
+
+      .brand {
+        font-family: Georgia, serif;
+        font-size: 22px;
+        letter-spacing: 0.02em;
+      }
+
+      .route-label {
+        color: #c9c4bb;
+        font-size: 13px;
+      }
+
+      .content {
+        padding: 28px;
+        container-type: inline-size;
+      }
+
+      .page-heading {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 18px;
+      }
+
+      h1,
+      h2,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font: 600 28px/1.2 Georgia, serif;
+      }
+
+      h2 {
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .hint {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .composer {
+        display: grid;
+        min-height: 420px;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+      }
+
+      .composer.app,
+      .composer.full {
+        grid-template-columns: minmax(0, 1fr) 320px;
+      }
+
+      .body-column,
+      .controls-column {
+        min-width: 0;
+        padding: 22px;
+      }
+
+      .body-column {
+        display: flex;
+        flex-direction: column;
+        gap: 9px;
+      }
+
+      .controls-column {
+        display: flex;
+        flex-direction: column;
+        gap: 17px;
+        border-left: 1px solid var(--line);
+        background: var(--bg);
+      }
+
+      .more-controls {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        padding-top: 17px;
+        border-top: 1px solid var(--line);
+      }
+
+      label {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      .field-label {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      textarea,
+      input,
+      select {
+        width: 100%;
+        color: var(--ink);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--surface);
+      }
+
+      textarea {
+        flex: 1;
+        min-height: 330px;
+        padding: 16px;
+        resize: none;
+        font: 18px/1.55 Georgia, serif;
+      }
+
+      input,
+      select {
+        min-height: 38px;
+        padding: 8px 10px;
+      }
+
+      .actions,
+      .segmented {
+        display: flex;
+        gap: 8px;
+      }
+
+      .media-field {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .field-heading {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .media-list {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+      }
+
+      .media-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        min-width: 0;
+        padding: 7px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--surface);
+      }
+
+      .media-thumb {
+        display: grid;
+        flex: 0 0 36px;
+        width: 36px;
+        height: 36px;
+        place-items: center;
+        color: var(--muted);
+        border-radius: 4px;
+        background: var(--surface-alt);
+      }
+
+      .media-name {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        font-size: 12px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .icon-button,
+      .media-add {
+        display: inline-grid;
+        width: 34px;
+        height: 34px;
+        padding: 0;
+        place-items: center;
+        color: var(--ink);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--surface);
+      }
+
+      .media-add {
+        width: 24px;
+        height: 24px;
+        font-size: 16px;
+      }
+
+      .media-item-actions {
+        display: flex;
+        gap: 4px;
+      }
+
+      .tag-input {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 4px;
+        min-height: 40px;
+        padding: 4px 6px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--surface);
+      }
+
+      .tag-input input {
+        flex: 1;
+        width: auto;
+        min-width: 72px;
+        min-height: 28px;
+        padding: 2px 4px;
+        border: 0;
+      }
+
+      .tag-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 3px 6px 3px 9px;
+        color: #873624;
+        font-size: 12px;
+        border: 1px solid var(--accent);
+        border-radius: 999px;
+        background: var(--accent-soft);
+      }
+
+      .tag-chip button {
+        padding: 0 2px;
+        color: var(--muted);
+        border: 0;
+        background: transparent;
+      }
+
+      .schedule-summary {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px;
+        font-size: 12px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--surface);
+      }
+
+      .schedule-summary > span:first-child {
+        flex: 1;
+      }
+
+      .schedule-actions {
+        display: flex;
+        gap: 4px;
+      }
+
+      .segmented button,
+      .secondary,
+      .media {
+        padding: 8px 10px;
+        color: var(--ink);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--surface);
+      }
+
+      .segmented button {
+        flex: 1;
+      }
+
+      .segmented button:first-child {
+        color: var(--accent);
+        border-color: var(--accent);
+        background: var(--accent-soft);
+      }
+
+      .media {
+        width: 40px;
+        height: 40px;
+        padding: 0;
+        font-size: 18px;
+      }
+
+      .actions {
+        justify-content: flex-start;
+        padding-top: 17px;
+        border-top: 1px solid var(--line);
+      }
+
+      .actions button {
+        flex: 0 1 150px;
+        min-height: 40px;
+        border-radius: 6px;
+      }
+
+      .prototype-shell[data-actions="fill"] .actions button {
+        flex: 1;
+      }
+
+      .prototype-shell[data-actions="split"] .actions {
+        justify-content: space-between;
+      }
+
+      .prototype-shell[data-actions="split"] .actions .primary {
+        margin-left: auto;
+      }
+
+      .primary {
+        color: white;
+        border: 1px solid var(--accent);
+        background: var(--accent);
+      }
+
+      .prototype-switcher {
+        position: fixed;
+        bottom: 18px;
+        left: 50%;
+        z-index: 10;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 7px;
+        color: white;
+        border-radius: 999px;
+        background: #191816;
+        box-shadow: 0 8px 28px #0006;
+        transform: translateX(-50%);
+      }
+
+      .prototype-switcher button {
+        padding: 8px 12px;
+        color: white;
+        border: 0;
+        border-radius: 999px;
+        background: transparent;
+        cursor: pointer;
+      }
+
+      .prototype-switcher button[aria-pressed="true"] {
+        color: #191816;
+        background: white;
+      }
+
+      .divider {
+        width: 1px;
+        height: 24px;
+        margin: 0 3px;
+        background: #ffffff33;
+      }
+
+      @container (max-width: 720px) {
+        .content {
+          padding: 16px;
+        }
+
+        .composer.app,
+        .composer.full {
+          grid-template-columns: minmax(0, 1fr);
+        }
+
+        .body-column,
+        .controls-column {
+          padding: 16px;
+        }
+
+        .controls-column {
+          border-top: 1px solid var(--line);
+          border-left: 0;
+        }
+
+        textarea {
+          min-height: 260px;
+        }
+
+        .prototype-switcher {
+          width: calc(100% - 20px);
+          justify-content: center;
+          overflow-x: auto;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="prototype-shell" id="shell" data-width="desktop" data-actions="fill">
+      <header class="app-header">
+        <span class="brand">jaunder</span>
+        <span class="route-label" id="routeLabel">/app</span>
+      </header>
+      <section class="content">
+        <div class="page-heading">
+          <div>
+            <h1 id="pageTitle">Home</h1>
+            <p class="hint" id="pageHint">Complete composer in the publishing cockpit</p>
+          </div>
+          <span class="hint">PROTOTYPE — issue #1513</span>
+        </div>
+        <section class="composer app" id="composer">
+          <div class="body-column">
+            <label for="body">Body</label>
+            <textarea id="body" placeholder="What’s on your mind?"></textarea>
+            <div class="actions">
+              <button class="secondary">Save draft</button>
+              <button class="primary">Schedule</button>
+            </div>
+          </div>
+          <aside class="controls-column">
+            <h2>Post details</h2>
+            <div class="media-field">
+              <div class="field-heading">
+                <span class="field-label">Media</span>
+                <button class="media-add" title="Add media" aria-label="Add media">+</button>
+              </div>
+              <div class="media-list">
+                <div class="media-item">
+                  <span class="media-thumb" aria-hidden="true">▧</span>
+                  <span class="media-name">coastal-path.jpg</span>
+                  <span class="media-item-actions">
+                    <button class="icon-button" title="Copy media URL" aria-label="Copy media URL">⧉</button>
+                    <button class="icon-button" title="Dismiss from composer" aria-label="Dismiss media from composer">−</button>
+                  </span>
+                </div>
+              </div>
+            </div>
+            <label>
+              Summary
+              <textarea style="min-height: 86px; flex: none; font: inherit" placeholder="Optional summary or excerpt"></textarea>
+            </label>
+            <label>
+              Tags
+              <span class="tag-input">
+                <span class="tag-chip">#walking <button aria-label="Remove walking tag">×</button></span>
+                <span class="tag-chip">#coast <button aria-label="Remove coast tag">×</button></span>
+                <input placeholder="Add tag…" />
+              </span>
+            </label>
+            <div>
+              <span class="field-label">Format</span>
+              <div class="segmented" style="margin-top: 6px">
+                <button>Markdown</button><button>Org</button><button>HTML</button>
+              </div>
+            </div>
+            <section class="more-controls" id="moreControls">
+              <h2>Publication options</h2>
+              <label>
+                Slug
+                <input value="a-day-on-the-coast" />
+              </label>
+              <div>
+                <span class="field-label">Publish at (optional)</span>
+                <div class="schedule-summary" style="margin-top: 6px">
+                  <span>September 18, 2026 at 9:00 AM local time</span>
+                  <span class="schedule-actions">
+                    <button class="icon-button" title="Change publication time" aria-label="Change publication time">✎</button>
+                    <button class="icon-button" title="Clear schedule" aria-label="Clear schedule">×</button>
+                  </span>
+                </div>
+              </div>
+              <label>
+                Audience
+                <select><option>Public</option><option selected>Subscribers</option><option>Private</option></select>
+              </label>
+            </section>
+          </aside>
+        </section>
+      </section>
+    </main>
+
+    <nav class="prototype-switcher" aria-label="Prototype controls">
+      <button id="appButton" aria-pressed="true">/app · 2 columns</button>
+      <button id="fullButton" aria-pressed="false">/posts/new · expanded controls</button>
+      <span class="divider"></span>
+      <button class="action-layout" data-actions="left" aria-pressed="false">Actions left</button>
+      <button class="action-layout" data-actions="fill" aria-pressed="true">Actions fill</button>
+      <button class="action-layout" data-actions="split" aria-pressed="false">Actions split</button>
+      <span class="divider"></span>
+      <button class="width" data-width="desktop" aria-pressed="true">Desktop</button>
+      <button class="width" data-width="portrait" aria-pressed="false">Portrait</button>
+      <button class="width" data-width="mobile" aria-pressed="false">Mobile</button>
+    </nav>
+
+    <script>
+      const shell = document.querySelector("#shell");
+      const composer = document.querySelector("#composer");
+      const appButton = document.querySelector("#appButton");
+      const fullButton = document.querySelector("#fullButton");
+      const routeLabel = document.querySelector("#routeLabel");
+      const pageTitle = document.querySelector("#pageTitle");
+      const pageHint = document.querySelector("#pageHint");
+
+      function showRoute(route) {
+        const full = route === "full";
+        composer.className = `composer ${full ? "full" : "app"}`;
+        appButton.setAttribute("aria-pressed", String(!full));
+        fullButton.setAttribute("aria-pressed", String(full));
+        routeLabel.textContent = full ? "/posts/new" : "/app";
+        pageTitle.textContent = full ? "New post" : "Home";
+        pageHint.textContent = full
+          ? "The complete composer in a dedicated writing workspace"
+          : "The complete composer in the publishing cockpit";
+        const url = new URL(window.location.href);
+        url.searchParams.set("route", full ? "new" : "app");
+        history.replaceState(null, "", url);
+      }
+
+      appButton.addEventListener("click", () => showRoute("app"));
+      fullButton.addEventListener("click", () => showRoute("full"));
+
+      document.querySelectorAll(".action-layout").forEach((button) => {
+        button.addEventListener("click", () => {
+          shell.dataset.actions = button.dataset.actions;
+          document.querySelectorAll(".action-layout").forEach((candidate) => {
+            candidate.setAttribute("aria-pressed", String(candidate === button));
+          });
+        });
+      });
+
+      document.querySelectorAll(".width").forEach((button) => {
+        button.addEventListener("click", () => {
+          shell.dataset.width = button.dataset.width;
+          document.querySelectorAll(".width").forEach((candidate) => {
+            candidate.setAttribute("aria-pressed", String(candidate === button));
+          });
+        });
+      });
+
+      showRoute(new URL(window.location.href).searchParams.get("route") === "new" ? "full" : "app");
+    </script>
+  </body>
+</html>
