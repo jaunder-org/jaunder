@@ -1676,15 +1676,45 @@ Pure synchronous `#[test]` unit tests are never flagged.
 
 ## NixOS integration
 
-- The shared NixOS module is `nixosModules.jaunder`.
-- Production imports should enable the service with
-  `services.jaunder.enable = true;` and set `services.jaunder.bind` as needed.
-- Set `services.jaunder.db` to choose the backend for a NixOS deployment. The
-  default remains `sqlite:./data/jaunder.db`.
-- Do not set `JAUNDER_CAPTURE_DIR` in production. That is test-only and should
-  stay in the interactive VM or e2e test node config.
-- The `jaunder` CLI is installed for the `jaunder` user via
-  `users.users.jaunder.packages`.
+The narrow `nixosModules.jaunder` module is the building block for custom NixOS
+deployments; it owns only Jaunder's systemd service:
+
+```nix
+{
+  imports = [ inputs.jaunder.nixosModules.jaunder ];
+
+  services.jaunder = {
+    enable = true;
+    bind = "127.0.0.1:3000";
+    db = "sqlite:/var/lib/jaunder/data/jaunder.db";
+    prod = true;
+  };
+}
+```
+
+For the supported single-host composition, import `nixosModules.jaunder-stack`:
+
+```nix
+{
+  imports = [ inputs.jaunder.nixosModules.jaunder-stack ];
+
+  services.jaunder.stack = {
+    enable = true;
+    hostName = "jaunder.example.com";
+    database = "sqlite"; # or "postgresql" for the host's local instance
+  };
+}
+```
+
+The [NixOS deployment runbook](docs/DESIGN.md#nixos-deployment-stack) owns
+operator procedures, including PostgreSQL boundaries, UI/SSH access, retention,
+persistence and backup, and optional Basic Auth. Its Basic Auth username grammar
+is `[A-Za-z0-9._-]+`; `passwordHash` is a literal evaluated Nix string embedded
+in generated Caddy configuration and the Nix store, not a runtime-file secret.
+
+Do not set `JAUNDER_CAPTURE_DIR` in production. That is test-only and should
+stay in the interactive VM or e2e test node config. The `jaunder` CLI is
+installed for the `jaunder` user via `users.users.jaunder.packages`.
 
 ## Interactive testing VM
 

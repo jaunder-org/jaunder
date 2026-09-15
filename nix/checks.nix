@@ -1,4 +1,4 @@
-{ self, system, pkgs, nixosInternals, packageInternals }:
+{ self, system, pkgs, nixpkgs, nixosInternals, packageInternals }:
 let
   inherit (nixosInternals) captureEnv e2eOtelCollectorEnv;
   inherit (packageInternals)
@@ -1060,6 +1060,590 @@ mkWasmCoverageMeasurementProducer =
     '';
   };
   measurementCacheBuster = builtins.getEnv "JAUNDER_WASM_COVERAGE_CACHE_BUSTER";
+
+  mkStackConfiguration = stack:
+    nixpkgs.lib.nixosSystem {
+      inherit system;
+      modules = [
+        self.nixosModules.jaunder-stack
+        ({ ... }: {
+          boot.isContainer = true;
+          system.stateVersion = "26.05";
+          services.jaunder.stack = stack;
+        })
+      ];
+    };
+  stackEvaluationSucceeds = stack:
+    (builtins.tryEval (mkStackConfiguration stack).config.system.build.toplevel.drvPath).success;
+  stackEvaluationFails = stack: !(stackEvaluationSucceeds stack);
+  validStackBasicAuth = {
+    username = "operator";
+    passwordHash = "$2b$12$abcdefghijklmnopqrstuuV4qg5bR1uRgYBzO8pu0h1rlaL8fQ2gQ";
+  };
+  sixtyThreeCharacterDnsLabel = builtins.concatStringsSep "" (builtins.genList (_: "a") 63);
+  invalidDnsHostNames = [
+    "https://jaunder.example.test"
+    "jaunder.example.test:443"
+    "*.jaunder.example.test"
+    "jaunder example.test"
+    "jaunder\nexample.test"
+    "jaunder..example.test"
+    ".jaunder.example.test"
+    "jaunder.example.test."
+    "-jaunder.example.test"
+    "jaunder-.example.test"
+    "${builtins.concatStringsSep "" (builtins.genList (_: "a") 64)}.example.test"
+    "${sixtyThreeCharacterDnsLabel}.${sixtyThreeCharacterDnsLabel}.${sixtyThreeCharacterDnsLabel}.${sixtyThreeCharacterDnsLabel}"
+  ];
+  invalidApplicationHostStack = mkStackConfiguration {
+    enable = true;
+    hostName = "https://jaunder.example.test";
+  };
+  invalidObservabilityHostStack = mkStackConfiguration {
+    enable = true;
+    hostName = "jaunder.example.test";
+    observability = {
+      hostName = "https://observe.example.test";
+      basicAuth = validStackBasicAuth;
+    };
+  };
+  caseNormalizedHostStack = mkStackConfiguration {
+    enable = true;
+    hostName = "Jaunder.Example.Test";
+    observability = {
+      hostName = "Observe.Example.Test";
+      basicAuth = validStackBasicAuth;
+    };
+  };
+  sqliteStack = mkStackConfiguration {
+    enable = true;
+    hostName = "jaunder.example.test";
+  };
+  postgresStack = mkStackConfiguration {
+    enable = true;
+    hostName = "jaunder.example.test";
+    database = "postgresql";
+  };
+  postgresFixtureModule =
+    { pkgs, ... }:
+    {
+      # This separate fixture module owns the host's PostgreSQL package and
+      # global policy. The stack must merge with it at ordinary priority.
+      services.postgresql = {
+        package = pkgs.postgresql_16;
+        settings.log_min_duration_statement = 4242;
+        authentication = "local all all peer";
+        ensureDatabases = [ "unrelated" ];
+        ensureUsers = [
+          {
+            name = "unrelated";
+            ensureDBOwnership = true;
+          }
+        ];
+      };
+    };
+  postgresFixtureStack = nixpkgs.lib.nixosSystem {
+    inherit system;
+    modules = [
+      self.nixosModules.jaunder-stack
+      postgresFixtureModule
+      ({ ... }: {
+        system.stateVersion = "26.05";
+        services.jaunder.stack = {
+          enable = true;
+          hostName = "jaunder.example.test";
+          database = "postgresql";
+        };
+      })
+    ];
+  };
+  bcryptStack = mkStackConfiguration {
+    enable = true;
+    hostName = "jaunder.example.test";
+    observability = {
+      hostName = "observe.example.test";
+      basicAuth = {
+        username = "operator";
+        passwordHash = "$2b$12$abcdefghijklmnopqrstuuV4qg5bR1uRgYBzO8pu0h1rlaL8fQ2gQ";
+      };
+    };
+  };
+  argon2idStack = mkStackConfiguration {
+    enable = true;
+    hostName = "jaunder.example.test";
+    observability = {
+      hostName = "observe.example.test";
+      basicAuth = {
+        username = "operator";
+        passwordHash = "$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHQ$YWJjZGVmZ2hpams";
+      };
+    };
+  };
+  nativeRetentionOverrideStack = nixpkgs.lib.nixosSystem {
+    inherit system;
+    modules = [
+      self.nixosModules.jaunder-stack
+      ({ ... }: {
+        system.stateVersion = "26.05";
+        services.jaunder.stack = {
+          enable = true;
+          hostName = "jaunder.example.test";
+        };
+        services.victoriametrics.retentionPeriod = "14d";
+        services.victorialogs.extraOptions = [ "-retentionPeriod=14d" ];
+        services.victoriatraces.retentionPeriod = "30d";
+      })
+    ];
+  };
+  minimalModule = nixpkgs.lib.nixosSystem {
+    inherit system;
+    modules = [
+      self.nixosModules.jaunder
+      ({ ... }: { system.stateVersion = "26.05"; })
+    ];
+  };
+  jaunderStackModuleCheck =
+    assert sqliteStack.config.services.jaunder.bind == "127.0.0.1:3000";
+    assert sqliteStack.config.services.jaunder.prod;
+    assert sqliteStack.config.services.jaunder.db == "sqlite:/var/lib/jaunder/data/jaunder.db";
+    assert postgresStack.config.services.jaunder.db == "postgresql://jaunder@localhost/jaunder?host=/run/postgresql";
+    assert postgresStack.config.services.postgresql.enable;
+    assert postgresStack.config.services.postgresql.ensureDatabases == [ "jaunder" ];
+    assert postgresFixtureStack.config.services.postgresql.package == pkgs.postgresql_16;
+    assert !postgresFixtureStack.config.services.postgresql.enableTCPIP;
+    assert postgresFixtureStack.config.services.postgresql.settings.listen_addresses == "localhost";
+    assert postgresFixtureStack.config.services.postgresql.settings.log_min_duration_statement == 4242;
+    assert postgresFixtureStack.config.networking.firewall.allowedTCPPorts == [ 80 443 ];
+    assert sqliteStack.config.networking.firewall.allowedTCPPorts == [ 80 443 ];
+    assert sqliteStack.config.services.victoriametrics.listenAddress == "127.0.0.1:8428";
+    assert sqliteStack.config.services.victorialogs.listenAddress == "127.0.0.1:9428";
+    assert sqliteStack.config.services.victoriatraces.listenAddress == "127.0.0.1:10428";
+    assert sqliteStack.config.services.victoriametrics.extraOptions == [ "-http.pathPrefix=/metrics" ];
+    assert sqliteStack.config.services.victorialogs.extraOptions == [ "-http.pathPrefix=/logs" ];
+    # Metrics and logs omit retention CLI arguments, retaining their native one-month and seven-day defaults.
+    assert sqliteStack.config.services.victoriametrics.retentionPeriod == null;
+    assert sqliteStack.config.services.victoriatraces.retentionPeriod == "7d";
+    assert sqliteStack.config.services.victoriatraces.extraOptions == [ "-http.pathPrefix=/traces" ];
+    assert nativeRetentionOverrideStack.config.services.victoriametrics.retentionPeriod == "14d";
+    assert builtins.any (option: option == "-retentionPeriod=14d") nativeRetentionOverrideStack.config.services.victorialogs.extraOptions;
+    assert nativeRetentionOverrideStack.config.services.victoriatraces.retentionPeriod == "30d";
+    assert sqliteStack.config.services.opentelemetry-collector.package == pkgs.opentelemetry-collector-contrib;
+    assert sqliteStack.config.systemd.services.opentelemetry-collector.serviceConfig.DynamicUser;
+    assert sqliteStack.config.systemd.services.opentelemetry-collector.serviceConfig.SupplementaryGroups == [ "systemd-journal" ];
+    assert sqliteStack.config.services.opentelemetry-collector.settings.receivers.journald.units == [ "jaunder.service" ];
+    assert sqliteStack.config.services.opentelemetry-collector.settings.exporters.prometheusremotewrite.endpoint == "http://127.0.0.1:8428/metrics/api/v1/write";
+    assert sqliteStack.config.services.opentelemetry-collector.settings.exporters."otlphttp/victoriatraces".traces_endpoint == "http://127.0.0.1:10428/traces/insert/opentelemetry/v1/traces";
+    assert sqliteStack.config.services.opentelemetry-collector.settings.exporters."otlphttp/victorialogs".logs_endpoint == "http://127.0.0.1:9428/logs/insert/opentelemetry/v1/logs";
+    assert builtins.hasAttr "jaunder.example.test" bcryptStack.config.services.caddy.virtualHosts;
+    assert builtins.hasAttr "observe.example.test" bcryptStack.config.services.caddy.virtualHosts;
+    assert pkgs.lib.hasInfix "reverse_proxy 127.0.0.1:3000" bcryptStack.config.services.caddy.virtualHosts."jaunder.example.test".extraConfig;
+    assert pkgs.lib.hasInfix "operator $2b$12$abcdefghijklmnopqrstuuV4qg5bR1uRgYBzO8pu0h1rlaL8fQ2gQ" bcryptStack.config.services.caddy.virtualHosts."observe.example.test".extraConfig;
+    assert builtins.any (v: pkgs.lib.hasInfix "basic_auth bcrypt" v.extraConfig) (builtins.attrValues bcryptStack.config.services.caddy.virtualHosts);
+    assert builtins.any (v: pkgs.lib.hasInfix "basic_auth argon2id" v.extraConfig) (builtins.attrValues argon2idStack.config.services.caddy.virtualHosts);
+    assert builtins.hasAttr "jaunder.example.test" caseNormalizedHostStack.config.services.caddy.virtualHosts;
+    assert builtins.hasAttr "observe.example.test" caseNormalizedHostStack.config.services.caddy.virtualHosts;
+    assert !(builtins.hasAttr "Jaunder.Example.Test" caseNormalizedHostStack.config.services.caddy.virtualHosts);
+    assert !(builtins.hasAttr "https://jaunder.example.test" invalidApplicationHostStack.config.services.caddy.virtualHosts);
+    assert !(builtins.hasAttr "https://observe.example.test" invalidObservabilityHostStack.config.services.caddy.virtualHosts);
+    assert stackEvaluationSucceeds { enable = true; hostName = "ordinary-host.example.test"; };
+    assert stackEvaluationSucceeds { enable = true; hostName = "jaunder.example.test"; };
+    assert stackEvaluationSucceeds { enable = true; hostName = "jaunder.example.test"; database = "postgresql"; };
+    assert stackEvaluationSucceeds { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator"; passwordHash = "$2b$12$abcdefghijklmnopqrstuuV4qg5bR1uRgYBzO8pu0h1rlaL8fQ2gQ"; }; }; };
+    assert stackEvaluationSucceeds { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator"; passwordHash = "$2a$12$abcdefghijklmnopqrstuuV4qg5bR1uRgYBzO8pu0h1rlaL8fQ2gQ"; }; }; };
+    assert stackEvaluationSucceeds { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator"; passwordHash = "$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHQ$YWJjZGVmZ2hpams"; }; }; };
+    assert stackEvaluationFails { enable = true; };
+    assert stackEvaluationFails { enable = true; hostName = " "; };
+    assert builtins.all (hostName: stackEvaluationFails { enable = true; inherit hostName; }) invalidDnsHostNames;
+    assert builtins.all (hostName: stackEvaluationFails {
+      enable = true;
+      hostName = "jaunder.example.test";
+      observability = { inherit hostName; basicAuth = validStackBasicAuth; };
+    }) invalidDnsHostNames;
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability.hostName = " "; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability.hostName = "observe.example.test"; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = " "; passwordHash = "$2b$12$abcdefghijklmnopqrstuuV4qg5bR1uRgYBzO8pu0h1rlaL8fQ2gQ"; }; }; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator name"; passwordHash = "$2b$12$abcdefghijklmnopqrstuuV4qg5bR1uRgYBzO8pu0h1rlaL8fQ2gQ"; }; }; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator}"; passwordHash = "$2b$12$abcdefghijklmnopqrstuuV4qg5bR1uRgYBzO8pu0h1rlaL8fQ2gQ"; }; }; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator\nreverse_proxy"; passwordHash = "$2b$12$abcdefghijklmnopqrstuuV4qg5bR1uRgYBzO8pu0h1rlaL8fQ2gQ"; }; }; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "jaunder.example.test"; basicAuth = { username = "operator"; passwordHash = "$2b$12$abcdefghijklmnopqrstuuV4qg5bR1uRgYBzO8pu0h1rlaL8fQ2gQ"; }; }; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "JAUNDER.EXAMPLE.TEST"; basicAuth = validStackBasicAuth; }; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator"; passwordHash = " "; }; }; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator"; passwordHash = "plaintext"; }; }; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator"; passwordHash = "$2b$12$too-short"; }; }; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator"; passwordHash = "$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHQ"; }; }; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator"; passwordHash = "$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$YWJjZGVmZ2hpams"; }; }; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator"; passwordHash = "$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHQ$YWJj"; }; }; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator"; passwordHash = "$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHR$YWJjZGVmZ2hpams"; }; }; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator"; passwordHash = "$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHQ$YWJjZGVmZ2hpamt"; }; }; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator"; passwordHash = "$scrypt$ln=16,r=8,p=1$c2FsdA$aGFzaA"; }; }; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; database = "mysql"; };
+    assert !(builtins.hasAttr "stack" minimalModule.options.services.jaunder);
+    pkgs.runCommand "jaunder-stack-module" { } ''
+      touch $out
+    '';
+  mkJaunderStackVmCheck =
+    {
+      checkName,
+      passwordHash,
+      captureSignals ? false,
+      persistSignals ? false,
+      database ? "sqlite",
+    }:
+    pkgs.testers.nixosTest {
+      name = checkName;
+      globalTimeout = 600;
+      nodes.machine =
+        { lib, pkgs, ... }:
+        {
+          imports = [ self.nixosModules.jaunder-stack ] ++ lib.optional (database == "postgresql") postgresFixtureModule;
+          virtualisation.memorySize = 2048;
+          boot.loader.grub.devices = [ "nodev" ];
+          environment.systemPackages = [
+            pkgs.curl
+            pkgs.gnugrep
+            pkgs.gawk
+            pkgs.iproute2
+            pkgs.jq
+            pkgs.procps
+          ] ++ lib.optionals (database == "postgresql") [
+            pkgs.iptables
+            pkgs.postgresql_16
+          ];
+          services.jaunder.stack = {
+            enable = true;
+            inherit database;
+            hostName = "jaunder.stack.test";
+            observability = {
+              hostName = "observe.stack.test";
+              basicAuth = {
+                username = "operator";
+                inherit passwordHash;
+              };
+            };
+          };
+          # Public ACME is an operator contract. The VM has no public DNS, so
+          # only this test replaces it with Caddy's deterministic local CA.
+          services.caddy.virtualHosts."jaunder.stack.test".extraConfig = lib.mkAfter ''
+            tls internal
+          '';
+          services.caddy.virtualHosts."observe.stack.test".extraConfig = lib.mkAfter ''
+            tls internal
+          '';
+          # The production default is intentionally quiet; the test drives an
+          # INFO request event so the journald parser has a named field to prove.
+          systemd.services.jaunder.environment.RUST_LOG = "info";
+          system.stateVersion = "26.05";
+        };
+      testScript = ''
+        import json
+        ${pkgs.lib.optionalString captureSignals ''
+        import shlex
+        import urllib.parse
+        ''}
+        curl_options = "--connect-timeout 5 --max-time 20"
+
+        def caddy_status(path, credentials=""):
+          return machine.succeed(
+            "curl " + curl_options + " -ksS -o /dev/null -w '%{http_code}'"
+            + " --resolve observe.stack.test:443:127.0.0.1"
+            + credentials
+            + " https://observe.stack.test" + path
+          )
+
+        def curl_json(command):
+          status, output = machine.execute(command)
+          assert status == 0, "request failed: %s\n%s" % (command, output)
+          try:
+            return json.loads(output)
+          except json.JSONDecodeError as error:
+            raise AssertionError("invalid JSON from %s: %s\n%s" % (command, error, output)) from error
+
+        def assert_ingress():
+          for path in ["/metrics/", "/logs/", "/traces/"]:
+            assert caddy_status(path) == "401", "unauthenticated ingress unexpectedly allowed %s" % path
+          for path in [
+            "/metrics/",
+            "/metrics/api/v1/query?query=jaunder_db_pool_max",
+            "/logs/",
+            "/logs/select/logsql/query?query=uri:*",
+            "/traces/",
+            "/traces/select/jaeger/api/services",
+          ]:
+            assert caddy_status(path, " -u operator:stack-password") == "200", path
+
+        def assert_local_uis():
+          for port, prefix in [(8428, "metrics"), (9428, "logs"), (10428, "traces")]:
+            machine.succeed("curl " + curl_options + " -fsS http://127.0.0.1:%d/%s/ > /dev/null" % (port, prefix))
+
+        def wait_for_stack_ready():
+          for unit in [
+            "caddy.service",
+            "jaunder.service",
+            "opentelemetry-collector.service",
+            "victoriametrics.service",
+            "victorialogs.service",
+            "victoriatraces.service",
+          ]:
+            machine.wait_for_unit(unit, timeout=90)
+          for port in [80, 443, 3000, 4317, 4318, 8428, 9428, 10428]:
+            machine.wait_for_open_port(port, timeout=60)
+
+        def assert_listener_contract():
+          listeners = machine.succeed("ss -ltnpH").splitlines()
+
+          def port(local_address):
+            return int(local_address.rsplit(":", 1)[1])
+
+          def loopback(local_address):
+            return local_address.startswith("127.") or local_address.startswith("[::1]")
+
+          loopback_ports = [3000, 4317, 4318, 8428, 9428, 10428]
+          for expected_port in loopback_ports:
+            rows = [row for row in listeners if port(row.split()[3]) == expected_port]
+            assert rows, "no listener found for required loopback port %d" % expected_port
+            exposed = [row for row in rows if not loopback(row.split()[3])]
+            assert not exposed, "non-loopback listener on port %d:\n%s" % (expected_port, "\n".join(exposed))
+
+          non_loopback = [row for row in listeners if not loopback(row.split()[3])]
+          unexpected = [
+            row for row in non_loopback
+            if port(row.split()[3]) not in [80, 443] or "caddy" not in row
+          ]
+          assert not unexpected, "unexpected non-loopback TCP listeners:\n%s" % "\n".join(unexpected)
+          for caddy_port in [80, 443]:
+            rows = [row for row in non_loopback if port(row.split()[3]) == caddy_port]
+            assert rows, "no non-loopback Caddy listener found on port %d" % caddy_port
+
+        def log_records(command):
+          status, output = machine.execute(command)
+          assert status == 0, "log query failed: %s\n%s" % (command, output)
+          try:
+            return [json.loads(line) for line in output.splitlines() if line]
+          except json.JSONDecodeError as error:
+            raise AssertionError("invalid VictoriaLogs record: %s\n%s" % (error, output)) from error
+
+        machine.start(allow_reboot=True)
+        wait_for_stack_ready()
+
+        ${pkgs.lib.optionalString (database == "postgresql") ''
+          # PostgreSQL cold-boots with the stack. Its native readiness target
+          # must complete before Jaunder's peer-authenticated initialization.
+          machine.wait_for_unit("postgresql.service", timeout=90)
+          machine.succeed("systemctl is-active postgresql.target")
+          machine.succeed(
+            "systemctl show --property After --value jaunder.service"
+            + " | tr ' ' '\\n' | grep -Fx postgresql.target"
+          )
+          machine.succeed(
+            "systemctl show --property Requires --value jaunder.service"
+            + " | tr ' ' '\\n' | grep -Fx postgresql.target"
+          )
+          machine.succeed(
+            "pid=$(systemctl show --property MainPID --value jaunder.service)"
+            + "; tr '\\0' '\\n' < /proc/$pid/environ"
+            + " | grep -Fx 'JAUNDER_DB=postgresql://jaunder@localhost/jaunder?host=/run/postgresql'"
+          )
+          machine.succeed(
+            "test -S /run/postgresql/.s.PGSQL.5432"
+            + " && ss -ltnH | awk '$4 ~ /:5432$/ && $4 !~ /^127\\./ && $4 !~ /^::1:/ && $4 !~ /^\\[::1\\]/ { exit 1 }'"
+          )
+          machine.succeed(
+            "runuser -u postgres -- psql -d postgres -Atqc 'SHOW server_version_num'"
+            + " | grep -Ex '16[0-9]{4}'"
+          )
+          machine.succeed(
+            "test \"$(runuser -u postgres -- psql -d postgres -Atqc 'SHOW listen_addresses')\" = \"localhost\""
+            + " && runuser -u postgres -- psql -d postgres -Atqc 'SHOW log_min_duration_statement'"
+            + " | grep -Fx '4242ms'"
+          )
+          machine.succeed(
+            "runuser -u jaunder -- psql -h /run/postgresql -d jaunder -Atqc "
+            + shlex.quote("SELECT current_user = 'jaunder' AND current_database() = 'jaunder'")
+            + " | grep -Fx t"
+          )
+          machine.succeed(
+            "runuser -u postgres -- psql -d postgres -Atqc "
+            + shlex.quote("SELECT datdba::regrole = 'jaunder'::regrole FROM pg_database WHERE datname = 'jaunder'")
+            + " | grep -Fx t"
+          )
+          role_password_status, role_password = machine.execute(
+            "runuser -u postgres -- psql -d postgres -Atqc "
+            + shlex.quote("SELECT rolcanlogin, rolpassword IS NULL FROM pg_authid WHERE rolname = 'jaunder'")
+          )
+          assert role_password_status == 0 and role_password.strip() == "t|t", (
+            "jaunder role is not a passwordless login role: %s" % role_password
+          )
+          table_ownership_status, table_ownership = machine.execute(
+            "runuser -u jaunder -- psql -h /run/postgresql -d jaunder -Atqc "
+            + shlex.quote("SELECT count(*), coalesce(bool_and(tableowner = 'jaunder'), false) FROM pg_tables WHERE schemaname = 'public'")
+          )
+          assert table_ownership_status == 0 and table_ownership.strip() != "0|f" and table_ownership.strip().endswith("|t"), (
+            "application tables are not owned by jaunder: %s" % table_ownership
+          )
+          machine.succeed(
+            "runuser -u postgres -- psql -d postgres -Atqc "
+            + shlex.quote("SELECT datdba::regrole = 'unrelated'::regrole FROM pg_database WHERE datname = 'unrelated'")
+            + " | grep -Fx t"
+          )
+          machine.succeed(
+            "runuser -u postgres -- psql -d postgres -Atqc "
+            + shlex.quote("SELECT rolcanlogin FROM pg_roles WHERE rolname = 'unrelated'")
+            + " | grep -Fx t"
+          )
+          machine.succeed(
+            "hba=$(runuser -u postgres -- psql -d postgres -Atqc 'SHOW hba_file')"
+            + "; grep -Eq '^local[[:space:]]+all[[:space:]]+all[[:space:]]+peer$' \"$hba\""
+            + "; ! grep -Eq '^[[:space:]]*host[[:space:]]' \"$hba\""
+            + "; pid=$(systemctl show --property MainPID --value jaunder.service)"
+            + "; ! tr '\\0' '\\n' < /proc/$pid/environ | grep -Eq '^JAUNDER_DB_PASSWORD(=|_)'"
+            + "; ! tr '\\0' '\\n' < /proc/$pid/environ | grep -Eqi 'password='"
+          )
+          machine.succeed(
+            "test \"$(iptables -S nixos-fw | awk '$1 == \"-A\" && $2 == \"nixos-fw\" && $3 == \"-p\" && $4 == \"tcp\" && $5 == \"-m\" && $6 == \"tcp\" && $7 == \"--dport\" { print $8 }' | sort -n | paste -sd, -)\" = \"80,443\""
+          )
+        ''}
+
+        # The application request crosses the public Caddy seam, rather than
+        # reaching Jaunder's loopback listener directly.
+        machine.succeed(
+          "curl " + curl_options + " -ksSf --resolve jaunder.stack.test:443:127.0.0.1"
+          + " https://jaunder.stack.test/ > /dev/null"
+        )
+        assert_local_uis()
+        assert_ingress()
+
+        assert_listener_contract()
+        collector_pid = machine.succeed(
+          "systemctl show --value --property MainPID opentelemetry-collector.service"
+        ).strip()
+        machine.succeed("test \"%s\" -gt 0" % collector_pid)
+        machine.succeed("test \"$(ps -o uid= -p %s | tr -d ' ')\" != 0" % collector_pid)
+        machine.succeed(
+          "journal_gid=$(getent group systemd-journal | cut -d: -f3)"
+          + "; grep -Eq \"^Groups:.*(^|[[:space:]])$journal_gid([[:space:]]|$)\""
+          + " /proc/%s/status" % collector_pid
+        )
+        machine.succeed(
+          "systemctl show --property SupplementaryGroups --value opentelemetry-collector.service"
+          + " | grep -Fx systemd-journal"
+        )
+
+        ${pkgs.lib.optionalString captureSignals ''
+          trace_id = "0123456789abcdef0123456789abcdef"
+          request_id = "jaunder-stack-telemetry-request"
+          authorization = "Bearer jaunder-stack-fake-authorization-credential"
+          cookie = "session=jaunder-stack-fake-cookie-credential"
+          telemetry_uri = "/atompub/nonexistent/posts"
+          status, output = machine.execute(
+            "curl " + curl_options + " -ksS -o /dev/null -w '%{http_code}'"
+            + " --resolve jaunder.stack.test:443:127.0.0.1"
+            + " -H " + shlex.quote("traceparent: 00-" + trace_id + "-0123456789abcdef-01")
+            + " -H " + shlex.quote("x-request-id: " + request_id)
+            + " -H " + shlex.quote("authorization: " + authorization)
+            + " -H " + shlex.quote("cookie: " + cookie)
+            + " https://jaunder.stack.test" + telemetry_uri
+          )
+          assert status == 0 and output == "401", "telemetry request did not return 401:\n%s" % output
+
+          metric_command = (
+            "curl " + curl_options + " -fsSG"
+            + " --data-urlencode " + shlex.quote('query=jaunder_atompub_requests_total{op="collection_get",result="client_error"}')
+            + " http://127.0.0.1:8428/metrics/api/v1/query"
+          )
+          metric_sample = None
+          for _ in range(120):
+            candidate = curl_json(metric_command)
+            results = candidate.get("data", {}).get("result", [])
+            if candidate.get("status") == "success" and len(results) == 1:
+              metric_sample = results[0]
+              break
+            machine.sleep(1)
+          assert metric_sample is not None, "driven AtomPub metric never appeared before reboot"
+          metric_identity = metric_sample["metric"]
+          metric_value = metric_sample["value"]
+          assert all(metric_identity.get(label) == value for label, value in {
+            "__name__": "jaunder_atompub_requests_total",
+            "op": "collection_get",
+            "result": "client_error",
+          }.items()), "unexpected driven metric identity: %s" % metric_identity
+          assert len(metric_value) == 2, "metric sample lacks timestamp/value: %s" % metric_sample
+
+          log_command = (
+            "curl " + curl_options + " -fsSG --data-urlencode 'query=* | limit 10000'"
+            + " http://127.0.0.1:9428/logs/select/logsql/query"
+          )
+          target_log = None
+          for _ in range(120):
+            records = log_records(log_command)
+            target_log = next((
+              record for record in records
+              if record.get("jaunder.target") == "tower_http::trace::on_response"
+              and record.get("jaunder.request.uri") == telemetry_uri
+            ), None)
+            if target_log is not None:
+              break
+            machine.sleep(1)
+          assert target_log is not None, "driven structured response log never appeared before reboot:\n%s" % records[-10:]
+          assert "_time" in target_log, "structured response log lacks a timestamp: %s" % target_log
+          target_log_identity = json.dumps(target_log, sort_keys=True, separators=(",", ":"))
+          assert request_id not in target_log_identity, "request header marker reached VictoriaLogs: %s" % target_log
+          for credential in [authorization, cookie]:
+            assert credential not in target_log_identity, "request credential reached VictoriaLogs: %s" % target_log
+          assert "jaunder.request.headers" not in target_log, "request headers were promoted to VictoriaLogs: %s" % target_log
+
+          trace_command = (
+            "curl " + curl_options + " -fsS http://127.0.0.1:10428/traces/select/jaeger/api/traces/"
+            + urllib.parse.quote(trace_id, safe="")
+          )
+          trace_payload = None
+          for _ in range(120):
+            candidate = curl_json(trace_command)
+            if any(trace.get("traceID") == trace_id for trace in candidate.get("data", [])):
+              trace_payload = candidate
+              break
+            machine.sleep(1)
+          assert trace_payload is not None, "driven trace ID %s never appeared before reboot" % trace_id
+          trace_payload_identity = json.dumps(trace_payload, sort_keys=True, separators=(",", ":"))
+          for credential in [authorization, cookie]:
+            assert credential not in trace_payload_identity, "request credential reached VictoriaTraces: %s" % trace_payload
+
+          ${pkgs.lib.optionalString persistSignals ''
+          machine.reboot()
+          wait_for_stack_ready()
+          machine.succeed(
+            "curl " + curl_options + " -ksSf --resolve jaunder.stack.test:443:127.0.0.1"
+            + " https://jaunder.stack.test/ > /dev/null"
+          )
+          assert_local_uis()
+          assert_ingress()
+          assert_listener_contract()
+
+          metric_at_capture_time = curl_json(
+            "curl " + curl_options + " -fsSG"
+            + " --data-urlencode " + shlex.quote('query=jaunder_atompub_requests_total{op="collection_get",result="client_error"}')
+            + " --data-urlencode " + shlex.quote("time=" + str(metric_value[0]))
+            + " http://127.0.0.1:8428/metrics/api/v1/query"
+          )
+          persisted_metrics = metric_at_capture_time.get("data", {}).get("result", [])
+          assert any(
+            result.get("metric") == metric_identity and result.get("value") == metric_value
+            for result in persisted_metrics
+          ), "driven pre-reboot metric sample is absent at its captured timestamp"
+
+          persisted_logs = log_records(log_command)
+          assert any(
+            json.dumps(record, sort_keys=True, separators=(",", ":")) == target_log_identity
+            for record in persisted_logs
+          ), "exact driven pre-reboot response log is absent"
+
+          trace_payload = curl_json(trace_command)
+          assert any(trace.get("traceID") == trace_id for trace in trace_payload.get("data", [])), (
+            "driven pre-reboot trace ID %s is absent" % trace_id
+          )
+          ''}
+        ''}
+      '';
+    };
 in
 {
 
@@ -1166,6 +1750,24 @@ e2eGateChecks
   # pushFilter still excludes it — the VM runs are never substituted
   # from a cached aggregate.
   e2e = self.packages.${system}.e2e-checks;
+
+  jaunder-stack-module = jaunderStackModuleCheck;
+  jaunder-stack-sqlite-bcrypt = mkJaunderStackVmCheck {
+    checkName = "jaunder-stack-sqlite-bcrypt";
+    passwordHash = "$2a$14$3XbcVHEiOPQs7JeFsE4L6.viyrrG.5pCGkdC5yzH5WK4pGCIm4u4S";
+    captureSignals = true;
+    persistSignals = true;
+  };
+  jaunder-stack-sqlite-argon2id = mkJaunderStackVmCheck {
+    checkName = "jaunder-stack-sqlite-argon2id";
+    passwordHash = "$argon2id$v=19$m=47104,t=1,p=1$lF4nDRbJX4Fmyz51MRZ4+Q$YArAYMGOutNEtB7Pv8Fa9CNZ75tfV+5W3kUvP8m+7gQ";
+  };
+  jaunder-stack-postgresql = mkJaunderStackVmCheck {
+    checkName = "jaunder-stack-postgresql";
+    passwordHash = "$2a$14$3XbcVHEiOPQs7JeFsE4L6.viyrrG.5pCGkdC5yzH5WK4pGCIm4u4S";
+    database = "postgresql";
+    captureSignals = true;
+  };
 
   # The producer combines pure and server-backed ERT observations in
   # one VM, returning controlled outcomes as fixed artifacts for the

@@ -58,9 +58,8 @@ fn make_request_span(request: &Request) -> Span {
         Level::INFO,
         "request",
         method = %request.method(),
-        uri = %request.uri(),
+        uri = request.uri().path(),
         version = ?request.version(),
-        headers = ?request.headers(),
     );
     if let Some(parent) = request.extensions().get::<ExtractedTraceContext>()
         && span.set_parent(parent.0.clone()).is_err()
@@ -122,7 +121,11 @@ mod tests {
     use axum::body::Body;
     use axum::http::{HeaderMap, Request, StatusCode};
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
     use tower::ServiceExt;
+    use tracing::field::{Field, Visit};
+    use tracing_subscriber::layer::{Context as LayerContext, Layer};
+    use tracing_subscriber::prelude::*;
 
     #[test]
     fn header_extractor_reads_known_headers() {
@@ -204,6 +207,70 @@ mod tests {
         )
         .await
         .expect("failed to get response")
+    }
+
+    #[derive(Clone, Default)]
+    struct SpanFields(Arc<Mutex<Vec<(String, String)>>>);
+
+    struct SpanFieldVisitor<'a>(&'a mut Vec<(String, String)>);
+
+    impl Visit for SpanFieldVisitor<'_> {
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            self.0.push((field.name().to_owned(), format!("{value:?}")));
+        }
+    }
+
+    impl<S> Layer<S> for SpanFields
+    where
+        S: tracing::Subscriber,
+    {
+        fn on_new_span(
+            &self,
+            attributes: &tracing::span::Attributes<'_>,
+            _: &tracing::span::Id,
+            _: LayerContext<'_, S>,
+        ) {
+            let mut fields = self.0.lock().expect("span fields lock");
+            attributes.record(&mut SpanFieldVisitor(&mut fields));
+        }
+    }
+
+    #[test]
+    fn request_span_records_only_safe_http_fields() {
+        let fields = SpanFields::default();
+        let subscriber = tracing_subscriber::registry().with(fields.clone());
+        let request = Request::builder()
+            .method("GET")
+            .uri("/atompub/nonexistent/posts?access_token=secret-query-value")
+            .header("authorization", "Bearer secret-authorization-value")
+            .header("cookie", "session=secret-cookie-value")
+            .body(Body::empty())
+            .expect("failed to build request");
+
+        tracing::subscriber::with_default(subscriber, || {
+            drop(make_request_span(&request));
+        });
+
+        let fields = fields.0.lock().expect("span fields lock");
+        assert_eq!(
+            fields
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            ["method", "uri", "version"]
+        );
+        let serialized = format!("{fields:?}");
+        assert!(serialized.contains("/atompub/nonexistent/posts"));
+        for secret in [
+            "secret-query-value",
+            "secret-authorization-value",
+            "secret-cookie-value",
+        ] {
+            assert!(
+                !serialized.contains(secret),
+                "span fields contained {secret}"
+            );
+        }
     }
 
     #[test]
