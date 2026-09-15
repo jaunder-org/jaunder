@@ -924,8 +924,12 @@
 .j-post-action-popover {
  pointer-events: auto;
  position: absolute;
+ /* Native popovers default every inset to zero; release the unused axes so the
+    anchor owns placement instead of the left/top conflict winning. */
  top: anchor(bottom);
- right: calc(100vw - anchor(right));
+ right: max(8px, anchor(right));
+ bottom: auto;
+ left: auto;
  margin: 4px 0 0;
  inline-size: max-content;
  max-inline-size: calc(100vw - 16px);
