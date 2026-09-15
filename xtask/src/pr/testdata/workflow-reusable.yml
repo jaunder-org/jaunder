@@ -1,0 +1,11 @@
+name: reusable checks
+on: workflow_call
+
+jobs:
+  package:
+    name: Check, thumbnail, and package theme
+    runs-on: ubuntu-24.04
+  release:
+    name: Attach package to release
+    needs: [package]
+    runs-on: ubuntu-24.04

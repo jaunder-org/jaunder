@@ -3786,6 +3786,13 @@ the merge and watches it home
 ([ADR-0087](adr/0087-xtask-github-pr-observation.md)). The transport is the `gh`
 CLI as a subprocess (`xtask/src/pr/gh.rs`), with `snapshot` turning its JSON
 into typed values and `decide` holding the pure verdict logic (`xtask/src/pr/`).
+The ruleset supplies directly required contexts and the positive readiness
+verdict. For early failure, the observer derives each check's relationship to a
+required aggregate from the exact workflow run's dependency graph: a directly or
+transitively required failure is immediately actionable, while an optional
+failure is reported without becoming merge-blocking
+([dynamic PR check classification](adr/drafts/dynamic-pr-check-classification.md)).
+This classification contains no maintained job-name or matrix-value allowlist.
 Distinguishing outcomes — including `ready-to-land`, `ejected`, `dequeued`,
 `timed-out` ("GitHub never finished"), and `watcher-error` ("we could not tell")
 — live in `pr.outcome` in the result envelope; success is command-specific
