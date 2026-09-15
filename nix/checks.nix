@@ -1077,6 +1077,8 @@ mkWasmCoverageMeasurementProducer =
     '';
   });
   measurementCacheBuster = builtins.getEnv "JAUNDER_WASM_COVERAGE_CACHE_BUSTER";
+  coverageMeasurementCacheBuster =
+    builtins.getEnv "JAUNDER_COVERAGE_MEASUREMENT_CACHE_BUSTER";
   e2eChecksPackage = finalCacheOutput (pkgs.symlinkJoin {
     name = "jaunder-e2e-checks";
     paths = builtins.attrValues (
@@ -1149,10 +1151,20 @@ coverage-support = craneLib.mkCargoDerivation (
       environment="$(cargo llvm-cov show-env --export-prefix)"
       # The environment is build-local and intentionally not retained in support.
       eval "$environment"
-      # `archive` builds and packs; unlike `nextest run`, it does not execute.
       cargo nextest archive --workspace --profile coverage --archive-file $out/tests.tar.zst
+      # RustEmbed resolves staged files from OUT_DIR at runtime in debug/test
+      # builds. Retain that exact runtime tree beside the archived binaries.
+      site_roots=(target/llvm-cov-target/debug/build/jaunder-*/out/site)
+      test -f "''${site_roots[0]}/index.html"
+      tar -cf $out/runtime-site.tar "''${site_roots[@]}"
+      # Derive the authoritative identities from the exact archive transferred
+      # to workers rather than independently resolving the workspace again.
+      cargo nextest list --archive-file $out/tests.tar.zst --message-format json > $out/census.json
     '';
     installPhaseCommand = "true";
+  }
+  // pkgs.lib.optionalAttrs (coverageMeasurementCacheBuster != "") {
+    JAUNDER_COVERAGE_MEASUREMENT_CACHE_BUSTER = coverageMeasurementCacheBuster;
   }
 );
   supportPackages = { coverage-support = coverage-support; };

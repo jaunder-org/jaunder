@@ -198,6 +198,17 @@ fn final_category(
         StatusCategory::Infra
     }
 }
+fn complete_status(status: &mut CoverageStatus, outcome: &ProcessOutcome, infra_detail: &str) {
+    match final_category(outcome, &status.failed_tests) {
+        category @ (StatusCategory::TestsOk | StatusCategory::TestFailure) => {
+            status.category = category;
+            status.infra_detail = None;
+        }
+        StatusCategory::Infra => {
+            record_infra(status, RequiredStage::InstrumentedTestRun, infra_detail);
+        }
+    }
+}
 
 fn run_capture(command: &mut Command) -> Result<CapturedCommand> {
     let output = command
@@ -276,7 +287,8 @@ fn emit_reports(
     out: &Path,
     diag: &Path,
     status: &mut CoverageStatus,
-    abs_root: &str,
+    coverage_root: &str,
+    analysis_root: &str,
 ) -> Result<()> {
     let text_started = Instant::now();
     let Some(text) = report_command(
@@ -291,7 +303,7 @@ fn emit_reports(
     };
     if fs::write(
         out.join("coverage-report.txt"),
-        coverage::pathnorm::normalize_report_text(&text, abs_root),
+        coverage::pathnorm::normalize_report_text(&text, coverage_root),
     )
     .is_err()
     {
@@ -329,6 +341,22 @@ fn emit_reports(
     {
         record_duration(status, RequiredStage::LcovReport, lcov_started);
         return write_status(out, status);
+    }
+    if coverage_root != analysis_root {
+        let remapped = fs::read_to_string(&lcov)
+            .map(|raw| remap_lcov_source_root(&raw, coverage_root, analysis_root));
+        if remapped
+            .and_then(|contents| fs::write(&lcov, contents))
+            .is_err()
+        {
+            record_evidence_error(
+                status,
+                RequiredStage::LcovReport,
+                "could not remap LCOV source paths",
+            );
+            record_duration(status, RequiredStage::LcovReport, lcov_started);
+            return write_status(out, status);
+        }
     }
     record_duration(status, RequiredStage::LcovReport, lcov_started);
 
@@ -368,7 +396,7 @@ fn emit_reports(
     }
     let crap = match fs::read_to_string(&raw_crap)
         .ok()
-        .and_then(|raw| normalize_crap_paths(&raw, abs_root).ok())
+        .and_then(|raw| normalize_crap_paths(&raw, analysis_root).ok())
     {
         Some(crap) => crap,
         None => {
@@ -588,7 +616,7 @@ pub fn run(out: &str) -> Result<()> {
         return Ok(());
     }
 
-    emit_reports(out, &diag, &mut status, &abs_root)?;
+    emit_reports(out, &diag, &mut status, &abs_root, &abs_root)?;
     if status.stages.iter().any(|stage| {
         matches!(
             stage.stage,
@@ -603,17 +631,11 @@ pub fn run(out: &str) -> Result<()> {
         write_diagnostic(&diag, "disk-usage.txt", &disk.output);
     }
 
-    match final_category(&instrumented_outcome, &status.failed_tests) {
-        category @ (StatusCategory::TestsOk | StatusCategory::TestFailure) => {
-            status.category = category;
-            status.infra_detail = None;
-        }
-        StatusCategory::Infra => record_infra(
-            &mut status,
-            RequiredStage::InstrumentedTestRun,
-            "test command did not exit normally",
-        ),
-    }
+    complete_status(
+        &mut status,
+        &instrumented_outcome,
+        "test command did not exit normally",
+    );
     write_status(out, &status)
 }
 /// The CPU allocation policy recorded with an experimental observation.
@@ -647,9 +669,10 @@ fn experiment_workers(
         ExperimentStrategy::Backend => "backend",
         ExperimentStrategy::Baseline => bail!("baseline has no partition workers"),
     };
-    let profile_root = std::env::current_dir()?.join("target/llvm-cov-target");
-    let extract_root = std::env::current_dir()?.join("target/coverage-experiment-extract");
-    let filter_root = std::env::current_dir()?.join("target/coverage-experiment-filter");
+    let workspace_root = std::env::current_dir()?;
+    let profile_root = workspace_root.join("target");
+    let extract_root = workspace_root.join("target/coverage-experiment-extract");
+    let filter_root = workspace_root.join("target/coverage-experiment-filter");
     let fixed_threads = match policy {
         ConcurrencyPolicy::Independent => None,
         ConcurrencyPolicy::Fixed => Some(fixed_worker_threads()?.to_string()),
@@ -670,6 +693,8 @@ fn experiment_workers(
                 "--no-fail-fast".into(),
                 "--archive-file".into(),
                 archive.display().to_string(),
+                "--workspace-remap".into(),
+                workspace_root.display().to_string(),
                 "--extract-to".into(),
                 extract_root.join(index.to_string()).display().to_string(),
             ];
@@ -853,6 +878,40 @@ fn worker_command(worker: &ExperimentWorker) -> Command {
     command
 }
 
+fn extract_experiment_archive(archive: &Path, workspace_root: &Path) -> Result<()> {
+    let mut command = Command::new("tar");
+    command
+        .args(["--zstd", "-xf"])
+        .arg(archive)
+        .arg("-C")
+        .arg(workspace_root);
+    let captured = run_capture(&mut command).context("extracting coverage experiment archive")?;
+    if !captured.status.success() {
+        bail!(
+            "extracting coverage experiment archive: {}",
+            captured.output
+        );
+    }
+    Ok(())
+}
+
+fn clear_experiment_profiles(profile_root: &Path) -> Result<()> {
+    if !profile_root.is_dir() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(profile_root)? {
+        let entry = entry?;
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with("coverage-experiment-worker-")
+        {
+            fs::remove_file(entry.path())?;
+        }
+    }
+    Ok(())
+}
+
 fn remove_experiment_inputs(workers: &[ExperimentWorker]) -> Result<()> {
     for worker in workers {
         if let Err(error) = fs::remove_dir_all(&worker.extract)
@@ -905,23 +964,7 @@ fn remove_experiment_paths(workers: &[ExperimentWorker]) -> Result<()> {
             .profile
             .parent()
             .context("experimental profile parent")?;
-        if !parent.exists() {
-            continue;
-        }
-        let prefix = worker
-            .profile
-            .file_name()
-            .and_then(|name| name.to_str())
-            .context("experimental profile name")?
-            .split('%')
-            .next()
-            .expect("split has a first item");
-        for entry in fs::read_dir(parent)? {
-            let entry = entry?;
-            if entry.file_name().to_string_lossy().starts_with(prefix) {
-                fs::remove_file(entry.path())?;
-            }
-        }
+        clear_experiment_profiles(parent)?;
     }
     Ok(())
 }
@@ -1389,7 +1432,7 @@ pub fn run_experiment(
         .outcome
         .clone();
     let root = std::env::current_dir()?.to_string_lossy().into_owned();
-    emit_reports(&out, &diag, &mut coverage_status, &root)?;
+    emit_reports(&out, &diag, &mut coverage_status, &root, &root)?;
     if coverage_status.stages.iter().any(|stage| {
         matches!(
             stage.stage,
@@ -1398,18 +1441,240 @@ pub fn run_experiment(
     }) {
         return Ok(());
     }
-    match final_category(&instrumented_outcome, &coverage_status.failed_tests) {
-        category @ (StatusCategory::TestsOk | StatusCategory::TestFailure) => {
-            coverage_status.category = category;
-            coverage_status.infra_detail = None;
-        }
-        StatusCategory::Infra => record_infra(
-            &mut coverage_status,
-            RequiredStage::InstrumentedTestRun,
-            "test command did not exit normally",
-        ),
-    }
+    complete_status(
+        &mut coverage_status,
+        &instrumented_outcome,
+        "test command did not exit normally",
+    );
     write_status(&out, &coverage_status)
+}
+/// Execute exactly one selected worker from a read-only instrumented archive.
+///
+/// This is the CI measurement seam: unlike [`run_experiment`], it neither starts
+/// a sibling worker nor emits a report. Its bundle is self-contained so an
+/// aggregate on another runner can retain the terminal evidence, raw profiles,
+/// and archive extraction required for one merged report.
+pub fn run_experiment_worker(
+    out: &str,
+    strategy: ExperimentStrategy,
+    index: u8,
+    policy: ConcurrencyPolicy,
+    census: &Path,
+    archive: &Path,
+) -> Result<()> {
+    if strategy == ExperimentStrategy::Baseline {
+        bail!("baseline is not a two-worker experiment");
+    }
+    let authoritative_census =
+        fs::read_to_string(census).with_context(|| format!("reading {}", census.display()))?;
+    let expected = status::parse_nextest_census(&authoritative_census)
+        .context("parsing authoritative nextest census")?;
+    let backend_identities = (strategy == ExperimentStrategy::Backend)
+        .then(|| parse_backend_identities(&authoritative_census))
+        .transpose()?;
+    if expected.expected.is_empty() {
+        bail!("authoritative nextest census is empty");
+    }
+    let archive = fs::canonicalize(archive)
+        .with_context(|| format!("canonicalizing archive {}", archive.display()))?;
+    if !archive.is_file() {
+        bail!("coverage experiment archive is not a file");
+    }
+    let worker = experiment_workers(strategy, policy, backend_identities.as_deref(), &archive)?
+        .into_iter()
+        .find(|worker| worker.partition.index == index)
+        .with_context(|| format!("worker index {index} is not one of 1 or 2"))?;
+    fs::create_dir_all(out).with_context(|| format!("creating {out}"))?;
+    let out = fs::canonicalize(out).with_context(|| format!("canonicalizing {out}"))?;
+    let diagnostics = out.join("diagnostics");
+    fs::create_dir_all(&diagnostics)?;
+    remove_experiment_paths(std::slice::from_ref(&worker))?;
+    extract_experiment_archive(&archive, &std::env::current_dir()?)?;
+    create_experiment_inputs(std::slice::from_ref(&worker))?;
+    let mut command = worker_command(&worker);
+    let evidence = match pg::with_ephemeral(|env| {
+        env.configure_command(&mut command);
+        Ok(run_worker(command, worker.clone(), diagnostics.clone()))
+    }) {
+        Ok(evidence) => evidence,
+        Err(_) => failed_worker(
+            worker.clone(),
+            diagnostics.clone(),
+            "could not start ephemeral PostgreSQL",
+        ),
+    };
+    let profiles = out.join("profiles");
+    fs::create_dir_all(&profiles)?;
+    let mut evidence = evidence;
+    let mut retained = Vec::new();
+    for profile in &evidence.profile_artifacts {
+        let source = Path::new(profile);
+        let name = source
+            .file_name()
+            .context("worker profile has no filename")?;
+        let destination = profiles.join(name);
+        fs::copy(source, &destination).with_context(|| format!("copying {}", source.display()))?;
+        retained.push(format!("profiles/{}", name.to_string_lossy()));
+    }
+    evidence.profile_artifacts = retained;
+    if worker.junit.is_file() {
+        fs::copy(&worker.junit, out.join("junit.xml"))?;
+    }
+    fs::write(out.join("census.json"), authoritative_census)?;
+    fs::write(out.join("worker.json"), evidence.to_json())?;
+    remove_experiment_inputs(std::slice::from_ref(&worker))?;
+    Ok(())
+}
+
+/// Aggregate two immutable worker bundles into the one per-ref coverage verdict.
+pub fn aggregate_experiment_bundles(
+    out: &str,
+    census: &Path,
+    archive: &Path,
+    bundles: &[PathBuf],
+) -> Result<()> {
+    if bundles.len() != 2 {
+        bail!("coverage aggregation requires exactly two worker bundles");
+    }
+    let archive = fs::canonicalize(archive)
+        .with_context(|| format!("canonicalizing archive {}", archive.display()))?;
+    if !archive.is_file() {
+        bail!("coverage experiment archive is not a file");
+    }
+    let expected = status::parse_nextest_census(
+        &fs::read_to_string(census).with_context(|| format!("reading {}", census.display()))?,
+    )
+    .context("parsing authoritative nextest census")?;
+    fs::create_dir_all(out)?;
+    let out = fs::canonicalize(out)?;
+    let diagnostics = out.join("diagnostics");
+    fs::create_dir_all(&diagnostics)?;
+    let mut status = new_status();
+    let started = Instant::now();
+    set_stage(
+        &mut status,
+        RequiredStage::WorkspaceResolution,
+        ProcessOutcome::success(),
+    );
+    record_duration(&mut status, RequiredStage::WorkspaceResolution, started);
+    set_stage(
+        &mut status,
+        RequiredStage::TestCensus,
+        ProcessOutcome::success(),
+    );
+    status.population.expected = expected.expected.len();
+    let staging_started = Instant::now();
+    let workspace_root = std::env::current_dir()?;
+    let profile_root = workspace_root.join("target");
+    clear_experiment_profiles(&profile_root)?;
+    extract_experiment_archive(&archive, &workspace_root)?;
+    fs::remove_file(&archive)
+        .with_context(|| format!("removing consumed archive {}", archive.display()))?;
+    let mut workers = Vec::with_capacity(2);
+    for bundle in bundles {
+        let worker = WorkerEvidence::from_json(
+            &fs::read_to_string(bundle.join("worker.json"))
+                .with_context(|| format!("reading worker bundle {}", bundle.display()))?,
+        )
+        .with_context(|| format!("invalid worker bundle {}", bundle.display()))?;
+        for profile in &worker.profile_artifacts {
+            let source = bundle.join(profile);
+            let name = source
+                .file_name()
+                .context("worker profile has no filename")?;
+            fs::hard_link(&source, profile_root.join(name))
+                .with_context(|| format!("linking {}", source.display()))?;
+        }
+        workers.push(worker);
+    }
+    set_stage(
+        &mut status,
+        RequiredStage::ProfileCleanup,
+        ProcessOutcome::success(),
+    );
+    record_duration(&mut status, RequiredStage::ProfileCleanup, staging_started);
+    let aggregate = aggregate_terminal(
+        workers.first().map_or(ExperimentStrategy::Slice, |worker| {
+            worker.partition.strategy
+        }),
+        &expected,
+        &workers,
+    );
+    write_aggregate_evidence(&diagnostics, &aggregate)?;
+    status.population.executed = aggregate.population.executed.len();
+    status.population.ignored = aggregate.population.ignored.len();
+    status.failed_tests = aggregate.population.failed.clone();
+    if let coverage::workers::Reconciliation::Error { detail } = &aggregate.reconciliation {
+        write_diagnostic(&diagnostics, "aggregate-error.txt", detail);
+        record_evidence_error(
+            &mut status,
+            RequiredStage::PopulationReconciliation,
+            "worker evidence did not reconcile",
+        );
+        write_status(&out, &status)?;
+        return Ok(());
+    }
+    set_stage(
+        &mut status,
+        RequiredStage::PopulationReconciliation,
+        ProcessOutcome::success(),
+    );
+    let outcome = aggregate_worker_outcome(&workers);
+    set_stage(
+        &mut status,
+        RequiredStage::InstrumentedTestRun,
+        outcome.clone(),
+    );
+    if worker_result_problem(&workers, &status.failed_tests).is_some() {
+        record_infra(
+            &mut status,
+            RequiredStage::InstrumentedTestRun,
+            "worker command failed without complete classified evidence",
+        );
+        write_status(&out, &status)?;
+        return Ok(());
+    }
+    let compiled_source_root = Path::new("/build/source");
+    let report_root = if compiled_source_root.join("Cargo.toml").is_file() {
+        compiled_source_root
+    } else {
+        &workspace_root
+    };
+    emit_reports(
+        &out,
+        &diagnostics,
+        &mut status,
+        &report_root.to_string_lossy(),
+        &workspace_root.to_string_lossy(),
+    )?;
+    if status.stages.iter().any(|stage| {
+        matches!(
+            stage.stage,
+            RequiredStage::TextReport | RequiredStage::LcovReport | RequiredStage::CrapReport
+        ) && !stage.outcome.is_success()
+    }) {
+        return Ok(());
+    }
+    complete_status(
+        &mut status,
+        &outcome,
+        "worker commands did not exit normally",
+    );
+    write_diagnostic(&diagnostics, "status-candidate.json", &status.to_json());
+    write_status(&out, &status)
+}
+
+fn remap_lcov_source_root(raw: &str, from: &str, to: &str) -> String {
+    let prefix = format!("SF:{from}/");
+    let replacement = format!("SF:{to}/");
+    raw.lines()
+        .map(|line| {
+            line.strip_prefix(&prefix)
+                .map_or_else(|| line.to_owned(), |path| format!("{replacement}{path}"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + if raw.ends_with('\n') { "\n" } else { "" }
 }
 
 /// Strip the absolute sandbox prefix and external package entries from CRAP output.
@@ -1602,10 +1867,35 @@ mod tests {
     }
 
     #[test]
+    fn classified_test_failure_clears_provisional_infrastructure_detail() {
+        let mut status = new_status();
+        status.failed_tests.push("server::failed".into());
+
+        complete_status(
+            &mut status,
+            &ProcessOutcome::ExitCode { exit_code: 100 },
+            "worker commands did not exit normally",
+        );
+
+        assert_eq!(status.category, StatusCategory::TestFailure);
+        assert_eq!(status.infra_detail, None);
+    }
+
+    #[test]
     fn signaled_instrumented_run_with_junit_failures_is_infrastructure() {
         assert_eq!(
             final_category(&ProcessOutcome::Signal, &["server::interrupted".into()]),
             StatusCategory::Infra
+        );
+    }
+
+    #[test]
+    fn remaps_only_lcov_source_paths_under_the_compiled_workspace() {
+        let raw = "TN:\nSF:/build/source/server/src/lib.rs\nDA:1,1\nSF:/nix/store/pkg/src/lib.rs\nend_of_record\n";
+
+        assert_eq!(
+            remap_lcov_source_root(raw, "/build/source", "/checkout"),
+            "TN:\nSF:/checkout/server/src/lib.rs\nDA:1,1\nSF:/nix/store/pkg/src/lib.rs\nend_of_record\n"
         );
     }
 
@@ -1647,9 +1937,10 @@ mod tests {
         )
         .expect("slice workers");
 
+        let workspace_root = std::env::current_dir().expect("workspace root");
         for (index, worker) in workers.iter().enumerate() {
             assert_eq!(
-                worker.arguments[..11],
+                worker.arguments[..13],
                 [
                     "nextest",
                     "run",
@@ -1658,6 +1949,8 @@ mod tests {
                     "--no-fail-fast",
                     "--archive-file",
                     &archive.display().to_string(),
+                    "--workspace-remap",
+                    &workspace_root.display().to_string(),
                     "--extract-to",
                     &worker.extract.display().to_string(),
                     "--partition",
@@ -1665,7 +1958,7 @@ mod tests {
                 ]
             );
             assert_eq!(
-                worker.arguments[11..],
+                worker.arguments[13..],
                 [
                     "--test-threads",
                     &fixed_worker_threads().unwrap().to_string()
@@ -1697,11 +1990,11 @@ mod tests {
                 .all(|worker| !worker.arguments.contains(&"--test-threads".into()))
         );
         assert_eq!(
-            workers[0].arguments[9..11],
+            workers[0].arguments[11..13],
             ["--partition".to_owned(), "hash:1/2".to_owned()]
         );
         assert_eq!(
-            workers[1].arguments[9..11],
+            workers[1].arguments[11..13],
             ["--partition".to_owned(), "hash:2/2".to_owned()]
         );
     }
@@ -1866,5 +2159,16 @@ mod tests {
             serde_json::from_str::<AggregateEvidence>(&aggregate_json).unwrap(),
             aggregate
         );
+    }
+    #[test]
+    fn separate_runner_aggregate_rejects_missing_worker_bundle_before_consuming_inputs() {
+        let error = aggregate_experiment_bundles(
+            "unused-output",
+            Path::new("missing-census.json"),
+            Path::new("missing-archive.tar.zst"),
+            &[PathBuf::from("only-worker")],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("exactly two worker bundles"));
     }
 }
