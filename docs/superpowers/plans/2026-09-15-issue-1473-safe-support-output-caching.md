@@ -62,7 +62,7 @@ Out:
     `devtool run -- cargo xtask check --no-test` exercises the integrated static
     surface without accepting a cached final verdict.
 
-- [ ] Task 3: Measure the candidate and select the durable outcome
+- [x] Task 3: Measure the candidate and select the durable outcome
   - Contract: gather matched baseline/treatment observations for all four
     source-changing/narrow × cold/warmed combinations, with two pairs per cell
     and the spec's numeric rule deciding whether a third pair is required.
@@ -80,7 +80,7 @@ Out:
     coverage/e2e verdict executing for the tested ref; the checked-in report's
     calculations reproduce from its cited observations.
 
-- [ ] Task 4: Record the accepted cache boundary
+- [x] Task 4: Record the accepted cache boundary
   - Contract: if Task 3 retains a narrower policy, write a numberless draft ADR
     and project it into `docs/ARCHITECTURE.md`; if the broad filter remains,
     record the rejection only in the issue report because no architecture

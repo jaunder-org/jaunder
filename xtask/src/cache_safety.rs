@@ -28,8 +28,16 @@ const WORKTREE_DIR: &str = ".xtask/cache-safety-source-probe.worktree";
 #[serde(rename_all = "camelCase")]
 struct Policy {
     schema_version: u32,
+    cache_boundary: CacheBoundary,
     outputs: Vec<PolicyOutput>,
     source_families: std::collections::BTreeMap<String, Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum CacheBoundary {
+    Broad,
+    Narrow,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
@@ -329,15 +337,24 @@ fn push_filter(raw: &str) -> Result<Regex> {
 fn verify_filter_membership(
     resolved: &[(PolicyOutput, String, String)],
     filter: &Regex,
+    boundary: CacheBoundary,
 ) -> Result<()> {
     for (output, out_path, drv_path) in resolved {
         for identity in [out_path, drv_path] {
             let matched = filter.is_match(identity);
             match output.classification {
-                Classification::Support if matched => bail!(
-                    "{} is cataloged support but Cachix pushFilter excludes its actual identity: {identity}",
-                    output.attr
-                ),
+                Classification::Support if boundary == CacheBoundary::Narrow && matched => {
+                    bail!(
+                        "{} is cataloged support but the narrow Cachix pushFilter excludes its actual identity: {identity}",
+                        output.attr
+                    )
+                }
+                Classification::Support if boundary == CacheBoundary::Broad && !matched => {
+                    bail!(
+                        "{} escapes the selected broad Cachix exclusion: {identity}",
+                        output.attr
+                    )
+                }
                 Classification::Final if !matched => bail!(
                     "{} is cataloged final but Cachix pushFilter admits its actual identity: {identity}",
                     output.attr
@@ -618,7 +635,7 @@ fn verify() -> Result<()> {
     }
     let ci_setup = fs::read_to_string(snapshot.join(CI_SETUP_PATH))
         .context("reading .github/actions/setup-ci/action.yml")?;
-    verify_filter_membership(&resolved, &push_filter(&ci_setup)?)?;
+    verify_filter_membership(&resolved, &push_filter(&ci_setup)?, policy.cache_boundary)?;
     let finals = resolved
         .iter()
         .filter(|(output, _, _)| output.classification == Classification::Final)
@@ -693,6 +710,7 @@ mod tests {
     fn policy(outputs: &[(&str, Classification)]) -> Policy {
         Policy {
             schema_version: 1,
+            cache_boundary: CacheBoundary::Narrow,
             source_families: std::collections::BTreeMap::from([(
                 "family".into(),
                 vec!["category".into()],
@@ -898,7 +916,7 @@ mod tests {
                 "/nix/store/0123456789abcdefghijklmnopqrstuv-jaunder-coverage.drv".into(),
             ),
         ];
-        assert!(verify_filter_membership(&resolved, &filter).is_ok());
+        assert!(verify_filter_membership(&resolved, &filter, CacheBoundary::Narrow).is_ok());
     }
 
     #[test]
@@ -913,7 +931,14 @@ mod tests {
             "/nix/store/0123456789abcdefghijklmnopqrstuv-jaunder-coverage".into(),
             "/nix/store/0123456789abcdefghijklmnopqrstuv-jaunder-coverage.drv".into(),
         )];
-        assert!(verify_filter_membership(&resolved, &Regex::new("jaunder-e2e").unwrap()).is_err());
+        assert!(
+            verify_filter_membership(
+                &resolved,
+                &Regex::new("jaunder-e2e").unwrap(),
+                CacheBoundary::Narrow
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -928,6 +953,29 @@ mod tests {
             "/nix/store/0123456789abcdefghijklmnopqrstuv-jaunder-e2e".into(),
             "/nix/store/0123456789abcdefghijklmnopqrstuv-jaunder-e2e.drv".into(),
         )];
-        assert!(verify_filter_membership(&resolved, &Regex::new("jaunder-e2e").unwrap()).is_err());
+        assert!(
+            verify_filter_membership(
+                &resolved,
+                &Regex::new("jaunder-e2e").unwrap(),
+                CacheBoundary::Narrow
+            )
+            .is_err()
+        );
+        assert!(
+            verify_filter_membership(
+                &resolved,
+                &Regex::new("does-not-match").unwrap(),
+                CacheBoundary::Broad
+            )
+            .is_err()
+        );
+        assert!(
+            verify_filter_membership(
+                &resolved,
+                &Regex::new("jaunder-e2e").unwrap(),
+                CacheBoundary::Broad
+            )
+            .is_ok()
+        );
     }
 }

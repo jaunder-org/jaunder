@@ -22,11 +22,10 @@ runs:
       with:
         name: jaunder-org
         authToken: ${{ inputs.cachix-auth-token }}
-        # The cache-safety probe reconciles this actual-store-name regular
-        # expression with nix/cache-policy.json and rejects any final identity
-        # that escapes it. Cataloged support closures are separately proven not
-        # to contain a final result, so only those support outputs may upload.
-        pushFilter: "(?:^|/)[0-9a-z]{32}-jaunder-coverage(?:-[0-9][0-9A-Za-z.+-]*)?(?:\\.drv)?$|(?:^|/)[0-9a-z]{32}-jaunder-coverage-gate(?:\\.drv)?$|(?:^|/)[0-9a-z]{32}-(?:jaunder|vm-test-run-jaunder)-e2e-(?:checks|postgres-(?:chromium|firefox)(?:-single-worker)?|sqlite-(?:chromium|firefox)(?:-single-worker)?)(?:\\.drv)?$"
+        # Push build products to the cache, but not coverage or e2e outputs.
+        # The structural probe proves which support outputs could be admitted;
+        # the measured decision report records why the broad boundary remains.
+        pushFilter: "jaunder-coverage|jaunder-e2e"
     # xtask is host-only, so cachix can't cover it; cache its compiled deps
     # between runs.
     - name: Cache xtask host build

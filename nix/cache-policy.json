@@ -1,5 +1,6 @@
 {
   "schemaVersion": 1,
+  "cacheBoundary": "broad",
   "sourceFamilies": {
     "coverage": [
       "cargo-workspace",
