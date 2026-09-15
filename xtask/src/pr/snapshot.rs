@@ -137,7 +137,7 @@ pub const PR_QUERY: &str = r#"query($owner:String!,$name:String!,$number:Int!,$a
         contexts(first:100, after:$after){
           nodes {
             __typename
-            ... on CheckRun { databaseId name conclusion status detailsUrl startedAt completedAt checkSuite { app { slug } workflowRun { databaseId } } }
+            ... on CheckRun { fullDatabaseId name conclusion status detailsUrl startedAt completedAt checkSuite { app { slug } workflowRun { fullDatabaseId } } }
             ... on StatusContext { context state targetUrl createdAt }
           }
           pageInfo { hasNextPage endCursor }
@@ -161,7 +161,7 @@ pub const COMMIT_CHECKS_QUERY: &str = r#"query($owner:String!,$name:String!,$oid
           contexts(first:100){
             nodes {
               __typename
-              ... on CheckRun { databaseId name conclusion status detailsUrl startedAt completedAt checkSuite { app { slug } workflowRun { databaseId } } }
+              ... on CheckRun { fullDatabaseId name conclusion status detailsUrl startedAt completedAt checkSuite { app { slug } workflowRun { fullDatabaseId } } }
               ... on StatusContext { context state targetUrl createdAt }
             }
           }
@@ -291,20 +291,14 @@ fn parse_check(node: &Value) -> Result<Option<CheckEntry>, ApiError> {
                 _ => CheckState::Failure,
             }
         };
-        let provider = match (
-            str_at(node, &["checkSuite", "app", "slug"]),
-            node.get("databaseId").and_then(Value::as_u64),
-        ) {
-            (Some("github-actions"), Some(check_run_id)) => CheckProvider::GitHubActions {
-                check_run_id,
-                workflow_run_id: node
-                    .pointer("/checkSuite/workflowRun/databaseId")
-                    .and_then(Value::as_u64)
-                    .ok_or_else(|| {
-                        ApiError::Malformed(
-                            "GitHub Actions check has no workflowRun.databaseId".into(),
-                        )
-                    })?,
+        let provider = match str_at(node, &["checkSuite", "app", "slug"]) {
+            Some("github-actions") => CheckProvider::GitHubActions {
+                check_run_id: full_database_id(node, "/fullDatabaseId", "check")?,
+                workflow_run_id: full_database_id(
+                    node,
+                    "/checkSuite/workflowRun/fullDatabaseId",
+                    "workflow run",
+                )?,
             },
             _ => CheckProvider::OtherCheckRun,
         };
@@ -336,6 +330,27 @@ fn parse_check(node: &Value) -> Result<Option<CheckEntry>, ApiError> {
             _ => owned(node, &["createdAt"]),
         },
     }))
+}
+
+/// Parse GitHub GraphQL's `BigInt` JSON representation without losing ID bits.
+///
+/// GitHub encodes `BigInt` values as decimal strings. IDs are correlation evidence,
+/// so missing, signed, non-decimal, or overflowing values are observation errors.
+fn full_database_id(value: &Value, pointer: &str, subject: &str) -> Result<u64, ApiError> {
+    let text = value
+        .pointer(pointer)
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::Malformed(format!("GitHub Actions {subject} has no {pointer}")))?;
+    if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(ApiError::Malformed(format!(
+            "GitHub Actions {subject} fullDatabaseId is not an unsigned decimal string"
+        )));
+    }
+    text.parse::<u64>().map_err(|_| {
+        ApiError::Malformed(format!(
+            "GitHub Actions {subject} fullDatabaseId exceeds u64"
+        ))
+    })
 }
 
 pub fn parse_commit_checks(v: &Value) -> Result<CommitChecks, ApiError> {
@@ -697,34 +712,89 @@ mod tests {
     #[test]
     fn actions_check_runs_retain_their_stable_provider_identity() {
         let value = serde_json::json!({
-            "databaseId": 42,
+            "fullDatabaseId": "90999406730",
             "name": "job",
             "status": "COMPLETED",
             "conclusion": "FAILURE",
             "detailsUrl": "https://github.com/o/r/actions/runs/30580548519/job/9",
-            "checkSuite": { "app": { "slug": "github-actions" }, "workflowRun": { "databaseId": 30580548519_u64 } }
+            "checkSuite": { "app": { "slug": "github-actions" }, "workflowRun": { "fullDatabaseId": "30580548519" } }
         });
         let check = parse_check(&value).expect("check run parses").unwrap();
         assert_eq!(
             check.provider,
             CheckProvider::GitHubActions {
-                check_run_id: 42,
+                check_run_id: 90999406730,
                 workflow_run_id: 30580548519,
             }
         );
     }
 
     #[test]
-    fn missing_actions_workflow_run_id_fails_closed() {
+    fn malformed_actions_full_database_ids_fail_closed() {
+        for (check_run_id, workflow_run_id) in [
+            (serde_json::json!(null), serde_json::json!("42")),
+            (serde_json::json!("-1"), serde_json::json!("42")),
+            (serde_json::json!("42.0"), serde_json::json!("42")),
+            (
+                serde_json::json!("18446744073709551616"),
+                serde_json::json!("42"),
+            ),
+            (serde_json::json!("42"), serde_json::json!(null)),
+            (serde_json::json!("42"), serde_json::json!("-1")),
+            (serde_json::json!("42"), serde_json::json!("not-an-id")),
+            (
+                serde_json::json!("42"),
+                serde_json::json!("18446744073709551616"),
+            ),
+        ] {
+            let value = serde_json::json!({
+                "fullDatabaseId": check_run_id,
+                "name": "job",
+                "status": "COMPLETED",
+                "conclusion": "FAILURE",
+                "checkSuite": { "app": { "slug": "github-actions" }, "workflowRun": { "fullDatabaseId": workflow_run_id } }
+            });
+            assert!(matches!(parse_check(&value), Err(ApiError::Malformed(_))));
+        }
+    }
+
+    #[test]
+    fn captured_actions_bigint_fixture_preserves_provider_identity() {
+        let snapshot = parse_snapshot(&fixture!("pr-actions-bigint.json")).unwrap();
+        assert_eq!(
+            snapshot.checks[0].provider,
+            CheckProvider::GitHubActions {
+                check_run_id: 90999406730,
+                workflow_run_id: 30580548519,
+            }
+        );
+    }
+
+    #[test]
+    fn commit_checks_preserve_actions_bigint_provider_identity() {
         let value = serde_json::json!({
-            "databaseId": 42,
-            "name": "job",
-            "status": "COMPLETED",
-            "conclusion": "FAILURE",
-            "detailsUrl": "https://github.com/o/r/actions/runs/not-a-number/job/9",
-            "checkSuite": { "app": { "slug": "github-actions" } }
+            "data": { "repository": { "object": {
+                "oid": "merge-group-sha",
+                "statusCheckRollup": { "contexts": { "nodes": [{
+                    "name": "captured Actions job",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "fullDatabaseId": "90999406730",
+                    "checkSuite": {
+                        "app": { "slug": "github-actions" },
+                        "workflowRun": { "fullDatabaseId": "30580548519" }
+                    }
+                }]}}
+            }}}
         });
-        assert!(matches!(parse_check(&value), Err(ApiError::Malformed(_))));
+        let checks = parse_commit_checks(&value).unwrap();
+        assert_eq!(
+            checks.checks[0].provider,
+            CheckProvider::GitHubActions {
+                check_run_id: 90999406730,
+                workflow_run_id: 30580548519,
+            }
+        );
     }
 
     #[test]

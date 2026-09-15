@@ -1,0 +1,42 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "number": 1498,
+        "state": "OPEN",
+        "mergedAt": null,
+        "mergeCommit": null,
+        "mergeable": "MERGEABLE",
+        "mergeStateStatus": "CLEAN",
+        "isInMergeQueue": false,
+        "mergeQueueEntry": null,
+        "autoMergeRequest": null,
+        "headRefName": "issue-1498",
+        "baseRefOid": "base",
+        "commits": {
+          "nodes": [{"commit": {"oid": "head", "committedDate": "2026-09-15T12:00:00Z"}}]
+        },
+        "statusCheckRollup": {
+          "contexts": {
+            "nodes": [
+              {
+                "__typename": "CheckRun",
+                "fullDatabaseId": "90999406730",
+                "name": "captured Actions job",
+                "conclusion": "FAILURE",
+                "status": "COMPLETED",
+                "detailsUrl": "https://github.com/jaunder-org/jaunder/actions/runs/30580548519/job/90999406730",
+                "startedAt": "2026-09-15T12:01:00Z",
+                "completedAt": "2026-09-15T12:02:00Z",
+                "checkSuite": {
+                  "app": {"slug": "github-actions"},
+                  "workflowRun": {"fullDatabaseId": "30580548519"}
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}
