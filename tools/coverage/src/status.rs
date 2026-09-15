@@ -112,7 +112,7 @@ pub struct CoverageStatus {
 }
 
 /// Stable JUnit testcase identity and its terminal classification.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TestCensus {
     pub expected: Vec<String>,
     pub executed: Vec<String>,

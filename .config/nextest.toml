@@ -5,3 +5,9 @@ slow-timeout = { period = "5s", terminate-after = 6 }
 
 [profile.coverage]
 junit = { path = "/tmp/jaunder-coverage-junit.xml", report-skipped = "ignored" }
+
+[profile.coverage-worker-1]
+junit = { path = "/tmp/jaunder-coverage-worker-1-junit.xml", report-skipped = "ignored" }
+
+[profile.coverage-worker-2]
+junit = { path = "/tmp/jaunder-coverage-worker-2-junit.xml", report-skipped = "ignored" }

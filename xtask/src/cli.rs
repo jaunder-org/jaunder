@@ -498,6 +498,16 @@ pub enum CoverageCommand {
     /// on request, NOT in per-commit `check`/`validate` (#241, #37).
     #[command(after_help = "EXAMPLES:\n  cargo xtask coverage probe-source")]
     ProbeSource,
+    /// Measure the existing coverage producer under a declared unloaded host window.
+    /// This is an opt-in local experiment; it does not alter production coverage.
+    #[command(
+        after_help = "EXAMPLES:\n  cargo xtask coverage benchmark-local --unloaded-system 'operator confirms no competing host load'"
+    )]
+    BenchmarkLocal {
+        /// Operator assertion that the host has no competing workload.
+        #[arg(long, value_parser = nonempty)]
+        unloaded_system: String,
+    },
 }
 /// `wasm-coverage` subcommands.
 #[derive(Subcommand)]
@@ -638,6 +648,7 @@ impl Cli {
             Command::Traces(TracesCommand::BootPhases { .. }) => "traces-boot-phases",
             Command::Nix(NixCommand::ProductionBaselineSmoke) => "nix-production-baseline-smoke",
             Command::Coverage(CoverageCommand::ProbeSource) => "coverage-probe-source",
+            Command::Coverage(CoverageCommand::BenchmarkLocal { .. }) => "coverage-benchmark-local",
             Command::WasmCoverage(WasmCoverageCommand::Probe) => "wasm-coverage-probe",
             Command::WasmCoverage(WasmCoverageCommand::Measure { .. }) => "wasm-coverage-measure",
             Command::Nix(NixCommand::ProbeSource) => "nix-probe-source",
@@ -1390,6 +1401,25 @@ mod tests {
                 command,
             } if name == "demo"
                 && command == ["site-config", "get", "site.title"]
+        ));
+    }
+
+    #[test]
+    fn coverage_benchmark_local_requires_an_unloaded_system_assertion() {
+        assert!(Cli::try_parse_from(["xtask", "coverage", "benchmark-local"]).is_err());
+        let cli = Cli::try_parse_from([
+            "xtask",
+            "coverage",
+            "benchmark-local",
+            "--unloaded-system",
+            "operator confirms no competing host load",
+        ])
+        .unwrap();
+        assert_eq!(cli.command_name(), "coverage-benchmark-local");
+        assert!(matches!(
+            cli.command,
+            Command::Coverage(CoverageCommand::BenchmarkLocal { unloaded_system })
+                if unloaded_system == "operator confirms no competing host load"
         ));
     }
 

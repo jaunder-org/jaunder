@@ -6,6 +6,7 @@
 
 use std::path::PathBuf;
 
+use ::coverage::workers::{ExperimentStrategy, WorkerConcurrencyPolicy};
 use anyhow::Result;
 use check::CheckGroup;
 use clap::{Parser, Subcommand};
@@ -169,6 +170,41 @@ enum CoverageCmd {
         /// Directory to write emitted artifacts into (defaults to CWD).
         #[arg(long, default_value = ".")]
         out: String,
+        /// Non-production two-worker coverage experiment to execute.
+        #[arg(long)]
+        experiment: Option<ExperimentStrategy>,
+        /// Worker concurrency policy for a two-worker experiment.
+        #[arg(long, default_value_t = WorkerConcurrencyPolicy::Independent)]
+        concurrency: WorkerConcurrencyPolicy,
+        /// Instrumented nextest archive shared read-only by experiment workers.
+        #[arg(long, requires = "experiment")]
+        archive_file: Option<PathBuf>,
+    },
+    /// Execute one selected non-production coverage worker and write its immutable bundle.
+    ExperimentWorker {
+        #[arg(long)]
+        out: String,
+        #[arg(long)]
+        strategy: ExperimentStrategy,
+        #[arg(long, value_parser = clap::value_parser!(u8).range(1..=2))]
+        worker: u8,
+        #[arg(long, default_value_t = WorkerConcurrencyPolicy::Independent)]
+        concurrency: WorkerConcurrencyPolicy,
+        #[arg(long)]
+        census: PathBuf,
+        #[arg(long)]
+        archive_file: PathBuf,
+    },
+    /// Consume exactly two worker bundles and emit the sole merged coverage verdict.
+    ExperimentAggregate {
+        #[arg(long)]
+        out: String,
+        #[arg(long)]
+        census: PathBuf,
+        #[arg(long)]
+        archive_file: PathBuf,
+        #[arg(long = "worker-bundle", required = true, num_args = 2)]
+        worker_bundles: Vec<PathBuf>,
     },
     /// Validate completed coverage producer evidence.
     ValidateStatus {
@@ -276,7 +312,54 @@ enum PgCmd {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Coverage(CoverageCmd::Emit { out }) => coverage::emit::run(&out),
+        Command::Coverage(CoverageCmd::Emit {
+            out,
+            experiment: None,
+            archive_file: None,
+            ..
+        }) => coverage::emit::run(&out),
+        Command::Coverage(CoverageCmd::Emit {
+            out,
+            experiment: Some(experiment),
+            concurrency,
+            archive_file: Some(archive_file),
+        }) => coverage::emit::run_experiment(&out, experiment, concurrency, &archive_file),
+        Command::Coverage(CoverageCmd::Emit {
+            experiment: Some(_),
+            archive_file: None,
+            ..
+        }) => anyhow::bail!("coverage experiments require --archive-file"),
+        Command::Coverage(CoverageCmd::Emit {
+            experiment: None,
+            archive_file: Some(_),
+            ..
+        }) => anyhow::bail!("--archive-file requires --experiment"),
+        Command::Coverage(CoverageCmd::ExperimentWorker {
+            out,
+            strategy,
+            worker,
+            concurrency,
+            census,
+            archive_file,
+        }) => coverage::emit::run_experiment_worker(
+            &out,
+            strategy,
+            worker,
+            concurrency,
+            &census,
+            &archive_file,
+        ),
+        Command::Coverage(CoverageCmd::ExperimentAggregate {
+            out,
+            census,
+            archive_file,
+            worker_bundles,
+        }) => coverage::emit::aggregate_experiment_bundles(
+            &out,
+            &census,
+            &archive_file,
+            &worker_bundles,
+        ),
         Command::Coverage(CoverageCmd::ValidateStatus { status }) => {
             coverage::validate_status::run(&status)
         }
@@ -455,5 +538,102 @@ mod tests {
             .command,
             Command::WasmCoverage(WasmCoverageCmd::Map { site_src }) if site_src == Path::new("/source/site")
         ));
+    }
+    #[test]
+    fn coverage_emit_keeps_default_producer_and_parses_experiments() {
+        let default_emit =
+            Cli::try_parse_from(["devtool", "coverage", "emit"]).expect("default coverage emit");
+        assert!(matches!(
+            default_emit.command,
+            Command::Coverage(CoverageCmd::Emit {
+                experiment: None,
+                concurrency: WorkerConcurrencyPolicy::Independent,
+                ..
+            })
+        ));
+
+        let experiment = Cli::try_parse_from([
+            "devtool",
+            "coverage",
+            "emit",
+            "--experiment",
+            "slice",
+            "--concurrency",
+            "fixed",
+            "--archive-file",
+            "/tmp/instrumented-tests.tar.zst",
+        ])
+        .expect("experiment coverage emit");
+        assert!(matches!(
+            experiment.command,
+            Command::Coverage(CoverageCmd::Emit {
+                experiment: Some(ExperimentStrategy::Slice),
+                concurrency: WorkerConcurrencyPolicy::Fixed,
+                archive_file: Some(archive_file),
+                ..
+            }) if archive_file == Path::new("/tmp/instrumented-tests.tar.zst")
+        ));
+    }
+    #[test]
+    fn coverage_experiment_runner_commands_require_exact_worker_inputs() {
+        let worker = Cli::try_parse_from([
+            "devtool",
+            "coverage",
+            "experiment-worker",
+            "--out",
+            "bundle",
+            "--strategy",
+            "slice",
+            "--worker",
+            "2",
+            "--census",
+            "census.json",
+            "--archive-file",
+            "tests.tar.zst",
+        ])
+        .expect("worker command parses");
+        assert!(matches!(
+            worker.command,
+            Command::Coverage(CoverageCmd::ExperimentWorker {
+                worker: 2,
+                strategy: ExperimentStrategy::Slice,
+                ..
+            })
+        ));
+        let aggregate = Cli::try_parse_from([
+            "devtool",
+            "coverage",
+            "experiment-aggregate",
+            "--out",
+            "aggregate",
+            "--census",
+            "census.json",
+            "--archive-file",
+            "tests.tar.zst",
+            "--worker-bundle",
+            "one",
+            "two",
+        ])
+        .expect("aggregate command parses");
+        assert!(matches!(
+            aggregate.command,
+            Command::Coverage(CoverageCmd::ExperimentAggregate { worker_bundles, .. }) if worker_bundles.len() == 2
+        ));
+        assert!(
+            Cli::try_parse_from([
+                "devtool",
+                "coverage",
+                "experiment-aggregate",
+                "--out",
+                "aggregate",
+                "--census",
+                "census.json",
+                "--archive-file",
+                "tests.tar.zst",
+                "--worker-bundle",
+                "only-one",
+            ])
+            .is_err()
+        );
     }
 }
