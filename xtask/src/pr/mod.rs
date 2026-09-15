@@ -8,6 +8,7 @@
 
 pub mod cleanup;
 pub mod decide;
+pub mod evidence;
 pub mod gh;
 pub mod land;
 pub mod promoter;

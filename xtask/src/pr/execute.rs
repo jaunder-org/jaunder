@@ -44,8 +44,9 @@ pub fn execute(number: Option<u64>, cfg: watch::WatchConfig, landing: bool) -> R
     dispatch_with_git_facts(
         || GitFacts::read(std::path::Path::new("."), landing),
         |git| {
+            let source = snapshot::GhSource::default();
             execute_with(
-                &snapshot::GhSource,
+                &source,
                 &land::GhArmer,
                 &watch::SystemClock,
                 Invocation {

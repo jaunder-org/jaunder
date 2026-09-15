@@ -19,6 +19,9 @@ pub enum Requirement {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct RuntimeJob {
     pub name: String,
+    /// The stable GitHub Actions check-run/job identity from the current attempt.
+    #[serde(default)]
+    pub check_run_id: Option<u64>,
     #[serde(default)]
     pub job_key: Option<String>,
     #[serde(default)]
@@ -86,6 +89,20 @@ pub struct WorkflowGraph {
 }
 
 impl WorkflowGraph {
+    /// Returns local reusable-workflow references from job-level `uses` entries.
+    ///
+    /// Steps also carry `uses`, but they invoke actions rather than reusable
+    /// workflows and therefore do not contribute dependency-graph nodes. Deserializing
+    /// only the top-level `jobs.*.uses` surface keeps those two concepts separate.
+    pub fn local_reusable_workflow_paths(source: &str) -> Result<BTreeSet<String>, GraphError> {
+        parse_jobs(source).map(|jobs| {
+            jobs.into_iter()
+                .filter_map(|job| job.uses)
+                .filter(|uses| uses.starts_with("./"))
+                .collect()
+        })
+    }
+
     /// Parses one immutable workflow source and expands its statically-known matrix.
     ///
     /// Local reusable workflows need their immutable sources to establish runtime
@@ -252,6 +269,7 @@ impl WorkflowGraph {
             .map(|name| {
                 self.correlate(&RuntimeJob {
                     name: name.clone(),
+                    check_run_id: None,
                     job_key: None,
                     matrix: BTreeMap::new(),
                 })
@@ -521,6 +539,7 @@ mod tests {
     fn runtime(name: &str) -> RuntimeJob {
         RuntimeJob {
             name: name.into(),
+            check_run_id: None,
             job_key: None,
             matrix: BTreeMap::new(),
         }
@@ -582,6 +601,27 @@ mod tests {
             graph.classify(&runtime("package"), &["Aggregate".into()]),
             Err(GraphError::MissingJoin { .. })
         ));
+    }
+
+    #[test]
+    fn local_reusable_references_exclude_step_level_local_actions() {
+        // This is the CI shape: a job-level reusable workflow and a step-level
+        // repository action both use local paths, but only the job builds graph
+        // ancestry and therefore needs workflow source evidence.
+        let source = r#"
+            jobs:
+              reusable:
+                uses: "./.github/workflows/reusable.yml"
+              ordinary:
+                name: ordinary
+                runs-on: ubuntu-24.04
+                steps:
+                  - uses: './.github/actions/setup-ci'
+        "#;
+        assert_eq!(
+            WorkflowGraph::local_reusable_workflow_paths(source).unwrap(),
+            BTreeSet::from(["./.github/workflows/reusable.yml".into()])
+        );
     }
 
     #[test]

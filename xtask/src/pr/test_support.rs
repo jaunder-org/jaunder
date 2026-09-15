@@ -10,8 +10,8 @@ use std::collections::VecDeque;
 
 use super::gh::ApiError;
 use super::snapshot::{
-    CheckEntry, CheckState, MergeStateStatus, Mergeable, PrSnapshot, PrSource, PrState, QueueState,
-    RequiredChecks, RunRef,
+    CheckEntry, CheckProvider, CheckState, MergeStateStatus, Mergeable, PrSnapshot, PrSource,
+    PrState, QueueState, RequiredChecks, RunRef,
 };
 use super::watch::{Clock, WatchConfig};
 use super::{PrNumber, Subject};
@@ -37,6 +37,7 @@ pub fn strict_rules() -> RequiredChecks {
 pub fn check(name: &str, state: CheckState, completed: &str) -> CheckEntry {
     CheckEntry {
         name: name.into(),
+        provider: CheckProvider::StatusContext,
         state,
         details_url: Some("https://x/1".into()),
         started_at: Some("2026-07-30T14:00:00Z".into()),
@@ -221,6 +222,16 @@ impl PrSource for FakeSource {
             .borrow()
             .clone()
             .expect("FakeSource was scripted with at least one snapshot")
+    }
+
+    fn actions_evidence(
+        &self,
+        _subject: &Subject,
+        _snapshot: &PrSnapshot,
+    ) -> Result<super::evidence::ActionsEvidence, ApiError> {
+        Err(ApiError::Malformed(
+            "fake Actions evidence was not scripted".into(),
+        ))
     }
 
     fn required_checks(&self, _subject: &Subject) -> Result<RequiredChecks, ApiError> {

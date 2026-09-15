@@ -38,7 +38,7 @@ Out:
     siblings, unsupported remote reuse, and ambiguous/missing joins through the
     production parser and graph builder.
 
-- [ ] Task 2: Add current-head GitHub evidence acquisition
+- [x] Task 2: Add current-head GitHub evidence acquisition
   - Contract: Enrich check observations with stable provider/check-run identity;
     resolve a GitHub Actions check to its job, run ID, run attempt, workflow
     path, workflow commit, complete paginated job population, and workflow
