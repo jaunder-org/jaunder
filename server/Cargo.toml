@@ -72,7 +72,6 @@ tempfile.workspace = true
 tokio-tungstenite.workspace = true
 url = { workspace = true }
 
-
 [build-dependencies]
 csr_bundle = { path = "../tools/csr_bundle" }
 

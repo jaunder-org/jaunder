@@ -10,7 +10,6 @@
 //! overrides. There is no baseline, anchor, or manifest.
 
 pub mod benchmark;
-pub mod cache_safety;
 pub mod crap;
 pub mod exempt;
 pub mod gate;

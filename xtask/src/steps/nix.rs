@@ -1214,48 +1214,6 @@ pub fn eval_coverage_drvpath(flake_dir: &Path) -> Result<String> {
     )
 }
 
-/// Evaluate the cache-eligible instrumented archive support identity.
-pub(crate) fn eval_coverage_support_drvpath(flake_dir: &Path) -> Result<String> {
-    nix_eval_raw(
-        Some(flake_dir),
-        &format!(".#packages.{SYSTEM}.coverage-support.drvPath"),
-    )
-}
-
-pub(crate) fn eval_installable_drvpath(flake_dir: &Path, attr: &str) -> Result<String> {
-    nix_eval_raw(Some(flake_dir), &format!(".#{attr}.drvPath"))
-}
-
-pub(crate) fn build_installable_out_path(flake_dir: &Path, attr: &str) -> Result<String> {
-    let installable = format!(".#{attr}");
-    let out = Command::new("nix")
-        .current_dir(flake_dir)
-        .args([
-            "build",
-            "--no-link",
-            "--print-out-paths",
-            "--accept-flake-config",
-            &installable,
-        ])
-        .output()
-        .with_context(|| format!("spawning `nix build {installable}`"))?;
-    if !out.status.success() {
-        bail!(
-            "`nix build {installable}` failed:\n{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
-    String::from_utf8(out.stdout)
-        .with_context(|| format!("`nix build {installable}` output was not UTF-8"))?
-        .lines()
-        .next()
-        .filter(|path| !path.is_empty())
-        .map(ToOwned::to_owned)
-        .context(format!(
-            "`nix build {installable}` returned an empty output path"
-        ))
-}
-
 /// Evaluate the probe-only identity of the filtered coverage source.
 pub(crate) fn eval_coverage_source_probe_drvpath(flake_dir: &Path) -> Result<String> {
     nix_eval_raw(

@@ -73,7 +73,7 @@ Out:
     slice/hash under both concurrency policies and the measurement-only backend
     comparator; reject observations without the declared quiescent window.
 
-- [ ] Task 5: Measure separate-runner CI fan-out
+- [x] Task 5: Measure separate-runner CI fan-out
   - Contract: CI prepares or substitutes the support output once, runs two
     uncached per-ref workers on separate runners, and aggregates both worker
     artifacts into one uncached per-ref coverage verdict while retaining the
@@ -86,7 +86,7 @@ Out:
     runner class, declared build/cache state, and alternating order; final
     coverage/e2e outputs demonstrably execute for each tested ref.
 
-- [ ] Task 6: Apply the conditional production decision
+- [x] Task 6: Apply the conditional production decision
   - Contract: select a slice or hash treatment only when every correctness,
     isolation, concurrency, cache, timing, and regression condition in the spec
     passes; backend identity parsing cannot be selected.
@@ -100,7 +100,7 @@ Out:
     both ship with the required closure inventory, safety probe, and cache
     measurements; otherwise it remains open.
 
-- [ ] Task 7: Certify the selected or rejected result
+- [x] Task 7: Certify the selected or rejected result
   - Contract: update `CONTRIBUTING.md` and applicable architecture/ADR material
     only for behavior that actually ships; archive the approved spec and outline
     at ship.

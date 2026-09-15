@@ -18,18 +18,15 @@ runs:
         extra_nix_config: |
           experimental-features = nix-command flakes
         github_access_token: ${{ inputs.github-token }}
-    - id: cache-policy
-      shell: bash
-      run: >-
-        echo "push-filter=$(jq -r '.excludedNameFragments | join("|")'
-        nix/cache-policy.json)" >> "$GITHUB_OUTPUT"
     - uses: cachix/cachix-action@v17
       with:
         name: jaunder-org
         authToken: ${{ inputs.cachix-auth-token }}
-        # The inventory uses this same policy file. Test-result derivations remain
-        # excluded so CI always executes their current-ref verdict.
-        pushFilter: ${{ steps.cache-policy.outputs.push-filter }}
+        # Push build products to the cache, but NOT the test-result check
+        # derivations (jaunder-coverage / jaunder-e2e): CI must always re-run
+        # the tests and never trust a cached green check (flaky-pass / impurity
+        # protection).
+        pushFilter: "jaunder-coverage|jaunder-e2e"
     # xtask is host-only, so cachix can't cover it; cache its compiled deps
     # between runs.
     - name: Cache xtask host build

@@ -106,23 +106,6 @@ let
           || cargoMemberSource coverageMembers path type
         );
     };
-  finalCacheOutput = drv:
-    if drv ? overrideTestDerivation then
-      let
-        protected = drv.overrideTestDerivation (_: {
-          allowSubstitutes = false;
-          preferLocalBuild = true;
-        });
-      in
-      protected // {
-        passthru = (protected.passthru or { }) // { cacheSafetyClass = "final"; };
-      }
-    else
-      drv.overrideAttrs (old: {
-        allowSubstitutes = false;
-        preferLocalBuild = true;
-        passthru = (old.passthru or { }) // { cacheSafetyClass = "final"; };
-      });
 
 # #93 / ADR-0032: shared zero-panic gate appended to each e2e testScript.
 # A server Rust panic is isolated (tests still pass), so without this it
@@ -502,7 +485,7 @@ mkE2eCheck =
     afterPackageCopy =
       if backendPolicy.seedBeforeStart then "\n\n" else "\n\n\n${seedDefinition}\n\n\n";
   in
-  finalCacheOutput (pkgs.testers.nixosTest {
+  pkgs.testers.nixosTest {
     name = checkName;
 
     # Caller-selected outer budget for boot, seed, execution, and artifact
@@ -598,7 +581,7 @@ mkE2eCheck =
         ''
       else
         producer { inherit backendPolicy; };
-  });
+  };
 
 # Cache-busting salt for e2e measurement runs (#792). Nix caches the e2e
 # check derivations, so a repeated `cargo xtask traces run` returns a
@@ -941,7 +924,7 @@ mkWasmCoverageProducer =
     browser,
     failure ? "",
   }:
-  finalCacheOutput (pkgs.testers.nixosTest {
+  pkgs.testers.nixosTest {
     name = "jaunder-wasm-coverage-${browser}${pkgs.lib.optionalString (failure != "") "-${failure}-failure"}";
     nodes.machine = { lib, ... }: {
       imports = [ self.nixosModules.jaunder ];
@@ -1024,7 +1007,7 @@ mkWasmCoverageProducer =
       machine.succeed("tar czf /tmp/wasm-coverage-${browser}.tar.gz -C /var/lib/jaunder wasm-coverage")
       machine.copy_from_machine("/tmp/wasm-coverage-${browser}.tar.gz", "")
     '';
-  });
+  };
 # These manual timing producers are intentionally separate from the permanent
 # coverage evidence producers above. `cacheBuster` is interpolated into the
 # derivation name and retained result, so `--impure` invocation entropy changes
@@ -1036,7 +1019,7 @@ mkWasmCoverageMeasurementProducer =
     cacheBuster,
   }:
   assert cacheBuster != "";
-  finalCacheOutput (pkgs.testers.nixosTest {
+  pkgs.testers.nixosTest {
     name = "jaunder-wasm-coverage-measure-${browser}-${mode}-${cacheBuster}";
     nodes.machine = { lib, ... }: {
       imports = [ self.nixosModules.jaunder ];
@@ -1075,136 +1058,8 @@ mkWasmCoverageMeasurementProducer =
       machine.succeed("tar czf /tmp/wasm-coverage-measure-${browser}-${mode}.tar.gz -C /var/lib/jaunder/wasm-coverage measurement.json")
       machine.copy_from_machine("/tmp/wasm-coverage-measure-${browser}-${mode}.tar.gz", "")
     '';
-  });
-  measurementCacheBuster = builtins.getEnv "JAUNDER_WASM_COVERAGE_CACHE_BUSTER";
-  coverageMeasurementCacheBuster =
-    builtins.getEnv "JAUNDER_COVERAGE_MEASUREMENT_CACHE_BUSTER";
-  e2eChecksPackage = finalCacheOutput (pkgs.symlinkJoin {
-    name = "jaunder-e2e-checks";
-    paths = builtins.attrValues (
-      pkgs.lib.filterAttrs (name: _: pkgs.lib.hasPrefix "e2e-" name) self.checks.${system}
-    );
-  });
-  wasmCoveragePackages =
-    {
-      wasm-coverage-chromium = mkWasmCoverageProducer { browser = "chromium"; };
-      wasm-coverage-firefox = mkWasmCoverageProducer { browser = "firefox"; };
-      wasm-coverage-chromium-export-failure = mkWasmCoverageProducer {
-        browser = "chromium";
-        failure = "export";
-      };
-      wasm-coverage-firefox-mapping-failure = mkWasmCoverageProducer {
-        browser = "firefox";
-        failure = "mapping";
-      };
-      wasm-coverage-chromium-early-playwright-failure = mkWasmCoverageProducer {
-        browser = "chromium";
-        failure = "early";
-      };
-    }
-    // pkgs.lib.optionalAttrs (measurementCacheBuster != "") {
-      wasm-coverage-measure-chromium-baseline = mkWasmCoverageMeasurementProducer {
-        browser = "chromium";
-        mode = "baseline";
-        cacheBuster = measurementCacheBuster;
-      };
-      wasm-coverage-measure-chromium-instrumented = mkWasmCoverageMeasurementProducer {
-        browser = "chromium";
-        mode = "instrumented";
-        cacheBuster = measurementCacheBuster;
-      };
-      wasm-coverage-measure-firefox-baseline = mkWasmCoverageMeasurementProducer {
-        browser = "firefox";
-        mode = "baseline";
-        cacheBuster = measurementCacheBuster;
-      };
-      wasm-coverage-measure-firefox-instrumented = mkWasmCoverageMeasurementProducer {
-        browser = "firefox";
-        mode = "instrumented";
-        cacheBuster = measurementCacheBuster;
-      };
-    };
-coverage-support = craneLib.mkCargoDerivation (
-  hostArgs
-  // {
-    # This is intentionally a compile/archive boundary, not a coverage verdict:
-    # nextest archives the instrumented test binaries together with the metadata
-    # a later worker needs to execute them, but never starts a test process.
-    src = coverageSrc;
-    inherit cargoArtifacts;
-    pname = "jaunder-instrumented-test-archive";
-    passthru.cacheSafetyClass = "support";
-    CARGO_PROFILE_DEV_DEBUG = "0";
-    CARGO_PROFILE_TEST_DEBUG = "0";
-    JAUNDER_CSR_BUNDLE_DIR = "${csrWasmBundle}";
-    JAUNDER_PUBLIC_DIR = "${../public}";
-    nativeBuildInputs = hostArgs.nativeBuildInputs ++ [
-      pkgs.cargo-llvm-cov
-      pkgs.cargo-nextest
-    ];
-    doInstallCargoArtifacts = false;
-    buildPhaseCargoCommand = ''
-      export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}:''${LD_LIBRARY_PATH:-}"
-      mkdir -p $out
-      cargo metadata --manifest-path Cargo.toml --format-version 1 --no-deps > $out/cargo-metadata.json
-      cp .config/nextest.toml $out/nextest.toml
-      environment="$(cargo llvm-cov show-env --export-prefix)"
-      # The environment is build-local and intentionally not retained in support.
-      eval "$environment"
-      cargo nextest archive --workspace --profile coverage --archive-file $out/tests.tar.zst
-      # RustEmbed resolves staged files from OUT_DIR at runtime in debug/test
-      # builds. Retain that exact runtime tree beside the archived binaries.
-      site_roots=(target/llvm-cov-target/debug/build/jaunder-*/out/site)
-      test -f "''${site_roots[0]}/index.html"
-      tar -cf $out/runtime-site.tar "''${site_roots[@]}"
-      # Derive the authoritative identities from the exact archive transferred
-      # to workers rather than independently resolving the workspace again.
-      cargo nextest list --archive-file $out/tests.tar.zst --message-format json > $out/census.json
-    '';
-    installPhaseCommand = "true";
-  }
-  // pkgs.lib.optionalAttrs (coverageMeasurementCacheBuster != "") {
-    JAUNDER_COVERAGE_MEASUREMENT_CACHE_BUSTER = coverageMeasurementCacheBuster;
-  }
-);
-  supportPackages = { coverage-support = coverage-support; };
-  cachePolicy = builtins.fromJSON (builtins.readFile ./cache-policy.json);
-  cacheSafetyEntry = attr: drv: {
-    inherit attr;
-    name = builtins.unsafeDiscardStringContext drv.name;
-    # This file is an eval-time inventory, not an aggregate build root. Strip
-    # string context so realizing it cannot realize any support or final output.
-    output = builtins.unsafeDiscardStringContext (toString drv);
-    derivation = builtins.unsafeDiscardStringContext drv.drvPath;
   };
-  supportCacheOutputs =
-    let
-      support = drv: (drv.passthru.cacheSafetyClass or null) == "support";
-      packages = pkgs.lib.filterAttrs (_: drv: support drv) supportPackages;
-    in
-    pkgs.lib.mapAttrsToList (
-      name: drv: cacheSafetyEntry "packages.${system}.${name}" drv
-    ) packages;
-  finalCacheOutputs =
-    let
-      final = drv: (drv.passthru.cacheSafetyClass or null) == "final";
-      checks = pkgs.lib.filterAttrs (_: drv: final drv) self.checks.${system};
-      packages = pkgs.lib.filterAttrs (_: drv: final drv) (
-        e2eSingleWorkerPackages // wasmCoveragePackages // { e2e-checks = e2eChecksPackage; }
-      );
-    in
-    (pkgs.lib.mapAttrsToList (name: drv: cacheSafetyEntry "checks.${system}.${name}" drv) checks)
-    ++ (pkgs.lib.mapAttrsToList (name: drv: cacheSafetyEntry "packages.${system}.${name}" drv) packages);
-  cacheSafetyInventory = pkgs.writeText "jaunder-cache-safety-inventory.json" (builtins.toJSON {
-    policy = cachePolicy;
-    eligible = supportCacheOutputs;
-    final = finalCacheOutputs;
-    supportInputs = {
-      rustToolchain = builtins.unsafeDiscardStringContext (toString toolchain);
-      cargoLlvmCov = builtins.unsafeDiscardStringContext (toString pkgs.cargo-llvm-cov);
-      cargoNextest = builtins.unsafeDiscardStringContext (toString pkgs.cargo-nextest);
-    };
-  });
+  measurementCacheBuster = builtins.getEnv "JAUNDER_WASM_COVERAGE_CACHE_BUSTER";
 in
 {
 
@@ -1213,14 +1068,56 @@ in
   };
   packages = pkgs.lib.optionalAttrs pkgs.stdenv.isLinux (
     {
-      cache-safety-inventory = cacheSafetyInventory;
-      # The aggregate and every manual coverage producer are catalogued above
-      # before the inventory is derived, avoiding a recursive package lookup.
-      e2e-checks = e2eChecksPackage;
+# The e2e aggregate: a symlinkJoin of every browser/backend `e2e-*`
+# check, exposed as `checks.e2e` and built by `cargo xtask validate`.
+# Adding a new browser/backend combo automatically joins it here. Its
+# `jaunder-e2e*` name keeps it out of the cachix push, so building it
+# always realizes the underlying VM checks rather than substituting a
+# cached aggregate.
+e2e-checks = pkgs.symlinkJoin {
+  name = "jaunder-e2e-checks";
+  paths = builtins.attrValues (
+    pkgs.lib.filterAttrs (name: _: pkgs.lib.hasPrefix "e2e-" name) self.checks.${system}
+  );
+};
+wasm-coverage-chromium = mkWasmCoverageProducer { browser = "chromium"; };
+wasm-coverage-firefox = mkWasmCoverageProducer { browser = "firefox"; };
+wasm-coverage-chromium-export-failure = mkWasmCoverageProducer {
+  browser = "chromium";
+  failure = "export";
+};
+wasm-coverage-firefox-mapping-failure = mkWasmCoverageProducer {
+  browser = "firefox";
+  failure = "mapping";
+};
+wasm-coverage-chromium-early-playwright-failure = mkWasmCoverageProducer {
+  browser = "chromium";
+  failure = "early";
+};
+}
+// pkgs.lib.optionalAttrs (measurementCacheBuster != "") {
+wasm-coverage-measure-chromium-baseline = mkWasmCoverageMeasurementProducer {
+  browser = "chromium";
+  mode = "baseline";
+  cacheBuster = measurementCacheBuster;
+};
+wasm-coverage-measure-chromium-instrumented = mkWasmCoverageMeasurementProducer {
+  browser = "chromium";
+  mode = "instrumented";
+  cacheBuster = measurementCacheBuster;
+};
+wasm-coverage-measure-firefox-baseline = mkWasmCoverageMeasurementProducer {
+  browser = "firefox";
+  mode = "baseline";
+  cacheBuster = measurementCacheBuster;
+};
+wasm-coverage-measure-firefox-instrumented = mkWasmCoverageMeasurementProducer {
+  browser = "firefox";
+  mode = "instrumented";
+  cacheBuster = measurementCacheBuster;
+};
     }
-    // supportPackages
     // e2eSingleWorkerPackages
-    // wasmCoveragePackages
   );
 
   checks = pkgs.lib.optionalAttrs pkgs.stdenv.isLinux (
@@ -1273,7 +1170,7 @@ e2eGateChecks
   # The producer combines pure and server-backed ERT observations in
   # one VM, returning controlled outcomes as fixed artifacts for the
   # host-side authoritative consumer.
-  elisp-coverage-producer = finalCacheOutput (pkgs.testers.nixosTest {
+  elisp-coverage-producer = pkgs.testers.nixosTest {
     name = "jaunder-elisp-coverage-producer";
     nodes.machine = _: {
       virtualisation.memorySize = 4096;
@@ -1302,7 +1199,7 @@ e2eGateChecks
       machine.copy_from_machine("/tmp/elisp-coverage/summary.txt", "elisp-coverage")
       machine.copy_from_machine("/tmp/elisp-coverage/status.json", "elisp-coverage")
     '';
-  });
+  };
 
 # The docs-only build preserves `devtool`'s single command catalog without
 # importing the performance producer's product-storage source closure.
@@ -1422,13 +1319,12 @@ static-code =
       devtool check --group code --sandbox-cargo
       touch $out
     '';
-coverage = finalCacheOutput (craneLib.mkCargoDerivation (
+coverage = craneLib.mkCargoDerivation (
   hostArgs
   // {
     src = coverageSrc;
     inherit cargoArtifacts;
     pname = "jaunder-coverage";
-    passthru.cacheSafetyClass = "final";
     # Source-based coverage uses LLVM's embedded coverage map
     # (-Cinstrument-coverage), not DWARF, so dropping debuginfo
     # shrinks the instrumented test binaries dramatically with no
@@ -1486,7 +1382,7 @@ coverage = finalCacheOutput (craneLib.mkCargoDerivation (
       fi
     '';
   }
-));
+);
   # Probe-only identity: its sole varying input is the filtered coverage source.
   # Keep this separate from coverage.drvPath, which also includes producer inputs.
   coverage-source-probe = pkgs.runCommand "jaunder-coverage-source-probe" { src = coverageSrc; } ''
@@ -1497,7 +1393,7 @@ coverage = finalCacheOutput (craneLib.mkCargoDerivation (
 # Named `jaunder-coverage-gate` so the cachix pushFilter
 # (jaunder-coverage|jaunder-e2e) excludes it.
 coverage-gate =
-  finalCacheOutput (pkgs.runCommand "jaunder-coverage-gate"
+  pkgs.runCommand "jaunder-coverage-gate"
     {
       nativeBuildInputs = [ devtoolBin ];
     }
@@ -1505,7 +1401,7 @@ coverage-gate =
       devtool coverage validate-status \
         --status ${self.checks.${system}.coverage}/status.json
       touch $out
-    '');
+    '';
 
 # Doctests: the one suite nextest structurally cannot run, so the
 # `coverage` check above never sees them (#763). The producer runs
