@@ -1,8 +1,9 @@
 //! Fail-closed structural proof for the coverage and e2e cache boundary.
 //!
-//! The versioned catalog is the only classification authority. It is reconciled
-//! with Nix's derived inventory, validates Cachix's actual store-name filter,
-//! and carries the paired source probes for every admitted support output.
+//! Nix emits the classification and source-boundary inventory from the
+//! concern-owned attrsets. The checked catalog reconciles to that authority,
+//! validates Cachix's actual store-name filter, and runs finite source-boundary
+//! regression arms without mistaking them for the complete Nix input graph.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -28,6 +29,7 @@ const WORKTREE_DIR: &str = ".xtask/cache-safety-source-probe.worktree";
 struct Policy {
     schema_version: u32,
     outputs: Vec<PolicyOutput>,
+    source_families: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
@@ -38,13 +40,25 @@ struct PolicyOutput {
     #[serde(default)]
     equivalent_to: Option<String>,
     #[serde(default)]
-    source_probe: Option<SourceProbe>,
+    source_family: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-struct SourceProbe {
+struct SourceFamily {
+    categories: Vec<SourceCategory>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+struct SourceCategory {
+    name: String,
     relevant: String,
-    unrelated: String,
+    excluded: String,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+struct SupportFamily {
+    attr: String,
+    family: String,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
@@ -58,12 +72,16 @@ enum Classification {
 #[serde(rename_all = "camelCase")]
 struct NixInventory {
     schema_version: u32,
-    outputs: Vec<String>,
+    final_attrs: Vec<String>,
+    support_attrs: Vec<String>,
+    support_families: Vec<SupportFamily>,
+    source_families: std::collections::BTreeMap<String, SourceFamily>,
 }
 
 fn parse_policy(raw: &str) -> Result<Policy> {
     let policy: Policy = serde_json::from_str(raw).context("parsing nix/cache-policy.json")?;
-    if policy.schema_version != 1 || policy.outputs.is_empty() {
+    if policy.schema_version != 1 || policy.outputs.is_empty() || policy.source_families.is_empty()
+    {
         bail!("cache policy must have schemaVersion 1 and at least one output");
     }
     let mut attrs = BTreeSet::new();
@@ -71,21 +89,16 @@ fn parse_policy(raw: &str) -> Result<Policy> {
         if output.attr.is_empty() || !attrs.insert(&output.attr) {
             bail!("cache policy has an empty or duplicate output attr");
         }
-        match (&output.classification, &output.source_probe) {
-            (Classification::Support, Some(probe))
-                if !probe.relevant.is_empty()
-                    && !probe.unrelated.is_empty()
-                    && probe.relevant != probe.unrelated => {}
+        match (&output.classification, &output.source_family) {
+            (Classification::Support, Some(family)) if !family.is_empty() => {}
             (Classification::Support, _) => {
-                bail!(
-                    "support output {} needs distinct sourceProbe paths",
-                    output.attr
-                );
+                bail!("support output {} needs a sourceFamily", output.attr)
             }
             (Classification::Final, None) => {}
-            (Classification::Final, Some(_)) => {
-                bail!("final output {} must not define a sourceProbe", output.attr);
-            }
+            (Classification::Final, Some(_)) => bail!(
+                "final output {} must not define a sourceFamily",
+                output.attr
+            ),
         }
         if let Some(equivalent) = &output.equivalent_to
             && (equivalent.is_empty() || equivalent == &output.attr)
@@ -96,28 +109,104 @@ fn parse_policy(raw: &str) -> Result<Policy> {
             );
         }
     }
+    for (family, categories) in &policy.source_families {
+        if family.is_empty()
+            || categories.is_empty()
+            || categories.iter().any(String::is_empty)
+            || categories.iter().collect::<BTreeSet<_>>().len() != categories.len()
+        {
+            bail!("cache policy has malformed source-family categories");
+        }
+    }
     Ok(policy)
 }
 
 fn reconcile(policy: &Policy, inventory: &NixInventory) -> Result<()> {
-    if inventory.schema_version != 1 || inventory.outputs.is_empty() {
-        bail!("Nix cache-safety inventory is malformed or empty");
+    let finals = inventory.final_attrs.iter().collect::<BTreeSet<_>>();
+    let supports = inventory.support_attrs.iter().collect::<BTreeSet<_>>();
+    if inventory.schema_version != 1
+        || finals.is_empty()
+        || supports.is_empty()
+        || !finals.is_disjoint(&supports)
+    {
+        bail!("Nix cache-safety inventory is malformed or has overlapping classifications");
     }
-    let actual = inventory.outputs.iter().collect::<BTreeSet<_>>();
-    if actual.len() != inventory.outputs.len() {
+    if finals.len() != inventory.final_attrs.len()
+        || supports.len() != inventory.support_attrs.len()
+    {
         bail!("Nix cache-safety inventory contains duplicate output attrs");
     }
-    let classified = policy
+    let policy_finals = policy
         .outputs
         .iter()
+        .filter(|output| output.classification == Classification::Final)
         .map(|output| &output.attr)
         .collect::<BTreeSet<_>>();
-    if classified != actual {
-        let missing = actual.difference(&classified).collect::<Vec<_>>();
-        let unreachable = classified.difference(&actual).collect::<Vec<_>>();
-        bail!(
-            "cache policy does not reconcile with Nix inventory; missing={missing:?} unreachable={unreachable:?}"
-        );
+    let policy_supports = policy
+        .outputs
+        .iter()
+        .filter(|output| output.classification == Classification::Support)
+        .map(|output| &output.attr)
+        .collect::<BTreeSet<_>>();
+    if policy_finals != finals || policy_supports != supports {
+        bail!("cache policy classifications do not reconcile with generated Nix inventory");
+    }
+    let generated_families = inventory
+        .support_families
+        .iter()
+        .map(|entry| (&entry.attr, &entry.family))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    if generated_families.len() != inventory.support_families.len()
+        || generated_families.keys().copied().collect::<BTreeSet<_>>() != supports
+    {
+        bail!("Nix cache-safety support families are incomplete or duplicate");
+    }
+    for output in policy
+        .outputs
+        .iter()
+        .filter(|output| output.classification == Classification::Support)
+    {
+        let family = output
+            .source_family
+            .as_ref()
+            .with_context(|| format!("{} has no validated source family", output.attr))?;
+        if generated_families.get(&output.attr) != Some(&family)
+            || !inventory.source_families.contains_key(family)
+        {
+            bail!(
+                "{} does not reconcile with its generated source family",
+                output.attr
+            );
+        }
+    }
+    if policy.source_families.len() != inventory.source_families.len() {
+        bail!("cache policy source-family categories do not reconcile with Nix inventory");
+    }
+    for (name, family) in &inventory.source_families {
+        let generated_categories = family
+            .categories
+            .iter()
+            .map(|category| &category.name)
+            .collect::<BTreeSet<_>>();
+        let declared_categories = policy
+            .source_families
+            .get(name)
+            .with_context(|| format!("cache policy omits generated source family {name}"))?
+            .iter()
+            .collect::<BTreeSet<_>>();
+        if generated_categories != declared_categories
+            || generated_categories.len() != family.categories.len()
+            || name.is_empty()
+            || family.categories.is_empty()
+            || family.categories.iter().any(|category| {
+                category.name.is_empty()
+                    || category.relevant.is_empty()
+                    || category.excluded.is_empty()
+                    || category.relevant == category.excluded
+            })
+        {
+            bail!("generated source family {name} has malformed categories");
+        }
     }
     for output in &policy.outputs {
         if let Some(equivalent) = &output.equivalent_to {
@@ -144,8 +233,12 @@ fn reconcile(policy: &Policy, inventory: &NixInventory) -> Result<()> {
     Ok(())
 }
 
-fn run(command: &str, args: &[&str]) -> Result<String> {
-    let output = Command::new(command)
+fn run_in(dir: Option<&Path>, command: &str, args: &[&str]) -> Result<String> {
+    let mut process = Command::new(command);
+    if let Some(dir) = dir {
+        process.current_dir(dir);
+    }
+    let output = process
         .args(args)
         .output()
         .with_context(|| format!("spawning `{command} {}`", args.join(" ")))?;
@@ -159,8 +252,13 @@ fn run(command: &str, args: &[&str]) -> Result<String> {
     String::from_utf8(output.stdout).context("Nix command output was not UTF-8")
 }
 
-fn build_inventory() -> Result<NixInventory> {
-    let out = run(
+fn run(command: &str, args: &[&str]) -> Result<String> {
+    run_in(None, command, args)
+}
+
+fn build_inventory(dir: &Path) -> Result<NixInventory> {
+    let out = run_in(
+        Some(dir),
         "nix",
         &[
             "build",
@@ -251,6 +349,43 @@ fn verify_filter_membership(
     Ok(())
 }
 
+fn non_substitutable_metadata(raw: &str, attr: &str) -> Result<()> {
+    let derivations: serde_json::Value =
+        serde_json::from_str(raw).context("parsing Nix derivation metadata")?;
+    let derivation = derivations
+        .get("derivations")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|derivations| derivations.values().next())
+        .context("Nix derivation metadata was empty")?;
+    let env = derivation
+        .get("env")
+        .and_then(serde_json::Value::as_object)
+        .context("Nix derivation metadata has no environment")?;
+    // Nix's JSON derivation encoding serializes `allowSubstitutes = false`
+    // as an empty string and `preferLocalBuild = true` as `"1"`.
+    if env
+        .get("allowSubstitutes")
+        .and_then(serde_json::Value::as_str)
+        != Some("")
+        || env
+            .get("preferLocalBuild")
+            .and_then(serde_json::Value::as_str)
+            != Some("1")
+    {
+        bail!(
+            "final output {attr} is not marked non-substitutable in its actual Nix derivation metadata"
+        );
+    }
+    Ok(())
+}
+
+fn verify_non_substitutable(attr: &str, drv_path: &str) -> Result<()> {
+    // Read the evaluated derivation, rather than trusting a Nix expression or
+    // policy declaration. These are the flags the Nix daemon receives when it
+    // decides whether this final result may be substituted.
+    non_substitutable_metadata(&run("nix", &["show-derivation", drv_path])?, attr)
+}
+
 fn closure(path: &str, include_outputs: bool) -> Result<BTreeSet<String>> {
     let mut args = vec!["--query", "--requisites"];
     if include_outputs {
@@ -283,6 +418,47 @@ fn git_run(dir: &Path, args: &[&str]) -> Result<()> {
     git::run(dir, &full)
 }
 
+fn git_output(dir: &Path, args: &[&str]) -> Result<String> {
+    let output = git::at(dir)
+        .args(["-c", "core.hooksPath="])
+        .args(args)
+        .output()
+        .context("running git for cache-safety probe")?;
+    if !output.status.success() {
+        bail!(
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    String::from_utf8(output.stdout)
+        .context("git output is not UTF-8")
+        .map(|value| value.trim().to_owned())
+}
+
+fn staged_snapshot_commit(repo_root: &Path) -> Result<String> {
+    let tree = git_output(repo_root, &["write-tree"])?;
+    let output = git::at(repo_root)
+        .args(["-c", "core.hooksPath=", "commit-tree"])
+        .arg(&tree)
+        .args(["-m", "cache-safety staged snapshot"])
+        .env("GIT_AUTHOR_NAME", "cache-safety probe")
+        .env("GIT_AUTHOR_EMAIL", "cache-safety@invalid")
+        .env("GIT_COMMITTER_NAME", "cache-safety probe")
+        .env("GIT_COMMITTER_EMAIL", "cache-safety@invalid")
+        .output()
+        .context("creating staged cache-safety snapshot")?;
+    if !output.status.success() {
+        bail!(
+            "git commit-tree failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    String::from_utf8(output.stdout)
+        .context("snapshot commit id is not UTF-8")
+        .map(|value| value.trim().to_owned())
+}
+
 struct WorktreeGuard {
     repo_root: PathBuf,
     path: PathBuf,
@@ -308,20 +484,59 @@ fn dirty_probe_tree(dir: &Path) -> Result<()> {
 }
 
 fn stage_change(dir: &Path, path: &str) -> Result<()> {
-    OpenOptions::new()
-        .append(true)
-        .open(dir.join(path))
-        .with_context(|| format!("opening {path} for cache-safety source probe"))?
-        .write_all(b"\n")
-        .with_context(|| format!("changing {path} for cache-safety source probe"))?;
-    git_run(dir, &["add", path])
+    let path = dir.join(path);
+    if path.ends_with("nix/checks.nix") {
+        // A whitespace-only Nix edit does not alter a derivation. Exercise the
+        // declared test-definition category through its explicit e2e salt,
+        // which every generated driver interpolates into its input graph.
+        let source = fs::read_to_string(&path).context("reading Nix source probe")?;
+        if !source.contains("e2eSalt = \"\";") {
+            bail!("locating e2e salt source-probe arm");
+        }
+        let source = source.replace("e2eSalt = \"\";", "e2eSalt = \"cache-safety-probe\";");
+        fs::write(&path, source).context("changing Nix source probe")?;
+    } else {
+        OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .with_context(|| format!("opening {} for cache-safety source probe", path.display()))?
+            .write_all(b"\n")
+            .with_context(|| {
+                format!("changing {} for cache-safety source probe", path.display())
+            })?;
+    }
+    let relative = path
+        .strip_prefix(dir)
+        .context("resolving source probe path")?;
+    git_run(
+        dir,
+        &[
+            "add",
+            relative
+                .to_str()
+                .context("source probe path is not UTF-8")?,
+        ],
+    )
 }
 
 fn source_identity(dir: &Path, attr: &str) -> Result<String> {
     eval_path_in(Some(dir), attr, "drvPath")
 }
 
-fn verify_source_probes(policy: &Policy) -> Result<()> {
+fn family_outputs<'a>(inventory: &'a NixInventory, family: &str) -> Result<Vec<&'a str>> {
+    let outputs = inventory
+        .support_families
+        .iter()
+        .filter(|entry| entry.family == family)
+        .map(|entry| entry.attr.as_str())
+        .collect::<Vec<_>>();
+    if outputs.is_empty() {
+        bail!("generated source family {family} has no support output");
+    }
+    Ok(outputs)
+}
+
+fn snapshot_worktree() -> Result<(PathBuf, WorktreeGuard)> {
     let repo_root = std::env::current_dir().context("resolving cwd")?;
     let path = repo_root.join(WORKTREE_DIR);
     fs::create_dir_all(repo_root.join(".xtask")).context("creating .xtask")?;
@@ -334,77 +549,90 @@ fn verify_source_probes(policy: &Policy) -> Result<()> {
     let path_str = path
         .to_str()
         .context("source probe worktree path is not UTF-8")?;
+    // The flake ignores unstaged files. Freeze the index once, then derive all
+    // inventory, identities, closures, and mutation baselines from that commit.
+    let snapshot = staged_snapshot_commit(&repo_root)?;
     git_run(
         &repo_root,
-        &["worktree", "add", "--detach", path_str, "HEAD"],
+        &["worktree", "add", "--detach", path_str, &snapshot],
     )?;
-    let _guard = WorktreeGuard {
+    let guard = WorktreeGuard {
         repo_root,
         path: path.clone(),
     };
+    Ok((path, guard))
+}
 
-    for output in policy
-        .outputs
-        .iter()
-        .filter(|output| output.classification == Classification::Support)
-    {
-        let probe = output
-            .source_probe
-            .as_ref()
-            .with_context(|| format!("{} has no validated sourceProbe", output.attr))?;
-        dirty_probe_tree(&path)?;
-        let base = source_identity(&path, &output.attr)?;
-
-        stage_change(&path, &probe.relevant)?;
-        let relevant = source_identity(&path, &output.attr)?;
-        if relevant == base {
-            bail!(
-                "{}: relevant source {} did not change derivation identity {base}",
-                output.attr,
-                probe.relevant
-            );
+fn verify_source_probes(path: &Path, inventory: &NixInventory) -> Result<()> {
+    for (family_name, family) in &inventory.source_families {
+        for output in family_outputs(inventory, family_name)? {
+            dirty_probe_tree(path)?;
+            let base = source_identity(path, output)?;
+            // These are regression mutations. The complete boundary is the Nix
+            // source predicate/input graph that generated this family, not this
+            // finite representative set.
+            for category in &family.categories {
+                stage_change(path, &category.relevant)?;
+                let relevant = source_identity(path, output)?;
+                if relevant == base {
+                    bail!(
+                        "{family_name}/{output}/{}: relevant source {} did not change derivation identity {base}",
+                        category.name,
+                        category.relevant
+                    );
+                }
+                git_run(path, &["reset", "--hard", "HEAD"])?;
+                dirty_probe_tree(path)?;
+                stage_change(path, &category.excluded)?;
+                let excluded = source_identity(path, output)?;
+                if excluded != base {
+                    bail!(
+                        "{family_name}/{output}/{}: excluded source {} changed derivation identity {base} -> {excluded}",
+                        category.name,
+                        category.excluded
+                    );
+                }
+                git_run(path, &["reset", "--hard", "HEAD"])?;
+                dirty_probe_tree(path)?;
+            }
+            git_run(path, &["reset", "--hard", "HEAD"])?;
         }
-
-        git_run(&path, &["reset", "--hard", "HEAD"])?;
-        dirty_probe_tree(&path)?;
-        stage_change(&path, &probe.unrelated)?;
-        let unrelated = source_identity(&path, &output.attr)?;
-        if unrelated != base {
-            bail!(
-                "{}: unrelated source {} changed derivation identity {base} -> {unrelated}",
-                output.attr,
-                probe.unrelated
-            );
-        }
-        git_run(&path, &["reset", "--hard", "HEAD"])?;
     }
     Ok(())
 }
 
-fn verify(policy: &Policy) -> Result<()> {
-    let inventory = build_inventory()?;
-    reconcile(policy, &inventory)?;
+fn verify() -> Result<()> {
+    let (snapshot, _guard) = snapshot_worktree()?;
+    let policy = parse_policy(
+        &fs::read_to_string(snapshot.join(POLICY_PATH)).context("reading nix/cache-policy.json")?,
+    )?;
+    let inventory = build_inventory(&snapshot)?;
+    reconcile(&policy, &inventory)?;
     let mut resolved = Vec::new();
     for output in &policy.outputs {
         resolved.push((
             output.clone(),
-            eval_path_in(None, &output.attr, "outPath")?,
-            eval_path_in(None, &output.attr, "drvPath")?,
+            eval_path_in(Some(&snapshot), &output.attr, "outPath")?,
+            eval_path_in(Some(&snapshot), &output.attr, "drvPath")?,
         ));
     }
-    let ci_setup =
-        fs::read_to_string(CI_SETUP_PATH).context("reading .github/actions/setup-ci/action.yml")?;
+    let ci_setup = fs::read_to_string(snapshot.join(CI_SETUP_PATH))
+        .context("reading .github/actions/setup-ci/action.yml")?;
     verify_filter_membership(&resolved, &push_filter(&ci_setup)?)?;
     let finals = resolved
         .iter()
         .filter(|(output, _, _)| output.classification == Classification::Final)
         .map(|(output, out, drv)| (output.attr.clone(), out.clone(), drv.clone()))
         .collect::<Vec<_>>();
+    for (attr, _, drv_path) in &finals {
+        verify_non_substitutable(attr, drv_path)?;
+    }
     for (output, out_path, drv_path) in &resolved {
         if output.classification == Classification::Support {
             // Realize support only. Final verdicts are never built just to inspect
             // their closure; evaluated final identities reject closure leakage.
-            run(
+            run_in(
+                Some(&snapshot),
                 "nix",
                 &[
                     "build",
@@ -413,23 +641,20 @@ fn verify(policy: &Policy) -> Result<()> {
                     &format!(".#{}", output.attr),
                 ],
             )?;
-            reject_final_membership(&closure(out_path, false)?, &finals)?;
-            reject_final_membership(&closure(drv_path, true)?, &finals)?;
+            let output_closure = closure(out_path, false)?;
+            reject_final_membership(&output_closure, &finals)?;
+            let derivation_closure = closure(drv_path, true)?;
+            reject_final_membership(&derivation_closure, &finals)?;
         }
     }
-    verify_source_probes(policy)
+    verify_source_probes(&snapshot, &inventory)
 }
 
 pub fn probe() -> StepResult {
-    let result = (|| {
-        let policy = parse_policy(
-            &fs::read_to_string(Path::new(POLICY_PATH)).context("reading nix/cache-policy.json")?,
-        )?;
-        verify(&policy)
-    })();
+    let result = verify();
     match result {
         Ok(()) => StepResult::ok("cache-safety-probe").detail(
-            "cataloged support closures exclude finals, Cachix admits only support identities, and paired source probes hold",
+            "generated support closures exclude generated finals, Cachix admits only support identities, and generated source-family regression arms hold",
         ),
         Err(error) => StepResult::fail("cache-safety-probe").detail(format!("{error:#}")),
     }
@@ -439,25 +664,47 @@ pub fn probe() -> StepResult {
 mod tests {
     use super::*;
 
-    fn support_probe() -> Option<SourceProbe> {
-        Some(SourceProbe {
-            relevant: "relevant".into(),
-            unrelated: "unrelated".into(),
-        })
+    fn inventory(final_attrs: &[&str], support_attrs: &[&str]) -> NixInventory {
+        let support_families = support_attrs
+            .iter()
+            .map(|attr| SupportFamily {
+                attr: (*attr).into(),
+                family: "family".into(),
+            })
+            .collect();
+        NixInventory {
+            schema_version: 1,
+            final_attrs: final_attrs.iter().map(|attr| (*attr).into()).collect(),
+            support_attrs: support_attrs.iter().map(|attr| (*attr).into()).collect(),
+            support_families,
+            source_families: std::collections::BTreeMap::from([(
+                "family".into(),
+                SourceFamily {
+                    categories: vec![SourceCategory {
+                        name: "category".into(),
+                        relevant: "relevant".into(),
+                        excluded: "excluded".into(),
+                    }],
+                },
+            )]),
+        }
     }
 
     fn policy(outputs: &[(&str, Classification)]) -> Policy {
         Policy {
             schema_version: 1,
+            source_families: std::collections::BTreeMap::from([(
+                "family".into(),
+                vec!["category".into()],
+            )]),
             outputs: outputs
                 .iter()
                 .map(|(attr, classification)| PolicyOutput {
                     attr: (*attr).into(),
                     classification: classification.clone(),
                     equivalent_to: None,
-                    source_probe: (classification == &Classification::Support)
-                        .then(support_probe)
-                        .flatten(),
+                    source_family: (classification == &Classification::Support)
+                        .then(|| "family".into()),
                 })
                 .collect(),
         }
@@ -469,15 +716,94 @@ mod tests {
             ("support", Classification::Support),
             ("final", Classification::Final),
         ]);
-        let inventory = NixInventory {
-            schema_version: 1,
-            outputs: vec!["support".into(), "final".into()],
-        };
+        let inventory = inventory(&["final"], &["support"]);
         assert!(reconcile(&policy, &inventory).is_ok());
         assert!(
             reject_final_membership(
                 &BTreeSet::from(["support-out".into()]),
                 &[("final".into(), "final-out".into(), "final.drv".into())]
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn admits_unrelated_nixpkgs_closure_path() {
+        assert!(
+            reject_final_membership(
+                &BTreeSet::from(
+                    ["/nix/store/0123456789abcdefghijklmnopqrstuv-bash-5.3.drv".into()]
+                ),
+                &[("final".into(), "final-out".into(), "final.drv".into())]
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn rejects_missing_generated_source_family() {
+        let policy = policy(&[("support", Classification::Support)]);
+        let mut inventory = inventory(&[], &["support"]);
+        inventory.source_families.clear();
+        assert!(reconcile(&policy, &inventory).is_err());
+    }
+
+    #[test]
+    fn rejects_malformed_generated_category_arm() {
+        let policy = policy(&[("support", Classification::Support)]);
+        let mut inventory = inventory(&[], &["support"]);
+        inventory
+            .source_families
+            .get_mut("family")
+            .unwrap()
+            .categories[0]
+            .excluded = "relevant".into();
+        assert!(reconcile(&policy, &inventory).is_err());
+    }
+
+    #[test]
+    fn rejects_missing_extra_or_duplicate_source_categories() {
+        assert!(parse_policy(r#"{"schemaVersion":1,"sourceFamilies":{"family":[]},"outputs":[{"attr":"support","classification":"support","sourceFamily":"family"}]}"#).is_err());
+        assert!(parse_policy(r#"{"schemaVersion":1,"sourceFamilies":{"family":["category","category"]},"outputs":[{"attr":"support","classification":"support","sourceFamily":"family"}]}"#).is_err());
+
+        let mut missing = policy(&[("support", Classification::Support)]);
+        missing
+            .source_families
+            .insert("family".into(), vec!["other".into()]);
+        assert!(reconcile(&missing, &inventory(&[], &["support"])).is_err());
+
+        let mut extra = policy(&[("support", Classification::Support)]);
+        extra
+            .source_families
+            .insert("extra".into(), vec!["category".into()]);
+        assert!(reconcile(&extra, &inventory(&[], &["support"])).is_err());
+    }
+
+    #[test]
+    fn selects_every_support_output_in_a_family() {
+        let inventory = inventory(&[], &["one", "two"]);
+        assert_eq!(
+            family_outputs(&inventory, "family").unwrap(),
+            vec!["one", "two"]
+        );
+    }
+
+    #[test]
+    fn rejects_final_without_actual_non_substitution_metadata() {
+        let error = non_substitutable_metadata(
+            r#"{"derivations":{"drv":{"env":{"allowSubstitutes":"1"}}}}"#,
+            "final",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("not marked non-substitutable"));
+    }
+
+    #[test]
+    fn admits_actual_non_substitution_metadata() {
+        assert!(
+            non_substitutable_metadata(
+                r#"{"derivations":{"drv":{"env":{"allowSubstitutes":"","preferLocalBuild":"1"}}}}"#,
+                "final"
             )
             .is_ok()
         );
@@ -494,12 +820,16 @@ mod tests {
     }
 
     #[test]
+    fn rejects_generated_classification_mismatch() {
+        let policy = policy(&[("verdict", Classification::Final)]);
+        let inventory = inventory(&[], &["verdict"]);
+        assert!(reconcile(&policy, &inventory).is_err());
+    }
+
+    #[test]
     fn rejects_incomplete_inventory() {
         let policy = policy(&[("support", Classification::Support)]);
-        let inventory = NixInventory {
-            schema_version: 1,
-            outputs: vec!["support".into(), "unclassified".into()],
-        };
+        let inventory = inventory(&[], &["support", "unclassified"]);
         assert!(reconcile(&policy, &inventory).is_err());
     }
 
@@ -516,14 +846,14 @@ mod tests {
     }
 
     #[test]
-    fn rejects_support_without_paired_source_probe() {
+    fn rejects_support_without_source_family() {
         assert!(
             parse_policy(
                 r#"{"schemaVersion":1,"outputs":[{"attr":"support","classification":"support"}]}"#
             )
             .is_err()
         );
-        assert!(parse_policy(r#"{"schemaVersion":1,"outputs":[{"attr":"final","classification":"final","sourceProbe":{"relevant":"a","unrelated":"b"}}]}"#).is_err());
+        assert!(parse_policy(r#"{"schemaVersion":1,"outputs":[{"attr":"final","classification":"final","sourceFamily":"family"}]}"#).is_err());
     }
 
     #[test]
@@ -533,10 +863,7 @@ mod tests {
             ("package", Classification::Final),
         ]);
         one_way.outputs[0].equivalent_to = Some("package".into());
-        let inventory = NixInventory {
-            schema_version: 1,
-            outputs: vec!["check".into(), "package".into()],
-        };
+        let inventory = inventory(&["check", "package"], &[]);
         assert!(reconcile(&one_way, &inventory).is_err());
         let mut mismatched = one_way;
         mismatched.outputs[1].equivalent_to = Some("another-final".into());
@@ -555,7 +882,7 @@ mod tests {
                     attr: "packages.e2e-support".into(),
                     classification: Classification::Support,
                     equivalent_to: None,
-                    source_probe: support_probe(),
+                    source_family: Some("family".into()),
                 },
                 "/nix/store/0123456789abcdefghijklmnopqrstuv-jaunder-e2e".into(),
                 "/nix/store/0123456789abcdefghijklmnopqrstuv-jaunder-e2e.drv".into(),
@@ -565,7 +892,7 @@ mod tests {
                     attr: "checks.coverage".into(),
                     classification: Classification::Final,
                     equivalent_to: None,
-                    source_probe: None,
+                    source_family: None,
                 },
                 "/nix/store/0123456789abcdefghijklmnopqrstuv-jaunder-coverage".into(),
                 "/nix/store/0123456789abcdefghijklmnopqrstuv-jaunder-coverage.drv".into(),
@@ -581,7 +908,7 @@ mod tests {
                 attr: "checks.coverage".into(),
                 classification: Classification::Final,
                 equivalent_to: None,
-                source_probe: None,
+                source_family: None,
             },
             "/nix/store/0123456789abcdefghijklmnopqrstuv-jaunder-coverage".into(),
             "/nix/store/0123456789abcdefghijklmnopqrstuv-jaunder-coverage.drv".into(),
@@ -596,7 +923,7 @@ mod tests {
                 attr: "packages.e2e-support".into(),
                 classification: Classification::Support,
                 equivalent_to: None,
-                source_probe: support_probe(),
+                source_family: Some("family".into()),
             },
             "/nix/store/0123456789abcdefghijklmnopqrstuv-jaunder-e2e".into(),
             "/nix/store/0123456789abcdefghijklmnopqrstuv-jaunder-e2e.drv".into(),

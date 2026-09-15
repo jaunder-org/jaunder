@@ -37,6 +37,21 @@ let
     emacsSrc
     emacsForCi
     ;
+  # Final coverage/e2e verdicts must execute for the current ref. These
+  # derivation flags are checked from actual Nix metadata by cache-safety probe;
+  # the closure proof remains the independent defense against result leakage.
+  nonSubstitutable =
+    derivation:
+    if derivation ? overrideAttrs then
+      derivation.overrideAttrs (_: {
+        allowSubstitutes = false;
+        preferLocalBuild = true;
+      })
+    else
+      derivation.overrideTestDerivation (_: {
+        allowSubstitutes = false;
+        preferLocalBuild = true;
+      });
   # The root workspace remains the coverage population. Its Cargo manifests
   # define the recursively discovered local path package build closure.
   coverageMembers = cargoPackageClosure workspaceMembers;
@@ -485,7 +500,7 @@ mkE2eCheck =
     afterPackageCopy =
       if backendPolicy.seedBeforeStart then "\n\n" else "\n\n\n${seedDefinition}\n\n\n";
   in
-  pkgs.testers.nixosTest {
+  nonSubstitutable (pkgs.testers.nixosTest {
     name = checkName;
 
     # Caller-selected outer budget for boot, seed, execution, and artifact
@@ -581,7 +596,7 @@ mkE2eCheck =
         ''
       else
         producer { inherit backendPolicy; };
-  };
+  });
 
 # Cache-busting salt for e2e measurement runs (#792). Nix caches the e2e
 # check derivations, so a repeated `cargo xtask traces run` returns a
@@ -1667,8 +1682,8 @@ mkWasmCoverageMeasurementProducer =
   # This concern-owned attrset is the sole definition of Rust coverage outputs.
   # The source probe is preparation only; the producer and its consumer are
   # verdict-bearing and therefore final.
-  coverageCacheChecks = rec {
-    coverage = craneLib.mkCargoDerivation (
+  coverageFinalCacheChecks = rec {
+    coverage = nonSubstitutable (craneLib.mkCargoDerivation (
       hostArgs
       // {
         src = coverageSrc;
@@ -1731,27 +1746,85 @@ mkWasmCoverageMeasurementProducer =
           fi
         '';
       }
-    );
+    ));
+    # Belt-and-suspenders: this sandbox consumer validates completed producer
+    # evidence through the shared Rust contract, while host xtask consumes its
+    # reports separately. Its `jaunder-coverage-gate` name stays broad-filtered.
+    coverage-gate = nonSubstitutable (pkgs.runCommand "jaunder-coverage-gate" { nativeBuildInputs = [ devtoolBin ]; } ''
+      devtool coverage validate-status --status ${coverage}/status.json
+      touch $out
+    '');
+  };
+  coverageSupportCacheChecks = {
     # Probe-only identity: its sole varying input is the filtered coverage
     # source. Keep this separate from coverage.drvPath, which also includes the
     # coverage producer's tooling and runtime inputs.
     coverage-source-probe = pkgs.runCommand "jaunder-coverage-source-probe" { src = coverageSrc; } ''
       touch $out
     '';
-    # Belt-and-suspenders: this sandbox consumer validates completed producer
-    # evidence through the shared Rust contract, while host xtask consumes its
-    # reports separately. Its `jaunder-coverage-gate` name stays broad-filtered.
-    coverage-gate = pkgs.runCommand "jaunder-coverage-gate" { nativeBuildInputs = [ devtoolBin ]; } ''
-      devtool coverage validate-status --status ${coverage}/status.json
-      touch $out
-    '';
   };
-  cacheSafetyOutputAttrs =
-    (map (name: "checks.${system}.${name}") (builtins.attrNames coverageCacheChecks))
+  coverageCacheChecks = coverageFinalCacheChecks // coverageSupportCacheChecks;
+  coveragePartitionAssertion =
+    let
+      final = builtins.attrNames coverageFinalCacheChecks;
+      support = builtins.attrNames coverageSupportCacheChecks;
+      complete = builtins.attrNames coverageCacheChecks;
+    in
+    assert pkgs.lib.intersectLists final support == [ ];
+    assert builtins.sort builtins.lessThan complete == builtins.sort builtins.lessThan (final ++ support);
+    true;
+  # These classifications are derived directly from the concern-owned attrsets.
+  # The JSON inventory below is the probe's authority; cache-policy.json must
+  # reconcile to it and cannot classify an attr by name convention.
+  cacheSafetyFinalAttrs =
+    assert coveragePartitionAssertion;
+    (map (name: "checks.${system}.${name}") (builtins.attrNames coverageFinalCacheChecks))
     ++ (map (name: "checks.${system}.${name}") (builtins.attrNames e2eGateChecks))
     ++ [ "checks.${system}.e2e" "packages.${system}.e2e-checks" ]
-    ++ (map (name: "packages.${system}.${name}") (builtins.attrNames e2eSingleWorkerPackages))
-    ++ (map (name: "packages.${system}.${name}") (builtins.attrNames e2eSupportPackages));
+    ++ (map (name: "packages.${system}.${name}") (builtins.attrNames e2eSingleWorkerPackages));
+  cacheSafetyDriverAttrs =
+    map (name: "packages.${system}.${name}") (builtins.attrNames e2eTestDriverPackages);
+  cacheSafetyPackageSupportAttrs = map (name: "packages.${system}.${name}") [ "e2e-support" "e2e-npm-deps" ];
+  cacheSafetySupportAttrs =
+    (map (name: "checks.${system}.${name}") (builtins.attrNames coverageSupportCacheChecks))
+    ++ cacheSafetyPackageSupportAttrs
+    ++ cacheSafetyDriverAttrs;
+  cacheSafetySourceFamilies = {
+    coverage = {
+      categories = [
+        { name = "cargo-workspace"; relevant = "server/src/lib.rs"; excluded = "xtask/src/main.rs"; }
+        { name = "nextest-profile"; relevant = ".config/nextest.toml"; excluded = "docs/README.md"; }
+        { name = "csr-shell"; relevant = "csr/index.html"; excluded = "flake.nix"; }
+        { name = "embedded-assets"; relevant = "server/assets/jaunder.css"; excluded = "end2end/tests/visual.css"; }
+        { name = "migrations"; relevant = "storage/migrations/sqlite/0001_create_site_config.sql"; excluded = "xtask/src/main.rs"; }
+        { name = "backup-corpus"; relevant = "server/tests/misc/backup_corpus/index.json"; excluded = "docs/README.md"; }
+      ];
+    };
+    e2e-package = {
+      # buildNpmPackage's `src = ../end2end` is the universal boundary; these
+      # finite paths are regression arms, not a substitute for that input.
+      categories = [
+        { name = "npm-manifest"; relevant = "end2end/package.json"; excluded = "docs/README.md"; }
+        { name = "npm-lock"; relevant = "end2end/package-lock.json"; excluded = "xtask/src/main.rs"; }
+        { name = "playwright-config"; relevant = "end2end/playwright.config.ts"; excluded = "docs/README.md"; }
+        { name = "playwright-tests"; relevant = "end2end/tests/fixtures.ts"; excluded = "xtask/src/main.rs"; }
+        { name = "otel-config"; relevant = "end2end/otel-collector.yaml"; excluded = "docs/README.md"; }
+      ];
+    };
+    e2e-driver = {
+      # Driver expressions explicitly interpolate jaunderBin, e2ePackage, and
+      # this NixOS test definition; all three are inputs to every driver.
+      categories = [
+        { name = "application"; relevant = "server/src/lib.rs"; excluded = "docs/README.md"; }
+        { name = "e2e-package"; relevant = "end2end/tests/fixtures.ts"; excluded = "xtask/src/main.rs"; }
+        { name = "nix-test-definition"; relevant = "nix/checks.nix"; excluded = "docs/README.md"; }
+      ];
+    };
+  };
+  cacheSafetySupportFamilies =
+    (map (attr: { inherit attr; family = "coverage"; }) (map (name: "checks.${system}.${name}") (builtins.attrNames coverageSupportCacheChecks)))
+    ++ (map (attr: { inherit attr; family = "e2e-package"; }) cacheSafetyPackageSupportAttrs)
+    ++ (map (attr: { inherit attr; family = "e2e-driver"; }) cacheSafetyDriverAttrs);
 in
 {
 
@@ -1766,7 +1839,10 @@ in
       cache-safety-inventory = pkgs.writeText "jaunder-cache-safety-inventory.json" (
         builtins.toJSON {
           schemaVersion = 1;
-          outputs = cacheSafetyOutputAttrs;
+          finalAttrs = cacheSafetyFinalAttrs;
+          supportAttrs = cacheSafetySupportAttrs;
+          supportFamilies = cacheSafetySupportFamilies;
+          sourceFamilies = cacheSafetySourceFamilies;
         }
       );
 # The e2e aggregate: a symlinkJoin of every browser/backend `e2e-*`
@@ -1775,12 +1851,12 @@ in
 # `jaunder-e2e*` name keeps it out of the cachix push, so building it
 # always realizes the underlying VM checks rather than substituting a
 # cached aggregate.
-e2e-checks = pkgs.symlinkJoin {
+e2e-checks = nonSubstitutable (pkgs.symlinkJoin {
   name = "jaunder-e2e-checks";
   paths = builtins.attrValues (
     pkgs.lib.filterAttrs (name: _: pkgs.lib.hasPrefix "e2e-" name) self.checks.${system}
   );
-};
+});
 wasm-coverage-chromium = mkWasmCoverageProducer { browser = "chromium"; };
 wasm-coverage-firefox = mkWasmCoverageProducer { browser = "firefox"; };
 wasm-coverage-chromium-export-failure = mkWasmCoverageProducer {

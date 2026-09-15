@@ -1,15 +1,30 @@
 {
   "schemaVersion": 1,
+  "sourceFamilies": {
+    "coverage": [
+      "cargo-workspace",
+      "nextest-profile",
+      "csr-shell",
+      "embedded-assets",
+      "migrations",
+      "backup-corpus"
+    ],
+    "e2e-package": [
+      "npm-manifest",
+      "npm-lock",
+      "playwright-config",
+      "playwright-tests",
+      "otel-config"
+    ],
+    "e2e-driver": ["application", "e2e-package", "nix-test-definition"]
+  },
   "outputs": [
     { "attr": "checks.x86_64-linux.coverage", "classification": "final" },
     { "attr": "checks.x86_64-linux.coverage-gate", "classification": "final" },
     {
       "attr": "checks.x86_64-linux.coverage-source-probe",
       "classification": "support",
-      "sourceProbe": {
-        "relevant": "server/src/lib.rs",
-        "unrelated": "xtask/src/main.rs"
-      }
+      "sourceFamily": "coverage"
     },
     {
       "attr": "checks.x86_64-linux.e2e",
@@ -40,42 +55,27 @@
     {
       "attr": "packages.x86_64-linux.e2e-postgres-chromium-driver",
       "classification": "support",
-      "sourceProbe": {
-        "relevant": "end2end/tests/fixtures.ts",
-        "unrelated": "docs/README.md"
-      }
+      "sourceFamily": "e2e-driver"
     },
     {
       "attr": "packages.x86_64-linux.e2e-postgres-chromium-single-worker-driver",
       "classification": "support",
-      "sourceProbe": {
-        "relevant": "end2end/tests/fixtures.ts",
-        "unrelated": "docs/README.md"
-      }
+      "sourceFamily": "e2e-driver"
     },
     {
       "attr": "packages.x86_64-linux.e2e-postgres-firefox-driver",
       "classification": "support",
-      "sourceProbe": {
-        "relevant": "end2end/tests/fixtures.ts",
-        "unrelated": "docs/README.md"
-      }
+      "sourceFamily": "e2e-driver"
     },
     {
       "attr": "packages.x86_64-linux.e2e-postgres-firefox-single-worker-driver",
       "classification": "support",
-      "sourceProbe": {
-        "relevant": "end2end/tests/fixtures.ts",
-        "unrelated": "docs/README.md"
-      }
+      "sourceFamily": "e2e-driver"
     },
     {
       "attr": "packages.x86_64-linux.e2e-npm-deps",
       "classification": "support",
-      "sourceProbe": {
-        "relevant": "end2end/package-lock.json",
-        "unrelated": "docs/README.md"
-      }
+      "sourceFamily": "e2e-package"
     },
     {
       "attr": "packages.x86_64-linux.e2e-postgres-chromium-single-worker",
@@ -96,42 +96,27 @@
     {
       "attr": "packages.x86_64-linux.e2e-sqlite-firefox-single-worker-driver",
       "classification": "support",
-      "sourceProbe": {
-        "relevant": "end2end/tests/fixtures.ts",
-        "unrelated": "docs/README.md"
-      }
+      "sourceFamily": "e2e-driver"
     },
     {
       "attr": "packages.x86_64-linux.e2e-sqlite-firefox-driver",
       "classification": "support",
-      "sourceProbe": {
-        "relevant": "end2end/tests/fixtures.ts",
-        "unrelated": "docs/README.md"
-      }
+      "sourceFamily": "e2e-driver"
     },
     {
       "attr": "packages.x86_64-linux.e2e-sqlite-chromium-single-worker-driver",
       "classification": "support",
-      "sourceProbe": {
-        "relevant": "end2end/tests/fixtures.ts",
-        "unrelated": "docs/README.md"
-      }
+      "sourceFamily": "e2e-driver"
     },
     {
       "attr": "packages.x86_64-linux.e2e-sqlite-chromium-driver",
       "classification": "support",
-      "sourceProbe": {
-        "relevant": "end2end/tests/fixtures.ts",
-        "unrelated": "docs/README.md"
-      }
+      "sourceFamily": "e2e-driver"
     },
     {
       "attr": "packages.x86_64-linux.e2e-support",
       "classification": "support",
-      "sourceProbe": {
-        "relevant": "end2end/tests/fixtures.ts",
-        "unrelated": "docs/README.md"
-      }
+      "sourceFamily": "e2e-package"
     }
   ]
 }
