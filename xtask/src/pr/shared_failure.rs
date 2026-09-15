@@ -90,6 +90,14 @@ pub struct SelectedRun {
     pub source: SharedFailureSource,
 }
 
+/// Transport evidence ready for the pure signature policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SharedFailureEvidence {
+    pub subject_log: String,
+    pub selected_runs: Vec<SelectedRun>,
+    pub jobs: Vec<(u64, Vec<CandidateJob>)>,
+}
+
 const ALGORITHM: &str = "github-actions-error-block-v1";
 const MAX_BLOCK_LINES: usize = 8;
 const MAX_BLOCK_BYTES: usize = 4 * 1024;

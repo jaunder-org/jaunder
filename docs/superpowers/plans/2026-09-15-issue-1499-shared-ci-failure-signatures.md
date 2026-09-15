@@ -58,7 +58,7 @@ Out:
     latest-completed precedence, green supersession, in-progress treatment, and
     ten-match ordering/cardinality.
 
-- [ ] Task 2: Add deadline-bound GitHub evidence acquisition
+- [x] Task 2: Add deadline-bound GitHub evidence acquisition
   - Files: modify `xtask/src/pr/gh.rs`, `xtask/src/pr/shared_failure.rs`, and
     `xtask/src/pr/snapshot.rs`; extend `xtask/src/pr/test_support.rs` only for
     reusable test doubles/fixtures.

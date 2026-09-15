@@ -5,9 +5,15 @@
 //! ejection — or a stale one from before the last push — belongs to `decide`, which
 //! can be tested without any of this.
 
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
 use serde_json::Value;
 
 use super::gh::{self, ApiError};
+use super::shared_failure::{
+    CandidateJob, CandidateRun, EligibleHead, SharedFailureEvidence, SharedFailureSource,
+    SubjectFailure, select_runs,
+};
 use super::{Outcome, PrNumber, Subject};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -514,6 +520,224 @@ impl GhSource {
             number,
         })
     }
+    /// Collect bounded, read-only evidence for the optional shared-failure annotation.
+    ///
+    /// This is intentionally not part of `PrSource`: watch must not acquire it while
+    /// deciding an outcome, and Task 3 alone chooses when the best-effort lookup runs.
+    pub fn shared_failure_evidence(
+        &self,
+        subject: &Subject,
+        failure: &SubjectFailure,
+    ) -> Result<SharedFailureEvidence, ApiError> {
+        let deadline = gh::Deadline::ten_seconds();
+        let not_before = rfc3339_24_hours_ago()?;
+        collect_shared_failure_evidence_with(
+            subject,
+            failure,
+            &not_before,
+            |args| gh::run_gh_deadline(args, &deadline),
+            |args| gh::run_gh_raw_deadline(args, &deadline),
+        )
+    }
+}
+
+/// Coordinate the fixed observation sequence while keeping transport injectable for
+/// request/parser tests.  Every path is repository-scoped from `Subject`; callers
+/// supply only the primary workflow's newest-first, 24-hour-bounded population.
+fn collect_shared_failure_evidence_with(
+    subject: &Subject,
+    failure: &SubjectFailure,
+    not_before: &str,
+    mut json: impl FnMut(&[&str]) -> Result<Value, ApiError>,
+    mut raw: impl FnMut(&[&str]) -> Result<Vec<u8>, ApiError>,
+) -> Result<SharedFailureEvidence, ApiError> {
+    let slug = format!("{}/{}", subject.owner, subject.repo);
+    let subject_jobs_path = format!(
+        "/repos/{slug}/actions/runs/{}/jobs?filter=latest&per_page=100",
+        failure.workflow_run_id
+    );
+    let subject_job =
+        find_job_for_check(&json(&["api", &subject_jobs_path])?, failure.check_run_id)?;
+    let subject_log_path = format!("/repos/{slug}/actions/jobs/{}/logs", subject_job.id);
+    let subject_log = String::from_utf8(raw(&["api", &subject_log_path])?)
+        .map_err(|error| ApiError::Malformed(format!("Actions log is not UTF-8: {error}")))?;
+
+    let mut eligible_heads = Vec::new();
+    let mut page = 1;
+    loop {
+        let pulls_path = format!("/repos/{slug}/pulls?state=open&per_page=100&page={page}");
+        let heads = parse_open_heads(&json(&["api", &pulls_path])?)?;
+        let complete = heads.len() < 100;
+        eligible_heads.extend(heads);
+        if complete {
+            break;
+        }
+        page += 1;
+    }
+    eligible_heads.retain(|head| {
+        !matches!(
+            &head.source,
+            SharedFailureSource::PullRequest { number, .. } if *number == subject.number.0
+        )
+    });
+    let main_path = format!("/repos/{slug}/commits/main");
+    eligible_heads.push(EligibleHead {
+        sha: required_string(&json(&["api", &main_path])?, "sha")?,
+        source: SharedFailureSource::Main,
+    });
+
+    let runs_path =
+        format!("/repos/{slug}/actions/workflows/ci.yml/runs?created=>={not_before}&per_page=50");
+    let runs = parse_candidate_runs(&json(&["api", &runs_path])?)?;
+    let selected_runs = select_runs(runs, &eligible_heads, failure.workflow_run_id, not_before);
+    let mut jobs = Vec::with_capacity(selected_runs.len());
+    for selected in &selected_runs {
+        let jobs_path = format!(
+            "/repos/{slug}/actions/runs/{}/jobs?filter=latest&per_page=100",
+            selected.run.id
+        );
+        let failed = parse_failed_jobs(&json(&["api", &jobs_path])?)?;
+        let mut with_logs = Vec::with_capacity(failed.len());
+        for job in failed {
+            let logs_path = format!("/repos/{slug}/actions/jobs/{}/logs", job.id);
+            let log = String::from_utf8(raw(&["api", &logs_path])?).map_err(|error| {
+                ApiError::Malformed(format!("Actions log is not UTF-8: {error}"))
+            })?;
+            with_logs.push(CandidateJob { log, ..job });
+        }
+        jobs.push((selected.run.id, with_logs));
+    }
+    Ok(SharedFailureEvidence {
+        subject_log,
+        selected_runs,
+        jobs,
+    })
+}
+
+fn parse_open_heads(value: &Value) -> Result<Vec<EligibleHead>, ApiError> {
+    let pulls = value
+        .as_array()
+        .ok_or_else(|| ApiError::Malformed("open PR response is not an array".into()))?;
+    pulls
+        .iter()
+        .map(|pull| {
+            Ok(EligibleHead {
+                sha: pull
+                    .pointer("/head/sha")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .ok_or_else(|| ApiError::Malformed("open PR omitted head SHA".into()))?,
+                source: SharedFailureSource::PullRequest {
+                    number: required_u64(pull, "number")?,
+                    url: required_string(pull, "html_url")?,
+                },
+            })
+        })
+        .collect()
+}
+
+fn parse_candidate_runs(value: &Value) -> Result<Vec<CandidateRun>, ApiError> {
+    required_array(value, "workflow_runs")?
+        .iter()
+        .map(|run| {
+            Ok(CandidateRun {
+                id: required_u64(run, "id")?,
+                url: required_string(run, "html_url")?,
+                head_sha: required_string(run, "head_sha")?,
+                created_at: required_string(run, "created_at")?,
+                conclusion: run
+                    .get("conclusion")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+            })
+        })
+        .collect()
+}
+
+fn find_job_for_check(value: &Value, check_run_id: u64) -> Result<CandidateJob, ApiError> {
+    let jobs = required_array(value, "jobs")?;
+    jobs.iter()
+        .find(|job| {
+            job.get("check_run_url")
+                .and_then(Value::as_str)
+                .and_then(|url| url.rsplit('/').next())
+                .and_then(|id| id.parse::<u64>().ok())
+                == Some(check_run_id)
+        })
+        .map(parse_job)
+        .transpose()?
+        .ok_or_else(|| ApiError::Malformed(format!("check run {check_run_id} has no REST job")))
+}
+
+fn parse_failed_jobs(value: &Value) -> Result<Vec<CandidateJob>, ApiError> {
+    required_array(value, "jobs")?
+        .iter()
+        .filter(|job| job.get("conclusion").and_then(Value::as_str) == Some("failure"))
+        .map(parse_job)
+        .collect()
+}
+
+fn parse_job(value: &Value) -> Result<CandidateJob, ApiError> {
+    Ok(CandidateJob {
+        id: required_u64(value, "id")?,
+        name: required_string(value, "name")?,
+        url: required_string(value, "html_url")?,
+        log: String::new(),
+    })
+}
+
+fn required_array<'a>(value: &'a Value, name: &str) -> Result<&'a Vec<Value>, ApiError> {
+    value
+        .get(name)
+        .and_then(Value::as_array)
+        .ok_or_else(|| ApiError::Malformed(format!("response omitted array {name}")))
+}
+
+fn required_string(value: &Value, name: &str) -> Result<String, ApiError> {
+    value
+        .get(name)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| ApiError::Malformed(format!("response omitted string {name}")))
+}
+
+fn required_u64(value: &Value, name: &str) -> Result<u64, ApiError> {
+    value
+        .get(name)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| ApiError::Malformed(format!("response omitted integer {name}")))
+}
+
+fn rfc3339_24_hours_ago() -> Result<String, ApiError> {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| ApiError::Transport(format!("reading wall clock: {error}")))?
+        .saturating_sub(Duration::from_secs(24 * 60 * 60))
+        .as_secs();
+    Ok(format_unix_rfc3339(seconds))
+}
+
+fn format_unix_rfc3339(seconds: u64) -> String {
+    // Howard Hinnant's civil-from-days conversion, kept local to avoid a second
+    // time dependency at this narrow REST-query boundary.
+    let days = (seconds / 86_400) as i64;
+    let seconds_of_day = seconds % 86_400;
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    let year = year + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        seconds_of_day / 3_600,
+        (seconds_of_day % 3_600) / 60,
+        seconds_of_day % 60
+    )
 }
 
 fn required_git_fact(
@@ -1063,5 +1287,136 @@ mod tests {
         v["data"]["repository"]["pullRequest"]["commits"]["nodes"][0]["commit"]["oid"] =
             serde_json::Value::Null;
         assert!(matches!(parse_snapshot(&v), Err(ApiError::Malformed(_))));
+    }
+    #[test]
+    fn shared_failure_collection_scopes_requests_and_joins_exact_check_run() {
+        let requests = std::cell::RefCell::new(Vec::new());
+        let responses = std::cell::RefCell::new(std::collections::VecDeque::from([
+            Ok(serde_json::json!({"jobs": [{
+                "id": 71, "name": "subject", "html_url": "job/71",
+                "check_run_url": "https://api.github.com/repos/o/r/check-runs/42"
+            }]})),
+            Ok(serde_json::json!([{
+                "number": 9, "html_url": "https://github.com/o/r/pull/9",
+                "head": {"sha": "other"}
+            }])),
+            Ok(serde_json::json!({"sha": "main"})),
+            Ok(serde_json::json!({"workflow_runs": [{
+                "id": 88, "html_url": "run/88", "head_sha": "other",
+                "created_at": "2026-09-15T00:00:00Z", "conclusion": "failure"
+            }]})),
+            Ok(serde_json::json!({"jobs": [
+                {"id": 90, "name": "failed", "html_url": "job/90", "conclusion": "failure"},
+                {"id": 91, "name": "green", "html_url": "job/91", "conclusion": "success"}
+            ]})),
+        ]));
+        let raw_paths = std::cell::RefCell::new(Vec::new());
+        let subject = crate::pr::test_support::subject();
+        let slug = format!("{}/{}", subject.owner, subject.repo);
+        let evidence = collect_shared_failure_evidence_with(
+            &subject,
+            &SubjectFailure {
+                workflow_run_id: 7,
+                check_run_id: 42,
+                name: "subject".into(),
+            },
+            "2026-09-14T00:00:00Z",
+            |args| {
+                requests.borrow_mut().push(args.join(" "));
+                responses.borrow_mut().pop_front().expect("scripted JSON")
+            },
+            |args| {
+                raw_paths.borrow_mut().push(args.join(" "));
+                Ok(b"error: same failure".to_vec())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(evidence.selected_runs.len(), 1);
+        assert_eq!(
+            evidence.jobs[0].1.len(),
+            1,
+            "successful jobs are never inspected"
+        );
+        assert_eq!(
+            raw_paths.into_inner(),
+            vec![
+                format!("api /repos/{slug}/actions/jobs/71/logs"),
+                format!("api /repos/{slug}/actions/jobs/90/logs"),
+            ]
+        );
+        let requests = requests.into_inner();
+        assert!(
+            requests.iter().all(|request| request.contains(&slug)),
+            "every request must derive its repository from Subject"
+        );
+        assert!(
+            requests
+                .iter()
+                .any(|request| request.contains("pulls?state=open"))
+        );
+        assert!(
+            requests
+                .iter()
+                .any(|request| request.contains("commits/main"))
+        );
+        assert!(requests.iter().any(|request| {
+            request.contains(
+                "actions/workflows/ci.yml/runs?created=>=2026-09-14T00:00:00Z&per_page=50",
+            )
+        }));
+    }
+
+    #[test]
+    fn shared_failure_collection_rejects_wrong_job_correlation_and_raw_bytes() {
+        let failure = SubjectFailure {
+            workflow_run_id: 7,
+            check_run_id: 42,
+            name: "subject".into(),
+        };
+        let wrong_job = collect_shared_failure_evidence_with(
+            &crate::pr::test_support::subject(),
+            &failure,
+            "2026-09-14T00:00:00Z",
+            |_| {
+                Ok(serde_json::json!({"jobs": [{
+                    "id": 71, "name": "subject", "html_url": "job/71",
+                    "check_run_url": "https://api.github.com/repos/o/r/check-runs/99"
+                }]}))
+            },
+            |_| unreachable!(),
+        );
+        assert!(matches!(wrong_job, Err(ApiError::Malformed(_))));
+
+        let responses = std::cell::RefCell::new(std::collections::VecDeque::from([Ok(
+            serde_json::json!({"jobs": [{
+                "id": 71, "name": "subject", "html_url": "job/71",
+                "check_run_url": "https://api.github.com/repos/o/r/check-runs/42"
+            }]}),
+        )]));
+        let bad_log = collect_shared_failure_evidence_with(
+            &crate::pr::test_support::subject(),
+            &failure,
+            "2026-09-14T00:00:00Z",
+            |_| responses.borrow_mut().pop_front().expect("subject jobs"),
+            |_| Ok(vec![0xff]),
+        );
+        assert!(matches!(bad_log, Err(ApiError::Malformed(_))));
+    }
+    #[test]
+    fn shared_failure_collection_preserves_query_failures_as_typed_errors() {
+        let error = collect_shared_failure_evidence_with(
+            &crate::pr::test_support::subject(),
+            &SubjectFailure {
+                workflow_run_id: 7,
+                check_run_id: 42,
+                name: "subject".into(),
+            },
+            "2026-09-14T00:00:00Z",
+            |_| Err(ApiError::GraphQlErrors("bad query".into())),
+            |_| unreachable!(),
+        )
+        .unwrap_err();
+        assert_eq!(error, ApiError::GraphQlErrors("bad query".into()));
     }
 }

@@ -10,7 +10,9 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
+use processkit::Command as ProcessCommand;
 use serde_json::Value;
 
 #[derive(Debug, Clone)]
@@ -92,6 +94,31 @@ impl ApiError {
             ApiError::GraphQlErrors(m) => format!("graphql: {m}"),
             ApiError::Git(error) => format!("git: {error}"),
         }
+    }
+}
+
+/// One monotonic budget shared by every best-effort enrichment request.
+///
+/// The deadline lives at the transport boundary so an already-blocked `gh` process
+/// is killed and reaped rather than merely preventing the next request.
+#[derive(Debug)]
+pub struct Deadline(Instant);
+
+impl Deadline {
+    pub fn ten_seconds() -> Self {
+        Self(Instant::now() + Duration::from_secs(10))
+    }
+
+    #[cfg(test)]
+    fn after(duration: Duration) -> Self {
+        Self(Instant::now() + duration)
+    }
+
+    fn remaining(&self) -> Result<Duration, ApiError> {
+        self.0
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(|| ApiError::Transport("shared-failure enrichment timed out".into()))
     }
 }
 
@@ -212,6 +239,47 @@ fn spawn(args: &[&str]) -> Result<(i32, String, String), ApiError> {
     }
 }
 
+/// Run one deadline-bound `gh` invocation and retain stdout as exact bytes.
+///
+/// `processkit` owns the process group: its timeout tears down and reaps descendants
+/// as well as the direct child, which is essential when `gh` delegates to a helper.
+fn spawn_deadline_program(
+    program: &str,
+    args: &[&str],
+    deadline: &Deadline,
+) -> Result<(i32, Vec<u8>, String), ApiError> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| ApiError::Transport(format!("creating gh runtime: {error}")))?;
+    let remaining = deadline.remaining()?;
+    let output = runtime
+        .block_on(
+            ProcessCommand::new(program)
+                .args(args)
+                .timeout(remaining)
+                .output_bytes(),
+        )
+        .map_err(|error| {
+            if error.is_not_found() {
+                ApiError::GhMissing
+            } else {
+                ApiError::Transport(format!("could not run gh: {error}"))
+            }
+        })?;
+    if output.timed_out() {
+        return Err(ApiError::Transport(
+            "shared-failure enrichment timed out".into(),
+        ));
+    }
+    let code = output.code().unwrap_or(-1);
+    let stderr = output.stderr().to_owned();
+    Ok((code, output.into_stdout(), stderr))
+}
+
+fn spawn_deadline(args: &[&str], deadline: &Deadline) -> Result<(i32, Vec<u8>, String), ApiError> {
+    spawn_deadline_program("gh", args, deadline)
+}
 /// Run `gh` with a complete stdin payload and hand its outputs to [`classify`].
 pub fn run_gh_stdin(args: &[&str], stdin: &str) -> Result<Value, ApiError> {
     let mut child = match Command::new("gh")
@@ -256,6 +324,31 @@ fn with_reset(err: ApiError) -> ApiError {
 pub fn run_gh(args: &[&str]) -> Result<Value, ApiError> {
     let (exit, out, err) = spawn(args)?;
     classify(exit, &out, &err).map_err(with_reset)
+}
+
+/// A deadline-bound JSON-producing `gh api` call for best-effort enrichment.
+pub fn run_gh_deadline(args: &[&str], deadline: &Deadline) -> Result<Value, ApiError> {
+    let (exit, stdout, stderr) = spawn_deadline(args, deadline)?;
+    let stdout = String::from_utf8(stdout)
+        .map_err(|error| ApiError::Malformed(format!("gh JSON stdout is not UTF-8: {error}")))?;
+    classify(exit, &stdout, &stderr)
+}
+
+/// A deadline-bound raw `gh api` call for Actions logs.
+///
+/// Unlike [`run_gh_deadline`], this deliberately never treats successful stdout as
+/// JSON: logs are bytes first and only the evidence parser may decide whether UTF-8
+/// is supported.
+pub fn run_gh_raw_deadline(args: &[&str], deadline: &Deadline) -> Result<Vec<u8>, ApiError> {
+    let (exit, stdout, stderr) = spawn_deadline(args, deadline)?;
+    if exit == 0 {
+        return Ok(stdout);
+    }
+    let text = String::from_utf8_lossy(&stdout);
+    match classify(exit, &text, &stderr) {
+        Ok(_) => Err(ApiError::Transport(format!("gh exited {exit}"))),
+        Err(error) => Err(error),
+    }
 }
 
 /// A `gh` call whose stdout is prose, not JSON — `gh pr merge` prints a human
@@ -500,5 +593,30 @@ mod tests {
         assert_reset_failure_warns_once(|| {
             Ok((0, "sensitive malformed body".to_owned(), String::new()))
         });
+    }
+    #[cfg(unix)]
+    #[test]
+    fn deadline_reaps_a_blocking_child_tree() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("child-pid");
+        let pid_file_arg = pid_file.display().to_string();
+        let script = "sleep 30 & printf '%s' $! > \"$1\"; wait";
+        let result = spawn_deadline_program(
+            "sh",
+            &["-c", script, "sh", &pid_file_arg],
+            &Deadline::after(Duration::from_millis(50)),
+        );
+        assert!(
+            matches!(result, Err(ApiError::Transport(message)) if message.contains("timed out"))
+        );
+        let pid = std::fs::read_to_string(pid_file)
+            .unwrap()
+            .parse::<u32>()
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(
+            !processkit::process_is_alive(pid, None).unwrap(),
+            "deadline must reap the shell's background child"
+        );
     }
 }
