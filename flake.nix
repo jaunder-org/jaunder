@@ -44,7 +44,7 @@
         pkgs = nixpkgs.legacyPackages.${system};
         packageLayer = import ./nix/packages.nix { inherit system pkgs fenix crane atom-fork; };
         checkLayer = import ./nix/checks.nix {
-          inherit self system pkgs;
+          inherit self system pkgs nixpkgs;
           nixosInternals = nixosLayer.internals;
           packageInternals = packageLayer.internals;
         };

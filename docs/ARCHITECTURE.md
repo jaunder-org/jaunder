@@ -2358,6 +2358,35 @@ no site symlink; the module comment names #237 as the reason. Two
 `nixosConfigurations` test VMs (interactive, PostgreSQL) exist for development
 only.
 
+### Committed direction
+
+The proposed `nixosModules.jaunder-stack` output will import the minimal module
+and expose `services.jaunder.stack` as a complete single-host composition
+([single-host NixOS deployment stack](adr/drafts/single-host-nixos-deployment-stack.md)).
+It will put Caddy alone on public ports 80 and 443 for automatic HTTPS, keep
+production-mode Jaunder and the OpenTelemetry Collector on loopback, select
+Jaunder's JSON log format, and route Jaunder metrics, parsed structured fields
+from the `jaunder.service` journal, and traces into persistent single-node
+VictoriaMetrics, VictoriaLogs, and VictoriaTraces stores. Each store and its
+built-in web UI will remain loopback-only. The services will use native
+`/metrics`, `/logs`, and `/traces` HTTP path prefixes, and Collector exporters
+will use the corresponding prefixed ingestion endpoints directly over loopback.
+An optional second Caddy HTTPS host will expose those prefixes after Basic Auth.
+Non-whitespace username and password-hash options will be required; recognized
+`$2a$`/`$2b$` bcrypt and `$argon2id$` prefixes will select the matching Caddy
+algorithm, while plaintext and unrecognized hashes will fail module evaluation.
+The closed stack database choice will default to SQLite; PostgreSQL mode will
+additively enable the host's ordinary shared PostgreSQL instance, ensure a
+Jaunder database owned by a matching login role with initialization and
+migration privileges, and connect over a Unix socket with peer authentication.
+It will create no separate cluster, choose no PostgreSQL package, and add no
+password or network exposure; other modules will retain ownership of unrelated
+databases, roles, and global PostgreSQL policy. Native service options will
+retain tuning and retention ownership. Grafana, unauthenticated observability
+exposure, per-user observability accounts, whole-host telemetry, external
+databases, Victoria-data backup, and VictoriaTraces cross-version compatibility
+will remain outside the stack contract.
+
 **Production baseline qualification.** The opt-in host-only
 `cargo xtask production-baseline` boundary resolves immutable upstream
 revisions, owns Nix builds, VM lifecycle, the stable local HTTPS proxy, workflow

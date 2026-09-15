@@ -1,4 +1,4 @@
-{ self, system, pkgs, nixosInternals, packageInternals }:
+{ self, system, pkgs, nixpkgs, nixosInternals, packageInternals }:
 let
   inherit (nixosInternals) captureEnv e2eOtelCollectorEnv;
   inherit (packageInternals)
@@ -1060,6 +1060,137 @@ mkWasmCoverageMeasurementProducer =
     '';
   };
   measurementCacheBuster = builtins.getEnv "JAUNDER_WASM_COVERAGE_CACHE_BUSTER";
+
+  mkStackConfiguration = stack:
+    nixpkgs.lib.nixosSystem {
+      inherit system;
+      modules = [
+        self.nixosModules.jaunder-stack
+        ({ ... }: {
+          boot.isContainer = true;
+          system.stateVersion = "26.05";
+          services.jaunder.stack = stack;
+        })
+      ];
+    };
+  stackEvaluationSucceeds = stack:
+    (builtins.tryEval (mkStackConfiguration stack).config.system.build.toplevel.drvPath).success;
+  stackEvaluationFails = stack: !(stackEvaluationSucceeds stack);
+  sqliteStack = mkStackConfiguration {
+    enable = true;
+    hostName = "jaunder.example.test";
+  };
+  postgresStack = mkStackConfiguration {
+    enable = true;
+    hostName = "jaunder.example.test";
+    database = "postgresql";
+  };
+  bcryptStack = mkStackConfiguration {
+    enable = true;
+    hostName = "jaunder.example.test";
+    observability = {
+      hostName = "observe.example.test";
+      basicAuth = {
+        username = "operator";
+        passwordHash = "$2b$12$abcdefghijklmnopqrstuuV4qg5bR1uRgYBzO8pu0h1rlaL8fQ2gQ";
+      };
+    };
+  };
+  argon2idStack = mkStackConfiguration {
+    enable = true;
+    hostName = "jaunder.example.test";
+    observability = {
+      hostName = "observe.example.test";
+      basicAuth = {
+        username = "operator";
+        passwordHash = "$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHQ$YWJjZGVmZ2hpams";
+      };
+    };
+  };
+  nativeRetentionOverrideStack = nixpkgs.lib.nixosSystem {
+    inherit system;
+    modules = [
+      self.nixosModules.jaunder-stack
+      ({ ... }: {
+        system.stateVersion = "26.05";
+        services.jaunder.stack = {
+          enable = true;
+          hostName = "jaunder.example.test";
+        };
+        services.victoriametrics.retentionPeriod = "14d";
+        services.victorialogs.extraOptions = [ "-retentionPeriod=14d" ];
+        services.victoriatraces.retentionPeriod = "30d";
+      })
+    ];
+  };
+  minimalModule = nixpkgs.lib.nixosSystem {
+    inherit system;
+    modules = [
+      self.nixosModules.jaunder
+      ({ ... }: { system.stateVersion = "26.05"; })
+    ];
+  };
+  jaunderStackModuleCheck =
+    assert sqliteStack.config.services.jaunder.bind == "127.0.0.1:3000";
+    assert sqliteStack.config.services.jaunder.prod;
+    assert sqliteStack.config.services.jaunder.db == "sqlite:/var/lib/jaunder/data/jaunder.db";
+    assert postgresStack.config.services.jaunder.db == "postgresql:///jaunder?host=/run/postgresql";
+    assert postgresStack.config.services.postgresql.enable;
+    assert postgresStack.config.services.postgresql.ensureDatabases == [ "jaunder" ];
+    assert sqliteStack.config.networking.firewall.allowedTCPPorts == [ 80 443 ];
+    assert sqliteStack.config.services.victoriametrics.listenAddress == "127.0.0.1:8428";
+    assert sqliteStack.config.services.victorialogs.listenAddress == "127.0.0.1:9428";
+    assert sqliteStack.config.services.victoriatraces.listenAddress == "127.0.0.1:10428";
+    assert sqliteStack.config.services.victoriametrics.extraOptions == [ "-http.pathPrefix=/metrics" ];
+    assert sqliteStack.config.services.victorialogs.extraOptions == [ "-http.pathPrefix=/logs" ];
+    # Metrics and logs omit retention CLI arguments, retaining their native one-month and seven-day defaults.
+    assert sqliteStack.config.services.victoriametrics.retentionPeriod == null;
+    assert sqliteStack.config.services.victoriatraces.retentionPeriod == "7d";
+    assert sqliteStack.config.services.victoriatraces.extraOptions == [ "-http.pathPrefix=/traces" ];
+    assert nativeRetentionOverrideStack.config.services.victoriametrics.retentionPeriod == "14d";
+    assert builtins.any (option: option == "-retentionPeriod=14d") nativeRetentionOverrideStack.config.services.victorialogs.extraOptions;
+    assert nativeRetentionOverrideStack.config.services.victoriatraces.retentionPeriod == "30d";
+    assert sqliteStack.config.services.opentelemetry-collector.package == pkgs.opentelemetry-collector-contrib;
+    assert sqliteStack.config.systemd.services.opentelemetry-collector.serviceConfig.DynamicUser;
+    assert sqliteStack.config.systemd.services.opentelemetry-collector.serviceConfig.SupplementaryGroups == [ "systemd-journal" ];
+    assert sqliteStack.config.services.opentelemetry-collector.settings.receivers.journald.units == [ "jaunder.service" ];
+    assert sqliteStack.config.services.opentelemetry-collector.settings.exporters.prometheusremotewrite.endpoint == "http://127.0.0.1:8428/metrics/api/v1/write";
+    assert sqliteStack.config.services.opentelemetry-collector.settings.exporters."otlphttp/victoriatraces".traces_endpoint == "http://127.0.0.1:10428/traces/insert/opentelemetry/v1/traces";
+    assert sqliteStack.config.services.opentelemetry-collector.settings.exporters."otlphttp/victorialogs".logs_endpoint == "http://127.0.0.1:9428/logs/insert/opentelemetry/v1/logs";
+    assert builtins.hasAttr "jaunder.example.test" bcryptStack.config.services.caddy.virtualHosts;
+    assert builtins.hasAttr "observe.example.test" bcryptStack.config.services.caddy.virtualHosts;
+    assert pkgs.lib.hasInfix "reverse_proxy 127.0.0.1:3000" bcryptStack.config.services.caddy.virtualHosts."jaunder.example.test".extraConfig;
+    assert pkgs.lib.hasInfix "operator $2b$12$abcdefghijklmnopqrstuuV4qg5bR1uRgYBzO8pu0h1rlaL8fQ2gQ" bcryptStack.config.services.caddy.virtualHosts."observe.example.test".extraConfig;
+    assert builtins.any (v: pkgs.lib.hasInfix "basic_auth bcrypt" v.extraConfig) (builtins.attrValues bcryptStack.config.services.caddy.virtualHosts);
+    assert builtins.any (v: pkgs.lib.hasInfix "basic_auth argon2id" v.extraConfig) (builtins.attrValues argon2idStack.config.services.caddy.virtualHosts);
+    assert stackEvaluationSucceeds { enable = true; hostName = "jaunder.example.test"; };
+    assert stackEvaluationSucceeds { enable = true; hostName = "jaunder.example.test"; database = "postgresql"; };
+    assert stackEvaluationSucceeds { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator"; passwordHash = "$2b$12$abcdefghijklmnopqrstuuV4qg5bR1uRgYBzO8pu0h1rlaL8fQ2gQ"; }; }; };
+    assert stackEvaluationSucceeds { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator"; passwordHash = "$2a$12$abcdefghijklmnopqrstuuV4qg5bR1uRgYBzO8pu0h1rlaL8fQ2gQ"; }; }; };
+    assert stackEvaluationSucceeds { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator"; passwordHash = "$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHQ$YWJjZGVmZ2hpams"; }; }; };
+    assert stackEvaluationFails { enable = true; };
+    assert stackEvaluationFails { enable = true; hostName = " "; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability.hostName = " "; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability.hostName = "observe.example.test"; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = " "; passwordHash = "$2b$12$abcdefghijklmnopqrstuuV4qg5bR1uRgYBzO8pu0h1rlaL8fQ2gQ"; }; }; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator name"; passwordHash = "$2b$12$abcdefghijklmnopqrstuuV4qg5bR1uRgYBzO8pu0h1rlaL8fQ2gQ"; }; }; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator}"; passwordHash = "$2b$12$abcdefghijklmnopqrstuuV4qg5bR1uRgYBzO8pu0h1rlaL8fQ2gQ"; }; }; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator\nreverse_proxy"; passwordHash = "$2b$12$abcdefghijklmnopqrstuuV4qg5bR1uRgYBzO8pu0h1rlaL8fQ2gQ"; }; }; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "jaunder.example.test"; basicAuth = { username = "operator"; passwordHash = "$2b$12$abcdefghijklmnopqrstuuV4qg5bR1uRgYBzO8pu0h1rlaL8fQ2gQ"; }; }; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator"; passwordHash = " "; }; }; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator"; passwordHash = "plaintext"; }; }; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator"; passwordHash = "$2b$12$too-short"; }; }; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator"; passwordHash = "$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHQ"; }; }; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator"; passwordHash = "$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$YWJjZGVmZ2hpams"; }; }; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator"; passwordHash = "$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHQ$YWJj"; }; }; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator"; passwordHash = "$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHR$YWJjZGVmZ2hpams"; }; }; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator"; passwordHash = "$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHQ$YWJjZGVmZ2hpamt"; }; }; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator"; passwordHash = "$scrypt$ln=16,r=8,p=1$c2FsdA$aGFzaA"; }; }; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; database = "mysql"; };
+    assert !(builtins.hasAttr "stack" minimalModule.options.services.jaunder);
+    pkgs.runCommand "jaunder-stack-module" { } ''
+      touch $out
+    '';
 in
 {
 
@@ -1166,6 +1297,8 @@ e2eGateChecks
   # pushFilter still excludes it — the VM runs are never substituted
   # from a cached aggregate.
   e2e = self.packages.${system}.e2e-checks;
+
+  jaunder-stack-module = jaunderStackModuleCheck;
 
   # The producer combines pure and server-backed ERT observations in
   # one VM, returning controlled outcomes as fixed artifacts for the

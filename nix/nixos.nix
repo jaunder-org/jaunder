@@ -96,6 +96,236 @@ let
       };
     };
 
+  mkJaunderStackModule =
+    {
+      lib,
+      pkgs,
+      config,
+      ...
+    }:
+    let
+      cfg = config.services.jaunder.stack;
+      nonWhitespace = value: value != null && builtins.match "^[[:space:]]*$" value == null;
+      caddyToken = value: builtins.match "^[A-Za-z0-9._-]+$" value != null;
+      bcryptHash = builtins.match "^\\$2[ab]\\$(0[4-9]|[12][0-9]|3[01])\\$[./0-9A-Za-z]{53}$" cfg.observability.basicAuth.passwordHash != null;
+      validUnpaddedBase64 = value:
+        let
+          length = builtins.stringLength value;
+          remainder = length - 4 * builtins.div length 4;
+          trailingCharacter = builtins.substring (length - 1) 1 value;
+        in
+        builtins.match "^[A-Za-z0-9+/]+$" value != null
+        && remainder != 1
+        && (remainder != 2 || builtins.match "^[AQgw]$" trailingCharacter != null)
+        && (remainder != 3 || builtins.match "^[AEIMQUYcgkosw048]$" trailingCharacter != null);
+      decodedBase64Length = value:
+        let
+          length = builtins.stringLength value;
+        in
+        3 * builtins.div length 4 + (if length - 4 * builtins.div length 4 == 2 then 1 else if length - 4 * builtins.div length 4 == 3 then 2 else 0);
+      argon2idParts = builtins.match "^\\$argon2id\\$v=19\\$m=([1-9][0-9]*),t=([1-9][0-9]*),p=([1-9][0-9]*)\\$([A-Za-z0-9+/]+)\\$([A-Za-z0-9+/]+)$" cfg.observability.basicAuth.passwordHash;
+      argon2idHash =
+        argon2idParts != null
+        && (let
+          memoryCost = builtins.fromJSON (builtins.elemAt argon2idParts 0);
+          parallelism = builtins.fromJSON (builtins.elemAt argon2idParts 2);
+          salt = builtins.elemAt argon2idParts 3;
+          hash = builtins.elemAt argon2idParts 4;
+        in
+        memoryCost >= 8 * parallelism
+        && validUnpaddedBase64 salt
+        && decodedBase64Length salt >= 8
+        && validUnpaddedBase64 hash
+        && decodedBase64Length hash >= 4);
+      postgresqlDatabase = cfg.database == "postgresql";
+      applicationHostName = if nonWhitespace cfg.hostName then cfg.hostName else "invalid-stack-host.invalid";
+      observabilityHostName = if nonWhitespace cfg.observability.hostName then cfg.observability.hostName else "invalid-observability-host.invalid";
+      hashAlgorithm = if bcryptHash then "bcrypt" else "argon2id";
+      observabilityIngress = lib.optionalString (nonWhitespace cfg.observability.hostName) ''
+        # The stores remain credential-free on loopback; this is their only remote access path.
+        basic_auth ${hashAlgorithm} {
+          ${cfg.observability.basicAuth.username} ${cfg.observability.basicAuth.passwordHash}
+        }
+        reverse_proxy /metrics* 127.0.0.1:8428
+        reverse_proxy /logs* 127.0.0.1:9428
+        reverse_proxy /traces* 127.0.0.1:10428
+      '';
+    in
+    {
+      imports = [ (mkJaunderModule null) ];
+
+      options.services.jaunder.stack = {
+        enable = lib.mkEnableOption "the single-host Jaunder deployment stack";
+        hostName = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          description = "Public application host name served by Caddy.";
+        };
+        database = lib.mkOption {
+          type = lib.types.enum [ "sqlite" "postgresql" ];
+          default = "sqlite";
+          description = "Database managed by the stack.";
+        };
+        observability = {
+          hostName = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            description = "Optional HTTPS operator host for the loopback observability UIs.";
+          };
+          basicAuth = {
+            username = lib.mkOption {
+              type = lib.types.str;
+              default = "";
+              description = "Basic Auth username for the optional observability host.";
+            };
+            passwordHash = lib.mkOption {
+              type = lib.types.str;
+              default = "";
+              description = "bcrypt or Argon2id password hash for the optional observability host.";
+            };
+          };
+        };
+      };
+
+      config = lib.mkIf cfg.enable {
+        assertions = [
+          {
+            jaunderStack = true;
+            assertion = nonWhitespace cfg.hostName;
+            message = "services.jaunder.stack.hostName must be non-whitespace when the stack is enabled.";
+          }
+          {
+            jaunderStack = true;
+            assertion = cfg.observability.hostName == null || nonWhitespace cfg.observability.hostName;
+            message = "services.jaunder.stack.observability.hostName must be non-whitespace when configured.";
+          }
+          {
+            jaunderStack = true;
+            assertion = cfg.observability.hostName == null || nonWhitespace cfg.observability.basicAuth.username;
+            message = "services.jaunder.stack.observability.basicAuth.username must be non-whitespace when an observability host is configured.";
+          }
+          {
+            jaunderStack = true;
+            assertion = cfg.observability.hostName == null || caddyToken cfg.observability.basicAuth.username;
+            message = "services.jaunder.stack.observability.basicAuth.username must contain only ASCII letters, digits, periods, hyphens, or underscores when an observability host is configured.";
+          }
+          {
+            jaunderStack = true;
+            assertion = cfg.observability.hostName == null || cfg.observability.hostName != cfg.hostName;
+            message = "services.jaunder.stack.observability.hostName must differ from services.jaunder.stack.hostName when configured.";
+          }
+          {
+            jaunderStack = true;
+            assertion = cfg.observability.hostName == null || nonWhitespace cfg.observability.basicAuth.passwordHash;
+            message = "services.jaunder.stack.observability.basicAuth.passwordHash must be non-whitespace when an observability host is configured.";
+          }
+          {
+            jaunderStack = true;
+            assertion = cfg.observability.hostName == null || bcryptHash || argon2idHash;
+            message = "services.jaunder.stack.observability.basicAuth.passwordHash must be a complete $2a$/$2b$ bcrypt or $argon2id$ encoded hash.";
+          }
+        ];
+
+        networking.firewall.allowedTCPPorts = [ 80 443 ];
+        services.caddy = lib.mkIf (nonWhitespace cfg.hostName) {
+          enable = true;
+          virtualHosts = {
+            ${applicationHostName}.extraConfig = ''
+              reverse_proxy 127.0.0.1:3000
+            '';
+          } // lib.optionalAttrs (nonWhitespace cfg.observability.hostName) {
+            ${observabilityHostName}.extraConfig = observabilityIngress;
+          };
+        };
+
+        services.jaunder = {
+          enable = true;
+          bind = "127.0.0.1:3000";
+          prod = true;
+          db = if postgresqlDatabase then "postgresql:///jaunder?host=/run/postgresql" else "sqlite:/var/lib/jaunder/data/jaunder.db";
+        };
+        systemd.services.jaunder.environment = {
+          JAUNDER_LOG_FORMAT = "json";
+          JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT = "http://127.0.0.1:4317";
+        };
+
+        # Prefixes are native store routes, so collector traffic bypasses Caddy and Basic Auth.
+        services.victoriametrics = {
+          enable = true;
+          listenAddress = "127.0.0.1:8428";
+          extraOptions = [ "-http.pathPrefix=/metrics" ];
+        };
+        services.victorialogs = {
+          enable = true;
+          listenAddress = "127.0.0.1:9428";
+          extraOptions = [ "-http.pathPrefix=/logs" ];
+        };
+        services.victoriatraces = {
+          enable = true;
+          listenAddress = "127.0.0.1:10428";
+          extraOptions = [ "-http.pathPrefix=/traces" ];
+        };
+
+        services.opentelemetry-collector = {
+          enable = true;
+          package = pkgs.opentelemetry-collector-contrib;
+          settings = {
+            receivers = {
+              otlp.protocols = {
+                grpc.endpoint = "127.0.0.1:4317";
+                http.endpoint = "127.0.0.1:4318";
+              };
+              journald.units = [ "jaunder.service" ];
+            };
+            processors = {
+              batch = { };
+              "transform/jaunder-json".log_statements = [
+                {
+                  context = "log";
+                  statements = [ "merge_maps(attributes, ParseJSON(body), \"upsert\") where IsMatch(body, \"^\\\\{\")" ];
+                }
+              ];
+            };
+            exporters = {
+              prometheusremotewrite.endpoint = "http://127.0.0.1:8428/metrics/api/v1/write";
+              "otlphttp/victoriatraces".traces_endpoint = "http://127.0.0.1:10428/traces/insert/opentelemetry/v1/traces";
+              "otlphttp/victorialogs".logs_endpoint = "http://127.0.0.1:9428/logs/insert/opentelemetry/v1/logs";
+            };
+            service.pipelines = {
+              metrics = {
+                receivers = [ "otlp" ];
+                processors = [ "batch" ];
+                exporters = [ "prometheusremotewrite" ];
+              };
+              traces = {
+                receivers = [ "otlp" ];
+                processors = [ "batch" ];
+                exporters = [ "otlphttp/victoriatraces" ];
+              };
+              logs = {
+                receivers = [ "journald" ];
+                processors = [ "transform/jaunder-json" "batch" ];
+                exporters = [ "otlphttp/victorialogs" ];
+              };
+            };
+          };
+        };
+
+        services.postgresql = lib.mkIf postgresqlDatabase {
+          enable = true;
+          ensureDatabases = [ "jaunder" ];
+          ensureUsers = [
+            {
+              name = "jaunder";
+              ensureDBOwnership = true;
+            }
+          ];
+        };
+        systemd.services.jaunder.after = lib.mkIf postgresqlDatabase [ "postgresql.target" ];
+        systemd.services.jaunder.requires = lib.mkIf postgresqlDatabase [ "postgresql.target" ];
+      };
+    };
+
   interactiveTestingVmModule =
     {
       pkgs,
@@ -354,6 +584,7 @@ let
 in
 {
   nixosModules.jaunder = mkJaunderModule null;
+  nixosModules.jaunder-stack = mkJaunderStackModule;
   nixosConfigurations.interactive-testing-vm = interactiveTestingVmConfiguration;
   nixosConfigurations.postgres-testing-vm = postgresTestingVmConfiguration;
   nixosConfigurations.production-baseline-sqlite = productionBaselineSqliteConfiguration;
