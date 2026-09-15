@@ -5,14 +5,15 @@
 //! the same snapshots. This is the same idiom as the crate-level
 //! [`crate::test_support`], scoped to `pr`.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, VecDeque};
 
 use super::evidence::{ActionsEvidence, WorkflowEvidence};
 use super::gh::ApiError;
+use super::shared_failure::{SharedFailureEvidence, SubjectFailure};
 use super::snapshot::{
     CheckEntry, CheckProvider, CheckState, MergeStateStatus, Mergeable, PrSnapshot, PrSource,
-    PrState, QueueState, RequiredChecks, RunRef,
+    PrState, QueueState, RequiredChecks, RunRef, SharedFailureEvidenceSource,
 };
 use super::watch::{Clock, WatchConfig};
 use super::workflow::{RuntimeJob, WorkflowGraph};
@@ -220,6 +221,10 @@ pub struct FakeSource {
     actions_evidence: RefCell<VecDeque<Result<ActionsEvidence, ApiError>>>,
     last_actions_evidence: RefCell<Option<Result<ActionsEvidence, ApiError>>>,
     resolve: Result<Subject, ApiError>,
+    shared_failure_evidence: RefCell<VecDeque<Result<SharedFailureEvidence, ApiError>>>,
+    shared_failure_evidence_delay: std::time::Duration,
+    shared_failure_subject_failures: RefCell<Vec<SubjectFailure>>,
+    shared_failure_evidence_requests: Cell<u32>,
 }
 
 impl FakeSource {
@@ -234,6 +239,12 @@ impl FakeSource {
             ))])),
             last_actions_evidence: RefCell::new(None),
             resolve: Ok(subject()),
+            shared_failure_evidence: RefCell::new(VecDeque::from([Err(ApiError::Malformed(
+                "fake shared-failure evidence was not scripted".into(),
+            ))])),
+            shared_failure_evidence_delay: std::time::Duration::ZERO,
+            shared_failure_subject_failures: RefCell::new(Vec::new()),
+            shared_failure_evidence_requests: Cell::new(0),
         }
     }
 
@@ -263,6 +274,36 @@ impl FakeSource {
     /// Make classification evidence fail through the watch poll-error policy.
     pub fn with_actions_evidence_error(self, error: ApiError) -> Self {
         self.with_actions_evidence_script(vec![Err(error)])
+    }
+
+    /// Script best-effort evidence for the report annotation.
+    pub fn with_shared_failure_evidence(self, evidence: SharedFailureEvidence) -> Self {
+        self.with_shared_failure_evidence_script(vec![Ok(evidence)])
+    }
+
+    /// Script each annotation attempt independently, including transport failures.
+    pub fn with_shared_failure_evidence_script(
+        mut self,
+        script: Vec<Result<SharedFailureEvidence, ApiError>>,
+    ) -> Self {
+        self.shared_failure_evidence = RefCell::new(script.into());
+        self.shared_failure_evidence_requests = Cell::new(0);
+        self.shared_failure_subject_failures = RefCell::new(Vec::new());
+        self
+    }
+
+    /// Delay the annotation response to exercise deadline handling after transport.
+    pub fn with_shared_failure_evidence_delay(mut self, delay: std::time::Duration) -> Self {
+        self.shared_failure_evidence_delay = delay;
+        self
+    }
+
+    pub fn shared_failure_evidence_requests(&self) -> u32 {
+        self.shared_failure_evidence_requests.get()
+    }
+
+    pub fn shared_failure_subject_failures(&self) -> Vec<SubjectFailure> {
+        self.shared_failure_subject_failures.borrow().clone()
     }
 
     /// What the merge-group probe finds. Without this the probe path is only ever
@@ -317,5 +358,29 @@ impl PrSource for FakeSource {
 
     fn ejection_run(&self, _subject: &Subject) -> Result<Option<RunRef>, ApiError> {
         self.ejection.clone()
+    }
+}
+
+impl SharedFailureEvidenceSource for FakeSource {
+    fn shared_failure_evidence(
+        &self,
+        _subject: &Subject,
+        failure: &SubjectFailure,
+        _deadline: &super::gh::Deadline,
+    ) -> Result<SharedFailureEvidence, ApiError> {
+        self.shared_failure_evidence_requests
+            .set(self.shared_failure_evidence_requests.get() + 1);
+        self.shared_failure_subject_failures
+            .borrow_mut()
+            .push(failure.clone());
+        std::thread::sleep(self.shared_failure_evidence_delay);
+        self.shared_failure_evidence
+            .borrow_mut()
+            .pop_front()
+            .unwrap_or_else(|| {
+                Err(ApiError::Malformed(
+                    "fake shared-failure evidence was not scripted".into(),
+                ))
+            })
     }
 }

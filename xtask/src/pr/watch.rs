@@ -17,7 +17,7 @@ use super::snapshot::{
     CheckProvider, CheckState, PrSnapshot, PrSource, PrState, RequiredChecks, RunRef,
 };
 use super::workflow::Requirement;
-use super::{Event, EventKind, Outcome, PrReport, Subject};
+use super::{Event, EventKind, Outcome, PrReport, Subject, SubjectFailure};
 
 pub trait Clock {
     fn now_unix(&self) -> u64;
@@ -246,8 +246,11 @@ fn classified_failures<S: PrSource>(
     failures
         .into_iter()
         .map(|check| {
-            let required = match check.provider {
-                CheckProvider::GitHubActions { check_run_id, .. } => {
+            let subject_failure = match check.provider {
+                CheckProvider::GitHubActions {
+                    check_run_id,
+                    workflow_run_id,
+                } => {
                     let evidence = evidence.as_ref().ok_or_else(|| {
                         ApiError::Malformed("GitHub Actions evidence unexpectedly absent".into())
                     })?;
@@ -255,13 +258,19 @@ fn classified_failures<S: PrSource>(
                         evidence.classify_check(check_run_id, &req.contexts)?,
                         Requirement::Direct | Requirement::Transitive
                     )
+                    .then(|| SubjectFailure {
+                        workflow_run_id,
+                        check_run_id,
+                        name: check.name.clone(),
+                    })
                 }
-                CheckProvider::StatusContext | CheckProvider::OtherCheckRun => false,
+                CheckProvider::StatusContext | CheckProvider::OtherCheckRun => None,
             };
-            Ok(if required {
+            Ok(if subject_failure.is_some() {
                 ClassifiedFailure::Required {
                     name: check.name.clone(),
                     pointer: check.details_url.clone(),
+                    subject_failure,
                 }
             } else {
                 ClassifiedFailure::Optional {
@@ -422,6 +431,7 @@ pub(super) fn watch_with_progress_and_optional_failures<S: PrSource, C: Clock>(
                     outcome,
                     detail: Some(detail.into()),
                     pointer: None,
+                    subject_failure: None,
                     phase: None,
                 },
                 em.events,
@@ -492,6 +502,7 @@ pub(super) fn watch_with_progress_and_optional_failures<S: PrSource, C: Clock>(
                                     e.detail()
                                 )),
                                 pointer: None,
+                                subject_failure: None,
                                 phase: None,
                             },
                             em.events,
@@ -525,6 +536,7 @@ pub(super) fn watch_with_progress_and_optional_failures<S: PrSource, C: Clock>(
                                 e.detail()
                             )),
                             pointer: None,
+                            subject_failure: None,
                             phase: None,
                         },
                         em.events,
@@ -624,6 +636,7 @@ pub(super) fn watch_with_progress_and_optional_failures<S: PrSource, C: Clock>(
                 outcome,
                 detail,
                 pointer,
+                subject_failure,
             } => {
                 em.emit(at, now, EventKind::Terminal, outcome.as_str().into());
                 return finish(
@@ -633,6 +646,7 @@ pub(super) fn watch_with_progress_and_optional_failures<S: PrSource, C: Clock>(
                         outcome,
                         detail,
                         pointer,
+                        subject_failure,
                         phase: None,
                     },
                     em.events,
@@ -655,6 +669,7 @@ pub(super) fn watch_with_progress_and_optional_failures<S: PrSource, C: Clock>(
                                 .into(),
                         ),
                         pointer: None,
+                        subject_failure: None,
                         phase: None,
                     },
                     em.events,
@@ -671,6 +686,7 @@ pub(super) fn watch_with_progress_and_optional_failures<S: PrSource, C: Clock>(
                     outcome: Outcome::Pending,
                     detail: None,
                     pointer: None,
+                    subject_failure: None,
                     phase: Some(phase.as_str().into()),
                 },
                 em.events,
@@ -710,6 +726,7 @@ struct Terminal {
     outcome: Outcome,
     detail: Option<String>,
     pointer: Option<String>,
+    subject_failure: Option<SubjectFailure>,
     /// Only ever `Some` for `Pending`, which `--once` alone can produce.
     phase: Option<String>,
 }
@@ -722,6 +739,8 @@ fn finish(subject: &Subject, head_sha: String, end: Terminal, events: Vec<Event>
         phase: end.phase,
         detail: end.detail,
         pointer: end.pointer,
+        shared_failure: None,
+        subject_failure: end.subject_failure,
         events,
     }
 }
@@ -1305,6 +1324,14 @@ mod tests {
                 assert_eq!(report.outcome, Outcome::ChecksFailed);
                 assert!(report.detail.unwrap().contains(name));
                 assert_eq!(report.pointer.as_deref(), Some("https://x/1"));
+                assert_eq!(
+                    report.subject_failure,
+                    Some(SubjectFailure {
+                        workflow_run_id: 1,
+                        check_run_id: id,
+                        name: name.into(),
+                    })
+                );
             }
         }
     }

@@ -2,8 +2,9 @@ use anyhow::{Result, anyhow};
 
 use super::decide::Progress;
 use super::gh::ApiError;
-use super::snapshot::PrSource;
-use super::{Event, GitFacts, Invocation, Outcome, PrNumber, PrReport, land, snapshot, watch};
+use super::invocation::{GitFacts, Invocation};
+use super::snapshot::{PrSource, SharedFailureEvidenceSource};
+use super::{Event, Outcome, PrNumber, PrReport, land, snapshot, watch};
 use crate::result::{CommandResult, StepResult};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,7 +75,11 @@ fn dispatch_with_git_facts<T>(
 /// Returns `Err` only when the *subject* could not be established, or when landing is
 /// refused — there is nothing to report on, so those become exit 2. Everything else,
 /// including the tooling failing outright, comes back as a `PrReport`.
-pub fn execute_with<S: PrSource, A: land::PrArmer, C: watch::Clock>(
+pub fn execute_with<
+    S: PrSource + SharedFailureEvidenceSource,
+    A: land::PrArmer,
+    C: watch::Clock,
+>(
     source: &S,
     armer: &A,
     clock: &C,
@@ -110,6 +115,8 @@ pub fn execute_with<S: PrSource, A: land::PrArmer, C: watch::Clock>(
                     detail: Some(e.detail()),
                     pointer: None,
                     events: Vec::new(),
+                    shared_failure: None,
+                    subject_failure: None,
                 }),
             };
         }
@@ -173,6 +180,8 @@ pub fn execute_with<S: PrSource, A: land::PrArmer, C: watch::Clock>(
                     )),
                     pointer: None,
                     events: Vec::new(),
+                    shared_failure: None,
+                    subject_failure: None,
                 });
             }
         };
@@ -189,9 +198,47 @@ pub fn execute_with<S: PrSource, A: land::PrArmer, C: watch::Clock>(
     let progress = established
         .as_ref()
         .map_or_else(|_| Progress::default(), Progress::from_snapshot);
-    Ok(watch::watch_with_progress(
-        source, clock, &subject, cfg, progress, sink,
-    ))
+    let mut report = watch::watch_with_progress(source, clock, &subject, cfg, progress, sink);
+    if report.outcome == Outcome::ChecksFailed && report.subject_failure.is_some() {
+        enrich_shared_failure(
+            source,
+            &subject,
+            &mut report,
+            super::gh::Deadline::ten_seconds(),
+        );
+    }
+    Ok(report)
+}
+fn enrich_shared_failure<S: SharedFailureEvidenceSource>(
+    source: &S,
+    subject: &super::Subject,
+    report: &mut PrReport,
+    deadline: super::gh::Deadline,
+) {
+    if deadline.check().is_err() {
+        return;
+    }
+    let Some(failure) = report.subject_failure.as_ref() else {
+        return;
+    };
+    let Ok(evidence) = source.shared_failure_evidence(subject, failure, &deadline) else {
+        return;
+    };
+    let mut check = || {
+        deadline
+            .check()
+            .map_err(|_| super::shared_failure::PolicyError::Cancelled)
+    };
+    let annotation = super::shared_failure::shared_failure_with_check(
+        &evidence.subject_log,
+        evidence.selected_runs,
+        evidence.jobs,
+        &mut check,
+    )
+    .map_err(|_| super::gh::ApiError::Transport("shared-failure enrichment timed out".into()));
+    if let Ok(annotation) = annotation {
+        report.shared_failure = annotation;
+    }
 }
 
 /// Wrap a report in the command envelope.
@@ -218,6 +265,10 @@ mod tests {
     use super::*;
     use crate::pr::gh::ApiError as E;
     use crate::pr::land::PrArmer;
+    use crate::pr::shared_failure::{
+        CandidateJob, CandidateRun, SelectedRun, SharedFailureEvidence, SharedFailureSource,
+        SubjectFailure,
+    };
     use crate::pr::test_support::*;
     use crate::pr::{EventKind, Subject};
 
@@ -411,6 +462,273 @@ mod tests {
         assert_eq!(armer.calls.get(), 0);
     }
 
+    fn failed_actions_snapshot() -> super::snapshot::PrSnapshot {
+        open(vec![
+            actions_check(
+                "Validate (no e2e)",
+                9,
+                super::snapshot::CheckState::Failure,
+                "2026-09-15T12:00:00Z",
+            ),
+            check("e2e gate", super::snapshot::CheckState::Pending, ""),
+        ])
+    }
+
+    fn matching_evidence() -> SharedFailureEvidence {
+        SharedFailureEvidence {
+            subject_log: "error: shared".into(),
+            selected_runs: vec![SelectedRun {
+                run: CandidateRun {
+                    id: 88,
+                    url: "https://github.com/jaunder-org/jaunder/actions/runs/88".into(),
+                    head_sha: "other-head".into(),
+                    created_at: "2026-09-15T11:00:00Z".into(),
+                    conclusion: Some("failure".into()),
+                },
+                source: SharedFailureSource::PullRequest {
+                    number: 732,
+                    url: "https://github.com/jaunder-org/jaunder/pull/732".into(),
+                },
+            }],
+            jobs: vec![(
+                88,
+                vec![CandidateJob {
+                    id: 90,
+                    name: "Validate (no e2e)".into(),
+                    url: "https://github.com/jaunder-org/jaunder/actions/jobs/90".into(),
+                    log: "error: shared".into(),
+                }],
+            )],
+        }
+    }
+
+    #[test]
+    fn typed_actions_failure_enriches_the_report_without_changing_its_execution_result() {
+        let annotated_source = FakeSource::new(vec![Ok(failed_actions_snapshot())], queue_rules())
+            .with_shared_failure_evidence(matching_evidence());
+        let bare_source = FakeSource::new(vec![Ok(failed_actions_snapshot())], queue_rules())
+            .with_shared_failure_evidence_script(vec![]);
+        let git = GitFacts::default();
+        let mut annotated_events = Vec::new();
+        let annotated = execute_with(
+            &annotated_source,
+            &SpyArmer::new(),
+            &clock(),
+            invocation(&git, false),
+            &mut |event| annotated_events.push(event.clone()),
+        )
+        .unwrap();
+        let mut bare_events = Vec::new();
+        let bare = execute_with(
+            &bare_source,
+            &SpyArmer::new(),
+            &clock(),
+            invocation(&git, false),
+            &mut |event| bare_events.push(event.clone()),
+        )
+        .unwrap();
+
+        assert_eq!(annotated_source.shared_failure_evidence_requests(), 1);
+        assert_eq!(
+            annotated_source.shared_failure_subject_failures(),
+            vec![SubjectFailure {
+                workflow_run_id: 1,
+                check_run_id: 9,
+                name: "Validate (no e2e)".into(),
+            }]
+        );
+        assert_eq!(bare_source.shared_failure_evidence_requests(), 1);
+        assert_eq!(annotated.outcome, Outcome::ChecksFailed);
+        assert_eq!(annotated_events, bare_events, "enrichment emits no events");
+        let mut expected = bare.clone();
+        expected.shared_failure = annotated.shared_failure.clone();
+        assert_eq!(annotated, expected, "only the annotation may change");
+        assert_eq!(
+            serde_json::to_value(&annotated).unwrap()["shared_failure"],
+            serde_json::json!({
+                "version": 1,
+                "algorithm": "github-actions-error-block-v1",
+                "digest_sha256": "d44f789533a2260f997226e225848d0c7904b037e50e523f469c9b1dc4ce5547",
+                "excerpt": "error: shared",
+                "matches": [{
+                    "source": {
+                        "kind": "pull-request",
+                        "number": 732,
+                        "url": "https://github.com/jaunder-org/jaunder/pull/732",
+                    },
+                    "head_sha": "other-head",
+                    "run": {
+                        "id": 88,
+                        "url": "https://github.com/jaunder-org/jaunder/actions/runs/88",
+                    },
+                    "job": {
+                        "id": 90,
+                        "name": "Validate (no e2e)",
+                        "url": "https://github.com/jaunder-org/jaunder/actions/jobs/90",
+                    },
+                }],
+            })
+        );
+        let annotated_result = into_result(
+            PrOperation::Watch,
+            annotated,
+            std::time::Duration::from_millis(42),
+        );
+        let bare_result = into_result(
+            PrOperation::Watch,
+            bare,
+            std::time::Duration::from_millis(42),
+        );
+        assert_eq!(
+            serde_json::to_value(&annotated_result).unwrap()["steps"],
+            serde_json::to_value(&bare_result).unwrap()["steps"]
+        );
+        assert_eq!(annotated_result.ok, bare_result.ok);
+        assert_eq!(annotated_result.exit_code(), bare_result.exit_code());
+    }
+
+    #[test]
+    fn evidence_failures_and_non_matches_leave_the_terminal_report_unannotated() {
+        let no_anchor = SharedFailureEvidence {
+            subject_log: "ordinary output".into(),
+            ..matching_evidence()
+        };
+        let no_match = SharedFailureEvidence {
+            jobs: vec![(
+                88,
+                vec![CandidateJob {
+                    log: "error: different".into(),
+                    ..matching_evidence().jobs[0].1[0].clone()
+                }],
+            )],
+            ..matching_evidence()
+        };
+        let git = GitFacts::default();
+        for (case, scripted) in [
+            ("no anchor", Ok(no_anchor)),
+            ("unique failure", Ok(no_match)),
+            ("query", Err(E::GraphQlErrors("query failed".into()))),
+            ("log", Err(E::Malformed("non-UTF-8 log".into()))),
+            ("parse", Err(E::Malformed("response was malformed".into()))),
+            ("timeout", Err(E::Transport("deadline elapsed".into()))),
+        ] {
+            let source = FakeSource::new(vec![Ok(failed_actions_snapshot())], queue_rules())
+                .with_shared_failure_evidence_script(vec![scripted]);
+            let report = execute_with(
+                &source,
+                &SpyArmer::new(),
+                &clock(),
+                invocation(&git, false),
+                &mut |_| {},
+            )
+            .unwrap();
+            assert_eq!(report.outcome, Outcome::ChecksFailed, "{case}");
+            assert!(report.shared_failure.is_none(), "{case}");
+            assert_eq!(report.events.len(), 1, "{case}");
+            assert_eq!(report.events[0].kind, EventKind::Terminal, "{case}");
+            assert_eq!(source.shared_failure_evidence_requests(), 1, "{case}");
+        }
+    }
+
+    #[test]
+    fn expiry_after_evidence_discards_the_annotation_during_policy_work() {
+        let git = GitFacts::default();
+        let bare_source = FakeSource::new(vec![Ok(failed_actions_snapshot())], queue_rules())
+            .with_shared_failure_evidence_script(vec![]);
+        let mut report = execute_with(
+            &bare_source,
+            &SpyArmer::new(),
+            &clock(),
+            invocation(&git, false),
+            &mut |_| {},
+        )
+        .unwrap();
+        let evidence_source = FakeSource::new(vec![], queue_rules())
+            .with_shared_failure_evidence(matching_evidence())
+            .with_shared_failure_evidence_delay(std::time::Duration::from_millis(20));
+        enrich_shared_failure(
+            &evidence_source,
+            &crate::pr::test_support::subject(),
+            &mut report,
+            crate::pr::gh::Deadline::after(std::time::Duration::from_millis(1)),
+        );
+        assert!(report.shared_failure.is_none());
+        assert_eq!(evidence_source.shared_failure_evidence_requests(), 1);
+    }
+
+    #[test]
+    fn land_status_context_failures_and_other_watch_outcomes_never_request_evidence() {
+        let land_source = FakeSource::new(vec![Ok(failed_actions_snapshot())], queue_rules())
+            .with_shared_failure_evidence(matching_evidence());
+        let land = execute_with(
+            &land_source,
+            &SpyArmer::new(),
+            &clock(),
+            invocation(&GitFacts::default(), true),
+            &mut |_| {},
+        )
+        .unwrap();
+        assert_eq!(land.outcome, Outcome::ChecksFailed);
+        assert_eq!(land_source.shared_failure_evidence_requests(), 0);
+
+        let status_source = FakeSource::new(
+            vec![Ok(open(vec![
+                check(
+                    "Validate (no e2e)",
+                    super::snapshot::CheckState::Failure,
+                    "2026-09-15T12:00:00Z",
+                ),
+                check("e2e gate", super::snapshot::CheckState::Pending, ""),
+            ]))],
+            queue_rules(),
+        )
+        .with_shared_failure_evidence(matching_evidence());
+        let status = execute_with(
+            &status_source,
+            &SpyArmer::new(),
+            &clock(),
+            invocation(&GitFacts::default(), false),
+            &mut |_| {},
+        )
+        .unwrap();
+        assert_eq!(status.outcome, Outcome::ChecksFailed);
+        assert_eq!(status_source.shared_failure_evidence_requests(), 0);
+
+        let merged_source = FakeSource::new(vec![Ok(merged_snapshot())], queue_rules())
+            .with_shared_failure_evidence(matching_evidence());
+        let merged = execute_with(
+            &merged_source,
+            &SpyArmer::new(),
+            &clock(),
+            invocation(&GitFacts::default(), false),
+            &mut |_| {},
+        )
+        .unwrap();
+        assert_eq!(merged.outcome, Outcome::Merged);
+
+        let pending_source = FakeSource::new(vec![Ok(open_pending())], queue_rules())
+            .with_shared_failure_evidence(matching_evidence());
+        let mut pending_cfg = cfg();
+        let pending_git = GitFacts::default();
+        pending_cfg.once = true;
+        let pending = execute_with(
+            &pending_source,
+            &SpyArmer::new(),
+            &clock(),
+            Invocation {
+                git: &pending_git,
+                number: Some(731),
+                cfg: pending_cfg,
+                landing: false,
+            },
+            &mut |_| {},
+        )
+        .unwrap();
+        assert_eq!(pending.outcome, Outcome::Pending);
+        assert_eq!(pending_source.shared_failure_evidence_requests(), 0);
+        assert_eq!(merged_source.shared_failure_evidence_requests(), 0);
+    }
+
     fn report(outcome: Outcome) -> PrReport {
         PrReport {
             outcome,
@@ -419,6 +737,8 @@ mod tests {
             phase: None,
             detail: None,
             pointer: None,
+            shared_failure: None,
+            subject_failure: None,
             events: vec![Event {
                 at: "2026-07-30T14:02:11Z".into(),
                 kind: EventKind::Phase,

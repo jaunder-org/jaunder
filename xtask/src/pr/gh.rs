@@ -6,12 +6,14 @@
 //! a pure function over `(exit, stdout, stderr)` and the subprocess wrapper around it
 //! is five lines. That split is what lets every transport failure be tested offline.
 
+use processkit::Command as ProcessCommand;
+use processkit::OutputBufferPolicy;
+use serde_json::Value;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
-
-use serde_json::Value;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
 pub struct GitError {
@@ -92,6 +94,36 @@ impl ApiError {
             ApiError::GraphQlErrors(m) => format!("graphql: {m}"),
             ApiError::Git(error) => format!("git: {error}"),
         }
+    }
+}
+
+/// One monotonic budget shared by every best-effort enrichment request.
+///
+/// The deadline lives at the transport boundary so an already-blocked `gh` process
+/// is killed and reaped rather than merely preventing the next request.
+#[derive(Debug)]
+pub struct Deadline(Instant);
+
+const MAX_JSON_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+impl Deadline {
+    pub fn ten_seconds() -> Self {
+        Self(Instant::now() + Duration::from_secs(10))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn after(duration: Duration) -> Self {
+        Self(Instant::now() + duration)
+    }
+
+    pub fn check(&self) -> Result<(), ApiError> {
+        self.remaining().map(|_| ())
+    }
+
+    fn remaining(&self) -> Result<Duration, ApiError> {
+        self.0
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(|| ApiError::Transport("shared-failure enrichment timed out".into()))
     }
 }
 
@@ -212,6 +244,53 @@ fn spawn(args: &[&str]) -> Result<(i32, String, String), ApiError> {
     }
 }
 
+/// Run one deadline-bound `gh` invocation and retain stdout as exact bytes.
+///
+/// `processkit` owns the process group: its timeout tears down and reaps descendants
+/// as well as the direct child, which is essential when `gh` delegates to a helper.
+fn spawn_deadline_program(
+    program: &str,
+    args: &[&str],
+    deadline: &Deadline,
+    max_bytes: usize,
+) -> Result<(i32, Vec<u8>, String), ApiError> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| ApiError::Transport(format!("creating gh runtime: {error}")))?;
+    let remaining = deadline.remaining()?;
+    let output = runtime
+        .block_on(
+            ProcessCommand::new(program)
+                .args(args)
+                .timeout(remaining)
+                .output_buffer(OutputBufferPolicy::fail_loud(usize::MAX).with_max_bytes(max_bytes))
+                .output_bytes(),
+        )
+        .map_err(|error| {
+            if error.is_not_found() {
+                ApiError::GhMissing
+            } else {
+                ApiError::Transport(format!("could not run gh: {error}"))
+            }
+        })?;
+    if output.timed_out() {
+        return Err(ApiError::Transport(
+            "shared-failure enrichment timed out".into(),
+        ));
+    }
+    let code = output.code().unwrap_or(-1);
+    let stderr = output.stderr().to_owned();
+    Ok((code, output.into_stdout(), stderr))
+}
+
+fn spawn_deadline(
+    args: &[&str],
+    deadline: &Deadline,
+    max_bytes: usize,
+) -> Result<(i32, Vec<u8>, String), ApiError> {
+    spawn_deadline_program("gh", args, deadline, max_bytes)
+}
 /// Run `gh` with a complete stdin payload and hand its outputs to [`classify`].
 pub fn run_gh_stdin(args: &[&str], stdin: &str) -> Result<Value, ApiError> {
     let mut child = match Command::new("gh")
@@ -256,6 +335,50 @@ fn with_reset(err: ApiError) -> ApiError {
 pub fn run_gh(args: &[&str]) -> Result<Value, ApiError> {
     let (exit, out, err) = spawn(args)?;
     classify(exit, &out, &err).map_err(with_reset)
+}
+
+/// A deadline-bound JSON-producing `gh api` call for best-effort enrichment.
+pub fn run_gh_deadline(args: &[&str], deadline: &Deadline) -> Result<Value, ApiError> {
+    let (exit, stdout, stderr) = spawn_deadline(args, deadline, MAX_JSON_RESPONSE_BYTES)?;
+    parse_deadline_json(exit, stdout, &stderr, deadline)
+}
+
+fn parse_deadline_json(
+    exit: i32,
+    stdout: Vec<u8>,
+    stderr: &str,
+    deadline: &Deadline,
+) -> Result<Value, ApiError> {
+    deadline.check()?;
+    if stdout.len() > MAX_JSON_RESPONSE_BYTES {
+        return Err(ApiError::Malformed(format!(
+            "gh JSON response exceeds {MAX_JSON_RESPONSE_BYTES} bytes"
+        )));
+    }
+    let stdout = String::from_utf8(stdout)
+        .map_err(|error| ApiError::Malformed(format!("gh JSON stdout is not UTF-8: {error}")))?;
+    deadline.check()?;
+    let value = classify(exit, &stdout, stderr)?;
+    deadline.check()?;
+    Ok(value)
+}
+
+/// A deadline-bound raw `gh api` call for Actions logs.
+pub fn run_gh_raw_deadline(
+    args: &[&str],
+    deadline: &Deadline,
+    max_bytes: usize,
+) -> Result<Vec<u8>, ApiError> {
+    let (exit, stdout, stderr) = spawn_deadline(args, deadline, max_bytes)?;
+    if exit == 0 {
+        deadline.check()?;
+        return Ok(stdout);
+    }
+    let text = String::from_utf8_lossy(&stdout);
+    match classify(exit, &text, &stderr) {
+        Ok(_) => Err(ApiError::Transport(format!("gh exited {exit}"))),
+        Err(error) => Err(error),
+    }
 }
 
 /// A `gh` call whose stdout is prose, not JSON — `gh pr merge` prints a human
@@ -444,6 +567,18 @@ mod tests {
     }
 
     #[test]
+    fn deadline_json_rejects_oversized_bytes_before_decoding() {
+        let error = parse_deadline_json(
+            0,
+            vec![b'{'; MAX_JSON_RESPONSE_BYTES + 1],
+            "",
+            &Deadline::ten_seconds(),
+        )
+        .unwrap_err();
+        assert!(matches!(error, ApiError::Malformed(message) if message.contains("exceeds")));
+    }
+
+    #[test]
     fn a_long_multibyte_error_body_truncates_without_panicking() {
         // Byte-slicing at 300 would land mid-character and panic, taking the whole
         // process — and the report — with it. `…` is 3 bytes, so a 200-char string of
@@ -500,5 +635,32 @@ mod tests {
         assert_reset_failure_warns_once(|| {
             Ok((0, "sensitive malformed body".to_owned(), String::new()))
         });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn deadline_reaps_a_blocking_child_tree() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("child-pid");
+        let pid_file_arg = pid_file.display().to_string();
+        let script = "sleep 30 & printf '%s' $! > \"$1\"; wait";
+        let result = spawn_deadline_program(
+            "sh",
+            &["-c", script, "sh", &pid_file_arg],
+            &Deadline::after(Duration::from_millis(50)),
+            MAX_JSON_RESPONSE_BYTES,
+        );
+        assert!(
+            matches!(result, Err(ApiError::Transport(message)) if message.contains("timed out"))
+        );
+        let pid = std::fs::read_to_string(pid_file)
+            .unwrap()
+            .parse::<u32>()
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(
+            !processkit::process_is_alive(pid, None).unwrap(),
+            "deadline must reap the shell's background child"
+        );
     }
 }

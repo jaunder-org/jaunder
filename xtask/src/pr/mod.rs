@@ -12,6 +12,7 @@ pub mod evidence;
 pub mod gh;
 pub mod land;
 pub mod promoter;
+pub mod shared_failure;
 pub mod snapshot;
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -23,5 +24,5 @@ mod invocation;
 mod types;
 
 pub use execute::{PrOperation, execute, execute_with, into_result};
-pub use invocation::{GitFacts, Invocation};
+pub use shared_failure::{SharedFailure, SubjectFailure};
 pub use types::{Event, EventKind, Outcome, PrNumber, PrReport, Subject};

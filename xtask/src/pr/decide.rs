@@ -3,11 +3,11 @@
 //! Every rule this command exists to get right lives here and nowhere else, which is
 //! what makes them all testable from hand-built values.
 
-use super::Outcome;
 use super::snapshot::{
     CheckEntry, CheckState, MergeStateStatus, Mergeable, PrSnapshot, PrState, RequiredChecks,
     RunRef,
 };
+use super::{Outcome, SubjectFailure};
 
 /// A settled failed check after the observation boundary has established whether
 /// its workflow ancestry makes it merge-blocking.
@@ -16,6 +16,7 @@ pub enum ClassifiedFailure {
     Required {
         name: String,
         pointer: Option<String>,
+        subject_failure: Option<SubjectFailure>,
     },
     Optional {
         id: String,
@@ -41,7 +42,6 @@ impl ClassifiedFailure {
             },
         }
     }
-
     fn is_required(&self) -> bool {
         matches!(self, Self::Required { .. })
     }
@@ -49,6 +49,15 @@ impl ClassifiedFailure {
     fn pointer(&self) -> Option<String> {
         match self {
             Self::Required { pointer, .. } | Self::Optional { pointer, .. } => pointer.clone(),
+        }
+    }
+
+    fn subject_failure(&self) -> Option<SubjectFailure> {
+        match self {
+            Self::Required {
+                subject_failure, ..
+            } => subject_failure.clone(),
+            Self::Optional { .. } => None,
         }
     }
 }
@@ -102,6 +111,7 @@ pub enum Step {
         outcome: Outcome,
         detail: Option<String>,
         pointer: Option<String>,
+        subject_failure: Option<SubjectFailure>,
     },
 }
 
@@ -225,6 +235,7 @@ pub fn classify_with_failures(
         outcome,
         detail,
         pointer,
+        subject_failure: None,
     };
 
     // Existing adverse verdicts outrank the approval handoff.
@@ -249,21 +260,23 @@ pub fn classify_with_failures(
         e.filter(|e| e.state == CheckState::Failure)
             .map(|e| (name, e))
     }) {
-        return terminal(
-            Outcome::ChecksFailed,
-            Some(format!("required check failed: {name}")),
-            entry.details_url.clone(),
-        );
+        return Step::Terminal {
+            outcome: Outcome::ChecksFailed,
+            detail: Some(format!("required check failed: {name}")),
+            pointer: entry.details_url.clone(),
+            subject_failure: subject_failure(entry),
+        };
     }
     if let Some(failure) = classified_failures
         .iter()
         .find(|failure| failure.is_required())
     {
-        return terminal(
-            Outcome::ChecksFailed,
-            Some(failure.detail()),
-            failure.pointer(),
-        );
+        return Step::Terminal {
+            outcome: Outcome::ChecksFailed,
+            detail: Some(failure.detail()),
+            pointer: failure.pointer(),
+            subject_failure: failure.subject_failure(),
+        };
     }
     if req.strict && snap.merge_state_status == MergeStateStatus::Behind {
         return terminal(
@@ -362,6 +375,21 @@ pub fn optional_failures(classified_failures: &[ClassifiedFailure]) -> Vec<Optio
         .collect()
 }
 
+fn subject_failure(check: &CheckEntry) -> Option<SubjectFailure> {
+    match check.provider {
+        super::snapshot::CheckProvider::GitHubActions {
+            workflow_run_id,
+            check_run_id,
+        } => Some(SubjectFailure {
+            workflow_run_id,
+            check_run_id,
+            name: check.name.clone(),
+        }),
+        super::snapshot::CheckProvider::StatusContext
+        | super::snapshot::CheckProvider::OtherCheckRun => None,
+    }
+}
+
 fn merge_state_label(status: MergeStateStatus) -> &'static str {
     match status {
         MergeStateStatus::Behind => "BEHIND",
@@ -418,12 +446,42 @@ mod tests {
                 outcome,
                 pointer,
                 detail,
+                subject_failure,
             } => {
                 assert_eq!(outcome, Outcome::ChecksFailed);
                 assert!(pointer.is_some(), "must point at the failing job log");
                 assert!(detail.unwrap().contains("Validate (no e2e)"));
+                assert_eq!(subject_failure, None);
             }
             other => panic!("expected checks-failed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn direct_actions_failure_retains_typed_identity() {
+        let mut failed = check(
+            "Validate (no e2e)",
+            CheckState::Failure,
+            "2026-07-30T14:10:00Z",
+        );
+        failed.provider = CheckProvider::GitHubActions {
+            workflow_run_id: 34710221556,
+            check_run_id: 103597518863,
+        };
+        let snapshot = open(vec![failed]);
+        match classify(&snapshot, &queue_rules(), None, &Progress::default()) {
+            Step::Terminal {
+                subject_failure: Some(identity),
+                ..
+            } => assert_eq!(
+                identity,
+                SubjectFailure {
+                    workflow_run_id: 34710221556,
+                    check_run_id: 103597518863,
+                    name: "Validate (no e2e)".into(),
+                }
+            ),
+            other => panic!("expected Actions identity, got {other:?}"),
         }
     }
 
@@ -511,16 +569,19 @@ mod tests {
             &[ClassifiedFailure::Required {
                 name: "renamed lane".into(),
                 pointer: Some("https://x/failed".into()),
+                subject_failure: None,
             }],
         ) {
             Step::Terminal {
                 outcome,
                 detail,
                 pointer,
+                subject_failure,
             } => {
                 assert_eq!(outcome, Outcome::ChecksFailed);
                 assert!(detail.unwrap().contains("renamed lane"));
                 assert_eq!(pointer.as_deref(), Some("https://x/failed"));
+                assert_eq!(subject_failure, None);
             }
             other => panic!("expected checks-failed, got {other:?}"),
         }
