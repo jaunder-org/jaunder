@@ -83,8 +83,10 @@ Out:
     bytes, malformed responses, and query failure. A supervised blocking-child
     test proves deadline expiry returns promptly and leaves no child running.
 
-- [ ] Task 3: Enrich only established watch failures
-  - Files: modify `xtask/src/pr/execute.rs` and its tests.
+- [x] Task 3: Enrich only established watch failures
+  - Files: modify `xtask/src/pr/execute.rs` and its tests, plus
+    `xtask/src/pr/snapshot.rs` and `xtask/src/pr/test_support.rs` for the
+    dedicated evidence-observation capability and scripted fake.
   - Depends on: Tasks 1 and 2.
   - Contract: after `watch` returns `Outcome::ChecksFailed`, and before
     `into_result` serializes it, run best-effort enrichment only when the report

@@ -437,6 +437,15 @@ pub trait PrSource {
     fn required_checks(&self, subject: &Subject) -> Result<RequiredChecks, ApiError>;
     fn ejection_run(&self, subject: &Subject) -> Result<Option<RunRef>, ApiError>;
 }
+/// Best-effort evidence for a terminal Actions failure, deliberately separate from
+/// [`PrSource`] so observing it cannot affect the watch state machine.
+pub trait SharedFailureEvidenceSource {
+    fn shared_failure_evidence(
+        &self,
+        subject: &Subject,
+        failure: &SubjectFailure,
+    ) -> Result<SharedFailureEvidence, ApiError>;
+}
 
 /// Owner and repo from a git remote URL, in either of the two forms git writes.
 /// Deriving this beats hardcoding an org into a tool — invisible until someone forks.
@@ -520,11 +529,10 @@ impl GhSource {
             number,
         })
     }
-    /// Collect bounded, read-only evidence for the optional shared-failure annotation.
-    ///
-    /// This is intentionally not part of `PrSource`: watch must not acquire it while
-    /// deciding an outcome, and Task 3 alone chooses when the best-effort lookup runs.
-    pub fn shared_failure_evidence(
+}
+
+impl SharedFailureEvidenceSource for GhSource {
+    fn shared_failure_evidence(
         &self,
         subject: &Subject,
         failure: &SubjectFailure,
