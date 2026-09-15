@@ -1,0 +1,21 @@
+name: unnamed jobs
+
+jobs:
+  unnamed-ancestor:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: true
+  matrix-ancestor:
+    strategy:
+      matrix:
+        platform: [linux]
+        version: [1]
+    runs-on: ubuntu-24.04
+    steps:
+      - run: true
+  aggregate:
+    name: Aggregate
+    needs: [unnamed-ancestor, matrix-ancestor]
+    runs-on: ubuntu-24.04
+    steps:
+      - run: true

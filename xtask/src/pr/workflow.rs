@@ -32,7 +32,6 @@ pub struct RuntimeJob {
 pub enum GraphError {
     MissingJobs,
     InvalidWorkflow { detail: String },
-    MissingJobName { job_key: String },
     MissingWorkflowSource { path: String },
     UnsupportedExpression { value: String },
     UnsupportedRemoteReusableWorkflow { uses: String },
@@ -50,7 +49,6 @@ impl std::fmt::Display for GraphError {
         match self {
             Self::MissingJobs => f.write_str("workflow has no jobs"),
             Self::InvalidWorkflow { detail } => write!(f, "invalid workflow: {detail}"),
-            Self::MissingJobName { job_key } => write!(f, "job {job_key} has no name"),
             Self::MissingWorkflowSource { path } => {
                 write!(f, "missing local reusable workflow {path}")
             }
@@ -159,15 +157,22 @@ impl WorkflowGraph {
                 reusable_terminals.insert(job.key.clone(), terminals);
                 continue;
             }
-            let name = job.name.ok_or_else(|| GraphError::MissingJobName {
-                job_key: job.key.clone(),
-            })?;
-            if contains_unsupported_expression(&name) {
-                return Err(GraphError::UnsupportedExpression { value: name });
-            }
             let matrixes = expand_matrix(&job.key, &job.matrix)?;
             for matrix in matrixes {
-                let display_name = render_matrix_name(&name, &matrix)?;
+                let display_name = match &job.name {
+                    Some(name) => {
+                        if contains_unsupported_expression(name) {
+                            return Err(GraphError::UnsupportedExpression {
+                                value: name.clone(),
+                            });
+                        }
+                        render_matrix_name(name, &matrix)?
+                    }
+                    // GitHub uses an ordinary job's key as its displayed check
+                    // name when `name` is omitted, appending matrix values in
+                    // matrix declaration order for a matrix job.
+                    None => render_unnamed_job_name(&job.key, &job.matrix, &matrix)?,
+                };
                 nodes.push(Node {
                     job_key: job.key.clone(),
                     display_name,
@@ -428,7 +433,9 @@ struct Job {
     key: String,
     name: Option<String>,
     needs: Vec<String>,
-    matrix: BTreeMap<String, Vec<String>>,
+    /// Matrix dimensions retain their workflow declaration order because GitHub
+    /// uses that order in the generated display name of an unnamed matrix job.
+    matrix: Vec<(String, Vec<String>)>,
     fail_fast: Option<bool>,
     uses: Option<String>,
 }
@@ -468,7 +475,7 @@ impl Needs {
 
 #[derive(Deserialize)]
 struct Strategy {
-    matrix: Option<BTreeMap<String, Vec<YamlValue>>>,
+    matrix: Option<YamlValue>,
     #[serde(rename = "fail-fast")]
     fail_fast: Option<bool>,
 }
@@ -486,18 +493,14 @@ fn parse_jobs(source: &str) -> Result<Vec<Job>, GraphError> {
         .map(|(key, job)| {
             let (matrix, fail_fast) = job
                 .strategy
-                .map(|strategy| (strategy.matrix.unwrap_or_default(), strategy.fail_fast))
-                .unwrap_or_default();
-            let matrix = matrix
-                .into_iter()
-                .map(|(name, values)| {
-                    values
-                        .into_iter()
-                        .map(|value| yaml_scalar(&key, value))
-                        .collect::<Result<Vec<_>, _>>()
-                        .map(|values| (name, values))
+                .map(|strategy| {
+                    (
+                        strategy.matrix.unwrap_or(YamlValue::Null),
+                        strategy.fail_fast,
+                    )
                 })
-                .collect::<Result<BTreeMap<_, _>, _>>()?;
+                .unwrap_or((YamlValue::Null, None));
+            let matrix = parse_matrix(&key, matrix)?;
             Ok(Job {
                 key,
                 name: job.name,
@@ -506,6 +509,43 @@ fn parse_jobs(source: &str) -> Result<Vec<Job>, GraphError> {
                 fail_fast,
                 uses: job.uses,
             })
+        })
+        .collect()
+}
+
+fn parse_matrix(
+    job_key: &str,
+    matrix: YamlValue,
+) -> Result<Vec<(String, Vec<String>)>, GraphError> {
+    let YamlValue::Mapping(matrix) = matrix else {
+        return match matrix {
+            YamlValue::Null => Ok(Vec::new()),
+            value => Err(GraphError::InvalidMatrix {
+                job_key: job_key.to_string(),
+                value: format!("{value:?}"),
+            }),
+        };
+    };
+    matrix
+        .into_iter()
+        .map(|(name, values)| {
+            let YamlValue::String(name) = name else {
+                return Err(GraphError::InvalidMatrix {
+                    job_key: job_key.to_string(),
+                    value: format!("{name:?}"),
+                });
+            };
+            let YamlValue::Sequence(values) = values else {
+                return Err(GraphError::InvalidMatrix {
+                    job_key: job_key.to_string(),
+                    value: format!("{values:?}"),
+                });
+            };
+            values
+                .into_iter()
+                .map(|value| yaml_scalar(job_key, value))
+                .collect::<Result<Vec<_>, _>>()
+                .map(|values| (name, values))
         })
         .collect()
 }
@@ -524,7 +564,7 @@ fn yaml_scalar(job_key: &str, value: YamlValue) -> Result<String, GraphError> {
 
 fn expand_matrix(
     job_key: &str,
-    matrix: &BTreeMap<String, Vec<String>>,
+    matrix: &[(String, Vec<String>)],
 ) -> Result<Vec<BTreeMap<String, String>>, GraphError> {
     let mut result = vec![BTreeMap::new()];
     for (key, values) in matrix {
@@ -546,6 +586,33 @@ fn expand_matrix(
             .collect();
     }
     Ok(result)
+}
+
+fn render_unnamed_job_name(
+    job_key: &str,
+    dimensions: &[(String, Vec<String>)],
+    matrix: &BTreeMap<String, String>,
+) -> Result<String, GraphError> {
+    if dimensions.is_empty() {
+        return Ok(job_key.to_string());
+    }
+    let values = dimensions
+        .iter()
+        .map(|(key, _)| {
+            matrix.get(key).ok_or_else(|| GraphError::InvalidMatrix {
+                job_key: job_key.to_string(),
+                value: key.clone(),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(format!(
+        "{job_key} ({})",
+        values
+            .iter()
+            .map(|value| value.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    ))
 }
 
 fn contains_unsupported_expression(value: &str) -> bool {
@@ -645,6 +712,22 @@ mod tests {
             graph.classify(&jobs[2], &required),
             Ok(Requirement::Optional)
         );
+    }
+
+    #[test]
+    fn unnamed_jobs_use_github_generated_runtime_display_names() {
+        let graph = WorkflowGraph::parse(&fixture("workflow-unnamed-jobs.yml")).unwrap();
+        let runtime_jobs =
+            serde_json::from_str::<Vec<RuntimeJob>>(&fixture("workflow-unnamed-jobs-runtime.json"))
+                .unwrap_or_else(|error| panic!("unnamed job runtime fixture: {error}"));
+
+        for job in runtime_jobs {
+            assert_eq!(
+                graph.classify(&job, &["Aggregate".into()]),
+                Ok(Requirement::Transitive),
+                "GitHub reports unnamed jobs by their key, with matrix values in declaration order"
+            );
+        }
     }
 
     #[test]
