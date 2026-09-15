@@ -82,6 +82,7 @@ test("owner Post Actions disclosures use native popover dismissal and focus", as
 
 test("owner permalink Post Actions menu stays attached to its trigger", async ({
   page,
+  tracedContext,
   firstNav,
 }) => {
   await signInAsNewUser(page);
@@ -130,6 +131,18 @@ test("owner permalink Post Actions menu stays attached to its trigger", async ({
     await page.keyboard.press("Escape");
     await expect(popover).not.toBeVisible();
     await expect(trigger).toBeFocused();
+  }
+
+  const anonymousContext = await tracedContext();
+  try {
+    const anonymousPage = await anonymousContext.newPage();
+    await goto(anonymousPage, post.permalink, { timeout: firstNav });
+    await expect(
+      anonymousPage.getByRole("button", { name: "Actions" }),
+    ).toHaveCount(0);
+    await expect(anonymousPage.locator(".j-trusted-post-actions")).toBeEmpty();
+  } finally {
+    await anonymousContext.close();
   }
 });
 
