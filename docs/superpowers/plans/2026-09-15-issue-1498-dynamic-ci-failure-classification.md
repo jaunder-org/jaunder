@@ -69,7 +69,7 @@ Out:
     successful reruns, head replacement, classification poll failures, `--once`,
     default watch, `--until merged`, and the post-`pr land` watch.
 
-- [ ] Task 4: Lock CI shape and document the observer contract
+- [x] Task 4: Lock CI shape and document the observer contract
   - Contract: The production workflow parser verifies the real CI workflow keeps
     the e2e matrix at `strategy.fail-fast: false`; observation continues to own
     no workflow mutation capability.

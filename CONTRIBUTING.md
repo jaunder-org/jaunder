@@ -936,6 +936,16 @@ baseline.
   merge and drives it home. Both need `gh` (in the devShell) and run on the host
   only. Omit `N` to use the open PR for the current branch.
 
+  The branch ruleset remains authoritative for direct required contexts and
+  readiness. For an early failure, `pr watch` follows the current workflow run's
+  dependency graph: a directly or transitively required failed check is
+  immediately `checks-failed`, while an optional failure emits one explicitly
+  optional event with its job-log URL and remains non-terminal. The observer
+  fails closed through its poll-error/strike policy if Actions, workflow, or
+  graph evidence cannot establish that classification; it never guesses that an
+  uncertain failure is optional. The observer only reads this evidence: it does
+  not cancel, rerun, rebase, enqueue, or otherwise mutate workflow jobs.
+
   ```bash
   cargo xtask pr watch                     # wait for the next action
   cargo xtask --json pr watch 731 --once   # one snapshot

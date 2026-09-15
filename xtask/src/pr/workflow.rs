@@ -41,6 +41,8 @@ pub enum GraphError {
     DependencyCycle { job_key: String },
     MissingJoin { name: String },
     AmbiguousJoin { name: String },
+    MissingJobKey { job_key: String },
+    NotMatrixJob { job_key: String },
 }
 
 impl std::fmt::Display for GraphError {
@@ -69,6 +71,8 @@ impl std::fmt::Display for GraphError {
             }
             Self::MissingJoin { name } => write!(f, "no workflow job matches {name}"),
             Self::AmbiguousJoin { name } => write!(f, "multiple workflow jobs match {name}"),
+            Self::MissingJobKey { job_key } => write!(f, "workflow has no job {job_key}"),
+            Self::NotMatrixJob { job_key } => write!(f, "workflow job {job_key} has no matrix"),
         }
     }
 }
@@ -80,6 +84,7 @@ struct Node {
     job_key: String,
     display_name: String,
     matrix: BTreeMap<String, String>,
+    fail_fast: Option<bool>,
     needs: Vec<String>,
 }
 
@@ -167,6 +172,7 @@ impl WorkflowGraph {
                     job_key: job.key.clone(),
                     display_name,
                     matrix,
+                    fail_fast: job.fail_fast,
                     needs: needs.clone(),
                 });
             }
@@ -274,6 +280,26 @@ impl WorkflowGraph {
                 }
             })
             .collect()
+    }
+
+    /// Returns the explicitly configured matrix fail-fast value for a job.
+    ///
+    /// `None` means the workflow omitted `strategy.fail-fast`; callers that need an
+    /// explicit setting must reject it rather than accepting GitHub's default.
+    pub fn matrix_fail_fast(&self, job_key: &str) -> Result<Option<bool>, GraphError> {
+        let node = self
+            .nodes
+            .iter()
+            .find(|node| node.job_key == job_key)
+            .ok_or_else(|| GraphError::MissingJobKey {
+                job_key: job_key.to_string(),
+            })?;
+        if node.matrix.is_empty() {
+            return Err(GraphError::NotMatrixJob {
+                job_key: job_key.to_string(),
+            });
+        }
+        Ok(node.fail_fast)
     }
 
     /// Classifies one runtime job using exact display-name and matrix identity joins.
@@ -403,6 +429,7 @@ struct Job {
     name: Option<String>,
     needs: Vec<String>,
     matrix: BTreeMap<String, Vec<String>>,
+    fail_fast: Option<bool>,
     uses: Option<String>,
 }
 
@@ -442,6 +469,8 @@ impl Needs {
 #[derive(Deserialize)]
 struct Strategy {
     matrix: Option<BTreeMap<String, Vec<YamlValue>>>,
+    #[serde(rename = "fail-fast")]
+    fail_fast: Option<bool>,
 }
 
 fn parse_jobs(source: &str) -> Result<Vec<Job>, GraphError> {
@@ -455,10 +484,11 @@ fn parse_jobs(source: &str) -> Result<Vec<Job>, GraphError> {
     }
     jobs.into_iter()
         .map(|(key, job)| {
-            let matrix = job
+            let (matrix, fail_fast) = job
                 .strategy
-                .and_then(|strategy| strategy.matrix)
-                .unwrap_or_default()
+                .map(|strategy| (strategy.matrix.unwrap_or_default(), strategy.fail_fast))
+                .unwrap_or_default();
+            let matrix = matrix
                 .into_iter()
                 .map(|(name, values)| {
                     values
@@ -473,6 +503,7 @@ fn parse_jobs(source: &str) -> Result<Vec<Job>, GraphError> {
                 name: job.name,
                 needs: job.needs.into_vec(),
                 matrix,
+                fail_fast,
                 uses: job.uses,
             })
         })
@@ -573,6 +604,24 @@ mod tests {
     fn captured_runtime_jobs() -> Vec<RuntimeJob> {
         serde_json::from_str(&fixture("workflow-runtime-jobs.json"))
             .unwrap_or_else(|error| panic!("runtime fixture: {error}"))
+    }
+
+    #[test]
+    fn production_ci_e2e_matrix_explicitly_keeps_fail_fast_disabled() {
+        let source = std::fs::read_to_string(format!(
+            "{}/../.github/workflows/ci.yml",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap_or_else(|error| panic!("production CI workflow: {error}"));
+        let graph = WorkflowGraph::parse(&source).unwrap_or_else(|error| {
+            panic!("production CI workflow must remain supported by the workflow parser: {error}")
+        });
+
+        assert_eq!(
+            graph.matrix_fail_fast("e2e"),
+            Ok(Some(false)),
+            "the e2e matrix must explicitly retain strategy.fail-fast: false so an early failure preserves sibling diagnostics"
+        );
     }
 
     #[test]
