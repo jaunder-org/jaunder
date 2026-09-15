@@ -242,7 +242,7 @@ let
           enable = true;
           bind = "127.0.0.1:3000";
           prod = true;
-          db = if postgresqlDatabase then "postgresql:///jaunder?host=/run/postgresql" else "sqlite:/var/lib/jaunder/data/jaunder.db";
+          db = if postgresqlDatabase then "postgresql://jaunder@localhost/jaunder?host=/run/postgresql" else "sqlite:/var/lib/jaunder/data/jaunder.db";
         };
         systemd.services.jaunder.environment = {
           JAUNDER_LOG_FORMAT = "json";

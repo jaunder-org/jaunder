@@ -68,7 +68,7 @@ Out:
     `checks.jaunder-stack-sqlite-bcrypt` and
     `checks.jaunder-stack-sqlite-argon2id`; build both directly before Task 3.
 
-- [ ] Task 3: Prove additive shared PostgreSQL composition.
+- [x] Task 3: Prove additive shared PostgreSQL composition.
   - Contract: PostgreSQL mode uses the host's ordinary `services.postgresql`,
     adds an owned `jaunder` database and matching login role through native
     additive options, and connects over `/run/postgresql` with peer

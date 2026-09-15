@@ -1085,6 +1085,39 @@ mkWasmCoverageMeasurementProducer =
     hostName = "jaunder.example.test";
     database = "postgresql";
   };
+  postgresFixtureModule =
+    { pkgs, ... }:
+    {
+      # This separate fixture module owns the host's PostgreSQL package and
+      # global policy. The stack must merge with it at ordinary priority.
+      services.postgresql = {
+        package = pkgs.postgresql_16;
+        settings.log_min_duration_statement = 4242;
+        authentication = "local all all peer";
+        ensureDatabases = [ "unrelated" ];
+        ensureUsers = [
+          {
+            name = "unrelated";
+            ensureDBOwnership = true;
+          }
+        ];
+      };
+    };
+  postgresFixtureStack = nixpkgs.lib.nixosSystem {
+    inherit system;
+    modules = [
+      self.nixosModules.jaunder-stack
+      postgresFixtureModule
+      ({ ... }: {
+        system.stateVersion = "26.05";
+        services.jaunder.stack = {
+          enable = true;
+          hostName = "jaunder.example.test";
+          database = "postgresql";
+        };
+      })
+    ];
+  };
   bcryptStack = mkStackConfiguration {
     enable = true;
     hostName = "jaunder.example.test";
@@ -1134,9 +1167,14 @@ mkWasmCoverageMeasurementProducer =
     assert sqliteStack.config.services.jaunder.bind == "127.0.0.1:3000";
     assert sqliteStack.config.services.jaunder.prod;
     assert sqliteStack.config.services.jaunder.db == "sqlite:/var/lib/jaunder/data/jaunder.db";
-    assert postgresStack.config.services.jaunder.db == "postgresql:///jaunder?host=/run/postgresql";
+    assert postgresStack.config.services.jaunder.db == "postgresql://jaunder@localhost/jaunder?host=/run/postgresql";
     assert postgresStack.config.services.postgresql.enable;
     assert postgresStack.config.services.postgresql.ensureDatabases == [ "jaunder" ];
+    assert postgresFixtureStack.config.services.postgresql.package == pkgs.postgresql_16;
+    assert !postgresFixtureStack.config.services.postgresql.enableTCPIP;
+    assert postgresFixtureStack.config.services.postgresql.settings.listen_addresses == "localhost";
+    assert postgresFixtureStack.config.services.postgresql.settings.log_min_duration_statement == 4242;
+    assert postgresFixtureStack.config.networking.firewall.allowedTCPPorts == [ 80 443 ];
     assert sqliteStack.config.networking.firewall.allowedTCPPorts == [ 80 443 ];
     assert sqliteStack.config.services.victoriametrics.listenAddress == "127.0.0.1:8428";
     assert sqliteStack.config.services.victorialogs.listenAddress == "127.0.0.1:9428";
@@ -1196,6 +1234,8 @@ mkWasmCoverageMeasurementProducer =
       checkName,
       passwordHash,
       captureSignals ? false,
+      persistSignals ? false,
+      database ? "sqlite",
     }:
     pkgs.testers.nixosTest {
       name = checkName;
@@ -1203,7 +1243,7 @@ mkWasmCoverageMeasurementProducer =
       nodes.machine =
         { lib, pkgs, ... }:
         {
-          imports = [ self.nixosModules.jaunder-stack ];
+          imports = [ self.nixosModules.jaunder-stack ] ++ lib.optional (database == "postgresql") postgresFixtureModule;
           virtualisation.memorySize = 2048;
           boot.loader.grub.devices = [ "nodev" ];
           environment.systemPackages = [
@@ -1213,9 +1253,13 @@ mkWasmCoverageMeasurementProducer =
             pkgs.iproute2
             pkgs.jq
             pkgs.procps
+          ] ++ lib.optionals (database == "postgresql") [
+            pkgs.iptables
+            pkgs.postgresql_16
           ];
           services.jaunder.stack = {
             enable = true;
+            inherit database;
             hostName = "jaunder.stack.test";
             observability = {
               hostName = "observe.stack.test";
@@ -1329,6 +1373,84 @@ mkWasmCoverageMeasurementProducer =
         machine.start(allow_reboot=True)
         wait_for_stack_ready()
 
+        ${pkgs.lib.optionalString (database == "postgresql") ''
+          # PostgreSQL cold-boots with the stack. Its native readiness target
+          # must complete before Jaunder's peer-authenticated initialization.
+          machine.wait_for_unit("postgresql.service", timeout=90)
+          machine.succeed("systemctl is-active postgresql.target")
+          machine.succeed(
+            "systemctl show --property After --value jaunder.service"
+            + " | tr ' ' '\\n' | grep -Fx postgresql.target"
+          )
+          machine.succeed(
+            "systemctl show --property Requires --value jaunder.service"
+            + " | tr ' ' '\\n' | grep -Fx postgresql.target"
+          )
+          machine.succeed(
+            "pid=$(systemctl show --property MainPID --value jaunder.service)"
+            + "; tr '\\0' '\\n' < /proc/$pid/environ"
+            + " | grep -Fx 'JAUNDER_DB=postgresql://jaunder@localhost/jaunder?host=/run/postgresql'"
+          )
+          machine.succeed(
+            "test -S /run/postgresql/.s.PGSQL.5432"
+            + " && ss -ltnH | awk '$4 ~ /:5432$/ && $4 !~ /^127\\./ && $4 !~ /^::1:/ && $4 !~ /^\\[::1\\]/ { exit 1 }'"
+          )
+          machine.succeed(
+            "runuser -u postgres -- psql -d postgres -Atqc 'SHOW server_version_num'"
+            + " | grep -Ex '16[0-9]{4}'"
+          )
+          machine.succeed(
+            "test \"$(runuser -u postgres -- psql -d postgres -Atqc 'SHOW listen_addresses')\" = \"localhost\""
+            + " && runuser -u postgres -- psql -d postgres -Atqc 'SHOW log_min_duration_statement'"
+            + " | grep -Fx '4242ms'"
+          )
+          machine.succeed(
+            "runuser -u jaunder -- psql -h /run/postgresql -d jaunder -Atqc "
+            + shlex.quote("SELECT current_user = 'jaunder' AND current_database() = 'jaunder'")
+            + " | grep -Fx t"
+          )
+          machine.succeed(
+            "runuser -u postgres -- psql -d postgres -Atqc "
+            + shlex.quote("SELECT datdba::regrole = 'jaunder'::regrole FROM pg_database WHERE datname = 'jaunder'")
+            + " | grep -Fx t"
+          )
+          role_password_status, role_password = machine.execute(
+            "runuser -u postgres -- psql -d postgres -Atqc "
+            + shlex.quote("SELECT rolcanlogin, rolpassword IS NULL FROM pg_authid WHERE rolname = 'jaunder'")
+          )
+          assert role_password_status == 0 and role_password.strip() == "t|t", (
+            "jaunder role is not a passwordless login role: %s" % role_password
+          )
+          table_ownership_status, table_ownership = machine.execute(
+            "runuser -u jaunder -- psql -h /run/postgresql -d jaunder -Atqc "
+            + shlex.quote("SELECT count(*), coalesce(bool_and(tableowner = 'jaunder'), false) FROM pg_tables WHERE schemaname = 'public'")
+          )
+          assert table_ownership_status == 0 and table_ownership.strip() != "0|f" and table_ownership.strip().endswith("|t"), (
+            "application tables are not owned by jaunder: %s" % table_ownership
+          )
+          machine.succeed(
+            "runuser -u postgres -- psql -d postgres -Atqc "
+            + shlex.quote("SELECT datdba::regrole = 'unrelated'::regrole FROM pg_database WHERE datname = 'unrelated'")
+            + " | grep -Fx t"
+          )
+          machine.succeed(
+            "runuser -u postgres -- psql -d postgres -Atqc "
+            + shlex.quote("SELECT rolcanlogin FROM pg_roles WHERE rolname = 'unrelated'")
+            + " | grep -Fx t"
+          )
+          machine.succeed(
+            "hba=$(runuser -u postgres -- psql -d postgres -Atqc 'SHOW hba_file')"
+            + "; grep -Eq '^local[[:space:]]+all[[:space:]]+all[[:space:]]+peer$' \"$hba\""
+            + "; ! grep -Eq '^[[:space:]]*host[[:space:]]' \"$hba\""
+            + "; pid=$(systemctl show --property MainPID --value jaunder.service)"
+            + "; ! tr '\\0' '\\n' < /proc/$pid/environ | grep -Eq '^JAUNDER_DB_PASSWORD(=|_)'"
+            + "; ! tr '\\0' '\\n' < /proc/$pid/environ | grep -Eqi 'password='"
+          )
+          machine.succeed(
+            "test \"$(iptables -S nixos-fw | awk '$1 == \"-A\" && $2 == \"nixos-fw\" && $3 == \"-p\" && $4 == \"tcp\" && $5 == \"-m\" && $6 == \"tcp\" && $7 == \"--dport\" { print $8 }' | sort -n | paste -sd, -)\" = \"80,443\""
+          )
+        ''}
+
         # The application request crosses the public Caddy seam, rather than
         # reaching Jaunder's loopback listener directly.
         machine.succeed(
@@ -1423,6 +1545,7 @@ mkWasmCoverageMeasurementProducer =
             machine.sleep(1)
           assert trace_payload is not None, "driven trace ID %s never appeared before reboot" % trace_id
 
+          ${pkgs.lib.optionalString persistSignals ''
           machine.reboot()
           wait_for_stack_ready()
           machine.succeed(
@@ -1455,6 +1578,7 @@ mkWasmCoverageMeasurementProducer =
           assert any(trace.get("traceID") == trace_id for trace in trace_payload.get("data", [])), (
             "driven pre-reboot trace ID %s is absent" % trace_id
           )
+          ''}
         ''}
       '';
     };
@@ -1570,10 +1694,17 @@ e2eGateChecks
     checkName = "jaunder-stack-sqlite-bcrypt";
     passwordHash = "$2a$14$3XbcVHEiOPQs7JeFsE4L6.viyrrG.5pCGkdC5yzH5WK4pGCIm4u4S";
     captureSignals = true;
+    persistSignals = true;
   };
   jaunder-stack-sqlite-argon2id = mkJaunderStackVmCheck {
     checkName = "jaunder-stack-sqlite-argon2id";
     passwordHash = "$argon2id$v=19$m=47104,t=1,p=1$lF4nDRbJX4Fmyz51MRZ4+Q$YArAYMGOutNEtB7Pv8Fa9CNZ75tfV+5W3kUvP8m+7gQ";
+  };
+  jaunder-stack-postgresql = mkJaunderStackVmCheck {
+    checkName = "jaunder-stack-postgresql";
+    passwordHash = "$2a$14$3XbcVHEiOPQs7JeFsE4L6.viyrrG.5pCGkdC5yzH5WK4pGCIm4u4S";
+    database = "postgresql";
+    captureSignals = true;
   };
 
   # The producer combines pure and server-backed ERT observations in
