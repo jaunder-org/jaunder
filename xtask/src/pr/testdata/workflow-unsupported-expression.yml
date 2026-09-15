@@ -1,0 +1,6 @@
+name: unsupported expression
+
+jobs:
+  generated:
+    name: ${{ github.event.pull_request.title }}
+    runs-on: ubuntu-24.04

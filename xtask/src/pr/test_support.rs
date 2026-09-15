@@ -6,14 +6,16 @@
 //! [`crate::test_support`], scoped to `pr`.
 
 use std::cell::RefCell;
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 
+use super::evidence::{ActionsEvidence, WorkflowEvidence};
 use super::gh::ApiError;
 use super::snapshot::{
-    CheckEntry, CheckState, MergeStateStatus, Mergeable, PrSnapshot, PrSource, PrState, QueueState,
-    RequiredChecks, RunRef,
+    CheckEntry, CheckProvider, CheckState, MergeStateStatus, Mergeable, PrSnapshot, PrSource,
+    PrState, QueueState, RequiredChecks, RunRef,
 };
 use super::watch::{Clock, WatchConfig};
+use super::workflow::{RuntimeJob, WorkflowGraph};
 use super::{PrNumber, Subject};
 
 /// The live ruleset: two required contexts, non-strict, merge queue present.
@@ -37,10 +39,53 @@ pub fn strict_rules() -> RequiredChecks {
 pub fn check(name: &str, state: CheckState, completed: &str) -> CheckEntry {
     CheckEntry {
         name: name.into(),
+        provider: CheckProvider::StatusContext,
         state,
         details_url: Some("https://x/1".into()),
         started_at: Some("2026-07-30T14:00:00Z".into()),
         completed_at: (!completed.is_empty()).then(|| completed.to_string()),
+    }
+}
+
+pub fn actions_check(
+    name: &str,
+    check_run_id: u64,
+    state: CheckState,
+    completed: &str,
+) -> CheckEntry {
+    CheckEntry {
+        provider: CheckProvider::GitHubActions {
+            check_run_id,
+            workflow_run_id: 1,
+        },
+        ..check(name, state, completed)
+    }
+}
+
+pub fn actions_evidence(head_sha: &str, source: &str, jobs: Vec<(&str, u64)>) -> ActionsEvidence {
+    let graph =
+        WorkflowGraph::parse(source).unwrap_or_else(|error| panic!("test workflow graph: {error}"));
+    ActionsEvidence {
+        head_sha: head_sha.into(),
+        runs: vec![WorkflowEvidence {
+            head_sha: head_sha.into(),
+            run_id: 1,
+            attempt: 1,
+            workflow_path: ".github/workflows/test.yml".into(),
+            workflow_sha: head_sha.into(),
+            jobs: jobs
+                .into_iter()
+                .map(|(name, check_run_id)| RuntimeJob {
+                    name: name.into(),
+                    check_run_id: Some(check_run_id),
+                    job_key: None,
+                    matrix: BTreeMap::new(),
+                })
+                .collect(),
+            workflow_source: source.into(),
+            local_sources: BTreeMap::new(),
+            graph,
+        }],
     }
 }
 
@@ -172,6 +217,8 @@ pub struct FakeSource {
     last: RefCell<Option<Result<PrSnapshot, ApiError>>>,
     req: RequiredChecks,
     ejection: Result<Option<RunRef>, ApiError>,
+    actions_evidence: RefCell<VecDeque<Result<ActionsEvidence, ApiError>>>,
+    last_actions_evidence: RefCell<Option<Result<ActionsEvidence, ApiError>>>,
     resolve: Result<Subject, ApiError>,
 }
 
@@ -182,6 +229,10 @@ impl FakeSource {
             last: RefCell::new(None),
             req,
             ejection: Ok(None),
+            actions_evidence: RefCell::new(VecDeque::from([Err(ApiError::Malformed(
+                "fake Actions evidence was not scripted".into(),
+            ))])),
+            last_actions_evidence: RefCell::new(None),
             resolve: Ok(subject()),
         }
     }
@@ -191,6 +242,27 @@ impl FakeSource {
     pub fn with_resolve_error(mut self, err: ApiError) -> Self {
         self.resolve = Err(err);
         self
+    }
+
+    /// Script the current-head Actions evidence required to classify failed jobs.
+    pub fn with_actions_evidence(self, evidence: ActionsEvidence) -> Self {
+        self.with_actions_evidence_script(vec![Ok(evidence)])
+    }
+
+    /// Script Actions evidence per observation, so retry behavior cannot pass by
+    /// silently reusing an earlier successful classification.
+    pub fn with_actions_evidence_script(
+        mut self,
+        script: Vec<Result<ActionsEvidence, ApiError>>,
+    ) -> Self {
+        self.actions_evidence = RefCell::new(script.into());
+        self.last_actions_evidence = RefCell::new(None);
+        self
+    }
+
+    /// Make classification evidence fail through the watch poll-error policy.
+    pub fn with_actions_evidence_error(self, error: ApiError) -> Self {
+        self.with_actions_evidence_script(vec![Err(error)])
     }
 
     /// What the merge-group probe finds. Without this the probe path is only ever
@@ -221,6 +293,22 @@ impl PrSource for FakeSource {
             .borrow()
             .clone()
             .expect("FakeSource was scripted with at least one snapshot")
+    }
+
+    fn actions_evidence(
+        &self,
+        _subject: &Subject,
+        _snapshot: &PrSnapshot,
+        _workflow_run_ids: &std::collections::BTreeSet<u64>,
+    ) -> Result<ActionsEvidence, ApiError> {
+        if let Some(next) = self.actions_evidence.borrow_mut().pop_front() {
+            *self.last_actions_evidence.borrow_mut() = Some(next.clone());
+            return next;
+        }
+        self.last_actions_evidence
+            .borrow()
+            .clone()
+            .expect("FakeSource Actions evidence was scripted with at least one value")
     }
 
     fn required_checks(&self, _subject: &Subject) -> Result<RequiredChecks, ApiError> {

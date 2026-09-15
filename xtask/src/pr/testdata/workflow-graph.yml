@@ -1,0 +1,25 @@
+name: arbitrary CI
+
+jobs:
+  renamed-validation:
+    name: Rebranded validation
+    runs-on: ubuntu-24.04
+  inserted-ancestor:
+    name: Inserted ancestor
+    needs: [renamed-validation]
+    runs-on: ubuntu-24.04
+  browser:
+    name: browser (${{ matrix.backend }}/${{ matrix.browser }})
+    needs: [inserted-ancestor]
+    strategy:
+      matrix:
+        backend: [sqlite, postgres]
+        browser: [chromium, firefox]
+    runs-on: ubuntu-24.04
+  aggregate:
+    name: Aggregate verdict
+    needs: [browser]
+    runs-on: ubuntu-slim
+  optional:
+    name: unrelated diagnostic
+    runs-on: ubuntu-24.04

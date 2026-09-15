@@ -1274,6 +1274,7 @@ mod tests {
     fn check(name: &str, state: CheckState) -> CheckEntry {
         CheckEntry {
             name: name.into(),
+            provider: crate::pr::snapshot::CheckProvider::StatusContext,
             state,
             details_url: None,
             started_at: Some("2026-08-24T00:00:00Z".into()),

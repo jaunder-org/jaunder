@@ -43,11 +43,27 @@ pub enum CheckState {
     Failure,
 }
 
+/// The provider identity of a status-rollup entry.
+///
+/// Only GitHub Actions check runs can be joined to an Actions workflow graph. A
+/// status context deliberately retains no invented run identity: ruleset membership
+/// is its only requirement evidence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CheckProvider {
+    GitHubActions {
+        check_run_id: u64,
+        workflow_run_id: u64,
+    },
+    StatusContext,
+    OtherCheckRun,
+}
+
 /// One entry from `statusCheckRollup`, flattened across the `CheckRun` /
 /// `StatusContext` union so nothing above this file has to know the union exists.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckEntry {
     pub name: String,
+    pub provider: CheckProvider,
     pub state: CheckState,
     pub details_url: Option<String>,
     pub started_at: Option<String>,
@@ -102,7 +118,7 @@ pub struct CommitChecks {
 }
 
 /// One document for the whole state machine (#729 spec F4).
-pub const PR_QUERY: &str = r#"query($owner:String!,$name:String!,$number:Int!){
+pub const PR_QUERY: &str = r#"query($owner:String!,$name:String!,$number:Int!,$after:String){
   repository(owner:$owner,name:$name){
     pullRequest(number:$number){
       number
@@ -118,12 +134,13 @@ pub const PR_QUERY: &str = r#"query($owner:String!,$name:String!,$number:Int!){
       baseRefOid
       commits(last:1){ nodes { commit { oid committedDate } } }
       statusCheckRollup {
-        contexts(first:100){
+        contexts(first:100, after:$after){
           nodes {
             __typename
-            ... on CheckRun { name conclusion status detailsUrl startedAt completedAt }
+            ... on CheckRun { databaseId name conclusion status detailsUrl startedAt completedAt checkSuite { app { slug } workflowRun { databaseId } } }
             ... on StatusContext { context state targetUrl createdAt }
           }
+          pageInfo { hasNextPage endCursor }
         }
       }
     }
@@ -144,7 +161,7 @@ pub const COMMIT_CHECKS_QUERY: &str = r#"query($owner:String!,$name:String!,$oid
           contexts(first:100){
             nodes {
               __typename
-              ... on CheckRun { name conclusion status detailsUrl startedAt completedAt }
+              ... on CheckRun { databaseId name conclusion status detailsUrl startedAt completedAt checkSuite { app { slug } workflowRun { databaseId } } }
               ... on StatusContext { context state targetUrl createdAt }
             }
           }
@@ -211,7 +228,8 @@ pub fn parse_snapshot(v: &Value) -> Result<PrSnapshot, ApiError> {
         .and_then(|r| r.get("contexts"))
         .and_then(|c| c.get("nodes"))
         .and_then(Value::as_array)
-        .map(|nodes| nodes.iter().filter_map(parse_check).collect())
+        .map(|nodes| parse_checks(nodes))
+        .transpose()?
         .unwrap_or_default();
 
     Ok(PrSnapshot {
@@ -251,7 +269,17 @@ pub fn parse_snapshot(v: &Value) -> Result<PrSnapshot, ApiError> {
 
 /// Flatten one rollup node. `CheckRun` carries `name`/`conclusion`/`status`;
 /// `StatusContext` carries `context`/`state`. Both become a `CheckEntry`.
-fn parse_check(node: &Value) -> Option<CheckEntry> {
+fn parse_checks(nodes: &[Value]) -> Result<Vec<CheckEntry>, ApiError> {
+    Ok(nodes
+        .iter()
+        .map(parse_check)
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+        .collect())
+}
+
+fn parse_check(node: &Value) -> Result<Option<CheckEntry>, ApiError> {
     if let Some(name) = str_at(node, &["name"]) {
         let completed = str_at(node, &["status"]) == Some("COMPLETED");
         let state = if !completed {
@@ -263,22 +291,37 @@ fn parse_check(node: &Value) -> Option<CheckEntry> {
                 _ => CheckState::Failure,
             }
         };
-        return Some(CheckEntry {
+        let provider = match str_at(node, &["checkSuite", "app", "slug"]) {
+            Some("github-actions") => CheckProvider::GitHubActions {
+                check_run_id: database_id(node, "/databaseId", "check")?,
+                workflow_run_id: database_id(
+                    node,
+                    "/checkSuite/workflowRun/databaseId",
+                    "workflow run",
+                )?,
+            },
+            _ => CheckProvider::OtherCheckRun,
+        };
+        return Ok(Some(CheckEntry {
             name: name.to_string(),
+            provider,
             state,
             details_url: owned(node, &["detailsUrl"]),
             started_at: owned(node, &["startedAt"]),
             completed_at: owned(node, &["completedAt"]),
-        });
+        }));
     }
-    let context = str_at(node, &["context"])?;
+    let Some(context) = str_at(node, &["context"]) else {
+        return Ok(None);
+    };
     let state = match str_at(node, &["state"]).unwrap_or("") {
         "SUCCESS" => CheckState::Success,
         "FAILURE" | "ERROR" => CheckState::Failure,
         _ => CheckState::Pending,
     };
-    Some(CheckEntry {
+    Ok(Some(CheckEntry {
         name: context.to_string(),
+        provider: CheckProvider::StatusContext,
         state,
         details_url: owned(node, &["targetUrl"]),
         started_at: owned(node, &["createdAt"]),
@@ -286,7 +329,22 @@ fn parse_check(node: &Value) -> Option<CheckEntry> {
             CheckState::Pending => None,
             _ => owned(node, &["createdAt"]),
         },
-    })
+    }))
+}
+
+/// Parse GitHub GraphQL's numeric `databaseId` without losing correlation evidence.
+///
+/// Missing, negative, fractional, or out-of-range IDs are observation errors rather
+/// than guesses about workflow identity.
+fn database_id(value: &Value, pointer: &str, subject: &str) -> Result<u64, ApiError> {
+    value
+        .pointer(pointer)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            ApiError::Malformed(format!(
+                "GitHub Actions {subject} has no unsigned integer {pointer}"
+            ))
+        })
 }
 
 pub fn parse_commit_checks(v: &Value) -> Result<CommitChecks, ApiError> {
@@ -303,7 +361,8 @@ pub fn parse_commit_checks(v: &Value) -> Result<CommitChecks, ApiError> {
         .and_then(|rollup| rollup.get("contexts"))
         .and_then(|contexts| contexts.get("nodes"))
         .and_then(Value::as_array)
-        .map(|nodes| nodes.iter().filter_map(parse_check).collect())
+        .map(|nodes| parse_checks(nodes))
+        .transpose()?
         .unwrap_or_default();
     Ok(CommitChecks { sha, checks })
 }
@@ -363,6 +422,12 @@ pub fn parse_ejection_run(v: &Value, pr: PrNumber) -> Option<RunRef> {
 pub trait PrSource {
     fn resolve(&self, requested: Option<PrNumber>) -> Result<Subject, ApiError>;
     fn snapshot(&self, subject: &Subject) -> Result<PrSnapshot, ApiError>;
+    fn actions_evidence(
+        &self,
+        subject: &Subject,
+        snapshot: &PrSnapshot,
+        workflow_run_ids: &std::collections::BTreeSet<u64>,
+    ) -> Result<super::evidence::ActionsEvidence, ApiError>;
     fn required_checks(&self, subject: &Subject) -> Result<RequiredChecks, ApiError>;
     fn ejection_run(&self, subject: &Subject) -> Result<Option<RunRef>, ApiError>;
 }
@@ -405,7 +470,19 @@ pub fn resolution_failure(err: &ApiError) -> ResolutionFailure {
     }
 }
 
-pub struct GhSource;
+/// The live source retains immutable workflow evidence for this one watch/land
+/// invocation. Dynamic snapshots and Actions job populations are never cached.
+pub struct GhSource {
+    evidence_cache: std::cell::RefCell<super::evidence::EvidenceCache>,
+}
+
+impl Default for GhSource {
+    fn default() -> Self {
+        Self {
+            evidence_cache: std::cell::RefCell::new(super::evidence::EvidenceCache::default()),
+        }
+    }
+}
 
 impl GhSource {
     fn resolve_with(
@@ -457,6 +534,33 @@ fn required_git_fact(
     }
 }
 
+fn graphql_snapshot_page(subject: &Subject, after: Option<&str>) -> Result<Value, ApiError> {
+    let query = format!("query={PR_QUERY}");
+    let owner = format!("owner={}", subject.owner);
+    let name = format!("name={}", subject.repo);
+    let number = format!("number={}", subject.number);
+    let mut args = vec![
+        "api", "graphql", "-f", &query, "-f", &owner, "-f", &name, "-F", &number,
+    ];
+    let after_arg;
+    if let Some(after) = after {
+        after_arg = format!("after={after}");
+        args.extend(["-f", &after_arg]);
+    }
+    gh::run_gh(&args)
+}
+
+fn rollup_page_info(value: &Value) -> Result<(bool, Option<String>), ApiError> {
+    let page_info = value
+        .pointer("/data/repository/pullRequest/statusCheckRollup/contexts/pageInfo")
+        .ok_or_else(|| ApiError::Malformed("status-check response omitted pageInfo".into()))?;
+    let has_next_page = page_info
+        .get("hasNextPage")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| ApiError::Malformed("status-check pageInfo omitted hasNextPage".into()))?;
+    Ok((has_next_page, owned(page_info, &["endCursor"])))
+}
+
 impl PrSource for GhSource {
     fn resolve(&self, requested: Option<PrNumber>) -> Result<Subject, ApiError> {
         let dir = std::path::Path::new(".");
@@ -476,14 +580,43 @@ impl PrSource for GhSource {
     }
 
     fn snapshot(&self, subject: &Subject) -> Result<PrSnapshot, ApiError> {
-        let query = format!("query={PR_QUERY}");
-        let owner = format!("owner={}", subject.owner);
-        let name = format!("name={}", subject.repo);
-        let number = format!("number={}", subject.number);
-        let v = gh::run_gh(&[
-            "api", "graphql", "-f", &query, "-f", &owner, "-f", &name, "-F", &number,
-        ])?;
-        parse_snapshot(&v)
+        let mut after = None;
+        let mut snapshot: Option<PrSnapshot> = None;
+        loop {
+            let value = graphql_snapshot_page(subject, after.as_deref())?;
+            let mut page = parse_snapshot(&value)?;
+            let (has_next_page, end_cursor) = rollup_page_info(&value)?;
+            if let Some(existing) = &mut snapshot {
+                if existing.head_sha != page.head_sha {
+                    return Err(ApiError::Malformed(
+                        "PR head changed while paginating status checks".into(),
+                    ));
+                }
+                existing.checks.append(&mut page.checks);
+            } else {
+                snapshot = Some(page);
+            }
+            if !has_next_page {
+                return snapshot.ok_or_else(|| ApiError::Malformed("empty PR snapshot".into()));
+            }
+            after = Some(end_cursor.ok_or_else(|| {
+                ApiError::Malformed("status-check page hasNextPage without endCursor".into())
+            })?);
+        }
+    }
+
+    fn actions_evidence(
+        &self,
+        subject: &Subject,
+        snapshot: &PrSnapshot,
+        workflow_run_ids: &std::collections::BTreeSet<u64>,
+    ) -> Result<super::evidence::ActionsEvidence, ApiError> {
+        self.evidence_cache.borrow_mut().collect_with(
+            subject,
+            snapshot,
+            workflow_run_ids,
+            gh::run_gh,
+        )
     }
 
     fn required_checks(&self, subject: &Subject) -> Result<RequiredChecks, ApiError> {
@@ -568,6 +701,118 @@ mod tests {
         assert_eq!(s.state, PrState::Open);
         assert!(s.queue.in_queue);
         assert_eq!(s.queue.position, Some(2));
+    }
+
+    #[test]
+    fn query_requests_supported_numeric_actions_database_ids() {
+        for query in [PR_QUERY, COMMIT_CHECKS_QUERY] {
+            assert!(query.contains("databaseId"));
+            assert!(!query.contains("fullDatabaseId"));
+        }
+    }
+
+    #[test]
+    fn actions_check_runs_retain_their_stable_provider_identity() {
+        let value = serde_json::json!({
+            "databaseId": 104431520054_u64,
+            "name": "job",
+            "status": "COMPLETED",
+            "conclusion": "FAILURE",
+            "detailsUrl": "https://github.com/o/r/actions/runs/34984065696/job/9",
+            "checkSuite": { "app": { "slug": "github-actions" }, "workflowRun": { "databaseId": 34984065696_u64 } }
+        });
+        let check = parse_check(&value).expect("check run parses").unwrap();
+        assert_eq!(
+            check.provider,
+            CheckProvider::GitHubActions {
+                check_run_id: 104431520054,
+                workflow_run_id: 34984065696,
+            }
+        );
+    }
+
+    #[test]
+    fn malformed_actions_database_ids_fail_closed() {
+        for (check_run_id, workflow_run_id) in [
+            (serde_json::json!(null), serde_json::json!(42)),
+            (serde_json::json!(-1), serde_json::json!(42)),
+            (serde_json::json!(42.5), serde_json::json!(42)),
+            (serde_json::json!("42"), serde_json::json!(42)),
+            (serde_json::json!(42), serde_json::json!(null)),
+            (serde_json::json!(42), serde_json::json!(-1)),
+            (serde_json::json!(42), serde_json::json!(42.5)),
+            (serde_json::json!(42), serde_json::json!("42")),
+        ] {
+            let value = serde_json::json!({
+                "databaseId": check_run_id,
+                "name": "job",
+                "status": "COMPLETED",
+                "conclusion": "FAILURE",
+                "checkSuite": { "app": { "slug": "github-actions" }, "workflowRun": { "databaseId": workflow_run_id } }
+            });
+            assert!(matches!(parse_check(&value), Err(ApiError::Malformed(_))));
+        }
+    }
+
+    #[test]
+    fn maximum_u64_actions_database_ids_remain_exact() {
+        let value = serde_json::json!({
+            "databaseId": u64::MAX,
+            "name": "job",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "checkSuite": {
+                "app": { "slug": "github-actions" },
+                "workflowRun": { "databaseId": u64::MAX }
+            }
+        });
+        let check = parse_check(&value).expect("maximum IDs parse").unwrap();
+        assert_eq!(
+            check.provider,
+            CheckProvider::GitHubActions {
+                check_run_id: u64::MAX,
+                workflow_run_id: u64::MAX,
+            }
+        );
+    }
+
+    #[test]
+    fn captured_actions_database_id_fixture_preserves_provider_identity() {
+        let snapshot = parse_snapshot(&fixture!("pr-actions-database-id.json")).unwrap();
+        assert_eq!(
+            snapshot.checks[0].provider,
+            CheckProvider::GitHubActions {
+                check_run_id: 104431520054,
+                workflow_run_id: 34984065696,
+            }
+        );
+    }
+
+    #[test]
+    fn commit_checks_preserve_actions_database_id_provider_identity() {
+        let value = serde_json::json!({
+            "data": { "repository": { "object": {
+                "oid": "merge-group-sha",
+                "statusCheckRollup": { "contexts": { "nodes": [{
+                    "name": "captured Actions job",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "databaseId": 104431520054_u64,
+                    "checkSuite": {
+                        "app": { "slug": "github-actions" },
+                        "workflowRun": { "databaseId": 34984065696_u64 }
+                    }
+                }]}}
+            }}}
+        });
+        let checks = parse_commit_checks(&value).unwrap();
+        assert_eq!(
+            checks.checks[0].provider,
+            CheckProvider::GitHubActions {
+                check_run_id: 104431520054,
+                workflow_run_id: 34984065696,
+            }
+        );
     }
 
     #[test]

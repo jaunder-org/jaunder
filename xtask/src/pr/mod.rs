@@ -8,6 +8,7 @@
 
 pub mod cleanup;
 pub mod decide;
+pub mod evidence;
 pub mod gh;
 pub mod land;
 pub mod promoter;
@@ -15,6 +16,7 @@ pub mod snapshot;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod watch;
+pub mod workflow;
 
 mod execute;
 mod invocation;

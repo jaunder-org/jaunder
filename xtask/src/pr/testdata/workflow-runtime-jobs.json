@@ -1,0 +1,18 @@
+[
+  {
+    "name": "Rebranded validation",
+    "job_key": "renamed-validation"
+  },
+  {
+    "name": "browser (sqlite/chromium)",
+    "job_key": "browser",
+    "matrix": {
+      "backend": "sqlite",
+      "browser": "chromium"
+    }
+  },
+  {
+    "name": "unrelated diagnostic",
+    "job_key": "optional"
+  }
+]

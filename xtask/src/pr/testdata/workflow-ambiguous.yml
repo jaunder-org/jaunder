@@ -1,0 +1,13 @@
+name: ambiguous jobs
+
+jobs:
+  first:
+    name: duplicate
+    runs-on: ubuntu-24.04
+  second:
+    name: duplicate
+    runs-on: ubuntu-24.04
+  aggregate:
+    name: Aggregate
+    needs: [first, second]
+    runs-on: ubuntu-slim

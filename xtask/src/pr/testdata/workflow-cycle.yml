@@ -1,0 +1,11 @@
+name: dependency cycle
+
+jobs:
+  first:
+    name: First
+    needs: [second]
+    runs-on: ubuntu-24.04
+  second:
+    name: Second
+    needs: [first]
+    runs-on: ubuntu-24.04

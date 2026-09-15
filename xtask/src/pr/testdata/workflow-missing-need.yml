@@ -1,0 +1,7 @@
+name: missing dependency
+
+jobs:
+  aggregate:
+    name: Aggregate
+    needs: [missing]
+    runs-on: ubuntu-slim

@@ -1,0 +1,13 @@
+name: caller
+
+jobs:
+  prepare:
+    name: Preparation
+    runs-on: ubuntu-24.04
+  package:
+    needs: [prepare]
+    uses: ./.github/workflows/reusable.yml
+  aggregate:
+    name: Aggregate
+    needs: [package]
+    runs-on: ubuntu-slim

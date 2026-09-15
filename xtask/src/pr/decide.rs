@@ -9,6 +9,50 @@ use super::snapshot::{
     RunRef,
 };
 
+/// A settled failed check after the observation boundary has established whether
+/// its workflow ancestry makes it merge-blocking.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClassifiedFailure {
+    Required {
+        name: String,
+        pointer: Option<String>,
+    },
+    Optional {
+        id: String,
+        name: String,
+        pointer: Option<String>,
+    },
+}
+
+/// One optional failure event, keyed by the logical attempt that produced it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OptionalFailure {
+    pub id: String,
+    pub detail: String,
+}
+
+impl ClassifiedFailure {
+    pub fn detail(&self) -> String {
+        match self {
+            Self::Required { name, .. } => format!("required check failed: {name}"),
+            Self::Optional { name, pointer, .. } => match pointer {
+                Some(pointer) => format!("optional check failed: {name} ({pointer})"),
+                None => format!("optional check failed: {name}"),
+            },
+        }
+    }
+
+    fn is_required(&self) -> bool {
+        matches!(self, Self::Required { .. })
+    }
+
+    fn pointer(&self) -> Option<String> {
+        match self {
+            Self::Required { pointer, .. } | Self::Optional { pointer, .. } => pointer.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
     AwaitingChecks,
@@ -91,6 +135,44 @@ fn required_states<'a>(
 /// A context that has not appeared at all is neither success nor failure — which is
 /// what keeps a late-appearing aggregate check (the `e2e gate` case) from letting an
 /// incomplete set read as complete.
+/// Settled failures by logical runtime check, using rerun precedence.
+///
+/// Required-context readiness remains name-based because branch rulesets name
+/// contexts. Actions constituent checks additionally carry a workflow-run ID, so
+/// an unrelated workflow's same-named pending job cannot suppress a failure from
+/// the run whose graph proves it required.
+pub fn resolved_failures(snap: &PrSnapshot) -> Vec<&CheckEntry> {
+    let mut identities = std::collections::BTreeSet::new();
+    snap.checks
+        .iter()
+        .filter(|check| identities.insert(failure_identity(check)))
+        .filter_map(|check| resolve_failure(&snap.checks, check))
+        .filter(|check| check.state == CheckState::Failure)
+        .collect()
+}
+
+fn failure_identity(check: &CheckEntry) -> String {
+    match check.provider {
+        super::snapshot::CheckProvider::GitHubActions {
+            workflow_run_id, ..
+        } => format!("actions:{workflow_run_id}:{}", check.name),
+        super::snapshot::CheckProvider::StatusContext => format!("status:{}", check.name),
+        super::snapshot::CheckProvider::OtherCheckRun => format!("check-run:{}", check.name),
+    }
+}
+
+fn resolve_failure<'a>(checks: &'a [CheckEntry], exemplar: &CheckEntry) -> Option<&'a CheckEntry> {
+    let matching = || {
+        checks
+            .iter()
+            .filter(|check| failure_identity(check) == failure_identity(exemplar))
+    };
+    matching()
+        .filter(|check| check.state == CheckState::Pending)
+        .max_by(|a, b| a.started_at.cmp(&b.started_at))
+        .or_else(|| matching().max_by(|a, b| a.completed_at.cmp(&b.completed_at)))
+}
+
 fn all_required_green(snap: &PrSnapshot, req: &RequiredChecks) -> bool {
     required_states(snap, req)
         .all(|(_, entry)| entry.is_some_and(|e| e.state == CheckState::Success))
@@ -129,6 +211,16 @@ pub fn classify(
     ejection: Option<&RunRef>,
     progress: &Progress,
 ) -> Step {
+    classify_with_failures(snap, req, ejection, progress, &[])
+}
+
+pub fn classify_with_failures(
+    snap: &PrSnapshot,
+    req: &RequiredChecks,
+    ejection: Option<&RunRef>,
+    progress: &Progress,
+    classified_failures: &[ClassifiedFailure],
+) -> Step {
     let terminal = |outcome, detail: Option<String>, pointer: Option<String>| Step::Terminal {
         outcome,
         detail,
@@ -161,6 +253,16 @@ pub fn classify(
             Outcome::ChecksFailed,
             Some(format!("required check failed: {name}")),
             entry.details_url.clone(),
+        );
+    }
+    if let Some(failure) = classified_failures
+        .iter()
+        .find(|failure| failure.is_required())
+    {
+        return terminal(
+            Outcome::ChecksFailed,
+            Some(failure.detail()),
+            failure.pointer(),
         );
     }
     if req.strict && snap.merge_state_status == MergeStateStatus::Behind {
@@ -247,6 +349,19 @@ pub fn classify(
     }
 }
 
+pub fn optional_failures(classified_failures: &[ClassifiedFailure]) -> Vec<OptionalFailure> {
+    classified_failures
+        .iter()
+        .filter_map(|failure| match failure {
+            ClassifiedFailure::Optional { id, .. } => Some(OptionalFailure {
+                id: id.clone(),
+                detail: failure.detail(),
+            }),
+            ClassifiedFailure::Required { .. } => None,
+        })
+        .collect()
+}
+
 fn merge_state_label(status: MergeStateStatus) -> &'static str {
     match status {
         MergeStateStatus::Behind => "BEHIND",
@@ -263,7 +378,9 @@ fn merge_state_label(status: MergeStateStatus) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pr::snapshot::{CheckState, MergeStateStatus, Mergeable, PrState, RequiredChecks};
+    use crate::pr::snapshot::{
+        CheckProvider, CheckState, MergeStateStatus, Mergeable, PrState, RequiredChecks,
+    };
     use crate::pr::test_support::*;
 
     // ---- terminal outcomes ----
@@ -380,6 +497,78 @@ mod tests {
     }
 
     #[test]
+    fn classified_transitive_failure_is_terminal_before_aggregate_settles() {
+        let snap = open(vec![check("Aggregate verdict", CheckState::Pending, "")]);
+        match classify_with_failures(
+            &snap,
+            &RequiredChecks {
+                contexts: vec!["Aggregate verdict".into()],
+                strict: false,
+                queue_present: false,
+            },
+            None,
+            &Progress::default(),
+            &[ClassifiedFailure::Required {
+                name: "renamed lane".into(),
+                pointer: Some("https://x/failed".into()),
+            }],
+        ) {
+            Step::Terminal {
+                outcome,
+                detail,
+                pointer,
+            } => {
+                assert_eq!(outcome, Outcome::ChecksFailed);
+                assert!(detail.unwrap().contains("renamed lane"));
+                assert_eq!(pointer.as_deref(), Some("https://x/failed"));
+            }
+            other => panic!("expected checks-failed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classified_optional_failure_is_non_terminal_warning() {
+        let snap = open(green());
+        match classify_with_failures(
+            &snap,
+            &queue_rules(),
+            None,
+            &Progress::default(),
+            &[ClassifiedFailure::Optional {
+                id: "optional-1".into(),
+                name: "unrelated diagnostic".into(),
+                pointer: Some("https://x/optional".into()),
+            }],
+        ) {
+            Step::Ready => {}
+            other => panic!("expected ready, got {other:?}"),
+        }
+        let pending = open_pending();
+        let failures = [ClassifiedFailure::Optional {
+            id: "optional-1".into(),
+            name: "unrelated diagnostic".into(),
+            pointer: Some("https://x/optional".into()),
+        }];
+        assert!(matches!(
+            classify_with_failures(
+                &pending,
+                &queue_rules(),
+                None,
+                &Progress::default(),
+                &failures,
+            ),
+            Step::Continue { warn: None, .. }
+        ));
+        assert_eq!(
+            optional_failures(&failures),
+            vec![OptionalFailure {
+                id: "optional-1".into(),
+                detail: "optional check failed: unrelated diagnostic (https://x/optional)".into(),
+            }]
+        );
+    }
+
+    #[test]
     fn failing_non_required_check_does_not_fail_the_pr() {
         let mut checks = green();
         checks.push(check(
@@ -443,6 +632,25 @@ mod tests {
     }
 
     // ---- ejection ----
+
+    #[test]
+    fn unrelated_actions_pending_check_does_not_suppress_a_failed_run() {
+        let failed = actions_check(
+            "shared display name",
+            11,
+            CheckState::Failure,
+            "2026-07-30T14:10:00Z",
+        );
+        let mut unrelated_pending =
+            actions_check("shared display name", 22, CheckState::Pending, "");
+        unrelated_pending.provider = CheckProvider::GitHubActions {
+            check_run_id: 22,
+            workflow_run_id: 2,
+        };
+        let snapshot = open(vec![failed, unrelated_pending]);
+        assert_eq!(resolved_failures(&snapshot).len(), 1);
+        assert_eq!(resolved_failures(&snapshot)[0].name, "shared display name");
+    }
 
     #[test]
     fn failed_merge_group_run_newer_than_head_is_ejected_without_history() {
