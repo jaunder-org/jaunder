@@ -200,17 +200,20 @@ fn classified_failures<S: PrSource>(
     if snap.state != PrState::Open || snap.mergeable == super::snapshot::Mergeable::Conflicting {
         return Ok(Vec::new());
     }
-    let failures = decide::resolved_failures(snap)
-        .into_iter()
-        .filter(|check| !req.contexts.iter().any(|context| context == &check.name))
-        .collect::<Vec<_>>();
-    if failures.is_empty() {
-        return Ok(Vec::new());
-    }
-    let actions = failures
+    // Load Actions evidence before rerun settledness can hide a failed constituent.
+    // A same-run, same-named pending job is a re-run only after the immutable graph
+    // proves that its runtime identity has exactly one node; otherwise it could be a
+    // distinct sibling that happens to share a display name.
+    let action_failures = snap
+        .checks
         .iter()
-        .any(|check| matches!(check.provider, CheckProvider::GitHubActions { .. }));
-    let evidence = actions
+        .filter(|check| {
+            check.state == CheckState::Failure
+                && !req.contexts.iter().any(|context| context == &check.name)
+                && matches!(check.provider, CheckProvider::GitHubActions { .. })
+        })
+        .collect::<Vec<_>>();
+    let evidence = (!action_failures.is_empty())
         .then(|| source.actions_evidence(subject, snap))
         .transpose()?;
     if evidence
@@ -220,6 +223,16 @@ fn classified_failures<S: PrSource>(
         return Err(ApiError::Malformed(
             "Actions evidence belongs to a different PR head".into(),
         ));
+    }
+    if let Some(evidence) = evidence.as_ref() {
+        validate_pending_action_reruns(snap, req, evidence)?;
+    }
+    let failures = decide::resolved_failures(snap)
+        .into_iter()
+        .filter(|check| !req.contexts.iter().any(|context| context == &check.name))
+        .collect::<Vec<_>>();
+    if failures.is_empty() {
+        return Ok(Vec::new());
     }
     failures
         .into_iter()
@@ -250,6 +263,46 @@ fn classified_failures<S: PrSource>(
             })
         })
         .collect()
+}
+
+/// Reject a pending Actions check that would otherwise suppress a same-run failed
+/// check unless its graph correlation proves it is the same logical runtime job.
+fn validate_pending_action_reruns(
+    snap: &PrSnapshot,
+    req: &RequiredChecks,
+    evidence: &super::evidence::ActionsEvidence,
+) -> Result<(), ApiError> {
+    let mut checked = std::collections::BTreeSet::new();
+    for failed in snap.checks.iter().filter(|check| {
+        check.state == CheckState::Failure
+            && !req.contexts.iter().any(|context| context == &check.name)
+    }) {
+        let CheckProvider::GitHubActions {
+            workflow_run_id, ..
+        } = failed.provider
+        else {
+            continue;
+        };
+        for pending in snap.checks.iter().filter(|check| {
+            check.state == CheckState::Pending
+                && check.name == failed.name
+                && matches!(
+                    check.provider,
+                    CheckProvider::GitHubActions {
+                        workflow_run_id: pending_run_id,
+                        ..
+                    } if pending_run_id == workflow_run_id
+                )
+        }) {
+            let CheckProvider::GitHubActions { check_run_id, .. } = pending.provider else {
+                unreachable!("filter retains only GitHub Actions checks");
+            };
+            if checked.insert(check_run_id) {
+                evidence.classify_check(check_run_id, &req.contexts)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn failure_identity(head_sha: &str, check: &super::snapshot::CheckEntry) -> String {
@@ -1269,6 +1322,47 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_same_run_actions_jobs_fail_closed_instead_of_looking_like_a_rerun() {
+        let workflow = r#"
+            jobs:
+              first:
+                name: Shared display name
+              second:
+                name: Shared display name
+              aggregate:
+                name: Aggregate verdict
+                needs: first
+        "#;
+        let snap = open(vec![
+            actions_check(
+                "Shared display name",
+                11,
+                CheckState::Failure,
+                "2026-07-30T14:10:00Z",
+            ),
+            actions_check("Shared display name", 12, CheckState::Pending, ""),
+            check("Aggregate verdict", CheckState::Pending, ""),
+        ]);
+        let evidence = actions_evidence(
+            "abc",
+            workflow,
+            vec![
+                ("Shared display name", 11),
+                ("Shared display name", 12),
+                ("Aggregate verdict", 13),
+            ],
+        );
+        let report = watch(
+            &FakeSource::new(vec![Ok(snap)], aggregate_rules()).with_actions_evidence(evidence),
+            &clock(),
+            &subject(),
+            cfg(),
+            &mut |_| {},
+        );
+        assert_eq!(report.outcome, Outcome::WatcherError);
+    }
+
+    #[test]
     fn optional_failure_is_emitted_once_and_does_not_block_readiness() {
         let pending = open(vec![
             actions_check(
@@ -1471,7 +1565,8 @@ mod tests {
             pending_rerun,
             check("Aggregate verdict", CheckState::Pending, ""),
         ]);
-        let src = FakeSource::new(vec![Ok(pending)], aggregate_rules());
+        let src = FakeSource::new(vec![Ok(pending)], aggregate_rules())
+            .with_actions_evidence(evidence_for("abc"));
         let mut once = cfg();
         once.once = true;
         let report = watch(&src, &clock(), &subject(), once, &mut |_| {});
@@ -1498,7 +1593,8 @@ mod tests {
                 "2026-07-30T14:50:00Z",
             ),
         ]);
-        let src = FakeSource::new(vec![Ok(successful)], aggregate_rules());
+        let src = FakeSource::new(vec![Ok(successful)], aggregate_rules())
+            .with_actions_evidence(evidence_for("abc"));
         assert_eq!(
             watch(&src, &clock(), &subject(), cfg(), &mut |_| {}).outcome,
             Outcome::ReadyToLand
