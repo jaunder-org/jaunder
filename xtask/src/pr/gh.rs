@@ -104,7 +104,6 @@ impl ApiError {
 #[derive(Debug)]
 pub struct Deadline(Instant);
 
-const MAX_CAPTURE_LINES: usize = 10_000;
 const MAX_JSON_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 impl Deadline {
     pub fn ten_seconds() -> Self {
@@ -265,9 +264,7 @@ fn spawn_deadline_program(
             ProcessCommand::new(program)
                 .args(args)
                 .timeout(remaining)
-                .output_buffer(
-                    OutputBufferPolicy::fail_loud(MAX_CAPTURE_LINES).with_max_bytes(max_bytes),
-                )
+                .output_buffer(OutputBufferPolicy::fail_loud(usize::MAX).with_max_bytes(max_bytes))
                 .output_bytes(),
         )
         .map_err(|error| {

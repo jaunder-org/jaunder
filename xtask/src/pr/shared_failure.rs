@@ -702,8 +702,34 @@ mod tests {
     }
 
     #[test]
+    fn preserved_values_must_match_exactly() {
+        let matching = "error: preserved /a/v1/id\n  cause";
+        let selected = [SelectedRun {
+            run: CandidateRun {
+                id: 1,
+                url: String::new(),
+                head_sha: String::new(),
+                created_at: "2026-09-15T01:00:00Z".into(),
+                conclusion: Some("failure".into()),
+            },
+            source: SharedFailureSource::Main,
+        }];
+        let jobs = [(
+            1,
+            vec![CandidateJob {
+                id: 1,
+                name: String::new(),
+                url: String::new(),
+                log: "error: preserved /a/v2/id\n  cause".into(),
+            }],
+        )];
+
+        assert!(shared_failure(matching, selected, jobs).is_none());
+    }
+
+    #[test]
     fn orders_matches_by_timestamp_then_run_then_job_id() {
-        let selected = [2, 4, 3].map(|id| SelectedRun {
+        let selected = [3, 2, 4].map(|id| SelectedRun {
             run: CandidateRun {
                 id,
                 url: String::new(),

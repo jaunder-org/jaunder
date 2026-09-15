@@ -639,20 +639,9 @@ fn collect_shared_failure_evidence_with(
 
     let runs_path =
         format!("/repos/{slug}/actions/workflows/ci.yml/runs?created=>={not_before}&per_page=50");
-    let mut runs = Vec::new();
-    let mut page = 1;
-    loop {
-        deadline.check()?;
-        let path = format!("{runs_path}&page={page}");
-        let value = json(&["api", &path])?;
-        let parsed = parse_candidate_runs(&value, deadline)?;
-        let complete = parsed.len() < 50;
-        runs.extend(parsed);
-        if complete {
-            break;
-        }
-        page += 1;
-    }
+    deadline.check()?;
+    let value = json(&["api", &runs_path])?;
+    let runs = parse_candidate_runs(&value, deadline)?;
     deadline.check()?;
     let selected_runs = select_runs(runs, &eligible_heads, failure.workflow_run_id, not_before);
     deadline.check()?;
