@@ -115,6 +115,7 @@ fn devtool_compile_check(name: &'static str, mode: Mode) -> StepSpec {
 fn devtool_check_with_cache(name: &'static str, mode: Mode, cache_rustc: bool) -> StepSpec {
     let mut args = vec![
         "run",
+        "--locked",
         "--quiet",
         "--manifest-path",
         "tools/Cargo.toml",
@@ -223,6 +224,7 @@ mod tests {
             fmt.args,
             [
                 "run",
+                "--locked",
                 "--quiet",
                 "--manifest-path",
                 "tools/Cargo.toml",
@@ -240,6 +242,7 @@ mod tests {
             ast_grep_tests.args,
             [
                 "run",
+                "--locked",
                 "--quiet",
                 "--manifest-path",
                 "tools/Cargo.toml",
@@ -257,6 +260,7 @@ mod tests {
             no_full_reload.args,
             [
                 "run",
+                "--locked",
                 "--quiet",
                 "--manifest-path",
                 "tools/Cargo.toml",
@@ -270,6 +274,11 @@ mod tests {
         assert!(!no_full_reload.cache_rustc);
         let fix_specs = specs(Mode::Fix);
         let prettier_fix = find(&fix_specs, "prettier-markdown");
+        assert!(
+            prettier_fix.args.contains(&"--locked"),
+            "fix mode locks the tools workspace: {:?}",
+            prettier_fix.args
+        );
         assert!(
             prettier_fix.args.contains(&"--fix"),
             "fix mode passes --fix: {:?}",
@@ -309,6 +318,7 @@ mod tests {
                 step.args,
                 [
                     "run",
+                    "--locked",
                     "--quiet",
                     "--manifest-path",
                     "tools/Cargo.toml",

@@ -15,6 +15,17 @@ use xshell::{Shell, cmd};
 use crate::git;
 use crate::result::{CommandResult, StepResult};
 
+fn devtool_csr_bundle_args() -> [&'static str; 6] {
+    [
+        "run",
+        "--locked",
+        "--manifest-path",
+        "tools/devtool/Cargo.toml",
+        "--",
+        "csr-bundle",
+    ]
+}
+
 /// Build `csr` to wasm and post-process it into the served bundle. `release`
 /// selects the optimized profile (CI parity); the default debug build is faster
 /// for the dev loop.
@@ -78,12 +89,10 @@ pub fn run(sh: &Shell, result: &mut CommandResult, release: bool) {
     }
     let out = bundle_root.to_string_lossy().into_owned();
     let bundle_start = Instant::now();
-    if cmd!(
-        sh,
-        "cargo run --manifest-path tools/devtool/Cargo.toml -- csr-bundle --wasm {wasm} --out {out}"
-    )
-    .run()
-    .is_err()
+    let devtool_args = devtool_csr_bundle_args();
+    if cmd!(sh, "cargo {devtool_args...} --wasm {wasm} --out {out}")
+        .run()
+        .is_err()
     {
         result.push(
             StepResult::fail("build-csr-bundle")
@@ -93,4 +102,24 @@ pub fn run(sh: &Shell, result: &mut CommandResult, release: bool) {
         return;
     }
     result.push(StepResult::ok("build-csr-bundle").with_duration(bundle_start.elapsed()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn csr_bundle_launch_locks_the_tools_workspace() {
+        assert_eq!(
+            devtool_csr_bundle_args(),
+            [
+                "run",
+                "--locked",
+                "--manifest-path",
+                "tools/devtool/Cargo.toml",
+                "--",
+                "csr-bundle",
+            ]
+        );
+    }
 }
