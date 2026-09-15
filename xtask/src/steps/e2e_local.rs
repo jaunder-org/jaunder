@@ -580,6 +580,17 @@ fn finish_lifecycle(
     }
 }
 
+fn devtool_seed_args(tools: &Path) -> [String; 6] {
+    [
+        "run".to_owned(),
+        "--locked".to_owned(),
+        "--manifest-path".to_owned(),
+        tools.display().to_string(),
+        "--".to_owned(),
+        "seed-e2e".to_owned(),
+    ]
+}
+
 fn run_lifecycle(
     sh: &Shell,
     result: &mut CommandResult,
@@ -766,11 +777,12 @@ fn run_lifecycle(
     };
 
     let tools = root.join("tools/Cargo.toml");
+    let devtool_args = devtool_seed_args(&tools);
     let jaunder = &artifacts.jaunder;
     let seed_start = std::time::Instant::now();
     if cmd!(
         sh,
-        "cargo run --manifest-path {tools} -- seed-e2e --db {db} --test-support-bin {test_support} --jaunder-bin {jaunder}"
+        "cargo {devtool_args...} --db {db} --test-support-bin {test_support} --jaunder-bin {jaunder}"
     )
     .env("JAUNDER_CAPTURE_DIR", &capture)
     .run()
@@ -874,6 +886,21 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn seed_launch_locks_the_tools_workspace() {
+        assert_eq!(
+            devtool_seed_args(Path::new("/repo/tools/Cargo.toml")),
+            [
+                "run",
+                "--locked",
+                "--manifest-path",
+                "/repo/tools/Cargo.toml",
+                "--",
+                "seed-e2e",
+            ]
+        );
+    }
 
     #[test]
     fn visual_updates_keep_independent_browser_lifecycles() {

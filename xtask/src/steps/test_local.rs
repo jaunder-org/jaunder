@@ -21,6 +21,7 @@ pub fn run(sh: &Shell, result: &mut CommandResult, nextest_args: &[String]) {
 pub fn args_for(nextest_args: &[String]) -> Vec<String> {
     let mut args = [
         "run",
+        "--locked",
         "--quiet",
         "--manifest-path",
         "tools/Cargo.toml",
@@ -59,6 +60,7 @@ mod tests {
             args_for(&[]),
             strings(&[
                 "run",
+                "--locked",
                 "--quiet",
                 "--manifest-path",
                 "tools/Cargo.toml",
@@ -86,6 +88,7 @@ mod tests {
             ])),
             strings(&[
                 "run",
+                "--locked",
                 "--quiet",
                 "--manifest-path",
                 "tools/Cargo.toml",

@@ -115,6 +115,7 @@ fn devtool_compile_check(name: &'static str, mode: Mode) -> StepSpec {
 fn devtool_check_with_cache(name: &'static str, mode: Mode, cache_rustc: bool) -> StepSpec {
     let mut args = vec![
         "run",
+        "--locked",
         "--quiet",
         "--manifest-path",
         "tools/Cargo.toml",
@@ -223,6 +224,7 @@ mod tests {
             fmt.args,
             [
                 "run",
+                "--locked",
                 "--quiet",
                 "--manifest-path",
                 "tools/Cargo.toml",
@@ -240,6 +242,7 @@ mod tests {
             ast_grep_tests.args,
             [
                 "run",
+                "--locked",
                 "--quiet",
                 "--manifest-path",
                 "tools/Cargo.toml",
@@ -257,6 +260,7 @@ mod tests {
             no_full_reload.args,
             [
                 "run",
+                "--locked",
                 "--quiet",
                 "--manifest-path",
                 "tools/Cargo.toml",
@@ -270,10 +274,21 @@ mod tests {
         assert!(!no_full_reload.cache_rustc);
         let fix_specs = specs(Mode::Fix);
         let prettier_fix = find(&fix_specs, "prettier-markdown");
-        assert!(
-            prettier_fix.args.contains(&"--fix"),
-            "fix mode passes --fix: {:?}",
-            prettier_fix.args
+        assert_eq!(
+            prettier_fix.args,
+            [
+                "run",
+                "--locked",
+                "--quiet",
+                "--manifest-path",
+                "tools/Cargo.toml",
+                "-p",
+                "devtool",
+                "--",
+                "check",
+                "prettier-markdown",
+                "--fix",
+            ]
         );
         // tsc-deps is gone — folded into `devtool check tsc`.
         assert!(specs(Mode::Check).iter().all(|s| s.name != "tsc-deps"));
@@ -309,6 +324,7 @@ mod tests {
                 step.args,
                 [
                     "run",
+                    "--locked",
                     "--quiet",
                     "--manifest-path",
                     "tools/Cargo.toml",
