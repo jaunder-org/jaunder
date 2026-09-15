@@ -213,8 +213,17 @@ fn classified_failures<S: PrSource>(
                 && matches!(check.provider, CheckProvider::GitHubActions { .. })
         })
         .collect::<Vec<_>>();
-    let evidence = (!action_failures.is_empty())
-        .then(|| source.actions_evidence(subject, snap))
+    let workflow_run_ids = action_failures
+        .iter()
+        .filter_map(|check| match check.provider {
+            CheckProvider::GitHubActions {
+                workflow_run_id, ..
+            } => Some(workflow_run_id),
+            _ => None,
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    let evidence = (!workflow_run_ids.is_empty())
+        .then(|| source.actions_evidence(subject, snap, &workflow_run_ids))
         .transpose()?;
     if evidence
         .as_ref()
@@ -225,7 +234,7 @@ fn classified_failures<S: PrSource>(
         ));
     }
     if let Some(evidence) = evidence.as_ref() {
-        validate_pending_action_reruns(snap, req, evidence)?;
+        validate_action_failure_collisions(snap, req, evidence)?;
     }
     let failures = decide::resolved_failures(snap)
         .into_iter()
@@ -265,14 +274,15 @@ fn classified_failures<S: PrSource>(
         .collect()
 }
 
-/// Reject a pending Actions check that would otherwise suppress a same-run failed
-/// check unless its graph correlation proves it is the same logical runtime job.
-fn validate_pending_action_reruns(
+/// Validate every same-run/display-name collision containing a failed Actions check
+/// before settledness. Only a uniquely correlated graph node can make it a rerun.
+fn validate_action_failure_collisions(
     snap: &PrSnapshot,
     req: &RequiredChecks,
     evidence: &super::evidence::ActionsEvidence,
 ) -> Result<(), ApiError> {
-    let mut checked = std::collections::BTreeSet::new();
+    let mut groups =
+        std::collections::BTreeMap::<(u64, String), std::collections::BTreeSet<u64>>::new();
     for failed in snap.checks.iter().filter(|check| {
         check.state == CheckState::Failure
             && !req.contexts.iter().any(|context| context == &check.name)
@@ -283,24 +293,28 @@ fn validate_pending_action_reruns(
         else {
             continue;
         };
-        for pending in snap.checks.iter().filter(|check| {
-            check.state == CheckState::Pending
-                && check.name == failed.name
-                && matches!(
-                    check.provider,
-                    CheckProvider::GitHubActions {
-                        workflow_run_id: pending_run_id,
-                        ..
-                    } if pending_run_id == workflow_run_id
-                )
-        }) {
-            let CheckProvider::GitHubActions { check_run_id, .. } = pending.provider else {
-                unreachable!("filter retains only GitHub Actions checks");
-            };
-            if checked.insert(check_run_id) {
-                evidence.classify_check(check_run_id, &req.contexts)?;
-            }
-        }
+        let check_run_ids = snap
+            .checks
+            .iter()
+            .filter_map(|check| match check.provider {
+                CheckProvider::GitHubActions {
+                    check_run_id,
+                    workflow_run_id: candidate_run_id,
+                } if candidate_run_id == workflow_run_id && check.name == failed.name => {
+                    Some(check_run_id)
+                }
+                _ => None,
+            })
+            .collect();
+        groups.insert((workflow_run_id, failed.name.clone()), check_run_ids);
+    }
+    for ((workflow_run_id, name), check_run_ids) in groups {
+        evidence.classify_current_attempt_group(
+            workflow_run_id,
+            &name,
+            &check_run_ids,
+            &req.contexts,
+        )?;
     }
     Ok(())
 }
@@ -1363,6 +1377,52 @@ mod tests {
     }
 
     #[test]
+    fn completed_same_run_duplicate_actions_jobs_fail_closed() {
+        let workflow = r#"
+            jobs:
+              first:
+                name: Shared display name
+              second:
+                name: Shared display name
+              aggregate:
+                name: Aggregate verdict
+                needs: first
+        "#;
+        let snap = open(vec![
+            actions_check(
+                "Shared display name",
+                11,
+                CheckState::Failure,
+                "2026-07-30T14:10:00Z",
+            ),
+            actions_check(
+                "Shared display name",
+                12,
+                CheckState::Success,
+                "2026-07-30T14:11:00Z",
+            ),
+            check("Aggregate verdict", CheckState::Pending, ""),
+        ]);
+        let evidence = actions_evidence(
+            "abc",
+            workflow,
+            vec![
+                ("Shared display name", 11),
+                ("Shared display name", 12),
+                ("Aggregate verdict", 13),
+            ],
+        );
+        let report = watch(
+            &FakeSource::new(vec![Ok(snap)], aggregate_rules()).with_actions_evidence(evidence),
+            &clock(),
+            &subject(),
+            cfg(),
+            &mut |_| {},
+        );
+        assert_eq!(report.outcome, Outcome::WatcherError);
+    }
+
+    #[test]
     fn optional_failure_is_emitted_once_and_does_not_block_readiness() {
         let pending = open(vec![
             actions_check(
@@ -1520,22 +1580,23 @@ mod tests {
             ),
             check("Aggregate verdict", CheckState::Pending, ""),
         ]);
-        let evidence = || {
-            actions_evidence(
-                "abc",
-                source,
-                vec![
-                    ("Aggregate verdict", 30),
-                    ("Optional A", 31),
-                    ("Optional A", 33),
-                ],
-            )
-        };
+        let first_evidence = actions_evidence(
+            "abc",
+            source,
+            vec![("Aggregate verdict", 30), ("Optional A", 31)],
+        );
+        // The rerun rollup retains 31, but the current-attempt jobs endpoint only
+        // exposes its replacement check run 33.
+        let rerun_evidence = actions_evidence(
+            "abc",
+            source,
+            vec![("Aggregate verdict", 30), ("Optional A", 33)],
+        );
         let src = FakeSource::new(
             vec![Ok(first), Ok(rerun), Ok(merged_snapshot())],
             aggregate_rules(),
         )
-        .with_actions_evidence_script(vec![Ok(evidence()), Ok(evidence())]);
+        .with_actions_evidence_script(vec![Ok(first_evidence), Ok(rerun_evidence)]);
         let report = watch(&src, &clock(), &subject(), cfg(), &mut |_| {});
         assert_eq!(
             report
@@ -1553,7 +1614,7 @@ mod tests {
     #[test]
     fn pending_or_successful_rerun_suppresses_a_superseded_failure() {
         let mut pending_rerun =
-            actions_check("Renamed validation lane", 11, CheckState::Pending, "");
+            actions_check("Renamed validation lane", 12, CheckState::Pending, "");
         pending_rerun.started_at = Some("2026-07-30T14:30:00Z".into());
         let pending = open(vec![
             actions_check(
@@ -1565,8 +1626,13 @@ mod tests {
             pending_rerun,
             check("Aggregate verdict", CheckState::Pending, ""),
         ]);
-        let src = FakeSource::new(vec![Ok(pending)], aggregate_rules())
-            .with_actions_evidence(evidence_for("abc"));
+        let src = FakeSource::new(vec![Ok(pending)], aggregate_rules()).with_actions_evidence(
+            actions_evidence(
+                "abc",
+                workflow_with_optional(),
+                vec![("Renamed validation lane", 12), ("Aggregate verdict", 13)],
+            ),
+        );
         let mut once = cfg();
         once.once = true;
         let report = watch(&src, &clock(), &subject(), once, &mut |_| {});
@@ -1574,7 +1640,7 @@ mod tests {
 
         let mut successful_rerun = actions_check(
             "Renamed validation lane",
-            11,
+            12,
             CheckState::Success,
             "2026-07-30T14:40:00Z",
         );
@@ -1593,8 +1659,13 @@ mod tests {
                 "2026-07-30T14:50:00Z",
             ),
         ]);
-        let src = FakeSource::new(vec![Ok(successful)], aggregate_rules())
-            .with_actions_evidence(evidence_for("abc"));
+        let src = FakeSource::new(vec![Ok(successful)], aggregate_rules()).with_actions_evidence(
+            actions_evidence(
+                "abc",
+                workflow_with_optional(),
+                vec![("Renamed validation lane", 12), ("Aggregate verdict", 13)],
+            ),
+        );
         assert_eq!(
             watch(&src, &clock(), &subject(), cfg(), &mut |_| {}).outcome,
             Outcome::ReadyToLand

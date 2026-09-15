@@ -137,7 +137,7 @@ pub const PR_QUERY: &str = r#"query($owner:String!,$name:String!,$number:Int!,$a
         contexts(first:100, after:$after){
           nodes {
             __typename
-            ... on CheckRun { databaseId name conclusion status detailsUrl startedAt completedAt checkSuite { app { slug } } }
+            ... on CheckRun { databaseId name conclusion status detailsUrl startedAt completedAt checkSuite { app { slug } workflowRun { databaseId } } }
             ... on StatusContext { context state targetUrl createdAt }
           }
           pageInfo { hasNextPage endCursor }
@@ -161,7 +161,7 @@ pub const COMMIT_CHECKS_QUERY: &str = r#"query($owner:String!,$name:String!,$oid
           contexts(first:100){
             nodes {
               __typename
-              ... on CheckRun { databaseId name conclusion status detailsUrl startedAt completedAt checkSuite { app { slug } } }
+              ... on CheckRun { databaseId name conclusion status detailsUrl startedAt completedAt checkSuite { app { slug } workflowRun { databaseId } } }
               ... on StatusContext { context state targetUrl createdAt }
             }
           }
@@ -297,7 +297,14 @@ fn parse_check(node: &Value) -> Result<Option<CheckEntry>, ApiError> {
         ) {
             (Some("github-actions"), Some(check_run_id)) => CheckProvider::GitHubActions {
                 check_run_id,
-                workflow_run_id: workflow_run_id(required_string(node, "detailsUrl")?)?,
+                workflow_run_id: node
+                    .pointer("/checkSuite/workflowRun/databaseId")
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| {
+                        ApiError::Malformed(
+                            "GitHub Actions check has no workflowRun.databaseId".into(),
+                        )
+                    })?,
             },
             _ => CheckProvider::OtherCheckRun,
         };
@@ -329,42 +336,6 @@ fn parse_check(node: &Value) -> Result<Option<CheckEntry>, ApiError> {
             _ => owned(node, &["createdAt"]),
         },
     }))
-}
-
-/// Parse the stable workflow run identity from an Actions check's job URL.
-/// Missing or malformed URLs fail closed rather than merging distinct workflows.
-fn workflow_run_id(details_url: String) -> Result<u64, ApiError> {
-    let Some((_, suffix)) = details_url.split_once("/actions/runs/") else {
-        return Err(ApiError::Malformed(
-            "Actions check detailsUrl has no workflow run".into(),
-        ));
-    };
-    let Some((run_id, job)) = suffix.split_once("/job/") else {
-        return Err(ApiError::Malformed(
-            "Actions check detailsUrl has no job segment".into(),
-        ));
-    };
-    let job_id = job.split('?').next().unwrap_or_default();
-    if run_id.is_empty()
-        || job_id.is_empty()
-        || job_id.contains('/')
-        || job_id.parse::<u64>().is_err()
-    {
-        return Err(ApiError::Malformed(
-            "Actions check detailsUrl is malformed".into(),
-        ));
-    }
-    run_id.parse().map_err(|_| {
-        ApiError::Malformed("Actions check detailsUrl has invalid workflow run ID".into())
-    })
-}
-
-fn required_string(value: &Value, name: &str) -> Result<String, ApiError> {
-    value
-        .get(name)
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| ApiError::Malformed(format!("response omitted string {name}")))
 }
 
 pub fn parse_commit_checks(v: &Value) -> Result<CommitChecks, ApiError> {
@@ -446,6 +417,7 @@ pub trait PrSource {
         &self,
         subject: &Subject,
         snapshot: &PrSnapshot,
+        workflow_run_ids: &std::collections::BTreeSet<u64>,
     ) -> Result<super::evidence::ActionsEvidence, ApiError>;
     fn required_checks(&self, subject: &Subject) -> Result<RequiredChecks, ApiError>;
     fn ejection_run(&self, subject: &Subject) -> Result<Option<RunRef>, ApiError>;
@@ -628,10 +600,14 @@ impl PrSource for GhSource {
         &self,
         subject: &Subject,
         snapshot: &PrSnapshot,
+        workflow_run_ids: &std::collections::BTreeSet<u64>,
     ) -> Result<super::evidence::ActionsEvidence, ApiError> {
-        self.evidence_cache
-            .borrow_mut()
-            .collect_with(subject, snapshot, gh::run_gh)
+        self.evidence_cache.borrow_mut().collect_with(
+            subject,
+            snapshot,
+            workflow_run_ids,
+            gh::run_gh,
+        )
     }
 
     fn required_checks(&self, subject: &Subject) -> Result<RequiredChecks, ApiError> {
@@ -726,7 +702,7 @@ mod tests {
             "status": "COMPLETED",
             "conclusion": "FAILURE",
             "detailsUrl": "https://github.com/o/r/actions/runs/30580548519/job/9",
-            "checkSuite": { "app": { "slug": "github-actions" } }
+            "checkSuite": { "app": { "slug": "github-actions" }, "workflowRun": { "databaseId": 30580548519_u64 } }
         });
         let check = parse_check(&value).expect("check run parses").unwrap();
         assert_eq!(
@@ -739,7 +715,7 @@ mod tests {
     }
 
     #[test]
-    fn malformed_actions_details_url_fails_closed() {
+    fn missing_actions_workflow_run_id_fails_closed() {
         let value = serde_json::json!({
             "databaseId": 42,
             "name": "job",

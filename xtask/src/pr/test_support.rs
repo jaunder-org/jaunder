@@ -299,6 +299,7 @@ impl PrSource for FakeSource {
         &self,
         _subject: &Subject,
         _snapshot: &PrSnapshot,
+        _workflow_run_ids: &std::collections::BTreeSet<u64>,
     ) -> Result<ActionsEvidence, ApiError> {
         if let Some(next) = self.actions_evidence.borrow_mut().pop_front() {
             *self.last_actions_evidence.borrow_mut() = Some(next.clone());

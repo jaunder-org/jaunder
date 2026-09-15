@@ -91,6 +91,52 @@ impl ActionsEvidence {
         required_contexts: &[String],
     ) -> Result<Requirement, ApiError> {
         let (run, job) = self.job_for_check(check_run_id)?;
+        self.classify_job(run, job, required_contexts)
+    }
+
+    /// Resolves one same-run/display-name rollup group to its sole current-attempt
+    /// job before classifying it. The rollup retains superseded rerun check IDs,
+    /// whereas the REST jobs endpoint deliberately exposes only the current attempt.
+    pub fn classify_current_attempt_group(
+        &self,
+        workflow_run_id: u64,
+        name: &str,
+        check_run_ids: &BTreeSet<u64>,
+        required_contexts: &[String],
+    ) -> Result<Requirement, ApiError> {
+        let matches = self
+            .runs
+            .iter()
+            .filter(|run| run.run_id == workflow_run_id)
+            .flat_map(|run| {
+                run.jobs
+                    .iter()
+                    .filter(move |job| {
+                        job.name == name
+                            && job
+                                .check_run_id
+                                .is_some_and(|check_run_id| check_run_ids.contains(&check_run_id))
+                    })
+                    .map(move |job| (run, job))
+            })
+            .collect::<Vec<_>>();
+        match matches.as_slice() {
+            [(run, job)] => self.classify_job(run, job, required_contexts),
+            [] => Err(ApiError::Malformed(format!(
+                "no current-attempt Actions job matches workflow run {workflow_run_id} check {name}"
+            ))),
+            _ => Err(ApiError::Malformed(format!(
+                "multiple current-attempt Actions jobs match workflow run {workflow_run_id} check {name}"
+            ))),
+        }
+    }
+
+    fn classify_job(
+        &self,
+        run: &WorkflowEvidence,
+        job: &RuntimeJob,
+        required_contexts: &[String],
+    ) -> Result<Requirement, ApiError> {
         let graph_targets = run
             .graph
             .required_targets(required_contexts)
@@ -128,9 +174,10 @@ impl ActionsEvidence {
 pub fn collect_with(
     subject: &Subject,
     snapshot: &PrSnapshot,
+    workflow_run_ids: &BTreeSet<u64>,
     run: impl FnMut(&[&str]) -> Result<Value, ApiError>,
 ) -> Result<ActionsEvidence, ApiError> {
-    EvidenceCache::default().collect_with(subject, snapshot, run)
+    EvidenceCache::default().collect_with(subject, snapshot, workflow_run_ids, run)
 }
 
 impl EvidenceCache {
@@ -140,11 +187,28 @@ impl EvidenceCache {
         &mut self,
         subject: &Subject,
         snapshot: &PrSnapshot,
+        workflow_run_ids: &BTreeSet<u64>,
         mut run: impl FnMut(&[&str]) -> Result<Value, ApiError>,
     ) -> Result<ActionsEvidence, ApiError> {
         let runs = paged_runs(subject, &snapshot.head_sha, &mut run)?;
-        let mut evidence = Vec::new();
+        let mut selected = BTreeMap::new();
         for run_value in runs {
+            let run_id = required_u64(&run_value, "id")?;
+            if workflow_run_ids.contains(&run_id) && selected.insert(run_id, run_value).is_some() {
+                return Err(ApiError::Malformed(format!(
+                    "requested Actions workflow run {run_id} appears more than once"
+                )));
+            }
+        }
+        for run_id in workflow_run_ids {
+            if !selected.contains_key(run_id) {
+                return Err(ApiError::Malformed(format!(
+                    "requested Actions workflow run {run_id} is absent from current-head runs"
+                )));
+            }
+        }
+        let mut evidence = Vec::new();
+        for (_, run_value) in selected {
             let run_id = required_u64(&run_value, "id")?;
             let workflow_sha = required_string(&run_value, "head_sha")?;
             if workflow_sha != snapshot.head_sha {
@@ -264,7 +328,9 @@ pub fn evidence_for_check_with(
     run: impl FnMut(&[&str]) -> Result<Value, ApiError>,
 ) -> Result<Option<ActionsEvidence>, ApiError> {
     match check.provider {
-        CheckProvider::GitHubActions { .. } => collect_with(subject, snapshot, run).map(Some),
+        CheckProvider::GitHubActions {
+            workflow_run_id, ..
+        } => collect_with(subject, snapshot, &BTreeSet::from([workflow_run_id]), run).map(Some),
         CheckProvider::StatusContext | CheckProvider::OtherCheckRun => Ok(None),
     }
 }
@@ -470,7 +536,7 @@ mod tests {
             serde_json::json!({"total_count": 1, "jobs": [{"id": 1022, "check_run_url": "https://api.github.com/repos/o/r/check-runs/22", "name": "other"}]}),
             serde_json::json!({"encoding": "base64", "content": "am9iczoKICBvdGhlcjoKICAgIG5hbWU6IG90aGVyCiAgICBydW5zLW9uOiB1YnVudHUtMjQuMDQK"}),
         ].into_iter();
-        let evidence = collect_with(&subject(), &snapshot(), |args| {
+        let evidence = collect_with(&subject(), &snapshot(), &BTreeSet::from([1, 2]), |args| {
             requests.push(args.join(" "));
             replies
                 .next()
@@ -531,20 +597,20 @@ mod tests {
         ]
         .into_iter();
         let mut cache = EvidenceCache::default();
-        let mut call = |snapshot: &PrSnapshot| {
-            cache.collect_with(&subject(), snapshot, |args| {
+        let mut call = |snapshot: &PrSnapshot, run_id| {
+            cache.collect_with(&subject(), snapshot, &BTreeSet::from([run_id]), |args| {
                 requests.push(args.join(" "));
                 responses
                     .next()
                     .ok_or_else(|| ApiError::Malformed("unexpected request".into()))
             })
         };
-        let first = call(&snapshot()).unwrap();
-        let second = call(&snapshot()).unwrap();
+        let first = call(&snapshot(), 1).unwrap();
+        let second = call(&snapshot(), 1).unwrap();
         let mut changed = snapshot();
         changed.head_sha = "next".into();
-        let third = call(&changed).unwrap();
-        let fourth = call(&changed).unwrap();
+        let third = call(&changed, 2).unwrap();
+        let fourth = call(&changed, 3).unwrap();
         assert_eq!(first.runs[0].run_id, 1);
         assert_eq!(second.runs[0].attempt, 2);
         assert_eq!(third.runs[0].head_sha, "next");
@@ -575,6 +641,109 @@ mod tests {
             source_requests
                 .iter()
                 .any(|request| request.contains("ref=next"))
+        );
+    }
+
+    #[test]
+    fn collection_ignores_unselected_unsupported_current_head_workflows() {
+        let source = "jobs:\n  lane:\n    name: Renamed lane\n  aggregate:\n    name: Aggregate\n    needs: lane\n";
+        let content = base64::engine::general_purpose::STANDARD.encode(source);
+        let mut replies = vec![
+            serde_json::json!({"total_count": 2, "workflow_runs": [
+                {"id": 7, "head_sha": "head", "run_attempt": 1, "path": ".github/workflows/selected.yml"},
+                {"id": 8, "head_sha": "head", "run_attempt": 1, "path": ".github/workflows/unsupported.yml"}
+            ]}),
+            serde_json::json!({"total_count": 2, "jobs": [
+                {"id": 701, "check_run_url": "https://api.github.com/repos/o/r/check-runs/71", "name": "Renamed lane"},
+                {"id": 702, "check_run_url": "https://api.github.com/repos/o/r/check-runs/72", "name": "Aggregate"}
+            ]}),
+            serde_json::json!({"encoding": "base64", "content": content}),
+        ].into_iter();
+        let evidence = collect_with(&subject(), &snapshot(), &BTreeSet::from([7]), |_| {
+            replies
+                .next()
+                .ok_or_else(|| ApiError::Malformed("unexpected request".into()))
+        })
+        .unwrap();
+        assert_eq!(evidence.runs.len(), 1);
+        assert_eq!(
+            evidence.classify_check(71, &["Aggregate".into()]),
+            Ok(Requirement::Transitive)
+        );
+    }
+
+    #[test]
+    fn production_actions_responses_correlate_check_runs_without_rest_job_ids() {
+        let source = r#"
+            jobs:
+              renamed-ancestor:
+                name: Renamed ancestor
+              matrix-lane:
+                name: Matrix ${{ matrix.backend }} / ${{ matrix.browser }}
+                strategy:
+                  matrix:
+                    backend: [sqlite, postgres]
+                    browser: [chromium, firefox]
+              aggregate:
+                name: Required aggregate
+                needs: [renamed-ancestor, matrix-lane]
+        "#;
+        let content = base64::engine::general_purpose::STANDARD.encode(source);
+        let mut replies = vec![
+            serde_json::json!({"total_count": 1, "workflow_runs": [{"id": 77, "head_sha": "head", "run_attempt": 3, "path": ".github/workflows/ci.yml"}]}),
+            serde_json::json!({"total_count": 6, "jobs": [
+                {"id": 9001, "check_run_url": "https://api.github.com/repos/o/r/check-runs/101", "name": "Renamed ancestor"},
+                {"id": 9002, "check_run_url": "https://api.github.com/repos/o/r/check-runs/102", "name": "Matrix sqlite / chromium"},
+                {"id": 9003, "check_run_url": "https://api.github.com/repos/o/r/check-runs/103", "name": "Matrix sqlite / firefox"},
+                {"id": 9004, "check_run_url": "https://api.github.com/repos/o/r/check-runs/104", "name": "Matrix postgres / chromium"},
+                {"id": 9005, "check_run_url": "https://api.github.com/repos/o/r/check-runs/105", "name": "Matrix postgres / firefox"},
+                {"id": 9006, "check_run_url": "https://api.github.com/repos/o/r/check-runs/106", "name": "Required aggregate"}
+            ]}),
+            serde_json::json!({"encoding": "base64", "content": content}),
+        ].into_iter();
+        let evidence = collect_with(&subject(), &snapshot(), &BTreeSet::from([77]), |_| {
+            replies
+                .next()
+                .ok_or_else(|| ApiError::Malformed("unexpected request".into()))
+        })
+        .unwrap();
+        assert_eq!(evidence.runs[0].jobs[0].check_run_id, Some(101));
+        assert_eq!(evidence.runs[0].jobs[0].job_key, None);
+        assert!(evidence.runs[0].jobs[0].matrix.is_empty());
+        for check_run_id in [101, 102, 103, 104, 105] {
+            assert_eq!(
+                evidence.classify_check(check_run_id, &["Required aggregate".into()]),
+                Ok(Requirement::Transitive)
+            );
+        }
+        assert_eq!(
+            evidence.classify_check(106, &["Required aggregate".into()]),
+            Ok(Requirement::Direct)
+        );
+    }
+
+    #[test]
+    fn current_attempt_group_uses_replacement_check_run_id() {
+        let evidence = actions_evidence(
+            "head",
+            r#"
+                jobs:
+                  lane:
+                    name: Renamed lane
+                  aggregate:
+                    name: Aggregate
+                    needs: lane
+            "#,
+            vec![("Renamed lane", 12), ("Aggregate", 13)],
+        );
+        assert_eq!(
+            evidence.classify_current_attempt_group(
+                1,
+                "Renamed lane",
+                &BTreeSet::from([11, 12]),
+                &["Aggregate".into()],
+            ),
+            Ok(Requirement::Transitive)
         );
     }
 
@@ -653,18 +822,21 @@ mod tests {
 
     #[test]
     fn malformed_pagination_and_superseded_runs_fail_closed() {
-        let error = collect_with(&subject(), &snapshot(), |_| {
+        let error = collect_with(&subject(), &snapshot(), &BTreeSet::from([1]), |_| {
             Ok(serde_json::json!({"total_count": 1, "workflow_runs": []}))
         })
         .unwrap_err();
         assert!(matches!(error, ApiError::Malformed(_)));
-        let error = collect_with(&subject(), &snapshot(), |_| Ok(serde_json::json!({"total_count": 1, "workflow_runs": [{"id": 1, "head_sha": "old", "run_attempt": 1, "path": "x"}]}))).unwrap_err();
+        let error = collect_with(&subject(), &snapshot(), &BTreeSet::from([1]), |_| Ok(serde_json::json!({"total_count": 1, "workflow_runs": [{"id": 1, "head_sha": "old", "run_attempt": 1, "path": "x"}]}))).unwrap_err();
         assert!(matches!(error, ApiError::Malformed(_)));
     }
 
     #[test]
     fn unavailable_workflow_source_is_an_observation_error() {
-        let error = collect_with(&subject(), &snapshot(), |_| Err(ApiError::NotFound)).unwrap_err();
+        let error = collect_with(&subject(), &snapshot(), &BTreeSet::from([1]), |_| {
+            Err(ApiError::NotFound)
+        })
+        .unwrap_err();
         assert_eq!(error, ApiError::NotFound);
     }
 
