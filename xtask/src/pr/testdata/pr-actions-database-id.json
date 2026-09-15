@@ -21,16 +21,16 @@
             "nodes": [
               {
                 "__typename": "CheckRun",
-                "fullDatabaseId": "90999406730",
+                "databaseId": 104431520054,
                 "name": "captured Actions job",
                 "conclusion": "FAILURE",
                 "status": "COMPLETED",
-                "detailsUrl": "https://github.com/jaunder-org/jaunder/actions/runs/30580548519/job/90999406730",
+                "detailsUrl": "https://github.com/jaunder-org/jaunder/actions/runs/34984065696/job/104431520054",
                 "startedAt": "2026-09-15T12:01:00Z",
                 "completedAt": "2026-09-15T12:02:00Z",
                 "checkSuite": {
                   "app": {"slug": "github-actions"},
-                  "workflowRun": {"fullDatabaseId": "30580548519"}
+                  "workflowRun": {"databaseId": 34984065696}
                 }
               }
             ]

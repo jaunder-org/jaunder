@@ -692,7 +692,7 @@ mod tests {
         let mut replies = vec![
             serde_json::json!({"total_count": 1, "workflow_runs": [{"id": 77, "head_sha": "head", "run_attempt": 3, "path": ".github/workflows/ci.yml"}]}),
             serde_json::json!({"total_count": 6, "jobs": [
-                {"id": 9001, "check_run_url": "https://api.github.com/repos/o/r/check-runs/90999406730", "name": "Renamed ancestor"},
+                {"id": 9001, "check_run_url": "https://api.github.com/repos/o/r/check-runs/104431520054", "name": "Renamed ancestor"},
                 {"id": 9002, "check_run_url": "https://api.github.com/repos/o/r/check-runs/102", "name": "Matrix sqlite / chromium"},
                 {"id": 9003, "check_run_url": "https://api.github.com/repos/o/r/check-runs/103", "name": "Matrix sqlite / firefox"},
                 {"id": 9004, "check_run_url": "https://api.github.com/repos/o/r/check-runs/104", "name": "Matrix postgres / chromium"},
@@ -707,10 +707,10 @@ mod tests {
                 .ok_or_else(|| ApiError::Malformed("unexpected request".into()))
         })
         .unwrap();
-        assert_eq!(evidence.runs[0].jobs[0].check_run_id, Some(90999406730));
+        assert_eq!(evidence.runs[0].jobs[0].check_run_id, Some(104431520054));
         assert_eq!(evidence.runs[0].jobs[0].job_key, None);
         assert!(evidence.runs[0].jobs[0].matrix.is_empty());
-        for check_run_id in [90999406730, 102, 103, 104, 105] {
+        for check_run_id in [104431520054, 102, 103, 104, 105] {
             assert_eq!(
                 evidence.classify_check(check_run_id, &["Required aggregate".into()]),
                 Ok(Requirement::Transitive)
@@ -805,10 +805,10 @@ mod tests {
         let job = parse_runtime_job(&serde_json::json!({
             "id": 700,
             "name": "lane",
-            "check_run_url": "https://api.github.com/repos/o/r/check-runs/90999406730"
+            "check_run_url": "https://api.github.com/repos/o/r/check-runs/104431520054"
         }))
         .unwrap();
-        assert_eq!(job.check_run_id, Some(90999406730));
+        assert_eq!(job.check_run_id, Some(104431520054));
         for value in [
             serde_json::json!({"id": 700, "name": "lane"}),
             serde_json::json!({"id": 700, "name": "lane", "check_run_url": "https://api.github.com/repos/o/r/jobs/42"}),
