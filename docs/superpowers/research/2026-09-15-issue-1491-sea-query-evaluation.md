@@ -77,21 +77,21 @@ repair.
 
 ### Dependency policy
 
-The disposable package used the repository's `deny.toml` and ran:
+The exact candidate pair was temporarily added to the root workspace dependency
+catalog and to `storage` so it participated in the complete product graph. The
+repository's authoritative host command then reported:
 
 ```text
-cargo deny --manifest-path .xtask/sea-query-review-prototype/Cargo.toml check
+cargo deny check
 exit code: 0
-advisories: passed
-bans and duplicate policy: passed (configured duplicate warnings remained warnings)
-licenses: passed
-sources: passed
+advisories ok, bans ok, licenses ok, sources ok
 ```
 
-The first attempt correctly rejected the disposable root package because its
-manifest omitted a license. Adding `license = "MIT"` to that temporary package
-and rerunning produced the successful policy result above. No exception,
-allowlist, or repository policy change was needed for SeaQuery or its adapter.
+The temporary manifest and root-lock changes were restored, removing SeaQuery
+from the product graph. Running the same command against the final tree produced
+the same exit-zero four-policy result. No exception, allowlist, source override,
+or repository policy change was needed for SeaQuery or its adapter, and no
+candidate dependency remains in a manifest or lockfile.
 
 ## Dynamic construction inventory
 
