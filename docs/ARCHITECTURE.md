@@ -1464,7 +1464,7 @@ routes and the pinned repository workflow covers the public browser command
 without a test-only Playwright address. Jaunder owns no preprocessor or browser
 distribution. That workflow is the canonical thumbnail and release-package
 authority; discovery remains ordinary repository links rather than a registry
-([theme repository authoring contract](adr/drafts/theme-repository-authoring-contract.md)).
+([theme repository authoring contract](adr/0195-theme-repository-authoring-contract.md)).
 
 Public markup exposes a versioned semantic Style Contract shared by built-in and
 custom themes; accessible source order and exact concept hooks are stable while
