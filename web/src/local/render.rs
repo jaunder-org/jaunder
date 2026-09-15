@@ -6,28 +6,11 @@ use maud::html;
 
 use crate::html::Markup;
 
-/// The Local page hero block (constant copy). Composed into [`masthead`] — the one
-/// source the projector and reactive `local::LocalPage` both render (ADR-0041 §2), so
-/// there is no `view!` twin.
-#[must_use]
-fn render_hero() -> Markup {
-    Markup::new(html! {
-        div class="j-hero" {
-            h1 { "One timeline. Every protocol." }
-            p {
-                "Jaunder is a self-hosted social client that reads from ActivityPub, "
-                "AT Protocol, RSS, Atom, and JSON Feed \u{2014} and publishes back out to "
-                "the ones you choose. Below: what\u{2019}s been posted from this instance."
-            }
-        }
-    })
-}
-
-/// The Local page masthead — the topbar (with the anonymous Sign-in / Register links)
-/// then the hero. The single source both the projector (`crate::posts::render::body`)
-/// and reactive `local::LocalPage` render, so coincidence holds by construction
-/// (ADR-0041 §2) — no `view!` twin to drift. The links carry `j-anon-only`; an
-/// anonymous viewer still sees them.
+/// The Local page masthead — the topbar with the anonymous Sign-in / Register links.
+/// The single source both the projector (`crate::posts::render::body`) and reactive
+/// `local::LocalPage` render, so coincidence holds by construction (ADR-0041 §2) — no
+/// `view!` twin to drift. The links carry `j-anon-only`; an anonymous viewer still
+/// sees them.
 #[must_use]
 pub(crate) fn masthead(logo: &Markup) -> Markup {
     let cta = Markup::new(html! {
@@ -41,7 +24,6 @@ pub(crate) fn masthead(logo: &Markup) -> Markup {
             &cta,
             logo,
         ))
-        (render_hero())
     })
 }
 
@@ -51,7 +33,7 @@ mod tests {
     use crate::html::Markup;
 
     #[test]
-    fn local_masthead_has_topbar_hero_and_anon_only_cta() {
+    fn local_masthead_has_topbar_and_anon_only_cta_without_hero() {
         let markup = masthead(&Markup::empty());
         let html = markup.as_str();
         assert!(html.contains("<h1>jaunder.local</h1>"), "{html}");
@@ -65,6 +47,7 @@ mod tests {
             ),
             "{html}"
         );
-        assert!(html.contains("<div class=\"j-hero\">"), "{html}");
+        assert!(!html.contains("<div class=\"j-hero\">"), "{html}");
+        assert!(!html.contains("One timeline. Every protocol."), "{html}");
     }
 }

@@ -634,7 +634,7 @@ mod tests {
     }
 
     #[test]
-    fn local_body_has_topbar_hero_signin_and_posts() {
+    fn local_body_has_topbar_signin_and_posts_without_hero() {
         let html = body(&PageSeed::SiteTimeline {
             order: common::seed::TimelineOrder::Newest,
             page: one_post_page(),
@@ -651,7 +651,7 @@ mod tests {
             ),
             "{html}"
         );
-        assert!(html.contains("<div class=\"j-hero\">"), "{html}");
+        assert!(!html.contains("<div class=\"j-hero\">"), "{html}");
         // The shared pure order control immediately precedes the semantic post list.
         let control = html
             .find("data-jaunder-part=\"timeline-order\"")

@@ -31,10 +31,9 @@ import { expectNoShiftAcrossMount } from "./layout-shift";
  * The four routes, the chrome element that must not move on each, and whether a post
  * row can also be measured there.
  *
- * `/` paints the masthead hero (the `inner_html` subtree #671 moves into the gate's
- * `children` slot, and the ADR-0041 coincidence surface #653 regressed); the other
- * three paint a `Topbar`. `url` is built from the per-test username, which doubles as
- * the tag.
+ * Every route paints a `Topbar`; `/` injects its shared masthead through the gate's
+ * `children` slot, the ADR-0041 coincidence surface #653 regressed. `url` is built
+ * from the per-test username, which doubles as the tag.
  *
  * `measureRow` is false for `/` **on purpose, and it is not a weakened assertion**.
  * The other three routes are scoped to this test's unique username/tag, so the page
@@ -53,7 +52,7 @@ const ROUTES: {
   chrome: string;
   measureRow: boolean;
 }[] = [
-  { name: "/", url: () => "/", chrome: ".j-hero", measureRow: false },
+  { name: "/", url: () => "/", chrome: ".j-topbar", measureRow: false },
   {
     name: "/tags/:tag",
     url: (u) => `/tags/${u}`,

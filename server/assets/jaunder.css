@@ -1482,38 +1482,6 @@
  color: var(--muted);
 }
 
-/* ─── unauth landing ─── */
-.j-hero {
- padding: 28px 28px 18px;
- background: var(--bg);
- border-bottom: 1px var(--border-style) var(--line-soft);
-}
-
-.j-hero h1 {
- font-family: var(--font-display);
- font-size: var(--fs-head);
- font-weight: 600;
- letter-spacing: var(--tracking-head);
- margin: 0 0 6px;
- text-wrap: balance;
- color: var(--ink);
-}
-
-.j-hero p {
- font-size: 14px;
- color: var(--muted);
- max-width: 520px;
- text-wrap: pretty;
- margin: 0;
-}
-
-.j-hero-chips {
- margin-top: 14px;
- display: flex;
- gap: 6px;
- flex-wrap: wrap;
-}
-
 /* ─── shared form field chrome ─── */
 
 .j-edit-form-label {
@@ -1840,15 +1808,6 @@
 /* ─── theme-specific structural tweaks (still triggered by variables only) ─── */
 .j-root[data-chrome="rule"] .j-topbar {
  border-bottom-width: 1px;
-}
-
-.j-root[data-chrome="rule"] .j-hero {
- text-align: center;
- padding-top: 36px;
-}
-
-.j-root[data-chrome="rule"] .j-hero p {
- margin: 0 auto;
 }
 
 /* ─── #181 pre-paint authed layout (ADR-0044 D4/D5) ─────────────

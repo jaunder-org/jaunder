@@ -88,7 +88,7 @@ pub fn LocalPage() -> impl IntoView {
         );
     });
 
-    // The masthead (topbar + anonymous Sign-in/Register links + hero) is the shared
+    // The masthead (topbar + anonymous Sign-in/Register links) is the shared
     // pure fn the projector renders too, so both sides coincide by construction
     // (ADR-0041 §2) — no `view!` twin to drift. The anonymous CTA lives inside it and
     // is hidden by `j-anon-only` + `html.authed` when the advisory marker is present.
