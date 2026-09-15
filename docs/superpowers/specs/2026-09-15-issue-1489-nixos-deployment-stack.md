@@ -18,17 +18,22 @@ building block for custom deployments.
   Jaunder, Caddy, OpenTelemetry Collector, VictoriaMetrics, VictoriaLogs, and
   VictoriaTraces. A deployment that disables required constituents should use
   the minimal module and compose its own stack instead.
-- `services.jaunder.stack.hostName` is required. Caddy is the only public
-  listener, opens ports 80 and 443, obtains HTTPS certificates automatically,
-  and proxies the named host to loopback-bound Jaunder. Existing Caddy options,
-  including its ACME account email, remain the operator's configuration surface.
+- `services.jaunder.stack.hostName` is required. Both it and an optional
+  observability host must be DNS hostnames of at most 253 ASCII characters:
+  dot-separated, nonempty labels of at most 63 ASCII letters, digits, or
+  hyphens, each starting and ending with a letter or digit. Caddy is the only
+  public listener, opens ports 80 and 443, obtains HTTPS certificates
+  automatically, and proxies the named host to loopback-bound Jaunder. Existing
+  Caddy options, including its ACME account email, remain the operator's
+  configuration surface.
 - Jaunder runs in production mode with `JAUNDER_LOG_FORMAT=json` and exports
   traces and metrics to one loopback-only OTLP receiver owned by the collector.
 - The collector routes Jaunder metrics to single-node VictoriaMetrics and
   Jaunder traces to single-node VictoriaTraces. It reads only the
-  `jaunder.service` journal, parses Jaunder's JSON events without flattening
-  them into plain messages, and sends their named fields to single-node
-  VictoriaLogs.
+  `jaunder.service` journal, parses Jaunder's JSON events into a structured
+  body, promotes only allowlisted named fields, and removes current-span and
+  span-stack structures before sending records to single-node VictoriaLogs so
+  request credentials cannot reach that store.
 - VictoriaMetrics, VictoriaLogs, VictoriaTraces, their built-in web UIs, and the
   collector bind only to loopback. Without further configuration, operators
   reach each UI through local access or SSH forwarding.
@@ -37,8 +42,10 @@ building block for custom deployments.
   the corresponding prefixed ingestion endpoints directly over loopback; they
   never traverse Caddy or Basic Auth.
 - An optional `services.jaunder.stack.observability.hostName` adds one
-  Caddy-served HTTPS operator host for those three prefixes. Configuring it
-  requires a non-whitespace
+  Caddy-served HTTPS operator host for those three prefixes. It must differ from
+  the application host after lowercasing, because same-host Caddy definitions
+  collide and could authenticate or replace the application route. Configuring
+  it requires a non-whitespace
   `services.jaunder.stack.observability.basicAuth.username` matching
   `[A-Za-z0-9._-]+` and a non-whitespace
   `services.jaunder.stack.observability.basicAuth.passwordHash`. The hash must

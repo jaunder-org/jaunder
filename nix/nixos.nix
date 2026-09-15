@@ -107,6 +107,18 @@ let
       cfg = config.services.jaunder.stack;
       nonWhitespace = value: value != null && builtins.match "^[[:space:]]*$" value == null;
       caddyToken = value: builtins.match "^[A-Za-z0-9._-]+$" value != null;
+      dnsHostName = value:
+        value != null
+        && (
+          let
+            labels = lib.splitString "." value;
+            validLabel = label:
+              builtins.stringLength label <= 63
+              && builtins.match "^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$" label != null;
+          in
+          builtins.stringLength value <= 253 && builtins.all validLabel labels
+        );
+      normalizedDnsHostName = value: lib.toLower value;
       bcryptHash = builtins.match "^\\$2[ab]\\$(0[4-9]|[12][0-9]|3[01])\\$[./0-9A-Za-z]{53}$" cfg.observability.basicAuth.passwordHash != null;
       validUnpaddedBase64 = value:
         let
@@ -138,10 +150,10 @@ let
         && validUnpaddedBase64 hash
         && decodedBase64Length hash >= 4);
       postgresqlDatabase = cfg.database == "postgresql";
-      applicationHostName = if nonWhitespace cfg.hostName then cfg.hostName else "invalid-stack-host.invalid";
-      observabilityHostName = if nonWhitespace cfg.observability.hostName then cfg.observability.hostName else "invalid-observability-host.invalid";
+      applicationHostName = if dnsHostName cfg.hostName then normalizedDnsHostName cfg.hostName else "invalid-stack-host.invalid";
+      observabilityHostName = if dnsHostName cfg.observability.hostName then normalizedDnsHostName cfg.observability.hostName else "invalid-observability-host.invalid";
       hashAlgorithm = if bcryptHash then "bcrypt" else "argon2id";
-      observabilityIngress = lib.optionalString (nonWhitespace cfg.observability.hostName) ''
+      observabilityIngress = lib.optionalString (dnsHostName cfg.observability.hostName) ''
         # The stores remain credential-free on loopback; this is their only remote access path.
         basic_auth ${hashAlgorithm} {
           ${cfg.observability.basicAuth.username} ${cfg.observability.basicAuth.passwordHash}
@@ -191,13 +203,13 @@ let
         assertions = [
           {
             jaunderStack = true;
-            assertion = nonWhitespace cfg.hostName;
-            message = "services.jaunder.stack.hostName must be non-whitespace when the stack is enabled.";
+            assertion = dnsHostName cfg.hostName;
+            message = "services.jaunder.stack.hostName must be a DNS hostname: at most 253 ASCII characters, dot-separated nonempty labels of at most 63 ASCII letters, digits, or hyphens, each starting and ending with a letter or digit.";
           }
           {
             jaunderStack = true;
-            assertion = cfg.observability.hostName == null || nonWhitespace cfg.observability.hostName;
-            message = "services.jaunder.stack.observability.hostName must be non-whitespace when configured.";
+            assertion = cfg.observability.hostName == null || dnsHostName cfg.observability.hostName;
+            message = "services.jaunder.stack.observability.hostName must be a DNS hostname when configured: at most 253 ASCII characters, dot-separated nonempty labels of at most 63 ASCII letters, digits, or hyphens, each starting and ending with a letter or digit.";
           }
           {
             jaunderStack = true;
@@ -211,8 +223,8 @@ let
           }
           {
             jaunderStack = true;
-            assertion = cfg.observability.hostName == null || cfg.observability.hostName != cfg.hostName;
-            message = "services.jaunder.stack.observability.hostName must differ from services.jaunder.stack.hostName when configured.";
+            assertion = cfg.observability.hostName == null || normalizedDnsHostName cfg.observability.hostName != normalizedDnsHostName cfg.hostName;
+            message = "services.jaunder.stack.observability.hostName must differ from services.jaunder.stack.hostName after DNS case normalization when configured.";
           }
           {
             jaunderStack = true;
@@ -227,13 +239,13 @@ let
         ];
 
         networking.firewall.allowedTCPPorts = [ 80 443 ];
-        services.caddy = lib.mkIf (nonWhitespace cfg.hostName) {
+        services.caddy = lib.mkIf (dnsHostName cfg.hostName) {
           enable = true;
           virtualHosts = {
             ${applicationHostName}.extraConfig = ''
               reverse_proxy 127.0.0.1:3000
             '';
-          } // lib.optionalAttrs (nonWhitespace cfg.observability.hostName) {
+          } // lib.optionalAttrs (dnsHostName cfg.observability.hostName) {
             ${observabilityHostName}.extraConfig = observabilityIngress;
           };
         };
@@ -283,10 +295,11 @@ let
                 {
                   context = "log";
                   statements = [
-                    "merge_maps(attributes, ParseJSON(body[\"MESSAGE\"]), \"upsert\") where IsMatch(body[\"MESSAGE\"], \"^\\\\{\")"
-                    "set(attributes[\"jaunder.target\"], ParseJSON(body[\"MESSAGE\"])[\"target\"]) where IsMatch(body[\"MESSAGE\"], \"^\\\\{\")"
-                    "set(attributes[\"jaunder.request.uri\"], ParseJSON(body[\"MESSAGE\"])[\"span\"][\"uri\"]) where IsMatch(body[\"MESSAGE\"], \"\\\"span\\\":\")"
-                    "set(attributes[\"jaunder.request.headers\"], ParseJSON(body[\"MESSAGE\"])[\"span\"][\"headers\"]) where IsMatch(body[\"MESSAGE\"], \"\\\"span\\\":\")"
+                    "set(body, ParseJSON(body[\"MESSAGE\"])) where IsMatch(body[\"MESSAGE\"], \"^\\\\{\")"
+                    "set(attributes[\"jaunder.target\"], body[\"target\"]) where IsMap(body)"
+                    "set(attributes[\"jaunder.request.uri\"], body[\"span\"][\"uri\"]) where IsMap(body)"
+                    "delete_key(body, \"span\") where IsMap(body)"
+                    "delete_key(body, \"spans\") where IsMap(body)"
                   ];
                 }
               ];

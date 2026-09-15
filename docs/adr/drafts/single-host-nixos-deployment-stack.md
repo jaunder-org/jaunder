@@ -31,12 +31,20 @@ imports the minimal Jaunder module and exposes `services.jaunder.stack`.
 Enabling it owns one complete single-host composition:
 
 - Caddy is the only public listener and terminates automatic HTTPS for a
-  required host name before proxying to loopback-bound Jaunder.
+  required DNS host name before proxying to loopback-bound Jaunder. Application
+  and optional observability host names are at most 253 ASCII characters with
+  dot-separated, nonempty labels of at most 63 ASCII letters, digits, or
+  hyphens; each label begins and ends with a letter or digit. The optional
+  observability host must differ from the application host after lowercasing,
+  because same-host Caddy definitions collide and could authenticate or replace
+  the application route.
 - Jaunder runs in production mode with JSON-formatted structured logs and
   exports traces and metrics to a loopback-only OpenTelemetry Collector.
 - The collector routes Jaunder metrics to VictoriaMetrics, traces to
   VictoriaTraces, and parsed structured events read only from `jaunder.service`
-  to VictoriaLogs without collapsing their named fields into plain messages.
+  to VictoriaLogs. It retains only allowlisted named fields and removes current
+  span and span-stack structures before export, so request credentials cannot
+  reach VictoriaLogs.
 - The collector, Victoria stores, and each store's built-in web UI remain on
   loopback. By default they are operator surfaces reached locally or through SSH
   forwarding, not public application endpoints.

@@ -2363,17 +2363,22 @@ only.
 `services.jaunder.stack` as a complete single-host composition
 ([single-host NixOS deployment stack](adr/drafts/single-host-nixos-deployment-stack.md)).
 Its required application `hostName` puts Caddy alone on public ports 80 and 443
-for automatic HTTPS. Production-mode Jaunder and the OpenTelemetry Collector
-remain on loopback; Jaunder emits JSON logs, and the collector routes Jaunder
-metrics, parsed structured fields from the `jaunder.service` journal, and traces
-into persistent single-node VictoriaMetrics, VictoriaLogs, and VictoriaTraces
-stores. Each store and its built-in web UI remains loopback-only.
+for automatic HTTPS. Application and optional observability host names are DNS
+hostnames of at most 253 ASCII characters: dot-separated, nonempty labels of at
+most 63 ASCII letters, digits, or hyphens, each beginning and ending with a
+letter or digit. Production-mode Jaunder and the OpenTelemetry Collector remain
+on loopback; Jaunder emits JSON logs, and the collector routes Jaunder metrics,
+parsed structured fields from the `jaunder.service` journal, and traces into
+persistent single-node VictoriaMetrics, VictoriaLogs, and VictoriaTraces stores.
+Each store and its built-in web UI remains loopback-only.
 
 The services use native `/metrics`, `/logs`, and `/traces` HTTP path prefixes;
 Collector exporters use the corresponding prefixed ingestion endpoints directly
 over loopback. An optional distinct
 `services.jaunder.stack.observability.hostName` adds a second Caddy HTTPS host
-for those prefixes. Its
+for those prefixes. It must differ from the application host after lowercasing:
+same-host Caddy definitions collide and could authenticate or replace the
+application route. Its
 `services.jaunder.stack.observability.basicAuth.{username,passwordHash}` values
 are required: the username matches `[A-Za-z0-9._-]+`, and `$2a$`/`$2b$` bcrypt
 and `$argon2id$` hashes select the matching Caddy algorithm, while plaintext and

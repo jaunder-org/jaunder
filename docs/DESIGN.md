@@ -35,12 +35,18 @@ For a supported single-host production composition, import
 ```
 
 The stack makes Caddy the only public listener on ports 80 and 443, with
-automatic HTTPS for the application host. It runs production-mode Jaunder, the
-OpenTelemetry Collector, VictoriaMetrics, VictoriaLogs, and VictoriaTraces. The
-collector and all Victoria services, including their built-in UIs, remain
-loopback-only. The collector sends metrics, logs, and traces directly to the
-native `/metrics`, `/logs`, and `/traces` ingestion prefixes over loopback; this
-traffic never traverses Caddy.
+automatic HTTPS for the application host. Each application or optional
+observability host name must be a DNS hostname of at most 253 ASCII characters:
+dot-separated, nonempty labels of at most 63 ASCII letters, digits, or hyphens,
+each beginning and ending with a letter or digit. The optional observability
+host must differ from the application host after lowercasing, because same-host
+Caddy definitions collide and could authenticate or replace the application
+route. It runs production-mode Jaunder, the OpenTelemetry Collector,
+VictoriaMetrics, VictoriaLogs, and VictoriaTraces. The collector and all
+Victoria services, including their built-in UIs, remain loopback-only. The
+collector sends metrics, logs, and traces directly to the native `/metrics`,
+`/logs`, and `/traces` ingestion prefixes over loopback; this traffic never
+traverses Caddy.
 
 The default loopback UIs are:
 
@@ -58,8 +64,10 @@ ssh -L 8428:127.0.0.1:8428 -L 9428:127.0.0.1:9428 -L 10428:127.0.0.1:10428 opera
 #### Optional HTTPS observability host and Basic Auth
 
 An optional distinct HTTPS operator host publishes only the three prefixed
-observability routes. Configure both Basic Auth fields when setting it. The
-username must match the exact ASCII grammar `[A-Za-z0-9._-]+`:
+observability routes. It follows the DNS hostname contract above and must remain
+distinct from the application host after lowercasing. Configure both Basic Auth
+fields when setting it. The username must match the exact ASCII grammar
+`[A-Za-z0-9._-]+`:
 
 ```nix
 services.jaunder.stack.observability.hostName = "observe.example.com";

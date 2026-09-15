@@ -1076,6 +1076,45 @@ mkWasmCoverageMeasurementProducer =
   stackEvaluationSucceeds = stack:
     (builtins.tryEval (mkStackConfiguration stack).config.system.build.toplevel.drvPath).success;
   stackEvaluationFails = stack: !(stackEvaluationSucceeds stack);
+  validStackBasicAuth = {
+    username = "operator";
+    passwordHash = "$2b$12$abcdefghijklmnopqrstuuV4qg5bR1uRgYBzO8pu0h1rlaL8fQ2gQ";
+  };
+  sixtyThreeCharacterDnsLabel = builtins.concatStringsSep "" (builtins.genList (_: "a") 63);
+  invalidDnsHostNames = [
+    "https://jaunder.example.test"
+    "jaunder.example.test:443"
+    "*.jaunder.example.test"
+    "jaunder example.test"
+    "jaunder\nexample.test"
+    "jaunder..example.test"
+    ".jaunder.example.test"
+    "jaunder.example.test."
+    "-jaunder.example.test"
+    "jaunder-.example.test"
+    "${builtins.concatStringsSep "" (builtins.genList (_: "a") 64)}.example.test"
+    "${sixtyThreeCharacterDnsLabel}.${sixtyThreeCharacterDnsLabel}.${sixtyThreeCharacterDnsLabel}.${sixtyThreeCharacterDnsLabel}"
+  ];
+  invalidApplicationHostStack = mkStackConfiguration {
+    enable = true;
+    hostName = "https://jaunder.example.test";
+  };
+  invalidObservabilityHostStack = mkStackConfiguration {
+    enable = true;
+    hostName = "jaunder.example.test";
+    observability = {
+      hostName = "https://observe.example.test";
+      basicAuth = validStackBasicAuth;
+    };
+  };
+  caseNormalizedHostStack = mkStackConfiguration {
+    enable = true;
+    hostName = "Jaunder.Example.Test";
+    observability = {
+      hostName = "Observe.Example.Test";
+      basicAuth = validStackBasicAuth;
+    };
+  };
   sqliteStack = mkStackConfiguration {
     enable = true;
     hostName = "jaunder.example.test";
@@ -1201,6 +1240,12 @@ mkWasmCoverageMeasurementProducer =
     assert pkgs.lib.hasInfix "operator $2b$12$abcdefghijklmnopqrstuuV4qg5bR1uRgYBzO8pu0h1rlaL8fQ2gQ" bcryptStack.config.services.caddy.virtualHosts."observe.example.test".extraConfig;
     assert builtins.any (v: pkgs.lib.hasInfix "basic_auth bcrypt" v.extraConfig) (builtins.attrValues bcryptStack.config.services.caddy.virtualHosts);
     assert builtins.any (v: pkgs.lib.hasInfix "basic_auth argon2id" v.extraConfig) (builtins.attrValues argon2idStack.config.services.caddy.virtualHosts);
+    assert builtins.hasAttr "jaunder.example.test" caseNormalizedHostStack.config.services.caddy.virtualHosts;
+    assert builtins.hasAttr "observe.example.test" caseNormalizedHostStack.config.services.caddy.virtualHosts;
+    assert !(builtins.hasAttr "Jaunder.Example.Test" caseNormalizedHostStack.config.services.caddy.virtualHosts);
+    assert !(builtins.hasAttr "https://jaunder.example.test" invalidApplicationHostStack.config.services.caddy.virtualHosts);
+    assert !(builtins.hasAttr "https://observe.example.test" invalidObservabilityHostStack.config.services.caddy.virtualHosts);
+    assert stackEvaluationSucceeds { enable = true; hostName = "ordinary-host.example.test"; };
     assert stackEvaluationSucceeds { enable = true; hostName = "jaunder.example.test"; };
     assert stackEvaluationSucceeds { enable = true; hostName = "jaunder.example.test"; database = "postgresql"; };
     assert stackEvaluationSucceeds { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator"; passwordHash = "$2b$12$abcdefghijklmnopqrstuuV4qg5bR1uRgYBzO8pu0h1rlaL8fQ2gQ"; }; }; };
@@ -1208,6 +1253,12 @@ mkWasmCoverageMeasurementProducer =
     assert stackEvaluationSucceeds { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator"; passwordHash = "$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHQ$YWJjZGVmZ2hpams"; }; }; };
     assert stackEvaluationFails { enable = true; };
     assert stackEvaluationFails { enable = true; hostName = " "; };
+    assert builtins.all (hostName: stackEvaluationFails { enable = true; inherit hostName; }) invalidDnsHostNames;
+    assert builtins.all (hostName: stackEvaluationFails {
+      enable = true;
+      hostName = "jaunder.example.test";
+      observability = { inherit hostName; basicAuth = validStackBasicAuth; };
+    }) invalidDnsHostNames;
     assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability.hostName = " "; };
     assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability.hostName = "observe.example.test"; };
     assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = " "; passwordHash = "$2b$12$abcdefghijklmnopqrstuuV4qg5bR1uRgYBzO8pu0h1rlaL8fQ2gQ"; }; }; };
@@ -1215,6 +1266,7 @@ mkWasmCoverageMeasurementProducer =
     assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator}"; passwordHash = "$2b$12$abcdefghijklmnopqrstuuV4qg5bR1uRgYBzO8pu0h1rlaL8fQ2gQ"; }; }; };
     assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator\nreverse_proxy"; passwordHash = "$2b$12$abcdefghijklmnopqrstuuV4qg5bR1uRgYBzO8pu0h1rlaL8fQ2gQ"; }; }; };
     assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "jaunder.example.test"; basicAuth = { username = "operator"; passwordHash = "$2b$12$abcdefghijklmnopqrstuuV4qg5bR1uRgYBzO8pu0h1rlaL8fQ2gQ"; }; }; };
+    assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "JAUNDER.EXAMPLE.TEST"; basicAuth = validStackBasicAuth; }; };
     assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator"; passwordHash = " "; }; }; };
     assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator"; passwordHash = "plaintext"; }; }; };
     assert stackEvaluationFails { enable = true; hostName = "jaunder.example.test"; observability = { hostName = "observe.example.test"; basicAuth = { username = "operator"; passwordHash = "$2b$12$too-short"; }; }; };
@@ -1479,12 +1531,16 @@ mkWasmCoverageMeasurementProducer =
         ${pkgs.lib.optionalString captureSignals ''
           trace_id = "0123456789abcdef0123456789abcdef"
           request_id = "jaunder-stack-telemetry-request"
+          authorization = "Bearer jaunder-stack-fake-authorization-credential"
+          cookie = "session=jaunder-stack-fake-cookie-credential"
           telemetry_uri = "/atompub/nonexistent/posts"
           status, output = machine.execute(
             "curl " + curl_options + " -ksS -o /dev/null -w '%{http_code}'"
             + " --resolve jaunder.stack.test:443:127.0.0.1"
             + " -H " + shlex.quote("traceparent: 00-" + trace_id + "-0123456789abcdef-01")
             + " -H " + shlex.quote("x-request-id: " + request_id)
+            + " -H " + shlex.quote("authorization: " + authorization)
+            + " -H " + shlex.quote("cookie: " + cookie)
             + " https://jaunder.stack.test" + telemetry_uri
           )
           assert status == 0 and output == "401", "telemetry request did not return 401:\n%s" % output
@@ -1523,7 +1579,6 @@ mkWasmCoverageMeasurementProducer =
               record for record in records
               if record.get("jaunder.target") == "tower_http::trace::on_response"
               and record.get("jaunder.request.uri") == telemetry_uri
-              and request_id in record.get("jaunder.request.headers", "")
             ), None)
             if target_log is not None:
               break
@@ -1531,6 +1586,10 @@ mkWasmCoverageMeasurementProducer =
           assert target_log is not None, "driven structured response log never appeared before reboot:\n%s" % records[-10:]
           assert "_time" in target_log, "structured response log lacks a timestamp: %s" % target_log
           target_log_identity = json.dumps(target_log, sort_keys=True, separators=(",", ":"))
+          assert request_id not in target_log_identity, "request header marker reached VictoriaLogs: %s" % target_log
+          for credential in [authorization, cookie]:
+            assert credential not in target_log_identity, "request credential reached VictoriaLogs: %s" % target_log
+          assert "jaunder.request.headers" not in target_log, "request headers were promoted to VictoriaLogs: %s" % target_log
 
           trace_command = (
             "curl " + curl_options + " -fsS http://127.0.0.1:10428/traces/select/jaeger/api/traces/"
@@ -1544,6 +1603,9 @@ mkWasmCoverageMeasurementProducer =
               break
             machine.sleep(1)
           assert trace_payload is not None, "driven trace ID %s never appeared before reboot" % trace_id
+          trace_payload_identity = json.dumps(trace_payload, sort_keys=True, separators=(",", ":"))
+          for credential in [authorization, cookie]:
+            assert credential not in trace_payload_identity, "request credential reached VictoriaTraces: %s" % trace_payload
 
           ${pkgs.lib.optionalString persistSignals ''
           machine.reboot()
