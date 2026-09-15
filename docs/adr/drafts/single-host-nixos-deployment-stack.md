@@ -43,17 +43,23 @@ Enabling it owns one complete single-host composition:
 - The Victoria services always use native `/metrics`, `/logs`, and `/traces`
   HTTP path prefixes, and Collector exporters use their prefixed ingestion
   endpoints directly over loopback. An optional second HTTPS host exposes those
-  prefixes through Caddy. It requires non-whitespace username and password-hash
-  options; recognized `$2a$`/`$2b$` bcrypt and `$argon2id$` prefixes select the
-  matching Caddy algorithm, while plaintext and unrecognized hashes fail module
-  evaluation. Caddy authenticates every external request before proxying it to
-  the credential-free loopback services.
+  prefixes through Caddy. It requires a non-whitespace Basic Auth username
+  matching `[A-Za-z0-9._-]+` and a password-hash option; recognized
+  `$2a$`/`$2b$` bcrypt and `$argon2id$` prefixes select the matching Caddy
+  algorithm, while plaintext and unrecognized hashes fail module evaluation. The
+  password hash is a literal evaluated Nix string embedded in generated Caddy
+  configuration and the Nix store, not a runtime-file secret. Caddy
+  authenticates every external request before proxying it to the credential-free
+  loopback services.
 - The stack's closed database choice is SQLite by default or local PostgreSQL.
   PostgreSQL mode additively enables the host's ordinary shared PostgreSQL
   instance, ensures a `jaunder` database owned by a matching login role with the
   privileges required for initialization and migrations, and connects over a
   Unix socket with peer authentication. It creates no separate cluster, chooses
-  no PostgreSQL package, and does not itself add a password or network exposure.
+  no PostgreSQL package, and assigns no PostgreSQL listener, authentication, or
+  global policy. On the pinned NixOS module, `enableTCPIP = false` still retains
+  a localhost TCP listener; the stack adds no non-loopback listener, host HBA
+  rule, firewall opening, or other network exposure.
 
 The stack guarantees that its constituent services are enabled. Their existing
 NixOS modules remain the configuration surface for retention and other tuning;
@@ -79,10 +85,10 @@ ports 80 and 443 are public. Remote access to the Victoria interfaces is an
 explicit, coarsely authorized single-operator surface rather than an account,
 role, or SSO system.
 
-PostgreSQL mode composes with databases, roles, package selection, and network
-policy declared by other NixOS modules; it does not claim that the shared
-instance is globally socket-only. Caddy OTLP telemetry and PostgreSQL metrics
-are feasible future extensions, but are excluded until production evidence
-justifies their additional signal, credential, cardinality, and retention
-policy. Backing up Victoria data or promising VictoriaTraces upgrade
-compatibility likewise requires a separate decision.
+PostgreSQL mode composes with databases, roles, package selection, listeners,
+authentication, and global policy declared by other NixOS modules; it does not
+claim that the shared instance is globally socket-only. Caddy OTLP telemetry and
+PostgreSQL metrics are feasible future extensions, but are excluded until
+production evidence justifies their additional signal, credential, cardinality,
+and retention policy. Backing up Victoria data or promising VictoriaTraces
+upgrade compatibility likewise requires a separate decision.

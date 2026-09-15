@@ -85,11 +85,17 @@ Out:
     exposure. Run
     `devtool run -- nix build -L --accept-flake-config .#checks.x86_64-linux.jaunder-stack-postgresql`.
 
-- [ ] Task 4: Publish the operator contract and current architecture.
+- [x] Task 4: Publish the operator contract and current architecture.
   - Contract: documentation gives minimal and stack import examples, required
     host configuration, database selection, local UI/SSH access, optional
-    authenticated host and password-hash generation, native retention tuning,
-    and the VictoriaTraces maturity and telemetry-backup exclusions.
+    authenticated host with Basic Auth usernames matching `[A-Za-z0-9._-]+`, and
+    password-hash generation on a trusted admin machine with a compatible Caddy
+    binary on `PATH`. It explains that `passwordHash` is a literal evaluated Nix
+    string embedded in generated Caddy configuration and the Nix store, not a
+    runtime-file secret; operators protect plaintext, use a strong password
+    against offline guessing, and store only the generated hash in host Nix
+    configuration. Documentation also gives native retention tuning and the
+    VictoriaTraces maturity and telemetry-backup exclusions.
   - Verification: fold the deployment projection from **Committed direction**
     into current architecture once the output exists; update the flake-output
     summary; run documentation links/ADR projection checks, then
@@ -110,7 +116,11 @@ Out:
 - PostgreSQL mode requires and starts Jaunder after the NixOS PostgreSQL
   readiness target; the VM test exercises a cold boot before initialization.
 - PostgreSQL changes remain additive under Nix module merging and preserve
-  another service's package, database, role, and network policy.
+  another service's package, database, role, listener, authentication, and
+  global policy. The pinned NixOS module retains a localhost TCP listener when
+  `enableTCPIP = false`; the stack assigns no listener or authentication policy
+  and adds no non-loopback listener, host HBA rule, firewall opening, or other
+  network exposure. Jaunder continues to use its peer-authenticated Unix socket.
 - Persistence testing observes data captured before reboot rather than merely
   proving that empty services restart.
 - Native retention defaults are verified without redundantly setting values to

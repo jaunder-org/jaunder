@@ -38,14 +38,17 @@ building block for custom deployments.
   never traverse Caddy or Basic Auth.
 - An optional `services.jaunder.stack.observability.hostName` adds one
   Caddy-served HTTPS operator host for those three prefixes. Configuring it
-  requires non-whitespace
-  `services.jaunder.stack.observability.basicAuth.username` and
-  `services.jaunder.stack.observability.basicAuth.passwordHash` strings. The
-  hash must begin with a recognized bcrypt prefix (`$2a$` or `$2b$`) or
-  `$argon2id$`; any other value, including plaintext, fails module evaluation.
-  The prefix selects Caddy's `bcrypt` or `argon2id` algorithm, respectively.
-  Caddy authenticates every external request before proxying to the
-  credential-free loopback services. Grafana is not part of the stack.
+  requires a non-whitespace
+  `services.jaunder.stack.observability.basicAuth.username` matching
+  `[A-Za-z0-9._-]+` and a non-whitespace
+  `services.jaunder.stack.observability.basicAuth.passwordHash`. The hash must
+  begin with a recognized bcrypt prefix (`$2a$` or `$2b$`) or `$argon2id$`; any
+  other value, including plaintext, fails module evaluation. The prefix selects
+  Caddy's `bcrypt` or `argon2id` algorithm, respectively. `passwordHash` is a
+  literal evaluated Nix string embedded in generated Caddy configuration and the
+  Nix store, not a runtime-file secret. Caddy authenticates every external
+  request before proxying to the credential-free loopback services. Grafana is
+  not part of the stack.
 - The stack exposes a closed database choice,
   `services.jaunder.stack.database = "sqlite" | "postgresql"`, defaulting to
   SQLite.
@@ -54,10 +57,12 @@ building block for custom deployments.
   matching login role with the privileges required to initialize and migrate its
   schema, and connects as the `jaunder` system user over a Unix socket with peer
   authentication. It creates no separate cluster or data directory, chooses no
-  PostgreSQL package, and does not itself add a password, TCP listener, network
-  authentication rule, or firewall opening. Other services may share and
-  independently configure the same PostgreSQL instance. External PostgreSQL
-  remains a custom composition through the minimal module.
+  PostgreSQL package, and assigns no PostgreSQL listener, authentication, or
+  global policy. On the pinned NixOS module, `enableTCPIP = false` still retains
+  a localhost TCP listener; the stack itself adds no non-loopback listener, host
+  HBA rule, firewall opening, or other network exposure. Other services may
+  share and independently configure the same PostgreSQL instance. External
+  PostgreSQL remains a custom composition through the minimal module.
 - Native NixOS options remain the tuning surface for Caddy, PostgreSQL, the
   collector, and each Victoria service. The stack does not duplicate their
   retention or storage controls. Consequently the initial native retention is 31
@@ -90,8 +95,9 @@ building block for custom deployments.
   the metrics, logs, and traces UIs and their query APIs at the three documented
   path prefixes. Positive cases prove both bcrypt and Argon2id authentication.
   Module evaluation rejects a configured observability host with either
-  credential field absent or whitespace-only, and rejects plaintext, malformed,
-  and unsupported password hashes.
+  credential field absent, whitespace-only, or with a username outside
+  `[A-Za-z0-9._-]+`, and rejects plaintext, malformed, and unsupported password
+  hashes.
 - Effective collector configuration proves that its metrics, logs, and traces
   exporters use each store's prefixed loopback ingestion endpoint without
   traversing the authenticated Caddy host.
@@ -104,12 +110,15 @@ building block for custom deployments.
   query UIs.
 - A fresh PostgreSQL deployment provides the same observable behavior while
   proving that Jaunder uses its additively configured database in the shared
-  local instance over a Unix socket without a database password. PostgreSQL
-  catalog inspection proves that the `jaunder` login role owns the database, and
-  fresh initialization and migrations execute successfully as that role. The
-  stack-only configuration adds no PostgreSQL TCP listener, network
-  authentication rule, or firewall opening, and composes without replacing an
-  unrelated database or role declared by another module.
+  local instance over a Unix socket with peer authentication and without a
+  database password. PostgreSQL catalog inspection proves that the `jaunder`
+  login role owns the database, and fresh initialization and migrations execute
+  successfully as that role. The stack assigns no PostgreSQL listener,
+  authentication, or global policy; although pinned NixOS retains a localhost
+  TCP listener when `enableTCPIP = false`, stack-only configuration adds no
+  non-loopback listener, host HBA rule, firewall opening, or other network
+  exposure, and composes without replacing an unrelated database or role
+  declared by another module.
 - Module evaluation rejects an enabled stack without its application host name
   and rejects an unknown database choice.
 - Evaluation or runtime inspection proves the effective initial retention of 31
@@ -117,8 +126,12 @@ building block for custom deployments.
   defaults represented by an omitted command-line argument.
 - Documentation shows the minimal and stack imports, the required declaration,
   database selection, local access to each built-in web UI, optional
-  authenticated observability-host configuration, password-hash generation,
-  native retention overrides, and the VictoriaTraces upgrade caveat.
+  authenticated observability-host configuration, the exact `[A-Za-z0-9._-]+`
+  Basic Auth username grammar, password-hash generation on a trusted admin
+  machine with a compatible Caddy binary on `PATH`, plaintext and
+  offline-guessing guidance, literal-Nix-string hash storage, native retention
+  overrides, telemetry persistence and backup boundaries, and the VictoriaTraces
+  upgrade caveat.
 
 ## Boundaries
 

@@ -17,6 +17,107 @@ Additional configuration is performed via the web interface or CLI. Jaunder does
 not implement HTTPS directly, expecting to run behind a reverse proxy for TLS
 termination.
 
+### NixOS deployment stack
+
+For a supported single-host production composition, import
+`nixosModules.jaunder-stack` and declare its application host:
+
+```nix
+{
+  imports = [ inputs.jaunder.nixosModules.jaunder-stack ];
+
+  services.jaunder.stack = {
+    enable = true;
+    hostName = "jaunder.example.com";
+    database = "sqlite"; # or "postgresql" for the host's local instance
+  };
+}
+```
+
+The stack makes Caddy the only public listener on ports 80 and 443, with
+automatic HTTPS for the application host. It runs production-mode Jaunder, the
+OpenTelemetry Collector, VictoriaMetrics, VictoriaLogs, and VictoriaTraces. The
+collector and all Victoria services, including their built-in UIs, remain
+loopback-only. The collector sends metrics, logs, and traces directly to the
+native `/metrics`, `/logs`, and `/traces` ingestion prefixes over loopback; this
+traffic never traverses Caddy.
+
+The default loopback UIs are:
+
+- VictoriaMetrics: `http://127.0.0.1:8428/metrics/`
+- VictoriaLogs: `http://127.0.0.1:9428/logs/`
+- VictoriaTraces: `http://127.0.0.1:10428/traces/`
+
+For remote operator access without publishing those UIs, forward all three ports
+from a trusted admin machine, then use the same `127.0.0.1` URLs locally:
+
+```bash
+ssh -L 8428:127.0.0.1:8428 -L 9428:127.0.0.1:9428 -L 10428:127.0.0.1:10428 operator@example-host
+```
+
+#### Optional HTTPS observability host and Basic Auth
+
+An optional distinct HTTPS operator host publishes only the three prefixed
+observability routes. Configure both Basic Auth fields when setting it. The
+username must match the exact ASCII grammar `[A-Za-z0-9._-]+`:
+
+```nix
+services.jaunder.stack.observability.hostName = "observe.example.com";
+services.jaunder.stack.observability.basicAuth.username = "operator";
+services.jaunder.stack.observability.basicAuth.passwordHash = "$2b$..."; # bcrypt, or an $argon2id$... hash
+```
+
+`passwordHash` is a literal evaluated Nix string embedded in generated Caddy
+configuration and the Nix store; it is not a runtime-file secret. Protect the
+plaintext while generating the hash, use a strong password because an exposed
+hash permits offline guessing, and store only the generated hash in host Nix
+configuration.
+
+Before running either command below, ensure a compatible Caddy binary is
+installed and available on `PATH` on a trusted admin machine. Generate the hash
+interactively so the plaintext does not appear in the command line or shell
+history, then unset it:
+
+```bash
+read -rs -p 'Password: ' password; printf '\n'; printf '%s' "$password" | caddy hash-password --algorithm bcrypt; unset password
+read -rs -p 'Password: ' password; printf '\n'; printf '%s' "$password" | caddy hash-password --algorithm argon2id; unset password
+```
+
+With the host configured, use `https://observe.example.com/metrics/`,
+`https://observe.example.com/logs/`, and `https://observe.example.com/traces/`.
+Caddy authenticates before proxying; collector ingestion continues directly over
+loopback and carries no Basic Auth.
+
+#### Database, retention, persistence, and maturity
+
+The database choice defaults to SQLite. PostgreSQL mode additively enables the
+host's ordinary PostgreSQL service and ensures the `jaunder` role and database.
+Jaunder connects as the `jaunder` system user through the peer-authenticated
+`/run/postgresql` Unix socket. The stack chooses no package and assigns no
+PostgreSQL listener, authentication, or global policy. On the pinned NixOS
+module, `enableTCPIP = false` still retains a localhost TCP listener; the stack
+adds no non-loopback listener, host HBA rule, firewall opening, or other network
+exposure. Keep existing PostgreSQL package, listener, HBA, and global-policy
+declarations in their owning host configuration.
+
+Use native service options for retention rather than stack options, for example:
+
+```nix
+services.victoriametrics.retentionPeriod = "14d";
+services.victorialogs.extraOptions = [ "-retentionPeriod=14d" ];
+services.victoriatraces.retentionPeriod = "30d";
+```
+
+The initial native retention is 31 days for metrics and 7 days for logs and
+traces. Victoria data is persistent operational evidence, not Jaunder
+application data: `jaunder backup` and `jaunder restore` neither include nor
+recover it. Back up the telemetry stores separately if their retained evidence
+is required.
+
+VictoriaTraces is upstream work in progress. This stack supports fresh
+deployment and same-version restart, not compatible on-disk upgrades or stable
+third-party query APIs.
+
 ## Interfaces
 
 - **CLI**: Administrative tasks (setup, backup/restore, configuration).
