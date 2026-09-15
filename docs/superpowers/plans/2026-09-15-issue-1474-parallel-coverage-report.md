@@ -26,6 +26,12 @@ measurement-only.
 - Build state: one warm-up, then two accepted observations per treatment
 - Census: 4,941 expected = 4,941 executed + 0 ignored; zero missing and zero
   duplicate identities in every observation
+- Checked evidence:
+  [`2026-09-15-issue-1474-local-coverage-evidence.json`](2026-09-15-issue-1474-local-coverage-evidence.json)
+  records every accepted observation's stage/worker/resource timings and the
+  complete slice, hash, and backend worker assignments against their reconciled
+  union. Its source is the retained 36,453,742-byte benchmark manifest with
+  SHA-256 `ce7df19a2f99820969f51f37722cec05515fe708e31639fa1c02a2a901816357`.
 
 ### CI
 
@@ -70,6 +76,35 @@ CRAP digest
 executable-source membership, exclusions, and passing verdict. Raw positive hit
 counts varied between rounds; boolean line-hit normalization removed that
 harmless repetition-count difference.
+
+## Experimental cache boundary
+
+Revision `84841873be4e5f9e50936bdd2d4e5064a9a7ce09` generated the inventory from
+Nix output metadata rather than a name search. Its sole upload-eligible output
+was `packages.x86_64-linux.coverage-support`. The complete protected final set
+was:
+
+- `checks.x86_64-linux.coverage`
+- `checks.x86_64-linux.coverage-gate`
+- `checks.x86_64-linux.elisp-coverage-producer`
+- `checks.x86_64-linux.e2e`
+- `checks.x86_64-linux.e2e-{sqlite,postgres}-{chromium,firefox}`
+- `packages.x86_64-linux.e2e-checks`
+- `packages.x86_64-linux.e2e-{sqlite,postgres}-{chromium,firefox}-single-worker`
+- `packages.x86_64-linux.wasm-coverage-{chromium,firefox}`
+
+The automated probe built the eligible support output, examined both its runtime
+and derivation closures, required the pinned Rust toolchain, `cargo-llvm-cov`,
+and `cargo-nextest` inputs, rejected every final output from those closures,
+verified every final derivation disabled substitution and preferred local build,
+and perturbed the relevant source/configuration inputs to prove invalidation. CI
+run
+[34942852876](https://github.com/jaunder-org/jaunder/actions/runs/34942852876)
+executed that probe at the experiment revision: the `Validation coverage` job's
+`Coverage source-drift probe (#241)` step passed after 480 seconds. The separate
+measurement run then observed one cold miss and two substitutions of the same
+support output. The final rejected state removes this experimental support
+boundary and restores the broad production exclusion filter.
 
 ## CI timing results
 

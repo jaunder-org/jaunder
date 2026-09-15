@@ -391,18 +391,9 @@ fn observation_name(entry: &ScheduleEntry) -> String {
     format!(
         "{:02}-{}-{}",
         entry.ordinal,
-        strategy_name(entry.strategy),
+        entry.strategy.as_str(),
         concurrency_name(entry.concurrency)
     )
-}
-
-fn strategy_name(strategy: ExperimentStrategy) -> &'static str {
-    match strategy {
-        ExperimentStrategy::Baseline => "baseline",
-        ExperimentStrategy::Slice => "slice",
-        ExperimentStrategy::Hash => "hash",
-        ExperimentStrategy::Backend => "backend",
-    }
 }
 
 fn concurrency_name(policy: ConcurrencyPolicy) -> &'static str {
@@ -616,7 +607,7 @@ fn run_emit(
     command.args([&tools.devtool, "coverage", "emit", "--out"]);
     command.arg(output);
     if let Some(strategy) = strategy {
-        command.args(["--experiment", strategy_name(strategy)]);
+        command.args(["--experiment", strategy.as_str()]);
     }
     if let Some(concurrency) = concurrency {
         command.args(["--concurrency", concurrency]);

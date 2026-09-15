@@ -663,12 +663,10 @@ fn experiment_workers(
     backend_identities: Option<&[(String, String)]>,
     archive: &Path,
 ) -> Result<Vec<ExperimentWorker>> {
-    let strategy_name = match strategy {
-        ExperimentStrategy::Slice => "slice",
-        ExperimentStrategy::Hash => "hash",
-        ExperimentStrategy::Backend => "backend",
-        ExperimentStrategy::Baseline => bail!("baseline has no partition workers"),
-    };
+    if strategy == ExperimentStrategy::Baseline {
+        bail!("baseline has no partition workers");
+    }
+    let strategy_name = strategy.as_str();
     let workspace_root = std::env::current_dir()?;
     let profile_root = workspace_root.join("target");
     let extract_root = workspace_root.join("target/coverage-experiment-extract");

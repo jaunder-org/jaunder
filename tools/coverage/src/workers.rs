@@ -22,14 +22,21 @@ pub enum ExperimentStrategy {
     Backend,
 }
 
-impl fmt::Display for ExperimentStrategy {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
+impl ExperimentStrategy {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
             Self::Baseline => "baseline",
             Self::Slice => "slice",
             Self::Hash => "hash",
             Self::Backend => "backend",
-        })
+        }
+    }
+}
+
+impl fmt::Display for ExperimentStrategy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
