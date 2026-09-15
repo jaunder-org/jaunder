@@ -2,8 +2,9 @@ use anyhow::{Result, anyhow};
 
 use super::decide::Progress;
 use super::gh::ApiError;
+use super::invocation::{GitFacts, Invocation};
 use super::snapshot::PrSource;
-use super::{Event, GitFacts, Invocation, Outcome, PrNumber, PrReport, land, snapshot, watch};
+use super::{Event, Outcome, PrNumber, PrReport, land, snapshot, watch};
 use crate::result::{CommandResult, StepResult};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,6 +111,8 @@ pub fn execute_with<S: PrSource, A: land::PrArmer, C: watch::Clock>(
                     detail: Some(e.detail()),
                     pointer: None,
                     events: Vec::new(),
+                    shared_failure: None,
+                    subject_failure: None,
                 }),
             };
         }
@@ -173,6 +176,8 @@ pub fn execute_with<S: PrSource, A: land::PrArmer, C: watch::Clock>(
                     )),
                     pointer: None,
                     events: Vec::new(),
+                    shared_failure: None,
+                    subject_failure: None,
                 });
             }
         };
@@ -419,6 +424,8 @@ mod tests {
             phase: None,
             detail: None,
             pointer: None,
+            shared_failure: None,
+            subject_failure: None,
             events: vec![Event {
                 at: "2026-07-30T14:02:11Z".into(),
                 kind: EventKind::Phase,

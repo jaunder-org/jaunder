@@ -1,5 +1,7 @@
 use serde::{Serialize, Serializer};
 
+use super::{SharedFailure, SubjectFailure};
+
 /// A pull request number. A newtype because it is threaded through every layer and
 /// is transposable with the other bare integers around it (queue position, run id).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,5 +133,37 @@ pub struct PrReport {
     /// the merge-group run that ejected the PR.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pointer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shared_failure: Option<SharedFailure>,
+    #[serde(skip)]
+    pub subject_failure: Option<SubjectFailure>,
     pub events: Vec<Event>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pr::SubjectFailure;
+
+    #[test]
+    fn internal_subject_failure_never_serializes() {
+        let report = PrReport {
+            outcome: Outcome::ChecksFailed,
+            pr: 1499,
+            head_sha: "head".into(),
+            phase: None,
+            detail: None,
+            pointer: None,
+            shared_failure: None,
+            subject_failure: Some(SubjectFailure {
+                workflow_run_id: 1,
+                check_run_id: 2,
+                name: "Validate".into(),
+            }),
+            events: Vec::new(),
+        };
+        let value = serde_json::to_value(report).unwrap();
+        assert!(value.get("subject_failure").is_none());
+        assert!(value.get("shared_failure").is_none());
+    }
 }

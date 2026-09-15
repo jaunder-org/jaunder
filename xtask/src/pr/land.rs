@@ -141,6 +141,8 @@ fn report(
         detail,
         pointer,
         events,
+        shared_failure: None,
+        subject_failure: None,
     }
 }
 
@@ -242,6 +244,7 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
         outcome,
         detail,
         pointer,
+        subject_failure,
     } = step
     {
         push(
@@ -251,7 +254,9 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
             EventKind::Terminal,
             outcome.as_str().into(),
         );
-        return report(subject, snap.head_sha, outcome, detail, pointer, events);
+        let mut report = report(subject, snap.head_sha, outcome, detail, pointer, events);
+        report.subject_failure = subject_failure;
+        return report;
     }
 
     // Arm, then verify against GitHub's own state. `gh pr merge` reports success
@@ -382,6 +387,7 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
             outcome,
             detail,
             pointer,
+            subject_failure,
         } = after_step
         {
             push(
@@ -391,7 +397,9 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
                 EventKind::Terminal,
                 outcome.as_str().into(),
             );
-            return report(subject, head_sha, outcome, detail, pointer, events);
+            let mut report = report(subject, head_sha, outcome, detail, pointer, events);
+            report.subject_failure = subject_failure;
+            return report;
         }
     }
 

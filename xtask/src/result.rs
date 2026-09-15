@@ -823,6 +823,8 @@ mod tests {
             detail: detail.map(str::to_string),
             pointer: pointer.map(str::to_string),
             events: Vec::new(),
+            shared_failure: None,
+            subject_failure: None,
         };
 
         let ready = render_pr_summary(&report(
