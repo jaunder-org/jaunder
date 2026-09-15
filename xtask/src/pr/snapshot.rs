@@ -548,7 +548,7 @@ impl SharedFailureEvidenceSource for GhSource {
             &not_before,
             deadline,
             |args| gh::run_gh_deadline(args, deadline),
-            |args| gh::run_gh_raw_deadline(args, deadline),
+            |args, max_bytes| gh::run_gh_raw_deadline(args, deadline, max_bytes),
         )
     }
 }
@@ -563,7 +563,7 @@ fn collect_shared_failure_evidence_with(
     not_before: &str,
     deadline: &gh::Deadline,
     mut json: impl FnMut(&[&str]) -> Result<Value, ApiError>,
-    mut raw: impl FnMut(&[&str]) -> Result<Vec<u8>, ApiError>,
+    mut raw: impl FnMut(&[&str], usize) -> Result<Vec<u8>, ApiError>,
 ) -> Result<SharedFailureEvidence, ApiError> {
     deadline.check()?;
     let slug = format!("{}/{}", subject.owner, subject.repo);
@@ -571,16 +571,39 @@ fn collect_shared_failure_evidence_with(
         "/repos/{slug}/actions/runs/{}/jobs?filter=latest&per_page=100",
         failure.workflow_run_id
     );
+    let mut subject_jobs = Vec::new();
+    let mut page = 1;
+    loop {
+        deadline.check()?;
+        let path = format!("{subject_jobs_path}&page={page}");
+        let value = json(&["api", &path])?;
+        let jobs = required_array(&value, "jobs")?;
+        let complete = jobs.len() < 100;
+        subject_jobs.extend(jobs.iter().cloned());
+        if complete {
+            break;
+        }
+        page += 1;
+    }
     let subject_job = find_job_for_check(
-        &json(&["api", &subject_jobs_path])?,
+        &Value::Object(serde_json::Map::from_iter([(
+            "jobs".to_owned(),
+            Value::Array(subject_jobs),
+        )])),
         failure.check_run_id,
         deadline,
     )?;
     deadline.check()?;
     let subject_log_path = format!("/repos/{slug}/actions/jobs/{}/logs", subject_job.id);
     let mut log_bytes = 0;
-    let subject_log =
-        decode_evidence_log(raw(&["api", &subject_log_path])?, &mut log_bytes, deadline)?;
+    let subject_log = decode_evidence_log(
+        raw(
+            &["api", &subject_log_path],
+            MAX_LOG_EVIDENCE_BYTES - log_bytes,
+        )?,
+        &mut log_bytes,
+        deadline,
+    )?;
 
     let mut eligible_heads = Vec::new();
     let mut page = 1;
@@ -604,15 +627,32 @@ fn collect_shared_failure_evidence_with(
     deadline.check()?;
     let main_path = format!("/repos/{slug}/commits/main");
     deadline.check()?;
+    let main_sha = required_string(&json(&["api", &main_path])?, "sha")?;
+    if !is_canonical_sha(&main_sha) {
+        return Err(ApiError::Malformed("main commit has malformed SHA".into()));
+    }
     eligible_heads.push(EligibleHead {
-        sha: required_string(&json(&["api", &main_path])?, "sha")?,
+        sha: main_sha,
         source: SharedFailureSource::Main,
     });
     deadline.check()?;
 
     let runs_path =
         format!("/repos/{slug}/actions/workflows/ci.yml/runs?created=>={not_before}&per_page=50");
-    let runs = parse_candidate_runs(&json(&["api", &runs_path])?, deadline)?;
+    let mut runs = Vec::new();
+    let mut page = 1;
+    loop {
+        deadline.check()?;
+        let path = format!("{runs_path}&page={page}");
+        let value = json(&["api", &path])?;
+        let parsed = parse_candidate_runs(&value, deadline)?;
+        let complete = parsed.len() < 50;
+        runs.extend(parsed);
+        if complete {
+            break;
+        }
+        page += 1;
+    }
     deadline.check()?;
     let selected_runs = select_runs(runs, &eligible_heads, failure.workflow_run_id, not_before);
     deadline.check()?;
@@ -623,13 +663,30 @@ fn collect_shared_failure_evidence_with(
             "/repos/{slug}/actions/runs/{}/jobs?filter=latest&per_page=100",
             selected.run.id
         );
-        let failed = parse_failed_jobs(&json(&["api", &jobs_path])?, deadline)?;
+        let mut failed = Vec::new();
+        let mut page = 1;
+        loop {
+            deadline.check()?;
+            let path = format!("{jobs_path}&page={page}");
+            let value = json(&["api", &path])?;
+            let parsed = parse_failed_jobs(&value, deadline)?;
+            let complete = required_array(&value, "jobs")?.len() < 100;
+            failed.extend(parsed);
+            if complete {
+                break;
+            }
+            page += 1;
+        }
         deadline.check()?;
         let mut with_logs = Vec::with_capacity(failed.len());
         for job in failed {
             deadline.check()?;
             let logs_path = format!("/repos/{slug}/actions/jobs/{}/logs", job.id);
-            let log = decode_evidence_log(raw(&["api", &logs_path])?, &mut log_bytes, deadline)?;
+            let log = decode_evidence_log(
+                raw(&["api", &logs_path], MAX_LOG_EVIDENCE_BYTES - log_bytes)?,
+                &mut log_bytes,
+                deadline,
+            )?;
             with_logs.push(CandidateJob { log, ..job });
             deadline.check()?;
         }
@@ -651,11 +708,17 @@ fn parse_open_heads(value: &Value, deadline: &gh::Deadline) -> Result<Vec<Eligib
     for pull in pulls {
         deadline.check()?;
         heads.push(EligibleHead {
-            sha: pull
-                .pointer("/head/sha")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-                .ok_or_else(|| ApiError::Malformed("open PR omitted head SHA".into()))?,
+            sha: {
+                let sha = pull
+                    .pointer("/head/sha")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .ok_or_else(|| ApiError::Malformed("open PR omitted head SHA".into()))?;
+                if !is_canonical_sha(&sha) {
+                    return Err(ApiError::Malformed("open PR has malformed head SHA".into()));
+                }
+                sha
+            },
             source: SharedFailureSource::PullRequest {
                 number: required_u64(pull, "number")?,
                 url: required_string(pull, "html_url")?,
@@ -702,11 +765,23 @@ fn parse_candidate_runs(
                 ));
             }
         };
+        let head_sha = required_string(run, "head_sha")?;
+        if !is_canonical_sha(&head_sha) {
+            return Err(ApiError::Malformed(
+                "workflow run has malformed head SHA".into(),
+            ));
+        }
+        let created_at = required_string(run, "created_at")?;
+        if !is_canonical_rfc3339(&created_at) {
+            return Err(ApiError::Malformed(
+                "workflow run has malformed created_at timestamp".into(),
+            ));
+        }
         parsed.push(CandidateRun {
             id: required_u64(run, "id")?,
             url: required_string(run, "html_url")?,
-            head_sha: required_string(run, "head_sha")?,
-            created_at: required_string(run, "created_at")?,
+            head_sha,
+            created_at,
             conclusion,
         });
     }
@@ -785,6 +860,52 @@ fn required_u64(value: &Value, name: &str) -> Result<u64, ApiError> {
         .get(name)
         .and_then(Value::as_u64)
         .ok_or_else(|| ApiError::Malformed(format!("response omitted integer {name}")))
+}
+
+fn is_canonical_sha(value: &str) -> bool {
+    value.len() == 40
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn is_canonical_rfc3339(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 20
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes[10] != b'T'
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+        || bytes[19] != b'Z'
+    {
+        return false;
+    }
+    let number = |start| {
+        std::str::from_utf8(&bytes[start..start + 2])
+            .ok()?
+            .parse::<u32>()
+            .ok()
+    };
+    let Some(year) = std::str::from_utf8(&bytes[..4])
+        .ok()
+        .and_then(|year| year.parse::<u32>().ok())
+    else {
+        return false;
+    };
+    let (Some(month), Some(day), Some(hour), Some(minute), Some(second)) =
+        (number(5), number(8), number(11), number(14), number(17))
+    else {
+        return false;
+    };
+    let days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        _ => return false,
+    };
+    day >= 1 && day <= days && hour < 24 && minute < 60 && second < 60
 }
 
 fn rfc3339_24_hours_ago() -> Result<String, ApiError> {
@@ -1377,11 +1498,12 @@ mod tests {
             }]})),
             Ok(serde_json::json!([{
                 "number": 9, "html_url": "https://github.com/o/r/pull/9",
-                "head": {"sha": "other"}
+                "head": {"sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
             }])),
-            Ok(serde_json::json!({"sha": "main"})),
+            Ok(serde_json::json!({"sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"})),
             Ok(serde_json::json!({"workflow_runs": [{
-                "id": 88, "html_url": "run/88", "head_sha": "other",
+                "id": 88, "html_url": "run/88",
+                "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "created_at": "2026-09-15T00:00:00Z", "conclusion": "failure"
             }]})),
             Ok(serde_json::json!({"jobs": [
@@ -1405,7 +1527,7 @@ mod tests {
                 requests.borrow_mut().push(args.join(" "));
                 responses.borrow_mut().pop_front().expect("scripted JSON")
             },
-            |args| {
+            |args, _| {
                 raw_paths.borrow_mut().push(args.join(" "));
                 Ok(b"error: same failure".to_vec())
             },
@@ -1465,7 +1587,7 @@ mod tests {
                     "check_run_url": "https://api.github.com/repos/o/r/check-runs/99"
                 }]}))
             },
-            |_| unreachable!(),
+            |_, _| unreachable!(),
         );
         assert!(matches!(wrong_job, Err(ApiError::Malformed(_))));
 
@@ -1481,7 +1603,7 @@ mod tests {
             "2026-09-14T00:00:00Z",
             &gh::Deadline::ten_seconds(),
             |_| responses.borrow_mut().pop_front().expect("subject jobs"),
-            |_| Ok(vec![0xff]),
+            |_, _| Ok(vec![0xff]),
         );
         assert!(matches!(bad_log, Err(ApiError::Malformed(_))));
     }
@@ -1490,7 +1612,8 @@ mod tests {
         let deadline = gh::Deadline::ten_seconds();
         for conclusion in [serde_json::json!("failure"), serde_json::json!(42)] {
             let value = serde_json::json!({"workflow_runs": [{
-                "id": 88, "html_url": "run/88", "head_sha": "other",
+                "id": 88, "html_url": "run/88",
+                "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "created_at": "2026-09-15T00:00:00Z", "conclusion": conclusion
             }]});
             if value["workflow_runs"][0]["conclusion"].is_string() {
@@ -1505,7 +1628,8 @@ mod tests {
         assert!(matches!(
             parse_candidate_runs(
                 &serde_json::json!({"workflow_runs": [{
-                    "id": 88, "html_url": "run/88", "head_sha": "other",
+                    "id": 88, "html_url": "run/88",
+                    "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                     "created_at": "2026-09-15T00:00:00Z"
                 }]}),
                 &deadline
@@ -1515,8 +1639,8 @@ mod tests {
         assert!(
             parse_candidate_runs(
                 &serde_json::json!({"workflow_runs": [{
-                    "id": 88, "html_url": "run/88", "head_sha": "other",
-
+                    "id": 88, "html_url": "run/88",
+                    "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                     "created_at": "2026-09-15T00:00:00Z", "conclusion": null
                 }]}),
                 &deadline
@@ -1525,6 +1649,27 @@ mod tests {
                 .conclusion
                 .is_none()
         );
+        for (head_sha, created_at) in [
+            (
+                "Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "2026-09-15T00:00:00Z",
+            ),
+            (
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "2026-09-15T25:00:00Z",
+            ),
+        ] {
+            assert!(matches!(
+                parse_candidate_runs(
+                    &serde_json::json!({"workflow_runs": [{
+                        "id": 88, "html_url": "run/88", "head_sha": head_sha,
+                        "created_at": created_at, "conclusion": "failure"
+                    }]}),
+                    &deadline
+                ),
+                Err(ApiError::Malformed(_))
+            ));
+        }
         assert!(matches!(
             parse_failed_jobs(
                 &serde_json::json!({"jobs": [{
@@ -1560,7 +1705,7 @@ mod tests {
             "2026-09-14T00:00:00Z",
             &gh::Deadline::ten_seconds(),
             |_| Err(ApiError::GraphQlErrors("bad query".into())),
-            |_| unreachable!(),
+            |_, _| unreachable!(),
         )
         .unwrap_err();
         assert_eq!(error, ApiError::GraphQlErrors("bad query".into()));

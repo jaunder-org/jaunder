@@ -224,12 +224,19 @@ fn enrich_shared_failure<S: SharedFailureEvidenceSource>(
     let Ok(evidence) = source.shared_failure_evidence(subject, failure, &deadline) else {
         return;
     };
-    if let Ok(annotation) = super::shared_failure::shared_failure_with_deadline(
+    let mut check = || {
+        deadline
+            .check()
+            .map_err(|_| super::shared_failure::PolicyError::Cancelled)
+    };
+    let annotation = super::shared_failure::shared_failure_with_check(
         &evidence.subject_log,
         evidence.selected_runs,
         evidence.jobs,
-        &deadline,
-    ) {
+        &mut check,
+    )
+    .map_err(|_| super::gh::ApiError::Transport("shared-failure enrichment timed out".into()));
+    if let Ok(annotation) = annotation {
         report.shared_failure = annotation;
     }
 }

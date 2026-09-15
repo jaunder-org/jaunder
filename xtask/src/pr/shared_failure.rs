@@ -9,7 +9,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use super::gh::{ApiError, Deadline};
+/// Cancellation reported by an injected orchestration check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicyError {
+    Cancelled,
+}
 
 /// The selected failed Actions check, retained internally until enrichment can use it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,11 +111,15 @@ const MAX_MATCHES: usize = 10;
 
 /// Remove presentation noise while preserving all substantive error text.
 pub fn normalize_log(log: &str) -> String {
-    normalize_log_checked(log, None).expect("an unchecked normalization cannot expire")
+    let mut never_cancel = || Ok(());
+    normalize_log_checked(log, &mut never_cancel).expect("an unchecked normalization cannot expire")
 }
 
-fn normalize_log_checked(log: &str, deadline: Option<&Deadline>) -> Result<String, ApiError> {
-    let no_ansi = strip_ansi(log, deadline)?;
+fn normalize_log_checked(
+    log: &str,
+    check: &mut impl FnMut() -> Result<(), PolicyError>,
+) -> Result<String, PolicyError> {
+    let no_ansi = strip_ansi(log, check)?;
     let mut normalized = String::new();
     let mut previous_blank = false;
     for (index, line) in no_ansi
@@ -121,7 +129,7 @@ fn normalize_log_checked(log: &str, deadline: Option<&Deadline>) -> Result<Strin
         .enumerate()
     {
         if index % 64 == 0 {
-            check_deadline(deadline)?;
+            check()?;
         }
         let line = strip_actions_prefix(line).trim_end();
         let blank = line.is_empty();
@@ -134,25 +142,27 @@ fn normalize_log_checked(log: &str, deadline: Option<&Deadline>) -> Result<Strin
         normalized.push_str(line);
         previous_blank = blank;
     }
-    check_deadline(deadline)?;
+    check()?;
     Ok(normalized)
 }
 
 /// Extract the final qualifying bounded error block from an Actions log.
 pub fn extract_error_block(log: &str) -> Option<String> {
-    extract_error_block_checked(log, None).expect("an unchecked extraction cannot expire")
+    let mut never_cancel = || Ok(());
+    extract_error_block_checked(log, &mut never_cancel)
+        .expect("an unchecked extraction cannot expire")
 }
 
 fn extract_error_block_checked(
     log: &str,
-    deadline: Option<&Deadline>,
-) -> Result<Option<String>, ApiError> {
-    let normalized = normalize_log_checked(log, deadline)?;
+    check: &mut impl FnMut() -> Result<(), PolicyError>,
+) -> Result<Option<String>, PolicyError> {
+    let normalized = normalize_log_checked(log, check)?;
     let lines = normalized.lines().collect::<Vec<_>>();
     let mut anchor = None;
     for (index, line) in lines.iter().enumerate() {
         if index % 64 == 0 {
-            check_deadline(deadline)?;
+            check()?;
         }
         if is_anchor(line) {
             anchor = Some(index);
@@ -164,7 +174,7 @@ fn extract_error_block_checked(
     let mut block = vec![lines[anchor]];
     for (index, line) in lines[anchor + 1..].iter().enumerate() {
         if index % 64 == 0 {
-            check_deadline(deadline)?;
+            check()?;
         }
         let trimmed = line.trim_start_matches(|ch: char| ch.is_ascii_whitespace());
         if line.is_empty() || trimmed.starts_with("Caused by:") || starts_indented(line) {
@@ -233,28 +243,31 @@ pub fn shared_failure(
     selected_runs: impl IntoIterator<Item = SelectedRun>,
     jobs: impl IntoIterator<Item = (u64, Vec<CandidateJob>)>,
 ) -> Option<SharedFailure> {
-    shared_failure_checked(subject_log, selected_runs, jobs, None)
+    let mut never_cancel = || Ok(());
+    shared_failure_checked(subject_log, selected_runs, jobs, &mut never_cancel)
         .expect("an unchecked comparison cannot expire")
 }
 
-/// Deadline-aware counterpart to [`shared_failure`] for enrichment execution.
-pub fn shared_failure_with_deadline(
+/// Cancellation-aware counterpart to [`shared_failure`].
+///
+/// The injected callback makes this policy independent of transport and clocks.
+pub fn shared_failure_with_check(
     subject_log: &str,
     selected_runs: impl IntoIterator<Item = SelectedRun>,
     jobs: impl IntoIterator<Item = (u64, Vec<CandidateJob>)>,
-    deadline: &Deadline,
-) -> Result<Option<SharedFailure>, ApiError> {
-    shared_failure_checked(subject_log, selected_runs, jobs, Some(deadline))
+    check: &mut impl FnMut() -> Result<(), PolicyError>,
+) -> Result<Option<SharedFailure>, PolicyError> {
+    shared_failure_checked(subject_log, selected_runs, jobs, check)
 }
 
 fn shared_failure_checked(
     subject_log: &str,
     selected_runs: impl IntoIterator<Item = SelectedRun>,
     candidate_jobs: impl IntoIterator<Item = (u64, Vec<CandidateJob>)>,
-    deadline: Option<&Deadline>,
-) -> Result<Option<SharedFailure>, ApiError> {
-    check_deadline(deadline)?;
-    let Some(excerpt) = extract_error_block_checked(subject_log, deadline)? else {
+    check: &mut impl FnMut() -> Result<(), PolicyError>,
+) -> Result<Option<SharedFailure>, PolicyError> {
+    check()?;
+    let Some(excerpt) = extract_error_block_checked(subject_log, check)? else {
         return Ok(None);
     };
     let digest_sha256 = Sha256::digest(excerpt.as_bytes())
@@ -263,19 +276,18 @@ fn shared_failure_checked(
         .collect();
     let mut jobs = BTreeMap::new();
     for (run_id, run_jobs) in candidate_jobs {
-        check_deadline(deadline)?;
+        check()?;
         jobs.insert(run_id, run_jobs);
     }
     let mut matches = Vec::new();
     for selected in selected_runs {
-        check_deadline(deadline)?;
+        check()?;
         let Some(candidate_jobs) = jobs.get(&selected.run.id) else {
             continue;
         };
         for job in candidate_jobs {
-            check_deadline(deadline)?;
-            if extract_error_block_checked(&job.log, deadline)?.as_deref() != Some(excerpt.as_str())
-            {
+            check()?;
+            if extract_error_block_checked(&job.log, check)?.as_deref() != Some(excerpt.as_str()) {
                 continue;
             }
             matches.push((
@@ -297,7 +309,7 @@ fn shared_failure_checked(
             ));
         }
     }
-    check_deadline(deadline)?;
+    check()?;
     matches.sort_by(|left, right| {
         right
             .0
@@ -305,7 +317,7 @@ fn shared_failure_checked(
             .then_with(|| right.1.cmp(&left.1))
             .then_with(|| left.2.job.id.cmp(&right.2.job.id))
     });
-    check_deadline(deadline)?;
+    check()?;
     let matches = matches
         .into_iter()
         .take(MAX_MATCHES)
@@ -359,17 +371,16 @@ fn is_timestamp(value: &str) -> bool {
         })
 }
 
-fn check_deadline(deadline: Option<&Deadline>) -> Result<(), ApiError> {
-    deadline.map_or(Ok(()), Deadline::check)
-}
-
-fn strip_ansi(input: &str, deadline: Option<&Deadline>) -> Result<String, ApiError> {
+fn strip_ansi(
+    input: &str,
+    check: &mut impl FnMut() -> Result<(), PolicyError>,
+) -> Result<String, PolicyError> {
     let mut output = String::with_capacity(input.len());
     let bytes = input.as_bytes();
     let mut index = 0;
     while index < bytes.len() {
         if index % 1024 == 0 {
-            check_deadline(deadline)?;
+            check()?;
         }
         if bytes[index] != 0x1b {
             let ch = input[index..].chars().next().expect("index is in bounds");
@@ -387,7 +398,7 @@ fn strip_ansi(input: &str, deadline: Option<&Deadline>) -> Result<String, ApiErr
             b'[' => {
                 while index < bytes.len() && !(0x40..=0x7e).contains(&bytes[index]) {
                     if index % 1024 == 0 {
-                        check_deadline(deadline)?;
+                        check()?;
                     }
                     index += 1;
                 }
@@ -399,7 +410,7 @@ fn strip_ansi(input: &str, deadline: Option<&Deadline>) -> Result<String, ApiErr
                     && !(bytes[index] == 0x1b && bytes.get(index + 1) == Some(&b'\\'))
                 {
                     if index % 1024 == 0 {
-                        check_deadline(deadline)?;
+                        check()?;
                     }
                     index += 1;
                 }
@@ -414,7 +425,7 @@ fn strip_ansi(input: &str, deadline: Option<&Deadline>) -> Result<String, ApiErr
                     && !(bytes[index] == 0x1b && bytes.get(index + 1) == Some(&b'\\'))
                 {
                     if index % 1024 == 0 {
-                        check_deadline(deadline)?;
+                        check()?;
                     }
                     index += 1;
                 }
@@ -433,7 +444,7 @@ fn strip_ansi(input: &str, deadline: Option<&Deadline>) -> Result<String, ApiErr
             _ => {}
         }
     }
-    check_deadline(deadline)?;
+    check()?;
     Ok(output)
 }
 
@@ -444,7 +455,11 @@ mod tests {
     fn normalizes_cited_logs_to_the_same_complete_signature() {
         let first = "Validate (no e2e)\tValidate (static + clippy + Rust and Emacs coverage, via xtask)\t2026-09-12T18:47:55.2254816Z error: failed to download `jiff v0.2.35`\r\nValidate (no e2e)\tValidate (static + clippy + Rust and Emacs coverage, via xtask)\t2026-09-12T18:47:55.2255010Z \r\nValidate (no e2e)\tValidate (static + clippy + Rust and Emacs coverage, via xtask)\t2026-09-12T18:47:55.2255098Z Caused by:\r\nValidate (no e2e)\tValidate (static + clippy + Rust and Emacs coverage, via xtask)\t2026-09-12T18:47:55.2255381Z   attempting to make an HTTP request, but --offline was specified";
         let second = "\u{1b}[31mValidate (no e2e)\tValidate (static + clippy + Rust and Emacs coverage, via xtask)\t2026-09-12T18:49:09.002Z error: failed to download `jiff v0.2.35`\u{1b}[0m\nValidate (no e2e)\tValidate (static + clippy + Rust and Emacs coverage, via xtask)\t2026-09-12T18:49:12.400Z \nValidate (no e2e)\tValidate (static + clippy + Rust and Emacs coverage, via xtask)\t2026-09-12T18:49:13.100Z Caused by:\nValidate (no e2e)\tValidate (static + clippy + Rust and Emacs coverage, via xtask)\t2026-09-12T18:49:15.600Z   attempting to make an HTTP request, but --offline was specified";
-        assert_eq!(extract_error_block(first), extract_error_block(second));
+        let expected = Some(
+            "error: failed to download `jiff v0.2.35`\n\nCaused by:\n  attempting to make an HTTP request, but --offline was specified",
+        );
+        assert_eq!(extract_error_block(first).as_deref(), expected);
+        assert_eq!(extract_error_block(second).as_deref(), expected);
     }
     #[test]
     fn normalization_removes_osc_hyperlinks_and_other_escape_families() {
@@ -567,10 +582,21 @@ mod tests {
             selected[0].run.id, 3,
             "a green latest completed run supersedes an older failure"
         );
+        let subject_run = CandidateRun {
+            id: 5,
+            url: String::new(),
+            head_sha: "a".into(),
+            created_at: "2026-09-15T01:00:00Z".into(),
+            conclusion: Some("failure".into()),
+        };
+        assert!(
+            select_runs([subject_run], &eligible, 5, "").is_empty(),
+            "the subject run cannot be reused as comparison evidence"
+        );
         assert!(
             select_runs(
                 [CandidateRun {
-                    id: 5,
+                    id: 6,
                     url: String::new(),
                     head_sha: "a".into(),
                     created_at: "2026-09-14T00:00:00Z".into(),
@@ -597,41 +623,143 @@ mod tests {
             },
             source: SharedFailureSource::Main,
         };
-        let selected = vec![
-            run(2, "2026-09-15T02:00:00Z"),
-            run(1, "2026-09-15T01:00:00Z"),
-        ];
         let matching = "error: preserved /a/v1/id\n  cause";
-        let jobs = vec![
-            (
-                2,
-                (0..11)
-                    .map(|id| CandidateJob {
-                        id,
-                        name: "job".into(),
+        let annotation = shared_failure(
+            matching,
+            [
+                run(2, "2026-09-15T02:00:00Z"),
+                run(4, "2026-09-15T01:00:00Z"),
+                run(3, "2026-09-15T01:00:00Z"),
+            ],
+            vec![
+                (
+                    2,
+                    (0..11)
+                        .map(|id| CandidateJob {
+                            id,
+                            name: "job".into(),
+                            url: String::new(),
+                            log: matching.into(),
+                        })
+                        .collect(),
+                ),
+                (
+                    4,
+                    vec![CandidateJob {
+                        id: 99,
+                        name: "different".into(),
                         url: String::new(),
                         log: matching.into(),
-                    })
-                    .collect(),
-            ),
-            (
-                1,
-                vec![CandidateJob {
-                    id: 99,
-                    name: "different".into(),
-                    url: String::new(),
-                    log: "error: preserved /a/v2/id\n  cause".into(),
-                }],
-            ),
-        ];
-        let annotation = shared_failure(matching, selected, jobs).unwrap();
+                    }],
+                ),
+                (
+                    3,
+                    vec![
+                        CandidateJob {
+                            id: 3,
+                            name: "preserved-value-non-match".into(),
+                            url: String::new(),
+                            log: "error: preserved /a/v2/id\n  cause".into(),
+                        },
+                        CandidateJob {
+                            id: 2,
+                            name: "tie-breaker".into(),
+                            url: String::new(),
+                            log: matching.into(),
+                        },
+                    ],
+                ),
+            ],
+        )
+        .unwrap();
         assert_eq!(annotation.matches.len(), 10);
-        assert_eq!(annotation.matches.first().unwrap().job.id, 0);
+        assert_eq!(
+            annotation
+                .matches
+                .iter()
+                .map(|matched| (matched.run.id, matched.job.id))
+                .collect::<Vec<_>>(),
+            vec![
+                (2, 0),
+                (2, 1),
+                (2, 2),
+                (2, 3),
+                (2, 4),
+                (2, 5),
+                (2, 6),
+                (2, 7),
+                (2, 8),
+                (2, 9)
+            ],
+            "created_at desc, numeric run id desc, job id asc, then cap"
+        );
         assert!(
             annotation
                 .digest_sha256
                 .chars()
                 .all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase())
+        );
+    }
+
+    #[test]
+    fn orders_matches_by_timestamp_then_run_then_job_id() {
+        let selected = [2, 4, 3].map(|id| SelectedRun {
+            run: CandidateRun {
+                id,
+                url: String::new(),
+                head_sha: String::new(),
+                created_at: if id == 2 {
+                    "2026-09-15T02:00:00Z"
+                } else {
+                    "2026-09-15T01:00:00Z"
+                }
+                .into(),
+                conclusion: Some("failure".into()),
+            },
+            source: SharedFailureSource::Main,
+        });
+        let matching = "error: same\n  cause";
+        let annotation = shared_failure(
+            matching,
+            selected,
+            [
+                (
+                    2,
+                    vec![CandidateJob {
+                        id: 9,
+                        name: String::new(),
+                        url: String::new(),
+                        log: matching.into(),
+                    }],
+                ),
+                (
+                    4,
+                    vec![CandidateJob {
+                        id: 8,
+                        name: String::new(),
+                        url: String::new(),
+                        log: matching.into(),
+                    }],
+                ),
+                (
+                    3,
+                    vec![CandidateJob {
+                        id: 7,
+                        name: String::new(),
+                        url: String::new(),
+                        log: matching.into(),
+                    }],
+                ),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            annotation
+                .matches
+                .iter()
+                .map(|matched| (matched.run.id, matched.job.id))
+                .collect::<Vec<_>>(),
+            vec![(2, 9), (4, 8), (3, 7)]
         );
     }
 }

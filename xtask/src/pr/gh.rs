@@ -6,14 +6,14 @@
 //! a pure function over `(exit, stdout, stderr)` and the subprocess wrapper around it
 //! is five lines. That split is what lets every transport failure be tested offline.
 
+use processkit::Command as ProcessCommand;
+use processkit::OutputBufferPolicy;
+use serde_json::Value;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-
-use processkit::Command as ProcessCommand;
-use serde_json::Value;
 
 #[derive(Debug, Clone)]
 pub struct GitError {
@@ -104,8 +104,8 @@ impl ApiError {
 #[derive(Debug)]
 pub struct Deadline(Instant);
 
+const MAX_CAPTURE_LINES: usize = 10_000;
 const MAX_JSON_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
-
 impl Deadline {
     pub fn ten_seconds() -> Self {
         Self(Instant::now() + Duration::from_secs(10))
@@ -253,6 +253,7 @@ fn spawn_deadline_program(
     program: &str,
     args: &[&str],
     deadline: &Deadline,
+    max_bytes: usize,
 ) -> Result<(i32, Vec<u8>, String), ApiError> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -264,6 +265,9 @@ fn spawn_deadline_program(
             ProcessCommand::new(program)
                 .args(args)
                 .timeout(remaining)
+                .output_buffer(
+                    OutputBufferPolicy::fail_loud(MAX_CAPTURE_LINES).with_max_bytes(max_bytes),
+                )
                 .output_bytes(),
         )
         .map_err(|error| {
@@ -283,8 +287,12 @@ fn spawn_deadline_program(
     Ok((code, output.into_stdout(), stderr))
 }
 
-fn spawn_deadline(args: &[&str], deadline: &Deadline) -> Result<(i32, Vec<u8>, String), ApiError> {
-    spawn_deadline_program("gh", args, deadline)
+fn spawn_deadline(
+    args: &[&str],
+    deadline: &Deadline,
+    max_bytes: usize,
+) -> Result<(i32, Vec<u8>, String), ApiError> {
+    spawn_deadline_program("gh", args, deadline, max_bytes)
 }
 /// Run `gh` with a complete stdin payload and hand its outputs to [`classify`].
 pub fn run_gh_stdin(args: &[&str], stdin: &str) -> Result<Value, ApiError> {
@@ -334,7 +342,7 @@ pub fn run_gh(args: &[&str]) -> Result<Value, ApiError> {
 
 /// A deadline-bound JSON-producing `gh api` call for best-effort enrichment.
 pub fn run_gh_deadline(args: &[&str], deadline: &Deadline) -> Result<Value, ApiError> {
-    let (exit, stdout, stderr) = spawn_deadline(args, deadline)?;
+    let (exit, stdout, stderr) = spawn_deadline(args, deadline, MAX_JSON_RESPONSE_BYTES)?;
     parse_deadline_json(exit, stdout, &stderr, deadline)
 }
 
@@ -359,8 +367,12 @@ fn parse_deadline_json(
 }
 
 /// A deadline-bound raw `gh api` call for Actions logs.
-pub fn run_gh_raw_deadline(args: &[&str], deadline: &Deadline) -> Result<Vec<u8>, ApiError> {
-    let (exit, stdout, stderr) = spawn_deadline(args, deadline)?;
+pub fn run_gh_raw_deadline(
+    args: &[&str],
+    deadline: &Deadline,
+    max_bytes: usize,
+) -> Result<Vec<u8>, ApiError> {
+    let (exit, stdout, stderr) = spawn_deadline(args, deadline, max_bytes)?;
     if exit == 0 {
         deadline.check()?;
         return Ok(stdout);
@@ -627,6 +639,7 @@ mod tests {
             Ok((0, "sensitive malformed body".to_owned(), String::new()))
         });
     }
+
     #[cfg(unix)]
     #[test]
     fn deadline_reaps_a_blocking_child_tree() {
@@ -638,6 +651,7 @@ mod tests {
             "sh",
             &["-c", script, "sh", &pid_file_arg],
             &Deadline::after(Duration::from_millis(50)),
+            MAX_JSON_RESPONSE_BYTES,
         );
         assert!(
             matches!(result, Err(ApiError::Transport(message)) if message.contains("timed out"))
