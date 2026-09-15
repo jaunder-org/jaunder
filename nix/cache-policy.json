@@ -5,7 +5,11 @@
     { "attr": "checks.x86_64-linux.coverage-gate", "classification": "final" },
     {
       "attr": "checks.x86_64-linux.coverage-source-probe",
-      "classification": "support"
+      "classification": "support",
+      "sourceProbe": {
+        "relevant": "server/src/lib.rs",
+        "unrelated": "xtask/src/main.rs"
+      }
     },
     {
       "attr": "checks.x86_64-linux.e2e",
@@ -35,23 +39,43 @@
     },
     {
       "attr": "packages.x86_64-linux.e2e-postgres-chromium-driver",
-      "classification": "support"
+      "classification": "support",
+      "sourceProbe": {
+        "relevant": "end2end/tests/fixtures.ts",
+        "unrelated": "docs/README.md"
+      }
     },
     {
       "attr": "packages.x86_64-linux.e2e-postgres-chromium-single-worker-driver",
-      "classification": "support"
+      "classification": "support",
+      "sourceProbe": {
+        "relevant": "end2end/tests/fixtures.ts",
+        "unrelated": "docs/README.md"
+      }
     },
     {
       "attr": "packages.x86_64-linux.e2e-postgres-firefox-driver",
-      "classification": "support"
+      "classification": "support",
+      "sourceProbe": {
+        "relevant": "end2end/tests/fixtures.ts",
+        "unrelated": "docs/README.md"
+      }
     },
     {
       "attr": "packages.x86_64-linux.e2e-postgres-firefox-single-worker-driver",
-      "classification": "support"
+      "classification": "support",
+      "sourceProbe": {
+        "relevant": "end2end/tests/fixtures.ts",
+        "unrelated": "docs/README.md"
+      }
     },
     {
       "attr": "packages.x86_64-linux.e2e-npm-deps",
-      "classification": "support"
+      "classification": "support",
+      "sourceProbe": {
+        "relevant": "end2end/package-lock.json",
+        "unrelated": "docs/README.md"
+      }
     },
     {
       "attr": "packages.x86_64-linux.e2e-postgres-chromium-single-worker",
@@ -71,20 +95,43 @@
     },
     {
       "attr": "packages.x86_64-linux.e2e-sqlite-firefox-single-worker-driver",
-      "classification": "support"
+      "classification": "support",
+      "sourceProbe": {
+        "relevant": "end2end/tests/fixtures.ts",
+        "unrelated": "docs/README.md"
+      }
     },
     {
       "attr": "packages.x86_64-linux.e2e-sqlite-firefox-driver",
-      "classification": "support"
+      "classification": "support",
+      "sourceProbe": {
+        "relevant": "end2end/tests/fixtures.ts",
+        "unrelated": "docs/README.md"
+      }
     },
     {
       "attr": "packages.x86_64-linux.e2e-sqlite-chromium-single-worker-driver",
-      "classification": "support"
+      "classification": "support",
+      "sourceProbe": {
+        "relevant": "end2end/tests/fixtures.ts",
+        "unrelated": "docs/README.md"
+      }
     },
     {
       "attr": "packages.x86_64-linux.e2e-sqlite-chromium-driver",
-      "classification": "support"
+      "classification": "support",
+      "sourceProbe": {
+        "relevant": "end2end/tests/fixtures.ts",
+        "unrelated": "docs/README.md"
+      }
     },
-    { "attr": "packages.x86_64-linux.e2e-support", "classification": "support" }
+    {
+      "attr": "packages.x86_64-linux.e2e-support",
+      "classification": "support",
+      "sourceProbe": {
+        "relevant": "end2end/tests/fixtures.ts",
+        "unrelated": "docs/README.md"
+      }
+    }
   ]
 }

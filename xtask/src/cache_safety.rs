@@ -1,21 +1,27 @@
 //! Fail-closed structural proof for the coverage and e2e cache boundary.
 //!
-//! The catalog is deliberately checked against a Nix-derived inventory. Names
-//! identify the population, but closure membership is the safety evidence.
+//! The versioned catalog is the only classification authority. It is reconciled
+//! with Nix's derived inventory, validates Cachix's actual store-name filter,
+//! and carries the paired source probes for every admitted support output.
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
-use std::process::Command;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
+use regex::Regex;
 use serde::Deserialize;
 
+use crate::git;
 use crate::result::StepResult;
 
 const POLICY_PATH: &str = "nix/cache-policy.json";
 const CI_SETUP_PATH: &str = ".github/actions/setup-ci/action.yml";
 const INVENTORY_ATTR: &str = "packages.x86_64-linux.cache-safety-inventory";
+const WORKTREE_DIR: &str = ".xtask/cache-safety-source-probe.worktree";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,6 +37,14 @@ struct PolicyOutput {
     classification: Classification,
     #[serde(default)]
     equivalent_to: Option<String>,
+    #[serde(default)]
+    source_probe: Option<SourceProbe>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+struct SourceProbe {
+    relevant: String,
+    unrelated: String,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
@@ -56,6 +70,22 @@ fn parse_policy(raw: &str) -> Result<Policy> {
     for output in &policy.outputs {
         if output.attr.is_empty() || !attrs.insert(&output.attr) {
             bail!("cache policy has an empty or duplicate output attr");
+        }
+        match (&output.classification, &output.source_probe) {
+            (Classification::Support, Some(probe))
+                if !probe.relevant.is_empty()
+                    && !probe.unrelated.is_empty()
+                    && probe.relevant != probe.unrelated => {}
+            (Classification::Support, _) => {
+                bail!(
+                    "support output {} needs distinct sourceProbe paths",
+                    output.attr
+                );
+            }
+            (Classification::Final, None) => {}
+            (Classification::Final, Some(_)) => {
+                bail!("final output {} must not define a sourceProbe", output.attr);
+            }
         }
         if let Some(equivalent) = &output.equivalent_to
             && (equivalent.is_empty() || equivalent == &output.attr)
@@ -150,24 +180,35 @@ fn build_inventory() -> Result<NixInventory> {
     serde_json::from_str(&raw).context("parsing Nix cache-safety inventory")
 }
 
-fn eval_path(attr: &str, field: &str) -> Result<String> {
-    let output = run(
-        "nix",
-        &[
+fn eval_path_in(dir: Option<&Path>, attr: &str, field: &str) -> Result<String> {
+    let mut command = Command::new("nix");
+    if let Some(dir) = dir {
+        command.current_dir(dir);
+    }
+    let output = command
+        .args([
             "eval",
             "--raw",
             "--accept-flake-config",
-            &format!(".#{attr}.{field}"),
-        ],
-    )?;
-    let path = output.trim();
+            &format!(".#{}.{field}", attr),
+        ])
+        .output()
+        .with_context(|| format!("spawning nix eval for {attr}.{field}"))?;
+    if !output.status.success() {
+        bail!(
+            "nix eval for {attr}.{field} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let path = String::from_utf8(output.stdout).context("Nix eval output was not UTF-8")?;
+    let path = path.trim();
     if !path.starts_with("/nix/store/") {
         bail!("{attr}.{field} did not evaluate to a store path: {path:?}");
     }
     Ok(path.to_owned())
 }
 
-fn broad_filter_fragments(raw: &str) -> Result<Vec<&str>> {
+fn push_filter(raw: &str) -> Result<Regex> {
     let filter = raw
         .lines()
         .map(str::trim)
@@ -177,35 +218,33 @@ fn broad_filter_fragments(raw: &str) -> Result<Vec<&str>> {
         .strip_prefix('"')
         .and_then(|filter| filter.strip_suffix('"'))
         .context("Cachix pushFilter must be a double-quoted literal")?;
-    let fragments = filter.split('|').collect::<Vec<_>>();
-    if fragments.is_empty()
-        || fragments.iter().any(|fragment| {
-            fragment.is_empty()
-                || !fragment
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-        })
-    {
-        bail!("Cachix pushFilter must contain nonempty ASCII literal fragments");
-    }
-    Ok(fragments)
+    // The action receives the YAML-decoded scalar. This compact parser accepts
+    // the only escape used by the checked-in double-quoted literal, so probe
+    // matching has the same regex that Cachix receives rather than YAML text.
+    let filter = filter.replace("\\\\", "\\");
+    Regex::new(&filter).context("Cachix pushFilter must be a valid regular expression")
 }
 
-fn verify_broad_filter_membership(
+/// Cachix applies `pushFilter` to actual store paths, not flake attribute names.
+/// The candidate admits only cataloged support identities and rejects every final
+/// identity, including both output and derivation paths.
+fn verify_filter_membership(
     resolved: &[(PolicyOutput, String, String)],
-    fragments: &[&str],
+    filter: &Regex,
 ) -> Result<()> {
     for (output, out_path, drv_path) in resolved {
         for identity in [out_path, drv_path] {
-            if !fragments.iter().any(|fragment| identity.contains(fragment)) {
-                bail!(
-                    "{} is cataloged as {} but its evaluated identity is not excluded by the current Cachix pushFilter: {identity}",
-                    output.attr,
-                    match output.classification {
-                        Classification::Support => "support",
-                        Classification::Final => "final",
-                    }
-                );
+            let matched = filter.is_match(identity);
+            match output.classification {
+                Classification::Support if matched => bail!(
+                    "{} is cataloged support but Cachix pushFilter excludes its actual identity: {identity}",
+                    output.attr
+                ),
+                Classification::Final if !matched => bail!(
+                    "{} is cataloged final but Cachix pushFilter admits its actual identity: {identity}",
+                    output.attr
+                ),
+                _ => {}
             }
         }
     }
@@ -238,6 +277,110 @@ fn reject_final_membership(
     Ok(())
 }
 
+fn git_run(dir: &Path, args: &[&str]) -> Result<()> {
+    let mut full = vec!["-c", "core.hooksPath="];
+    full.extend_from_slice(args);
+    git::run(dir, &full)
+}
+
+struct WorktreeGuard {
+    repo_root: PathBuf,
+    path: PathBuf,
+}
+
+impl Drop for WorktreeGuard {
+    fn drop(&mut self) {
+        let _ = git::at(&self.repo_root)
+            .args(["-c", "core.hooksPath=", "worktree", "remove", "--force"])
+            .arg(&self.path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
+fn dirty_probe_tree(dir: &Path) -> Result<()> {
+    let readme = dir.join("README.md");
+    let mut bytes =
+        fs::read(&readme).context("reading README.md to dirty source probe worktree")?;
+    bytes.push(b'\n');
+    fs::write(readme, bytes).context("dirtying source probe worktree")
+}
+
+fn stage_change(dir: &Path, path: &str) -> Result<()> {
+    OpenOptions::new()
+        .append(true)
+        .open(dir.join(path))
+        .with_context(|| format!("opening {path} for cache-safety source probe"))?
+        .write_all(b"\n")
+        .with_context(|| format!("changing {path} for cache-safety source probe"))?;
+    git_run(dir, &["add", path])
+}
+
+fn source_identity(dir: &Path, attr: &str) -> Result<String> {
+    eval_path_in(Some(dir), attr, "drvPath")
+}
+
+fn verify_source_probes(policy: &Policy) -> Result<()> {
+    let repo_root = std::env::current_dir().context("resolving cwd")?;
+    let path = repo_root.join(WORKTREE_DIR);
+    fs::create_dir_all(repo_root.join(".xtask")).context("creating .xtask")?;
+    let _ = git::at(&repo_root)
+        .args(["-c", "core.hooksPath=", "worktree", "remove", "--force"])
+        .arg(&path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    let path_str = path
+        .to_str()
+        .context("source probe worktree path is not UTF-8")?;
+    git_run(
+        &repo_root,
+        &["worktree", "add", "--detach", path_str, "HEAD"],
+    )?;
+    let _guard = WorktreeGuard {
+        repo_root,
+        path: path.clone(),
+    };
+
+    for output in policy
+        .outputs
+        .iter()
+        .filter(|output| output.classification == Classification::Support)
+    {
+        let probe = output
+            .source_probe
+            .as_ref()
+            .with_context(|| format!("{} has no validated sourceProbe", output.attr))?;
+        dirty_probe_tree(&path)?;
+        let base = source_identity(&path, &output.attr)?;
+
+        stage_change(&path, &probe.relevant)?;
+        let relevant = source_identity(&path, &output.attr)?;
+        if relevant == base {
+            bail!(
+                "{}: relevant source {} did not change derivation identity {base}",
+                output.attr,
+                probe.relevant
+            );
+        }
+
+        git_run(&path, &["reset", "--hard", "HEAD"])?;
+        dirty_probe_tree(&path)?;
+        stage_change(&path, &probe.unrelated)?;
+        let unrelated = source_identity(&path, &output.attr)?;
+        if unrelated != base {
+            bail!(
+                "{}: unrelated source {} changed derivation identity {base} -> {unrelated}",
+                output.attr,
+                probe.unrelated
+            );
+        }
+        git_run(&path, &["reset", "--hard", "HEAD"])?;
+    }
+    Ok(())
+}
+
 fn verify(policy: &Policy) -> Result<()> {
     let inventory = build_inventory()?;
     reconcile(policy, &inventory)?;
@@ -245,23 +388,22 @@ fn verify(policy: &Policy) -> Result<()> {
     for output in &policy.outputs {
         resolved.push((
             output.clone(),
-            eval_path(&output.attr, "outPath")?,
-            eval_path(&output.attr, "drvPath")?,
+            eval_path_in(None, &output.attr, "outPath")?,
+            eval_path_in(None, &output.attr, "drvPath")?,
         ));
     }
     let ci_setup =
         fs::read_to_string(CI_SETUP_PATH).context("reading .github/actions/setup-ci/action.yml")?;
-    let broad_filter = broad_filter_fragments(&ci_setup)?;
-    verify_broad_filter_membership(&resolved, &broad_filter)?;
+    verify_filter_membership(&resolved, &push_filter(&ci_setup)?)?;
     let finals = resolved
         .iter()
         .filter(|(output, _, _)| output.classification == Classification::Final)
         .map(|(output, out, drv)| (output.attr.clone(), out.clone(), drv.clone()))
         .collect::<Vec<_>>();
-    for (output, out_path, drv_path) in resolved {
+    for (output, out_path, drv_path) in &resolved {
         if output.classification == Classification::Support {
             // Realize support only. Final verdicts are never built just to inspect
-            // their closure; their evaluated identities are enough to reject them.
+            // their closure; evaluated final identities reject closure leakage.
             run(
                 "nix",
                 &[
@@ -271,11 +413,11 @@ fn verify(policy: &Policy) -> Result<()> {
                     &format!(".#{}", output.attr),
                 ],
             )?;
-            reject_final_membership(&closure(&out_path, false)?, &finals)?;
-            reject_final_membership(&closure(&drv_path, true)?, &finals)?;
+            reject_final_membership(&closure(out_path, false)?, &finals)?;
+            reject_final_membership(&closure(drv_path, true)?, &finals)?;
         }
     }
-    Ok(())
+    verify_source_probes(policy)
 }
 
 pub fn probe() -> StepResult {
@@ -287,7 +429,7 @@ pub fn probe() -> StepResult {
     })();
     match result {
         Ok(()) => StepResult::ok("cache-safety-probe").detail(
-            "all admitted support closures exclude every final and lifted coverage/e2e output",
+            "cataloged support closures exclude finals, Cachix admits only support identities, and paired source probes hold",
         ),
         Err(error) => StepResult::fail("cache-safety-probe").detail(format!("{error:#}")),
     }
@@ -296,6 +438,13 @@ pub fn probe() -> StepResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn support_probe() -> Option<SourceProbe> {
+        Some(SourceProbe {
+            relevant: "relevant".into(),
+            unrelated: "unrelated".into(),
+        })
+    }
 
     fn policy(outputs: &[(&str, Classification)]) -> Policy {
         Policy {
@@ -306,6 +455,9 @@ mod tests {
                     attr: (*attr).into(),
                     classification: classification.clone(),
                     equivalent_to: None,
+                    source_probe: (classification == &Classification::Support)
+                        .then(support_probe)
+                        .flatten(),
                 })
                 .collect(),
         }
@@ -364,6 +516,17 @@ mod tests {
     }
 
     #[test]
+    fn rejects_support_without_paired_source_probe() {
+        assert!(
+            parse_policy(
+                r#"{"schemaVersion":1,"outputs":[{"attr":"support","classification":"support"}]}"#
+            )
+            .is_err()
+        );
+        assert!(parse_policy(r#"{"schemaVersion":1,"outputs":[{"attr":"final","classification":"final","sourceProbe":{"relevant":"a","unrelated":"b"}}]}"#).is_err());
+    }
+
+    #[test]
     fn rejects_one_way_or_mismatched_lifted_equivalents() {
         let mut one_way = policy(&[
             ("check", Classification::Final),
@@ -375,51 +538,69 @@ mod tests {
             outputs: vec!["check".into(), "package".into()],
         };
         assert!(reconcile(&one_way, &inventory).is_err());
-
         let mut mismatched = one_way;
         mismatched.outputs[1].equivalent_to = Some("another-final".into());
         assert!(reconcile(&mismatched, &inventory).is_err());
     }
 
     #[test]
-    fn accepts_actual_filter_matched_support_and_final_identities() {
-        let filter =
-            broad_filter_fragments(include_str!("../../.github/actions/setup-ci/action.yml"))
-                .unwrap();
+    fn admits_only_actual_cataloged_support_identities() {
+        let filter = Regex::new(
+            r"(?:^|/)[0-9a-z]{32}-jaunder-coverage(?:\.drv)?$|(?:^|/)[0-9a-z]{32}-jaunder-e2e-(?:checks|sqlite-chromium)(?:\.drv)?$",
+        )
+        .unwrap();
         let resolved = vec![
             (
                 PolicyOutput {
                     attr: "packages.e2e-support".into(),
                     classification: Classification::Support,
                     equivalent_to: None,
+                    source_probe: support_probe(),
                 },
-                "/nix/store/support-jaunder-e2e".into(),
-                "/nix/store/support-jaunder-e2e.drv".into(),
+                "/nix/store/0123456789abcdefghijklmnopqrstuv-jaunder-e2e".into(),
+                "/nix/store/0123456789abcdefghijklmnopqrstuv-jaunder-e2e.drv".into(),
             ),
             (
                 PolicyOutput {
                     attr: "checks.coverage".into(),
                     classification: Classification::Final,
                     equivalent_to: None,
+                    source_probe: None,
                 },
-                "/nix/store/final-jaunder-coverage".into(),
-                "/nix/store/final-jaunder-coverage.drv".into(),
+                "/nix/store/0123456789abcdefghijklmnopqrstuv-jaunder-coverage".into(),
+                "/nix/store/0123456789abcdefghijklmnopqrstuv-jaunder-coverage.drv".into(),
             ),
         ];
-        assert!(verify_broad_filter_membership(&resolved, &filter).is_ok());
+        assert!(verify_filter_membership(&resolved, &filter).is_ok());
     }
 
     #[test]
-    fn rejects_attr_spelling_when_actual_identity_escapes_filter() {
+    fn rejects_actual_final_identity_that_escapes_filter() {
+        let resolved = vec![(
+            PolicyOutput {
+                attr: "checks.coverage".into(),
+                classification: Classification::Final,
+                equivalent_to: None,
+                source_probe: None,
+            },
+            "/nix/store/0123456789abcdefghijklmnopqrstuv-jaunder-coverage".into(),
+            "/nix/store/0123456789abcdefghijklmnopqrstuv-jaunder-coverage.drv".into(),
+        )];
+        assert!(verify_filter_membership(&resolved, &Regex::new("jaunder-e2e").unwrap()).is_err());
+    }
+
+    #[test]
+    fn rejects_actual_support_identity_that_filter_excludes() {
         let resolved = vec![(
             PolicyOutput {
                 attr: "packages.e2e-support".into(),
                 classification: Classification::Support,
                 equivalent_to: None,
+                source_probe: support_probe(),
             },
-            "/nix/store/innocuous-support".into(),
-            "/nix/store/innocuous-support.drv".into(),
+            "/nix/store/0123456789abcdefghijklmnopqrstuv-jaunder-e2e".into(),
+            "/nix/store/0123456789abcdefghijklmnopqrstuv-jaunder-e2e.drv".into(),
         )];
-        assert!(verify_broad_filter_membership(&resolved, &["jaunder-e2e"]).is_err());
+        assert!(verify_filter_membership(&resolved, &Regex::new("jaunder-e2e").unwrap()).is_err());
     }
 }

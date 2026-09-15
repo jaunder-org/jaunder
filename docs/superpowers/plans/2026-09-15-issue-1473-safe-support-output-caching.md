@@ -43,7 +43,7 @@ Out:
     arms; an exhaustive assertion derived from `nix/cache-policy.json` rejects
     every classified final output, aggregate, and lifted equivalent.
 
-- [ ] Task 2: Apply and guard the candidate cache boundary
+- [x] Task 2: Apply and guard the candidate cache boundary
   - Contract: policy generation or validation consumes the exact
     `nix/cache-policy.json` schema and successful
     `cargo xtask cache-safety probe` verdict from Task 1; no second
