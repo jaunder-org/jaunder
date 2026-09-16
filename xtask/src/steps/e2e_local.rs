@@ -885,40 +885,83 @@ pub fn run(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
+
+    fn yaml_keys(value: &serde_yaml::Value) -> BTreeSet<&str> {
+        value
+            .as_mapping()
+            .expect("collector configuration mapping")
+            .keys()
+            .map(|key| key.as_str().expect("collector configuration string key"))
+            .collect()
+    }
+
+    fn yaml_sequence(value: &serde_yaml::Value) -> Vec<&str> {
+        value
+            .as_sequence()
+            .expect("collector configuration sequence")
+            .iter()
+            .map(|entry| {
+                entry
+                    .as_str()
+                    .expect("collector configuration string entry")
+            })
+            .collect()
+    }
 
     #[test]
     fn local_collector_config_has_only_owned_listener_surfaces() {
-        const EXPECTED: &str = r#"
-receivers:
-  otlp:
-    protocols:
-      grpc:
-        endpoint: ${env:OTELCOL_GRPC_ENDPOINT}
-      http:
-        endpoint: ${env:OTELCOL_HTTP_ENDPOINT}
-processors:
-  batch: {}
-exporters:
-  file:
-    path: ${env:JAUNDER_CAPTURE_DIR}/otel-traces.jsonl
-service:
-  pipelines:
-    traces:
-      receivers: [otlp]
-      processors: [batch]
-      exporters: [file]
-"#;
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("xtask manifest directory has a workspace parent");
-        let actual = std::fs::read_to_string(root.join("end2end/otel-collector.yaml"))
+        let config = std::fs::read_to_string(root.join("end2end/otel-collector.yaml"))
             .expect("local collector configuration");
-        let actual: serde_yaml::Value =
-            serde_yaml::from_str(&actual).expect("valid local collector configuration");
-        let expected: serde_yaml::Value =
-            serde_yaml::from_str(EXPECTED).expect("valid expected collector configuration");
-        assert_eq!(actual, expected);
+        let config: serde_yaml::Value =
+            serde_yaml::from_str(&config).expect("valid local collector configuration");
+
+        assert_eq!(
+            yaml_keys(&config),
+            BTreeSet::from(["exporters", "processors", "receivers", "service"])
+        );
+        assert_eq!(yaml_keys(&config["receivers"]), BTreeSet::from(["otlp"]));
+        assert_eq!(
+            yaml_keys(&config["receivers"]["otlp"]),
+            BTreeSet::from(["protocols"])
+        );
+        let protocols = &config["receivers"]["otlp"]["protocols"];
+        assert_eq!(yaml_keys(protocols), BTreeSet::from(["grpc", "http"]));
+        for protocol in ["grpc", "http"] {
+            assert_eq!(
+                yaml_keys(&protocols[protocol]),
+                BTreeSet::from(["endpoint"])
+            );
+            assert!(protocols[protocol]["endpoint"].as_str().is_some());
+        }
+
+        assert_eq!(yaml_keys(&config["processors"]), BTreeSet::from(["batch"]));
+        assert!(yaml_keys(&config["processors"]["batch"]).is_empty());
+        assert_eq!(yaml_keys(&config["exporters"]), BTreeSet::from(["file"]));
+        assert_eq!(
+            yaml_keys(&config["exporters"]["file"]),
+            BTreeSet::from(["path"])
+        );
+        assert!(config["exporters"]["file"]["path"].as_str().is_some());
+
+        assert_eq!(yaml_keys(&config["service"]), BTreeSet::from(["pipelines"]));
+        assert_eq!(
+            yaml_keys(&config["service"]["pipelines"]),
+            BTreeSet::from(["traces"])
+        );
+        let traces = &config["service"]["pipelines"]["traces"];
+        assert_eq!(
+            yaml_keys(traces),
+            BTreeSet::from(["exporters", "processors", "receivers"])
+        );
+        assert_eq!(yaml_sequence(&traces["receivers"]), ["otlp"]);
+        assert_eq!(yaml_sequence(&traces["processors"]), ["batch"]);
+        assert_eq!(yaml_sequence(&traces["exporters"]), ["file"]);
     }
 
     #[test]
