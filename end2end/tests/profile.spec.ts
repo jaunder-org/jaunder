@@ -2,6 +2,7 @@ import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import { failServerFn, goto, signInAsNewUser } from "./helpers";
 import { navigateInApp } from "./navigate";
+import { applySeededSession, seedUserViaTool } from "./seed";
 import { SEL } from "./selectors";
 
 // The profile "Update Profile" control is a plain button that dispatches the
@@ -24,6 +25,22 @@ test("Settings navigates to profile", async ({ registeredPage }) => {
     ready: UPDATE_BUTTON,
   });
   await expect(page.locator(UPDATE_BUTTON)).toBeVisible();
+});
+
+test("Profile presents Username as a read-only field", async ({ page }) => {
+  const session = await seedUserViaTool(
+    "profile-readonly",
+    "profile-password123",
+  );
+  await applySeededSession(page.context(), session);
+  await goto(page, "/profile");
+
+  const username = page.getByLabel("Username");
+  await expect(username).toHaveValue(session.username);
+  await expect(username).toBeEnabled();
+  await expect(username).not.toBeEditable();
+  await expect(username).toHaveAttribute("readonly", "");
+  await expect(page.getByText("Your display name and bio.")).toHaveCount(0);
 });
 
 const APP_LINK = 'a[href="/app"]';
