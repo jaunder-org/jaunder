@@ -82,20 +82,27 @@ Every server action result must render as a single styled paragraph.
 
 ## 4. Forms
 
-Forms hang off a `ServerAction::<T>::new()` plus an `ActionForm`.
+Forms use either `ActionForm` or a typed direct-dispatch action, according to
+what their wire contract requires. Presentation is shared across both paths.
 
+- Use `ValidatedInput` / `ValidatedTextarea` where a field parses into a domain
+  type. Their defaults supply the standard `j-form-field`, `j-form-label`,
+  `j-form-help`, and `j-form-input` presentation.
+- A hand-wired control uses the same structure: `j-form-field` on its wrapping
+  label, `j-form-label` on the visible label, `j-form-input` on text inputs,
+  selects, and textareas, and `j-form-help` for explanatory text. Add
+  `j-form-toggle` to a `j-form-field` for a checkbox-and-label row.
+- Layout classes may place those fields in a grid, inline row, table, or editor
+  toolbar. They do not replace the standard label typography or control chrome;
+  combine a layout modifier such as `j-backup-field-wide` with `j-form-field`.
+- Compact contextual actions do not need card chrome. A card form uses
+  `j-card-head`, `j-form-body`, and `j-form-actions`; only its field arrangement
+  may need a purpose-specific body layout such as `j-backup-form-body`.
 - Bind any controlled input through an `RwSignal` (`prop:value`, `on:input`).
   See `auth.rs` for the canonical lowercase-username pattern.
 - Every submit button gets a `j-btn` class (and `is-primary` for the primary
   action of the form). Plain `<button type="submit">"Save"</button>` is the
   legacy style.
-- Group label + input as `<label>"Field" <input … /></label>` — short fields can
-  stay inline, longer ones break onto their own lines via the `j-backup-field`
-  pattern in `backup.rs`.
-- Card-style settings pages should follow `backup.rs`: an
-  `<ActionForm attr:class="j-card j-…-form">` containing
-  `<div class="j-card-head"><h2>…</h2></div>` and a
-  `<div class="j-…-form-actions">` footer.
 
 ## 5. Buttons
 

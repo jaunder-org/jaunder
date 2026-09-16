@@ -171,7 +171,7 @@ fn InviteCreateOutcome(action: ServerAction<Create>) -> impl IntoView {
                             .get()
                             .map(|args| args.request.recipient_email.to_string())
                             .unwrap_or_default();
-                        view! { <p class="j-form-note">"Invitation emailed to " {to} "."</p> }
+                        view! { <p class="success">"Invitation emailed to " {to} "."</p> }
                             .into_any()
                     }
                     Ok(MutationOutcome::CommitIndeterminate(())) => {

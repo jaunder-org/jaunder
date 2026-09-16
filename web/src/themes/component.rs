@@ -32,10 +32,7 @@ pub fn ThemesPage() -> impl IntoView {
     view! {
         <Topbar title="Themes" sub="Public presentation packages" />
         <div class="j-page j-themes-page" data-theme-management="studio">
-            <section
-                class="j-card j-theme-authoring-guidance"
-                aria-labelledby="theme-authoring-guidance-heading"
-            >
+            <section class="j-card" aria-labelledby="theme-authoring-guidance-heading">
                 <h2 id="theme-authoring-guidance-heading">"Author themes from a repository"</h2>
                 <p class="j-sub">
                     "Keep your theme source, preview, and release artifacts together, then use Jaunder to validate and package them."
@@ -120,7 +117,7 @@ fn scope_card(
     scope: RwSignal<OwnershipScope>,
 ) -> impl IntoView {
     view! {
-        <section class="j-card j-theme-scope" aria-labelledby="theme-scope-heading">
+        <section class="j-card" aria-labelledby="theme-scope-heading">
             <div class="j-card-head">
                 <div>
                     <h2 id="theme-scope-heading">"Catalog scope"</h2>
@@ -423,7 +420,7 @@ fn catalog_content(
             None => view! { <p class="j-loading">"Loading catalog…"</p> }.into_any(),
             Some(Ok(entries)) if entries.is_empty() => {
                 view! {
-                    <p class="j-theme-catalog-empty">
+                    <p>
                         "No themes in this catalog yet. Create a draft or import a package to start authoring."
                     </p>
                 }
@@ -497,7 +494,7 @@ fn ThemeSelection(
         });
     };
     view! {
-        <div class="j-theme-selection">
+        <div>
             <label class="j-form-field">
                 <span class="j-form-label">"Public selection"</span>
                 <select class="j-form-input" prop:value=selected_token on:change=change>

@@ -26,7 +26,7 @@ pub fn SmtpSettingsPage() -> impl IntoView {
     view! {
         <Topbar title="SMTP Relay" sub="Operations" />
         <div class="j-scroll">
-            <div class="j-settings j-site-settings">
+            <div class="j-settings">
                 <Suspense fallback=|| {
                     view! { <p class="j-loading j-settings-loading">"Loading\u{2026}"</p> }
                 }>
@@ -51,7 +51,7 @@ pub fn SmtpSettingsPage() -> impl IntoView {
                             ) {
                                 mutation_feedback::MutationFeedback::Confirmed(()) => {
                                     view! {
-                                        <p class="j-settings-saved" role="status">
+                                        <p class="success" role="status" data-settings-saved>
                                             "SMTP settings saved. Restart Jaunder through its service manager to apply them."
                                         </p>
                                     }
@@ -130,25 +130,12 @@ fn assemble_request(state: SmtpFormState, draft: SmtpUpdateDraft) -> Option<Upda
 
 fn smtp_relay_fields(state: SmtpFormState, initial_tls_mode: SmtpTlsMode) -> impl IntoView {
     view! {
-        <ValidatedInput<SmtpHost>
-            label="Relay Host"
-            name="host"
-            field=state.host
-            field_class="j-site-field j-site-field-wide"
-            class="j-site-input"
-        />
-        <ValidatedInput<SmtpPort>
-            label="Port"
-            name="port"
-            input_type="number"
-            field=state.port
-            field_class="j-site-field"
-            class="j-site-input"
-        />
-        <label class="j-site-field">
+        <ValidatedInput<SmtpHost> label="Relay Host" name="host" field=state.host />
+        <ValidatedInput<SmtpPort> label="Port" name="port" input_type="number" field=state.port />
+        <label class="j-form-field">
             <span class="j-form-label">"TLS Mode"</span>
             <select
-                class="j-site-input"
+                class="j-form-input"
                 name="tls_mode"
                 prop:disabled=move || !state.enabled.get()
                 on:change=move |event| {
@@ -172,8 +159,6 @@ fn smtp_relay_fields(state: SmtpFormState, initial_tls_mode: SmtpTlsMode) -> imp
             label="Sender Mailbox"
             name="sender"
             field=state.sender
-            field_class="j-site-field j-site-field-wide"
-            class="j-site-input"
             help="An email address, optionally with a display name."
         />
     }
@@ -185,7 +170,7 @@ fn smtp_authentication_fields(
     password_input: NodeRef<html::Input>,
 ) -> impl IntoView {
     view! {
-        <label class="j-site-field j-site-field-wide">
+        <label class="j-form-field j-form-toggle">
             <input
                 type="checkbox"
                 name="authentication_enabled"
@@ -201,18 +186,12 @@ fn smtp_authentication_fields(
             />
             <span class="j-form-label">"Use authentication"</span>
         </label>
-        <ValidatedInput<SmtpUsername>
-            label="Username"
-            name="username"
-            field=state.username
-            field_class="j-site-field j-site-field-wide"
-            class="j-site-input"
-        />
-        <label class="j-site-field j-site-field-wide">
+        <ValidatedInput<SmtpUsername> label="Username" name="username" field=state.username />
+        <label class="j-form-field">
             <span class="j-form-label">"Password"</span>
             <input
                 node_ref=password_input
-                class="j-site-input"
+                class="j-form-input"
                 type="password"
                 name="password"
                 autocomplete="new-password"
@@ -261,15 +240,15 @@ fn smtp_settings_form(
     };
 
     view! {
-        <form class="j-card j-site-form" on:submit=submit>
+        <form class="j-card" on:submit=submit>
             <div class="j-card-head">
                 <div>
                     <h2>"SMTP Relay"</h2>
                     <div class="j-sub">"Configure the outbound relay used for Jaunder email."</div>
                 </div>
             </div>
-            <div class="j-site-form-body">
-                <label class="j-site-field j-site-field-wide">
+            <div class="j-form-body">
+                <label class="j-form-field j-form-toggle">
                     <input
                         type="checkbox"
                         name="enabled"
@@ -288,7 +267,7 @@ fn smtp_settings_form(
                 {smtp_relay_fields(state, initial_tls_mode)}
                 {smtp_authentication_fields(state, password_error, password_input)}
             </div>
-            <div class="j-site-form-actions">
+            <div class="j-form-actions">
                 <button
                     type="submit"
                     class="j-btn is-primary"

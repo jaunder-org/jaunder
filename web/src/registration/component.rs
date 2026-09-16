@@ -20,9 +20,11 @@ use leptos::prelude::*;
 fn InviteLinkRequired() -> impl IntoView {
     view! {
         <div class="j-card">
-            <p class="j-form-note">
-                "You need an invitation link to register. Please use the link from your invitation email."
-            </p>
+            <div class="j-form-body">
+                <p>
+                    "You need an invitation link to register. Please use the link from your invitation email."
+                </p>
+            </div>
         </div>
     }
 }
@@ -164,7 +166,7 @@ fn RegistrationForm(
                 />
                 {show_invite_note
                     .then(|| {
-                        view! { <p class="j-form-note">"Registering with your invitation."</p> }
+                        view! { <p class="j-form-help">"Registering with your invitation."</p> }
                     })}
             </div>
             <div class="j-form-actions">
