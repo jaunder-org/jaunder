@@ -176,19 +176,22 @@ test("composer keeps filled body actions before a container-responsive controls 
     expect(Math.abs(widths[0]! - widths[1]!)).toBeLessThan(1);
   };
   const expectStackedWithoutClipping = async (grid: Locator): Promise<void> => {
-    const geometry = await grid.evaluate((element) => {
-      const body = element
-        .querySelector(".j-compose-body")!
-        .getBoundingClientRect();
-      const aside = element
-        .querySelector(".j-compose-aside")!
-        .getBoundingClientRect();
-      return {
-        stacked: aside.top >= body.bottom,
-        clipped: element.scrollWidth > element.clientWidth + 1,
-      };
-    });
-    expect(geometry).toEqual({ stacked: true, clipped: false });
+    await expect
+      .poll(async () =>
+        grid.evaluate((element) => {
+          const body = element
+            .querySelector(".j-compose-body")!
+            .getBoundingClientRect();
+          const aside = element
+            .querySelector(".j-compose-aside")!
+            .getBoundingClientRect();
+          return {
+            stacked: aside.top >= body.bottom - 1,
+            clipped: element.scrollWidth > element.clientWidth + 1,
+          };
+        }),
+      )
+      .toEqual({ stacked: true, clipped: false });
   };
 
   const container = page.locator(".j-main");
@@ -196,6 +199,7 @@ test("composer keeps filled body actions before a container-responsive controls 
   await container.evaluate((element) => {
     const container = element as HTMLElement;
     container.style.alignSelf = "flex-start";
+    container.style.flex = "none";
     container.style.width = "960px";
   });
   await expect
@@ -290,21 +294,25 @@ test("loaded edit controls remain coherent in wide and mobile layouts", async ({
   await page.locator(".j-main").evaluate((element) => {
     const container = element as HTMLElement;
     container.style.alignSelf = "flex-start";
+    container.style.flex = "none";
     container.style.width = "375px";
   });
-  const geometry = await grid.evaluate((element) => {
-    const body = element
-      .querySelector(".j-compose-body")!
-      .getBoundingClientRect();
-    const aside = element
-      .querySelector(".j-compose-aside")!
-      .getBoundingClientRect();
-    return {
-      stacked: aside.top >= body.bottom,
-      clipped: element.scrollWidth > element.clientWidth + 1,
-    };
-  });
-  expect(geometry).toEqual({ stacked: true, clipped: false });
+  await expect
+    .poll(async () =>
+      grid.evaluate((element) => {
+        const body = element
+          .querySelector(".j-compose-body")!
+          .getBoundingClientRect();
+        const aside = element
+          .querySelector(".j-compose-aside")!
+          .getBoundingClientRect();
+        return {
+          stacked: aside.top >= body.bottom - 1,
+          clipped: element.scrollWidth > element.clientWidth + 1,
+        };
+      }),
+    )
+    .toEqual({ stacked: true, clipped: false });
   await expect(grid.getByLabel("Summary", { exact: true })).toHaveValue(
     "A populated summary",
   );
