@@ -345,6 +345,7 @@ fn EditPostForm(
     action: ServerAction<posts::Update>,
 ) -> impl IntoView {
     let creation_schedule = CreationSchedule::new();
+    creation_schedule.restore_committed(&state.publish_at.get());
     // The body/field gate also waits for a real named-audience load. Repeating
     // the pure guard in the callback prevents a direct invocation from
     // dispatching while Loading or Failed.
@@ -381,6 +382,7 @@ fn EditPostForm(
                     state=state
                     actions=ComposerActions::Save {
                         publication: loaded_publication,
+                        scheduled: creation_schedule.scheduled(),
                         disabled: save_disabled,
                         unpublish_disabled,
                         on_save: dispatch_update,

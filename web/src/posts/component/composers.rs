@@ -115,6 +115,7 @@ pub fn ComposerFields(
 pub(super) enum ComposerActions {
     Save {
         publication: LoadedPublication,
+        scheduled: RwSignal<bool>,
         disabled: Signal<bool>,
         unpublish_disabled: Signal<bool>,
         on_save: Callback<bool>,
@@ -151,10 +152,17 @@ pub(super) fn ComposerCore(
             />
             <div class="j-composer-toolbar">
                 {match actions {
-                    ComposerActions::Save { publication, disabled, unpublish_disabled, on_save } => {
+                    ComposerActions::Save {
+                        publication,
+                        scheduled,
+                        disabled,
+                        unpublish_disabled,
+                        on_save,
+                    } => {
                         view! {
                             <PostSaveActions
                                 publication=publication
+                                scheduled=scheduled
                                 disabled=disabled
                                 unpublish_disabled=unpublish_disabled
                                 on_save=on_save
@@ -304,15 +312,23 @@ impl CreationSchedule {
         }
     }
 
-    fn restore_committed(self, committed: &str) {
+    pub(super) fn restore_committed(self, committed: &str) {
         let (date, time) = committed.split_once('T').unwrap_or(("", ""));
         self.date.set(date.to_owned());
         self.time.set(time.to_owned());
+        self.scheduled.set(
+            time::strict_utc_instant_from_local(committed)
+                .is_some_and(|instant| instant.value() > UtcInstant::now().value()),
+        );
         self.error.set(None);
     }
 
     pub(super) fn is_editing(self) -> bool {
         self.disclosed.get()
+    }
+
+    pub(super) fn scheduled(self) -> RwSignal<bool> {
+        self.scheduled
     }
 }
 
@@ -633,6 +649,8 @@ fn DraftSaveButton(disabled: Signal<bool>, on_save: Callback<bool>) -> impl Into
 pub(super) fn PostSaveActions(
     /// Publication state that selects the Draft or published controls.
     publication: LoadedPublication,
+    /// Whether a Draft's committed optional time is in the future.
+    scheduled: RwSignal<bool>,
     /// Whether Save is blocked by invalid form or publication-time state.
     disabled: Signal<bool>,
     /// Whether Unpublish is blocked by invalid persisted fields. Publication-time
@@ -654,7 +672,7 @@ pub(super) fn PostSaveActions(
                     prop:disabled=move || disabled.get()
                     on:click=move |_| on_save.run(true)
                 >
-                    "Publish"
+                    {move || if scheduled.get() { "Schedule" } else { "Publish" }}
                 </button>
             }
                 .into_any()
