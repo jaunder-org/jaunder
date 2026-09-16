@@ -493,12 +493,7 @@ pub fn InlineComposer(on_publish: Callback<()>) -> impl IntoView {
         use leptos_dom::helpers::set_timeout;
         use std::time::Duration;
         let url = created.post.permalink.to_string();
-        let msg = match created.publication {
-            CreatePublication::Draft => "Draft saved!".to_string(),
-            CreatePublication::Published | CreatePublication::Scheduled => {
-                "Post published!".to_string()
-            }
-        };
+        let msg = posts::creation_success_message(created.publication).to_owned();
         flash.set(Some((url, msg)));
         set_timeout(move || flash.set(None), Duration::from_secs(30));
     });

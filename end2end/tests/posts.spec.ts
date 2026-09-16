@@ -1513,6 +1513,23 @@ test("inline composer: publish flash is a link to the post permalink", async ({
   expect(href).toMatch(/^\/~[^/]+\//);
 });
 
+test("inline composer: scheduled flash reports the scheduled outcome", async ({
+  registeredPage,
+}) => {
+  const page = await registeredPage("/app");
+  await waitForSelector(page, ".j-composer");
+
+  await page.fill('.j-composer textarea[name="body"]', "Scheduled flash test");
+  await applyPublicationTime(page, "2999-01-01T09:00");
+  await expect(page.locator(SEL.publishButton("true"))).toHaveText("Schedule");
+  await click(page, '.j-composer button[name="publish"][value="true"]');
+  await waitForSelector(page, ".j-composer p.success a");
+
+  await expect(page.locator(".j-composer p.success a")).toContainText(
+    "Post scheduled!",
+  );
+});
+
 test("inline composer: draft flash links to the draft's canonical permalink", async ({
   registeredPage,
 }) => {

@@ -65,7 +65,8 @@ pub use page_state::{
 pub use compose_state::{ComposeState, PublicationIntent, publication_from_local, submit_gate};
 pub use composer_media::{ComposerMedia, ComposerMediaState};
 pub use composer_presentation::{
-    CreationComposerPresentation, creation_composer_presentation, draft_primary_action_label,
+    CreationComposerPresentation, creation_composer_presentation, creation_success_message,
+    draft_primary_action_label,
 };
 pub use edit_state::{
     EditLifecycleState, EditPublicationState, InvalidSchedule, LoadedPublication,

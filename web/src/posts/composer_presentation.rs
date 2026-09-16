@@ -1,5 +1,7 @@
 //! Host-tested presentation choices for the shared creation composer.
 
+use super::api::CreatePublication;
+
 /// CSS classes selected by the creation surface's surrounding page context.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CreationComposerPresentation {
@@ -29,6 +31,16 @@ pub fn creation_composer_presentation(compact: bool) -> CreationComposerPresenta
 #[must_use]
 pub fn draft_primary_action_label(scheduled: bool) -> &'static str {
     if scheduled { "Schedule" } else { "Publish" }
+}
+
+/// Describe a confirmed creation outcome without conflating scheduling and publication.
+#[must_use]
+pub fn creation_success_message(publication: CreatePublication) -> &'static str {
+    match publication {
+        CreatePublication::Draft => "Draft saved!",
+        CreatePublication::Published => "Post published!",
+        CreatePublication::Scheduled => "Post scheduled!",
+    }
 }
 
 #[cfg(test)]
@@ -61,5 +73,21 @@ mod tests {
     fn draft_primary_action_tracks_future_schedule_classification() {
         assert_eq!(draft_primary_action_label(false), "Publish");
         assert_eq!(draft_primary_action_label(true), "Schedule");
+    }
+
+    #[test]
+    fn creation_success_messages_distinguish_every_publication_outcome() {
+        assert_eq!(
+            creation_success_message(CreatePublication::Draft),
+            "Draft saved!"
+        );
+        assert_eq!(
+            creation_success_message(CreatePublication::Published),
+            "Post published!"
+        );
+        assert_eq!(
+            creation_success_message(CreatePublication::Scheduled),
+            "Post scheduled!"
+        );
     }
 }
