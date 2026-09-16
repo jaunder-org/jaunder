@@ -205,6 +205,22 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn unexpected_trace_open_failure_retains_path_context() {
+        let capture = tempfile::tempdir().expect("capture directory");
+        let trace_path = capture.path().join("seed-trace.jsonl");
+        std::os::unix::fs::symlink(&trace_path, &trace_path).expect("self-referential symlink");
+
+        let error = verify_seed_trace(&trace_path).expect_err("a symlink loop cannot be opened");
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("opening seed trace {}", trace_path.display())),
+            "{error}"
+        );
+    }
+
     #[test]
     fn unexpected_trace_read_failure_retains_path_context() {
         let capture = tempfile::tempdir().expect("capture directory");
