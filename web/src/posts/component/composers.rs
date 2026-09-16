@@ -139,50 +139,48 @@ pub(super) fn ComposerCore(
     #[prop(optional_no_strip)] on_input: Option<Callback<()>>,
 ) -> impl IntoView {
     view! {
-        <div class="j-post-editor-panel">
-            <ComposerFields
-                body=state.body
-                format=state.format
-                rows=rows
-                placeholder=placeholder
-                field_class="j-composer-field"
-                textarea_class=textarea_class
-                show_seg=false
-                on_input=on_input
-            />
-            <div class="j-composer-toolbar">
-                {match actions {
-                    ComposerActions::Save {
-                        publication,
-                        scheduled,
-                        disabled,
-                        unpublish_disabled,
-                        on_save,
-                    } => {
-                        view! {
-                            <PostSaveActions
-                                publication=publication
-                                scheduled=scheduled
-                                disabled=disabled
-                                unpublish_disabled=unpublish_disabled
-                                on_save=on_save
-                            />
-                        }
-                            .into_any()
+        <ComposerFields
+            body=state.body
+            format=state.format
+            rows=rows
+            placeholder=placeholder
+            field_class="j-composer-field"
+            textarea_class=textarea_class
+            show_seg=false
+            on_input=on_input
+        />
+        <div class="j-composer-toolbar">
+            {match actions {
+                ComposerActions::Save {
+                    publication,
+                    scheduled,
+                    disabled,
+                    unpublish_disabled,
+                    on_save,
+                } => {
+                    view! {
+                        <PostSaveActions
+                            publication=publication
+                            scheduled=scheduled
+                            disabled=disabled
+                            unpublish_disabled=unpublish_disabled
+                            on_save=on_save
+                        />
                     }
-                    ComposerActions::Create { publish_at, scheduled, disabled, on_save } => {
-                        view! {
-                            <CreationPostActions
-                                publish_at=publish_at
-                                scheduled=scheduled
-                                disabled=disabled
-                                on_save=on_save
-                            />
-                        }
-                            .into_any()
+                        .into_any()
+                }
+                ComposerActions::Create { publish_at, scheduled, disabled, on_save } => {
+                    view! {
+                        <CreationPostActions
+                            publish_at=publish_at
+                            scheduled=scheduled
+                            disabled=disabled
+                            on_save=on_save
+                        />
                     }
-                }}
-            </div>
+                        .into_any()
+                }
+            }}
         </div>
     }
 }
@@ -193,6 +191,9 @@ pub(super) fn ComposerDetails(state: ComposeState) -> impl IntoView {
     let uploads_enabled = Resource::new(|| (), |()| crate::media::get_uploads_enabled());
     view! {
         <div class="j-composer-details">
+            <h2 class="j-sb-head" style="padding:0">
+                "Post details"
+            </h2>
             {move || match crate::media::upload_presentation(uploads_enabled.get()) {
                 crate::media::UploadPresentation::Enabled => {
                     view! { <ComposerMediaField /> }.into_any()
@@ -208,7 +209,8 @@ pub(super) fn ComposerDetails(state: ComposeState) -> impl IntoView {
                 name="summary"
                 field=state.summary_field
                 placeholder="Optional summary or excerpt"
-            /> <TagInput tags=state.tags on_change=state.tag_input_changed() />
+            />
+            <TagInput tags=state.tags on_change=state.tag_input_changed() />
             <FormatToggle format=state.format />
         </div>
     }
@@ -763,9 +765,9 @@ pub(super) fn ComposeOptions(
 ) -> impl IntoView {
     view! {
         <div class="j-compose-options">
-            <div class="j-sb-head" style="padding:0">
-                "Options"
-            </div>
+            <h2 class="j-sb-head" style="padding:0">
+                "Publication options"
+            </h2>
             {match publication {
                 LoadedPublication::Draft => {
                     view! {

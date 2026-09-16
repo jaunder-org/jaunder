@@ -167,6 +167,21 @@ test("composer keeps filled body actions before a container-responsive controls 
 }) => {
   const page = await registeredPage("/posts/new");
 
+  const expectApprovedMarkup = async (grid: Locator): Promise<void> => {
+    const body = grid.locator(":scope > .j-compose-body");
+    const rail = grid.locator(":scope > .j-compose-aside");
+    await expect(body).toHaveCount(1);
+    await expect(rail).toHaveCount(1);
+    await expect(body.locator(":scope > .j-composer-field")).toHaveCount(1);
+    await expect(body.locator(":scope > .j-composer-toolbar")).toHaveCount(1);
+    await expect(body.locator(":scope > .j-post-editor-panel")).toHaveCount(0);
+    await expect(
+      rail.getByRole("heading", { name: "Post details", exact: true }),
+    ).toBeVisible();
+    await expect(
+      rail.getByRole("heading", { name: "Publication options", exact: true }),
+    ).toBeVisible();
+  };
   const expectFilledActions = async (scope: Locator): Promise<void> => {
     const actions = scope.locator(".j-composer-toolbar .j-btn");
     await expect(actions).toHaveCount(2);
@@ -207,6 +222,7 @@ test("composer keeps filled body actions before a container-responsive controls 
       grid.evaluate((element) => getComputedStyle(element).gridTemplateColumns),
     )
     .toMatch(/640px 320px/);
+  await expectApprovedMarkup(grid);
   await expectFilledActions(grid);
 
   await container.evaluate((element) => {
@@ -248,6 +264,7 @@ test("composer keeps filled body actions before a container-responsive controls 
       ),
     )
     .toMatch(/640px 320px/);
+  await expectApprovedMarkup(inlineGrid);
   await expectFilledActions(inlineGrid);
 
   await inlineContainer.evaluate((element) => {
