@@ -40,6 +40,7 @@ use storage::{
 
 pub mod panic_gate;
 pub mod performance;
+pub mod seed_trace;
 
 #[cfg(test)]
 mod performance_tests;

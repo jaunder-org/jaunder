@@ -2359,6 +2359,188 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
         assert!(manifest_copy_at < manifest_grab_at && manifest_grab_at < assertion_at);
     }
 
+    fn generated_seed_trace_helper() -> String {
+        let checks = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("nix")
+                .join("checks.nix"),
+        )
+        .expect("nix/checks.nix");
+        let source = checks
+            .split_once("e2eOtelTestHelpers = backend: ''\n")
+            .expect("E2E OTel helper declaration")
+            .1
+            .split_once("\n'';\n\n# The NixOS test driver")
+            .expect("E2E OTel helper end")
+            .0;
+        source
+            .replace("${backend}", "sqlite")
+            .replace("${toString e2eSeedTraceTimeout}", "30")
+    }
+
+    fn run_seed_timeout_harness(timed_out_command: &str) -> serde_json::Value {
+        let helper = generated_seed_trace_helper();
+        let script = format!(
+            r#"
+import json
+import textwrap
+
+class FakeMachine:
+  def __init__(self):
+    self.actions = []
+
+  def execute(self, command, timeout=None):
+    self.actions.append(["execute", command, timeout])
+    if command == {timed_out_command:?}:
+      return (124, "")
+    return (0, "")
+
+  def copy_from_machine(self, path, target):
+    self.actions.append(["copy_from_machine", path, target])
+
+  def succeed(self, command):
+    self.actions.append(["succeed", command])
+    return ""
+
+  def wait_for_unit(self, unit, timeout=None):
+    self.actions.append(["wait_for_unit", unit, timeout])
+
+  def wait_for_open_port(self, port, timeout=None):
+    self.actions.append(["wait_for_open_port", port, timeout])
+
+machine = FakeMachine()
+exec(textwrap.dedent({helper:?}))
+try:
+  assert_seed_storage_spans()
+except AssertionError as error:
+  print(json.dumps({{"error": str(error), "actions": machine.actions}}))
+else:
+  raise AssertionError("seed timeout harness unexpectedly succeeded")
+"#
+        );
+        let output = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .output()
+            .expect("launching Python seed timeout harness");
+        assert!(
+            output.status.success(),
+            "seed timeout harness failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).expect("seed timeout harness JSON")
+    }
+
+    fn assert_seed_timeout_harness(
+        timed_out_command: &str,
+        expected_token: &str,
+        forbidden_stage: &str,
+    ) {
+        let result = run_seed_timeout_harness(timed_out_command);
+        let expected_error = if expected_token == "seed-collector-stop-timeout" {
+            "seed-collector-stop-timeout: collector stop exceeded 30s"
+        } else {
+            "seed-trace-verifier-timeout: verification exceeded 30s"
+        };
+        assert_eq!(result["error"], expected_error);
+        let actions = result["actions"].as_array().expect("harness actions");
+        let timeout = actions
+            .iter()
+            .find(|action| action[0] == "execute" && action[1] == timed_out_command)
+            .expect("timed out command");
+        assert_eq!(timeout[2], 30);
+        let tar = actions
+            .iter()
+            .position(|action| {
+                action[0] == "execute"
+                    && action[1].as_str().is_some_and(|command| {
+                        command.starts_with(
+                        "test -d /var/lib/jaunder/capture && tar czf /tmp/capture-sqlite.tar.gz",
+                    )
+                    })
+            })
+            .expect("capture tar action");
+        let copy = actions
+            .iter()
+            .position(|action| {
+                action[0] == "copy_from_machine" && action[1] == "/tmp/capture-sqlite.tar.gz"
+            })
+            .expect("capture copy action");
+        assert!(tar < copy, "capture tar must precede copy");
+        assert!(
+            !actions
+                .iter()
+                .any(|action| action.to_string().contains("systemctl start ")),
+            "timeout path must not restart a service: {actions:?}"
+        );
+        assert!(
+            !actions
+                .iter()
+                .any(|action| action.to_string().contains(forbidden_stage)),
+            "timeout path must not reach {forbidden_stage}: {actions:?}"
+        );
+        assert!(
+            !actions
+                .iter()
+                .any(|action| action.to_string().contains("playwright")),
+            "timeout path must not reach Playwright: {actions:?}"
+        );
+    }
+
+    #[test]
+    fn e2e_seed_collector_stop_timeout_retains_capture_before_failing() {
+        assert_seed_timeout_harness(
+            "systemctl stop otel-collector.service",
+            "seed-collector-stop-timeout",
+            "test-support verify-seed-trace",
+        );
+    }
+
+    #[test]
+    fn e2e_seed_verifier_timeout_retains_capture_before_failing() {
+        assert_seed_timeout_harness(
+            "test-support verify-seed-trace --capture-dir /var/lib/jaunder/capture 2>&1",
+            "seed-trace-verifier-timeout",
+            "systemctl start otel-collector.service",
+        );
+    }
+
+    #[test]
+    fn e2e_seed_verifier_merges_stderr_into_the_reported_failure() {
+        let checks = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("nix")
+                .join("checks.nix"),
+        )
+        .expect("nix/checks.nix");
+        let command = "test-support verify-seed-trace --capture-dir /var/lib/jaunder/capture 2>&1";
+        let command_at = checks.find(command).expect("verifier stderr is captured");
+        let assertion_at = checks[command_at..]
+            .find("raise AssertionError(verify_out)")
+            .map(|offset| command_at + offset)
+            .expect("captured verifier output is reported");
+        assert!(command_at < assertion_at);
+    }
+
+    #[test]
+    fn e2e_seed_helpers_are_emitted_for_sqlite_and_postgres_placements() {
+        let checks = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("nix")
+                .join("checks.nix"),
+        )
+        .expect("nix/checks.nix");
+        let sqlite_placement = "beforeMachineStart = if backendPolicy.seedBeforeStart then \"\\n\\n${seedDefinition}\\n\\n\\n\" else \"\\n\";";
+        let postgres_placement = "afterPackageCopy =\n      if backendPolicy.seedBeforeStart then \"\\n\\n\" else \"\\n\\n\\n${seedDefinition}\\n\\n\\n\";";
+        assert!(checks.contains(sqlite_placement));
+        assert!(checks.contains(postgres_placement));
+        assert!(checks.contains("${e2ePhaseTimingHelpers backend browser}${e2eOtelTestHelpers backend}${beforeMachineStart}"));
+        assert!(checks.contains("machine.succeed(\"cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e\")${afterPackageCopy}"));
+    }
+
     #[test]
     fn copy_e2e_diagnostics_between_copies_journal_capture_playwright_and_manifest() {
         let tmp = std::env::temp_dir().join(format!("xtask-j-{}", std::process::id()));
