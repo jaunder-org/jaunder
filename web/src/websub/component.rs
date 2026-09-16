@@ -41,11 +41,14 @@ pub fn WebsubPage() -> impl IntoView {
                     })}
                 </Suspense>
                 {move || mutation_flash(update.value().get(), "WebSub hub saved.")}
-                <DeadLetterList
-                    phase=WebsubPhase::Regeneration
-                    heading="Regeneration dead letters"
-                />
-                <DeadLetterList phase=WebsubPhase::Publication heading="Publication dead letters" />
+                <div class="j-card j-websub-recovery-guidance" data-test="websub-recovery-guidance">
+                    <p>
+                        "Dead-lettered work is Syndication Feed work whose automatic processing stopped after retries were exhausted or publication encountered a terminal, non-retryable failure."
+                    </p>
+                    <p>"Dead-letter rows are retained for seven days."</p>
+                </div>
+                <DeadLetterList phase=WebsubPhase::Regeneration />
+                <DeadLetterList phase=WebsubPhase::Publication />
             </div>
         </div>
     }
@@ -97,10 +100,20 @@ fn hub_form(initial: &str, action: ServerAction<UpdateWebsubHub>) -> impl IntoVi
 }
 
 #[component]
-fn DeadLetterList(phase: WebsubPhase, heading: &'static str) -> impl IntoView {
-    let phase_key = match phase {
-        WebsubPhase::Regeneration => "regeneration",
-        WebsubPhase::Publication => "publication",
+fn DeadLetterList(phase: WebsubPhase) -> impl IntoView {
+    let (phase_key, heading, subtitle, empty_message) = match phase {
+        WebsubPhase::Regeneration => (
+            "regeneration",
+            "Regeneration dead letters",
+            "Feed changes that could not rebuild their cached public Syndication Feed representation. Review the diagnostic and correct storage, site identity, or configuration problems before redriving.",
+            "No regeneration work is currently dead-lettered.",
+        ),
+        WebsubPhase::Publication => (
+            "publication",
+            "Publication dead letters",
+            "Feed changes that could not send a WebSub Publish Ping after regeneration. Review the diagnostic and correct the WebSub Hub, network, HTTP, or redirect problem before redriving.",
+            "No publication work is currently dead-lettered.",
+        ),
     };
     let cursor = RwSignal::new(None::<DeadLetterCursor>);
     let selection = RwSignal::new(Vec::new());
@@ -123,18 +136,26 @@ fn DeadLetterList(phase: WebsubPhase, heading: &'static str) -> impl IntoView {
     view! {
         <div class="j-card" data-phase=phase_key>
             <div class="j-card-head">
-                <h2>{heading}</h2>
+                <div>
+                    <h2>{heading}</h2>
+                    <div class="j-sub">{subtitle}</div>
+                </div>
             </div>
             <Suspense fallback=|| {
                 view! { <p class="j-loading">"Loading\u{2026}"</p> }
             }>
                 {move || Suspend::new(async move {
                     match page.await {
-                        Ok(page) => dead_letter_table(page, selection, cursor).into_any(),
+                        Ok(page) => {
+                            dead_letter_table(page, selection, cursor, empty_message).into_any()
+                        }
                         Err(error) => view! { <p class="error">{error.to_string()}</p> }.into_any(),
                     }
                 })}
             </Suspense>
+            <p class="j-websub-redrive-guidance">
+                "Address the reported cause, then select rows to redrive. If any selected row is stale or no longer dead-lettered, none are redriven."
+            </p>
             <div class="j-form-actions">
                 <button
                     type="button"
@@ -158,13 +179,17 @@ fn dead_letter_table(
     page: DeadLetterPage,
     selection: RwSignal<Vec<FeedEventId>>,
     cursor: RwSignal<Option<DeadLetterCursor>>,
+    empty_message: &'static str,
 ) -> impl IntoView {
+    if page.events.is_empty() {
+        return view! { <p class="j-websub-empty">{empty_message}</p> }.into_any();
+    }
     let next = page.next_cursor;
     view! {
         <table class="j-table">
             <thead>
                 <tr>
-                    <th></th>
+                    <th>"Select"</th>
                     <th>"Event"</th>
                     <th>"Feed"</th>
                     <th>"Phase"</th>
@@ -195,6 +220,7 @@ fn dead_letter_table(
                 }
             })}
     }
+    .into_any()
 }
 
 fn dead_letter_row(row: DeadLetterRow, selection: RwSignal<Vec<FeedEventId>>) -> impl IntoView {
@@ -204,6 +230,7 @@ fn dead_letter_row(row: DeadLetterRow, selection: RwSignal<Vec<FeedEventId>>) ->
             <td>
                 <input
                     type="checkbox"
+                    aria-label=format!("Select event {id}")
                     on:change=move |event| {
                         selection
                             .update(|selected| {

@@ -6,6 +6,7 @@ import {
   signInAsNewUser,
   waitForSelector,
 } from "./helpers";
+import { navigateInApp } from "./navigate";
 import { redriveDeadLettersViaCli, seedDeadLettersViaTool } from "./seed";
 import { findPingWave, type CapturedPing } from "./websub";
 
@@ -74,17 +75,68 @@ test("a complete wave follows deduplicated request order", async () => {
   expect(wave?.map((ping) => ping.feed_url)).toEqual([ATOM_URL, RSS_URL]);
 });
 
-test("operator filters, pages, redrives, and rejects a stale WebSub selection", async ({
+test("operator understands, pages, redrives, and rejects stale WebSub work", async ({
   page,
 }) => {
-  const regenerationIds = await seedDeadLettersViaTool("regeneration", 51);
-  const publicationIds = await seedDeadLettersViaTool("publication", 1);
   await signInAs(page, "testoperator");
   await goto(page, "/admin/websub");
 
   const regeneration = page.locator('[data-phase="regeneration"]');
   const publication = page.locator('[data-phase="publication"]');
+
+  await expect(
+    page.locator('[data-test="websub-recovery-guidance"]'),
+  ).toContainText(
+    "automatic processing stopped after retries were exhausted or publication encountered a terminal, non-retryable failure",
+  );
+  await expect(
+    page.locator('[data-test="websub-recovery-guidance"]'),
+  ).toContainText("retained for seven days");
+  await expect(regeneration.locator(".j-sub")).toContainText(
+    "could not rebuild their cached public Syndication Feed representation",
+  );
+  await expect(regeneration.locator(".j-sub")).toContainText(
+    "correct storage, site identity, or configuration problems",
+  );
+  await expect(publication.locator(".j-sub")).toContainText(
+    "could not send a WebSub Publish Ping after regeneration",
+  );
+  await expect(publication.locator(".j-sub")).toContainText(
+    "correct the WebSub Hub, network, HTTP, or redirect problem",
+  );
+  await expect(regeneration).toContainText(
+    "No regeneration work is currently dead-lettered.",
+  );
+  await expect(publication).toContainText(
+    "No publication work is currently dead-lettered.",
+  );
+
+  const regenerationIds = await seedDeadLettersViaTool("regeneration", 51);
+  const publicationIds = await seedDeadLettersViaTool("publication", 1);
+  await navigateInApp(
+    page,
+    () => click(page, 'a.j-nav-item[href="/admin/site"]'),
+    { url: "/admin/site", ready: 'input[name="title"]' },
+  );
+  await navigateInApp(
+    page,
+    () => click(page, 'a.j-nav-item[href="/admin/websub"]'),
+    {
+      url: "/admin/websub",
+      ready: '[data-phase="regeneration"] tbody tr',
+    },
+  );
+
   await expect(regeneration.locator("tbody tr")).toHaveCount(50);
+  await expect(
+    regeneration.getByRole("columnheader", { name: "Select" }),
+  ).toBeVisible();
+  await expect(regeneration).toContainText(
+    "Address the reported cause, then select rows to redrive.",
+  );
+  await expect(regeneration).toContainText(
+    "If any selected row is stale or no longer dead-lettered, none are redriven.",
+  );
   await expect(
     publication.getByText(String(publicationIds[0]), { exact: true }),
   ).toBeVisible();
