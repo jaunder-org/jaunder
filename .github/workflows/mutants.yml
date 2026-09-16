@@ -312,7 +312,7 @@ jobs:
     needs: [plan, shard]
     if: always()
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@v8.0.1
         with:
           pattern: mutants-*
           # NOT merge-multiple: each shard's files keep their own directory, so
