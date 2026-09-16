@@ -2417,6 +2417,10 @@ test("scheduling from the edit page shows a Scheduled-for badge on the drafts pa
   await page.getByRole("button", { name: "Apply" }).click();
   await expect(page.locator(SEL.publishButton("false"))).toBeEnabled();
   await expect(page.locator(SEL.publishButton("true"))).toHaveText("Schedule");
+  await page.getByRole("button", { name: "Clear publication time" }).click();
+  await expect(page.locator(SEL.publishButton("true"))).toHaveText("Publish");
+  await applyPublicationTime(page, "2999-01-01T09:00");
+  await expect(page.locator(SEL.publishButton("true"))).toHaveText("Schedule");
   await click(page, SEL.publishButton("true"));
 
   // Settle before navigating, or the `goto` races the in-flight update. The signal is

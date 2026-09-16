@@ -672,7 +672,7 @@ pub(super) fn PostSaveActions(
                     prop:disabled=move || disabled.get()
                     on:click=move |_| on_save.run(true)
                 >
-                    {move || if scheduled.get() { "Schedule" } else { "Publish" }}
+                    {move || posts::draft_primary_action_label(scheduled.get())}
                 </button>
             }
                 .into_any()
@@ -725,7 +725,7 @@ fn CreationPostActions(
             on:click=move |_| on_save.run(true)
         >
             {move || {
-                if !publish_at.get().is_empty() && scheduled.get() { "Schedule" } else { "Publish" }
+                posts::draft_primary_action_label(!publish_at.get().is_empty() && scheduled.get())
             }}
         </button>
     }

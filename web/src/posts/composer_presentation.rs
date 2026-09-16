@@ -25,6 +25,12 @@ pub fn creation_composer_presentation(compact: bool) -> CreationComposerPresenta
     }
 }
 
+/// Label the primary action for a Draft's committed publication time.
+#[must_use]
+pub fn draft_primary_action_label(scheduled: bool) -> &'static str {
+    if scheduled { "Schedule" } else { "Publish" }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -49,5 +55,11 @@ mod tests {
                 textarea_class: "j-edit-form-textarea",
             }
         );
+    }
+
+    #[test]
+    fn draft_primary_action_tracks_future_schedule_classification() {
+        assert_eq!(draft_primary_action_label(false), "Publish");
+        assert_eq!(draft_primary_action_label(true), "Schedule");
     }
 }

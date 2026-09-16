@@ -64,7 +64,9 @@ pub use page_state::{
 // wasm-only component.
 pub use compose_state::{ComposeState, PublicationIntent, publication_from_local, submit_gate};
 pub use composer_media::{ComposerMedia, ComposerMediaState};
-pub use composer_presentation::{CreationComposerPresentation, creation_composer_presentation};
+pub use composer_presentation::{
+    CreationComposerPresentation, creation_composer_presentation, draft_primary_action_label,
+};
 pub use edit_state::{
     EditLifecycleState, EditPublicationState, InvalidSchedule, LoadedPublication,
     PublicationTimeEditState, edit_submit_gate, loaded_publication, scheduled_publication_at,
