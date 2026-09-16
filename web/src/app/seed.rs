@@ -35,15 +35,22 @@ mod tests {
 
     #[test]
     fn valid_presentation_retains_the_server_resolved_destination_theme() {
-        let json = r#"{"theme":{"identity":{"kind":"built_in","value":"reader"},"revision":null,"stylesheet_url":"/style/jaunder-themes.css","logo_url":null,"header_url":null},"page":{"SiteTimeline":{"order":"newest","page":{"posts":[],"has_more":false,"next_cursor":null}}}}"#;
+        let json = r#"{"theme":{"identity":{"kind":"built_in","value":"reader"},"revision":null,"stylesheet_url":"/style/jaunder-themes.css","logo_url":null,"header_url":null},"page":{"SiteTimeline":{"identity":{"title":"Jaunder","base_url":null},"order":"newest","page":{"posts":[],"next_cursor":null,"has_more":false}}}}"#;
 
         let decoded = decode_projector_seed(Some(json)).expect("valid presentation");
         assert!(matches!(
             decoded,
             Some(PublicPresentation {
                 theme,
-                page: PageSeed::SiteTimeline { order: common::seed::TimelineOrder::Newest, .. },
+                page: PageSeed::SiteTimeline {
+                    identity,
+                    order: common::seed::TimelineOrder::Newest,
+                    ..
+                },
             }) if theme == common::theme::PublishedThemePresentation::built_in(common::theme::Theme::Reader)
+                && identity.title == common::site::SiteTitle::default()
+                && identity.tagline.is_none()
+                && identity.base_url.is_none()
         ));
     }
 }

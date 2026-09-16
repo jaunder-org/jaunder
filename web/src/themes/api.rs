@@ -112,9 +112,9 @@ use {
         sync::Arc,
     },
     storage::{
-        PostStorage, ReplaceDraftError, ThemeAssetError, ThemeAssetManager, ThemeDraft,
-        ThemeDraftAsset, ThemeManager, ThemeOwner, ThemeQuotaLimits, ThemeRoleInput, ThemeStorage,
-        UserStorage, WriteScope,
+        PostStorage, ReplaceDraftError, SiteConfigStorage, ThemeAssetError, ThemeAssetManager,
+        ThemeDraft, ThemeDraftAsset, ThemeManager, ThemeOwner, ThemeQuotaLimits, ThemeRoleInput,
+        ThemeStorage, UserStorage, WriteScope,
     },
 };
 #[cfg(feature = "server")]
@@ -1077,6 +1077,9 @@ pub async fn preview(scope: OwnershipScope, theme_id: ThemeId) -> WebResult<Them
     let (page, route) = match owner {
         ThemeOwner::Site => (
             common::seed::PageSeed::SiteTimeline {
+                identity: expect_context::<Arc<dyn SiteConfigStorage>>()
+                    .get_identity()
+                    .await?,
                 order: common::seed::TimelineOrder::Newest,
                 page: crate::timeline::fetch_local_timeline(
                     expect_context::<Arc<dyn PostStorage>>().as_ref(),

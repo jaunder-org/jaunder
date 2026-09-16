@@ -58,6 +58,10 @@ fn mount() {
     // RsdDiscovery mounted below produce the ONLY set (no invisible duplicate). Crawlers/
     // no-JS never run this, so their head is unchanged (#198).
     dom::remove_elements_by_selector(&format!("link[{}]", web::app::DISCOVERY_MARKER_ATTR));
+    // Local's projected identity metadata would otherwise remain alongside its
+    // reactive replacements after mount. The app seam owns this narrow selector;
+    // it deliberately cannot remove metadata from other public destinations.
+    dom::remove_elements_by_selector(web::app::PROJECTED_LOCAL_METADATA_SELECTOR);
     perf::mark(perf::BOOT_RENDER_START);
     leptos::mount::mount_to_body(move || {
         provide_context(presentation.as_ref().map(|value| value.page.clone()));

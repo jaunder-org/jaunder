@@ -5,14 +5,61 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use common::{feed::FeedSurface, pagination::PageSize, seed::TimelineOrder};
+use common::{feed::FeedSurface, pagination::PageSize, seed::TimelineOrder, site::SiteIdentity};
 use leptos::prelude::*;
+use leptos::task::spawn_local;
+use leptos_meta::{Meta, Title};
 use leptos_router::NavigateOptions;
 use leptos_router::hooks::{use_navigate, use_query_map};
 
 use crate::feed_discovery::FeedDiscovery;
 use crate::reactive::Invalidator;
 use crate::timeline::{self, TimelineGate, TimelineState};
+
+/// Commits a resolved Local destination only after its presentation is safe to paint.
+/// The host-tested state fold lives in [`super::commit_destination`]; this wasm leaf
+/// owns only the resource/effect and asynchronous theme-adoption wiring.
+fn wire_local_destination(
+    state: TimelineState,
+    identity: RwSignal<Option<common::site::SiteIdentity>>,
+    destination: Resource<crate::error::WebResult<super::LocalDestination>>,
+    presentation: crate::app::ThemePresentationCoordinator,
+) {
+    Effect::new(move |_| match destination.try_get().flatten() {
+        Some(Ok(destination)) => {
+            spawn_local(async move {
+                match presentation.adopt(destination.theme.clone()).await {
+                    Ok(crate::app::ThemeAdoption::Applied) => {
+                        super::commit_destination(state, identity, destination);
+                    }
+                    Ok(crate::app::ThemeAdoption::Superseded) => {}
+                    Err(error) => state.fail(error),
+                }
+            });
+        }
+        Some(Err(error)) => state.fail(error),
+        None => presentation.begin_navigation(),
+    });
+}
+
+fn local_identity_metadata(identity: RwSignal<Option<SiteIdentity>>) -> impl IntoView {
+    move || {
+        identity.get().map(|identity| {
+            view! {
+                <Title text=identity.title.to_string() />
+                <Meta
+                    name="description"
+                    content=identity.tagline.as_ref().map_or_else(String::new, ToString::to_string)
+                />
+                <Meta property="og:title" content=identity.title.to_string() />
+                <Meta
+                    property="og:description"
+                    content=identity.tagline.as_ref().map_or_else(String::new, ToString::to_string)
+                />
+            }
+        })
+    }
+}
 
 #[component]
 pub fn LocalPage() -> impl IntoView {
@@ -32,9 +79,13 @@ pub fn LocalPage() -> impl IntoView {
     // paint; a live session that lacks its marker may reach this recovery path once.
     // The projector still paints anonymous-only bytes, and Home remains the distinct
     // authenticated cockpit.
-    let (seed_order, seed) = super::site_timeline_seed(
+    let (seed_order, seed_identity, seed) = super::site_timeline_seed(
         leptos::prelude::use_context::<Option<common::seed::PageSeed>>().flatten(),
     );
+    // An unseeded Local route has no identity until its full destination is ready.
+    // In particular, do not manufacture the historical "Jaunder" default while a
+    // client-side navigation is still awaiting its theme.
+    let identity = RwSignal::new(seed_identity);
     if seed_order == order.get_untracked() {
         state.adopt_seed(seed);
     }
@@ -64,7 +115,7 @@ pub fn LocalPage() -> impl IntoView {
             .map(super::site_destination)
         },
     );
-    timeline::wire_timeline_destination(state, initial_page, presentation);
+    wire_local_destination(state, identity, initial_page, presentation);
 
     let on_load_more = Callback::new(move |()| {
         let order = order.get_untracked();
@@ -76,7 +127,7 @@ pub fn LocalPage() -> impl IntoView {
             })
             .await
             .map(super::site_destination)
-            .map(|(_, page)| page)
+            .map(|destination| destination.page)
         });
     });
     let navigate = use_navigate();
@@ -97,6 +148,7 @@ pub fn LocalPage() -> impl IntoView {
     let theme = crate::app::public_theme();
 
     view! {
+        {local_identity_metadata(identity)}
         <FeedDiscovery surface=&FeedSurface::Site />
         // loading and rows arms but not over an error — the error branch replaces
         // masthead + rows together. The gate keeps that subtree alive across
@@ -110,8 +162,15 @@ pub fn LocalPage() -> impl IntoView {
             on_order_change=on_order_change
         >
             {move || {
-                super::render::masthead(&crate::app::render_theme_logo(&theme.get()))
-                    .inject_into(leptos::html::div().class("j-contents"))
+                identity
+                    .get()
+                    .map(|identity| {
+                        super::render::masthead(
+                                &identity,
+                                &crate::app::render_theme_logo(&theme.get()),
+                            )
+                            .inject_into(leptos::html::div().class("j-contents"))
+                    })
             }}
             {move || {
                 crate::app::render_theme_header(&theme.get())

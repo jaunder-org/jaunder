@@ -352,6 +352,7 @@ macro_rules! make_app {
                 posts.clone(),
                 users.clone(),
                 themes.clone(),
+                site_config.clone(),
                 jaunder::projector::Shell(jaunder::site::shell_html()),
             );
             let app = jaunder::application_routes(

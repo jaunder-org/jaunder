@@ -41,7 +41,7 @@ Out:
     - `devtool run -- cargo xtask test-local -- -p storage publisher`
     - `devtool run -- cargo xtask test-local -- -p jaunder commands::site_config`
 
-- [ ] Task 2: Carry one resolved identity through projected and reactive Local.
+- [x] Task 2: Carry one resolved identity through projected and reactive Local.
   - Contract: the Local public presentation/seed carries the resolved
     `SiteIdentity`; projected body, serialized seed, reactive adoption, and
     document/Open Graph metadata all consume that same value rather than making

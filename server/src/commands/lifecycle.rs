@@ -601,6 +601,16 @@ fn publisher_context(
     )
 }
 
+fn public_projector(dependencies: &ServeStorage) -> crate::projector::PublicProjector {
+    crate::projector::PublicProjector::new(
+        Arc::clone(&dependencies.posts),
+        Arc::clone(&dependencies.users),
+        Arc::clone(&dependencies.themes),
+        Arc::clone(&dependencies.site_config),
+        crate::projector::Shell(crate::site::shell_html()),
+    )
+}
+
 fn compose_server_router(
     dependencies: &ServeStorage,
     storage_path: PathBuf,
@@ -672,12 +682,7 @@ fn compose_server_router(
             prod,
         ),
     );
-    let public_projector = crate::projector::PublicProjector::new(
-        Arc::clone(&dependencies.posts),
-        Arc::clone(&dependencies.users),
-        Arc::clone(&dependencies.themes),
-        crate::projector::Shell(crate::site::shell_html()),
-    );
+    let public_projector = public_projector(dependencies);
     let app = crate::application_routes(
         crate::client_telemetry_routes(
             Arc::clone(&dependencies.sessions),

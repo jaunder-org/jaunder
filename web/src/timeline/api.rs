@@ -16,7 +16,9 @@
 #[cfg(feature = "server")]
 use crate::error::InternalResult;
 use crate::error::WebResult;
-use common::seed::{Page, PublicPresentation, RenderedPost, TimelinePageRequest};
+use common::seed::{
+    LocalTimelinePresentation, Page, PublicPresentation, RenderedPost, TimelinePageRequest,
+};
 use common::{tag::Tag, username::Username};
 use leptos::server_fn::codec::Json;
 
@@ -28,7 +30,7 @@ use {
     common::time::UtcInstant,
     leptos::prelude::*,
     std::sync::Arc,
-    storage::{self, PostStorage, ThemeStorage, UserStorage},
+    storage::{self, PostStorage, SiteConfigStorage, ThemeStorage, UserStorage},
 };
 
 #[cfg(feature = "server")]
@@ -90,8 +92,9 @@ pub async fn list_by_user(
 /// Lists published, non-deleted posts across all users using cursor pagination.
 pub async fn list_local_timeline(
     request: TimelinePageRequest,
-) -> WebResult<PublicPresentation<Page<RenderedPost, common::seed::TimelineCursor>>> {
+) -> WebResult<PublicPresentation<LocalTimelinePresentation>> {
     let posts = expect_context::<Arc<dyn PostStorage>>();
+    let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
     // Resolve request credentials before selecting rows: invalid explicit
     // credentials still reject, while valid identities cannot affect Local.
     viewer::viewer_identity().await?;
@@ -102,7 +105,15 @@ pub async fn list_local_timeline(
         request.limit,
     )
     .await?;
-    site_presentation(common::theme::PublicThemeRoute::site(), page).await
+    let identity = site_config.get_identity().await?;
+    let presentation = site_presentation(common::theme::PublicThemeRoute::site(), page).await?;
+    Ok(PublicPresentation {
+        theme: presentation.theme,
+        page: LocalTimelinePresentation {
+            identity,
+            page: presentation.page,
+        },
+    })
 }
 
 /// Lists published, non-deleted posts by the authenticated user using cursor pagination.
