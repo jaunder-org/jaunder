@@ -35,7 +35,8 @@ test("owner Post Actions disclosures use native popover dismissal and focus", as
     page.getByRole("button", { name: "Actions", expanded: true }),
   ).toHaveCount(1);
   await expect(firstPopover).toHaveAttribute("popover", "auto");
-  await expectAccessible(page);
+  await expect(firstPopover).toBeVisible();
+  await expect(firstTrigger).toBeFocused();
 
   await page.keyboard.press("Tab");
   await expect(firstPopover.getByRole("link", { name: "Edit" })).toBeFocused();
@@ -66,6 +67,11 @@ test("owner Post Actions disclosures use native popover dismissal and focus", as
   expect(narrowPopover).not.toBeNull();
   expect(narrowPopover!.x).toBeGreaterThanOrEqual(0);
   expect(narrowPopover!.x + narrowPopover!.width).toBeLessThanOrEqual(375);
+
+  // Keep accessibility scanning independent from native popover interaction:
+  // axe may disturb that state, so no later assertion depends on preserving it.
+  await expect(page.locator(":popover-open")).toHaveCount(1);
+  await expectAccessible(page);
 
   const anonymousContext = await tracedContext();
   try {
