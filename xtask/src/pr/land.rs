@@ -146,6 +146,22 @@ fn report(
     }
 }
 
+fn pending_classification_report(
+    subject: &Subject,
+    head_sha: String,
+    incomplete: super::evidence::IncompleteEvidence,
+    events: Vec<Event>,
+) -> PrReport {
+    report(
+        subject,
+        head_sha,
+        Outcome::Pending,
+        Some(incomplete.detail()),
+        None,
+        events,
+    )
+}
+
 /// Arm the merge and drive it to a terminal outcome.
 ///
 /// Like [`watch`](super::watch::watch), never returns `Err` — a failure to arm is a
@@ -223,14 +239,7 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
             optional_failures,
         }) => (step, optional_failures),
         Ok(watch::SnapshotClassification::Incomplete(incomplete)) => {
-            return report(
-                subject,
-                snap.head_sha,
-                Outcome::Pending,
-                Some(incomplete.detail()),
-                None,
-                events,
-            );
+            return pending_classification_report(subject, snap.head_sha, incomplete, events);
         }
         Err(e) => {
             return report(
@@ -379,14 +388,7 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
                 optional_failures,
             }) => (step, optional_failures),
             Ok(watch::SnapshotClassification::Incomplete(incomplete)) => {
-                return report(
-                    subject,
-                    head_sha,
-                    Outcome::Pending,
-                    Some(incomplete.detail()),
-                    None,
-                    events,
-                );
+                return pending_classification_report(subject, head_sha, incomplete, events);
             }
             Err(e) => {
                 return report(

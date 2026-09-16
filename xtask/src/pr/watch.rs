@@ -1775,7 +1775,7 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_classification_waits_without_spending_a_strike() {
+    fn incomplete_classification_waits_without_spending_strikes_or_repeating_status() {
         let workflow = r#"
             jobs:
               lane:
@@ -1784,12 +1784,14 @@ mod tests {
                 name: Aggregate verdict
                 needs: lane
         "#;
-        let failed = open(vec![actions_check(
-            "Renamed validation lane",
-            11,
-            CheckState::Failure,
-            "2026-07-30T14:10:00Z",
-        )]);
+        let failed = || {
+            open(vec![actions_check(
+                "Renamed validation lane",
+                11,
+                CheckState::Failure,
+                "2026-07-30T14:10:00Z",
+            )])
+        };
         let materialized = open(vec![
             actions_check(
                 "Renamed validation lane",
@@ -1799,20 +1801,27 @@ mod tests {
             ),
             check("Aggregate verdict", CheckState::Pending, ""),
         ]);
-        let src = FakeSource::new(vec![Ok(failed), Ok(materialized)], aggregate_rules())
-            .with_actions_evidence_script(vec![
+        let mut snapshots = (0..6).map(|_| Ok(failed())).collect::<Vec<_>>();
+        snapshots.push(Ok(materialized));
+        let mut evidence = (0..6)
+            .map(|_| {
                 Ok(active_actions_evidence(
                     "abc",
                     workflow,
                     vec![("Renamed validation lane", 11)],
-                )),
-                Ok(actions_evidence(
-                    "abc",
-                    workflow,
-                    vec![("Renamed validation lane", 11), ("Aggregate verdict", 12)],
-                )),
-            ]);
-        let report = watch(&src, &clock(), &subject(), cfg(), &mut |_| {});
+                ))
+            })
+            .collect::<Vec<_>>();
+        evidence.push(Ok(actions_evidence(
+            "abc",
+            workflow,
+            vec![("Renamed validation lane", 11), ("Aggregate verdict", 12)],
+        )));
+        let src =
+            FakeSource::new(snapshots, aggregate_rules()).with_actions_evidence_script(evidence);
+        let mut config = cfg();
+        config.heartbeat_secs = 60;
+        let report = watch(&src, &clock(), &subject(), config, &mut |_| {});
         assert_eq!(report.outcome, Outcome::ChecksFailed);
         assert!(
             report
@@ -1820,11 +1829,28 @@ mod tests {
                 .iter()
                 .all(|event| event.kind != EventKind::PollError)
         );
-        assert!(report.events.iter().any(|event| {
-            event.kind == EventKind::Phase
-                && event.detail.contains("Aggregate verdict")
-                && event.detail.contains(".github/workflows/test.yml")
-        }));
+        assert_eq!(
+            report
+                .events
+                .iter()
+                .filter(|event| {
+                    event.kind == EventKind::Phase
+                        && event.detail.contains("Aggregate verdict")
+                        && event.detail.contains(".github/workflows/test.yml")
+                })
+                .count(),
+            1,
+            "unchanged incomplete evidence emits one phase event"
+        );
+        assert_eq!(
+            report
+                .events
+                .iter()
+                .filter(|event| event.kind == EventKind::Heartbeat)
+                .count(),
+            2,
+            "unchanged incomplete evidence retains bounded liveness reporting"
+        );
     }
 
     #[test]
@@ -1850,6 +1876,43 @@ mod tests {
         once.once = true;
         let report = watch(&src, &clock(), &subject(), once, &mut |_| {});
         assert_eq!(report.outcome, Outcome::Pending);
+        assert!(
+            report
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("Aggregate verdict"))
+        );
+    }
+
+    #[test]
+    fn completed_workflow_missing_target_exhausts_the_strike_budget() {
+        let workflow = r#"
+            jobs:
+              lane:
+                name: Renamed validation lane
+              aggregate:
+                name: Aggregate verdict
+                needs: lane
+        "#;
+        let failed = open(vec![actions_check(
+            "Renamed validation lane",
+            11,
+            CheckState::Failure,
+            "2026-07-30T14:10:00Z",
+        )]);
+        let src = FakeSource::new(vec![Ok(failed)], aggregate_rules()).with_actions_evidence(
+            actions_evidence("abc", workflow, vec![("Renamed validation lane", 11)]),
+        );
+        let report = watch(&src, &clock(), &subject(), cfg(), &mut |_| {});
+        assert_eq!(report.outcome, Outcome::WatcherError);
+        assert_eq!(
+            report
+                .events
+                .iter()
+                .filter(|event| event.kind == EventKind::PollError)
+                .count(),
+            5
+        );
         assert!(
             report
                 .detail
