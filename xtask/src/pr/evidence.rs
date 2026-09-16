@@ -40,11 +40,56 @@ pub struct EvidenceCache {
 }
 
 /// One current-attempt Actions run, bound to the head it was observed for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkflowRunStatus {
+    Active,
+    Completed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IncompleteEvidence {
+    pub target: String,
+    pub workflow_path: String,
+    pub run_id: u64,
+    pub attempt: u64,
+}
+
+impl IncompleteEvidence {
+    pub fn detail(&self) -> String {
+        format!(
+            "classification evidence incomplete: required workflow target {} is absent while workflow {} run {} attempt {} is still running",
+            self.target, self.workflow_path, self.run_id, self.attempt
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClassificationError {
+    Incomplete(IncompleteEvidence),
+    Observation(ApiError),
+}
+
+impl ClassificationError {
+    pub fn detail(&self) -> String {
+        match self {
+            Self::Incomplete(evidence) => evidence.detail(),
+            Self::Observation(error) => error.detail(),
+        }
+    }
+}
+
+impl From<ApiError> for ClassificationError {
+    fn from(error: ApiError) -> Self {
+        Self::Observation(error)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct WorkflowEvidence {
     pub head_sha: String,
     pub run_id: u64,
     pub attempt: u64,
+    pub status: WorkflowRunStatus,
     pub workflow_path: String,
     pub workflow_sha: String,
     pub jobs: Vec<RuntimeJob>,
@@ -89,7 +134,7 @@ impl ActionsEvidence {
         &self,
         check_run_id: u64,
         required_contexts: &[String],
-    ) -> Result<Requirement, ApiError> {
+    ) -> Result<Requirement, ClassificationError> {
         let (run, job) = self.job_for_check(check_run_id)?;
         self.classify_job(run, job, required_contexts)
     }
@@ -103,7 +148,7 @@ impl ActionsEvidence {
         name: &str,
         check_run_ids: &BTreeSet<u64>,
         required_contexts: &[String],
-    ) -> Result<Requirement, ApiError> {
+    ) -> Result<Requirement, ClassificationError> {
         let matches = self
             .runs
             .iter()
@@ -124,10 +169,12 @@ impl ActionsEvidence {
             [(run, job)] => self.classify_job(run, job, required_contexts),
             [] => Err(ApiError::Malformed(format!(
                 "no current-attempt Actions job matches workflow run {workflow_run_id} check {name}"
-            ))),
+            ))
+            .into()),
             _ => Err(ApiError::Malformed(format!(
                 "multiple current-attempt Actions jobs match workflow run {workflow_run_id} check {name}"
-            ))),
+            ))
+            .into()),
         }
     }
 
@@ -136,7 +183,7 @@ impl ActionsEvidence {
         run: &WorkflowEvidence,
         job: &RuntimeJob,
         required_contexts: &[String],
-    ) -> Result<Requirement, ApiError> {
+    ) -> Result<Requirement, ClassificationError> {
         let graph_targets = run
             .graph
             .required_targets(required_contexts)
@@ -149,21 +196,33 @@ impl ActionsEvidence {
                 .count();
             match matches {
                 1 => {}
+                0 if run.status == WorkflowRunStatus::Active => {
+                    return Err(ClassificationError::Incomplete(IncompleteEvidence {
+                        target: target.clone(),
+                        workflow_path: run.workflow_path.clone(),
+                        run_id: run.run_id,
+                        attempt: run.attempt,
+                    }));
+                }
                 0 => {
                     return Err(ApiError::Malformed(format!(
                         "required workflow target {target} is absent from current-attempt jobs"
-                    )));
+                    ))
+                    .into());
                 }
                 _ => {
                     return Err(ApiError::Malformed(format!(
                         "required workflow target {target} is ambiguous in current-attempt jobs"
-                    )));
+                    ))
+                    .into());
                 }
             }
         }
-        run.graph
-            .classify(job, &graph_targets)
-            .map_err(|error| ApiError::Malformed(format!("workflow graph: {error}")))
+        run.graph.classify(job, &graph_targets).map_err(|error| {
+            ClassificationError::Observation(ApiError::Malformed(format!(
+                "workflow graph: {error}"
+            )))
+        })
     }
 }
 
@@ -218,6 +277,7 @@ impl EvidenceCache {
                 )));
             }
             let attempt = required_u64(&run_value, "run_attempt")?;
+            let status = parse_workflow_run_status(&run_value)?;
             let workflow_path = required_string(&run_value, "path")?;
             let jobs = paged_jobs(subject, run_id, attempt, &mut run)?;
             let cached = self.workflow(subject, &workflow_path, &workflow_sha, &mut run)?;
@@ -225,6 +285,7 @@ impl EvidenceCache {
                 head_sha: snapshot.head_sha.clone(),
                 run_id,
                 attempt,
+                status,
                 workflow_path,
                 workflow_sha,
                 jobs,
@@ -466,6 +527,18 @@ fn decode_contents(value: &Value) -> Result<String, ApiError> {
         .map_err(|error| ApiError::Malformed(format!("workflow content is not UTF-8: {error}")))
 }
 
+fn parse_workflow_run_status(value: &Value) -> Result<WorkflowRunStatus, ApiError> {
+    match required_string(value, "status")?.as_str() {
+        "completed" => Ok(WorkflowRunStatus::Completed),
+        "queued" | "in_progress" | "requested" | "waiting" | "pending" => {
+            Ok(WorkflowRunStatus::Active)
+        }
+        status => Err(ApiError::Malformed(format!(
+            "unsupported Actions workflow run status {status}"
+        ))),
+    }
+}
+
 fn required_array<'a>(value: &'a Value, name: &str) -> Result<&'a Vec<Value>, ApiError> {
     value
         .get(name)
@@ -492,7 +565,7 @@ fn required_u64(value: &Value, name: &str) -> Result<u64, ApiError> {
 mod tests {
     use super::*;
     use crate::pr::snapshot::{CheckState, MergeStateStatus, Mergeable, PrState, QueueState};
-    use crate::pr::test_support::actions_evidence;
+    use crate::pr::test_support::{actions_evidence, active_actions_evidence};
     use crate::pr::{PrNumber, Subject};
 
     fn subject() -> Subject {
@@ -527,8 +600,8 @@ mod tests {
     fn pagination_collects_current_attempt_and_pinned_sources() {
         let mut requests = Vec::new();
         let mut replies = vec![
-            serde_json::json!({"total_count": 2, "workflow_runs": [{"id": 1, "head_sha": "head", "run_attempt": 2, "path": ".github/workflows/main.yml"}]}),
-            serde_json::json!({"total_count": 2, "workflow_runs": [{"id": 2, "head_sha": "head", "run_attempt": 1, "path": ".github/workflows/other.yml"}]}),
+            serde_json::json!({"total_count": 2, "workflow_runs": [{"id": 1, "head_sha": "head", "run_attempt": 2, "status": "completed", "path": ".github/workflows/main.yml"}]}),
+            serde_json::json!({"total_count": 2, "workflow_runs": [{"id": 2, "head_sha": "head", "run_attempt": 1, "status": "completed", "path": ".github/workflows/other.yml"}]}),
             serde_json::json!({"total_count": 2, "jobs": [{"id": 1011, "check_run_url": "https://api.github.com/repos/o/r/check-runs/11", "name": "caller / nested"}]}),
             serde_json::json!({"total_count": 2, "jobs": [{"id": 1012, "check_run_url": "https://api.github.com/repos/o/r/check-runs/12", "name": "caller / sibling"}]}),
             serde_json::json!({"encoding": "base64", "content": "am9iczoKICBjYWxsZXI6CiAgICB1c2VzOiAuL2xvY2FsLnltbAogIGFnZ3JlZ2F0ZToKICAgIG5hbWU6IEFnZ3JlZ2F0ZQogICAgbmVlZHM6IGNhbGxlcgo="}),
@@ -545,6 +618,7 @@ mod tests {
         .unwrap();
         assert_eq!(evidence.runs.len(), 2);
         assert_eq!(evidence.runs[0].attempt, 2);
+        assert_eq!(evidence.runs[0].status, WorkflowRunStatus::Completed);
         assert_eq!(
             evidence.job_for_check(11).unwrap().1.name,
             "caller / nested"
@@ -577,21 +651,21 @@ mod tests {
         let mut requests = Vec::new();
         let mut responses = vec![
             // First collection: dynamic run/jobs plus immutable root/local sources.
-            serde_json::json!({"total_count": 1, "workflow_runs": [{"id": 1, "head_sha": "head", "run_attempt": 1, "path": ".github/workflows/main.yml"}]}),
+            serde_json::json!({"total_count": 1, "workflow_runs": [{"id": 1, "head_sha": "head", "run_attempt": 1, "status": "completed", "path": ".github/workflows/main.yml"}]}),
             serde_json::json!({"total_count": 1, "jobs": [{"id": 1011, "check_run_url": "https://api.github.com/repos/o/r/check-runs/11", "name": "caller / body"}]}),
             serde_json::json!({"encoding": "base64", "content": root_content}),
             serde_json::json!({"encoding": "base64", "content": nested_content}),
             // Same path/SHA: only dynamic observations are fetched.
-            serde_json::json!({"total_count": 1, "workflow_runs": [{"id": 1, "head_sha": "head", "run_attempt": 2, "path": ".github/workflows/main.yml"}]}),
+            serde_json::json!({"total_count": 1, "workflow_runs": [{"id": 1, "head_sha": "head", "run_attempt": 2, "status": "completed", "path": ".github/workflows/main.yml"}]}),
             serde_json::json!({"total_count": 1, "jobs": [{"id": 1012, "check_run_url": "https://api.github.com/repos/o/r/check-runs/12", "name": "caller / body"}]}),
             // A different SHA cannot reuse source or graph evidence.
-            serde_json::json!({"total_count": 1, "workflow_runs": [{"id": 2, "head_sha": "next", "run_attempt": 1, "path": ".github/workflows/main.yml"}]}),
+            serde_json::json!({"total_count": 1, "workflow_runs": [{"id": 2, "head_sha": "next", "run_attempt": 1, "status": "completed", "path": ".github/workflows/main.yml"}]}),
             serde_json::json!({"total_count": 1, "jobs": [{"id": 1021, "check_run_url": "https://api.github.com/repos/o/r/check-runs/21", "name": "caller / body"}]}),
             serde_json::json!({"encoding": "base64", "content": root_content}),
             serde_json::json!({"encoding": "base64", "content": nested_content}),
             // A different path at the same SHA needs a distinct root graph/source,
             // while its shared pinned local reusable source remains reusable.
-            serde_json::json!({"total_count": 1, "workflow_runs": [{"id": 3, "head_sha": "next", "run_attempt": 1, "path": ".github/workflows/other.yml"}]}),
+            serde_json::json!({"total_count": 1, "workflow_runs": [{"id": 3, "head_sha": "next", "run_attempt": 1, "status": "completed", "path": ".github/workflows/other.yml"}]}),
             serde_json::json!({"total_count": 1, "jobs": [{"id": 1031, "check_run_url": "https://api.github.com/repos/o/r/check-runs/31", "name": "caller / body"}]}),
             serde_json::json!({"encoding": "base64", "content": root_content}),
         ]
@@ -650,8 +724,8 @@ mod tests {
         let content = base64::engine::general_purpose::STANDARD.encode(source);
         let mut replies = vec![
             serde_json::json!({"total_count": 2, "workflow_runs": [
-                {"id": 7, "head_sha": "head", "run_attempt": 1, "path": ".github/workflows/selected.yml"},
-                {"id": 8, "head_sha": "head", "run_attempt": 1, "path": ".github/workflows/unsupported.yml"}
+                {"id": 7, "head_sha": "head", "run_attempt": 1, "status": "completed", "path": ".github/workflows/selected.yml"},
+                {"id": 8, "head_sha": "head", "run_attempt": 1, "status": "completed", "path": ".github/workflows/unsupported.yml"}
             ]}),
             serde_json::json!({"total_count": 2, "jobs": [
                 {"id": 701, "check_run_url": "https://api.github.com/repos/o/r/check-runs/71", "name": "Renamed lane"},
@@ -690,7 +764,7 @@ mod tests {
         "#;
         let content = base64::engine::general_purpose::STANDARD.encode(source);
         let mut replies = vec![
-            serde_json::json!({"total_count": 1, "workflow_runs": [{"id": 77, "head_sha": "head", "run_attempt": 3, "path": ".github/workflows/ci.yml"}]}),
+            serde_json::json!({"total_count": 1, "workflow_runs": [{"id": 77, "head_sha": "head", "run_attempt": 3, "status": "completed", "path": ".github/workflows/ci.yml"}]}),
             serde_json::json!({"total_count": 6, "jobs": [
                 {"id": 9001, "check_run_url": "https://api.github.com/repos/o/r/check-runs/104431520054", "name": "Renamed ancestor"},
                 {"id": 9002, "check_run_url": "https://api.github.com/repos/o/r/check-runs/102", "name": "Matrix sqlite / chromium"},
@@ -723,6 +797,51 @@ mod tests {
     }
 
     #[test]
+    fn production_running_workflow_preserves_incomplete_target_identity() {
+        let source = r#"
+            jobs:
+              lane:
+                name: Renamed lane
+              aggregate:
+                name: Required aggregate
+                needs: lane
+        "#;
+        let content = base64::engine::general_purpose::STANDARD.encode(source);
+        let mut replies = vec![
+            serde_json::json!({"total_count": 1, "workflow_runs": [{
+                "id": 77,
+                "head_sha": "head",
+                "run_attempt": 3,
+                "status": "in_progress",
+                "path": ".github/workflows/ci.yml"
+            }]}),
+            serde_json::json!({"total_count": 1, "jobs": [{
+                "id": 9001,
+                "check_run_url": "https://api.github.com/repos/o/r/check-runs/71",
+                "name": "Renamed lane"
+            }]}),
+            serde_json::json!({"encoding": "base64", "content": content}),
+        ]
+        .into_iter();
+        let evidence = collect_with(&subject(), &snapshot(), &BTreeSet::from([77]), |_| {
+            replies
+                .next()
+                .ok_or_else(|| ApiError::Malformed("unexpected request".into()))
+        })
+        .unwrap();
+        let error = evidence
+            .classify_check(71, &["Required aggregate".into()])
+            .unwrap_err();
+        let ClassificationError::Incomplete(incomplete) = error else {
+            panic!("expected incomplete evidence, got {error:?}")
+        };
+        assert_eq!(incomplete.target, "Required aggregate");
+        assert_eq!(incomplete.workflow_path, ".github/workflows/ci.yml");
+        assert_eq!(incomplete.run_id, 77);
+        assert_eq!(incomplete.attempt, 3);
+    }
+
+    #[test]
     fn current_attempt_group_uses_replacement_check_run_id() {
         let evidence = actions_evidence(
             "head",
@@ -745,6 +864,21 @@ mod tests {
             ),
             Ok(Requirement::Transitive)
         );
+    }
+
+    #[test]
+    fn running_workflow_reports_a_missing_required_target_as_incomplete() {
+        let source = r#"
+            jobs:
+              lane:
+                name: Arbitrary lane
+              aggregate:
+                name: Required aggregate
+                needs: lane
+        "#;
+        let evidence = active_actions_evidence("head", source, vec![("Arbitrary lane", 1)]);
+        let result = evidence.classify_check(1, &["Required aggregate".into()]);
+        assert!(matches!(result, Err(ClassificationError::Incomplete(_))));
     }
 
     #[test]
@@ -821,13 +955,31 @@ mod tests {
     }
 
     #[test]
+    fn workflow_run_status_parsing_is_fail_closed() {
+        for status in ["queued", "in_progress", "requested", "waiting", "pending"] {
+            assert_eq!(
+                parse_workflow_run_status(&serde_json::json!({"status": status})),
+                Ok(WorkflowRunStatus::Active)
+            );
+        }
+        assert_eq!(
+            parse_workflow_run_status(&serde_json::json!({"status": "completed"})),
+            Ok(WorkflowRunStatus::Completed)
+        );
+        assert!(matches!(
+            parse_workflow_run_status(&serde_json::json!({"status": "surprising"})),
+            Err(ApiError::Malformed(_))
+        ));
+    }
+
+    #[test]
     fn malformed_pagination_and_superseded_runs_fail_closed() {
         let error = collect_with(&subject(), &snapshot(), &BTreeSet::from([1]), |_| {
             Ok(serde_json::json!({"total_count": 1, "workflow_runs": []}))
         })
         .unwrap_err();
         assert!(matches!(error, ApiError::Malformed(_)));
-        let error = collect_with(&subject(), &snapshot(), &BTreeSet::from([1]), |_| Ok(serde_json::json!({"total_count": 1, "workflow_runs": [{"id": 1, "head_sha": "old", "run_attempt": 1, "path": "x"}]}))).unwrap_err();
+        let error = collect_with(&subject(), &snapshot(), &BTreeSet::from([1]), |_| Ok(serde_json::json!({"total_count": 1, "workflow_runs": [{"id": 1, "head_sha": "old", "run_attempt": 1, "status": "completed", "path": "x"}]}))).unwrap_err();
         assert!(matches!(error, ApiError::Malformed(_)));
     }
 

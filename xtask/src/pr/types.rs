@@ -23,7 +23,8 @@ pub struct Subject {
     pub number: PrNumber,
 }
 
-/// The terminal verdicts, plus `Pending` which only `--once` can produce.
+/// The terminal verdicts, plus `Pending` for a non-terminal one-shot observation
+/// or a pre-arm refusal while classification evidence is incomplete.
 ///
 /// The whole point of the command is that these never collapse into each other:
 /// `TimedOut` says GitHub never finished, `WatcherError` says *we* could not tell.

@@ -153,8 +153,20 @@ impl Rendered {
 struct Polled {
     required: RequiredChecks,
     snapshot: PrSnapshot,
-    step: Step,
-    optional_failures: Vec<OptionalFailure>,
+    classification: SnapshotClassification,
+}
+
+pub(super) enum SnapshotClassification {
+    Complete {
+        step: Step,
+        optional_failures: Vec<OptionalFailure>,
+    },
+    Incomplete(super::evidence::IncompleteEvidence),
+}
+
+enum FailureResolution {
+    Complete(Vec<ClassifiedFailure>),
+    Incomplete(super::evidence::IncompleteEvidence),
 }
 
 struct Emitter<'a> {
@@ -182,13 +194,17 @@ pub(super) fn classify_snapshot<S: PrSource>(
     req: &RequiredChecks,
     ejection: Option<&RunRef>,
     progress: &Progress,
-) -> Result<(Step, Vec<OptionalFailure>), ApiError> {
-    let failures = classified_failures(source, subject, snap, req)?;
-    let optional_failures = decide::optional_failures(&failures);
-    Ok((
-        decide::classify_with_failures(snap, req, ejection, progress, &failures),
-        optional_failures,
-    ))
+) -> Result<SnapshotClassification, ApiError> {
+    match classified_failures(source, subject, snap, req)? {
+        FailureResolution::Complete(failures) => {
+            let optional_failures = decide::optional_failures(&failures);
+            Ok(SnapshotClassification::Complete {
+                step: decide::classify_with_failures(snap, req, ejection, progress, &failures),
+                optional_failures,
+            })
+        }
+        FailureResolution::Incomplete(evidence) => Ok(SnapshotClassification::Incomplete(evidence)),
+    }
 }
 
 fn classified_failures<S: PrSource>(
@@ -196,9 +212,9 @@ fn classified_failures<S: PrSource>(
     subject: &Subject,
     snap: &PrSnapshot,
     req: &RequiredChecks,
-) -> Result<Vec<ClassifiedFailure>, ApiError> {
+) -> Result<FailureResolution, ApiError> {
     if snap.state != PrState::Open || snap.mergeable == super::snapshot::Mergeable::Conflicting {
-        return Ok(Vec::new());
+        return Ok(FailureResolution::Complete(Vec::new()));
     }
     // Load Actions evidence before rerun settledness can hide a failed constituent.
     // A same-run, same-named pending job is a re-run only after the immutable graph
@@ -233,54 +249,62 @@ fn classified_failures<S: PrSource>(
             "Actions evidence belongs to a different PR head".into(),
         ));
     }
-    if let Some(evidence) = evidence.as_ref() {
-        validate_action_failure_collisions(snap, req, evidence)?;
+    if let Some(evidence) = evidence.as_ref()
+        && let Some(incomplete) = validate_action_failure_collisions(snap, req, evidence)?
+    {
+        return Ok(FailureResolution::Incomplete(incomplete));
     }
     let failures = decide::resolved_failures(snap)
         .into_iter()
         .filter(|check| !req.contexts.iter().any(|context| context == &check.name))
         .collect::<Vec<_>>();
     if failures.is_empty() {
-        return Ok(Vec::new());
+        return Ok(FailureResolution::Complete(Vec::new()));
     }
-    failures
-        .into_iter()
-        .map(|check| {
-            let subject_failure = match check.provider {
-                CheckProvider::GitHubActions {
-                    check_run_id,
-                    workflow_run_id,
-                } => {
-                    let evidence = evidence.as_ref().ok_or_else(|| {
-                        ApiError::Malformed("GitHub Actions evidence unexpectedly absent".into())
-                    })?;
-                    matches!(
-                        evidence.classify_check(check_run_id, &req.contexts)?,
-                        Requirement::Direct | Requirement::Transitive
-                    )
-                    .then(|| SubjectFailure {
+    let mut classified = Vec::with_capacity(failures.len());
+    for check in failures {
+        let subject_failure = match check.provider {
+            CheckProvider::GitHubActions {
+                check_run_id,
+                workflow_run_id,
+            } => {
+                let evidence = evidence.as_ref().ok_or_else(|| {
+                    ApiError::Malformed("GitHub Actions evidence unexpectedly absent".into())
+                })?;
+                let requirement = match evidence.classify_check(check_run_id, &req.contexts) {
+                    Ok(requirement) => requirement,
+                    Err(super::evidence::ClassificationError::Incomplete(incomplete)) => {
+                        return Ok(FailureResolution::Incomplete(incomplete));
+                    }
+                    Err(super::evidence::ClassificationError::Observation(error)) => {
+                        return Err(error);
+                    }
+                };
+                matches!(requirement, Requirement::Direct | Requirement::Transitive).then(|| {
+                    SubjectFailure {
                         workflow_run_id,
                         check_run_id,
                         name: check.name.clone(),
-                    })
-                }
-                CheckProvider::StatusContext | CheckProvider::OtherCheckRun => None,
-            };
-            Ok(if subject_failure.is_some() {
-                ClassifiedFailure::Required {
-                    name: check.name.clone(),
-                    pointer: check.details_url.clone(),
-                    subject_failure,
-                }
-            } else {
-                ClassifiedFailure::Optional {
-                    id: failure_identity(&snap.head_sha, check),
-                    name: check.name.clone(),
-                    pointer: check.details_url.clone(),
-                }
-            })
-        })
-        .collect()
+                    }
+                })
+            }
+            CheckProvider::StatusContext | CheckProvider::OtherCheckRun => None,
+        };
+        classified.push(if subject_failure.is_some() {
+            ClassifiedFailure::Required {
+                name: check.name.clone(),
+                pointer: check.details_url.clone(),
+                subject_failure,
+            }
+        } else {
+            ClassifiedFailure::Optional {
+                id: failure_identity(&snap.head_sha, check),
+                name: check.name.clone(),
+                pointer: check.details_url.clone(),
+            }
+        });
+    }
+    Ok(FailureResolution::Complete(classified))
 }
 
 /// Validate every same-run/display-name collision containing a failed Actions check
@@ -289,7 +313,7 @@ fn validate_action_failure_collisions(
     snap: &PrSnapshot,
     req: &RequiredChecks,
     evidence: &super::evidence::ActionsEvidence,
-) -> Result<(), ApiError> {
+) -> Result<Option<super::evidence::IncompleteEvidence>, ApiError> {
     let mut groups =
         std::collections::BTreeMap::<(u64, String), std::collections::BTreeSet<u64>>::new();
     for failed in snap.checks.iter().filter(|check| {
@@ -318,14 +342,22 @@ fn validate_action_failure_collisions(
         groups.insert((workflow_run_id, failed.name.clone()), check_run_ids);
     }
     for ((workflow_run_id, name), check_run_ids) in groups {
-        evidence.classify_current_attempt_group(
+        match evidence.classify_current_attempt_group(
             workflow_run_id,
             &name,
             &check_run_ids,
             &req.contexts,
-        )?;
+        ) {
+            Ok(_) => {}
+            Err(super::evidence::ClassificationError::Incomplete(incomplete)) => {
+                return Ok(Some(incomplete));
+            }
+            Err(super::evidence::ClassificationError::Observation(error)) => {
+                return Err(error);
+            }
+        }
     }
-    Ok(())
+    Ok(None)
 }
 
 fn failure_identity(head_sha: &str, check: &super::snapshot::CheckEntry) -> String {
@@ -401,6 +433,7 @@ pub(super) fn watch_with_progress_and_optional_failures<S: PrSource, C: Clock>(
     let mut strikes = 0u32;
     let mut head_sha = String::new();
     let mut prev: Option<Rendered> = None;
+    let mut last_incomplete_detail: Option<String> = None;
     let mut ever_read = false;
 
     loop {
@@ -453,21 +486,19 @@ pub(super) fn watch_with_progress_and_optional_failures<S: PrSource, C: Clock>(
             } else {
                 None
             };
-            let (step, optional_failures) =
+            let classification =
                 classify_snapshot(source, subject, &snap, &req, ejection.as_ref(), &progress)?;
             Ok(Polled {
                 required: req,
                 snapshot: snap,
-                step,
-                optional_failures,
+                classification,
             })
         })();
 
         let Polled {
             required: req,
             snapshot: snap,
-            step,
-            optional_failures,
+            classification,
         } = match polled {
             Ok(v) => {
                 strikes = 0;
@@ -559,6 +590,50 @@ pub(super) fn watch_with_progress_and_optional_failures<S: PrSource, C: Clock>(
         {
             progress.queued_head_sha = None;
         }
+
+        let (step, optional_failures) = match classification {
+            SnapshotClassification::Complete {
+                step,
+                optional_failures,
+            } => {
+                last_incomplete_detail = None;
+                (step, optional_failures)
+            }
+            SnapshotClassification::Incomplete(incomplete) => {
+                let detail = incomplete.detail();
+                let now = clock.now_unix();
+                if last_incomplete_detail.as_deref() != Some(&detail) {
+                    em.emit(clock.now_rfc3339(), now, EventKind::Phase, detail.clone());
+                    last_incomplete_detail = Some(detail.clone());
+                }
+                prev = None;
+                if cfg.once {
+                    return finish(
+                        subject,
+                        head_sha,
+                        Terminal {
+                            outcome: Outcome::Pending,
+                            detail: Some(detail),
+                            pointer: None,
+                            subject_failure: None,
+                            phase: Some("awaiting-classification-evidence".into()),
+                        },
+                        em.events,
+                    );
+                }
+                if clock.now_unix().saturating_sub(em.last_event_at) >= cfg.heartbeat_secs {
+                    let now = clock.now_unix();
+                    em.emit(
+                        clock.now_rfc3339(),
+                        now,
+                        EventKind::Heartbeat,
+                        "still awaiting classification evidence".into(),
+                    );
+                }
+                clock.sleep_secs(cfg.interval_secs);
+                continue;
+            }
+        };
 
         let phase = match &step {
             Step::Continue { phase, .. } => *phase,
@@ -1696,6 +1771,90 @@ mod tests {
         assert_eq!(
             watch(&src, &clock(), &subject(), cfg(), &mut |_| {}).outcome,
             Outcome::ReadyToLand
+        );
+    }
+
+    #[test]
+    fn incomplete_classification_waits_without_spending_a_strike() {
+        let workflow = r#"
+            jobs:
+              lane:
+                name: Renamed validation lane
+              aggregate:
+                name: Aggregate verdict
+                needs: lane
+        "#;
+        let failed = open(vec![actions_check(
+            "Renamed validation lane",
+            11,
+            CheckState::Failure,
+            "2026-07-30T14:10:00Z",
+        )]);
+        let materialized = open(vec![
+            actions_check(
+                "Renamed validation lane",
+                11,
+                CheckState::Failure,
+                "2026-07-30T14:10:00Z",
+            ),
+            check("Aggregate verdict", CheckState::Pending, ""),
+        ]);
+        let src = FakeSource::new(vec![Ok(failed), Ok(materialized)], aggregate_rules())
+            .with_actions_evidence_script(vec![
+                Ok(active_actions_evidence(
+                    "abc",
+                    workflow,
+                    vec![("Renamed validation lane", 11)],
+                )),
+                Ok(actions_evidence(
+                    "abc",
+                    workflow,
+                    vec![("Renamed validation lane", 11), ("Aggregate verdict", 12)],
+                )),
+            ]);
+        let report = watch(&src, &clock(), &subject(), cfg(), &mut |_| {});
+        assert_eq!(report.outcome, Outcome::ChecksFailed);
+        assert!(
+            report
+                .events
+                .iter()
+                .all(|event| event.kind != EventKind::PollError)
+        );
+        assert!(report.events.iter().any(|event| {
+            event.kind == EventKind::Phase
+                && event.detail.contains("Aggregate verdict")
+                && event.detail.contains(".github/workflows/test.yml")
+        }));
+    }
+
+    #[test]
+    fn one_shot_incomplete_classification_is_pending() {
+        let workflow = r#"
+            jobs:
+              lane:
+                name: Renamed validation lane
+              aggregate:
+                name: Aggregate verdict
+                needs: lane
+        "#;
+        let failed = open(vec![actions_check(
+            "Renamed validation lane",
+            11,
+            CheckState::Failure,
+            "2026-07-30T14:10:00Z",
+        )]);
+        let src = FakeSource::new(vec![Ok(failed)], aggregate_rules()).with_actions_evidence(
+            active_actions_evidence("abc", workflow, vec![("Renamed validation lane", 11)]),
+        );
+        let mut once = cfg();
+        once.once = true;
+        let report = watch(&src, &clock(), &subject(), once, &mut |_| {});
+        assert_eq!(report.outcome, Outcome::Pending);
+        assert!(
+            report
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("Aggregate verdict"))
         );
     }
 

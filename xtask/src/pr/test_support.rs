@@ -8,7 +8,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, VecDeque};
 
-use super::evidence::{ActionsEvidence, WorkflowEvidence};
+use super::evidence::{ActionsEvidence, WorkflowEvidence, WorkflowRunStatus};
 use super::gh::ApiError;
 use super::shared_failure::{SharedFailureEvidence, SubjectFailure};
 use super::snapshot::{
@@ -64,6 +64,23 @@ pub fn actions_check(
 }
 
 pub fn actions_evidence(head_sha: &str, source: &str, jobs: Vec<(&str, u64)>) -> ActionsEvidence {
+    actions_evidence_with_status(head_sha, source, jobs, WorkflowRunStatus::Completed)
+}
+
+pub fn active_actions_evidence(
+    head_sha: &str,
+    source: &str,
+    jobs: Vec<(&str, u64)>,
+) -> ActionsEvidence {
+    actions_evidence_with_status(head_sha, source, jobs, WorkflowRunStatus::Active)
+}
+
+fn actions_evidence_with_status(
+    head_sha: &str,
+    source: &str,
+    jobs: Vec<(&str, u64)>,
+    status: WorkflowRunStatus,
+) -> ActionsEvidence {
     let graph =
         WorkflowGraph::parse(source).unwrap_or_else(|error| panic!("test workflow graph: {error}"));
     ActionsEvidence {
@@ -72,6 +89,7 @@ pub fn actions_evidence(head_sha: &str, source: &str, jobs: Vec<(&str, u64)>) ->
             head_sha: head_sha.into(),
             run_id: 1,
             attempt: 1,
+            status,
             workflow_path: ".github/workflows/test.yml".into(),
             workflow_sha: head_sha.into(),
             jobs: jobs
