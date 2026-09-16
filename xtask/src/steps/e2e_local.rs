@@ -888,6 +888,61 @@ mod tests {
     use super::*;
 
     #[test]
+    fn local_collector_config_has_only_owned_listener_surfaces() {
+        const EXPECTED: &str = r#"
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: ${env:OTELCOL_GRPC_ENDPOINT}
+      http:
+        endpoint: ${env:OTELCOL_HTTP_ENDPOINT}
+processors:
+  batch: {}
+exporters:
+  file:
+    path: ${env:JAUNDER_CAPTURE_DIR}/otel-traces.jsonl
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [file]
+"#;
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask manifest directory has a workspace parent");
+        let actual = std::fs::read_to_string(root.join("end2end/otel-collector.yaml"))
+            .expect("local collector configuration");
+        let actual: serde_yaml::Value =
+            serde_yaml::from_str(&actual).expect("valid local collector configuration");
+        let expected: serde_yaml::Value =
+            serde_yaml::from_str(EXPECTED).expect("valid expected collector configuration");
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn local_collectors_overlap_while_default_metrics_port_is_occupied() {
+        let occupied = match TcpListener::bind("127.0.0.1:8888") {
+            Ok(listener) => Some(listener),
+            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => None,
+            Err(error) => panic!("occupying collector metrics port: {error}"),
+        };
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask manifest directory has a workspace parent");
+        let first_capture = tempfile::tempdir().expect("first collector capture directory");
+        let mut first = start_collector(root, first_capture)
+            .unwrap_or_else(|failure| panic!("starting first collector: {}", failure.error));
+        let second_capture = tempfile::tempdir().expect("second collector capture directory");
+        let mut second = start_collector(root, second_capture)
+            .unwrap_or_else(|failure| panic!("starting second collector: {}", failure.error));
+        second.shutdown().expect("second collector shutdown");
+        first.shutdown().expect("first collector shutdown");
+        drop(occupied);
+    }
+
+    #[test]
     fn seed_launch_locks_the_tools_workspace() {
         assert_eq!(
             devtool_seed_args(Path::new("/repo/tools/Cargo.toml")),
