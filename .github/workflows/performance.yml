@@ -30,7 +30,7 @@ jobs:
       # Keep the CI shell and flake selection identical to the build lanes, but
       # do not configure Cachix or any action cache: a measurement producer must
       # realize its invocation-specific derivation rather than restore output.
-      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
