@@ -175,12 +175,37 @@ test("composer keeps filled body actions before a container-responsive controls 
     await expect(body.locator(":scope > .j-composer-field")).toHaveCount(1);
     await expect(body.locator(":scope > .j-composer-toolbar")).toHaveCount(1);
     await expect(body.locator(":scope > .j-post-editor-panel")).toHaveCount(0);
+    expect(
+      await body
+        .locator(":scope > *")
+        .evaluateAll((children) => children.map((child) => child.className)),
+    ).toEqual(["j-composer-field", "j-composer-toolbar"]);
+    const bodyField = body.locator(":scope > label.j-composer-field");
     await expect(
-      rail.getByRole("heading", { name: "Post details", exact: true }),
-    ).toBeVisible();
-    await expect(
-      rail.getByRole("heading", { name: "Publication options", exact: true }),
-    ).toBeVisible();
+      bodyField.locator(":scope > .j-form-label + textarea[name='body']"),
+    ).toHaveCount(1);
+    expect(
+      await rail
+        .locator(":scope > .j-composer-details, :scope > .j-compose-options")
+        .evaluateAll((sections) =>
+          sections.map((section) => section.className),
+        ),
+    ).toEqual(["j-composer-details", "j-compose-options"]);
+    expect(
+      (await rail.locator("h2, .j-form-label").allTextContents()).map((text) =>
+        text.trim(),
+      ),
+    ).toEqual([
+      "Post details",
+      "Media",
+      "Summary",
+      "Tags",
+      "Format",
+      "Publication options",
+      "Slug",
+      "Publish at (optional)",
+      "Audience",
+    ]);
   };
   const expectFilledActions = async (scope: Locator): Promise<void> => {
     const actions = scope.locator(".j-composer-toolbar .j-btn");
