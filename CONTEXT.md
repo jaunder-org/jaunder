@@ -44,6 +44,11 @@ User's own published Posts and inline composer. It is not a followed source or
 reading timeline. _Avoid_: Feed (reserved for Syndication Feeds), Local (the
 public instance timeline).
 
+**Site Tagline**: The optional operator-controlled plain-text description of
+Local. It appears in Local presentation and describes site-wide and site-tag
+Syndication Feeds; it does not describe Home or an individual User's
+publication. _Avoid_: Post summary, User bio, promotional hero.
+
 **Style Contract**: The versioned semantic HTML surface shared by Jaunder's
 built-in and custom public themes. It guarantees accessible source order,
 landmarks, and named concept hooks, not incidental wrapper nesting or sibling
