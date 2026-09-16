@@ -44,6 +44,7 @@ mod steps {
     pub mod doc_links;
     pub mod doctest_fences;
     pub mod duration_budget;
+    pub mod e2e_collector_config_check;
     pub mod e2e_goto_wrapper_check;
     pub mod e2e_local;
     pub mod e2e_scaffold_check;

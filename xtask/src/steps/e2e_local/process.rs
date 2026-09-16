@@ -12,6 +12,7 @@ use processkit::{Command, Outcome, StdioMode};
 
 const COLLECTOR_READINESS_TIMEOUT: Duration = Duration::from_secs(5);
 const PROCESS_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+const DISABLE_SELF_METRICS: &str = "service.telemetry.metrics.level=none";
 
 /// One collector and its temporary capture directory. Endpoint allocation and
 /// artifact retention remain Jaunder policy; processkit owns containment,
@@ -54,6 +55,10 @@ impl CollectorGuard {
         let command = Command::new("otelcol-contrib")
             .arg("--config")
             .arg(&config)
+            // The local harness does not consume collector self-metrics. Disabling
+            // them here keeps the shared VM configuration unchanged and avoids the
+            // collector's implicit fixed Prometheus listener.
+            .arg(format!("--set={DISABLE_SELF_METRICS}"))
             .env("OTELCOL_GRPC_ENDPOINT", grpc_endpoint.to_string())
             .env("OTELCOL_HTTP_ENDPOINT", http_endpoint.to_string())
             .stdin(processkit::Stdin::empty())

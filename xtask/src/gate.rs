@@ -249,6 +249,11 @@ pub(crate) const HOST_GATE_NON_TEST_STEPS: &[HostGateStep] = &[
         markdown_eligible: false,
     },
     HostGateStep::ResultOnly {
+        name: "e2e-collector-config",
+        run: steps::e2e_collector_config_check::run,
+        markdown_eligible: false,
+    },
+    HostGateStep::ResultOnly {
         name: "proffered-secret",
         run: steps::proffered_secret_check::run,
         markdown_eligible: false,
