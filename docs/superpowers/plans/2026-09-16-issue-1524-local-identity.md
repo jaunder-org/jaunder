@@ -69,7 +69,7 @@ Out:
     - `devtool run -- cargo xtask test-local -- -p host feed::`
     - `devtool run -- cargo xtask test-local -- -p jaunder -E 'test(/^feed::/)'`
 
-- [ ] Task 4: Expose and prove the aggregate operator workflow.
+- [x] Task 4: Expose and prove the aggregate operator workflow.
   - Contract: the existing Site Settings card loads, validates, sets, changes,
     and clears the tagline alongside title and base URL through one action;
     rollback-confirmed and commit-indeterminate feedback retain their existing

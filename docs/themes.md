@@ -211,37 +211,40 @@ the theme surface. For example:
 
 The stable hooks are:
 
-| Hook                 | Meaning                                                     |
-| -------------------- | ----------------------------------------------------------- |
-| `primary-navigation` | The public navigation landmark                              |
-| `masthead`           | The public masthead                                         |
-| `site-title`         | Textual site identity                                       |
-| `logo`               | Optional decorative package or Media logo                   |
-| `header-image`       | Optional decorative package, Media, or pooled header image  |
-| `main`               | The main-content landmark                                   |
-| `post-list`          | Timeline or tag-route Post list; absent on a permalink      |
-| `post`               | One rendered Post article                                   |
-| `post-header`        | A Post header                                               |
-| `avatar`             | Optional author avatar                                      |
-| `author-name`        | Author display name                                         |
-| `author-handle`      | Optional author handle                                      |
-| `published-time`     | Publication time                                            |
-| `post-title`         | Optional Post title heading                                 |
-| `post-summary`       | Optional Post summary                                       |
-| `post-body`          | Post body; its sanitized semantic descendants are styleable |
-| `post-footer`        | A Post footer                                               |
-| `tag-list`           | Optional tag list                                           |
-| `tag`                | One tag link                                                |
-| `source-attribution` | Optional source attribution                                 |
-| `continuation`       | Optional pagination continuation                            |
+| Hook                 | Meaning                                                        |
+| -------------------- | -------------------------------------------------------------- |
+| `primary-navigation` | The public navigation landmark                                 |
+| `masthead`           | The public masthead, including the optional Local Site Tagline |
+| `site-title`         | Textual Local site identity                                    |
+| `logo`               | Optional decorative package or Media logo                      |
+| `header-image`       | Optional decorative package, Media, or pooled header image     |
+| `main`               | The main-content landmark                                      |
+| `post-list`          | Timeline or tag-route Post list; absent on a permalink         |
+| `post`               | One rendered Post article                                      |
+| `post-header`        | A Post header                                                  |
+| `avatar`             | Optional author avatar                                         |
+| `author-name`        | Author display name                                            |
+| `author-handle`      | Optional author handle                                         |
+| `published-time`     | Publication time                                               |
+| `post-title`         | Optional Post title heading                                    |
+| `post-summary`       | Optional Post summary                                          |
+| `post-body`          | Post body; its sanitized semantic descendants are styleable    |
+| `post-footer`        | A Post footer                                                  |
+| `tag-list`           | Optional tag list                                              |
+| `tag`                | One tag link                                                   |
+| `source-attribution` | Optional source attribution                                    |
+| `continuation`       | Optional pagination continuation                               |
 
 The contract guarantees these concepts, landmarks, route presence, cardinality,
-and accessible source order. It does not guarantee wrapper depth or incidental
-sibling positions. Owner-only Post Actions controls are not Style Contract
-content: Jaunder mounts them in a trusted sibling outside this surface, tethered
-to a protected Post-header slot. Theme CSS cannot directly style or suppress
-those controls, but a theme that removes or clips a Post/header can remove their
-visual anchor; select **Studio** in `/themes` to recover the controls.
+and accessible source order. The optional Site Tagline is plain text within the
+existing `masthead` concept; target it through that hook and ordinary descendant
+selectors rather than expecting a separate tagline hook. It does not guarantee
+wrapper depth or incidental sibling positions. Owner-only Post Actions controls
+are not Style Contract content: Jaunder mounts them in a trusted sibling outside
+this surface, tethered to a protected Post-header slot. Theme CSS cannot
+directly style or suppress those controls, but a theme that removes or clips a
+Post/header can remove their visual anchor; select **Studio** in `/themes` to
+recover the controls.
 
 Jaunder accepts standard declarations and CSS custom properties, subject to the
 same URL and global-name checks. `anchor-name` is reserved for Jaunder's trusted

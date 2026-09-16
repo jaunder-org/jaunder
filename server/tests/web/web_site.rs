@@ -134,6 +134,51 @@ async fn update_site_identity_round_trips_via_get(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
+async fn update_site_identity_clears_tagline_when_omitted(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
+
+    let (status, body) = post_form(
+        app.clone(),
+        <web::site::UpdateIdentity as ServerFn>::PATH,
+        "title=My+Blog&tagline=A+tagline&base_url=https%3A%2F%2Fexample.com%2F",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+
+    // The direct-bound optional field dispatches `None` by omitting `tagline`,
+    // which clears the aggregate identity value rather than retaining it.
+    let (status, body) = post_form(
+        app.clone(),
+        <web::site::UpdateIdentity as ServerFn>::PATH,
+        "title=My+Blog&base_url=https%3A%2F%2Fexample.com%2F",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+
+    let (status, body) = post_form(
+        app,
+        <web::site::GetIdentity as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let identity: SiteIdentity = serde_json::from_str(&body).unwrap();
+    assert_eq!(identity.tagline, None);
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn update_site_identity_preserves_loaded_tagline(#[case] backend: Backend) {
     let env = backend.setup().await;
     let site_config = env.site_config();

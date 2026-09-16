@@ -13,8 +13,8 @@ Matrix: `matrix:docs/coverage/csr-e2e-matrix.md#administration`
 
 | Endpoint                                          | Status  | Surface                                                                                            |
 | ------------------------------------------------- | ------- | -------------------------------------------------------------------------------------------------- |
-| `endpoint:/api/site/get_identity`                 | Covered | Seeds the site title and base-URL form on the site-settings page.                                  |
-| `endpoint:/api/site/update_identity`              | Covered | Persists the operator's title/base-URL changes from the typed settings form.                       |
+| `endpoint:/api/site/get_identity`                 | Covered | Seeds the site title, optional Site Tagline, and base-URL form on the site-settings page.          |
+| `endpoint:/api/site/update_identity`              | Covered | Atomically persists the operator's title, optional Site Tagline, and base-URL aggregate.           |
 | `endpoint:/api/site/get_media_uploads_enabled`    | Covered | Independently loads the site-wide Media Upload Capability for its dedicated admin card.            |
 | `endpoint:/api/site/update_media_uploads_enabled` | Covered | Independently persists the Media Upload Capability without writing site identity settings.         |
 | `endpoint:/api/site/is_base_url_warning_visible`  | Covered | Drives the soft shell warning when feeds and AtomPub are disabled by a missing base URL.           |
@@ -43,11 +43,14 @@ site-base-URL predicate; the equivalent backup-settings save independently
 re-reads only the backup-destination predicate. Rollback-confirmed failures do
 not revalidate either warning.
 
-The routes themselves stay narrow. `/admin/site` owns site title, canonical base
-URL, and the independently persisted Media Upload Capability; `/admin/backups`
-owns storage destination, schedule, retention, and backup mode; `/admin/smtp`
-owns persisted outbound relay and paired credential intent; and `/admin/websub`
-owns the publisher hub plus regeneration and publication dead-letter recovery.
+The routes themselves stay narrow. `/admin/site` owns the Local title, optional
+Site Tagline, canonical base URL, and the independently persisted Media Upload
+Capability. One Site Settings save validates all three identity values before
+dispatching their atomic aggregate mutation; a blank tagline clears it.
+`/admin/backups` owns storage destination, schedule, retention, and backup mode;
+`/admin/smtp` owns persisted outbound relay and paired credential intent; and
+`/admin/websub` owns the publisher hub plus regeneration and publication
+dead-letter recovery.
 
 For Passkeys, the canonical base URL is a credential-binding WebAuthn origin:
 its exact origin is checked by the browser and its hostname is the RP ID.

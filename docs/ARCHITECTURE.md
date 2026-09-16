@@ -2262,7 +2262,18 @@ storage directory and database; `create-pg-db` bootstraps a PostgreSQL database;
 and `restore` round-trip the data, with the backup target auto-derived from the
 storage configuration ([ADR-0064](adr/0064-backup-target-auto-derivation.md),
 [ADR-0054](adr/0054-backup-test-homing-and-uniform-restore-failure.md)); and
-`site-config set/get/list/unset` reads and writes site settings.
+`site-config set/get/list/unset` reads and writes site settings. The operator
+Site Settings card resolves one `SiteIdentity` aggregate: required Local title,
+optional Site Tagline, and canonical base URL. It client-validates the shared
+newtypes before one `update_identity` dispatch; blank tagline and base URL clear
+their optional values. The composition-root-injected `SiteIdentityPublisher`
+performs that aggregate mutation through its bounded write scope, atomically
+advancing the publisher generation and invalidating affected feed caches. A
+confirmed or commit-indeterminate result revalidates the base-URL warning, while
+rollback-confirmed failure leaves that projection alone. Local's projector and
+CSR consume the same resolved identity for its title, optional tagline, and
+metadata; the existing public-theme `masthead` and `site-title` concepts remain
+the complete Style Contract surface.
 
 **Transient-data cleanup.** The
 [bounded transient-data retention decision](adr/0167-bounded-transient-data-retention.md)
