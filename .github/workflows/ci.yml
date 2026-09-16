@@ -54,7 +54,7 @@ jobs:
           nix develop .#ci --accept-flake-config -c cargo xtask nix probe-source
       - name: Upload core validation diagnostics
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: validate-core-diagnostics
           path: |
@@ -94,7 +94,7 @@ jobs:
           probe-source
       - name: Upload coverage validation diagnostics
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: validate-coverage-diagnostics
           path: |
@@ -144,7 +144,7 @@ jobs:
           matrix.backend }} ${{ matrix.browser }}
       - name: Upload e2e diagnostics
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: e2e-diagnostics-${{ matrix.backend }}-${{ matrix.browser }}
           path: |
