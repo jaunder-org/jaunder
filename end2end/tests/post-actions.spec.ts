@@ -117,7 +117,10 @@ test("owner permalink Post Actions menu stays attached to its trigger", async ({
     const alignmentFitsViewport =
       triggerRight - popoverBox!.width >= 0 && triggerRight <= viewport.width;
     if (alignmentFitsViewport) {
-      expect(Math.abs(popoverRight - triggerRight)).toBeLessThanOrEqual(1);
+      expect(
+        Math.abs(popoverRight - triggerRight),
+        JSON.stringify({ viewport, triggerBox, popoverBox }),
+      ).toBeLessThanOrEqual(1);
     }
     expect(popoverBox!.x).toBeGreaterThanOrEqual(0);
     expect(popoverBox!.y).toBeGreaterThanOrEqual(0);
