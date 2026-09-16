@@ -54,7 +54,6 @@ pub fn ProfilePage() -> impl IntoView {
                                                 <span class="j-form-label">"Username"</span>
                                                 <input
                                                     type="text"
-                                                    name="username"
                                                     class="j-form-input"
                                                     prop:value=data.username.to_string()
                                                     readonly
