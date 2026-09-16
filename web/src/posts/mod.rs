@@ -63,7 +63,7 @@ pub use page_state::{
 // Same reason again: the composer and editor state seams are consumed by the
 // wasm-only component.
 pub use compose_state::{ComposeState, PublicationIntent, publication_from_local, submit_gate};
-pub use composer_media::ComposerMedia;
+pub use composer_media::{ComposerMedia, ComposerMediaState};
 pub use composer_presentation::{CreationComposerPresentation, creation_composer_presentation};
 pub use edit_state::{
     EditLifecycleState, EditPublicationState, InvalidSchedule, LoadedPublication,

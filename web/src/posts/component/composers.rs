@@ -7,8 +7,8 @@ use crate::icon::{IconButtonContent, Icons};
 use crate::media::MediaUpload;
 use crate::posts;
 use crate::posts::{
-    ClassifiedSavedPost, ComposeState, ComposerMedia, Create, CreatePublication, InvalidSchedule,
-    LoadedPublication, NamedAudienceState, PublicationTimeEditState,
+    ClassifiedSavedPost, ComposeState, ComposerMediaState, Create, CreatePublication,
+    InvalidSchedule, LoadedPublication, NamedAudienceState, PublicationTimeEditState,
 };
 use crate::tags::TagInput;
 use crate::topbar::Topbar;
@@ -183,12 +183,11 @@ pub(super) fn ComposerCore(
 #[component]
 pub(super) fn ComposerDetails(state: ComposeState) -> impl IntoView {
     let uploads_enabled = Resource::new(|| (), |()| crate::media::get_uploads_enabled());
-    let media = RwSignal::new(Vec::<ComposerMedia>::new());
     view! {
         <div class="j-composer-details">
             {move || match crate::media::upload_presentation(uploads_enabled.get()) {
                 crate::media::UploadPresentation::Enabled => {
-                    view! { <ComposerMediaField media=media /> }.into_any()
+                    view! { <ComposerMediaField /> }.into_any()
                 }
                 crate::media::UploadPresentation::Error(message) => {
                     view! { <p class="error">{message}</p> }.into_any()
@@ -209,16 +208,10 @@ pub(super) fn ComposerDetails(state: ComposeState) -> impl IntoView {
 
 /// Temporary Media rows for one composer session; dismissing a row never mutates a Media Record.
 #[component]
-fn ComposerMediaField(media: RwSignal<Vec<ComposerMedia>>) -> impl IntoView {
-    let error = RwSignal::new(None::<String>);
-    let add_media = Callback::new(move |url| match ComposerMedia::try_from_uploaded_url(url) {
-        Ok(item) => {
-            media.update(|items| items.push(item));
-            error.set(None);
-        }
-        Err(_) => error.set(Some("The uploaded Media URL was invalid.".to_owned())),
-    });
-    let report_error = Callback::new(move |message| error.set(Some(message)));
+fn ComposerMediaField() -> impl IntoView {
+    let state = ComposerMediaState::new();
+    let add_media = Callback::new(move |url| state.record_uploaded(url));
+    let report_error = Callback::new(move |message| state.record_error(message));
     view! {
         <div class="j-composer-media">
             <div class="j-composer-media-heading">
@@ -232,8 +225,8 @@ fn ComposerMediaField(media: RwSignal<Vec<ComposerMedia>>) -> impl IntoView {
             </div>
             <div class="j-composer-media-rows">
                 {move || {
-                    media
-                        .get()
+                    state
+                        .rows()
                         .into_iter()
                         .enumerate()
                         .map(|(index, item)| {
@@ -248,7 +241,7 @@ fn ComposerMediaField(media: RwSignal<Vec<ComposerMedia>>) -> impl IntoView {
                                         class="j-btn is-icon"
                                         type="button"
                                         aria-label="Copy media URL"
-                                        on:click=move |_| copy_media_url(copy_url.clone(), error)
+                                        on:click=move |_| copy_media_url(copy_url.clone(), state)
                                     >
                                         <IconButtonContent
                                             path=Icons::COPY
@@ -259,14 +252,7 @@ fn ComposerMediaField(media: RwSignal<Vec<ComposerMedia>>) -> impl IntoView {
                                         class="j-btn is-icon"
                                         type="button"
                                         aria-label="Dismiss media"
-                                        on:click=move |_| {
-                                            media
-                                                .update(|items| {
-                                                    if index < items.len() {
-                                                        items.remove(index);
-                                                    }
-                                                });
-                                        }
+                                        on:click=move |_| state.dismiss(index)
                                     >
                                         <IconButtonContent
                                             path=Icons::MINUS
@@ -279,21 +265,17 @@ fn ComposerMediaField(media: RwSignal<Vec<ComposerMedia>>) -> impl IntoView {
                         .collect_view()
                 }}
             </div>
-            {move || error.get().map(|message| view! { <p class="error">{message}</p> })}
+            {move || state.error().map(|message| view! { <p class="error">{message}</p> })}
         </div>
     }
 }
 
 /// Copy a temporary Media URL while keeping clipboard failures visible in the composer.
-fn copy_media_url(url: String, error: RwSignal<Option<String>>) {
+fn copy_media_url(url: String, state: ComposerMediaState) {
     use leptos::task::spawn_local;
 
     spawn_local(async move {
-        if client::clipboard::write_text(&url).await.is_ok() {
-            error.set(None);
-        } else {
-            error.set(Some("Could not copy the Media URL.".to_owned()));
-        }
+        state.settle_copy(client::clipboard::write_text(&url).await.is_ok());
     });
 }
 
