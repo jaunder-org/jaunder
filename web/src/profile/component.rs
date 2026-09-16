@@ -47,13 +47,19 @@ pub fn ProfilePage() -> impl IntoView {
                                 view! {
                                     <div class="j-card">
                                         <div class="j-card-head">
-                                            <div>
-                                                <h2>"Profile"</h2>
-                                                <div class="j-sub">"Your display name and bio."</div>
-                                            </div>
+                                            <h2>"Profile"</h2>
                                         </div>
                                         <div class="j-form-body">
-                                            <p>"Username: " {data.username.to_string()}</p>
+                                            <label class="j-form-field">
+                                                <span class="j-form-label">"Username"</span>
+                                                <input
+                                                    type="text"
+                                                    name="username"
+                                                    class="j-form-input"
+                                                    prop:value=data.username.to_string()
+                                                    readonly
+                                                />
+                                            </label>
                                             <ValidatedInput<DisplayName>
                                                 label="Display Name"
                                                 name="display_name"
