@@ -366,13 +366,10 @@ mod tests {
     #[test]
     fn operator_websub_destination_uses_page_title() {
         let websub = nav_items(RegistrationPolicy::Closed, true, true)
-            .find(|item| item.key == "admin-websub");
-        let Some(websub) = websub else {
-            panic!("operator navigation must contain the WebSub destination");
-        };
+            .find(|item| item.key == "admin-websub")
+            .map(|item| (item.label, item.href.as_deref()));
 
-        assert_eq!(websub.label, "WebSub");
-        assert_eq!(websub.href.as_deref(), Some("/admin/websub"));
+        assert_eq!(websub, Some(("WebSub", Some("/admin/websub"))));
     }
 
     #[test]
