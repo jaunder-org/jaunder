@@ -99,6 +99,18 @@ async fn execute_site_config_set(
     key.validate(&value)?;
     let factory = open_existing_storage(&storage).await?;
     match key {
+        SiteConfigKey::SiteTitle | SiteConfigKey::SiteTagline | SiteConfigKey::SiteBaseUrl => {
+            site_config::cmd_site_identity_set(
+                storage.storage_path,
+                factory.publisher(),
+                factory.write_scope(),
+                factory.site_config(),
+                factory.passkeys(),
+                key,
+                &value,
+            )
+            .await
+        }
         SiteConfigKey::FeedsMinItems => {
             site_config::cmd_feed_window_set(
                 storage.storage_path,
@@ -152,6 +164,17 @@ async fn execute_site_config_set(
 async fn execute_site_config_unset(storage: StorageArgs, key: SiteConfigKey) -> anyhow::Result<()> {
     let factory = open_existing_storage(&storage).await?;
     match key {
+        SiteConfigKey::SiteTitle | SiteConfigKey::SiteTagline | SiteConfigKey::SiteBaseUrl => {
+            site_config::cmd_site_identity_unset(
+                storage.storage_path,
+                factory.publisher(),
+                factory.write_scope(),
+                factory.site_config(),
+                factory.passkeys(),
+                key,
+            )
+            .await
+        }
         SiteConfigKey::FeedsMinItems => {
             site_config::cmd_feed_window_unset(
                 storage.storage_path,

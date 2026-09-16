@@ -1,79 +1,19 @@
 use crate::error::WebResult;
 use common::MutationOutcome;
-use common::site::{SiteIdentity, SiteTitle};
+use common::site::{SiteIdentity, SiteTagline, SiteTitle};
 use common::tagged_url::BaseUrl;
 
 #[cfg(feature = "server")]
 use {
     crate::{
         auth,
-        error::{ErrorClass, ErrorKind, InternalError, from_write_scope_error},
+        error::{InternalError, from_write_scope_error},
+        site::server::update_identity_impl,
     },
     leptos::prelude::*,
     std::sync::Arc,
-    storage::{
-        BaseUrlMutationError, PasskeyStorage, SiteConfigStorage, WriteScope,
-        set_base_url_with_passkey_guard,
-    },
+    storage::{SiteConfigStorage, WriteScope},
 };
-
-#[cfg(feature = "server")]
-fn map_base_url_mutation_error(error: BaseUrlMutationError) -> InternalError {
-    match error {
-        error @ BaseUrlMutationError::RpHostLocked(_) => InternalError::masked(
-            ErrorKind::Conflict,
-            ErrorClass::Client,
-            "site.base_url hostname is locked while Passkeys exist",
-            anyhow::Error::new(error),
-        ),
-        error @ BaseUrlMutationError::Validation(_) => InternalError::masked(
-            ErrorKind::Validation,
-            ErrorClass::Client,
-            "invalid site base URL",
-            anyhow::Error::new(error),
-        ),
-        BaseUrlMutationError::Database(error) => InternalError::storage(error),
-    }
-}
-
-#[cfg(all(test, feature = "server"))]
-mod tests {
-    use super::map_base_url_mutation_error;
-    use crate::error::ErrorKind;
-    use std::error::Error;
-    use storage::{BaseUrlMutationError, PasskeyRpHostLocked};
-
-    #[test]
-    fn guarded_base_url_errors_preserve_their_public_classification_and_sources() {
-        let conflict =
-            map_base_url_mutation_error(BaseUrlMutationError::RpHostLocked(PasskeyRpHostLocked));
-        assert_eq!(conflict.kind(), ErrorKind::Conflict);
-        assert!(
-            Error::source(&conflict)
-                .and_then(|source| source.downcast_ref::<BaseUrlMutationError>())
-                .is_some()
-        );
-
-        let validation = map_base_url_mutation_error(BaseUrlMutationError::Validation(Box::new(
-            common::tagged_url::InvalidUrl,
-        )));
-        assert_eq!(validation.kind(), ErrorKind::Validation);
-        assert!(
-            Error::source(&validation)
-                .and_then(|source| source.downcast_ref::<BaseUrlMutationError>())
-                .is_some()
-        );
-
-        let storage =
-            map_base_url_mutation_error(BaseUrlMutationError::Database(sqlx::Error::PoolClosed));
-        assert_eq!(storage.kind(), ErrorKind::Storage);
-        assert!(
-            Error::source(&storage)
-                .and_then(|source| source.downcast_ref::<sqlx::Error>())
-                .is_some()
-        );
-    }
-}
 
 #[macros::server]
 pub async fn get_identity() -> WebResult<SiteIdentity> {
@@ -116,42 +56,19 @@ pub async fn update_media_uploads_enabled(uploads_enabled: bool) -> WebResult<Mu
 #[macros::server]
 pub async fn update_identity(
     title: SiteTitle,
+    tagline: Option<SiteTagline>,
     base_url: Option<BaseUrl>,
 ) -> WebResult<MutationOutcome<()>> {
-    auth::require_operator().await?;
-
     // `base_url` is a typed `Option<BaseUrl>` wire arg (ADR-0065): the
     // validating serde bridge already rejected a malformed/non-http(s) value at
     // decode time, and an omitted field decodes to `None` (clearing-via-omit) —
     // no server-side parse/`non_empty` bridge is needed.
-    let identity = SiteIdentity { title, base_url };
-    let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
-    let passkeys = expect_context::<Arc<dyn PasskeyStorage>>();
-    let write_scope = expect_context::<WriteScope>();
-    write_scope
-        .run(move |transaction| {
-            Box::pin(async move {
-                set_base_url_with_passkey_guard(
-                    transaction,
-                    site_config.as_ref(),
-                    passkeys.as_ref(),
-                    identity.base_url,
-                )
-                .await
-                .map_err(map_base_url_mutation_error)?;
-                site_config
-                    .set(
-                        transaction,
-                        host::config_key::SiteConfigKey::SiteTitle,
-                        &identity.title,
-                    )
-                    .await
-                    .map_err(InternalError::storage)?;
-                Ok(())
-            })
-        })
-        .await
-        .map_err(from_write_scope_error)
+    let identity = SiteIdentity {
+        title,
+        tagline,
+        base_url,
+    };
+    update_identity_impl(identity).await
 }
 
 /// Whether to show the "site base URL not configured" warning banner (#575):

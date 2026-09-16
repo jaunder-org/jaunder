@@ -11,9 +11,9 @@ use host::feed::{FeedMinDays, FeedMinItems, FeedsConfig};
 use host::smtp_config::{SmtpConfig, SmtpConfigUpdate, SmtpCredentialsUpdate};
 // Re-exported so `storage::RegistrationPolicy` keeps resolving for call sites, and
 // used by `get_registration_policy` below (the typed config accessor, #607).
-use crate::WriteTransaction;
+use crate::{PublisherStorage, PublisherStorageError, WriteTransaction};
 pub use common::registration::RegistrationPolicy;
-use common::site::{SiteIdentity, SiteTitle};
+use common::site::{SiteIdentity, SiteTagline, SiteTitle};
 use common::smtp_host::SmtpHost;
 use common::smtp_port::SmtpPort;
 use common::smtp_sender::SmtpSender;
@@ -43,6 +43,20 @@ pub enum BaseUrlMutationError {
     /// The guarded operation's database failure.
     #[error("site base URL database error")]
     Database(#[from] sqlx::Error),
+}
+
+/// Failure from the aggregate identity mutation.
+#[derive(Debug, Error)]
+pub enum SiteIdentityMutationError {
+    /// The base URL mutation failed its Passkey-aware policy or storage operation.
+    #[error(transparent)]
+    BaseUrl(#[from] BaseUrlMutationError),
+    /// A title or tagline configuration write failed.
+    #[error(transparent)]
+    Config(#[from] sqlx::Error),
+    /// Publisher generation/cache invalidation failed.
+    #[error(transparent)]
+    Publisher(#[from] PublisherStorageError),
 }
 
 // cov:ignore-start: InvalidUrl construction is covered at the BaseUrl boundary; this conversion only preserves its typed validation classification.
@@ -383,13 +397,17 @@ pub trait SiteConfigStorage: Send + Sync {
     #[cfg(test)]
     async fn install_feeds_config_read_gate(&self, gate: Option<Arc<FeedsConfigReadGate>>);
 
-    /// Returns the site identity (title and base URL).
+    /// Returns the site identity (title, optional tagline, and base URL).
     async fn get_identity(&self) -> Result<SiteIdentity> {
         let title = self
             .get_raw(SiteConfigKey::SiteTitle)
             .await?
             .and_then(|v| v.parse::<SiteTitle>().ok())
             .unwrap_or_default();
+        let tagline = self
+            .get_raw(SiteConfigKey::SiteTagline)
+            .await?
+            .and_then(|value| value.parse::<SiteTagline>().ok());
         let base_url = match self
             .get_raw(SiteConfigKey::SiteBaseUrl)
             .await?
@@ -407,24 +425,38 @@ pub trait SiteConfigStorage: Send + Sync {
                 }
             }
         };
-        Ok(SiteIdentity { title, base_url })
+        Ok(SiteIdentity {
+            title,
+            tagline,
+            base_url,
+        })
     }
-    /// Stores the site title and base URL through the Passkey RP-host gate.
+
+    /// Writes the complete identity and advances publisher generation in the
+    /// same caller-owned transaction.
     async fn set_identity(
         &self,
         transaction: &mut WriteTransaction,
         passkeys: std::sync::Arc<dyn crate::PasskeyStorage>,
-        config: &SiteIdentity,
-    ) -> std::result::Result<(), BaseUrlMutationError> {
+        publisher: std::sync::Arc<dyn PublisherStorage>,
+        identity: &SiteIdentity,
+    ) -> std::result::Result<(), SiteIdentityMutationError> {
         set_base_url_with_passkey_guard(
             transaction,
             self,
             passkeys.as_ref(),
-            config.base_url.clone(),
+            identity.base_url.clone(),
         )
         .await?;
-        self.set(transaction, SiteConfigKey::SiteTitle, &config.title)
+        self.set(transaction, SiteConfigKey::SiteTitle, &identity.title)
             .await?;
+        self.set(
+            transaction,
+            SiteConfigKey::SiteTagline,
+            identity.tagline.as_ref().map_or("", AsRef::as_ref),
+        )
+        .await?;
+        publisher.invalidate_identity(transaction).await?;
         Ok(())
     }
 
@@ -1016,6 +1048,7 @@ mod tests {
     use common::backup::{BackupConfig, BackupMode, RetentionCount};
     use common::media::{MaxFileSize, UserQuota};
     use common::registration::RegistrationPolicy;
+    use common::site::SiteIdentity;
     use common::smtp_host::SmtpHost;
     use common::smtp_port::SmtpPort;
     use common::smtp_sender::SmtpSender;
@@ -2046,6 +2079,34 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
+    async fn identity_reads_tagline_and_ignores_malformed_storage(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.site_config();
+        set_config(
+            Arc::clone(&env.publisher()),
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::SiteTagline,
+            "  A tagline  ",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            storage.get_identity().await.unwrap().tagline.as_deref(),
+            Some("A tagline")
+        );
+        env.inject_invalid_site_config(SiteConfigKey::SiteTagline, "broken\nline")
+            .await
+            .unwrap();
+        assert_eq!(storage.get_identity().await.unwrap().tagline, None);
+        assert_eq!(
+            storage.get_raw(SiteConfigKey::SiteTagline).await.unwrap(),
+            Some("broken\nline".to_owned())
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
     async fn identity_normalizes_stored_base_url_to_canonical_form(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.site_config();
@@ -2119,22 +2180,24 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn set_identity_round_trips_via_get_identity(#[case] backend: Backend) {
+    async fn set_identity_writes_the_aggregate_and_invalidates_publisher(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let storage = &*env.site_config();
-        let original = common::site::SiteIdentity {
+        let identity = SiteIdentity {
             title: parse_site_title("Test Site"),
+            tagline: Some("Tagline".parse().unwrap()),
             base_url: Some(parse_url("https://test.example.com/")),
         };
-        let config_storage = std::sync::Arc::clone(&env.site_config());
+        let site_config = env.site_config();
         let passkeys = env.passkeys();
-        let expected = original.clone();
+        let publisher = env.publisher();
+        let before = publisher.snapshot().await.unwrap().generation;
+        let expected = identity.clone();
         confirmed(
             env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
-                        config_storage
-                            .set_identity(transaction, passkeys, &original)
+                        site_config
+                            .set_identity(transaction, passkeys, publisher, &identity)
                             .await
                     })
                 })
@@ -2142,9 +2205,10 @@ mod tests {
                 .unwrap(),
         );
 
-        let retrieved = storage.get_identity().await.expect("get_identity");
-        assert_eq!(retrieved, expected);
+        assert_eq!(env.site_config().get_identity().await.unwrap(), expected);
+        assert!(env.publisher().snapshot().await.unwrap().generation > before);
     }
+
     #[apply(backends)]
     #[tokio::test]
     async fn base_url_policy_read_uses_the_owned_transaction(#[case] backend: Backend) {

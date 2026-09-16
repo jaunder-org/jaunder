@@ -14,7 +14,7 @@ use common::{
     media::{MaxFileSize, UserQuota},
     registration::RegistrationPolicy,
     render::PostFormat,
-    site::SiteTitle,
+    site::{SiteTagline, SiteTitle},
     smtp_host::SmtpHost,
     smtp_port::SmtpPort,
     smtp_sender::SmtpSender,
@@ -72,6 +72,9 @@ macro_rules! site_config_keys {
     (@optional { optional }) => { true };
 
     // -- internal: a row's validator --
+    (@validate SiteTagline, $key:expr, $raw:expr) => {
+        if $raw.trim().is_empty() { Ok(()) } else { check::<SiteTagline>($key, $raw) }
+    };
     (@validate $ty:ident, $key:expr, $raw:expr) => { check::<$ty>($key, $raw) };
 
     ($(
@@ -148,6 +151,7 @@ site_config_keys! {
     PostsDefaultAudience   => "posts.default_audience"    : DefaultAudience,              bad: "everyone";
     SiteRegistrationPolicy => "site.registration_policy"  : RegistrationPolicy,           bad: "sideways";
     SiteTitle              => "site.title"                : SiteTitle,                    bad: "";
+    SiteTagline            => "site.tagline"              : SiteTagline { optional },      bad: "line\nbreak";
     SiteBaseUrl            => "site.base_url"             : BaseUrl { optional },         bad: "nonsense://x";
     MediaUploadsEnabled     => "media.uploads_enabled"     : bool,                         bad: "TRUE";
     MediaMaxFileSizeBytes  => "media.max_file_size_bytes" : MaxFileSize,                  bad: "0";
@@ -254,7 +258,7 @@ mod tests {
             assert_eq!(SiteConfigKey::from_str(dotted).ok().as_ref(), Some(key));
             assert!(dotted.contains('.'), "{dotted} must be namespace.name");
         }
-        assert_eq!(SiteConfigKey::VARIANTS.len(), 20);
+        assert_eq!(SiteConfigKey::VARIANTS.len(), 21);
     }
 
     #[test]

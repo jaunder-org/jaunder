@@ -11,6 +11,9 @@ use crate::tagged_url::BaseUrl;
 pub struct SiteIdentity {
     /// Human-facing title for the site, used in feed metadata and similar contexts.
     pub title: SiteTitle,
+    /// Optional plain-text description of Local and site-wide Syndication Feeds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tagline: Option<SiteTagline>,
     /// Public-facing base URL (an absolute `http(s)` origin, normalized to its
     /// canonical form with a trailing slash), if set. When absent, callers emit
     /// root-relative URLs.
@@ -47,6 +50,43 @@ impl FromStr for SiteTitle {
             return Err(InvalidSiteTitle);
         }
         Ok(SiteTitle(trimmed.to_owned()))
+    }
+}
+
+/// The optional Site Tagline — single-line plain text with surrounding whitespace
+/// trimmed and at most 280 Unicode scalar values.
+#[derive(Clone, Debug, PartialEq, Eq, StrNewtype)]
+pub struct SiteTagline(String);
+
+/// Error returned when a string cannot be parsed as a [`SiteTagline`].
+#[derive(Debug, Error)]
+pub enum InvalidSiteTagline {
+    /// An optional tagline has no non-blank representation.
+    #[error("site tagline cannot be blank")]
+    Blank,
+    /// Line separators would violate the single-line presentation contract.
+    #[error("site tagline cannot contain line separators")]
+    LineSeparator,
+    /// The display value exceeds the public presentation limit.
+    #[error("site tagline cannot exceed 280 Unicode scalar values")]
+    TooLong,
+}
+
+impl FromStr for SiteTagline {
+    type Err = InvalidSiteTagline;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.contains(['\r', '\n', '\u{0085}', '\u{2028}', '\u{2029}']) {
+            return Err(InvalidSiteTagline::LineSeparator);
+        }
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            return Err(InvalidSiteTagline::Blank);
+        }
+        if trimmed.chars().count() > 280 {
+            return Err(InvalidSiteTagline::TooLong);
+        }
+        Ok(Self(trimmed.to_owned()))
     }
 }
 
@@ -101,5 +141,49 @@ mod tests {
     #[test]
     fn site_title_default_is_the_app_default() {
         assert_eq!(SiteTitle::default(), DEFAULT_SITE_TITLE);
+    }
+
+    #[test]
+    fn site_tagline_parses_plain_single_line_text() {
+        assert_eq!(
+            "  Привет  мир  ".parse::<SiteTagline>().unwrap(),
+            "Привет  мир"
+        );
+        assert_eq!(
+            "x".repeat(280)
+                .parse::<SiteTagline>()
+                .unwrap()
+                .chars()
+                .count(),
+            280
+        );
+    }
+
+    #[test]
+    fn site_tagline_rejects_blank_overlong_and_every_line_separator() {
+        assert!(" \t ".parse::<SiteTagline>().is_err());
+        assert!("x".repeat(281).parse::<SiteTagline>().is_err());
+        for separator in ['\r', '\n', '\u{0085}', '\u{2028}', '\u{2029}'] {
+            assert!(
+                format!("before{separator}after")
+                    .parse::<SiteTagline>()
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn site_tagline_serde_validates_and_optional_identity_field_is_compatible() {
+        let tagline: SiteTagline = "A tagline".parse().unwrap();
+        assert_eq!(serde_json::to_string(&tagline).unwrap(), "\"A tagline\"");
+        assert!(serde_json::from_str::<SiteTagline>("\"line\\nbreak\"").is_err());
+        let identity: SiteIdentity =
+            serde_json::from_str("{\"title\":\"Jaunder\",\"base_url\":null}").unwrap();
+        assert_eq!(identity.tagline, None);
+        assert!(
+            !serde_json::to_string(&identity)
+                .unwrap()
+                .contains("tagline")
+        );
     }
 }

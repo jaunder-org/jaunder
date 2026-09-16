@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use common::etag::ETag;
 use common::media::ContentType;
-use common::site::{SiteIdentity, SiteTitle};
+use common::site::{SiteIdentity, SiteTagline, SiteTitle};
 use common::tagged_url::{BaseUrl, HubUrl};
 use common::time::UtcInstant;
 use host::config_key::SiteConfigKey;
@@ -85,6 +85,13 @@ pub trait PublisherStorage: Send + Sync {
     /// Reads feed configuration, site identity, and generation from one database statement.
     async fn snapshot(&self) -> Result<PublisherSnapshot, PublisherStorageError>;
 
+    /// Advances publisher generation and invalidates every cached feed after an
+    /// identity mutation in the caller-owned transaction.
+    async fn invalidate_identity(
+        &self,
+        transaction: &mut WriteTransaction,
+    ) -> Result<PublisherGeneration, PublisherStorageError>;
+
     /// Applies a normalized hub mutation and invalidates every cached feed when it changes.
     async fn mutate_hub(
         &self,
@@ -139,6 +146,7 @@ struct SnapshotRow {
     min_days: Option<StoredSiteConfigValue>,
     hub: Option<StoredSiteConfigValue>,
     title: Option<StoredSiteConfigValue>,
+    tagline: Option<StoredSiteConfigValue>,
     base_url: Option<StoredSiteConfigValue>,
     generation: PublisherGeneration,
 }
@@ -153,6 +161,7 @@ fn snapshot_from_row(row: SnapshotRow) -> Result<PublisherSnapshot, Error> {
     let min_days = site_config::parse_feed_minimum(SiteConfigKey::FeedsMinDays, row.min_days)?;
     let hub = row.hub.map(StoredSiteConfigValue::into_inner);
     let title = row.title.map(StoredSiteConfigValue::into_inner);
+    let tagline = row.tagline.map(StoredSiteConfigValue::into_inner);
     let base_url = row.base_url.map(StoredSiteConfigValue::into_inner);
     let malformed_hub = hub
         .as_ref()
@@ -171,6 +180,7 @@ fn snapshot_from_row(row: SnapshotRow) -> Result<PublisherSnapshot, Error> {
             title: title
                 .and_then(|value| value.parse::<SiteTitle>().ok())
                 .unwrap_or_default(),
+            tagline: tagline.and_then(|value| value.parse::<SiteTagline>().ok()),
             base_url,
         },
         generation: row.generation,
@@ -207,15 +217,32 @@ where
              MAX(CASE WHEN c.key = 'feeds.min_days' THEN c.value END) AS min_days, \
              MAX(CASE WHEN c.key = 'feeds.websub_hub_url' THEN c.value END) AS hub, \
              MAX(CASE WHEN c.key = 'site.title' THEN c.value END) AS title, \
+             MAX(CASE WHEN c.key = 'site.tagline' THEN c.value END) AS tagline, \
              MAX(CASE WHEN c.key = 'site.base_url' THEN c.value END) AS base_url, \
              s.generation AS generation \
              FROM publisher_state s LEFT JOIN site_config c ON c.key IN \
-             ('feeds.min_items', 'feeds.min_days', 'feeds.websub_hub_url', 'site.title', 'site.base_url') \
+             ('feeds.min_items', 'feeds.min_days', 'feeds.websub_hub_url', 'site.title', 'site.tagline', 'site.base_url') \
              WHERE s.id = 1 GROUP BY s.generation",
         )
         .fetch_one(&self.pool)
         .await?;
         Ok(snapshot_from_row(row)?)
+    }
+
+    async fn invalidate_identity(
+        &self,
+        transaction: &mut WriteTransaction,
+    ) -> Result<PublisherGeneration, PublisherStorageError> {
+        let connection = DB::write_connection(transaction)?;
+        let generation = sqlx::query_scalar::<_, PublisherGeneration>(
+            "UPDATE publisher_state SET generation = generation + 1 WHERE id = 1 RETURNING generation",
+        )
+        .fetch_one(&mut *connection)
+        .await?;
+        sqlx::query("DELETE FROM feed_cache")
+            .execute(&mut *connection)
+            .await?;
+        Ok(generation)
     }
 
     async fn mutate_hub(
@@ -527,6 +554,7 @@ mod tests {
         assert_eq!(snapshot.feeds.min_days, FeedMinDays::default());
         assert_eq!(snapshot.feeds.websub_hub_url, None);
         assert_eq!(snapshot.identity.title, SiteTitle::default());
+        assert_eq!(snapshot.identity.tagline, None);
         assert_eq!(
             snapshot.identity.base_url.as_ref().map(ToString::to_string),
             Some("https://example.com/".to_owned())

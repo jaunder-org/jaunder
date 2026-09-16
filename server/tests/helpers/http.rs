@@ -328,6 +328,14 @@ macro_rules! make_app {
                     leptos::prelude::provide_context::<std::sync::Arc<dyn storage::FeedEventStorage>>(feed_events.clone());
                     leptos::prelude::provide_context(publisher_service.clone());
                     leptos::prelude::provide_context::<std::sync::Arc<dyn web::websub::WebsubPublisher>>(publisher_service.clone());
+                    let identity_publisher = std::sync::Arc::new(
+                        jaunder::publisher::SiteIdentityPublisherOperation::new(
+                            publisher_service.clone(),
+                            site_config.clone(),
+                            passkeys.clone(),
+                        ),
+                    );
+                    leptos::prelude::provide_context::<std::sync::Arc<dyn web::site::SiteIdentityPublisher>>(identity_publisher);
                     leptos::prelude::provide_context(post_media_ownership.clone());
                     jaunder::context::provide_media_content_locks_context(&content_locks);
                     jaunder::context::provide_mailer_context(&mailer);

@@ -20,18 +20,24 @@ use storage::test_support::backends;
 async fn rsd_document_advertises_service_url(#[case] backend: Backend) {
     let env = backend.setup().await;
     let base = &env.base;
-    let identity = common::site::SiteIdentity {
-        title: common::test_support::parse_site_title("Test"),
-        base_url: Some(common::test_support::parse_url("https://example.test/")),
-    };
     let site_config = std::sync::Arc::clone(&env.site_config());
-    let passkeys = std::sync::Arc::clone(&env.passkeys());
     storage::test_support::confirmed(
         env.write_scope()
             .run(move |transaction| {
                 Box::pin(async move {
                     site_config
-                        .set_identity(transaction, passkeys, &identity)
+                        .set(
+                            transaction,
+                            host::config_key::SiteConfigKey::SiteTitle,
+                            "Test",
+                        )
+                        .await?;
+                    site_config
+                        .set(
+                            transaction,
+                            host::config_key::SiteConfigKey::SiteBaseUrl,
+                            "https://example.test/",
+                        )
                         .await
                 })
             })

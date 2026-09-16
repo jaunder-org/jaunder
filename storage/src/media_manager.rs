@@ -1240,6 +1240,7 @@ mod tests {
         site_config.expect_get_identity().times(1).return_once(|| {
             Ok(common::site::SiteIdentity {
                 title: common::site::SiteTitle::default(),
+                tagline: None,
                 base_url: None,
             })
         });

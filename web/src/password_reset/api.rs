@@ -426,6 +426,7 @@ mod server_tests {
         site_config.expect_get_identity().returning(|| {
             Ok(SiteIdentity {
                 title: parse_site_title("Jaunder"),
+                tagline: None,
                 base_url: Some(parse_url("https://example.com/")),
             })
         });

@@ -673,10 +673,12 @@ mod tests {
         let identities = [
             SiteIdentity {
                 title: "Jaunder".parse().expect("valid fixture title"),
+                tagline: None,
                 base_url: Some(original_url),
             },
             SiteIdentity {
                 title: "Jaunder".parse().expect("valid fixture title"),
+                tagline: None,
                 base_url: Some(changed_url),
             },
         ];

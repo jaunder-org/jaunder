@@ -1,6 +1,10 @@
 //! Site settings vertical: operator-gated site identity and media-upload-capability
 //! endpoints plus the settings-page UI.
 mod api;
+#[cfg(feature = "server")]
+mod server;
+#[cfg(feature = "server")]
+pub use server::{SiteIdentityPublisher, SiteIdentityPublisherError};
 #[cfg(target_arch = "wasm32")]
 mod component;
 

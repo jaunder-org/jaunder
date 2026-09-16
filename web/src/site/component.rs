@@ -127,10 +127,12 @@ fn site_settings_form(
     let title_field = Field::<SiteTitle>::prefilled(&identity.title);
     let base_url_field =
         Field::<BaseUrl>::optional_prefilled(identity.base_url.as_deref().unwrap_or_default());
+    let tagline = identity.tagline.clone();
     let submit = move |_| {
         if let Some(title) = title_field.parsed() {
             update_action.dispatch(UpdateIdentity {
                 title,
+                tagline: tagline.clone(),
                 base_url: base_url_field.parsed(),
             });
         }

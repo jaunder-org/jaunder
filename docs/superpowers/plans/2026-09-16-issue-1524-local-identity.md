@@ -22,7 +22,7 @@ Out:
 
 ## Task outline
 
-- [ ] Task 1: Establish the typed identity and publisher persistence contract.
+- [x] Task 1: Establish the typed identity and publisher persistence contract.
   - Contract: add optional `SiteTagline` to `SiteIdentity` and `site.tagline` to
     `SiteConfigKey`; parsing follows the approved scalar-count and
     line-separator rules, while invalid stored data reads as absent without

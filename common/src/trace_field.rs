@@ -22,7 +22,7 @@ use crate::media::{hash::ContentHash, storage::MediaSource};
 use crate::pagination::{PageOffset, PageSize};
 use crate::render::PostFormat;
 use crate::seed::{PageCursor, TimelineCursor, TimelinePageRequest};
-use crate::site::SiteTitle;
+use crate::site::{SiteTagline, SiteTitle};
 use crate::slug::Slug;
 use crate::tag::Tag;
 use crate::tagged_url::BaseUrl;
@@ -66,6 +66,12 @@ impl<T: TraceField + ?Sized> TraceField for &T {
     fn trace_value(&self) -> Self::Value<'_> {
         (*self).trace_value()
     }
+}
+
+impl TraceField for SiteTagline {
+    type Value<'a> = ();
+
+    fn trace_value(&self) -> Self::Value<'_> {}
 }
 
 macro_rules! impl_borrowed_trace_field {

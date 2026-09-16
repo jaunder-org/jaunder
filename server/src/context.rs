@@ -131,10 +131,18 @@ pub fn service_context_provider(
 /// Captures the publisher's concrete service and web-facing capability.
 pub fn publisher_context_provider(
     publisher: Arc<crate::publisher::PublisherService>,
+    site_config: Arc<dyn SiteConfigStorage>,
+    passkeys: Arc<dyn PasskeyStorage>,
 ) -> impl Fn() + Clone + Send + Sync + 'static {
+    let identity_publisher = Arc::new(crate::publisher::SiteIdentityPublisherOperation::new(
+        Arc::clone(&publisher),
+        site_config,
+        passkeys,
+    ));
     move || {
         provide_context(Arc::clone(&publisher));
         provide_context::<Arc<dyn web::websub::WebsubPublisher>>(publisher.clone());
+        provide_context::<Arc<dyn web::site::SiteIdentityPublisher>>(identity_publisher.clone());
     }
 }
 
@@ -305,7 +313,8 @@ mod tests {
             Arc::clone(&theme_manager),
             true,
         );
-        let publisher_context = publisher_context_provider(Arc::clone(&publisher));
+        let publisher_context =
+            publisher_context_provider(Arc::clone(&publisher), env.site_config(), env.passkeys());
         let ownership_context = post_media_ownership_context_provider(ownership);
         let owner = Owner::new();
 

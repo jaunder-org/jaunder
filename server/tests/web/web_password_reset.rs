@@ -189,6 +189,7 @@ fn reset_site_config() -> MockSiteConfigStorage {
     site_config.expect_get_identity().returning(|| {
         Ok(SiteIdentity {
             title: "Jaunder".parse().expect("valid title"),
+            tagline: None,
             base_url: Some("https://example.com/".parse().expect("valid base URL")),
         })
     });
@@ -442,6 +443,7 @@ async fn request_password_reset_base_url_failure_is_neutral_and_reported_once(
             .expect("worker reports base URL failure");
         Ok(SiteIdentity {
             title: "Jaunder".parse().expect("valid title"),
+            tagline: None,
             base_url: None,
         })
     });

@@ -134,6 +134,59 @@ async fn update_site_identity_round_trips_via_get(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
+async fn update_site_identity_preserves_loaded_tagline(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let site_config = env.site_config();
+    let configured_tagline = "Existing tagline";
+    confirmed(
+        env.write_scope()
+            .run(move |transaction| {
+                Box::pin(async move {
+                    site_config
+                        .set(
+                            transaction,
+                            host::config_key::SiteConfigKey::SiteTagline,
+                            configured_tagline,
+                        )
+                        .await
+                })
+            })
+            .await
+            .unwrap(),
+    );
+    let app = make_app!(&env, &env.base);
+    let cookie = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
+
+    let (status, body) = post_form(
+        app.clone(),
+        <web::site::UpdateIdentity as ServerFn>::PATH,
+        "title=Renamed&tagline=Existing+tagline&base_url=https%3A%2F%2Fexample.com%2F",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+
+    let (status, body) = post_form(
+        app,
+        <web::site::GetIdentity as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let identity: SiteIdentity = serde_json::from_str(&body).unwrap();
+    assert_eq!(identity.title, "Renamed");
+    assert_eq!(identity.tagline.as_deref(), Some(configured_tagline));
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn update_site_identity_rejects_empty_title(#[case] backend: Backend) {
     // A whitespace-only `title` fails at typed-arg decode — the validating serde
     // bridge for `SiteTitle` rejects an empty/whitespace-only value, a non-OK server
