@@ -57,7 +57,7 @@ Out:
     - `devtool run -- cargo xtask test-local -- -p web app::render`
     - `devtool run -- cargo xtask test-local -- -p jaunder projector`
 
-- [ ] Task 3: Route the Site Tagline into applicable Syndication Feeds.
+- [x] Task 3: Route the Site Tagline into applicable Syndication Feeds.
   - Contract: `PublisherSnapshot` supplies one coherent identity; feed metadata
     maps the tagline to `description` only for `FeedSurface::Site` and
     `FeedSurface::SiteTag`. Existing serializers remain the native RSS

@@ -5,7 +5,10 @@ use common::{
     time::UtcInstant,
     visibility::AudienceTarget,
 };
-use jaunder::{feed::regenerate::render, publisher::PublisherService};
+use jaunder::{
+    feed::regenerate::render,
+    publisher::{PublisherService, SiteIdentityMutation},
+};
 
 use jiff::Timestamp;
 use rstest::*;
@@ -37,6 +40,79 @@ fn fixed_instant(day: u32) -> UtcInstant {
             .parse::<Timestamp>()
             .expect("fixed test instant"),
     )
+}
+
+async fn set_tagline(
+    env: &storage::test_support::TestEnv,
+    publisher: &PublisherService,
+    tagline: Option<&str>,
+) {
+    let tagline = tagline
+        .map(str::parse)
+        .transpose()
+        .expect("valid test site tagline");
+    confirmed_for(
+        publisher
+            .mutate_identity_with_feedback(
+                env.site_config(),
+                env.passkeys(),
+                SiteIdentityMutation::SetTagline(tagline),
+            )
+            .await
+            .expect("set site tagline"),
+        "set site tagline",
+    );
+}
+
+fn assert_description(row: &FeedCacheRow, expected: Option<&str>, markup_is_escaped: bool) {
+    match row.representation().format() {
+        common::feed::FeedFormat::Rss => {
+            let body = row.representation().body();
+            let description = expected.map(xml_text).unwrap_or_default();
+            assert!(
+                body.contains(&format!("<description>{description}</description>")),
+                "RSS description: {body}"
+            );
+            if markup_is_escaped {
+                assert!(
+                    body.contains("&lt;local &amp; tagline&gt;"),
+                    "RSS escapes markup: {body}"
+                );
+            }
+        }
+        common::feed::FeedFormat::Atom => {
+            let body = row.representation().body();
+            match expected {
+                Some(expected) => assert!(
+                    body.contains(&format!("<subtitle>{}</subtitle>", xml_text(expected))),
+                    "Atom subtitle: {body}"
+                ),
+                None => assert!(!body.contains("<subtitle"), "Atom omits subtitle: {body}"),
+            }
+            if markup_is_escaped {
+                assert!(
+                    body.contains("&lt;local &amp; tagline&gt;"),
+                    "Atom escapes markup: {body}"
+                );
+            }
+        }
+        common::feed::FeedFormat::Json => {
+            let value: serde_json::Value =
+                serde_json::from_str(row.representation().body()).expect("JSON Feed parses");
+            assert_eq!(
+                value.get("description").and_then(serde_json::Value::as_str),
+                expected,
+                "JSON Feed description"
+            );
+        }
+    }
+}
+
+fn xml_text(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 async fn render_and_commit(
@@ -281,6 +357,93 @@ async fn render_each_format(#[case] backend: Backend) {
             "body not empty for {feed_url}"
         );
     }
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn feed_descriptions_follow_site_tagline_surfaces_and_serializers(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let publisher = PublisherService::new(
+        env.base.path().to_path_buf(),
+        Arc::clone(&env.publisher()),
+        env.write_scope(),
+    );
+    let user = SeedUser::new()
+        .seed(Arc::clone(&env.users()), env.write_scope())
+        .await;
+
+    for (tagline, markup_is_escaped) in [
+        (None, false),
+        (Some("Configured Local description"), false),
+        (Some("<local & tagline>"), true),
+    ] {
+        set_tagline(&env, &publisher, tagline).await;
+        for (path, describes_site) in [
+            ("/feed", true),
+            ("/tags/rust/feed", true),
+            ("/~user/feed", false),
+            ("/~user/tags/rust/feed", false),
+        ] {
+            for extension in ["rss", "atom", "json"] {
+                let path = path.replace("user", user.username.as_ref());
+                let row = render_feed(
+                    Arc::clone(&env.publisher()),
+                    Arc::clone(&env.posts()),
+                    fp(&format!("{path}.{extension}")),
+                )
+                .await;
+                assert_description(
+                    &row,
+                    describes_site.then_some(tagline).flatten(),
+                    markup_is_escaped && describes_site,
+                );
+            }
+        }
+    }
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn identity_invalidation_regenerates_site_feed_with_new_etag(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let publisher = PublisherService::new(
+        env.base.path().to_path_buf(),
+        Arc::clone(&env.publisher()),
+        env.write_scope(),
+    );
+    let feed_path = fp("/feed.rss");
+
+    let before = render_and_commit(
+        Arc::clone(&env.posts()),
+        &publisher,
+        feed_path.clone(),
+        fixed_instant(1),
+    )
+    .await;
+    set_tagline(&env, &publisher, Some("Changed Local description")).await;
+    assert!(
+        env.feed_cache()
+            .get(&feed_path)
+            .await
+            .expect("read invalidated cache")
+            .is_none(),
+        "identity mutation invalidates cached feeds"
+    );
+
+    let after = render_and_commit(
+        Arc::clone(&env.posts()),
+        &publisher,
+        feed_path,
+        fixed_instant(2),
+    )
+    .await;
+    assert_ne!(
+        before.semantic_fingerprint(),
+        after.semantic_fingerprint(),
+        "site tagline changes feed semantic identity"
+    );
+    assert_ne!(before.etag, after.etag, "site tagline changes feed ETag");
+    assert_description(&after, Some("Changed Local description"), false);
 }
 
 /// Published feeds are public-only (M8): [`render`] resolves posts as an
