@@ -43,7 +43,7 @@ jobs:
       # Persisting the App credential gives the controller's explicit branch
       # push an authenticated origin without granting direct-main authority.
       - name: Checkout trusted main
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
         with:
           ref: refs/heads/main
           fetch-depth: 0
