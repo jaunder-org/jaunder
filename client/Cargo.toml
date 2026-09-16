@@ -20,8 +20,9 @@ web-sys = { workspace = true, features = [
   "Element",
   "Node",
   "NodeList",
-  # `client::webauthn` invokes explicit WebAuthn ceremonies (#1455).
+  # Browser clipboard and WebAuthn ceremonies both start at `Navigator`.
   "Navigator",
+  "Clipboard",
   "CredentialsContainer",
   "Credential",
   "PublicKeyCredential",

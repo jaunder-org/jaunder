@@ -1,15 +1,14 @@
 use leptos::prelude::*;
 
 use crate::auth;
-use crate::avatar::Avatar;
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput, ValidatedTextarea};
 use crate::icon::{IconButtonContent, Icons};
 use crate::media::MediaUpload;
 use crate::posts;
 use crate::posts::{
-    ClassifiedSavedPost, ComposeState, Create, CreatePublication, InvalidSchedule,
-    LoadedPublication, NamedAudienceState, PublicationTimeEditState,
+    ClassifiedSavedPost, ComposeState, ComposerMediaState, Create, CreatePublication,
+    InvalidSchedule, LoadedPublication, NamedAudienceState, PublicationTimeEditState,
 };
 use crate::tags::TagInput;
 use crate::topbar::Topbar;
@@ -19,7 +18,6 @@ use common::post_summary::PostSummary;
 use common::render::PostFormat;
 use common::slug::Slug;
 use common::time::{self, UtcInstant};
-use common::username::Username;
 
 use super::audience::AudiencePickerWithState;
 use super::{audience, support};
@@ -29,19 +27,11 @@ use super::{audience, support};
 /// (renderer-internal, #445), so it is filtered out. Adding a format is a one-attribute change
 /// on `PostFormat`, not new markup here.
 #[component]
-fn FormatToggle(
-    format: RwSignal<PostFormat>,
-    /// Extra inline style for the field group (e.g. spacing). Omitted when unset.
-    #[prop(optional, into)]
-    style: Option<&'static str>,
-) -> impl IntoView {
+fn FormatToggle(format: RwSignal<PostFormat>) -> impl IntoView {
     use strum::{EnumMessage, VariantArray};
     view! {
-        <fieldset class="j-form-field j-composer-group" style=style aria-describedby="format-help">
+        <fieldset class="j-form-field j-composer-group">
             <legend class="j-form-label">"Format"</legend>
-            <p id="format-help" class="j-form-help">
-                "Format controls how Jaunder interprets the Body."
-            </p>
             <div class="j-seg">
                 {PostFormat::VARIANTS
                     .iter()
@@ -117,6 +107,7 @@ pub fn ComposerFields(
 pub(super) enum ComposerActions {
     Save {
         publication: LoadedPublication,
+        scheduled: RwSignal<bool>,
         disabled: Signal<bool>,
         unpublish_disabled: Signal<bool>,
         on_save: Callback<bool>,
@@ -140,20 +131,71 @@ pub(super) fn ComposerCore(
     #[prop(optional_no_strip)] on_input: Option<Callback<()>>,
 ) -> impl IntoView {
     view! {
-        <div class="j-post-editor-panel">
-            <ComposerFields
-                body=state.body
-                format=state.format
-                rows=rows
-                placeholder=placeholder
-                field_class="j-composer-field"
-                textarea_class=textarea_class
-                show_seg=false
-                on_input=on_input
-            />
-            <div class="j-post-editor-media">
-                <MediaUpload show_result=true icon_only=true />
-            </div>
+        <ComposerFields
+            body=state.body
+            format=state.format
+            rows=rows
+            placeholder=placeholder
+            field_class="j-composer-field"
+            textarea_class=textarea_class
+            show_seg=false
+            on_input=on_input
+        />
+        <div class="j-composer-toolbar">
+            {match actions {
+                ComposerActions::Save {
+                    publication,
+                    scheduled,
+                    disabled,
+                    unpublish_disabled,
+                    on_save,
+                } => {
+                    view! {
+                        <PostSaveActions
+                            publication=publication
+                            scheduled=scheduled
+                            disabled=disabled
+                            unpublish_disabled=unpublish_disabled
+                            on_save=on_save
+                        />
+                    }
+                        .into_any()
+                }
+                ComposerActions::Create { publish_at, scheduled, disabled, on_save } => {
+                    view! {
+                        <CreationPostActions
+                            publish_at=publish_at
+                            scheduled=scheduled
+                            disabled=disabled
+                            on_save=on_save
+                        />
+                    }
+                        .into_any()
+                }
+            }}
+        </div>
+    }
+}
+
+/// The complete non-body control rail shared by every Post composer.
+#[component]
+pub(super) fn ComposerDetails(state: ComposeState) -> impl IntoView {
+    let uploads_enabled = Resource::new(|| (), |()| crate::media::get_uploads_enabled());
+    view! {
+        <div class="j-composer-details">
+            <h2 class="j-sb-head" style="padding:0">
+                "Post details"
+            </h2>
+            {move || match crate::media::upload_presentation(uploads_enabled.get()) {
+                crate::media::UploadPresentation::Enabled => {
+                    view! { <ComposerMediaField /> }.into_any()
+                }
+                crate::media::UploadPresentation::Error(message) => {
+                    view! { <p class="error">{message}</p> }.into_any()
+                }
+                crate::media::UploadPresentation::Disabled
+                | crate::media::UploadPresentation::Loading => ().into_any(),
+            }}
             <ValidatedTextarea<PostSummary>
                 label="Summary"
                 name="summary"
@@ -161,36 +203,82 @@ pub(super) fn ComposerCore(
                 placeholder="Optional summary or excerpt"
             />
             <TagInput tags=state.tags on_change=state.tag_input_changed() />
-            <div class="j-composer-toolbar">
-                <FormatToggle format=state.format />
-                <span class="j-spacer"></span>
-                {match actions {
-                    ComposerActions::Save { publication, disabled, unpublish_disabled, on_save } => {
-                        view! {
-                            <PostSaveActions
-                                publication=publication
-                                disabled=disabled
-                                unpublish_disabled=unpublish_disabled
-                                on_save=on_save
-                            />
-                        }
-                            .into_any()
-                    }
-                    ComposerActions::Create { publish_at, scheduled, disabled, on_save } => {
-                        view! {
-                            <CreationPostActions
-                                publish_at=publish_at
-                                scheduled=scheduled
-                                disabled=disabled
-                                on_save=on_save
-                            />
-                        }
-                            .into_any()
-                    }
-                }}
-            </div>
+            <FormatToggle format=state.format />
         </div>
     }
+}
+
+/// Temporary Media rows for one composer session; dismissing a row never mutates a Media Record.
+#[component]
+fn ComposerMediaField() -> impl IntoView {
+    let state = ComposerMediaState::new();
+    let add_media = Callback::new(move |url| state.record_uploaded(url));
+    let report_error = Callback::new(move |message| state.record_error(message));
+    view! {
+        <div class="j-composer-media">
+            <div class="j-composer-media-heading">
+                <span class="j-form-label">"Media"</span>
+                <MediaUpload
+                    on_uploaded=add_media
+                    on_error=report_error
+                    icon_only=true
+                    icon_path=Icons::PLUS
+                />
+            </div>
+            <div class="j-composer-media-rows">
+                {move || {
+                    state
+                        .rows()
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, item)| {
+                            let image_url = String::from(item.url.clone());
+                            let copy_url = image_url.clone();
+                            let filename = item.display_filename().into_owned();
+                            view! {
+                                <div class="j-composer-media-row">
+                                    <img class="j-composer-media-thumbnail" src=image_url alt="" />
+                                    <span class="j-composer-media-filename">{filename}</span>
+                                    <button
+                                        class="j-btn is-icon"
+                                        type="button"
+                                        aria-label="Copy media URL"
+                                        on:click=move |_| copy_media_url(copy_url.clone(), state)
+                                    >
+                                        <IconButtonContent
+                                            path=Icons::COPY
+                                            tooltip="Copy media URL"
+                                        />
+                                    </button>
+                                    <button
+                                        class="j-btn is-icon"
+                                        type="button"
+                                        aria-label="Dismiss media"
+                                        on:click=move |_| state.dismiss(index)
+                                    >
+                                        <IconButtonContent
+                                            path=Icons::MINUS
+                                            tooltip="Dismiss media"
+                                        />
+                                    </button>
+                                </div>
+                            }
+                        })
+                        .collect_view()
+                }}
+            </div>
+            {move || state.error().map(|message| view! { <p class="error">{message}</p> })}
+        </div>
+    }
+}
+
+/// Copy a temporary Media URL while keeping clipboard failures visible in the composer.
+fn copy_media_url(url: String, state: ComposerMediaState) {
+    use leptos::task::spawn_local;
+
+    spawn_local(async move {
+        state.settle_copy(client::clipboard::write_text(&url).await.is_ok());
+    });
 }
 
 /// Provisional publication-time inputs for the full new-Post composer.
@@ -208,7 +296,7 @@ pub(super) struct CreationSchedule {
 }
 
 impl CreationSchedule {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             disclosed: RwSignal::new(false),
             date: RwSignal::new(String::new()),
@@ -218,15 +306,23 @@ impl CreationSchedule {
         }
     }
 
-    fn restore_committed(self, committed: &str) {
+    pub(super) fn restore_committed(self, committed: &str) {
         let (date, time) = committed.split_once('T').unwrap_or(("", ""));
         self.date.set(date.to_owned());
         self.time.set(time.to_owned());
+        self.scheduled.set(
+            time::strict_utc_instant_from_local(committed)
+                .is_some_and(|instant| instant.value() > UtcInstant::now().value()),
+        );
         self.error.set(None);
     }
 
-    fn is_editing(self) -> bool {
+    pub(super) fn is_editing(self) -> bool {
         self.disclosed.get()
+    }
+
+    pub(super) fn scheduled(self) -> RwSignal<bool> {
+        self.scheduled
     }
 }
 
@@ -239,7 +335,6 @@ impl CreationSchedule {
 #[component]
 pub fn PostCreateForm(
     compact: bool,
-    #[prop(optional)] username: Option<Username>,
     #[prop(into)] on_success: Callback<ClassifiedSavedPost>,
     #[prop(optional)] on_mutation: Option<Callback<bool>>,
     #[prop(default = 6)] rows: u32,
@@ -272,93 +367,35 @@ pub fn PostCreateForm(
         },
     );
 
-    if compact {
-        view! {
-            <CompactComposer
-                state=state
-                create_action=create_action
-                username=username
-                rows=rows
-                placeholder=placeholder
-                on_input=on_input
-            />
-        }
-        .into_any()
-    } else {
-        view! { <FullComposer state=state create_action=create_action rows=rows placeholder=placeholder /> }
-        .into_any()
-    }
-}
-
-/// The inline composer row: avatar, body, summary, tags, and the two dispatch
-/// buttons. Split out of [`PostCreateForm`] (#301); no slug or schedule control,
-/// so it dispatches with `slug_override: None` and an empty `publish_at`.
-#[component]
-fn CompactComposer(
-    state: ComposeState,
-    create_action: ServerAction<Create>,
-    /// Passed through from `PostCreateForm`, which is the only caller — so these two
-    /// are plain `Option` props rather than `#[prop(optional)]` ones, which would
-    /// take the inner value and re-wrap it.
-    username: Option<Username>,
-    rows: u32,
-    placeholder: &'static str,
-    on_input: Option<Callback<()>>,
-) -> impl IntoView {
-    // The gate and the payload come from one `submit_gate` call (#860, ADR-0105), so a
-    // control that cannot dispatch is disabled rather than inert. No slug in this shape,
-    // so the only other blocker is the summary.
-    let (submit_disabled, dispatch) = posts::submit_gate(
-        state.body,
-        Signal::derive(move || !state.summary_field.is_valid()),
-        Callback::new(move |(body, publish): (PostBody, bool)| {
-            let publication = posts::publication_from_local(publish, &state.publish_at.get());
-            create_action.dispatch(Create {
-                post: state.inputs(body, publication, None),
-            });
-        }),
-    );
+    let presentation = posts::creation_composer_presentation(compact);
     view! {
-        <div class="j-composer-row">
-            {username.map(|u| view! { <Avatar name=&u size=36 /> })} <div class="j-composer-body">
-                <ComposerCore
-                    state=state
-                    actions=ComposerActions::Save {
-                        publication: LoadedPublication::Draft,
-                        disabled: submit_disabled,
-                        unpublish_disabled: submit_disabled,
-                        on_save: dispatch,
-                    }
-                    rows=rows
-                    placeholder=placeholder
-
-                    textarea_class=""
-                    on_input=on_input
-                />
-
-            </div>
-        </div>
-        <CreateErrorFlash action=create_action />
+        <CreationComposer
+            state=state
+            create_action=create_action
+            rows=rows
+            placeholder=placeholder
+            layout_class=presentation.layout_class
+            textarea_class=presentation.textarea_class
+            on_input=on_input
+        />
     }
 }
 
-/// The full compose page: the shared editor core plus its advanced options aside.
-/// Split out of [`PostCreateForm`] (#301). The slug field is owned here and passed
-/// down — see [`ComposeState::seed_from`] for why the bundle does not hold it.
+/// The one creation composer used in both Home and the dedicated writing workspace.
+/// Only its outer layout and textarea classes vary with the surrounding page context.
 #[component]
-fn FullComposer(
+fn CreationComposer(
     state: ComposeState,
     create_action: ServerAction<Create>,
     rows: u32,
     placeholder: &'static str,
+    layout_class: &'static str,
+    textarea_class: &'static str,
+    on_input: Option<Callback<()>>,
 ) -> impl IntoView {
     let slug_field = Field::<Slug>::optional();
     let named = audience::load_named_audiences();
     let schedule = CreationSchedule::new();
-    // The one-call form gate also carries the named-audience load decision: a
-    // failed or unresolved picker cannot dispatch as though an empty list had
-    // loaded. The callback repeats the pure guard so direct invocation cannot
-    // bypass the disabled buttons.
     let (submit_disabled, dispatch) = posts::submit_gate(
         state.body,
         Signal::derive(move || {
@@ -381,7 +418,7 @@ fn FullComposer(
         }),
     );
     view! {
-        <div class="j-compose-grid">
+        <div class=layout_class>
             <div class="j-compose-body">
                 <ComposerCore
                     state=state
@@ -393,11 +430,12 @@ fn FullComposer(
                     }
                     rows=rows
                     placeholder=placeholder
-
-                    textarea_class="j-edit-form-textarea"
+                    textarea_class=textarea_class
+                    on_input=on_input
                 />
             </div>
             <aside class="j-compose-aside">
+                <ComposerDetails state=state />
                 <ComposeOptions
                     state=state
                     slug_field=slug_field
@@ -407,15 +445,13 @@ fn FullComposer(
                     creation_schedule=Some(schedule)
                     named=named
                 />
-
             </aside>
         </div>
         <CreateErrorFlash action=create_action />
     }
 }
 
-/// The create action's error flash. Both composer shapes ended with the identical
-/// block; extracting it means a change to how a failed create reads happens once.
+/// The create action's error flash shared by both creation surfaces.
 #[component]
 fn CreateErrorFlash(action: ServerAction<Create>) -> impl IntoView {
     view! {
@@ -444,19 +480,14 @@ fn CreateErrorFlash(action: ServerAction<Create>) -> impl IntoView {
 }
 
 #[component]
-pub fn InlineComposer(username: Username, on_publish: Callback<()>) -> impl IntoView {
+pub fn InlineComposer(on_publish: Callback<()>) -> impl IntoView {
     let flash: RwSignal<Option<(String, String)>> = RwSignal::new(None);
 
     let on_success = Callback::new(move |created: ClassifiedSavedPost| {
         use leptos_dom::helpers::set_timeout;
         use std::time::Duration;
         let url = created.post.permalink.to_string();
-        let msg = match created.publication {
-            CreatePublication::Draft => "Draft saved!".to_string(),
-            CreatePublication::Published | CreatePublication::Scheduled => {
-                "Post published!".to_string()
-            }
-        };
+        let msg = posts::creation_success_message(created.publication).to_owned();
         flash.set(Some((url, msg)));
         set_timeout(move || flash.set(None), Duration::from_secs(30));
     });
@@ -470,7 +501,6 @@ pub fn InlineComposer(username: Username, on_publish: Callback<()>) -> impl Into
         <div class="j-composer">
             <PostCreateForm
                 compact=true
-                username=username
                 on_success=on_success
                 on_mutation=on_mutation
                 rows=6
@@ -585,15 +615,14 @@ fn CreateResultSummary(result: RwSignal<Option<ClassifiedSavedPost>>) -> impl In
 fn DraftSaveButton(disabled: Signal<bool>, on_save: Callback<bool>) -> impl IntoView {
     view! {
         <button
-            class="j-btn is-icon"
+            class="j-btn"
             type="button"
             name="publish"
             value="false"
-            aria-label="Save draft"
             prop:disabled=move || disabled.get()
             on:click=move |_| on_save.run(false)
         >
-            <IconButtonContent path=Icons::SAVE tooltip="Save draft" />
+            "Save draft"
         </button>
     }
 }
@@ -608,6 +637,8 @@ fn DraftSaveButton(disabled: Signal<bool>, on_save: Callback<bool>) -> impl Into
 pub(super) fn PostSaveActions(
     /// Publication state that selects the Draft or published controls.
     publication: LoadedPublication,
+    /// Whether a Draft's committed optional time is in the future.
+    scheduled: RwSignal<bool>,
     /// Whether Save is blocked by invalid form or publication-time state.
     disabled: Signal<bool>,
     /// Whether Unpublish is blocked by invalid persisted fields. Publication-time
@@ -629,7 +660,7 @@ pub(super) fn PostSaveActions(
                     prop:disabled=move || disabled.get()
                     on:click=move |_| on_save.run(true)
                 >
-                    "Publish"
+                    {move || posts::draft_primary_action_label(scheduled.get())}
                 </button>
             }
                 .into_any()
@@ -672,54 +703,19 @@ fn CreationPostActions(
     on_save: Callback<bool>,
 ) -> impl IntoView {
     view! {
-        {move || match (!publish_at.get().is_empty(), scheduled.get()) {
-            (true, true) => {
-                view! {
-                    <button
-                        class="j-btn is-primary"
-                        type="button"
-                        name="publish"
-                        value="true"
-                        prop:disabled=move || disabled.get()
-                        on:click=move |_| on_save.run(true)
-                    >
-                        "Schedule"
-                    </button>
-                }
-                    .into_any()
-            }
-            (true, false) => {
-                view! {
-                    <button
-                        class="j-btn is-primary"
-                        type="button"
-                        name="publish"
-                        value="true"
-                        prop:disabled=move || disabled.get()
-                        on:click=move |_| on_save.run(true)
-                    >
-                        "Publish"
-                    </button>
-                }
-                    .into_any()
-            }
-            (false, _) => {
-                view! {
-                    <DraftSaveButton disabled=disabled on_save=on_save />
-                    <button
-                        class="j-btn is-primary"
-                        type="button"
-                        name="publish"
-                        value="true"
-                        prop:disabled=move || disabled.get()
-                        on:click=move |_| on_save.run(true)
-                    >
-                        "Publish"
-                    </button>
-                }
-                    .into_any()
-            }
-        }}
+        <DraftSaveButton disabled=disabled on_save=on_save />
+        <button
+            class="j-btn is-primary"
+            type="button"
+            name="publish"
+            value="true"
+            prop:disabled=move || disabled.get()
+            on:click=move |_| on_save.run(true)
+        >
+            {move || {
+                posts::draft_primary_action_label(!publish_at.get().is_empty() && scheduled.get())
+            }}
+        </button>
     }
 }
 
@@ -760,9 +756,9 @@ pub(super) fn ComposeOptions(
 ) -> impl IntoView {
     view! {
         <div class="j-compose-options">
-            <div class="j-sb-head" style="padding:0">
-                "Options"
-            </div>
+            <h2 class="j-sb-head" style="padding:0">
+                "Publication options"
+            </h2>
             {match publication {
                 LoadedPublication::Draft => {
                     view! {
@@ -836,13 +832,31 @@ fn CreationScheduleControl(state: ComposeState, schedule: CreationSchedule) -> i
                 } else {
                     let value = state.publish_at.get().replace('T', " ");
                     view! {
-                        <p>{format!("Publication time: {value} local time")}</p>
-                        <button class="j-btn" type="button" on:click=open>
-                            "Change publication time…"
-                        </button>
-                        <button class="j-btn" type="button" on:click=clear>
-                            "Clear schedule"
-                        </button>
+                        <div class="j-publication-time">
+                            <span>{format!("{value} local time")}</span>
+                            <button
+                                class="j-btn is-icon"
+                                type="button"
+                                aria-label="Edit publication time"
+                                on:click=open
+                            >
+                                <IconButtonContent
+                                    path=Icons::EDIT
+                                    tooltip="Edit publication time"
+                                />
+                            </button>
+                            <button
+                                class="j-btn is-icon"
+                                type="button"
+                                aria-label="Clear publication time"
+                                on:click=clear
+                            >
+                                <IconButtonContent
+                                    path=Icons::MINUS
+                                    tooltip="Clear publication time"
+                                />
+                            </button>
+                        </div>
                     }
                         .into_any()
                 }
@@ -928,29 +942,54 @@ pub(super) fn ScheduleControl(
     publication_time: Option<PublicationTimeEditState>,
     schedule_error: Signal<Option<InvalidSchedule>>,
 ) -> impl IntoView {
+    let editing = RwSignal::new(false);
     view! {
         {match publication_time {
             Some(publication_time) => {
                 view! {
-                    <label class="j-form-field">
+                    <div class="j-form-field">
                         <span class="j-form-label">"Publication time (local)"</span>
-                        <input
-                            type="datetime-local"
-                            name="publish_at"
-                            class="j-form-input"
-                            prop:value=publication_time.value
-                            on:input=move |ev| {
-                                publication_time.set_input(event_target_value(&ev));
+                        {move || {
+                            if editing.get() {
+                                view! {
+                                    <input
+                                        type="datetime-local"
+                                        name="publish_at"
+                                        class="j-form-input"
+                                        prop:value=publication_time.value
+                                        on:input=move |ev| {
+                                            publication_time.set_input(event_target_value(&ev));
+                                        }
+                                    />
+                                }
+                                    .into_any()
+                            } else {
+                                let value = publication_time.value.get().replace('T', " ");
+                                view! {
+                                    <div class="j-publication-time">
+                                        <span>{format!("{value} local time")}</span>
+                                        <button
+                                            class="j-btn is-icon"
+                                            type="button"
+                                            aria-label="Edit publication time"
+                                            on:click=move |_| editing.set(true)
+                                        >
+                                            <IconButtonContent
+                                                path=Icons::EDIT
+                                                tooltip="Edit publication time"
+                                            />
+                                        </button>
+                                    </div>
+                                }
+                                    .into_any()
                             }
-                        />
+                        }}
                         {move || {
                             schedule_error
                                 .get()
-                                .map(|err| {
-                                    view! { <span class="error">{err.to_string()}</span> }
-                                })
+                                .map(|err| view! { <span class="error">{err.to_string()}</span> })
                         }}
-                    </label>
+                    </div>
                 }
                     .into_any()
             }

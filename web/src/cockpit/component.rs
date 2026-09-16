@@ -105,10 +105,10 @@ pub fn CockpitPage() -> impl IntoView {
         >
             {move || match read_username() {
                 None => view! { <Topbar title="Home" /> }.into_any(),
-                Some(user) => {
+                Some(_) => {
                     view! {
                         <Topbar title="Home" sub="Your published Posts" />
-                        <InlineComposer username=user on_publish=on_mutate />
+                        <InlineComposer on_publish=on_mutate />
                     }
                         .into_any()
                 }

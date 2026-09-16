@@ -125,36 +125,264 @@ test("authenticated user can create a post through the UI", async ({
   );
 });
 
-test("post create surfaces expose secondary actions as accessible icons", async ({
+test("post create surfaces use textual draft actions and an accessible Media icon", async ({
   registeredPage,
 }) => {
   const page = await registeredPage("/posts/new");
-  const expectAccessibleIcons = async (scope: Locator): Promise<void> => {
+  const expectApprovedActions = async (scope: Locator): Promise<void> => {
     await expect(scope).toBeVisible();
-    await scope.locator(SEL.postBody).fill("Tooltip focus");
+    await scope.locator(SEL.postBody).fill("Approved actions");
     const attach = scope.getByRole("button", { name: "Attach media" });
     const saveDraft = scope.locator(SEL.publishButton("false"));
 
-    for (const [button, label] of [
-      [attach, "Attach media"],
-      [saveDraft, "Save draft"],
-    ] as const) {
-      await expect(button).toHaveAttribute("aria-label", label);
-      await expect(button.locator("svg")).toHaveCount(1);
-      const tooltip = button.locator('[role="tooltip"]');
-      await expect(tooltip).toHaveText(label);
-      await expect(tooltip).toBeHidden();
-      await button.focus();
-      await expect(tooltip).toBeVisible();
-    }
+    await expect(attach).toHaveAttribute("aria-label", "Attach media");
+    await expect(attach.locator("path")).toHaveAttribute(
+      "d",
+      "M10 4v12 M4 10h12",
+    );
+    await expect(attach.locator("svg")).toHaveCount(1);
+    const tooltip = attach.locator('[role="tooltip"]');
+    await expect(tooltip).toHaveText("Attach media");
+    await expect(tooltip).toBeHidden();
+    await attach.focus();
+    await expect(tooltip).toBeVisible();
+
+    await expect(saveDraft).toHaveText("Save draft");
+    await expect(saveDraft.locator("svg")).toHaveCount(0);
+    await expect(saveDraft.locator('[role="tooltip"]')).toHaveCount(0);
   };
 
-  await expectAccessibleIcons(page.locator(".j-compose-grid"));
+  await expectApprovedActions(page.locator(".j-compose-grid"));
   await navigateInApp(page, () => click(page, 'a[href="/app"]'), {
     url: "/app",
     ready: ".j-composer",
   });
-  await expectAccessibleIcons(page.locator(".j-composer"));
+  await expectApprovedActions(page.locator(".j-composer"));
+});
+
+test("composer keeps filled body actions before a container-responsive controls rail", async ({
+  registeredPage,
+}) => {
+  const page = await registeredPage("/posts/new");
+
+  const expectApprovedMarkup = async (grid: Locator): Promise<void> => {
+    const body = grid.locator(":scope > .j-compose-body");
+    const rail = grid.locator(":scope > .j-compose-aside");
+    await expect(body).toHaveCount(1);
+    await expect(rail).toHaveCount(1);
+    await expect(body.locator(":scope > .j-composer-field")).toHaveCount(1);
+    await expect(body.locator(":scope > .j-composer-toolbar")).toHaveCount(1);
+    await expect(body.locator(":scope > .j-post-editor-panel")).toHaveCount(0);
+    expect(
+      await body
+        .locator(":scope > *")
+        .evaluateAll((children) => children.map((child) => child.className)),
+    ).toEqual(["j-composer-field", "j-composer-toolbar"]);
+    const bodyField = body.locator(":scope > label.j-composer-field");
+    await expect(
+      bodyField.locator(":scope > .j-form-label + textarea[name='body']"),
+    ).toHaveCount(1);
+    expect(
+      await rail
+        .locator(":scope > .j-composer-details, :scope > .j-compose-options")
+        .evaluateAll((sections) =>
+          sections.map((section) => section.className),
+        ),
+    ).toEqual(["j-composer-details", "j-compose-options"]);
+    await expect(
+      rail.getByText("Format controls how Jaunder interprets the Body.", {
+        exact: true,
+      }),
+    ).toHaveCount(0);
+    const fieldLabelStyles = await grid
+      .locator(".j-form-label")
+      .evaluateAll((labels) =>
+        labels.map((label) => {
+          const style = getComputedStyle(label);
+          return {
+            fontSize: style.fontSize,
+            fontWeight: style.fontWeight,
+            letterSpacing: style.letterSpacing,
+            textTransform: style.textTransform,
+          };
+        }),
+      );
+    expect(fieldLabelStyles).not.toHaveLength(0);
+    for (const style of fieldLabelStyles) {
+      expect(style).toMatchObject({
+        fontSize: "12px",
+        fontWeight: "600",
+        letterSpacing: "0.4px",
+      });
+      expect(style.textTransform).not.toBe("uppercase");
+    }
+    expect(
+      (await rail.locator("h2, .j-form-label").allTextContents()).map((text) =>
+        text.trim(),
+      ),
+    ).toEqual([
+      "Post details",
+      "Media",
+      "Summary",
+      "Tags",
+      "Format",
+      "Publication options",
+      "Slug",
+      "Publish at (optional)",
+      "Audience",
+    ]);
+  };
+  const expectFilledActions = async (scope: Locator): Promise<void> => {
+    const actions = scope.locator(".j-composer-toolbar .j-btn");
+    await expect(actions).toHaveCount(2);
+    const widths = await actions.evaluateAll((buttons) =>
+      buttons.map((button) => button.getBoundingClientRect().width),
+    );
+    expect(Math.abs(widths[0]! - widths[1]!)).toBeLessThan(1);
+  };
+  const expectStackedWithoutClipping = async (grid: Locator): Promise<void> => {
+    await expect
+      .poll(async () =>
+        grid.evaluate((element) => {
+          const body = element
+            .querySelector(".j-compose-body")!
+            .getBoundingClientRect();
+          const aside = element
+            .querySelector(".j-compose-aside")!
+            .getBoundingClientRect();
+          return {
+            stacked: aside.top >= body.bottom - 1,
+            clipped: element.scrollWidth > element.clientWidth + 1,
+          };
+        }),
+      )
+      .toEqual({ stacked: true, clipped: false });
+  };
+
+  const container = page.locator(".j-main");
+  const grid = page.locator(".j-compose-grid");
+  await container.evaluate((element) => {
+    const container = element as HTMLElement;
+    container.style.alignSelf = "flex-start";
+    container.style.flex = "none";
+    container.style.width = "960px";
+  });
+  await expect
+    .poll(async () =>
+      grid.evaluate((element) => getComputedStyle(element).gridTemplateColumns),
+    )
+    .toMatch(/640px 320px/);
+  await expectApprovedMarkup(grid);
+  await expectFilledActions(grid);
+
+  await container.evaluate((element) => {
+    (element as HTMLElement).style.width = "800px";
+  });
+  const order = await grid
+    .locator("textarea, button, aside")
+    .evaluateAll((elements) =>
+      elements.map(
+        (element) =>
+          element.tagName + ":" + (element.getAttribute("name") ?? ""),
+      ),
+    );
+  expect(order.indexOf("ASIDE:")).toBeGreaterThan(
+    order.findIndex((item) => item === "BUTTON:publish"),
+  );
+  await expectStackedWithoutClipping(grid);
+
+  await container.evaluate((element) => {
+    (element as HTMLElement).style.width = "375px";
+  });
+  await expectStackedWithoutClipping(grid);
+
+  await navigateInApp(page, () => click(page, 'a[href="/app"]'), {
+    url: "/app",
+    ready: ".j-composer",
+  });
+  const inlineContainer = page.locator(".j-composer");
+  const inlineGrid = inlineContainer.locator(".j-composer-layout");
+  await inlineContainer.evaluate((element) => {
+    const container = element as HTMLElement;
+    container.style.alignSelf = "flex-start";
+    container.style.width = "960px";
+  });
+  await expect
+    .poll(async () =>
+      inlineGrid.evaluate(
+        (element) => getComputedStyle(element).gridTemplateColumns,
+      ),
+    )
+    .toMatch(/640px 320px/);
+  await expectApprovedMarkup(inlineGrid);
+  await expectFilledActions(inlineGrid);
+
+  await inlineContainer.evaluate((element) => {
+    (element as HTMLElement).style.width = "800px";
+  });
+  await expectStackedWithoutClipping(inlineGrid);
+});
+
+test("loaded edit controls remain coherent in wide and mobile layouts", async ({
+  page,
+  registeredPage,
+}) => {
+  const { post_id } = await createPostViaApi(page, {
+    body: "# Populated edit layout\n\nBody",
+    tags: ["layout", "populated"],
+    audience: "private",
+    publish: false,
+    slug: "populated-edit-layout",
+  });
+  await registeredPage(`/posts/${post_id}/edit`);
+
+  const grid = page.locator(".j-compose-grid");
+  await expect(grid.locator(SEL.postBody)).toHaveValue(
+    /^# Populated edit layout\n\nBody\n?$/,
+  );
+  await page.locator(SEL.postSummary).fill("A populated summary");
+  await expect(
+    grid.locator('.j-tag-chip-label:has-text("#layout")'),
+  ).toBeVisible();
+  await expect(grid.getByLabel("Audience", { exact: true })).toHaveValue(
+    "private",
+  );
+  await expect(grid.locator('input[name="slug_override"]')).toHaveValue(
+    "populated-edit-layout",
+  );
+
+  const actions = grid.locator(".j-composer-toolbar .j-btn");
+  await expect(actions).toHaveCount(2);
+  const widths = await actions.evaluateAll((buttons) =>
+    buttons.map((button) => button.getBoundingClientRect().width),
+  );
+  expect(Math.abs(widths[0]! - widths[1]!)).toBeLessThan(1);
+
+  await page.locator(".j-main").evaluate((element) => {
+    const container = element as HTMLElement;
+    container.style.alignSelf = "flex-start";
+    container.style.flex = "none";
+    container.style.width = "375px";
+  });
+  await expect
+    .poll(async () =>
+      grid.evaluate((element) => {
+        const body = element
+          .querySelector(".j-compose-body")!
+          .getBoundingClientRect();
+        const aside = element
+          .querySelector(".j-compose-aside")!
+          .getBoundingClientRect();
+        return {
+          stacked: aside.top >= body.bottom - 1,
+          clipped: element.scrollWidth > element.clientWidth + 1,
+        };
+      }),
+    )
+    .toEqual({ stacked: true, clipped: false });
+  await expect(grid.getByLabel("Summary", { exact: true })).toHaveValue(
+    "A populated summary",
+  );
 });
 
 test("Post headers use the current display name with a handle-only fallback", async ({
@@ -612,7 +840,11 @@ test("full composer: narrow layout stays reachable and format round-trips", asyn
 
   const format = page.getByRole("group", { name: "Format" });
   await expect(format).toBeVisible();
-  await expect(format).toContainText("Body");
+  await expect(
+    format.getByText("Format controls how Jaunder interprets the Body.", {
+      exact: true,
+    }),
+  ).toHaveCount(0);
   const markdownBtn = format.getByRole("button", { name: "Markdown" });
   const orgBtn = format.getByRole("button", { name: "Org" });
 
@@ -744,7 +976,11 @@ test("edit page: format control prefills accessibly and round-trips a change", a
 
   const format = page.getByRole("group", { name: "Format" });
   await expect(format).toBeVisible();
-  await expect(format).toContainText("Body");
+  await expect(
+    format.getByText("Format controls how Jaunder interprets the Body.", {
+      exact: true,
+    }),
+  ).toHaveCount(0);
   const markdownBtn = format.getByRole("button", { name: "Markdown" });
   const orgBtn = format.getByRole("button", { name: "Org" });
 
@@ -854,9 +1090,8 @@ test("live editor can reschedule and atomically save edits while unpublishing", 
   await openEditor(page);
 
   await expect(page.locator(SEL.postSlug)).not.toBeVisible();
-  const publicationTime = page.getByLabel("Publication time (local)", {
-    exact: true,
-  });
+  await page.getByRole("button", { name: "Edit publication time" }).click();
+  const publicationTime = page.locator(SEL.publishAt);
   await expect(publicationTime).toBeVisible();
   await expect(publicationTime).not.toHaveValue("");
   await expect(page.locator(SEL.publishButton("false"))).toHaveText(
@@ -881,8 +1116,7 @@ test("live editor can reschedule and atomically save edits while unpublishing", 
   await expect(page.locator(SEL.postBody)).toHaveValue(
     /edited while unpublishing/,
   );
-  await expect(page.locator(SEL.publishButton("false"))).toHaveAttribute(
-    "aria-label",
+  await expect(page.locator(SEL.publishButton("false"))).toHaveText(
     "Save draft",
   );
 
@@ -891,8 +1125,7 @@ test("live editor can reschedule and atomically save edits while unpublishing", 
   await click(page, SEL.publishButton("false"));
   await expect(page.locator(SEL.error)).toBeVisible();
   await expect(page.locator(SEL.postSlug)).toBeVisible();
-  await expect(page.locator(SEL.publishButton("false"))).toHaveAttribute(
-    "aria-label",
+  await expect(page.locator(SEL.publishButton("false"))).toHaveText(
     "Save draft",
   );
 });
@@ -1361,6 +1594,23 @@ test("inline composer: publish flash is a link to the post permalink", async ({
   expect(href).toMatch(/^\/~[^/]+\//);
 });
 
+test("inline composer: scheduled flash reports the scheduled outcome", async ({
+  registeredPage,
+}) => {
+  const page = await registeredPage("/app");
+  await waitForSelector(page, ".j-composer");
+
+  await page.fill('.j-composer textarea[name="body"]', "Scheduled flash test");
+  await applyPublicationTime(page, "2999-01-01T09:00");
+  await expect(page.locator(SEL.publishButton("true"))).toHaveText("Schedule");
+  await click(page, '.j-composer button[name="publish"][value="true"]');
+  await waitForSelector(page, ".j-composer p.success a");
+
+  await expect(page.locator(".j-composer p.success a")).toContainText(
+    "Post scheduled!",
+  );
+});
+
 test("inline composer: draft flash links to the draft's canonical permalink", async ({
   registeredPage,
 }) => {
@@ -1412,7 +1662,11 @@ test("inline composer: format toggle is named and keyboard-operable", async ({
 
   const format = composer.getByRole("group", { name: "Format" });
   await expect(format).toBeVisible();
-  await expect(format).toContainText("Body");
+  await expect(
+    format.getByText("Format controls how Jaunder interprets the Body.", {
+      exact: true,
+    }),
+  ).toHaveCount(0);
   const markdownBtn = format.getByRole("button", { name: "Markdown" });
   const orgBtn = format.getByRole("button", { name: "Org" });
   await expect(markdownBtn).toHaveAttribute("aria-pressed", "true");
@@ -1850,29 +2104,33 @@ test.describe("new post publication time", () => {
     ).toBeVisible();
 
     await applyPublicationTime(page, "2999-01-01T00:00");
-    await expect(page.locator(SEL.publishButton("false"))).toHaveCount(0);
+    await expect(page.locator(SEL.publishButton("false"))).toBeEnabled();
     await expect(page.locator(SEL.publishButton("true"))).toHaveText(
       "Schedule",
     );
+    const scheduledActionWidths = await page
+      .locator(".j-composer-toolbar .j-btn")
+      .evaluateAll((buttons) =>
+        buttons.map((button) => button.getBoundingClientRect().width),
+      );
+    expect(
+      Math.abs(scheduledActionWidths[0]! - scheduledActionWidths[1]!),
+    ).toBeLessThan(1);
 
-    await page
-      .getByRole("button", { name: "Change publication time…" })
-      .click();
+    await page.getByRole("button", { name: "Edit publication time" }).click();
     await page.locator('input[name="publish_date"]').fill("2999-02-03");
     await page.getByRole("button", { name: "Cancel" }).click();
     await expect(page.locator(".j-compose-aside")).toContainText(
-      "Publication time: 2999-01-01 00:00 local time",
+      "2999-01-01 00:00 local time",
     );
 
-    await page
-      .getByRole("button", { name: "Change publication time…" })
-      .click();
+    await page.getByRole("button", { name: "Edit publication time" }).click();
     await page.locator('input[name="publish_date"]').fill("2999-02-03");
     await page.getByRole("button", { name: "Apply" }).click();
     await expect(page.locator(".j-compose-aside")).toContainText(
-      "Publication time: 2999-02-03 00:00 local time",
+      "2999-02-03 00:00 local time",
     );
-    await page.getByRole("button", { name: "Clear schedule" }).click();
+    await page.getByRole("button", { name: "Clear publication time" }).click();
     await expect(
       page.getByRole("button", { name: "Set publication time…" }),
     ).toBeVisible();
@@ -2003,6 +2261,7 @@ test("scheduled management page opens editor for reschedule and pullback", async
   );
 
   await openPostFromScheduled(page, "Scheduled Management");
+  await page.getByRole("button", { name: "Edit publication time" }).click();
   await page.fill(SEL.publishAt, REPLACEMENT_SCHEDULE);
   await click(page, SEL.publishButton("true"));
   await page.waitForURL((url) => !url.pathname.endsWith("/edit"));
@@ -2101,6 +2360,7 @@ test.describe("scheduled editor local time", () => {
     });
 
     await openPostFromDrafts(page, "Exact Scheduled Post");
+    await page.getByRole("button", { name: "Edit publication time" }).click();
     await expect(page.locator(SEL.publishAt)).toHaveValue("2999-11-03T01:30");
 
     const before = await page.request.post(
@@ -2154,6 +2414,7 @@ test.describe("scheduled editor local time", () => {
     await waitForSelector(page, SEL.saveSummary);
 
     await openPostFromDrafts(page, "Scheduled Draft");
+    await page.getByRole("button", { name: "Edit publication time" }).click();
     await expect(page.locator(SEL.publishAt)).toHaveValue(ORIGINAL_SCHEDULE);
     await expect(page.locator(SEL.publishButton("true"))).toHaveText("Save");
     await expect(page.locator(SEL.publishButton("false"))).toHaveText(
@@ -2166,6 +2427,7 @@ test.describe("scheduled editor local time", () => {
     await page.waitForURL((url) => !url.pathname.endsWith("/edit"));
 
     await openPostFromDrafts(page, "Scheduled Draft");
+    await page.getByRole("button", { name: "Edit publication time" }).click();
     await expect(page.locator(SEL.publishAt)).toHaveValue(REPLACEMENT_SCHEDULE);
 
     await page.fill(SEL.publishAt, "2027-03-14T02:30");
@@ -2177,6 +2439,7 @@ test.describe("scheduled editor local time", () => {
     expect(new URL(page.url()).pathname).toMatch(/\/edit$/);
 
     await openPostFromDrafts(page, "Scheduled Draft");
+    await page.getByRole("button", { name: "Edit publication time" }).click();
     await expect(page.locator(SEL.publishAt)).toHaveValue(REPLACEMENT_SCHEDULE);
     await page.fill(SEL.publishAt, "");
     await expect(page.locator(SEL.publishButton("true"))).toBeDisabled();
@@ -2184,6 +2447,7 @@ test.describe("scheduled editor local time", () => {
     expect(new URL(page.url()).pathname).toMatch(/\/edit$/);
 
     await openPostFromDrafts(page, "Scheduled Draft");
+    await page.getByRole("button", { name: "Edit publication time" }).click();
     await expect(page.locator(SEL.publishAt)).toHaveValue(REPLACEMENT_SCHEDULE);
     await click(page, SEL.publishButton("false"));
     await waitForSelector(page, SEL.saveSummary);
@@ -2213,11 +2477,15 @@ test.describe("scheduled editor local time", () => {
     expect(page.url()).toContain("/scheduled-draft-reopened");
 
     await openEditor(page);
-    await page.fill(SEL.publishAt, FINAL_SCHEDULE);
+    await page.getByRole("button", { name: "Set publication time…" }).click();
+    await page.locator('input[name="publish_date"]').fill("2999-04-05");
+    await page.locator('input[name="publish_time"]').fill("11:30");
+    await page.getByRole("button", { name: "Apply" }).click();
     await click(page, SEL.publishButton("true"));
     await page.waitForURL((url) => !url.pathname.endsWith("/edit"));
 
     await openPostFromDrafts(page, "Scheduled Draft");
+    await page.getByRole("button", { name: "Edit publication time" }).click();
     await expect(page.locator(SEL.publishAt)).toHaveValue(FINAL_SCHEDULE);
     await expect(page.locator(SEL.postSlug)).toHaveCount(0);
   });
@@ -2232,7 +2500,6 @@ test("scheduling from the edit page shows a Scheduled-for badge on the drafts pa
   // difference in the settle step: a *scheduled* publish sets `published_at` to a
   // future instant, so `EditSaveOutcome` takes its `Ok(_)` "Redirecting…" arm rather
   // than rendering the `.j-save-summary` block the draft-save path renders.
-  const FUTURE_DATETIME_LOCAL = "2999-01-01T09:00";
 
   // Create a draft and reach its edit page through the shared in-app hops.
   const page = await registeredPage("/posts/new");
@@ -2246,9 +2513,16 @@ test("scheduling from the edit page shows a Scheduled-for badge on the drafts pa
 
   // The post is still a draft, so the slug and schedule controls are rendered.
   await expect(page.getByLabel("Slug", { exact: true })).toBeVisible();
-  const schedule = page.getByLabel("Publish at (optional)", { exact: true });
-  await expect(schedule).toBeVisible();
-  await schedule.fill(FUTURE_DATETIME_LOCAL);
+  await page.getByRole("button", { name: "Set publication time…" }).click();
+  await page.locator('input[name="publish_date"]').fill("2999-01-01");
+  await page.locator('input[name="publish_time"]').fill("09:00");
+  await page.getByRole("button", { name: "Apply" }).click();
+  await expect(page.locator(SEL.publishButton("false"))).toBeEnabled();
+  await expect(page.locator(SEL.publishButton("true"))).toHaveText("Schedule");
+  await page.getByRole("button", { name: "Clear publication time" }).click();
+  await expect(page.locator(SEL.publishButton("true"))).toHaveText("Publish");
+  await applyPublicationTime(page, "2999-01-01T09:00");
+  await expect(page.locator(SEL.publishButton("true"))).toHaveText("Schedule");
   await click(page, SEL.publishButton("true"));
 
   // Settle before navigating, or the `goto` races the in-flight update. The signal is

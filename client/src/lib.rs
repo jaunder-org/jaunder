@@ -21,6 +21,10 @@ pub mod storage;
 /// state machine host-compiles; its fetch adapter is wasm-only.
 pub mod telemetry;
 
+/// Raw browser clipboard primitive.
+#[cfg(target_arch = "wasm32")]
+pub mod clipboard;
+
 /// Raw browser confirm-dialog primitive (`window.confirm`, #516).
 #[cfg(target_arch = "wasm32")]
 pub mod dialog;

@@ -178,6 +178,7 @@
 }
 
 .j-main {
+  container-type: inline-size;
   flex: 1;
   min-width: 0;
   display: flex;
@@ -462,42 +463,82 @@
 
 /* ─── composer ─── */
 .j-composer {
-  padding: 18px 28px;
+  container-type: inline-size;
+  flex: 0 1 50%;
+  min-height: 260px;
+  overflow: auto;
+  padding: 0;
   border-bottom: 1px var(--border-style) var(--line);
   background: var(--surface);
 }
 
-.j-composer-row {
+.j-composer-details {
   display: flex;
-  gap: 14px;
+  flex-direction: column;
+  gap: 17px;
 }
 
-.j-composer-body {
+.j-composer-media {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.j-composer-media-heading,
+.j-composer-media-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.j-composer-media-heading .j-btn.is-icon,
+.j-composer-media-row .j-btn.is-icon {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+}
+
+.j-composer-media-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.j-composer-media-row {
+  min-width: 0;
+}
+
+.j-composer-media-thumbnail {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  background: var(--surface-alt);
+}
+
+.j-composer-media-filename {
+  min-width: 0;
   flex: 1;
-  font-size: 15px;
-  line-height: 1.55;
-  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.j-publication-time {
   display: flex;
-  flex-direction: column;
-  gap: 10px;
+  align-items: center;
+  gap: 6px;
   min-width: 0;
 }
 
-.j-post-editor-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+.j-publication-time > span {
   min-width: 0;
-  padding: 18px;
-  border: 1px var(--border-style) var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-}
-
-.j-post-editor-media {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .j-btn.is-icon {
@@ -534,10 +575,6 @@
   opacity: 1;
 }
 
-.j-composer-body textarea {
-  width: 100%;
-}
-
 .j-composer-field {
   display: flex;
   flex-direction: column;
@@ -546,10 +583,17 @@
 }
 
 .j-composer-toolbar {
-  display: flex;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  padding-top: 17px;
+  border-top: 1px var(--border-style) var(--line);
+}
+
+.j-composer-toolbar .j-btn {
+  width: 100%;
 }
 
 .j-tag {
@@ -620,10 +664,12 @@
 
 /* ─── segmented control (format selector) ─── */
 .j-seg {
-  display: inline-flex;
+  display: flex;
+  width: 100%;
 }
 
 .j-seg .j-btn {
+  flex: 1;
   border-radius: 0;
   margin-left: -1px;
 }
@@ -994,33 +1040,54 @@
   gap: 12px;
 }
 
+.j-compose-grid,
+.j-composer-layout {
+  display: grid;
+  grid-template-columns: minmax(480px, 1fr) 320px;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.j-composer-layout {
+  height: 100%;
+}
+
 .j-compose-grid {
   flex: 1;
-  display: grid;
-  grid-template-columns: 1fr 320px;
   overflow: hidden;
-  min-height: 0;
 }
 
 .j-compose-body {
-  padding: 28px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  min-width: 0;
+  padding: 22px;
   overflow: auto;
   background: var(--surface);
 }
 
 .j-compose-aside {
-  border-left: 1px var(--border-style) var(--line);
-  padding: 24px 20px;
-  background: var(--bg);
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 17px;
+  min-width: 0;
+  padding: 22px;
   overflow: auto;
+  border-left: 1px var(--border-style) var(--line);
+  background: var(--bg);
 }
 
-@media (max-width: 720px) {
-  .j-compose-grid {
+@container (max-width: 800px) {
+  .j-compose-grid,
+  .j-composer-layout {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .j-compose-grid {
     overflow: auto;
   }
 
@@ -1033,18 +1100,6 @@
     border-top: 1px var(--border-style) var(--line);
     border-left: 0;
     overflow: visible;
-  }
-
-  .j-composer {
-    padding: 14px 16px;
-  }
-
-  .j-composer-row {
-    gap: 10px;
-  }
-
-  .j-post-editor-panel {
-    padding: 14px;
   }
 }
 
@@ -1135,34 +1190,6 @@
 
 .j-switch.is-on .j-switch-knob {
   left: 14px;
-}
-
-@media (max-width: 720px) {
-  .j-composer {
-    padding: 16px;
-  }
-
-  .j-compose-grid {
-    grid-template-columns: 1fr;
-    overflow: auto;
-  }
-
-  .j-compose-body,
-  .j-edit-form-body {
-    padding: 20px 16px;
-    overflow: visible;
-  }
-
-  .j-compose-aside {
-    border-top: 1px var(--border-style) var(--line);
-    border-left: 0;
-    padding: 20px 16px;
-    overflow: visible;
-  }
-
-  .j-composer-toolbar {
-    align-items: flex-end;
-  }
 }
 
 /* ─── settings ─── */
@@ -1280,6 +1307,14 @@
   font-weight: 600;
   letter-spacing: 0.4px;
   color: var(--ink-soft);
+}
+
+.j-compose-grid .j-form-label,
+.j-composer-layout .j-form-label {
+ font-size: 12px;
+ font-weight: 600;
+ letter-spacing: 0.4px;
+ color: var(--muted);
 }
 
 .j-form-help {

@@ -47,6 +47,9 @@ pub fn MediaUpload(
     /// When true, render the composer-family icon treatment instead of visible text.
     #[prop(optional)]
     icon_only: bool,
+    /// Optional icon path for an icon-only contextual variant.
+    #[prop(optional)]
+    icon_path: Option<&'static str>,
 ) -> impl IntoView {
     // The signal bundle, the outcome fold, and the notify/record sequencing are all
     // host-compiled and host-tested in `super::upload_state` (#306, ADR-0083); what
@@ -92,7 +95,7 @@ pub fn MediaUpload(
 
     view! {
         <input type="file" node_ref=file_input style="display:none" on:change=on_file_change />
-        <MediaUploadButton state file_input icon_only />
+        <MediaUploadButton state file_input icon_only icon_path />
         {move || show_result.then(|| state.last_media_url.get()).flatten().map(uploaded_url_view)}
         {move || {
             show_result
@@ -114,6 +117,7 @@ fn MediaUploadButton(
     state: UploadState,
     file_input: NodeRef<leptos::html::Input>,
     icon_only: bool,
+    icon_path: Option<&'static str>,
 ) -> impl IntoView {
     let presentation =
         Signal::derive(move || super::upload_button_presentation(icon_only, state.uploading.get()));
@@ -133,7 +137,10 @@ fn MediaUploadButton(
             {move || match presentation.get() {
                 UploadButtonPresentation::Text(label) => label.into_any(),
                 UploadButtonPresentation::Icon { tooltip, .. } => {
-                    view! { <IconButtonContent path=Icons::MEDIA tooltip=tooltip /> }.into_any()
+                    view! {
+                        <IconButtonContent path=icon_path.unwrap_or(Icons::MEDIA) tooltip=tooltip />
+                    }
+                        .into_any()
                 }
             }}
         </button>
