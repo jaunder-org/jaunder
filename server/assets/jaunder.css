@@ -1233,9 +1233,11 @@
 }
 
 .j-form-label {
- font-size: 13px;
- color: var(--ink-soft);
  font-family: var(--font-meta);
+ font-size: 12px;
+ font-weight: 600;
+ letter-spacing: 0.4px;
+ color: var(--muted-soft);
 }
 
 .j-form-help {

@@ -95,6 +95,9 @@ async function expectStandardCard(
         return {
           fontFamily: style.fontFamily,
           fontSize: style.fontSize,
+          fontWeight: style.fontWeight,
+          letterSpacing: style.letterSpacing,
+          textTransform: style.textTransform,
           color: style.color,
         };
       }),
@@ -103,6 +106,9 @@ async function expectStandardCard(
   for (const style of labelStyles.slice(1)) {
     expect(style).toEqual(labelStyles[0]);
   }
+  expect(labelStyles[0].fontWeight).toBe("600");
+  expect(labelStyles[0].letterSpacing).toBe("0.4px");
+  expect(labelStyles[0].textTransform).toBe("none");
 
   if (styledControls.length > 0) {
     await styledControls[0].blur();
