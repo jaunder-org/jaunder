@@ -167,7 +167,7 @@ pub(super) static NAV_ITEMS: LazyLock<[NavItem; 19]> = LazyLock::new(|| {
         },
         NavItem {
             key: "admin-websub",
-            label: "WebSub Recovery",
+            label: "WebSub",
             icon_path: Icons::SHIELD,
             href: Some(root_relative_url("/admin/websub")),
             requires_auth: true,
@@ -284,7 +284,7 @@ mod tests {
         assert!(!html.contains(">Invites<"), "{html}");
         assert!(!html.contains(">Configure Backups<"), "{html}");
         assert!(!html.contains(">Site Settings<"), "{html}");
-        assert!(!html.contains(">WebSub Recovery<"), "{html}");
+        assert!(!html.contains(">WebSub<"), "{html}");
         assert_eq!(
             html.matches("data-jaunder-part=\"primary-navigation\"")
                 .count(),
@@ -364,6 +364,18 @@ mod tests {
     }
 
     #[test]
+    fn operator_websub_destination_uses_page_title() {
+        let websub = nav_items(RegistrationPolicy::Closed, true, true)
+            .find(|item| item.key == "admin-websub");
+        let Some(websub) = websub else {
+            panic!("operator navigation must contain the WebSub destination");
+        };
+
+        assert_eq!(websub.label, "WebSub");
+        assert_eq!(websub.href.as_deref(), Some("/admin/websub"));
+    }
+
+    #[test]
     fn operator_destinations_are_visible_only_to_operators() {
         let viewer_items = nav_items(RegistrationPolicy::Closed, false, true)
             .map(|item| item.key)
@@ -371,6 +383,7 @@ mod tests {
         assert!(!viewer_items.contains(&"admin-backups"));
         assert!(!viewer_items.contains(&"admin-site"));
         assert!(!viewer_items.contains(&"admin-smtp"));
+        assert!(!viewer_items.contains(&"admin-websub"));
 
         let operator_items = nav_items(RegistrationPolicy::Closed, true, true)
             .map(|item| {
@@ -391,6 +404,10 @@ mod tests {
         );
         assert!(
             operator_items.contains(&("admin-smtp", "/admin/smtp")),
+            "{operator_items:?}"
+        );
+        assert!(
+            operator_items.contains(&("admin-websub", "/admin/websub")),
             "{operator_items:?}"
         );
     }
