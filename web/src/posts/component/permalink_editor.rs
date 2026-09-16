@@ -19,7 +19,9 @@ use common::time::{self, UtcInstant};
 use common::{MutationOutcome, permalink_route::PermalinkRoute};
 
 use super::audience;
-use super::composers::{ComposeOptions, ComposerActions, ComposerCore};
+use super::composers::{
+    ComposeOptions, ComposerActions, ComposerCore, ComposerDetails, CreationSchedule,
+};
 use super::display::PostCard;
 use super::support;
 
@@ -342,12 +344,14 @@ fn EditPostForm(
     named: RwSignal<NamedAudienceState>,
     action: ServerAction<posts::Update>,
 ) -> impl IntoView {
+    let creation_schedule = CreationSchedule::new();
     // The body/field gate also waits for a real named-audience load. Repeating
     // the pure guard in the callback prevents a direct invocation from
     // dispatching while Loading or Failed.
     let also_blocked = Signal::derive(move || {
         !slug_field.is_valid()
             || !state.summary_field.is_valid()
+            || creation_schedule.is_editing()
             || state.audience.with(|selection| {
                 named.with(|state| state.selection_for_submit(selection).is_none())
             })
@@ -387,13 +391,14 @@ fn EditPostForm(
                 />
             </div>
             <aside class="j-compose-aside">
+                <ComposerDetails state=state />
                 <ComposeOptions
                     state=state
                     slug_field=slug_field
                     publication=loaded_publication
                     publication_time=publication_time
                     schedule_error=schedule_error
-                    creation_schedule=None
+                    creation_schedule=Some(creation_schedule)
                     named=named
                 />
             </aside>

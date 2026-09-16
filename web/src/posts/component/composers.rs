@@ -1,14 +1,13 @@
 use leptos::prelude::*;
 
 use crate::auth;
-use crate::avatar::Avatar;
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput, ValidatedTextarea};
 use crate::icon::{IconButtonContent, Icons};
 use crate::media::MediaUpload;
 use crate::posts;
 use crate::posts::{
-    ClassifiedSavedPost, ComposeState, Create, CreatePublication, InvalidSchedule,
+    ClassifiedSavedPost, ComposeState, ComposerMedia, Create, CreatePublication, InvalidSchedule,
     LoadedPublication, NamedAudienceState, PublicationTimeEditState,
 };
 use crate::tags::TagInput;
@@ -19,7 +18,6 @@ use common::post_summary::PostSummary;
 use common::render::PostFormat;
 use common::slug::Slug;
 use common::time::{self, UtcInstant};
-use common::username::Username;
 
 use super::audience::AudiencePickerWithState;
 use super::{audience, support};
@@ -151,19 +149,7 @@ pub(super) fn ComposerCore(
                 show_seg=false
                 on_input=on_input
             />
-            <div class="j-post-editor-media">
-                <MediaUpload show_result=true icon_only=true />
-            </div>
-            <ValidatedTextarea<PostSummary>
-                label="Summary"
-                name="summary"
-                field=state.summary_field
-                placeholder="Optional summary or excerpt"
-            />
-            <TagInput tags=state.tags on_change=state.tag_input_changed() />
             <div class="j-composer-toolbar">
-                <FormatToggle format=state.format />
-                <span class="j-spacer"></span>
                 {match actions {
                     ComposerActions::Save { publication, disabled, unpublish_disabled, on_save } => {
                         view! {
@@ -193,6 +179,115 @@ pub(super) fn ComposerCore(
     }
 }
 
+/// The complete non-body control rail shared by every Post composer.
+#[component]
+pub(super) fn ComposerDetails(state: ComposeState) -> impl IntoView {
+    let uploads_enabled = Resource::new(|| (), |()| crate::media::get_uploads_enabled());
+    let media = RwSignal::new(Vec::<ComposerMedia>::new());
+    view! {
+        <div class="j-composer-details">
+            {move || match uploads_enabled.get() {
+                Some(Ok(true)) => view! { <ComposerMediaField media=media /> }.into_any(),
+                None | Some(Ok(false) | Err(_)) => ().into_any(),
+            }}
+            <ValidatedTextarea<PostSummary>
+                label="Summary"
+                name="summary"
+                field=state.summary_field
+                placeholder="Optional summary or excerpt"
+            /> <TagInput tags=state.tags on_change=state.tag_input_changed() />
+            <FormatToggle format=state.format />
+        </div>
+    }
+}
+
+/// Temporary Media rows for one composer session; dismissing a row never mutates a Media Record.
+#[component]
+fn ComposerMediaField(media: RwSignal<Vec<ComposerMedia>>) -> impl IntoView {
+    let error = RwSignal::new(None::<String>);
+    let add_media = Callback::new(move |url| {
+        media.update(|items| items.push(ComposerMedia::from_uploaded_url(url)));
+        error.set(None);
+    });
+    let report_error = Callback::new(move |message| error.set(Some(message)));
+    view! {
+        <div class="j-composer-media">
+            <div class="j-composer-media-heading">
+                <span class="j-form-label">"Media"</span>
+                <MediaUpload on_uploaded=add_media on_error=report_error icon_only=true />
+            </div>
+            <div class="j-composer-media-rows">
+                {move || {
+                    media
+                        .get()
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, item)| {
+                            let image_url = String::from(item.url.clone());
+                            let copy_url = image_url.clone();
+                            view! {
+                                <div class="j-composer-media-row">
+                                    <img class="j-composer-media-thumbnail" src=image_url alt="" />
+                                    <span class="j-composer-media-filename">{item.filename}</span>
+                                    <button
+                                        class="j-btn is-icon"
+                                        type="button"
+                                        aria-label="Copy media URL"
+                                        on:click=move |_| copy_media_url(&copy_url, error)
+                                    >
+                                        <IconButtonContent
+                                            path=Icons::COPY
+                                            tooltip="Copy media URL"
+                                        />
+                                    </button>
+                                    <button
+                                        class="j-btn is-icon"
+                                        type="button"
+                                        aria-label="Dismiss media"
+                                        on:click=move |_| {
+                                            media
+                                                .update(|items| {
+                                                    if index < items.len() {
+                                                        items.remove(index);
+                                                    }
+                                                });
+                                        }
+                                    >
+                                        <IconButtonContent
+                                            path=Icons::MINUS
+                                            tooltip="Dismiss media"
+                                        />
+                                    </button>
+                                </div>
+                            }
+                        })
+                        .collect_view()
+                }}
+            </div>
+            {move || error.get().map(|message| view! { <p class="error">{message}</p> })}
+        </div>
+    }
+}
+
+/// Copy a temporary Media URL while keeping clipboard failures visible in the composer.
+fn copy_media_url(url: &str, error: RwSignal<Option<String>>) {
+    use leptos::task::spawn_local;
+    use wasm_bindgen_futures::JsFuture;
+
+    let Some(window) = web_sys::window() else {
+        error.set(Some("Could not copy the Media URL.".to_owned()));
+        return;
+    };
+    let write = window.navigator().clipboard().write_text(url);
+    spawn_local(async move {
+        if JsFuture::from(write).await.is_ok() {
+            error.set(None);
+        } else {
+            error.set(Some("Could not copy the Media URL.".to_owned()));
+        }
+    });
+}
+
 /// Provisional publication-time inputs for the full new-Post composer.
 ///
 /// The committed wire value remains on [`ComposeState`]; these fields exist only while
@@ -208,7 +303,7 @@ pub(super) struct CreationSchedule {
 }
 
 impl CreationSchedule {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             disclosed: RwSignal::new(false),
             date: RwSignal::new(String::new()),
@@ -225,7 +320,7 @@ impl CreationSchedule {
         self.error.set(None);
     }
 
-    fn is_editing(self) -> bool {
+    pub(super) fn is_editing(self) -> bool {
         self.disclosed.get()
     }
 }
@@ -239,7 +334,6 @@ impl CreationSchedule {
 #[component]
 pub fn PostCreateForm(
     compact: bool,
-    #[prop(optional)] username: Option<Username>,
     #[prop(into)] on_success: Callback<ClassifiedSavedPost>,
     #[prop(optional)] on_mutation: Option<Callback<bool>>,
     #[prop(default = 6)] rows: u32,
@@ -277,7 +371,6 @@ pub fn PostCreateForm(
             <CompactComposer
                 state=state
                 create_action=create_action
-                username=username
                 rows=rows
                 placeholder=placeholder
                 on_input=on_input
@@ -290,53 +383,69 @@ pub fn PostCreateForm(
     }
 }
 
-/// The inline composer row: avatar, body, summary, tags, and the two dispatch
-/// buttons. Split out of [`PostCreateForm`] (#301); no slug or schedule control,
-/// so it dispatches with `slug_override: None` and an empty `publish_at`.
+/// The inline composer uses the same complete field grouping and dispatch contract as
+/// the dedicated creation page. It differs only in its surrounding Home context.
 #[component]
 fn CompactComposer(
     state: ComposeState,
     create_action: ServerAction<Create>,
-    /// Passed through from `PostCreateForm`, which is the only caller — so these two
-    /// are plain `Option` props rather than `#[prop(optional)]` ones, which would
-    /// take the inner value and re-wrap it.
-    username: Option<Username>,
     rows: u32,
     placeholder: &'static str,
     on_input: Option<Callback<()>>,
 ) -> impl IntoView {
-    // The gate and the payload come from one `submit_gate` call (#860, ADR-0105), so a
-    // control that cannot dispatch is disabled rather than inert. No slug in this shape,
-    // so the only other blocker is the summary.
+    let slug_field = Field::<Slug>::optional();
+    let named = audience::load_named_audiences();
+    let schedule = CreationSchedule::new();
     let (submit_disabled, dispatch) = posts::submit_gate(
         state.body,
-        Signal::derive(move || !state.summary_field.is_valid()),
+        Signal::derive(move || {
+            !slug_field.is_valid()
+                || !state.summary_field.is_valid()
+                || schedule.is_editing()
+                || state.audience.with(|selection| {
+                    named.with(|state| state.selection_for_submit(selection).is_none())
+                })
+        }),
         Callback::new(move |(body, publish): (PostBody, bool)| {
             let publication = posts::publication_from_local(publish, &state.publish_at.get());
-            create_action.dispatch(Create {
-                post: state.inputs(body, publication, None),
-            });
+            if state.audience.with(|selection| {
+                named.with(|state| state.selection_for_submit(selection).is_some())
+            }) {
+                create_action.dispatch(Create {
+                    post: state.inputs(body, publication, slug_field.parsed()),
+                });
+            }
         }),
     );
     view! {
-        <div class="j-composer-row">
-            {username.map(|u| view! { <Avatar name=&u size=36 /> })} <div class="j-composer-body">
+        <div class="j-composer-layout">
+            <div class="j-compose-body">
                 <ComposerCore
                     state=state
-                    actions=ComposerActions::Save {
-                        publication: LoadedPublication::Draft,
+                    actions=ComposerActions::Create {
+                        publish_at: state.publish_at,
+                        scheduled: schedule.scheduled,
                         disabled: submit_disabled,
-                        unpublish_disabled: submit_disabled,
                         on_save: dispatch,
                     }
                     rows=rows
                     placeholder=placeholder
-
                     textarea_class=""
                     on_input=on_input
                 />
-
             </div>
+            <aside class="j-compose-aside">
+                <ComposerDetails state=state />
+                <ComposeOptions
+                    state=state
+                    slug_field=slug_field
+                    publication=LoadedPublication::Draft
+                    publication_time=None
+                    schedule_error=Signal::derive(|| None::<InvalidSchedule>)
+                    creation_schedule=Some(schedule)
+                    named=named
+                />
+            </aside>
         </div>
         <CreateErrorFlash action=create_action />
     }
@@ -398,6 +507,7 @@ fn FullComposer(
                 />
             </div>
             <aside class="j-compose-aside">
+                <ComposerDetails state=state />
                 <ComposeOptions
                     state=state
                     slug_field=slug_field
@@ -444,7 +554,7 @@ fn CreateErrorFlash(action: ServerAction<Create>) -> impl IntoView {
 }
 
 #[component]
-pub fn InlineComposer(username: Username, on_publish: Callback<()>) -> impl IntoView {
+pub fn InlineComposer(on_publish: Callback<()>) -> impl IntoView {
     let flash: RwSignal<Option<(String, String)>> = RwSignal::new(None);
 
     let on_success = Callback::new(move |created: ClassifiedSavedPost| {
@@ -470,7 +580,6 @@ pub fn InlineComposer(username: Username, on_publish: Callback<()>) -> impl Into
         <div class="j-composer">
             <PostCreateForm
                 compact=true
-                username=username
                 on_success=on_success
                 on_mutation=on_mutation
                 rows=6
@@ -836,13 +945,31 @@ fn CreationScheduleControl(state: ComposeState, schedule: CreationSchedule) -> i
                 } else {
                     let value = state.publish_at.get().replace('T', " ");
                     view! {
-                        <p>{format!("Publication time: {value} local time")}</p>
-                        <button class="j-btn" type="button" on:click=open>
-                            "Change publication time…"
-                        </button>
-                        <button class="j-btn" type="button" on:click=clear>
-                            "Clear schedule"
-                        </button>
+                        <div class="j-publication-time">
+                            <span>{format!("{value} local time")}</span>
+                            <button
+                                class="j-btn is-icon"
+                                type="button"
+                                aria-label="Edit publication time"
+                                on:click=open
+                            >
+                                <IconButtonContent
+                                    path=Icons::EDIT
+                                    tooltip="Edit publication time"
+                                />
+                            </button>
+                            <button
+                                class="j-btn is-icon"
+                                type="button"
+                                aria-label="Clear publication time"
+                                on:click=clear
+                            >
+                                <IconButtonContent
+                                    path=Icons::MINUS
+                                    tooltip="Clear publication time"
+                                />
+                            </button>
+                        </div>
                     }
                         .into_any()
                 }
@@ -928,29 +1055,54 @@ pub(super) fn ScheduleControl(
     publication_time: Option<PublicationTimeEditState>,
     schedule_error: Signal<Option<InvalidSchedule>>,
 ) -> impl IntoView {
+    let editing = RwSignal::new(false);
     view! {
         {match publication_time {
             Some(publication_time) => {
                 view! {
-                    <label class="j-form-field">
+                    <div class="j-form-field">
                         <span class="j-form-label">"Publication time (local)"</span>
-                        <input
-                            type="datetime-local"
-                            name="publish_at"
-                            class="j-form-input"
-                            prop:value=publication_time.value
-                            on:input=move |ev| {
-                                publication_time.set_input(event_target_value(&ev));
+                        {move || {
+                            if editing.get() {
+                                view! {
+                                    <input
+                                        type="datetime-local"
+                                        name="publish_at"
+                                        class="j-form-input"
+                                        prop:value=publication_time.value
+                                        on:input=move |ev| {
+                                            publication_time.set_input(event_target_value(&ev));
+                                        }
+                                    />
+                                }
+                                    .into_any()
+                            } else {
+                                let value = publication_time.value.get().replace('T', " ");
+                                view! {
+                                    <div class="j-publication-time">
+                                        <span>{format!("{value} local time")}</span>
+                                        <button
+                                            class="j-btn is-icon"
+                                            type="button"
+                                            aria-label="Edit publication time"
+                                            on:click=move |_| editing.set(true)
+                                        >
+                                            <IconButtonContent
+                                                path=Icons::EDIT
+                                                tooltip="Edit publication time"
+                                            />
+                                        </button>
+                                    </div>
+                                }
+                                    .into_any()
                             }
-                        />
+                        }}
                         {move || {
                             schedule_error
                                 .get()
-                                .map(|err| {
-                                    view! { <span class="error">{err.to_string()}</span> }
-                                })
+                                .map(|err| view! { <span class="error">{err.to_string()}</span> })
                         }}
-                    </label>
+                    </div>
                 }
                     .into_any()
             }

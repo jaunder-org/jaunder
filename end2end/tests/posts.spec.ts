@@ -157,6 +157,51 @@ test("post create surfaces expose secondary actions as accessible icons", async 
   await expectAccessibleIcons(page.locator(".j-composer"));
 });
 
+test("composer keeps body actions before a responsive controls rail", async ({
+  registeredPage,
+}) => {
+  const page = await registeredPage("/posts/new");
+  const container = page.locator(".j-main");
+  const grid = page.locator(".j-compose-grid");
+  await container.evaluate((element) => {
+    const container = element as HTMLElement;
+    container.style.alignSelf = "flex-start";
+    container.style.width = "960px";
+  });
+  await expect
+    .poll(async () =>
+      grid.evaluate((element) => getComputedStyle(element).gridTemplateColumns),
+    )
+    .toMatch(/640px 320px/);
+  await expect(grid.locator(".j-compose-body")).toHaveCount(1);
+  await expect(grid.locator(".j-compose-aside")).toHaveCount(1);
+
+  await container.evaluate((element) => {
+    (element as HTMLElement).style.width = "800px";
+  });
+  const order = await grid
+    .locator("textarea, button, aside")
+    .evaluateAll((elements) =>
+      elements.map(
+        (element) =>
+          element.tagName + ":" + (element.getAttribute("name") ?? ""),
+      ),
+    );
+  expect(order.indexOf("ASIDE:")).toBeGreaterThan(
+    order.findIndex((item) => item === "BUTTON:publish"),
+  );
+  const stacked = await grid.evaluate((element) => {
+    const body = element
+      .querySelector(".j-compose-body")!
+      .getBoundingClientRect();
+    const aside = element
+      .querySelector(".j-compose-aside")!
+      .getBoundingClientRect();
+    return aside.top >= body.bottom;
+  });
+  expect(stacked).toBe(true);
+});
+
 test("Post headers use the current display name with a handle-only fallback", async ({
   page,
 }, testInfo) => {
@@ -854,9 +899,8 @@ test("live editor can reschedule and atomically save edits while unpublishing", 
   await openEditor(page);
 
   await expect(page.locator(SEL.postSlug)).not.toBeVisible();
-  const publicationTime = page.getByLabel("Publication time (local)", {
-    exact: true,
-  });
+  await page.getByRole("button", { name: "Edit publication time" }).click();
+  const publicationTime = page.locator(SEL.publishAt);
   await expect(publicationTime).toBeVisible();
   await expect(publicationTime).not.toHaveValue("");
   await expect(page.locator(SEL.publishButton("false"))).toHaveText(
@@ -1855,24 +1899,20 @@ test.describe("new post publication time", () => {
       "Schedule",
     );
 
-    await page
-      .getByRole("button", { name: "Change publication time…" })
-      .click();
+    await page.getByRole("button", { name: "Edit publication time" }).click();
     await page.locator('input[name="publish_date"]').fill("2999-02-03");
     await page.getByRole("button", { name: "Cancel" }).click();
     await expect(page.locator(".j-compose-aside")).toContainText(
-      "Publication time: 2999-01-01 00:00 local time",
+      "2999-01-01 00:00 local time",
     );
 
-    await page
-      .getByRole("button", { name: "Change publication time…" })
-      .click();
+    await page.getByRole("button", { name: "Edit publication time" }).click();
     await page.locator('input[name="publish_date"]').fill("2999-02-03");
     await page.getByRole("button", { name: "Apply" }).click();
     await expect(page.locator(".j-compose-aside")).toContainText(
-      "Publication time: 2999-02-03 00:00 local time",
+      "2999-02-03 00:00 local time",
     );
-    await page.getByRole("button", { name: "Clear schedule" }).click();
+    await page.getByRole("button", { name: "Clear publication time" }).click();
     await expect(
       page.getByRole("button", { name: "Set publication time…" }),
     ).toBeVisible();
@@ -2003,6 +2043,7 @@ test("scheduled management page opens editor for reschedule and pullback", async
   );
 
   await openPostFromScheduled(page, "Scheduled Management");
+  await page.getByRole("button", { name: "Edit publication time" }).click();
   await page.fill(SEL.publishAt, REPLACEMENT_SCHEDULE);
   await click(page, SEL.publishButton("true"));
   await page.waitForURL((url) => !url.pathname.endsWith("/edit"));
@@ -2101,6 +2142,7 @@ test.describe("scheduled editor local time", () => {
     });
 
     await openPostFromDrafts(page, "Exact Scheduled Post");
+    await page.getByRole("button", { name: "Edit publication time" }).click();
     await expect(page.locator(SEL.publishAt)).toHaveValue("2999-11-03T01:30");
 
     const before = await page.request.post(
@@ -2154,6 +2196,7 @@ test.describe("scheduled editor local time", () => {
     await waitForSelector(page, SEL.saveSummary);
 
     await openPostFromDrafts(page, "Scheduled Draft");
+    await page.getByRole("button", { name: "Edit publication time" }).click();
     await expect(page.locator(SEL.publishAt)).toHaveValue(ORIGINAL_SCHEDULE);
     await expect(page.locator(SEL.publishButton("true"))).toHaveText("Save");
     await expect(page.locator(SEL.publishButton("false"))).toHaveText(
@@ -2166,6 +2209,7 @@ test.describe("scheduled editor local time", () => {
     await page.waitForURL((url) => !url.pathname.endsWith("/edit"));
 
     await openPostFromDrafts(page, "Scheduled Draft");
+    await page.getByRole("button", { name: "Edit publication time" }).click();
     await expect(page.locator(SEL.publishAt)).toHaveValue(REPLACEMENT_SCHEDULE);
 
     await page.fill(SEL.publishAt, "2027-03-14T02:30");
@@ -2177,6 +2221,7 @@ test.describe("scheduled editor local time", () => {
     expect(new URL(page.url()).pathname).toMatch(/\/edit$/);
 
     await openPostFromDrafts(page, "Scheduled Draft");
+    await page.getByRole("button", { name: "Edit publication time" }).click();
     await expect(page.locator(SEL.publishAt)).toHaveValue(REPLACEMENT_SCHEDULE);
     await page.fill(SEL.publishAt, "");
     await expect(page.locator(SEL.publishButton("true"))).toBeDisabled();
@@ -2184,6 +2229,7 @@ test.describe("scheduled editor local time", () => {
     expect(new URL(page.url()).pathname).toMatch(/\/edit$/);
 
     await openPostFromDrafts(page, "Scheduled Draft");
+    await page.getByRole("button", { name: "Edit publication time" }).click();
     await expect(page.locator(SEL.publishAt)).toHaveValue(REPLACEMENT_SCHEDULE);
     await click(page, SEL.publishButton("false"));
     await waitForSelector(page, SEL.saveSummary);
@@ -2213,11 +2259,15 @@ test.describe("scheduled editor local time", () => {
     expect(page.url()).toContain("/scheduled-draft-reopened");
 
     await openEditor(page);
-    await page.fill(SEL.publishAt, FINAL_SCHEDULE);
+    await page.getByRole("button", { name: "Set publication time…" }).click();
+    await page.locator('input[name="publish_date"]').fill("2999-04-05");
+    await page.locator('input[name="publish_time"]').fill("11:30");
+    await page.getByRole("button", { name: "Apply" }).click();
     await click(page, SEL.publishButton("true"));
     await page.waitForURL((url) => !url.pathname.endsWith("/edit"));
 
     await openPostFromDrafts(page, "Scheduled Draft");
+    await page.getByRole("button", { name: "Edit publication time" }).click();
     await expect(page.locator(SEL.publishAt)).toHaveValue(FINAL_SCHEDULE);
     await expect(page.locator(SEL.postSlug)).toHaveCount(0);
   });
@@ -2232,7 +2282,6 @@ test("scheduling from the edit page shows a Scheduled-for badge on the drafts pa
   // difference in the settle step: a *scheduled* publish sets `published_at` to a
   // future instant, so `EditSaveOutcome` takes its `Ok(_)` "Redirecting…" arm rather
   // than rendering the `.j-save-summary` block the draft-save path renders.
-  const FUTURE_DATETIME_LOCAL = "2999-01-01T09:00";
 
   // Create a draft and reach its edit page through the shared in-app hops.
   const page = await registeredPage("/posts/new");
@@ -2246,9 +2295,10 @@ test("scheduling from the edit page shows a Scheduled-for badge on the drafts pa
 
   // The post is still a draft, so the slug and schedule controls are rendered.
   await expect(page.getByLabel("Slug", { exact: true })).toBeVisible();
-  const schedule = page.getByLabel("Publish at (optional)", { exact: true });
-  await expect(schedule).toBeVisible();
-  await schedule.fill(FUTURE_DATETIME_LOCAL);
+  await page.getByRole("button", { name: "Set publication time…" }).click();
+  await page.locator('input[name="publish_date"]').fill("2999-01-01");
+  await page.locator('input[name="publish_time"]').fill("09:00");
+  await page.getByRole("button", { name: "Apply" }).click();
   await click(page, SEL.publishButton("true"));
 
   // Settle before navigating, or the `goto` races the in-flight update. The signal is

@@ -40,6 +40,7 @@ mod page_state;
 // so the payload is host-tested and so each composer shape can be its own
 // `#[component]` over one prop rather than seven (#301, ADR-0070 §6).
 mod compose_state;
+mod composer_media;
 mod edit_state;
 
 // Re-exported at the public `crate::posts::…` path so the host build keeps the
@@ -61,6 +62,7 @@ pub use page_state::{
 // Same reason again: the composer and editor state seams are consumed by the
 // wasm-only component.
 pub use compose_state::{ComposeState, PublicationIntent, publication_from_local, submit_gate};
+pub use composer_media::ComposerMedia;
 pub use edit_state::{
     EditLifecycleState, EditPublicationState, InvalidSchedule, LoadedPublication,
     PublicationTimeEditState, edit_submit_gate, loaded_publication, scheduled_publication_at,

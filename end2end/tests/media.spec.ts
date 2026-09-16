@@ -224,46 +224,56 @@ test.describe("Media upload and serving", () => {
     await openMediaLibrary(page);
   });
 
-  test("upload widget on create-post page uploads file and shows URL", async ({
+  test("create composer retains multiple uploaded Media rows without URL inputs", async ({
     page,
   }) => {
     await signInAsNewUser(page);
     await goto(page, "/posts/new");
 
-    // Use setInputFiles on the hidden file input to bypass the OS dialog.
     const fileInput = page.locator("input[type='file']").first();
     await fileInput.setInputFiles({
-      name: "test-image.png",
+      name: "first-image.png",
       mimeType: "image/png",
-      buffer: Buffer.from("fake png content"),
+      buffer: Buffer.from("first image"),
     });
+    await expect(page.locator(".j-composer-media-row")).toHaveCount(1);
+    await fileInput.setInputFiles({
+      name: "second-image.png",
+      mimeType: "image/png",
+      buffer: Buffer.from("second image"),
+    });
+    const rows = page.locator(".j-composer-media-row");
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(0)).toContainText("first-image.png");
+    await expect(rows.nth(1)).toContainText("second-image.png");
+    await expect(rows.locator("img")).toHaveCount(2);
+    await expect(
+      rows.getByRole("button", { name: "Copy media URL" }),
+    ).toHaveCount(2);
+    await expect(
+      rows.getByRole("button", { name: "Dismiss media" }),
+    ).toHaveCount(2);
+    await expect(page.locator(".j-composer input[readonly]")).toHaveCount(0);
 
-    // The upload should complete and show the URL in a readonly input.
-    await page
-      .locator("input[readonly]")
-      .waitFor({ state: "visible", timeout: 10000 });
-    const url = await page.locator("input[readonly]").inputValue();
-    expect(url).toContain("/media/upload/");
+    await rows.nth(0).getByRole("button", { name: "Dismiss media" }).click();
+    await expect(rows).toHaveCount(1);
+    await expect(rows.nth(0)).toContainText("second-image.png");
   });
 
-  test("upload widget on the /app cockpit uploads file and shows URL", async ({
-    page,
-  }) => {
+  test("Home composer uses the same temporary Media rows", async ({ page }) => {
     await signInAsNewUser(page);
-    // The /app cockpit shows the InlineComposer (#181), which includes MediaUpload.
     await goto(page, "/app");
     await waitForSelector(page, ".j-composer");
     const fileInput = page.locator(".j-composer input[type='file']").first();
     await fileInput.setInputFiles({
       name: "home-image.png",
       mimeType: "image/png",
-      buffer: Buffer.from("fake png content for home"),
+      buffer: Buffer.from("home image"),
     });
-    await page
-      .locator(".j-composer input[readonly]")
-      .waitFor({ state: "visible", timeout: 10000 });
-    const url = await page.locator(".j-composer input[readonly]").inputValue();
-    expect(url).toContain("/media/upload/");
+    await expect(page.locator(".j-composer-media-row")).toContainText(
+      "home-image.png",
+    );
+    await expect(page.locator(".j-composer input[readonly]")).toHaveCount(0);
   });
 });
 
@@ -286,6 +296,18 @@ test.describe("Media upload capability", () => {
     await seedConfigViaTool("media.uploads_enabled", "false");
 
     await goto(page, "/app");
+    await expect(
+      page.locator(".j-composer").getByRole("button", { name: "Attach media" }),
+    ).toHaveCount(0);
+    await navigateInApp(page, () => click(page, "a[href='/posts/new']"), {
+      url: "/posts/new",
+      ready: '.j-topbar h1:has-text("New post")',
+    });
+    await expect(
+      page
+        .locator(".j-compose-grid")
+        .getByRole("button", { name: "Attach media" }),
+    ).toHaveCount(0);
     const counts = countMediaRequests(page);
 
     await navigateInApp(page, () => click(page, "a[href='/media']"), {
