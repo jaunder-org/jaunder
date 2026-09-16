@@ -175,6 +175,13 @@ enum Commands {
         #[arg(long)]
         server_log: std::path::PathBuf,
     },
+    /// Verify that the canonical trace capture contains complete E2E seed storage evidence.
+    VerifySeedTrace {
+        /// E2E capture directory; the command projects its `OTel` leaf at the
+        /// command boundary using `host::capture`'s canonical stream filename.
+        #[arg(long)]
+        capture_dir: std::path::PathBuf,
+    },
 }
 
 /// CLI spelling for the two fixed sandbox profiles.
@@ -352,6 +359,10 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         } => {
             let diag_path = capture_dir.join(capture::Stream::Diag.filename());
             test_support::panic_gate::verify_no_panics(&diag_path, &server_log)
+        }
+        Commands::VerifySeedTrace { capture_dir } => {
+            let trace_path = capture_dir.join(capture::Stream::Otel.filename());
+            test_support::seed_trace::verify_seed_trace(&trace_path)
         }
     }
 }
@@ -956,6 +967,28 @@ mod tests {
             status.success(),
             "unrelated commands must ignore a broken capture directory"
         );
+    }
+
+    #[tokio::test]
+    async fn verify_seed_trace_dispatches_the_canonical_capture_leaf() {
+        let capture_dir = TempDir::new().expect("capture directory");
+        let trace = concat!(
+            r#"{"resourceSpans":[{"resource":{"attributes":[{"key":"jaunder.e2e.seed_process","value":{"stringValue":"e2e.seed.jaunder"}}]},"scopeSpans":[{"spans":[{"name":"storage.users.create"}]}]}]}"#,
+            "\n",
+            r#"{"resourceSpans":[{"resource":{"attributes":[{"key":"jaunder.e2e.seed_process","value":{"stringValue":"e2e.seed.test-support"}}]},"scopeSpans":[{"spans":[{"name":"storage.posts.create"}]}]}]}"#,
+            "\n",
+        );
+        std::fs::write(
+            capture_dir.path().join(capture::Stream::Otel.filename()),
+            trace,
+        )
+        .expect("seed trace");
+
+        run(cli(Commands::VerifySeedTrace {
+            capture_dir: capture_dir.path().to_owned(),
+        }))
+        .await
+        .expect("complete trace passes through command dispatch");
     }
 
     #[tokio::test]

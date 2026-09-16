@@ -166,6 +166,7 @@ e2ePanicGate = backend: ''
 # inner budget allows 25 min for that supported concurrent execution path.
 e2ePlaywrightTimeout = 1500;
 e2eGlobalTimeout = 1680;
+e2eSeedTraceTimeout = 30;
 
 # Performance producers seed larger profiles before measuring. Their browser
 # step gets 75 minutes; the VM budget leaves 25 minutes for boot, seed, and
@@ -185,35 +186,39 @@ performanceGlobalTimeout = 6000;
 # the actual endpoints before any exporter runs. Seed-span verification
 # then stops the collector to flush short-lived process spans into the
 # JSONL file the VM owns.
-e2eOtelTestHelpers = ''
+e2eOtelTestHelpers = backend: ''
   def wait_for_otel_receivers():
     machine.wait_for_open_port(4317, timeout=30)
     machine.wait_for_open_port(4318, timeout=30)
 
+  def retain_e2e_capture():
+    # The ordinary and pre-Playwright paths retain one whole-directory artifact,
+    # so a failure cannot silently lose a capture stream that ordinary retention preserves.
+    machine.execute("test -d /var/lib/jaunder/capture && tar czf /tmp/capture-${backend}.tar.gz -C /var/lib/jaunder capture 2>/dev/null || true")
+    if machine.execute("test -e /tmp/capture-${backend}.tar.gz")[0] == 0:
+      machine.copy_from_machine("/tmp/capture-${backend}.tar.gz", "")
+
   def assert_seed_storage_spans():
-    import json
-    machine.succeed("systemctl stop otel-collector.service")
-    raw = machine.succeed("test -s /var/lib/jaunder/capture/otel-traces.jsonl && cat /var/lib/jaunder/capture/otel-traces.jsonl")
-    wanted = {"e2e.seed.jaunder", "e2e.seed.test-support"}
-    seen = set()
-    for line_number, line in enumerate(raw.splitlines(), 1):
-      try:
-        record = json.loads(line)
-      except json.JSONDecodeError as error:
-        raise AssertionError("malformed seed otel-traces.jsonl line %d: %s" % (line_number, error)) from error
-      for resource_span in record.get("resourceSpans", []):
-        attrs = {
-          attr.get("key"): attr.get("value", {}).get("stringValue", "")
-          for attr in resource_span.get("resource", {}).get("attributes", [])
-        }
-        process = attrs.get("jaunder.e2e.seed_process")
-        if process not in wanted:
-          continue
-        for scope_span in resource_span.get("scopeSpans", []):
-          if any(span.get("name", "").startswith("storage.") for span in scope_span.get("spans", [])):
-            seen.add(process)
-    missing = sorted(wanted - seen)
-    assert not missing, "seed trace lacks storage spans for: %s" % ", ".join(missing)
+    stop_status, stop_out = machine.execute(
+      "systemctl stop otel-collector.service",
+      timeout=${toString e2eSeedTraceTimeout},
+    )
+    if stop_status != 0:
+      retain_e2e_capture()
+      if stop_status == 124:
+        raise AssertionError("seed-collector-stop-timeout: collector stop exceeded ${toString e2eSeedTraceTimeout}s")
+      raise AssertionError("seed-collector-stop-failed: " + stop_out)
+
+    verify_status, verify_out = machine.execute(
+      "test-support verify-seed-trace --capture-dir /var/lib/jaunder/capture 2>&1",
+      timeout=${toString e2eSeedTraceTimeout},
+    )
+    if verify_status != 0:
+      retain_e2e_capture()
+      if verify_status == 124:
+        raise AssertionError("seed-trace-verifier-timeout: verification exceeded ${toString e2eSeedTraceTimeout}s")
+      raise AssertionError(verify_out)
+
     machine.succeed("systemctl start otel-collector.service")
     machine.wait_for_unit("otel-collector.service", timeout=60)
     wait_for_otel_receivers()
@@ -366,14 +371,10 @@ e2eRunAndCapture =
     machine.execute("journalctl --no-pager -o short-precise > /tmp/system-journal-${backend}.log")
     _grab("/tmp/system-journal-${backend}.log")
 
-    # Capture-dir contract (#227, #332): tar the whole capture dir out per combo as
-    # capture-${backend}.tar.gz — a file copy mirroring the playwright-artifacts
-    # tarball (the proven copy_from_machine shape). Holds diag.log, the collector's
-    # otel-traces.jsonl (#332 — the collector is stopped above, so its file export is
-    # flushed), plus any written mail.jsonl/websub.jsonl. The in-VM zero-panic gate
-    # reads diag.log directly, so it does not depend on this lift.
-    machine.execute("test -d /var/lib/jaunder/capture && tar czf /tmp/capture-${backend}.tar.gz -C /var/lib/jaunder capture 2>/dev/null || true")
-    _grab("/tmp/capture-${backend}.tar.gz")
+    # Capture-dir contract (#227, #332): the shared helper retains the complete
+    # capture directory for ordinary and seed-failure paths alike. It holds diag.log,
+    # the collector's flushed otel-traces.jsonl, plus any written mail/websub stream.
+    retain_e2e_capture()
     record_e2e_phase(
       "result-lift",
       result_lift_started_at,
@@ -507,7 +508,10 @@ mkE2eCheck =
     # recovery. The ordinary gate defaults to 28 minutes; performance producers
     # extend it for canonical dataset seeding. Each inner execution timeout must
     # expire first so diagnostics remain recoverable.
-    globalTimeout = vmGlobalTimeout;
+    globalTimeout =
+      assert e2eSeedTraceTimeout < e2ePlaywrightTimeout;
+      assert e2eSeedTraceTimeout < vmGlobalTimeout;
+      vmGlobalTimeout;
 
     nodes.machine =
       { pkgs, lib, ... }:
@@ -564,7 +568,7 @@ mkE2eCheck =
     testScript =
       if producer == null then
         ''
-          ${e2ePhaseTimingHelpers backend browser}${e2eOtelTestHelpers}${beforeMachineStart}vm_startup_started_at = time.monotonic()
+          ${e2ePhaseTimingHelpers backend browser}${e2eOtelTestHelpers backend}${beforeMachineStart}vm_startup_started_at = time.monotonic()
           machine.start()
           machine.wait_for_unit("otel-collector.service", timeout=60)
           # `active` precedes the OTLP receiver binds; seeding immediately can
@@ -776,7 +780,7 @@ mkPerformanceProducer =
       import shlex
       import time
 
-      ${e2eOtelTestHelpers}
+      ${e2eOtelTestHelpers backend}
       machine.start()
       provisioning_started = time.monotonic_ns()
       machine.wait_for_unit("otel-collector.service", timeout=60)

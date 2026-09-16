@@ -53,6 +53,9 @@ let
       # shared VM/host JSONL trace pipeline.
       pkgs.opentelemetry-collector-contrib
       pkgs.prettier
+      # xtask's executable NixOS-test-script regressions run the generated
+      # Python helper under the same pinned interpreter as CI and developers.
+      pkgs.python3
       pkgs.sqlite
       pkgs.typescript
       # Host xtask steps opt Rust-compiling cargo invocations into
