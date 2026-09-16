@@ -136,7 +136,7 @@ mod tests {
     #[test]
     fn session_records_and_dismisses_multiple_uploads() {
         Owner::new().with(|| {
-            let state = ComposerMediaState::new();
+            let state = ComposerMediaState::default();
             state.record_uploaded(parse_root_relative_url("/media/upload/sha256/first.png"));
             state.record_uploaded(parse_root_relative_url("/media/upload/sha256/second.png"));
 
