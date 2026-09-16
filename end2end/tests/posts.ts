@@ -118,7 +118,7 @@ export async function openPostActions(page: Page): Promise<Locator> {
 export async function openComposerFromSidebar(page: Page): Promise<void> {
   await navigateInApp(page, () => click(page, '.j-nav a[href="/posts/new"]'), {
     url: "/posts/new",
-    ready: "#audience-base",
+    ready: ".j-compose-grid",
   });
 }
 

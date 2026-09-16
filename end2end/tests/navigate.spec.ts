@@ -52,7 +52,7 @@ test("Compose sidebar navigation reaches the full composer without a document lo
   await expect(composeLink).toHaveText("Compose");
   await navigateInApp(page, () => composeLink.click(), {
     url: "/posts/new",
-    ready: "#audience-base",
+    ready: ".j-compose-grid",
   });
   await expect(page.locator(SEL.topbarHeading)).toHaveText("New post");
   await expect(page.locator(".j-topbar")).toContainText("Long-form");
