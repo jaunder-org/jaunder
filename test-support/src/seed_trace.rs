@@ -149,9 +149,11 @@ mod tests {
     }
 
     #[test]
-    fn complete_seed_evidence_passes() {
+    fn complete_seed_evidence_passes_despite_irrelevant_and_blank_records() {
         verify(
-            &(trace("e2e.seed.jaunder", "storage.users.create")
+            &(trace("other-process", "storage.ignored")
+                + "\n"
+                + &trace("e2e.seed.jaunder", "storage.users.create")
                 + &trace("e2e.seed.test-support", "storage.posts.create")),
         )
         .expect("both seed processes carry a storage span");
@@ -182,8 +184,7 @@ mod tests {
 
     #[test]
     fn incomplete_trace_names_every_missing_seed_process() {
-        let error = verify("{\"resourceSpans\":[]}\n")
-            .expect_err("trace without seed spans is insufficient");
+        let error = verify("{}\n").expect_err("trace without seed spans is insufficient");
         let message = error.to_string();
         assert!(message.contains("seed-trace-incomplete"), "{message}");
         for process in REQUIRED_SEED_PROCESSES {
@@ -200,6 +201,19 @@ mod tests {
         let error = verify_seed_trace(&trace_path).expect_err("invalid UTF-8 must fail");
         assert!(
             error.to_string().contains("seed-trace-malformed"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn unexpected_trace_read_failure_retains_path_context() {
+        let capture = tempfile::tempdir().expect("capture directory");
+        let error =
+            verify_seed_trace(capture.path()).expect_err("a directory cannot be read as JSONL");
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("reading seed trace {}", capture.path().display())),
             "{error}"
         );
     }
