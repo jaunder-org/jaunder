@@ -101,6 +101,14 @@ test("owner permalink Post Actions menu stays attached to its trigger", async ({
     await page.setViewportSize(viewport);
     await trigger.scrollIntoViewIfNeeded();
     const popover = await openPostActions(page);
+    await expect(popover.getByRole("link", { name: "Edit" })).toHaveCSS(
+      "text-decoration-line",
+      "none",
+    );
+    await expect(popover.getByRole("link", { name: "History" })).toHaveCSS(
+      "text-decoration-line",
+      "none",
+    );
     const triggerBox = await trigger.boundingBox();
     const popoverBox = await popover.boundingBox();
 

@@ -960,6 +960,10 @@
  gap: 6px;
 }
 
+.j-post-acts .j-btn {
+ text-decoration: none;
+}
+
 .j-post-plink {
  font-size: 12px;
  color: var(--muted-soft);
