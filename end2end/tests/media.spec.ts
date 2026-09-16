@@ -228,6 +228,24 @@ test.describe("Media upload and serving", () => {
   test("create composer retains multiple uploaded Media rows without URL inputs", async ({
     page,
   }) => {
+    await page.addInitScript(() => {
+      const state = window as Window & {
+        __copiedMediaUrl?: string;
+        __rejectMediaCopy?: boolean;
+      };
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: (value: string) => {
+            if (state.__rejectMediaCopy) {
+              return Promise.reject(new Error("clipboard rejected"));
+            }
+            state.__copiedMediaUrl = value;
+            return Promise.resolve();
+          },
+        },
+      });
+    });
     await signInAsNewUser(page);
     await goto(page, "/posts/new");
 
@@ -255,6 +273,26 @@ test.describe("Media upload and serving", () => {
       rows.getByRole("button", { name: "Dismiss media" }),
     ).toHaveCount(2);
     await expect(page.locator(".j-composer input[readonly]")).toHaveCount(0);
+
+    const firstUrl = await rows.nth(0).locator("img").getAttribute("src");
+    await rows.nth(0).getByRole("button", { name: "Copy media URL" }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as Window & { __copiedMediaUrl?: string }).__copiedMediaUrl,
+        ),
+      )
+      .toBe(firstUrl);
+
+    await page.evaluate(() => {
+      (window as Window & { __rejectMediaCopy?: boolean }).__rejectMediaCopy =
+        true;
+    });
+    await rows.nth(1).getByRole("button", { name: "Copy media URL" }).click();
+    await expect(page.locator(".j-composer-media > .error")).toHaveText(
+      "Could not copy the Media URL.",
+    );
 
     await rows.nth(0).getByRole("button", { name: "Dismiss media" }).click();
     await expect(rows).toHaveCount(1);

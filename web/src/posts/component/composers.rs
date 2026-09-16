@@ -375,31 +375,30 @@ pub fn PostCreateForm(
         },
     );
 
-    if compact {
-        view! {
-            <CompactComposer
-                state=state
-                create_action=create_action
-                rows=rows
-                placeholder=placeholder
-                on_input=on_input
-            />
-        }
-        .into_any()
-    } else {
-        view! { <FullComposer state=state create_action=create_action rows=rows placeholder=placeholder /> }
-        .into_any()
+    let presentation = posts::creation_composer_presentation(compact);
+    view! {
+        <CreationComposer
+            state=state
+            create_action=create_action
+            rows=rows
+            placeholder=placeholder
+            layout_class=presentation.layout_class
+            textarea_class=presentation.textarea_class
+            on_input=on_input
+        />
     }
 }
 
-/// The inline composer uses the same complete field grouping and dispatch contract as
-/// the dedicated creation page. It differs only in its surrounding Home context.
+/// The one creation composer used in both Home and the dedicated writing workspace.
+/// Only its outer layout and textarea classes vary with the surrounding page context.
 #[component]
-fn CompactComposer(
+fn CreationComposer(
     state: ComposeState,
     create_action: ServerAction<Create>,
     rows: u32,
     placeholder: &'static str,
+    layout_class: &'static str,
+    textarea_class: &'static str,
     on_input: Option<Callback<()>>,
 ) -> impl IntoView {
     let slug_field = Field::<Slug>::optional();
@@ -427,7 +426,7 @@ fn CompactComposer(
         }),
     );
     view! {
-        <div class="j-composer-layout">
+        <div class=layout_class>
             <div class="j-compose-body">
                 <ComposerCore
                     state=state
@@ -439,7 +438,7 @@ fn CompactComposer(
                     }
                     rows=rows
                     placeholder=placeholder
-                    textarea_class=""
+                    textarea_class=textarea_class
                     on_input=on_input
                 />
             </div>
@@ -460,81 +459,7 @@ fn CompactComposer(
     }
 }
 
-/// The full compose page: the shared editor core plus its advanced options aside.
-/// Split out of [`PostCreateForm`] (#301). The slug field is owned here and passed
-/// down — see [`ComposeState::seed_from`] for why the bundle does not hold it.
-#[component]
-fn FullComposer(
-    state: ComposeState,
-    create_action: ServerAction<Create>,
-    rows: u32,
-    placeholder: &'static str,
-) -> impl IntoView {
-    let slug_field = Field::<Slug>::optional();
-    let named = audience::load_named_audiences();
-    let schedule = CreationSchedule::new();
-    // The one-call form gate also carries the named-audience load decision: a
-    // failed or unresolved picker cannot dispatch as though an empty list had
-    // loaded. The callback repeats the pure guard so direct invocation cannot
-    // bypass the disabled buttons.
-    let (submit_disabled, dispatch) = posts::submit_gate(
-        state.body,
-        Signal::derive(move || {
-            !slug_field.is_valid()
-                || !state.summary_field.is_valid()
-                || schedule.is_editing()
-                || state.audience.with(|selection| {
-                    named.with(|state| state.selection_for_submit(selection).is_none())
-                })
-        }),
-        Callback::new(move |(body, publish): (PostBody, bool)| {
-            let publication = posts::publication_from_local(publish, &state.publish_at.get());
-            if state.audience.with(|selection| {
-                named.with(|state| state.selection_for_submit(selection).is_some())
-            }) {
-                create_action.dispatch(Create {
-                    post: state.inputs(body, publication, slug_field.parsed()),
-                });
-            }
-        }),
-    );
-    view! {
-        <div class="j-compose-grid">
-            <div class="j-compose-body">
-                <ComposerCore
-                    state=state
-                    actions=ComposerActions::Create {
-                        publish_at: state.publish_at,
-                        scheduled: schedule.scheduled,
-                        disabled: submit_disabled,
-                        on_save: dispatch,
-                    }
-                    rows=rows
-                    placeholder=placeholder
-
-                    textarea_class="j-edit-form-textarea"
-                />
-            </div>
-            <aside class="j-compose-aside">
-                <ComposerDetails state=state />
-                <ComposeOptions
-                    state=state
-                    slug_field=slug_field
-                    publication=LoadedPublication::Draft
-                    publication_time=None
-                    schedule_error=Signal::derive(|| None::<InvalidSchedule>)
-                    creation_schedule=Some(schedule)
-                    named=named
-                />
-
-            </aside>
-        </div>
-        <CreateErrorFlash action=create_action />
-    }
-}
-
-/// The create action's error flash. Both composer shapes ended with the identical
-/// block; extracting it means a change to how a failed create reads happens once.
+/// The create action's error flash shared by both creation surfaces.
 #[component]
 fn CreateErrorFlash(action: ServerAction<Create>) -> impl IntoView {
     view! {
@@ -790,54 +715,19 @@ fn CreationPostActions(
     on_save: Callback<bool>,
 ) -> impl IntoView {
     view! {
-        {move || match (!publish_at.get().is_empty(), scheduled.get()) {
-            (true, true) => {
-                view! {
-                    <button
-                        class="j-btn is-primary"
-                        type="button"
-                        name="publish"
-                        value="true"
-                        prop:disabled=move || disabled.get()
-                        on:click=move |_| on_save.run(true)
-                    >
-                        "Schedule"
-                    </button>
-                }
-                    .into_any()
-            }
-            (true, false) => {
-                view! {
-                    <button
-                        class="j-btn is-primary"
-                        type="button"
-                        name="publish"
-                        value="true"
-                        prop:disabled=move || disabled.get()
-                        on:click=move |_| on_save.run(true)
-                    >
-                        "Publish"
-                    </button>
-                }
-                    .into_any()
-            }
-            (false, _) => {
-                view! {
-                    <DraftSaveButton disabled=disabled on_save=on_save />
-                    <button
-                        class="j-btn is-primary"
-                        type="button"
-                        name="publish"
-                        value="true"
-                        prop:disabled=move || disabled.get()
-                        on:click=move |_| on_save.run(true)
-                    >
-                        "Publish"
-                    </button>
-                }
-                    .into_any()
-            }
-        }}
+        <DraftSaveButton disabled=disabled on_save=on_save />
+        <button
+            class="j-btn is-primary"
+            type="button"
+            name="publish"
+            value="true"
+            prop:disabled=move || disabled.get()
+            on:click=move |_| on_save.run(true)
+        >
+            {move || {
+                if !publish_at.get().is_empty() && scheduled.get() { "Schedule" } else { "Publish" }
+            }}
+        </button>
     }
 }
 

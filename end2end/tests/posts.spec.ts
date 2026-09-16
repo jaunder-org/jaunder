@@ -2002,10 +2002,18 @@ test.describe("new post publication time", () => {
     ).toBeVisible();
 
     await applyPublicationTime(page, "2999-01-01T00:00");
-    await expect(page.locator(SEL.publishButton("false"))).toHaveCount(0);
+    await expect(page.locator(SEL.publishButton("false"))).toBeEnabled();
     await expect(page.locator(SEL.publishButton("true"))).toHaveText(
       "Schedule",
     );
+    const scheduledActionWidths = await page
+      .locator(".j-composer-toolbar .j-btn")
+      .evaluateAll((buttons) =>
+        buttons.map((button) => button.getBoundingClientRect().width),
+      );
+    expect(
+      Math.abs(scheduledActionWidths[0]! - scheduledActionWidths[1]!),
+    ).toBeLessThan(1);
 
     await page.getByRole("button", { name: "Edit publication time" }).click();
     await page.locator('input[name="publish_date"]').fill("2999-02-03");
