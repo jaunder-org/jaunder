@@ -240,7 +240,14 @@ test("author completes the custom theme lifecycle through Studio", async ({
   const freshContext = await tracedContext();
   const freshPage = await freshContext.newPage();
   await signInAs(freshPage, username);
+  const releaseCatalog = await stallServerFn(freshPage, "themes/list");
+  const persistedSelection = freshPage.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === "/api/themes/get_selection",
+  );
   await goto(freshPage, "/themes");
+  await persistedSelection;
+  releaseCatalog();
   await expect(freshPage.getByLabel("Public selection")).toHaveValue(themeId!);
   await freshContext.close();
 

@@ -478,8 +478,12 @@ fn ThemeSelection(
     refresh: Invalidator,
     status: RwSignal<Option<String>>,
 ) -> impl IntoView {
-    let selected_token =
-        Memo::new(move |_| selection_token(selection.get().and_then(Result::ok).flatten()));
+    // Reapply the controlled value after the option catalog settles: assigning a
+    // custom value before its option exists does not stick in the native select.
+    let selected_token = move || {
+        drop(catalog.get());
+        selection_token(selection.get().and_then(Result::ok).flatten())
+    };
     let change = move |event| {
         let token = event_target_value(&event);
         let current_scope = scope.get_untracked();
@@ -502,13 +506,8 @@ fn ThemeSelection(
                 <span class="j-form-label">"Public selection"</span>
                 <select class="j-form-input" prop:value=selected_token on:change=change>
                     {move || {
-                        let selected_value = selection.get().and_then(Result::ok).flatten();
-                        let inherited = scope.get() == OwnershipScope::Author
-                            && selected_value.is_none();
                         view! {
-                            <option value="inherit" selected=inherited>
-                                "Inherit site selection"
-                            </option>
+                            <option value="inherit">"Inherit site selection"</option>
                             <For
                                 each=move || built_in_themes()
                                 key=|theme| *theme
