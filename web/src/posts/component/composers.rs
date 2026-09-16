@@ -27,19 +27,11 @@ use super::{audience, support};
 /// (renderer-internal, #445), so it is filtered out. Adding a format is a one-attribute change
 /// on `PostFormat`, not new markup here.
 #[component]
-fn FormatToggle(
-    format: RwSignal<PostFormat>,
-    /// Extra inline style for the field group (e.g. spacing). Omitted when unset.
-    #[prop(optional, into)]
-    style: Option<&'static str>,
-) -> impl IntoView {
+fn FormatToggle(format: RwSignal<PostFormat>) -> impl IntoView {
     use strum::{EnumMessage, VariantArray};
     view! {
-        <fieldset class="j-form-field j-composer-group" style=style aria-describedby="format-help">
+        <fieldset class="j-form-field j-composer-group">
             <legend class="j-form-label">"Format"</legend>
-            <p id="format-help" class="j-form-help">
-                "Format controls how Jaunder interprets the Body."
-            </p>
             <div class="j-seg">
                 {PostFormat::VARIANTS
                     .iter()
@@ -623,15 +615,14 @@ fn CreateResultSummary(result: RwSignal<Option<ClassifiedSavedPost>>) -> impl In
 fn DraftSaveButton(disabled: Signal<bool>, on_save: Callback<bool>) -> impl IntoView {
     view! {
         <button
-            class="j-btn is-icon"
+            class="j-btn"
             type="button"
             name="publish"
             value="false"
-            aria-label="Save draft"
             prop:disabled=move || disabled.get()
             on:click=move |_| on_save.run(false)
         >
-            <IconButtonContent path=Icons::SAVE tooltip="Save draft" />
+            "Save draft"
         </button>
     }
 }

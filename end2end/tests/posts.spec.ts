@@ -125,41 +125,39 @@ test("authenticated user can create a post through the UI", async ({
   );
 });
 
-test("post create surfaces expose secondary actions as accessible icons", async ({
+test("post create surfaces use textual draft actions and an accessible Media icon", async ({
   registeredPage,
 }) => {
   const page = await registeredPage("/posts/new");
-  const expectAccessibleIcons = async (scope: Locator): Promise<void> => {
+  const expectApprovedActions = async (scope: Locator): Promise<void> => {
     await expect(scope).toBeVisible();
-    await scope.locator(SEL.postBody).fill("Tooltip focus");
+    await scope.locator(SEL.postBody).fill("Approved actions");
     const attach = scope.getByRole("button", { name: "Attach media" });
     const saveDraft = scope.locator(SEL.publishButton("false"));
 
+    await expect(attach).toHaveAttribute("aria-label", "Attach media");
     await expect(attach.locator("path")).toHaveAttribute(
       "d",
       "M10 4v12 M4 10h12",
     );
+    await expect(attach.locator("svg")).toHaveCount(1);
+    const tooltip = attach.locator('[role="tooltip"]');
+    await expect(tooltip).toHaveText("Attach media");
+    await expect(tooltip).toBeHidden();
+    await attach.focus();
+    await expect(tooltip).toBeVisible();
 
-    for (const [button, label] of [
-      [attach, "Attach media"],
-      [saveDraft, "Save draft"],
-    ] as const) {
-      await expect(button).toHaveAttribute("aria-label", label);
-      await expect(button.locator("svg")).toHaveCount(1);
-      const tooltip = button.locator('[role="tooltip"]');
-      await expect(tooltip).toHaveText(label);
-      await expect(tooltip).toBeHidden();
-      await button.focus();
-      await expect(tooltip).toBeVisible();
-    }
+    await expect(saveDraft).toHaveText("Save draft");
+    await expect(saveDraft.locator("svg")).toHaveCount(0);
+    await expect(saveDraft.locator('[role="tooltip"]')).toHaveCount(0);
   };
 
-  await expectAccessibleIcons(page.locator(".j-compose-grid"));
+  await expectApprovedActions(page.locator(".j-compose-grid"));
   await navigateInApp(page, () => click(page, 'a[href="/app"]'), {
     url: "/app",
     ready: ".j-composer",
   });
-  await expectAccessibleIcons(page.locator(".j-composer"));
+  await expectApprovedActions(page.locator(".j-composer"));
 });
 
 test("composer keeps filled body actions before a container-responsive controls rail", async ({
@@ -191,6 +189,11 @@ test("composer keeps filled body actions before a container-responsive controls 
           sections.map((section) => section.className),
         ),
     ).toEqual(["j-composer-details", "j-compose-options"]);
+    await expect(
+      rail.getByText("Format controls how Jaunder interprets the Body.", {
+        exact: true,
+      }),
+    ).toHaveCount(0);
     expect(
       (await rail.locator("h2, .j-form-label").allTextContents()).map((text) =>
         text.trim(),
@@ -815,7 +818,11 @@ test("full composer: narrow layout stays reachable and format round-trips", asyn
 
   const format = page.getByRole("group", { name: "Format" });
   await expect(format).toBeVisible();
-  await expect(format).toContainText("Body");
+  await expect(
+    format.getByText("Format controls how Jaunder interprets the Body.", {
+      exact: true,
+    }),
+  ).toHaveCount(0);
   const markdownBtn = format.getByRole("button", { name: "Markdown" });
   const orgBtn = format.getByRole("button", { name: "Org" });
 
@@ -947,7 +954,11 @@ test("edit page: format control prefills accessibly and round-trips a change", a
 
   const format = page.getByRole("group", { name: "Format" });
   await expect(format).toBeVisible();
-  await expect(format).toContainText("Body");
+  await expect(
+    format.getByText("Format controls how Jaunder interprets the Body.", {
+      exact: true,
+    }),
+  ).toHaveCount(0);
   const markdownBtn = format.getByRole("button", { name: "Markdown" });
   const orgBtn = format.getByRole("button", { name: "Org" });
 
@@ -1083,8 +1094,7 @@ test("live editor can reschedule and atomically save edits while unpublishing", 
   await expect(page.locator(SEL.postBody)).toHaveValue(
     /edited while unpublishing/,
   );
-  await expect(page.locator(SEL.publishButton("false"))).toHaveAttribute(
-    "aria-label",
+  await expect(page.locator(SEL.publishButton("false"))).toHaveText(
     "Save draft",
   );
 
@@ -1093,8 +1103,7 @@ test("live editor can reschedule and atomically save edits while unpublishing", 
   await click(page, SEL.publishButton("false"));
   await expect(page.locator(SEL.error)).toBeVisible();
   await expect(page.locator(SEL.postSlug)).toBeVisible();
-  await expect(page.locator(SEL.publishButton("false"))).toHaveAttribute(
-    "aria-label",
+  await expect(page.locator(SEL.publishButton("false"))).toHaveText(
     "Save draft",
   );
 });
@@ -1631,7 +1640,11 @@ test("inline composer: format toggle is named and keyboard-operable", async ({
 
   const format = composer.getByRole("group", { name: "Format" });
   await expect(format).toBeVisible();
-  await expect(format).toContainText("Body");
+  await expect(
+    format.getByText("Format controls how Jaunder interprets the Body.", {
+      exact: true,
+    }),
+  ).toHaveCount(0);
   const markdownBtn = format.getByRole("button", { name: "Markdown" });
   const orgBtn = format.getByRole("button", { name: "Org" });
   await expect(markdownBtn).toHaveAttribute("aria-pressed", "true");
