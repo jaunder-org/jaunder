@@ -923,9 +923,13 @@
 
 .j-post-action-popover {
  pointer-events: auto;
- position: absolute;
+ position: fixed;
+ /* Native popovers default every inset to zero; release the unused axes so the
+    viewport-relative anchor placement wins over the conflicting defaults. */
  top: anchor(bottom);
- right: calc(100vw - anchor(right));
+ right: max(8px, anchor(right));
+ bottom: auto;
+ left: auto;
  margin: 4px 0 0;
  inline-size: max-content;
  max-inline-size: calc(100vw - 16px);
@@ -939,11 +943,25 @@
  box-shadow: 0 4px 12px rgb(0 0 0 / 8%);
 }
 
+/* At this narrow shell width Firefox's anchored inset leaves the menu outside
+   the viewport, so pin the menu to the viewport edge explicitly. */
+@supports (-moz-appearance: none) {
+ @media (max-width: 400px) {
+  .j-post-action-popover {
+   right: 8px;
+  }
+ }
+}
+
 .j-post-acts {
  display: flex;
  flex-direction: column;
  align-items: stretch;
  gap: 6px;
+}
+
+.j-post-acts .j-btn {
+ text-decoration: none;
 }
 
 .j-post-plink {

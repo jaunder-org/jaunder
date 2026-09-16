@@ -80,6 +80,83 @@ test("owner Post Actions disclosures use native popover dismissal and focus", as
   }
 });
 
+test("owner permalink Post Actions menu stays attached to its trigger", async ({
+  page,
+  tracedContext,
+  firstNav,
+}) => {
+  await signInAsNewUser(page);
+  const post = await createPostViaApi(page, {
+    body: "# Permalink actions placement probe\n\nBody",
+  });
+  await goto(page, post.permalink, { timeout: firstNav });
+
+  const trigger = page.getByRole("button", { name: "Actions" });
+  await expect(trigger).toBeVisible();
+
+  for (const viewport of [
+    { width: 1280, height: 720 },
+    { width: 375, height: 800 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await trigger.scrollIntoViewIfNeeded();
+    const popover = await openPostActions(page);
+    await expect(popover.getByRole("link", { name: "Edit" })).toHaveCSS(
+      "text-decoration-line",
+      "none",
+    );
+    await expect(popover.getByRole("link", { name: "History" })).toHaveCSS(
+      "text-decoration-line",
+      "none",
+    );
+    const triggerBox = await trigger.boundingBox();
+    const popoverBox = await popover.boundingBox();
+
+    expect(triggerBox).not.toBeNull();
+    expect(popoverBox).not.toBeNull();
+    expect(
+      popoverBox!.y - (triggerBox!.y + triggerBox!.height),
+    ).toBeGreaterThanOrEqual(0);
+    expect(
+      popoverBox!.y - (triggerBox!.y + triggerBox!.height),
+    ).toBeLessThanOrEqual(8);
+    const triggerRight = triggerBox!.x + triggerBox!.width;
+    const popoverRight = popoverBox!.x + popoverBox!.width;
+    const alignmentFitsViewport =
+      triggerRight - popoverBox!.width >= 0 && triggerRight <= viewport.width;
+    if (alignmentFitsViewport) {
+      expect(
+        Math.abs(popoverRight - triggerRight),
+        JSON.stringify({ viewport, triggerBox, popoverBox }),
+      ).toBeLessThanOrEqual(1);
+    }
+    expect(popoverBox!.x).toBeGreaterThanOrEqual(0);
+    expect(popoverBox!.y).toBeGreaterThanOrEqual(0);
+    expect(popoverBox!.x + popoverBox!.width).toBeLessThanOrEqual(
+      viewport.width,
+    );
+    expect(popoverBox!.y + popoverBox!.height).toBeLessThanOrEqual(
+      viewport.height,
+    );
+
+    await page.keyboard.press("Escape");
+    await expect(popover).not.toBeVisible();
+    await expect(trigger).toBeFocused();
+  }
+
+  const anonymousContext = await tracedContext();
+  try {
+    const anonymousPage = await anonymousContext.newPage();
+    await goto(anonymousPage, post.permalink, { timeout: firstNav });
+    await expect(
+      anonymousPage.getByRole("button", { name: "Actions" }),
+    ).toHaveCount(0);
+    await expect(anonymousPage.locator(".j-trusted-post-actions")).toBeEmpty();
+  } finally {
+    await anonymousContext.close();
+  }
+});
+
 test("owned Post Actions stay per-Post across supported routes", async ({
   page,
   firstNav,
