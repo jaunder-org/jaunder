@@ -92,6 +92,9 @@ what their wire contract requires. Presentation is shared across both paths.
   label, `j-form-label` on the visible label, `j-form-input` on text inputs,
   selects, and textareas, and `j-form-help` for explanatory text. Add
   `j-form-toggle` to a `j-form-field` for a checkbox-and-label row.
+- Write field labels in sentence case, matching the post form
+  (`Publish at (optional)`, not `Publish At (Optional)`). Preserve the normal
+  capitalization of acronyms such as URL, SMTP, and TLS.
 - Layout classes may place those fields in a grid, inline row, table, or editor
   toolbar. They do not replace the standard label typography or control chrome;
   combine a layout modifier such as `j-backup-field-wide` with `j-form-field`.

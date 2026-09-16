@@ -130,10 +130,10 @@ fn assemble_request(state: SmtpFormState, draft: SmtpUpdateDraft) -> Option<Upda
 
 fn smtp_relay_fields(state: SmtpFormState, initial_tls_mode: SmtpTlsMode) -> impl IntoView {
     view! {
-        <ValidatedInput<SmtpHost> label="Relay Host" name="host" field=state.host />
+        <ValidatedInput<SmtpHost> label="Relay host" name="host" field=state.host />
         <ValidatedInput<SmtpPort> label="Port" name="port" input_type="number" field=state.port />
         <label class="j-form-field">
-            <span class="j-form-label">"TLS Mode"</span>
+            <span class="j-form-label">"TLS mode"</span>
             <select
                 class="j-form-input"
                 name="tls_mode"
@@ -156,7 +156,7 @@ fn smtp_relay_fields(state: SmtpFormState, initial_tls_mode: SmtpTlsMode) -> imp
             </select>
         </label>
         <ValidatedInput<SmtpSender>
-            label="Sender Mailbox"
+            label="Sender mailbox"
             name="sender"
             field=state.sender
             help="An email address, optionally with a display name."

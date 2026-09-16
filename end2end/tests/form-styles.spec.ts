@@ -6,6 +6,7 @@ import { navigateInApp } from "./navigate";
 
 type FormControl = {
   name: string;
+  label: string;
   standardChrome: boolean;
 };
 
@@ -35,7 +36,7 @@ async function expectStandardCard(
   const fields: Locator[] = [];
   const labels: Locator[] = [];
   const styledControls: Locator[] = [];
-  for (const { name, standardChrome } of controls) {
+  for (const { name, label: expectedLabel, standardChrome } of controls) {
     const control = card.locator(`[name="${name}"]`);
     const field = control.locator("..");
     const label = field.locator(".j-form-label");
@@ -43,6 +44,7 @@ async function expectStandardCard(
     await expect(field).toHaveCount(1);
     await expect(field).toHaveClass(/(?:^|\s)j-form-field(?:\s|$)/);
     await expect(label).toHaveCount(1);
+    await expect(label).toHaveText(expectedLabel);
     fields.push(field);
     labels.push(label);
 
@@ -191,11 +193,15 @@ async function expectSiteForms(page: Page) {
   await waitForSelector(page, 'input[name="title"]');
   await waitForSelector(page, 'input[name="uploads_enabled"]');
   const presentation = await expectStandardCard(page, "Site Settings", [
-    { name: "title", standardChrome: true },
-    { name: "base_url", standardChrome: true },
+    { name: "title", label: "Site title", standardChrome: true },
+    { name: "base_url", label: "Base URL", standardChrome: true },
   ]);
   await expectStandardCard(page, "Media Uploads", [
-    { name: "uploads_enabled", standardChrome: false },
+    {
+      name: "uploads_enabled",
+      label: "Enable new media uploads",
+      standardChrome: false,
+    },
   ]);
   return presentation;
 }
@@ -203,14 +209,18 @@ async function expectSiteForms(page: Page) {
 async function expectSmtpForm(page: Page) {
   await waitForSelector(page, 'input[name="enabled"]');
   return expectStandardCard(page, "SMTP Relay", [
-    { name: "enabled", standardChrome: false },
-    { name: "host", standardChrome: true },
-    { name: "port", standardChrome: true },
-    { name: "tls_mode", standardChrome: true },
-    { name: "sender", standardChrome: true },
-    { name: "authentication_enabled", standardChrome: false },
-    { name: "username", standardChrome: true },
-    { name: "password", standardChrome: true },
+    { name: "enabled", label: "Enable SMTP relay", standardChrome: false },
+    { name: "host", label: "Relay host", standardChrome: true },
+    { name: "port", label: "Port", standardChrome: true },
+    { name: "tls_mode", label: "TLS mode", standardChrome: true },
+    { name: "sender", label: "Sender mailbox", standardChrome: true },
+    {
+      name: "authentication_enabled",
+      label: "Use authentication",
+      standardChrome: false,
+    },
+    { name: "username", label: "Username", standardChrome: true },
+    { name: "password", label: "Password", standardChrome: true },
   ]);
 }
 
@@ -220,10 +230,18 @@ async function expectBackupForm(page: Page, columns: 1 | 2) {
     page,
     "Scheduled Backups",
     [
-      { name: "destination_path", standardChrome: true },
-      { name: "schedule", standardChrome: true },
-      { name: "retention_count", standardChrome: true },
-      { name: "mode", standardChrome: true },
+      {
+        name: "destination_path",
+        label: "Destination path",
+        standardChrome: true,
+      },
+      { name: "schedule", label: "Schedule", standardChrome: true },
+      {
+        name: "retention_count",
+        label: "Retention count",
+        standardChrome: true,
+      },
+      { name: "mode", label: "Mode", standardChrome: true },
     ],
     { stacked: false },
   );
@@ -247,7 +265,7 @@ async function expectWebsubForm(page: Page) {
   const presentation = await expectStandardCard(
     page,
     "WebSub hub",
-    [{ name: "hub_url", standardChrome: true }],
+    [{ name: "hub_url", label: "Hub URL", standardChrome: true }],
     { focus: true },
   );
   presentation.error = await expectValidationError(
@@ -264,7 +282,7 @@ async function expectAppPasswordForm(page: Page) {
   const presentation = await expectStandardCard(
     page,
     "App passwords",
-    [{ name: "label", standardChrome: true }],
+    [{ name: "label", label: "Label", standardChrome: true }],
     { focus: true },
   );
   presentation.error = await expectValidationError(

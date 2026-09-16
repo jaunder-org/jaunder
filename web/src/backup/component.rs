@@ -66,7 +66,7 @@ pub fn BackupSettingsPage() -> impl IntoView {
 fn backup_destination_field(destination: Field<DestinationPath>) -> impl IntoView {
     view! {
         <label class="j-form-field j-backup-field-wide">
-            <span class="j-form-label">"Destination Path"</span>
+            <span class="j-form-label">"Destination path"</span>
             <ValidatedBareInput<DestinationPath>
                 name="destination_path"
                 field=destination
@@ -130,7 +130,7 @@ fn backup_settings_form(
                     help="Use a six-field cron expression: second minute hour day-of-month month day-of-week. Example: 0 0 0 * * * runs daily at midnight."
                 />
                 <ValidatedInput<RetentionCount>
-                    label="Retention Count"
+                    label="Retention count"
                     name="retention_count"
                     field=retention
                     input_type="number"

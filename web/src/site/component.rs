@@ -144,7 +144,7 @@ fn site_settings_form(
                 </div>
             </div>
             <div class="j-form-body">
-                <ValidatedInput<SiteTitle> label="Site Title" name="title" field=title_field />
+                <ValidatedInput<SiteTitle> label="Site title" name="title" field=title_field />
                 <ValidatedInput<BaseUrl>
                     label="Base URL"
                     name="base_url"
