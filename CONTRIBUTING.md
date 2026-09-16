@@ -940,11 +940,16 @@ baseline.
   readiness. For an early failure, `pr watch` follows the current workflow run's
   dependency graph: a directly or transitively required failed check is
   immediately `checks-failed`, while an optional failure emits one explicitly
-  optional event with its job-log URL and remains non-terminal. The observer
-  fails closed through its poll-error/strike policy if Actions, workflow, or
-  graph evidence cannot establish that classification; it never guesses that an
-  uncertain failure is optional. The observer only reads this evidence: it does
-  not cancel, rerun, rebase, enqueue, or otherwise mutate workflow jobs.
+  optional event with its job-log URL and remains non-terminal. A graph-derived
+  required target may not have materialized while its owning Actions workflow is
+  still running; that is explicit incomplete evidence, so default observation
+  waits without consuming the strike budget. `--once` and the pre-arm `pr land`
+  check report it as `pending`, and `pr land` does not arm. If the workflow is
+  completed and the target is still absent, the evidence is malformed. Other
+  Actions, workflow, or graph failures use the existing poll-error/strike
+  policy; uncertainty is never guessed optional. The observer only reads this
+  evidence: it does not cancel, rerun, rebase, enqueue, or otherwise mutate
+  workflow jobs.
 
   ```bash
   cargo xtask pr watch                     # wait for the next action
@@ -955,11 +960,12 @@ baseline.
 
   Outcomes are `ready-to-land`, `merged`, `checks-failed`, `ejected`,
   `dequeued`, `blocked`, `conflicted`, `closed-unmerged`, `stale`, `timed-out`,
-  or `watcher-error`, plus `pending` when `--once` catches a PR mid-flight. They
-  never collapse into one another: `dequeued` means an observed same-head queue
-  entry vanished without a failed current-head merge-group run; `timed-out`
-  means GitHub never finished; `watcher-error` means the tooling could not
-  establish a trustworthy verdict.
+  or `watcher-error`, plus `pending` when one-shot observation catches a PR
+  mid-flight or pre-arm classification evidence is incomplete. They never
+  collapse into one another: `dequeued` means an observed same-head queue entry
+  vanished without a failed current-head merge-group run; `timed-out` means
+  GitHub never finished; `watcher-error` means the tooling could not establish a
+  trustworthy verdict.
 
   `pr watch` exits 0 for `ready-to-land` or `merged`; `pr land` exits 0 only for
   `merged`. Exit 1 still covers several distinct actionable outcomes, so branch

@@ -146,6 +146,22 @@ fn report(
     }
 }
 
+fn pending_classification_report(
+    subject: &Subject,
+    head_sha: String,
+    incomplete: super::evidence::IncompleteEvidence,
+    events: Vec<Event>,
+) -> PrReport {
+    report(
+        subject,
+        head_sha,
+        Outcome::Pending,
+        Some(incomplete.detail()),
+        None,
+        events,
+    )
+}
+
 /// Arm the merge and drive it to a terminal outcome.
 ///
 /// Like [`watch`](super::watch::watch), never returns `Err` — a failure to arm is a
@@ -218,7 +234,13 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
         ejection.as_ref(),
         &Progress::default(),
     ) {
-        Ok(result) => result,
+        Ok(watch::SnapshotClassification::Complete {
+            step,
+            optional_failures,
+        }) => (step, optional_failures),
+        Ok(watch::SnapshotClassification::Incomplete(incomplete)) => {
+            return pending_classification_report(subject, snap.head_sha, incomplete, events);
+        }
         Err(e) => {
             return report(
                 subject,
@@ -361,7 +383,13 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
             after_ejection.as_ref(),
             &Progress::default(),
         ) {
-            Ok(result) => result,
+            Ok(watch::SnapshotClassification::Complete {
+                step,
+                optional_failures,
+            }) => (step, optional_failures),
+            Ok(watch::SnapshotClassification::Incomplete(incomplete)) => {
+                return pending_classification_report(subject, head_sha, incomplete, events);
+            }
             Err(e) => {
                 return report(
                     subject,
@@ -612,6 +640,42 @@ mod tests {
         let report = land(&src, &armer, &clock(), &subject(), cfg(), &mut |_| {});
         assert_eq!(report.outcome, Outcome::WatcherError);
         assert_eq!(armer.calls.get(), 0);
+    }
+
+    #[test]
+    fn incomplete_classification_is_pending_and_never_arms() {
+        let rules = RequiredChecks {
+            contexts: vec!["Aggregate verdict".into()],
+            strict: false,
+            queue_present: false,
+        };
+        let snap = open(vec![actions_check(
+            "Arbitrarily renamed lane",
+            9,
+            CheckState::Failure,
+            "2026-07-30T14:10:00Z",
+        )]);
+        let source = r#"
+            jobs:
+              lane:
+                name: Arbitrarily renamed lane
+              aggregate:
+                name: Aggregate verdict
+                needs: lane
+        "#;
+        let src = FakeSource::new(vec![Ok(snap)], rules).with_actions_evidence(
+            active_actions_evidence("abc", source, vec![("Arbitrarily renamed lane", 9)]),
+        );
+        let armer = CountingArmer::new();
+        let report = land(&src, &armer, &clock(), &subject(), cfg(), &mut |_| {});
+        assert_eq!(report.outcome, Outcome::Pending);
+        assert_eq!(armer.calls.get(), 0);
+        assert!(
+            report
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("Aggregate verdict"))
+        );
     }
 
     #[test]
