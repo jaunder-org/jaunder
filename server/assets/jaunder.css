@@ -1200,6 +1200,30 @@
  margin-top: 2px;
 }
 
+.j-websub-recovery-guidance,
+.j-websub-empty,
+.j-websub-redrive-guidance {
+ padding: 12px 18px;
+ font-size: 13.5px;
+ line-height: 1.4;
+}
+
+.j-websub-recovery-guidance p,
+.j-websub-empty,
+.j-websub-redrive-guidance {
+ margin: 0;
+}
+
+.j-websub-recovery-guidance p + p {
+ margin-top: 6px;
+ color: var(--muted);
+}
+
+.j-websub-redrive-guidance {
+ color: var(--muted);
+ border-top: 1px var(--border-style) var(--line-soft);
+}
+
 .j-field-row {
  padding: 14px 18px;
  display: grid;
