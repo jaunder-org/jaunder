@@ -1,4 +1,4 @@
-use crate::forms::{self, Field, ValidatedBareInput};
+use crate::forms::{Field, ValidatedInput};
 use crate::topbar::Topbar;
 use common::{MutationOutcome, session_label::SessionLabel};
 use leptos::prelude::*;
@@ -93,35 +93,37 @@ fn AppPasswordCreator(create_action: ServerAction<CreateAppPassword>) -> impl In
     let label_field = Field::<SessionLabel>::new();
 
     view! {
-        <section class="j-app-passwords">
-            <h2>"App passwords"</h2>
-            <p>
-                "Create a password to publish from an external editor (such as MarsEdit) over AtomPub."
-            </p>
-            <label for="app-password-label">"Label"</label>
-            <ValidatedBareInput<SessionLabel>
-                name="label"
-                field=label_field
-                id=Some("app-password-label")
-                placeholder=Some("Label (e.g. MarsEdit)")
-            />
-            {forms::validated_error(
-                label_field.error(),
-                Signal::derive(move || label_field.is_touched()),
-                |msg| view! { <p class="error">{msg}</p> }.into_any(),
-            )}
-            <button
-                type="button"
-                class="j-btn"
-                prop:disabled=move || !label_field.is_valid()
-                on:click=move |_| {
-                    if let Some(label) = label_field.parsed() {
-                        create_action.dispatch(CreateAppPassword { label });
+        <section class="j-card" data-app-passwords>
+            <div class="j-card-head">
+                <div>
+                    <h2>"App passwords"</h2>
+                    <div class="j-sub">
+                        "Create a password for an external AtomPub editor such as MarsEdit."
+                    </div>
+                </div>
+            </div>
+            <div class="j-form-body">
+                <ValidatedInput<SessionLabel>
+                    label="Label"
+                    name="label"
+                    field=label_field
+                    placeholder="e.g. MarsEdit"
+                />
+            </div>
+            <div class="j-form-actions">
+                <button
+                    type="button"
+                    class="j-btn is-primary"
+                    prop:disabled=move || !label_field.is_valid()
+                    on:click=move |_| {
+                        if let Some(label) = label_field.parsed() {
+                            create_action.dispatch(CreateAppPassword { label });
+                        }
                     }
-                }
-            >
-                "Create app password"
-            </button>
+                >
+                    "Create app password"
+                </button>
+            </div>
             {move || {
                 create_action
                     .value()
@@ -129,23 +131,19 @@ fn AppPasswordCreator(create_action: ServerAction<CreateAppPassword>) -> impl In
                     .map(|result| match result {
                         Ok(MutationOutcome::Confirmed(pw)) => {
                             view! {
-                                <div class="j-app-password-token">
-                                    <p>
-                                        "Copy this app password now \u{2014} it will not be shown again:"
-                                    </p>
+                                <p class="success" data-app-password-token>
+                                    "Copy this app password now \u{2014} it will not be shown again: "
                                     <code>{pw.token.to_string()}</code>
-                                </div>
+                                </p>
                             }
                                 .into_any()
                         }
                         Ok(MutationOutcome::CommitIndeterminate(pw)) => {
                             view! {
-                                <div class="j-app-password-token">
-                                    <p class="error">
-                                        "The app password may have been created, but its status could not be confirmed. Copy it now and refresh to check."
-                                    </p>
+                                <p class="error" data-app-password-token>
+                                    "The app password may have been created, but its status could not be confirmed. Copy it now and refresh to check: "
                                     <code>{pw.token.to_string()}</code>
-                                </div>
+                                </p>
                             }
                                 .into_any()
                         }

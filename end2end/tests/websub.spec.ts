@@ -82,12 +82,8 @@ test("operator filters, pages, redrives, and rejects a stale WebSub selection", 
   await signInAs(page, "testoperator");
   await goto(page, "/admin/websub");
 
-  const regeneration = page.locator(".j-websub-dead-letters").filter({
-    has: page.getByRole("heading", { name: "Regeneration dead letters" }),
-  });
-  const publication = page.locator(".j-websub-dead-letters").filter({
-    has: page.getByRole("heading", { name: "Publication dead letters" }),
-  });
+  const regeneration = page.locator('[data-phase="regeneration"]');
+  const publication = page.locator('[data-phase="publication"]');
   await expect(regeneration.locator("tbody tr")).toHaveCount(50);
   await expect(
     publication.getByText(String(publicationIds[0]), { exact: true }),

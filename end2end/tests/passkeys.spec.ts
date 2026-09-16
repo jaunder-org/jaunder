@@ -102,7 +102,7 @@ test("Chromium passkeys enroll, authenticate discoverably, refresh metadata, and
     await waitForSelector(settingsPage, 'input[name="base_url"]');
     await settingsPage.fill('input[name="base_url"]', BASE_URL);
     await click(settingsPage, 'button:has-text("Save Site Settings")');
-    await waitForSelector(settingsPage, ".j-settings-saved");
+    await waitForSelector(settingsPage, "[data-settings-saved]");
     await reenterAdminSettings(settingsPage, "site");
     await expect(settingsPage.locator('input[name="base_url"]')).toHaveValue(
       new URL(BASE_URL).toString(),

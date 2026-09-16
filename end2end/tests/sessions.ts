@@ -10,9 +10,12 @@ export async function mintAppPassword(
   if (new URL(page.url()).pathname !== "/sessions") {
     await goto(page, "/sessions");
   }
-  await page.fill("#app-password-label", label);
-  await click(page, '.j-app-passwords button:has-text("Create app password")');
-  const token = page.locator(".j-app-password-token code");
+  await page.fill('input[name="label"]', label);
+  await click(
+    page,
+    '[data-app-passwords] button:has-text("Create app password")',
+  );
+  const token = page.locator("[data-app-password-token] code");
   await token.waitFor({ state: "visible", timeout: 15_000 });
   return ((await token.textContent()) ?? "").trim();
 }

@@ -24,7 +24,7 @@ pub fn WebsubPage() -> impl IntoView {
     view! {
         <Topbar title="WebSub" sub="Operations" />
         <div class="j-scroll">
-            <div class="j-settings j-websub-settings">
+            <div class="j-settings">
                 <Suspense fallback=|| {
                     view! { <p class="j-loading">"Loading\u{2026}"</p> }
                 }>
@@ -59,28 +59,30 @@ fn hub_form(initial: &str, action: ServerAction<UpdateWebsubHub>) -> impl IntoVi
         });
     };
     view! {
-        <div class="j-card j-websub-hub-form">
+        <div class="j-card">
             <div class="j-card-head">
                 <div>
                     <h2>"WebSub hub"</h2>
                     <div class="j-sub">"Configure the hub used to announce regenerated feeds."</div>
                 </div>
             </div>
-            <label class="j-backup-field j-backup-field-wide">
-                <span class="j-edit-form-label">"Hub URL"</span>
-                <ValidatedBareInput<HubUrl>
-                    name="hub_url"
-                    field=hub
-                    placeholder=Some("https://hub.example/")
-                    class=Some("j-backup-input")
-                />
-            </label>
-            {forms::validated_error(
-                hub.error(),
-                Signal::derive(move || hub.is_touched()),
-                |message| view! { <p class="error">{message}</p> }.into_any(),
-            )}
-            <div class="j-backup-form-actions">
+            <div class="j-form-body">
+                <label class="j-form-field">
+                    <span class="j-form-label">"Hub URL"</span>
+                    <ValidatedBareInput<HubUrl>
+                        name="hub_url"
+                        field=hub
+                        placeholder=Some("https://hub.example/")
+                        class=Some("j-form-input")
+                    />
+                </label>
+                {forms::validated_error(
+                    hub.error(),
+                    Signal::derive(move || hub.is_touched()),
+                    |message| view! { <p class="error">{message}</p> }.into_any(),
+                )}
+            </div>
+            <div class="j-form-actions">
                 <button
                     type="button"
                     class="j-btn is-primary"
@@ -119,7 +121,7 @@ fn DeadLetterList(phase: WebsubPhase, heading: &'static str) -> impl IntoView {
         });
     };
     view! {
-        <div class="j-card j-websub-dead-letters" data-phase=phase_key>
+        <div class="j-card" data-phase=phase_key>
             <div class="j-card-head">
                 <h2>{heading}</h2>
             </div>
@@ -133,7 +135,7 @@ fn DeadLetterList(phase: WebsubPhase, heading: &'static str) -> impl IntoView {
                     }
                 })}
             </Suspense>
-            <div class="j-backup-form-actions">
+            <div class="j-form-actions">
                 <button
                     type="button"
                     class="j-btn is-primary"

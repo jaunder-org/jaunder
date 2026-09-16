@@ -65,13 +65,13 @@ pub fn BackupSettingsPage() -> impl IntoView {
 /// stays within the line budget.
 fn backup_destination_field(destination: Field<DestinationPath>) -> impl IntoView {
     view! {
-        <label class="j-backup-field j-backup-field-wide">
-            <span class="j-edit-form-label">"Destination Path"</span>
+        <label class="j-form-field j-backup-field-wide">
+            <span class="j-form-label">"Destination path"</span>
             <ValidatedBareInput<DestinationPath>
                 name="destination_path"
                 field=destination
                 placeholder=Some("/srv/jaunder/backups")
-                class=Some("j-backup-input")
+                class=Some("j-form-input")
             />
         </label>
         {forms::validated_error(
@@ -120,27 +120,24 @@ fn backup_settings_form(
                     </div>
                 </div>
             </div>
-            <div class="j-backup-form-body">
+            <div class="j-form-body j-backup-form-body">
                 {backup_destination_field(destination)}
                 <ValidatedInput<BackupSchedule>
                     label="Schedule"
                     name="schedule"
                     field=schedule
-                    field_class="j-backup-field j-backup-field-wide"
-                    class="j-backup-input"
+                    field_class="j-form-field j-backup-field-wide"
                     help="Use a six-field cron expression: second minute hour day-of-month month day-of-week. Example: 0 0 0 * * * runs daily at midnight."
                 />
                 <ValidatedInput<RetentionCount>
-                    label="Retention Count"
+                    label="Retention count"
                     name="retention_count"
                     field=retention
                     input_type="number"
-                    field_class="j-backup-field"
-                    class="j-backup-input"
-                /> <label class="j-backup-field">
-                    <span class="j-edit-form-label">"Mode"</span>
+                /> <label class="j-form-field">
+                    <span class="j-form-label">"Mode"</span>
                     <select
-                        class="j-backup-input"
+                        class="j-form-input"
                         name="mode"
                         on:change=move |ev| {
                             mode.set(
@@ -165,7 +162,7 @@ fn backup_settings_form(
                     </select>
                 </label>
             </div>
-            <div class="j-backup-form-actions">
+            <div class="j-form-actions">
                 <button
                     type="button"
                     class="j-btn is-primary"

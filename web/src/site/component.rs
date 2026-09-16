@@ -21,7 +21,7 @@ pub fn SiteSettingsPage() -> impl IntoView {
     view! {
         <Topbar title="Site Settings" sub="Operations" />
         <div class="j-scroll">
-            <div class="j-settings j-site-settings">
+            <div class="j-settings">
                 <Suspense fallback=|| {
                     view! { <p class="j-loading j-settings-loading">"Loading\u{2026}"</p> }
                 }>
@@ -47,7 +47,7 @@ pub fn SiteSettingsPage() -> impl IntoView {
                             ) {
                                 crate::mutation_feedback::MutationFeedback::Confirmed(()) => {
                                     view! {
-                                        <p class="j-settings-saved" role="status">
+                                        <p class="success" role="status" data-settings-saved>
                                             "Site settings saved."
                                         </p>
                                     }
@@ -99,7 +99,7 @@ fn MediaUploadsCard() -> impl IntoView {
                     ) {
                         crate::mutation_feedback::MutationFeedback::Confirmed(()) => {
                             view! {
-                                <p class="j-settings-saved" role="status">
+                                <p class="success" role="status" data-settings-saved>
                                     "Media upload settings saved."
                                 </p>
                             }
@@ -136,32 +136,24 @@ fn site_settings_form(
         }
     };
     view! {
-        <div class="j-card j-site-form">
+        <div class="j-card">
             <div class="j-card-head">
                 <div>
                     <h2>"Site Settings"</h2>
                     <div class="j-sub">"Configure the site title and canonical base URL."</div>
                 </div>
             </div>
-            <div class="j-site-form-body">
-                <ValidatedInput<SiteTitle>
-                    label="Site Title"
-                    name="title"
-                    field=title_field
-                    class="j-site-input"
-                    field_class="j-site-field j-site-field-wide"
-                />
+            <div class="j-form-body">
+                <ValidatedInput<SiteTitle> label="Site title" name="title" field=title_field />
                 <ValidatedInput<BaseUrl>
                     label="Base URL"
                     name="base_url"
                     input_type="url"
                     field=base_url_field
-                    field_class="j-site-field j-site-field-wide"
-                    class="j-site-input"
                     help="Leave blank to disable or enter a fully-qualified https URL."
                 />
             </div>
-            <div class="j-site-form-actions">
+            <div class="j-form-actions">
                 <button
                     type="button"
                     class="j-btn is-primary"
@@ -182,7 +174,7 @@ fn media_uploads_form(
 ) -> impl IntoView {
     let uploads_enabled = RwSignal::new(enabled);
     view! {
-        <div class="j-card j-site-form">
+        <div class="j-card">
             <div class="j-card-head">
                 <div>
                     <h2>"Media Uploads"</h2>
@@ -191,23 +183,21 @@ fn media_uploads_form(
                     </div>
                 </div>
             </div>
-            <div class="j-site-form-body">
-                <div class="j-site-field j-site-field-wide">
-                    <label for="media-uploads-enabled">
-                        <input
-                            id="media-uploads-enabled"
-                            name="uploads_enabled"
-                            type="checkbox"
-                            prop:checked=move || uploads_enabled.get()
-                            on:change=move |event| {
-                                uploads_enabled.set(event_target_checked(&event));
-                            }
-                        />
-                        " Enable new media uploads"
-                    </label>
-                </div>
+            <div class="j-form-body">
+                <label class="j-form-field j-form-toggle" for="media-uploads-enabled">
+                    <input
+                        id="media-uploads-enabled"
+                        name="uploads_enabled"
+                        type="checkbox"
+                        prop:checked=move || uploads_enabled.get()
+                        on:change=move |event| {
+                            uploads_enabled.set(event_target_checked(&event));
+                        }
+                    />
+                    <span class="j-form-label">"Enable new media uploads"</span>
+                </label>
             </div>
-            <div class="j-site-form-actions">
+            <div class="j-form-actions">
                 <button
                     type="button"
                     class="j-btn is-primary"
