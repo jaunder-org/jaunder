@@ -1309,6 +1309,14 @@
   color: var(--ink-soft);
 }
 
+.j-compose-grid .j-form-label,
+.j-composer-layout .j-form-label {
+ font-size: 12px;
+ font-weight: 600;
+ letter-spacing: 0.4px;
+ color: var(--muted);
+}
+
 .j-form-help {
   color: var(--ink-soft);
   font-size: 12.5px;

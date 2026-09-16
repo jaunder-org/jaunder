@@ -194,6 +194,28 @@ test("composer keeps filled body actions before a container-responsive controls 
         exact: true,
       }),
     ).toHaveCount(0);
+    const fieldLabelStyles = await grid
+      .locator(".j-form-label")
+      .evaluateAll((labels) =>
+        labels.map((label) => {
+          const style = getComputedStyle(label);
+          return {
+            fontSize: style.fontSize,
+            fontWeight: style.fontWeight,
+            letterSpacing: style.letterSpacing,
+            textTransform: style.textTransform,
+          };
+        }),
+      );
+    expect(fieldLabelStyles).not.toHaveLength(0);
+    for (const style of fieldLabelStyles) {
+      expect(style).toMatchObject({
+        fontSize: "12px",
+        fontWeight: "600",
+        letterSpacing: "0.4px",
+      });
+      expect(style.textTransform).not.toBe("uppercase");
+    }
     expect(
       (await rail.locator("h2, .j-form-label").allTextContents()).map((text) =>
         text.trim(),
