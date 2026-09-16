@@ -588,13 +588,15 @@
 }
 
 .j-composer-toolbar {
-  display: flex;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   align-items: center;
   gap: 8px;
 }
 
 .j-composer-toolbar .j-btn {
-  flex: 1;
+  width: 100%;
 }
 
 .j-tag {

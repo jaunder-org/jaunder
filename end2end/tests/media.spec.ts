@@ -9,6 +9,7 @@ import {
   waitForSelector,
   type MutationOutcome,
   stallServerFn,
+  failServerFn,
 } from "./helpers";
 import { createPostViaApi } from "./posts";
 import { navigateInApp } from "./navigate";
@@ -232,7 +233,7 @@ test.describe("Media upload and serving", () => {
 
     const fileInput = page.locator("input[type='file']").first();
     await fileInput.setInputFiles({
-      name: "first-image.png",
+      name: "first image.png",
       mimeType: "image/png",
       buffer: Buffer.from("first image"),
     });
@@ -244,7 +245,7 @@ test.describe("Media upload and serving", () => {
     });
     const rows = page.locator(".j-composer-media-row");
     await expect(rows).toHaveCount(2);
-    await expect(rows.nth(0)).toContainText("first-image.png");
+    await expect(rows.nth(0)).toContainText("first image.png");
     await expect(rows.nth(1)).toContainText("second-image.png");
     await expect(rows.locator("img")).toHaveCount(2);
     await expect(
@@ -350,6 +351,20 @@ test.describe("Media upload capability", () => {
     ).toBeVisible();
     await expect(
       page.getByRole("link", { name: "read-only-media.jpg" }),
+    ).toHaveCount(0);
+  });
+
+  test("composer surfaces report Media Upload Capability lookup failures", async ({
+    page,
+  }) => {
+    await signInAsNewUser(page);
+    await failServerFn(page, "media/get_uploads_enabled");
+    await goto(page, "/app");
+
+    const composer = page.locator(".j-composer");
+    await expect(composer.locator(".error")).toBeVisible();
+    await expect(
+      composer.getByRole("button", { name: "Attach media" }),
     ).toHaveCount(0);
   });
 

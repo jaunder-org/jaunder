@@ -186,9 +186,15 @@ pub(super) fn ComposerDetails(state: ComposeState) -> impl IntoView {
     let media = RwSignal::new(Vec::<ComposerMedia>::new());
     view! {
         <div class="j-composer-details">
-            {move || match uploads_enabled.get() {
-                Some(Ok(true)) => view! { <ComposerMediaField media=media /> }.into_any(),
-                None | Some(Ok(false) | Err(_)) => ().into_any(),
+            {move || match crate::media::upload_presentation(uploads_enabled.get()) {
+                crate::media::UploadPresentation::Enabled => {
+                    view! { <ComposerMediaField media=media /> }.into_any()
+                }
+                crate::media::UploadPresentation::Error(message) => {
+                    view! { <p class="error">{message}</p> }.into_any()
+                }
+                crate::media::UploadPresentation::Disabled
+                | crate::media::UploadPresentation::Loading => ().into_any(),
             }}
             <ValidatedTextarea<PostSummary>
                 label="Summary"
@@ -205,16 +211,24 @@ pub(super) fn ComposerDetails(state: ComposeState) -> impl IntoView {
 #[component]
 fn ComposerMediaField(media: RwSignal<Vec<ComposerMedia>>) -> impl IntoView {
     let error = RwSignal::new(None::<String>);
-    let add_media = Callback::new(move |url| {
-        media.update(|items| items.push(ComposerMedia::from_uploaded_url(url)));
-        error.set(None);
+    let add_media = Callback::new(move |url| match ComposerMedia::try_from_uploaded_url(url) {
+        Ok(item) => {
+            media.update(|items| items.push(item));
+            error.set(None);
+        }
+        Err(_) => error.set(Some("The uploaded Media URL was invalid.".to_owned())),
     });
     let report_error = Callback::new(move |message| error.set(Some(message)));
     view! {
         <div class="j-composer-media">
             <div class="j-composer-media-heading">
                 <span class="j-form-label">"Media"</span>
-                <MediaUpload on_uploaded=add_media on_error=report_error icon_only=true />
+                <MediaUpload
+                    on_uploaded=add_media
+                    on_error=report_error
+                    icon_only=true
+                    icon_path=Icons::PLUS
+                />
             </div>
             <div class="j-composer-media-rows">
                 {move || {
@@ -225,15 +239,16 @@ fn ComposerMediaField(media: RwSignal<Vec<ComposerMedia>>) -> impl IntoView {
                         .map(|(index, item)| {
                             let image_url = String::from(item.url.clone());
                             let copy_url = image_url.clone();
+                            let filename = item.display_filename().into_owned();
                             view! {
                                 <div class="j-composer-media-row">
                                     <img class="j-composer-media-thumbnail" src=image_url alt="" />
-                                    <span class="j-composer-media-filename">{item.filename}</span>
+                                    <span class="j-composer-media-filename">{filename}</span>
                                     <button
                                         class="j-btn is-icon"
                                         type="button"
                                         aria-label="Copy media URL"
-                                        on:click=move |_| copy_media_url(&copy_url, error)
+                                        on:click=move |_| copy_media_url(copy_url.clone(), error)
                                     >
                                         <IconButtonContent
                                             path=Icons::COPY
@@ -270,17 +285,11 @@ fn ComposerMediaField(media: RwSignal<Vec<ComposerMedia>>) -> impl IntoView {
 }
 
 /// Copy a temporary Media URL while keeping clipboard failures visible in the composer.
-fn copy_media_url(url: &str, error: RwSignal<Option<String>>) {
+fn copy_media_url(url: String, error: RwSignal<Option<String>>) {
     use leptos::task::spawn_local;
-    use wasm_bindgen_futures::JsFuture;
 
-    let Some(window) = web_sys::window() else {
-        error.set(Some("Could not copy the Media URL.".to_owned()));
-        return;
-    };
-    let write = window.navigator().clipboard().write_text(url);
     spawn_local(async move {
-        if JsFuture::from(write).await.is_ok() {
+        if client::clipboard::write_text(&url).await.is_ok() {
             error.set(None);
         } else {
             error.set(Some("Could not copy the Media URL.".to_owned()));

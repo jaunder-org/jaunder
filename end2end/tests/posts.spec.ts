@@ -135,6 +135,11 @@ test("post create surfaces expose secondary actions as accessible icons", async 
     const attach = scope.getByRole("button", { name: "Attach media" });
     const saveDraft = scope.locator(SEL.publishButton("false"));
 
+    await expect(attach.locator("path")).toHaveAttribute(
+      "d",
+      "M10 4v12 M4 10h12",
+    );
+
     for (const [button, label] of [
       [attach, "Attach media"],
       [saveDraft, "Save draft"],
@@ -157,10 +162,35 @@ test("post create surfaces expose secondary actions as accessible icons", async 
   await expectAccessibleIcons(page.locator(".j-composer"));
 });
 
-test("composer keeps body actions before a responsive controls rail", async ({
+test("composer keeps filled body actions before a container-responsive controls rail", async ({
   registeredPage,
 }) => {
   const page = await registeredPage("/posts/new");
+
+  const expectFilledActions = async (scope: Locator): Promise<void> => {
+    const actions = scope.locator(".j-composer-toolbar .j-btn");
+    await expect(actions).toHaveCount(2);
+    const widths = await actions.evaluateAll((buttons) =>
+      buttons.map((button) => button.getBoundingClientRect().width),
+    );
+    expect(Math.abs(widths[0]! - widths[1]!)).toBeLessThan(1);
+  };
+  const expectStackedWithoutClipping = async (grid: Locator): Promise<void> => {
+    const geometry = await grid.evaluate((element) => {
+      const body = element
+        .querySelector(".j-compose-body")!
+        .getBoundingClientRect();
+      const aside = element
+        .querySelector(".j-compose-aside")!
+        .getBoundingClientRect();
+      return {
+        stacked: aside.top >= body.bottom,
+        clipped: element.scrollWidth > element.clientWidth + 1,
+      };
+    });
+    expect(geometry).toEqual({ stacked: true, clipped: false });
+  };
+
   const container = page.locator(".j-main");
   const grid = page.locator(".j-compose-grid");
   await container.evaluate((element) => {
@@ -173,8 +203,7 @@ test("composer keeps body actions before a responsive controls rail", async ({
       grid.evaluate((element) => getComputedStyle(element).gridTemplateColumns),
     )
     .toMatch(/640px 320px/);
-  await expect(grid.locator(".j-compose-body")).toHaveCount(1);
-  await expect(grid.locator(".j-compose-aside")).toHaveCount(1);
+  await expectFilledActions(grid);
 
   await container.evaluate((element) => {
     (element as HTMLElement).style.width = "800px";
@@ -190,16 +219,95 @@ test("composer keeps body actions before a responsive controls rail", async ({
   expect(order.indexOf("ASIDE:")).toBeGreaterThan(
     order.findIndex((item) => item === "BUTTON:publish"),
   );
-  const stacked = await grid.evaluate((element) => {
+  await expectStackedWithoutClipping(grid);
+
+  await container.evaluate((element) => {
+    (element as HTMLElement).style.width = "375px";
+  });
+  await expectStackedWithoutClipping(grid);
+
+  await navigateInApp(page, () => click(page, 'a[href="/app"]'), {
+    url: "/app",
+    ready: ".j-composer",
+  });
+  const inlineContainer = page.locator(".j-composer");
+  const inlineGrid = inlineContainer.locator(".j-composer-layout");
+  await inlineContainer.evaluate((element) => {
+    const container = element as HTMLElement;
+    container.style.alignSelf = "flex-start";
+    container.style.width = "960px";
+  });
+  await expect
+    .poll(async () =>
+      inlineGrid.evaluate(
+        (element) => getComputedStyle(element).gridTemplateColumns,
+      ),
+    )
+    .toMatch(/640px 320px/);
+  await expectFilledActions(inlineGrid);
+
+  await inlineContainer.evaluate((element) => {
+    (element as HTMLElement).style.width = "800px";
+  });
+  await expectStackedWithoutClipping(inlineGrid);
+});
+
+test("loaded edit controls remain coherent in wide and mobile layouts", async ({
+  page,
+  registeredPage,
+}) => {
+  const { post_id } = await createPostViaApi(page, {
+    body: "# Populated edit layout\n\nBody",
+    tags: ["layout", "populated"],
+    audience: "private",
+    publish: false,
+    slug: "populated-edit-layout",
+  });
+  await registeredPage(`/posts/${post_id}/edit`);
+
+  const grid = page.locator(".j-compose-grid");
+  await expect(grid.locator(SEL.postBody)).toHaveValue(
+    /^# Populated edit layout\n\nBody\n?$/,
+  );
+  await page.locator(SEL.postSummary).fill("A populated summary");
+  await expect(
+    grid.locator('.j-tag-chip-label:has-text("#layout")'),
+  ).toBeVisible();
+  await expect(grid.getByLabel("Audience", { exact: true })).toHaveValue(
+    "private",
+  );
+  await expect(grid.locator('input[name="slug_override"]')).toHaveValue(
+    "populated-edit-layout",
+  );
+
+  const actions = grid.locator(".j-composer-toolbar .j-btn");
+  await expect(actions).toHaveCount(2);
+  const widths = await actions.evaluateAll((buttons) =>
+    buttons.map((button) => button.getBoundingClientRect().width),
+  );
+  expect(Math.abs(widths[0]! - widths[1]!)).toBeLessThan(1);
+
+  await page.locator(".j-main").evaluate((element) => {
+    const container = element as HTMLElement;
+    container.style.alignSelf = "flex-start";
+    container.style.width = "375px";
+  });
+  const geometry = await grid.evaluate((element) => {
     const body = element
       .querySelector(".j-compose-body")!
       .getBoundingClientRect();
     const aside = element
       .querySelector(".j-compose-aside")!
       .getBoundingClientRect();
-    return aside.top >= body.bottom;
+    return {
+      stacked: aside.top >= body.bottom,
+      clipped: element.scrollWidth > element.clientWidth + 1,
+    };
   });
-  expect(stacked).toBe(true);
+  expect(geometry).toEqual({ stacked: true, clipped: false });
+  await expect(grid.getByLabel("Summary", { exact: true })).toHaveValue(
+    "A populated summary",
+  );
 });
 
 test("Post headers use the current display name with a handle-only fallback", async ({
