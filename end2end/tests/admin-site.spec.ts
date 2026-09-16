@@ -27,7 +27,7 @@ test("admin site settings page loads and allows updating title and base_url", as
 
   // Submit the form and wait for the success status to confirm the write committed
   await submitButton.click();
-  await waitForSelector(page, ".j-settings-saved");
+  await waitForSelector(page, "[data-settings-saved]");
 
   // Re-enter the page in-app and verify the values are persisted: the remount
   // refetches through site::get, so the form is populated from the server.
@@ -82,7 +82,7 @@ test.describe("Media upload capability", () => {
     ]);
     await waitForSelector(
       page,
-      'p.j-settings-saved:has-text("Media upload settings saved.")',
+      'p[data-settings-saved]:has-text("Media upload settings saved.")',
     );
 
     await reenterAdminSettings(page, "site");
@@ -102,7 +102,7 @@ test.describe("Media upload capability", () => {
     ]);
     await waitForSelector(
       page,
-      'p.j-settings-saved:has-text("Media upload settings saved.")',
+      'p[data-settings-saved]:has-text("Media upload settings saved.")',
     );
 
     await reenterAdminSettings(page, "site");
@@ -130,7 +130,7 @@ test("site base URL round-trips, clears via omission, and validates inline", asy
   await page.fill('input[name="title"]', "Round Trip Site");
   await page.fill('input[name="base_url"]', "https://roundtrip.example.com");
   await saveButton.click();
-  await waitForSelector(page, ".j-settings-saved");
+  await waitForSelector(page, "[data-settings-saved]");
 
   // Re-enter in-app and confirm it round-trips in canonical form.
   await reenterAdminSettings(page, "site");
@@ -142,7 +142,7 @@ test("site base URL round-trips, clears via omission, and validates inline", asy
   // is omitted on the wire and decodes to `None` (the clear-to-None path).
   await page.fill('input[name="base_url"]', "");
   await page.locator('button:has-text("Save Site Settings")').click();
-  await waitForSelector(page, ".j-settings-saved");
+  await waitForSelector(page, "[data-settings-saved]");
 
   // Re-enter in-app and confirm the base URL is now empty.
   await reenterAdminSettings(page, "site");
@@ -153,7 +153,7 @@ test("site base URL round-trips, clears via omission, and validates inline", asy
   const baseUrl = page.locator('input[name="base_url"]');
   await baseUrl.fill("not a url");
   await baseUrl.blur();
-  await expect(page.locator(".j-site-form .error")).toBeVisible();
+  await expect(page.locator(".j-card .error")).toBeVisible();
   await expect(
     page.locator('button:has-text("Save Site Settings")'),
   ).toBeDisabled();

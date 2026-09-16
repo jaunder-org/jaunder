@@ -65,11 +65,14 @@ test("an app password can be minted from the sessions page", async ({
   await goto(page, "/sessions");
 
   // goto waits for the CSR mount, so the label input is safe to fill.
-  await page.fill("#app-password-label", "MarsEdit e2e");
-  await click(page, '.j-app-passwords button:has-text("Create app password")');
+  await page.fill('input[name="label"]', "MarsEdit e2e");
+  await click(
+    page,
+    '[data-app-passwords] button:has-text("Create app password")',
+  );
 
   // The raw token is shown exactly once.
-  const tokenEl = page.locator(".j-app-password-token code");
+  const tokenEl = page.locator("[data-app-password-token] code");
   await tokenEl.waitFor({ state: "visible", timeout: 15_000 });
   const token = ((await tokenEl.textContent()) ?? "").trim();
   expect(token.length).toBeGreaterThan(10);

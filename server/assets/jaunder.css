@@ -1223,6 +1223,15 @@
  min-width: 0;
 }
 
+.j-form-field.j-form-toggle {
+ flex-direction: row;
+ align-items: center;
+}
+
+.j-form-toggle>input[type="checkbox"] {
+ margin: 0;
+}
+
 .j-form-label {
  font-size: 13px;
  color: var(--ink-soft);
@@ -1371,45 +1380,12 @@
 }
 
 .j-backup-form-body {
- padding: 18px;
  display: grid;
  grid-template-columns: minmax(0, 1fr) minmax(180px, 220px);
- gap: 16px;
-}
-
-.j-backup-field {
- min-width: 0;
- display: flex;
- flex-direction: column;
- gap: 7px;
 }
 
 .j-backup-field-wide {
  grid-column: 1 / -1;
-}
-
-.j-backup-input {
- width: 100%;
- min-height: 38px;
- padding: 8px 10px;
- border: 1px var(--border-style) var(--line);
- border-radius: var(--radius-sm);
- background: var(--surface);
- color: var(--ink);
- font-size: 13.5px;
- outline: none;
-}
-
-.j-backup-input:focus {
- border-color: var(--accent);
-}
-
-.j-backup-form-actions {
- padding: 14px 18px;
- border-top: 1px var(--border-style) var(--line-soft);
- display: flex;
- justify-content: flex-end;
- background: var(--bg);
 }
 
 .j-settings-loading,

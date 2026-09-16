@@ -27,7 +27,7 @@ async function saveSmtp(page: Page) {
   );
   await page.locator(saveButton).click();
   expect((await response).ok()).toBe(true);
-  await expect(page.locator(".j-settings-saved")).toBeVisible();
+  await expect(page.locator("[data-settings-saved]")).toBeVisible();
 }
 
 async function disableSmtpIfEnabled(page: Page) {
@@ -106,7 +106,7 @@ test("operator manages the complete SMTP relay lifecycle in one document", async
     await host.fill("relay.example.com");
     await port.fill("0");
     await port.blur();
-    await expect(page.locator(".j-site-form .error")).toContainText(
+    await expect(page.locator("form.j-card .error")).toContainText(
       "port must not be zero",
     );
     await expect(page.locator(saveButton)).toBeDisabled();
@@ -114,7 +114,7 @@ test("operator manages the complete SMTP relay lifecycle in one document", async
     await tlsMode.selectOption("tls");
     await sender.fill("not-a-mailbox");
     await sender.blur();
-    await expect(page.locator(".j-site-form .error")).toContainText(
+    await expect(page.locator("form.j-card .error")).toContainText(
       "must be an email address",
     );
     await expect(page.locator(saveButton)).toBeDisabled();
@@ -133,7 +133,7 @@ test("operator manages the complete SMTP relay lifecycle in one document", async
     await expect(password).toHaveValue("");
     await expectNoStoredSecret(page, firstSecret);
     release();
-    await expect(page.locator(".j-settings-saved")).toContainText(
+    await expect(page.locator("[data-settings-saved]")).toContainText(
       "Restart Jaunder through its service manager",
     );
 
@@ -171,7 +171,7 @@ test("operator manages the complete SMTP relay lifecycle in one document", async
     await page.locator(saveButton).click();
     await expect(page.locator('input[name="password"]')).toHaveValue("");
     expect((await replacementResponse).ok()).toBe(true);
-    await expect(page.locator(".j-settings-saved")).toBeVisible();
+    await expect(page.locator("[data-settings-saved]")).toBeVisible();
     await expectNoStoredSecret(page, replacement);
     await reenterAdminSettings(page, "smtp");
     await expect(page.getByText("A password is configured")).toBeVisible();
