@@ -702,6 +702,11 @@ Lets the warning tests assert on emitted warnings without touching the real
       (when (buffer-live-p created) (kill-buffer created))
       (delete-directory root t))))
 
+(ert-deftest jaunder-new-post-cancel-requires-visiting-file ()
+  "Abandonment refuses a buffer that has no local draft to delete."
+  (with-temp-buffer
+    (should-error (jaunder-new-post-cancel) :type 'error)))
+
 (ert-deftest jaunder-new-post-c-c-c-k-abandons-saved-input-locally ()
   "Abandoning a saved new Post deletes it without contacting the server."
   (let* ((root (file-name-as-directory (make-temp-file "jaunder-abandon-" t)))

@@ -242,12 +242,12 @@ the command before file creation has no filesystem side effect."
       (jaunder--set-keyword "DATE" scheduled-date))
     (save-buffer)))
 
-(defvar-keymap jaunder-new-post-mode-map
+(defvar-keymap jaunder-new-post-mode-map ;; cov:ignore: defvar-keymap expands to synthetic bookkeeping with no instrumentable source form
   :doc "Keymap for a Post being entered by `jaunder-new-post'."
   "C-c C-c" #'jaunder-new-post-complete
   "C-c C-k" #'jaunder-new-post-cancel)
 
-(define-minor-mode jaunder-new-post-mode
+(define-minor-mode jaunder-new-post-mode ;; cov:ignore: define-minor-mode expands to synthetic bookkeeping with no instrumentable source form
   "Treat the current buffer as transient new-Post input."
   :lighter nil
   :keymap jaunder-new-post-mode-map)
