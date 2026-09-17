@@ -339,6 +339,100 @@ Lets the warning tests assert on emitted warnings without touching the real
       (when (buffer-live-p created) (kill-buffer created))
       (delete-directory root t))))
 
+(ert-deftest jaunder-new-post-reoffers-invalid-leading-tag-character ()
+  "An invalid Tag stays editable and explains the required first character."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-tag-repair-" t)))
+         (jaunder-blogs nil)
+         (default-directory root)
+         (tag-prompt-count 0)
+         created)
+    (unwind-protect
+        (cl-letf
+            (((symbol-function 'read-string) (lambda (&rest _) "Repairable Tag"))
+             ((symbol-function 'completing-read)
+              (lambda (prompt _collection _predicate _require-match
+                              &optional initial-input &rest _)
+                (cond
+                 ((string-prefix-p "Tag" prompt)
+                  (setq tag-prompt-count (1+ tag-prompt-count))
+                  (pcase tag-prompt-count
+                    (1
+                     (should-not initial-input)
+                     "-topic")
+                    (2
+                     (should
+                      (string-match-p
+                       "must start with an ASCII letter or digit" prompt))
+                     (should (equal initial-input '("-topic" . 0)))
+                     "topic")
+                    (3 "")
+                    (_ (error "unexpected Tag prompt: %s" prompt))))
+                 ((string-prefix-p "Status" prompt) "draft")
+                 (t (error "unexpected prompt: %s" prompt))))))
+          (jaunder-new-post nil)
+          (setq created (current-buffer))
+          (should (= tag-prompt-count 3))
+          (should (equal (jaunder--buffer-keyword "KEYWORDS") "topic")))
+      (when (buffer-live-p created) (kill-buffer created))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-new-post-reoffers-each-invalid-later-tag-character ()
+  "Tag repair identifies the first later defect without losing raw input."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-tag-repair-" t)))
+         (jaunder-blogs nil)
+         (default-directory root)
+         (tag-prompt-count 0)
+         created)
+    (unwind-protect
+        (cl-letf
+            (((symbol-function 'read-string) (lambda (&rest _) "Repairable Tag"))
+             ((symbol-function 'completing-read)
+              (lambda (prompt _collection _predicate _require-match
+                              &optional initial-input &rest _)
+                (cond
+                 ((string-prefix-p "Tag" prompt)
+                  (setq tag-prompt-count (1+ tag-prompt-count))
+                  (pcase tag-prompt-count
+                    (1 "two words")
+                    (2
+                     (should
+                      (string-match-p
+                       (regexp-quote "Tag character \" \" at position 4")
+                       prompt))
+                     (should (equal initial-input '("two words" . 3)))
+                     "tag!")
+                    (3
+                     (should
+                      (string-match-p
+                       (regexp-quote "Tag character \"!\" at position 4")
+                       prompt))
+                     (should (equal initial-input '("tag!" . 3)))
+                     "café")
+                    (4
+                     (should
+                      (string-match-p
+                       (regexp-quote "Tag character \"é\" at position 4")
+                       prompt))
+                     (should (equal initial-input '("café" . 3)))
+                     "  two words  ")
+                    (5
+                     (should
+                      (string-match-p
+                       (regexp-quote "Tag character \" \" at position 4")
+                       prompt))
+                     (should (equal initial-input '("  two words  " . 5)))
+                     "two-words")
+                    (6 "")
+                    (_ (error "unexpected Tag prompt: %s" prompt))))
+                 ((string-prefix-p "Status" prompt) "draft")
+                 (t (error "unexpected prompt: %s" prompt))))))
+          (jaunder-new-post nil)
+          (setq created (current-buffer))
+          (should (= tag-prompt-count 6))
+          (should (equal (jaunder--buffer-keyword "KEYWORDS") "two-words")))
+      (when (buffer-live-p created) (kill-buffer created))
+      (delete-directory root t))))
+
 (ert-deftest jaunder-new-post-cancellation-leaves-no-file ()
   "Cancelling metadata collection cannot leave a partial local Post."
   (let* ((root (file-name-as-directory (make-temp-file "jaunder-cancel-" t)))
