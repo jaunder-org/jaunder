@@ -17,7 +17,7 @@ pub(super) struct NavItem {
     pub(super) requires_operator: bool,
 }
 
-pub(super) static NAV_ITEMS: LazyLock<[NavItem; 19]> = LazyLock::new(|| {
+pub(super) static NAV_ITEMS: LazyLock<[NavItem; 20]> = LazyLock::new(|| {
     [
         NavItem {
             key: "local",
@@ -114,6 +114,14 @@ pub(super) static NAV_ITEMS: LazyLock<[NavItem; 19]> = LazyLock::new(|| {
             label: "Themes",
             icon_path: Icons::COG,
             href: Some(root_relative_url("/themes")),
+            requires_auth: true,
+            requires_operator: false,
+        },
+        NavItem {
+            key: "sessions",
+            label: "Sessions",
+            icon_path: Icons::COG,
+            href: Some(root_relative_url("/sessions")),
             requires_auth: true,
             requires_operator: false,
         },
@@ -281,6 +289,7 @@ mod tests {
         assert!(!html.contains(">Drafts<"), "{html}");
         assert!(!html.contains(">Scheduled<"), "{html}");
         assert!(!html.contains(">History<"), "{html}");
+        assert!(!html.contains(">Sessions<"), "{html}");
         assert!(!html.contains(">Invites<"), "{html}");
         assert!(!html.contains(">Configure Backups<"), "{html}");
         assert!(!html.contains(">Site Settings<"), "{html}");
@@ -305,7 +314,7 @@ mod tests {
     }
 
     #[test]
-    fn nav_catalog_exposes_home_only_to_authenticated_navigation() {
+    fn nav_catalog_defines_order_and_authenticated_destinations() {
         let destinations = NAV_ITEMS
             .iter()
             .filter_map(|item| item.href.as_deref().map(|href| (item.key, href)))
@@ -322,6 +331,7 @@ mod tests {
                 ("media", "/media"),
                 ("audiences", "/audiences"),
                 ("themes", "/themes"),
+                ("sessions", "/sessions"),
                 ("passkeys", "/passkeys"),
                 ("settings", "/profile"),
                 ("invites", "/invites"),
@@ -336,6 +346,7 @@ mod tests {
             .map(|item| item.key)
             .collect::<Vec<_>>();
         assert!(authenticated.contains(&"home"));
+        assert!(authenticated.contains(&"sessions"));
         assert!(!authenticated.contains(&"local"));
         let anonymous = render_sidebar("").into_string();
         assert!(anonymous.contains(">Local<"), "{anonymous}");
