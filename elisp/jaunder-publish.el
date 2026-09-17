@@ -185,43 +185,33 @@ available without server completion."
        nil))))
 
 
-(defun jaunder--ascii-tag-alphanumeric-p (character)
-  "Return non-nil when CHARACTER is an ASCII letter or digit."
-  (or (and (<= ?a character) (<= character ?z))
-      (and (<= ?A character) (<= character ?Z))
-      (and (<= ?0 character) (<= character ?9))))
-
-(defun jaunder--invalid-tag-repair (answer)
-  "Return (PROMPT . CURSOR) for invalid Tag ANSWER.
-PROMPT explains the first grammar violation.  CURSOR is its zero-based
-position in the original, untrimmed ANSWER so the next prompt can preserve and
-repair exactly what the user entered."
+(defun jaunder--invalid-tag-repair (answer defect)
+  "Return (PROMPT . CURSOR) for invalid Tag ANSWER and its DEFECT.
+DEFECT comes from `jaunder--tag-label-defect', the shared grammar authority.
+PROMPT explains that first violation.  CURSOR is its zero-based position in the
+original, untrimmed ANSWER so the next prompt can preserve and repair exactly
+what the user entered."
   (let* ((trimmed (string-trim answer))
          (leading-whitespace
           (- (length answer) (length (string-trim-left answer))))
-         (first (aref trimmed 0)))
-    (if (not (jaunder--ascii-tag-alphanumeric-p first))
-        (cons
+         (offset (cdr defect)))
+    (pcase (car defect)
+      ('invalid-start
+       (cons
+        (concat
+         "Tag must start with an ASCII letter or digit; remaining characters "
+         "may be ASCII letters, digits, or hyphens; edit: ")
+        leading-whitespace))
+      ('invalid-character
+       (cons
+        (format
          (concat
-          "Tag must start with an ASCII letter or digit; remaining characters "
-          "may be ASCII letters, digits, or hyphens; edit: ")
-         leading-whitespace)
-      (let ((offset 1))
-        (while (and (< offset (length trimmed))
-                    (let ((character (aref trimmed offset)))
-                      (or (jaunder--ascii-tag-alphanumeric-p character)
-                          (= character ?-))))
-          (setq offset (1+ offset)))
-        (unless (< offset (length trimmed))
-          (error "jaunder: Tag validator could not locate invalid input"))
-        (cons
-         (format
-          (concat
-           "Tag character %S at position %d is not allowed; subsequent "
-           "characters allow only ASCII letters, digits, or hyphens; edit: ")
-          (char-to-string (aref trimmed offset))
-          (1+ offset))
-         (+ leading-whitespace offset))))))
+          "Tag character %S at position %d is not allowed; subsequent "
+          "characters allow only ASCII letters, digits, or hyphens; edit: ")
+         (char-to-string (aref trimmed offset))
+         (1+ offset))
+        (+ leading-whitespace offset)))
+      (_ (error "jaunder: unsupported Tag defect %S" (car defect))))))
 
 (defun jaunder--read-new-post-tags (candidates)
   "Prompt for Tags using CANDIDATES until empty input; return accepted labels.
@@ -234,12 +224,13 @@ canonical slugs are omitted while preserving first-entry order."
                (or retry-prompt "Tag (empty to finish): ")
                candidates nil nil retry-input))
              (label (string-trim answer))
-             (slug (downcase label)))
+             (slug (downcase label))
+             (defect (jaunder--tag-label-defect answer)))
         (setq retry-input nil retry-prompt nil)
         (cond
          ((string-empty-p label) (setq done t))
-         ((not (jaunder--valid-tag-label-p label))
-          (let ((repair (jaunder--invalid-tag-repair answer)))
+         (defect
+          (let ((repair (jaunder--invalid-tag-repair answer defect)))
             (setq retry-input (cons answer (cdr repair))
                   retry-prompt (car repair)))
           (message
