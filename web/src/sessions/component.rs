@@ -133,8 +133,7 @@ fn AppPasswordCreator(create_action: ServerAction<CreateAppPassword>) -> impl In
                             view! {
                                 <AppPasswordToken
                                     token=pw.token
-                                    status_class="success"
-                                    prompt="Copy this app password now \u{2014} it will not be shown again: "
+                                    presentation=AppPasswordPresentation::Confirmed
                                 />
                             }
                                 .into_any()
@@ -143,8 +142,7 @@ fn AppPasswordCreator(create_action: ServerAction<CreateAppPassword>) -> impl In
                             view! {
                                 <AppPasswordToken
                                     token=pw.token
-                                    status_class="error"
-                                    prompt="The app password may have been created, but its status could not be confirmed. Copy it now and refresh to check: "
+                                    presentation=AppPasswordPresentation::CommitIndeterminate
                                 />
                             }
                                 .into_any()
@@ -156,12 +154,35 @@ fn AppPasswordCreator(create_action: ServerAction<CreateAppPassword>) -> impl In
     }
 }
 
+#[derive(Clone, Copy)]
+enum AppPasswordPresentation {
+    Confirmed,
+    CommitIndeterminate,
+}
+
+impl AppPasswordPresentation {
+    fn status_class(self) -> &'static str {
+        match self {
+            Self::Confirmed => "success",
+            Self::CommitIndeterminate => "error",
+        }
+    }
+
+    fn prompt(self) -> &'static str {
+        match self {
+            Self::Confirmed => "Copy this app password now \u{2014} it will not be shown again: ",
+            Self::CommitIndeterminate => {
+                "The app password may have been created, but its status could not be confirmed. Copy it now and refresh to check: "
+            }
+        }
+    }
+}
+
 /// One-time App Password presentation with an explicit clipboard action and manual fallback.
 #[component]
 fn AppPasswordToken(
     token: common::token::RawToken,
-    status_class: &'static str,
-    prompt: &'static str,
+    presentation: AppPasswordPresentation,
 ) -> impl IntoView {
     let copied = RwSignal::new(false);
     let copy_error = RwSignal::new(None::<&'static str>);
@@ -171,8 +192,9 @@ fn AppPasswordToken(
 
     view! {
         <div data-app-password-token>
-            <p class=status_class>
-                {prompt} <code>{token_text}</code> " "
+            <p class=presentation
+                .status_class()>
+                {presentation.prompt()} <code>{token_text}</code> " "
                 <button
                     type="button"
                     class="j-btn"

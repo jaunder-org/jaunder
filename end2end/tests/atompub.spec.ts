@@ -60,6 +60,28 @@ test("RSD autodiscovery link is present on the user page and resolves", async ({
 test("an app password can be minted from the sessions page", async ({
   page,
 }) => {
+  await page.addInitScript(() => {
+    const state = window as Window & {
+      __copiedAppPassword?: string;
+      __rejectAppPasswordCopy?: boolean;
+      __disableAppPasswordClipboard?: boolean;
+    };
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      get: () => {
+        if (state.__disableAppPasswordClipboard) return undefined;
+        return {
+          writeText: (value: string) => {
+            if (state.__rejectAppPasswordCopy) {
+              return Promise.reject(new Error("clipboard rejected"));
+            }
+            state.__copiedAppPassword = value;
+            return Promise.resolve();
+          },
+        };
+      },
+    });
+  });
   await signInAsNewUser(page);
 
   await goto(page, "/sessions");
@@ -77,44 +99,59 @@ test("an app password can be minted from the sessions page", async ({
   const token = ((await tokenEl.textContent()) ?? "").trim();
   expect(token.length).toBeGreaterThan(10);
 
-  await page.evaluate(() => {
-    Object.defineProperty(navigator, "clipboard", {
-      configurable: true,
-      value: {
-        writeText: async (value: string) => {
-          document.documentElement.dataset.copiedAppPassword = value;
-        },
-      },
-    });
-  });
   const copyButton = page.locator("[data-app-password-token] button");
+  const copyError = page.locator("[data-app-password-copy-error]");
   await click(
     page,
     '[data-app-password-token] button:has-text("Copy app password")',
   );
   expect(
     await page.evaluate(
-      () => document.documentElement.dataset.copiedAppPassword,
+      () =>
+        (window as Window & { __copiedAppPassword?: string })
+          .__copiedAppPassword,
     ),
   ).toBe(token);
   await expect(copyButton).toHaveText("Copied");
   await expect(copyButton).toHaveText("Copy app password", { timeout: 3_000 });
 
   await page.evaluate(() => {
-    Object.defineProperty(navigator, "clipboard", {
-      configurable: true,
-      value: {
-        writeText: async () => {
-          throw new Error("clipboard unavailable");
-        },
-      },
-    });
+    (
+      window as Window & { __rejectAppPasswordCopy?: boolean }
+    ).__rejectAppPasswordCopy = true;
   });
   await click(
     page,
     '[data-app-password-token] button:has-text("Copy app password")',
   );
-  await expect(page.locator("[data-app-password-copy-error]")).toHaveText(
+  await expect(copyError).toHaveText(
+    "Could not copy the App Password. Select it manually instead.",
+  );
+  await expect(tokenEl).toHaveText(token);
+
+  await page.evaluate(() => {
+    (
+      window as Window & { __rejectAppPasswordCopy?: boolean }
+    ).__rejectAppPasswordCopy = false;
+  });
+  await click(
+    page,
+    '[data-app-password-token] button:has-text("Copy app password")',
+  );
+  await expect(copyButton).toHaveText("Copied");
+  await expect(copyError).toHaveCount(0);
+  await expect(copyButton).toHaveText("Copy app password", { timeout: 3_000 });
+
+  await page.evaluate(() => {
+    (
+      window as Window & { __disableAppPasswordClipboard?: boolean }
+    ).__disableAppPasswordClipboard = true;
+  });
+  await click(
+    page,
+    '[data-app-password-token] button:has-text("Copy app password")',
+  );
+  await expect(copyError).toHaveText(
     "Could not copy the App Password. Select it manually instead.",
   );
   await expect(tokenEl).toHaveText(token);
