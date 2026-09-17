@@ -1,8 +1,8 @@
 //! Deterministic typed-reference guard for flow documentation (#601).
 //!
 //! The checker reads only committed, reproducible inputs: mounted routes from the
-//! router source, server-function endpoints from the shared inventory, and coverage
-//! status from the committed snapshot. Typed backticked `route:`, `endpoint:`, and
+//! application route catalog, server-function endpoints from the shared inventory,
+//! and coverage status from the committed snapshot. Typed backticked `route:`, `endpoint:`, and
 //! `matrix:` tokens are the only checked references.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -10,7 +10,6 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use proc_macro2::{TokenStream, TokenTree};
-use syn::visit::Visit;
 
 use crate::files;
 use crate::result::StepResult;
@@ -18,7 +17,7 @@ use crate::server_fn_coverage::io::{inventory, read_snapshot};
 
 const STEP: &str = "flow-docs";
 const FLOW_DIR: &str = "docs/flows";
-const ROUTER_PATH: &str = "web/src/app/component.rs";
+const ROUTE_CATALOG_PATH: &str = "web/src/app/route_policy.rs";
 const WEB_SRC: &str = "web/src";
 const SNAPSHOT_PATH: &str = "docs/coverage/server-fns.json";
 const FLOW_INDEX: &str = "docs/flows/README.md";
@@ -234,244 +233,71 @@ fn check(root: &Path) -> Result<Report> {
 }
 
 fn mounted_routes(root: &Path) -> Result<BTreeSet<String>> {
-    let path = root.join(ROUTER_PATH);
+    let path = root.join(ROUTE_CATALOG_PATH);
     let source =
         std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     mounted_routes_in(&source)
-        .with_context(|| format!("parsing mounted routes in {}", path.display()))
+        .with_context(|| format!("parsing application route catalog in {}", path.display()))
 }
 
 fn mounted_routes_in(source: &str) -> Result<BTreeSet<String>> {
-    let file = syn::parse_file(source).context("cannot parse router source as Rust")?;
-    let mut visitor = ViewVisitor::default();
-    visitor.visit_file(&file);
-    if !visitor.errors.is_empty() {
-        bail!(visitor.errors.join("\n"));
+    let file = syn::parse_file(source).context("cannot parse route catalog as Rust")?;
+    let catalog = file
+        .items
+        .iter()
+        .find_map(app_routes_macro_body)
+        .context("cannot find `app_routes` route catalog macro")?;
+    let mut routes = BTreeSet::from(["<shell>".to_string()]);
+    collect_catalog_routes(catalog, &mut routes)?;
+    if routes.len() == 1 {
+        bail!("`app_routes` route catalog has no route entries");
     }
-    Ok(visitor.routes)
+    Ok(routes)
 }
 
-#[derive(Default)]
-struct ViewVisitor {
-    routes: BTreeSet<String>,
-    errors: Vec<String>,
+fn app_routes_macro_body(item: &syn::Item) -> Option<TokenStream> {
+    let syn::Item::Macro(item) = item else {
+        return None;
+    };
+    (item.mac.path.is_ident("macro_rules")
+        && item
+            .ident
+            .as_ref()
+            .is_some_and(|ident| ident == "app_routes"))
+    .then(|| item.mac.tokens.clone())
 }
 
-impl<'ast> Visit<'ast> for ViewVisitor {
-    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
-        if mac.path.is_ident("view")
-            && let Err(error) = collect_routes_from_view(&mac.tokens, &mut self.routes)
-        {
-            self.errors.push(error.to_string());
-        }
-        syn::visit::visit_macro(self, mac);
-    }
-}
-
-#[derive(Clone)]
-struct OpenRoute {
-    name: String,
-    prefix: Vec<String>,
-}
-
-fn collect_routes_from_view(tokens: &TokenStream, routes: &mut BTreeSet<String>) -> Result<()> {
-    let tokens: Vec<TokenTree> = tokens.clone().into_iter().collect();
-    let mut i = 0;
-    let mut stack: Vec<OpenRoute> = Vec::new();
-    while i < tokens.len() {
-        if !matches_punct(tokens.get(i), '<') {
-            i += 1;
-            continue;
-        }
-        if matches_punct(tokens.get(i + 1), '/') {
-            let Some(name) = ident(tokens.get(i + 2)) else {
-                i += 1;
-                continue;
-            };
-            i += 3;
-            while i < tokens.len() && !matches_punct(tokens.get(i), '>') {
-                i += 1;
-            }
-            if i < tokens.len() {
-                i += 1;
-            }
-            if matches!(name.as_str(), "ParentRoute" | "Route") {
-                match stack.pop() {
-                    Some(open) if open.name == name => {}
-                    Some(open) => bail!(
-                        "route tag nesting desynced: closed {name} while {} was open",
-                        open.name
-                    ),
-                    None => {
-                        bail!("route tag nesting desynced: closed {name} with no matching open tag")
-                    }
-                }
-            }
-            continue;
-        }
-
-        let Some(name) = ident(tokens.get(i + 1)) else {
-            i += 1;
+fn collect_catalog_routes(tokens: TokenStream, routes: &mut BTreeSet<String>) -> Result<()> {
+    for token in tokens {
+        let TokenTree::Group(group) = token else {
             continue;
         };
-        let (tag, next) = parse_open_tag(&tokens, i + 2)?;
-        i = next;
-        if !matches!(name.as_str(), "ParentRoute" | "Route") {
-            continue;
+        let entry: Vec<TokenTree> = group.stream().into_iter().collect();
+        if let Some(pattern) = catalog_entry_pattern(&entry)? {
+            routes.insert(pattern);
         }
-        let path = tag
-            .path
-            .with_context(|| format!("<{name}> is missing a `path=` attribute"))?;
-        let segments = normalize_path_expr(path)?;
-        let mut mounted = current_prefix(&stack);
-        mounted.extend(segments.clone());
-        if name == "ParentRoute" && mounted.is_empty() {
-            routes.insert("<shell>".to_string());
-        } else {
-            routes.insert(render_route(&mounted));
-        }
-        if !tag.self_closing {
-            stack.push(OpenRoute {
-                name: name.to_string(),
-                prefix: mounted,
-            });
-        }
-    }
-    if let Some(open) = stack.last() {
-        bail!("route tag nesting desynced: <{}> was not closed", open.name);
+        collect_catalog_routes(group.stream(), routes)?;
     }
     Ok(())
 }
 
-struct ParsedTag {
-    path: Option<TokenStream>,
-    self_closing: bool,
-}
-
-fn parse_open_tag(tokens: &[TokenTree], mut i: usize) -> Result<(ParsedTag, usize)> {
-    let mut path = None;
-    loop {
-        if i >= tokens.len() {
-            bail!("unterminated route tag");
-        }
-        if matches_punct(tokens.get(i), '>') {
-            return Ok((
-                ParsedTag {
-                    path,
-                    self_closing: false,
-                },
-                i + 1,
-            ));
-        }
-        if matches_punct(tokens.get(i), '/') && matches_punct(tokens.get(i + 1), '>') {
-            return Ok((
-                ParsedTag {
-                    path,
-                    self_closing: true,
-                },
-                i + 2,
-            ));
-        }
-        let Some(attr) = ident(tokens.get(i)) else {
-            i += 1;
-            continue;
-        };
-        if !matches_punct(tokens.get(i + 1), '=') {
-            i += 1;
-            continue;
-        }
-        let (value, next) = read_attr_value(tokens, i + 2)?;
-        if attr == "path" {
-            path = Some(value);
-        }
-        i = next;
+fn catalog_entry_pattern(tokens: &[TokenTree]) -> Result<Option<String>> {
+    if tokens.len() < 5
+        || ident(tokens.first()).is_none()
+        || !matches_punct(tokens.get(1), ',')
+        || !matches!(ident(tokens.get(2)).as_deref(), Some("Public" | "Private"))
+        || !matches_punct(tokens.get(3), ',')
+    {
+        return Ok(None);
     }
-}
-
-fn read_attr_value(tokens: &[TokenTree], mut i: usize) -> Result<(TokenStream, usize)> {
-    let mut value = Vec::new();
-    loop {
-        if i >= tokens.len() {
-            bail!("unterminated route attribute value");
-        }
-        if matches_punct(tokens.get(i), '>')
-            || (matches_punct(tokens.get(i), '/') && matches_punct(tokens.get(i + 1), '>'))
-        {
-            break;
-        }
-        if ident(tokens.get(i)).is_some() && matches_punct(tokens.get(i + 1), '=') {
-            break;
-        }
-        value.push(tokens[i].clone());
-        i += 1;
+    let TokenTree::Literal(pattern) = &tokens[4] else {
+        bail!("route catalog entry is missing its literal pattern");
+    };
+    let pattern = syn::parse_str::<syn::LitStr>(&pattern.to_string())?.value();
+    if !pattern.starts_with('/') {
+        bail!("route catalog pattern `{pattern}` is not root-relative");
     }
-    Ok((value.into_iter().collect(), i))
-}
-
-fn normalize_path_expr(tokens: TokenStream) -> Result<Vec<String>> {
-    normalize_expr(syn::parse2(tokens).context("cannot parse route `path=` expression")?)
-}
-
-fn normalize_expr(expr: syn::Expr) -> Result<Vec<String>> {
-    match expr {
-        syn::Expr::Call(call) => {
-            let name = match call.func.as_ref() {
-                syn::Expr::Path(path) => path
-                    .path
-                    .segments
-                    .last()
-                    .map(|segment| segment.ident.to_string())
-                    .unwrap_or_default(),
-                _ => String::new(),
-            };
-            let Some(first) = call.args.first() else {
-                bail!("route segment call is missing its string literal");
-            };
-            let syn::Expr::Lit(syn::ExprLit {
-                lit: syn::Lit::Str(value),
-                ..
-            }) = first
-            else {
-                bail!("route segment call must take a string literal");
-            };
-            match name.as_str() {
-                "StaticSegment" => {
-                    if value.value().is_empty() {
-                        Ok(Vec::new())
-                    } else {
-                        Ok(vec![value.value()])
-                    }
-                }
-                "ParamSegment" => Ok(vec![format!(":{}", value.value())]),
-                "TildeUsername" => Ok(vec![format!("~:{}", value.value())]),
-                _ => bail!("unsupported route segment `{name}`"),
-            }
-        }
-        syn::Expr::Tuple(tuple) => {
-            let mut out = Vec::new();
-            for elem in tuple.elems {
-                out.extend(normalize_expr(elem)?);
-            }
-            Ok(out)
-        }
-        syn::Expr::Paren(paren) => normalize_expr(*paren.expr),
-        other => bail!("unsupported route expression `{}`", quote::quote!(#other)),
-    }
-}
-
-fn current_prefix(stack: &[OpenRoute]) -> Vec<String> {
-    stack
-        .last()
-        .map(|open| open.prefix.clone())
-        .unwrap_or_default()
-}
-
-fn render_route(segments: &[String]) -> String {
-    if segments.is_empty() {
-        "/".to_string()
-    } else {
-        format!("/{}", segments.join("/"))
-    }
+    Ok(Some(pattern))
 }
 
 fn endpoint_inventory(root: &Path) -> Result<BTreeMap<String, String>> {
@@ -726,42 +552,25 @@ mod tests {
         std::fs::write(path, content).expect("write file");
     }
 
-    fn component_source() -> &'static str {
+    fn route_catalog_source() -> &'static str {
         r#"
-use crate::route_segments::TildeUsername;
-use leptos_router::{
-    ParamSegment, StaticSegment,
-    components::{ParentRoute, Route, Router, Routes},
-};
-
-fn app() {
-    view! {
-        <Router>
-            <Routes fallback=|| "Page not found.".into_view()>
-                <ParentRoute path=StaticSegment("") view=AppShell>
-                    <Route path=StaticSegment("") view=HomePage />
-                    <Route path=StaticSegment("login") view=LoginPage />
-                    <Route path=ParamSegment("username") view=UserTimelinePage />
-                    <Route
-                        path=(
-                            TildeUsername("username"),
-                            ParamSegment("year"),
-                            ParamSegment("month"),
-                            ParamSegment("day"),
-                            ParamSegment("slug"),
-                        )
-                        view=PostPage
-                    />
-                </ParentRoute>
-            </Routes>
-        </Router>
-    }
+macro_rules! app_routes {
+    ($consumer:ident) => {
+        $consumer! {
+            (Local, Public, "/", leptos_router::StaticSegment(""), $crate::local::LocalPage)
+            (App, Private, "/app", leptos_router::StaticSegment("app"), $crate::cockpit::CockpitPage)
+            (Login, Public, "/login", leptos_router::StaticSegment("login"), $crate::auth::LoginPage)
+            (UserTimeline, Public, "/:username", leptos_router::ParamSegment("username"), $crate::posts::UserTimelinePage)
+            (Post, Public, "/~:username/:year/:month/:day/:slug", ($crate::route_segments::TildeUsername("username"), leptos_router::ParamSegment("year"), leptos_router::ParamSegment("month"), leptos_router::ParamSegment("day"), leptos_router::ParamSegment("slug")), $crate::posts::PostPage)
+            (PostHistory, Private, "/posts/:post_id/history", (leptos_router::StaticSegment("posts"), leptos_router::ParamSegment("post_id"), leptos_router::StaticSegment("history")), $crate::posts::PostHistoryPage)
+        }
+    };
 }
 "#
     }
 
-    fn write_component(root: &Path) {
-        write(&root.join(ROUTER_PATH), component_source());
+    fn write_route_catalog(root: &Path) {
+        write(&root.join(ROUTE_CATALOG_PATH), route_catalog_source());
     }
 
     fn write_server_fns(root: &Path, defs: &[(&str, &[&str])]) {
@@ -807,7 +616,7 @@ fn app() {
 
     fn base_fixture() -> tempfile::TempDir {
         let tmp = tempfile::tempdir().expect("tempdir");
-        write_component(tmp.path());
+        write_route_catalog(tmp.path());
         write_matrix(tmp.path());
         write_snapshot(tmp.path(), &[]);
         write_readme(tmp.path(), "# Flow index\n\n`route:<shell>`\n");
@@ -846,18 +655,34 @@ graph TD
     }
 
     #[test]
-    fn mounted_routes_normalize_shell_param_and_tilde_username_and_skip_fallback() {
-        let routes = mounted_routes_in(component_source()).expect("routes parse");
+    fn mounted_routes_come_from_the_catalog_including_shell_public_and_private_routes() {
+        let routes = mounted_routes_in(route_catalog_source()).expect("routes parse");
         assert_eq!(
             routes,
             BTreeSet::from([
                 "<shell>".to_string(),
                 "/".to_string(),
+                "/app".to_string(),
                 "/login".to_string(),
                 "/:username".to_string(),
                 "/~:username/:year/:month/:day/:slug".to_string(),
+                "/posts/:post_id/history".to_string(),
             ])
         );
+    }
+
+    #[test]
+    fn mounted_routes_reads_the_catalog_not_the_router_component() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        write_route_catalog(tmp.path());
+        write(
+            &tmp.path().join("web/src/app/component.rs"),
+            "fn app() { view! { <Route path=StaticSegment(\"ghost\") /> } }",
+        );
+
+        let routes = mounted_routes(tmp.path()).expect("routes parse");
+        assert!(!routes.contains("/ghost"));
+        assert!(routes.contains("/app"));
     }
 
     #[test]
