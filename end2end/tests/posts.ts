@@ -122,6 +122,21 @@ export async function openComposerFromSidebar(page: Page): Promise<void> {
   });
 }
 
+/** Open one of the compact secondary-control disclosures in the mounted composer. */
+export async function openComposerControl(
+  page: Page,
+  label: "Media" | "Format" | "Slug" | "Publish" | "Audience",
+): Promise<void> {
+  const trigger = page.locator(".j-composer-control-summary").filter({
+    has: page.getByText(label, { exact: true }),
+  });
+  await expect(trigger).toHaveCount(1);
+  if ((await trigger.getAttribute("aria-expanded")) !== "true") {
+    await trigger.click();
+  }
+  await expect(trigger).toHaveAttribute("aria-expanded", "true");
+}
+
 /** Compose and submit a post through the `/posts/new` UI: fill the body (and the
  *  summary / slug inputs when provided), click publish/save, and wait for the
  *  save-summary panel. Returns the `.j-save-summary` locator for follow-up
@@ -148,15 +163,18 @@ export async function composePost(
     await waitForSelector(page, SEL.postBody);
     await page.fill(SEL.postBody, opts.body);
     if (opts.format !== undefined) {
+      await openComposerControl(page, "Format");
       await click(page, SEL.formatButton(FORMAT[opts.format].label));
     }
     if (opts.summary !== undefined) {
       await page.fill(SEL.postSummary, opts.summary);
     }
     if (opts.slug !== undefined) {
+      await openComposerControl(page, "Slug");
       await page.fill(SEL.postSlug, opts.slug);
     }
     if (opts.audience !== undefined) {
+      await openComposerControl(page, "Audience");
       await page.selectOption("#audience-base", opts.audience);
     }
     await click(page, SEL.publishButton(opts.publish ? "true" : "false"));

@@ -29,6 +29,7 @@ import {
   followPermalink,
   FORMAT_PROBE_BODY,
   openEditor,
+  openComposerControl,
   openComposerFromSidebar,
   openPostActions,
 } from "./posts";
@@ -98,6 +99,7 @@ async function applyPublicationTime(
   localDateTime: string,
 ): Promise<void> {
   const [date, time] = localDateTime.split("T");
+  await openComposerControl(page, "Publish");
   await page.getByRole("button", { name: "Set publication time…" }).click();
   await page.locator('input[name="publish_date"]').fill(date!);
   await page.locator('input[name="publish_time"]').fill(time!);
@@ -113,6 +115,7 @@ test("authenticated user can create a post through the UI", async ({
   // #58: a fresh author has a successfully loaded, genuinely empty named-audience
   // list. The empty-state copy proves that Ready([]), rather than Loading or Failed,
   // is what authorizes this ordinary publish flow.
+  await openComposerControl(page, "Audience");
   await expect(page.getByText("No named audiences.")).toBeVisible();
   await page.fill(SEL.postBody, "# Playwright Post\n\n**browser**");
   await expect(page.locator(SEL.publishButton("true"))).toBeEnabled();
@@ -125,27 +128,23 @@ test("authenticated user can create a post through the UI", async ({
   );
 });
 
-test("post create surfaces use textual draft actions and an accessible Media icon", async ({
+test("post create surfaces use textual draft and disclosed Media actions", async ({
   registeredPage,
 }) => {
   const page = await registeredPage("/posts/new");
   const expectApprovedActions = async (scope: Locator): Promise<void> => {
     await expect(scope).toBeVisible();
     await scope.locator(SEL.postBody).fill("Approved actions");
+    const media = scope.getByRole("button", { name: /Media None/ });
+    await media.click();
+    await expect(media).toHaveAttribute("aria-expanded", "true");
     const attach = scope.getByRole("button", { name: "Attach media" });
     const saveDraft = scope.locator(SEL.publishButton("false"));
 
-    await expect(attach).toHaveAttribute("aria-label", "Attach media");
-    await expect(attach.locator("path")).toHaveAttribute(
-      "d",
-      "M10 4v12 M4 10h12",
-    );
-    await expect(attach.locator("svg")).toHaveCount(1);
-    const tooltip = attach.locator('[role="tooltip"]');
-    await expect(tooltip).toHaveText("Attach media");
-    await expect(tooltip).toBeHidden();
-    await attach.focus();
-    await expect(tooltip).toBeVisible();
+    await expect(attach).toBeVisible();
+    await expect(attach).toHaveText("Attach media");
+    await expect(attach.locator("svg")).toHaveCount(0);
+    await expect(attach.locator('[role="tooltip"]')).toHaveCount(0);
 
     await expect(saveDraft).toHaveText("Save draft");
     await expect(saveDraft.locator("svg")).toHaveCount(0);
@@ -184,11 +183,45 @@ test("composer keeps filled body actions before a container-responsive controls 
     ).toHaveCount(1);
     expect(
       await rail
-        .locator(":scope > .j-composer-details, :scope > .j-compose-options")
+        .locator(":scope > .j-composer-details, :scope > .j-composer-controls")
         .evaluateAll((sections) =>
           sections.map((section) => section.className),
         ),
-    ).toEqual(["j-composer-details", "j-compose-options"]);
+    ).toEqual(["j-composer-details", "j-composer-controls"]);
+    await expect(rail.locator("h2")).toHaveCount(0);
+    expect(
+      await rail
+        .locator(".j-composer-details > .j-form-field > .j-form-label")
+        .allTextContents(),
+    ).toEqual(["Tags", "Summary"]);
+    const disclosures = rail.locator(".j-composer-control-summary");
+    await expect(disclosures).toHaveCount(5);
+    expect(
+      (await disclosures.allTextContents()).map((text) =>
+        text.replace("⌄", "").trim().replace(/\s+/g, " "),
+      ),
+    ).toEqual([
+      "MediaNone",
+      "FormatMarkdown",
+      "Slugauto",
+      "PublishNow",
+      "AudiencePrivate",
+    ]);
+    expect(
+      await disclosures
+        .locator(".j-composer-control-label")
+        .evaluateAll((labels) =>
+          labels.every((label) => label.scrollWidth <= label.clientWidth),
+        ),
+    ).toBe(true);
+    expect(
+      await disclosures.evaluateAll((buttons) =>
+        buttons.map((button) => button.getAttribute("aria-expanded")),
+      ),
+    ).toEqual(["false", "false", "false", "false", "false"]);
+    await expect(
+      rail.getByText("Choose who can see this post.", { exact: false }),
+    ).toHaveCount(0);
     await expect(
       rail.getByText("Format controls how Jaunder interprets the Body.", {
         exact: true,
@@ -216,21 +249,8 @@ test("composer keeps filled body actions before a container-responsive controls 
       });
       expect(style.textTransform).not.toBe("uppercase");
     }
-    expect(
-      (await rail.locator("h2, .j-form-label").allTextContents()).map((text) =>
-        text.trim(),
-      ),
-    ).toEqual([
-      "Post details",
-      "Media",
-      "Summary",
-      "Tags",
-      "Format",
-      "Publication options",
-      "Slug",
-      "Publish at (optional)",
-      "Audience",
-    ]);
+    const summary = rail.locator('textarea[name="summary"]');
+    await expect(summary).toHaveCSS("height", "44px");
   };
   const expectFilledActions = async (scope: Locator): Promise<void> => {
     const actions = scope.locator(".j-composer-toolbar .j-btn");
@@ -275,6 +295,27 @@ test("composer keeps filled body actions before a container-responsive controls 
   await expectApprovedMarkup(grid);
   await expectFilledActions(grid);
 
+  const formatDisclosure = grid.getByRole("button", {
+    name: /Format Markdown/,
+  });
+  const audienceDisclosure = grid.getByRole("button", {
+    name: /Audience Private/,
+  });
+  await formatDisclosure.click();
+  await expect(formatDisclosure).toHaveAttribute("aria-expanded", "true");
+  await expect(grid.getByRole("button", { name: "Org" })).toBeVisible();
+  await audienceDisclosure.click();
+  await expect(formatDisclosure).toHaveAttribute("aria-expanded", "false");
+  await expect(audienceDisclosure).toHaveAttribute("aria-expanded", "true");
+  await expect(grid.getByLabel("Audience", { exact: true })).toBeVisible();
+
+  const summary = grid.locator('textarea[name="summary"]');
+  await summary.focus();
+  await expect(summary).toHaveCSS("min-height", "96px");
+  await summary.fill("Compact summary");
+  await page.locator('textarea[name="body"]').focus();
+  await expect(summary).toHaveCSS("min-height", "96px");
+
   await container.evaluate((element) => {
     (element as HTMLElement).style.width = "800px";
   });
@@ -295,6 +336,21 @@ test("composer keeps filled body actions before a container-responsive controls 
     (element as HTMLElement).style.width = "375px";
   });
   await expectStackedWithoutClipping(grid);
+
+  await container.evaluate((element) => {
+    (element as HTMLElement).style.width = "340px";
+  });
+  await expectStackedWithoutClipping(grid);
+  await expect
+    .poll(async () =>
+      grid
+        .locator(".j-composer-controls")
+        .evaluate(
+          (element) =>
+            getComputedStyle(element).gridTemplateColumns.split(" ").length,
+        ),
+    )
+    .toBe(1);
 
   await navigateInApp(page, () => click(page, 'a[href="/app"]'), {
     url: "/app",
@@ -479,6 +535,7 @@ test("Org header metadata round-trips through the composer as canonical source",
   const summary = "Browser Org header description";
   const unknownDirective = "#+AUTHOR: Browser compatibility";
 
+  await openComposerControl(page, "Format");
   await click(page, SEL.formatButton("Org"));
   await page.fill(
     SEL.postBody,
@@ -542,6 +599,7 @@ test("Org editor update preserves canonical state when a stale sync marker rejec
   const acceptedSlug = "structured-editor-slug";
   const unknownDirective = "#+AUTHOR: Editor compatibility";
   const acceptedBody = "Accepted editor Org body";
+  await openComposerControl(page, "Format");
   await click(page, SEL.formatButton("Org"));
   await page.fill(
     SEL.postBody,
@@ -555,6 +613,7 @@ ${unknownDirective}
 ${acceptedBody}`,
   );
   await page.fill(SEL.postSummary, acceptedSummary);
+  await openComposerControl(page, "Slug");
   await page.fill(SEL.postSlug, acceptedSlug);
 
   // Structured form fields remain authoritative over mutable metadata: save
@@ -571,6 +630,7 @@ ${acceptedBody}`,
   await expect(page.locator("article.j-post")).toContainText(acceptedSummary);
 
   await openEditor(page);
+  await openComposerControl(page, "Slug");
   await expect(
     page.locator('.j-tag-chip-label:has-text("#editororg")'),
   ).toBeVisible();
@@ -599,6 +659,7 @@ Rejected editor Org body`,
   await expect(page).toHaveURL(editorUrl);
 
   await openPostFromDrafts(page, acceptedTitle);
+  await openComposerControl(page, "Slug");
   await expect(page.locator(SEL.postSummary)).toHaveValue(acceptedSummary);
   await expect(page.locator(SEL.postSlug)).toHaveValue(acceptedSlug);
   await expect(page.locator(SEL.postBody)).toHaveValue(
@@ -615,6 +676,7 @@ test("metadata-only Org composer input reports validation without saving", async
   const page = await registeredPage("/posts/new");
   const composerUrl = page.url();
 
+  await openComposerControl(page, "Format");
   await click(page, SEL.formatButton("Org"));
   await page.fill(SEL.postBody, "#+TITLE: No content");
   await click(page, SEL.publishButton("false"));
@@ -802,7 +864,9 @@ test("authenticated user can save a draft through the UI", async ({
   const page = await registeredPage("/posts/new");
 
   await page.fill(SEL.postBody, "*draft*");
+  await openComposerControl(page, "Format");
   await click(page, '.j-seg button:has-text("Org")');
+  await openComposerControl(page, "Slug");
   await page.fill(SEL.postSlug, "Draft-Slug");
   await click(page, SEL.publishButton("false"));
   await waitForSelector(page, SEL.saveSummary);
@@ -819,7 +883,9 @@ test("full composer: narrow layout stays reachable and format round-trips", asyn
   await page.setViewportSize({ width: 720, height: 600 });
 
   await expect(page.getByLabel("Body", { exact: true })).toBeVisible();
+  await openComposerControl(page, "Slug");
   await expect(page.getByLabel("Slug", { exact: true })).toBeVisible();
+  await openComposerControl(page, "Publish");
   const publicationTime = page.getByRole("group", {
     name: "Publish at (optional)",
   });
@@ -832,12 +898,14 @@ test("full composer: narrow layout stays reachable and format round-trips", asyn
   await expect(tags).toBeVisible();
   await expect(tags).toHaveAttribute("placeholder", "Add tag…");
 
+  await openComposerControl(page, "Audience");
   const audience = page.getByRole("group", { name: "Audience" });
   await expect(audience).toBeVisible();
   await expect(
     audience.getByRole("combobox", { name: "Audience" }),
   ).toBeVisible();
 
+  await openComposerControl(page, "Format");
   const format = page.getByRole("group", { name: "Format" });
   await expect(format).toBeVisible();
   await expect(
@@ -961,19 +1029,23 @@ test("edit page: format control prefills accessibly and round-trips a change", a
   await expect(page.getByLabel("Body", { exact: true })).toHaveValue(
     /^\*emphasis\*\s*$/,
   );
+  await openComposerControl(page, "Slug");
   await expect(page.getByLabel("Slug", { exact: true })).toBeVisible();
+  await openComposerControl(page, "Publish");
   await expect(
     page.getByLabel("Publish at (optional)", { exact: true }),
   ).toBeVisible();
   await expect(page.getByLabel("Summary", { exact: true })).toBeVisible();
   await expect(page.getByText("Tags", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Tags", { exact: true })).toBeVisible();
+  await openComposerControl(page, "Audience");
   await expect(
     page
       .getByRole("group", { name: "Audience" })
       .getByRole("combobox", { name: "Audience" }),
   ).toBeVisible();
 
+  await openComposerControl(page, "Format");
   const format = page.getByRole("group", { name: "Format" });
   await expect(format).toBeVisible();
   await expect(
@@ -1022,8 +1094,11 @@ test("edit page pre-selects the post's current audience", async ({
   // Reach the full composer through the authenticated sidebar rather than
   // taking a second document load after managing the audience.
   await openComposerFromSidebar(page);
+  await openComposerControl(page, "Audience");
   const audience = page.getByRole("group", { name: "Audience" });
-  await expect(audience).toContainText("Choose who can see");
+  await expect(
+    audience.getByText("Choose who can see", { exact: false }),
+  ).toHaveCount(0);
   await expect(
     audience.getByText("Also share with", { exact: true }),
   ).toBeVisible();
@@ -1044,6 +1119,7 @@ test("edit page pre-selects the post's current audience", async ({
   // Reach the draft's edit page through the shared in-app navigation hops.
   await followPermalink(page, page.locator(SEL.saveSummary));
   await openEditor(page);
+  await openComposerControl(page, "Audience");
   const editedAudience = page.getByRole("group", { name: "Audience" });
   const editedAudienceBase = editedAudience.getByRole("combobox", {
     name: "Audience",
@@ -1090,6 +1166,7 @@ test("live editor can reschedule and atomically save edits while unpublishing", 
   await openEditor(page);
 
   await expect(page.locator(SEL.postSlug)).not.toBeVisible();
+  await openComposerControl(page, "Publish");
   await page.getByRole("button", { name: "Edit publication time" }).click();
   const publicationTime = page.locator(SEL.publishAt);
   await expect(publicationTime).toBeVisible();
@@ -1112,6 +1189,7 @@ test("live editor can reschedule and atomically save edits while unpublishing", 
 
   await expect(page.locator(SEL.saveSummary)).toContainText("Draft saved.");
   expect(new URL(page.url()).pathname).toMatch(/\/edit$/);
+  await openComposerControl(page, "Slug");
   await expect(page.locator(SEL.postSlug)).toBeVisible();
   await expect(page.locator(SEL.postBody)).toHaveValue(
     /edited while unpublishing/,
@@ -1658,6 +1736,7 @@ test("inline composer: format toggle is named and keyboard-operable", async ({
   await expect(tags).toBeVisible();
   await expect(tags).toHaveAttribute("placeholder", "Add tag…");
 
+  await openComposerControl(page, "Format");
   const format = composer.getByRole("group", { name: "Format" });
   await expect(format).toBeVisible();
   await expect(
@@ -2067,6 +2146,7 @@ test.describe("new post publication time", () => {
     const page = await registeredPage("/posts/new");
     await page.fill(SEL.postBody, `# ${title}\n\n${body}`);
 
+    await openComposerControl(page, "Publish");
     await page.getByRole("button", { name: "Set publication time…" }).click();
     await expect(page.locator(SEL.publishButton("true"))).toBeDisabled();
     await expect(page.locator(SEL.publishButton("false"))).toBeDisabled();
@@ -2259,6 +2339,7 @@ test("scheduled management page opens editor for reschedule and pullback", async
   );
 
   await openPostFromScheduled(page, "Scheduled Management");
+  await openComposerControl(page, "Publish");
   await page.getByRole("button", { name: "Edit publication time" }).click();
   await page.fill(SEL.publishAt, REPLACEMENT_SCHEDULE);
   await click(page, SEL.publishButton("true"));
@@ -2332,6 +2413,7 @@ test.describe("scheduled editor local time", () => {
     );
 
     await page.fill(SEL.postBody, "# New York Gap\nngap body");
+    await openComposerControl(page, "Publish");
     await page.getByRole("button", { name: "Set publication time…" }).click();
     await page.locator('input[name="publish_date"]').fill("2027-03-14");
     await page.locator('input[name="publish_time"]').fill("02:30");
@@ -2358,6 +2440,7 @@ test.describe("scheduled editor local time", () => {
     });
 
     await openPostFromDrafts(page, "Exact Scheduled Post");
+    await openComposerControl(page, "Publish");
     await page.getByRole("button", { name: "Edit publication time" }).click();
     await expect(page.locator(SEL.publishAt)).toHaveValue("2999-11-03T01:30");
 
@@ -2412,6 +2495,7 @@ test.describe("scheduled editor local time", () => {
     await waitForSelector(page, SEL.saveSummary);
 
     await openPostFromDrafts(page, "Scheduled Draft");
+    await openComposerControl(page, "Publish");
     await page.getByRole("button", { name: "Edit publication time" }).click();
     await expect(page.locator(SEL.publishAt)).toHaveValue(ORIGINAL_SCHEDULE);
     await expect(page.locator(SEL.publishButton("true"))).toHaveText("Save");
@@ -2425,6 +2509,7 @@ test.describe("scheduled editor local time", () => {
     await page.waitForURL((url) => !url.pathname.endsWith("/edit"));
 
     await openPostFromDrafts(page, "Scheduled Draft");
+    await openComposerControl(page, "Publish");
     await page.getByRole("button", { name: "Edit publication time" }).click();
     await expect(page.locator(SEL.publishAt)).toHaveValue(REPLACEMENT_SCHEDULE);
 
@@ -2437,6 +2522,7 @@ test.describe("scheduled editor local time", () => {
     expect(new URL(page.url()).pathname).toMatch(/\/edit$/);
 
     await openPostFromDrafts(page, "Scheduled Draft");
+    await openComposerControl(page, "Publish");
     await page.getByRole("button", { name: "Edit publication time" }).click();
     await expect(page.locator(SEL.publishAt)).toHaveValue(REPLACEMENT_SCHEDULE);
     await page.fill(SEL.publishAt, "");
@@ -2445,6 +2531,7 @@ test.describe("scheduled editor local time", () => {
     expect(new URL(page.url()).pathname).toMatch(/\/edit$/);
 
     await openPostFromDrafts(page, "Scheduled Draft");
+    await openComposerControl(page, "Publish");
     await page.getByRole("button", { name: "Edit publication time" }).click();
     await expect(page.locator(SEL.publishAt)).toHaveValue(REPLACEMENT_SCHEDULE);
     await click(page, SEL.publishButton("false"));
@@ -2460,6 +2547,7 @@ test.describe("scheduled editor local time", () => {
     );
     expect(new URL(page.url()).pathname).toMatch(/\/edit$/);
 
+    await openComposerControl(page, "Slug");
     await expect(page.locator(SEL.postSlug)).toBeVisible();
     await page.fill(SEL.postSlug, "scheduled-draft-reopened");
     await click(page, SEL.publishButton("false"));
@@ -2475,6 +2563,7 @@ test.describe("scheduled editor local time", () => {
     expect(page.url()).toContain("/scheduled-draft-reopened");
 
     await openEditor(page);
+    await openComposerControl(page, "Publish");
     await page.getByRole("button", { name: "Set publication time…" }).click();
     await page.locator('input[name="publish_date"]').fill("2999-04-05");
     await page.locator('input[name="publish_time"]').fill("11:30");
@@ -2483,6 +2572,7 @@ test.describe("scheduled editor local time", () => {
     await page.waitForURL((url) => !url.pathname.endsWith("/edit"));
 
     await openPostFromDrafts(page, "Scheduled Draft");
+    await openComposerControl(page, "Publish");
     await page.getByRole("button", { name: "Edit publication time" }).click();
     await expect(page.locator(SEL.publishAt)).toHaveValue(FINAL_SCHEDULE);
     await expect(page.locator(SEL.postSlug)).toHaveCount(0);
@@ -2510,7 +2600,9 @@ test("scheduling from the edit page shows a Scheduled-for badge on the drafts pa
   await expect(page.locator(SEL.topbarHeading)).toHaveText("Edit Post");
 
   // The post is still a draft, so the slug and schedule controls are rendered.
+  await openComposerControl(page, "Slug");
   await expect(page.getByLabel("Slug", { exact: true })).toBeVisible();
+  await openComposerControl(page, "Publish");
   await page.getByRole("button", { name: "Set publication time…" }).click();
   await page.locator('input[name="publish_date"]').fill("2999-01-01");
   await page.locator('input[name="publish_time"]').fill("09:00");

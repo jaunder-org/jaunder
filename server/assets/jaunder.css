@@ -478,10 +478,102 @@
   gap: 17px;
 }
 
+.j-composer-summary textarea {
+  height: 44px;
+  min-height: 44px;
+  overflow: hidden;
+  resize: vertical;
+}
+
+.j-composer-summary textarea:focus,
+.j-composer-summary textarea:not(:placeholder-shown) {
+  height: auto;
+  min-height: 96px;
+  overflow: auto;
+}
+
+.j-composer-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 8px;
+}
+
+.j-composer-control {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px var(--border-style) var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.j-composer-control.is-wide {
+  grid-column: 1 / -1;
+}
+
+.j-composer-control-summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 12px;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 8px;
+  color: var(--ink);
+  text-align: left;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.j-composer-control-summary[aria-expanded="true"] {
+  box-shadow: inset 0 0 0 1px var(--ink);
+}
+
+.j-composer-control-label {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.j-composer-control-value {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.j-composer-control-chevron {
+  color: var(--muted);
+  font-size: 16px;
+  text-align: center;
+  transition: transform 120ms ease;
+}
+
+.j-composer-control-summary[aria-expanded="true"] .j-composer-control-chevron {
+  transform: rotate(180deg);
+}
+
+.j-composer-control-body {
+  padding: 0 10px 10px;
+}
+
+.j-composer-control-body > .j-form-field > .j-form-label,
+.j-composer-control-body > fieldset > .j-form-label {
+  display: none;
+}
+
 .j-composer-media {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.j-composer-media > .j-btn {
+  width: 100%;
 }
 
 .j-composer-media-heading,
@@ -1077,6 +1169,10 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .j-composer-layout {
+    height: auto;
+  }
+
   .j-compose-grid {
     overflow: auto;
   }
@@ -1094,9 +1190,13 @@
 }
 
 .j-compose-options {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
+  display: contents;
+}
+
+@container (max-width: 360px) {
+  .j-composer-controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .j-compose-editor {

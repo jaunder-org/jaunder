@@ -19,9 +19,7 @@ use common::time::{self, UtcInstant};
 use common::{MutationOutcome, permalink_route::PermalinkRoute};
 
 use super::audience;
-use super::composers::{
-    ComposeOptions, ComposerActions, ComposerCore, ComposerDetails, CreationSchedule,
-};
+use super::composers::{ComposerActions, ComposerControlRail, ComposerCore, CreationSchedule};
 use super::display::PostCard;
 use super::support;
 
@@ -393,8 +391,7 @@ fn EditPostForm(
                 />
             </div>
             <aside class="j-compose-aside">
-                <ComposerDetails state=state />
-                <ComposeOptions
+                <ComposerControlRail
                     state=state
                     slug_field=slug_field
                     publication=loaded_publication

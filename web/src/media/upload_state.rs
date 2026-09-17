@@ -100,9 +100,16 @@ pub struct UploadCallbacks {
     pub on_uploaded: Option<Callback<RootRelativeUrl>>,
     pub on_indeterminate: Option<Callback<()>>,
     pub on_error: Option<Callback<String>>,
+    pub on_uploading: Option<Callback<bool>>,
 }
 
 impl UploadCallbacks {
+    pub fn notify_uploading(&self, uploading: bool) {
+        if let Some(callback) = self.on_uploading {
+            callback.run(uploading);
+        }
+    }
+
     /// Fire callbacks matching `outcome`, when the caller supplied them.
     pub fn notify(&self, outcome: &UploadOutcome) {
         match outcome {
@@ -212,9 +219,10 @@ impl UploadState {
         }
     }
 
-    /// Mark an upload as started.
-    pub fn begin(&self) {
+    /// Mark an upload as started and notify the caller.
+    pub fn begin(&self, callbacks: UploadCallbacks) {
         self.uploading.set(true);
+        callbacks.notify_uploading(true);
     }
 
     /// Settle a finished upload: clear the in-flight flag, notify the caller, then —
@@ -231,6 +239,7 @@ impl UploadState {
         self.uploading.set(false);
         let outcome = UploadOutcome::classify(result);
         callbacks.notify(&outcome);
+        callbacks.notify_uploading(false);
         self.record(&outcome);
     }
 
@@ -283,6 +292,7 @@ mod tests {
             on_uploaded: None,
             on_indeterminate: None,
             on_error: None,
+            on_uploading: None,
         }
     }
 
@@ -299,6 +309,7 @@ mod tests {
         uploaded: RwSignal<Option<RootRelativeUrl>>,
         indeterminate: RwSignal<u32>,
         failed: RwSignal<Option<String>>,
+        uploading: RwSignal<Vec<bool>>,
     }
 
     impl Sinks {
@@ -307,6 +318,7 @@ mod tests {
                 uploaded: RwSignal::new(None),
                 indeterminate: RwSignal::new(0),
                 failed: RwSignal::new(None),
+                uploading: RwSignal::new(Vec::new()),
             }
         }
 
@@ -318,6 +330,9 @@ mod tests {
                     self.indeterminate.update(|count| *count += 1);
                 })),
                 on_error: Some(Callback::new(move |message| self.failed.set(Some(message)))),
+                on_uploading: Some(Callback::new(move |active| {
+                    self.uploading.update(|states| states.push(active));
+                })),
             }
         }
 
@@ -334,6 +349,7 @@ mod tests {
             self.uploaded.set(None);
             self.indeterminate.set(0);
             self.failed.set(None);
+            self.uploading.set(Vec::new());
         }
     }
     #[test]
@@ -563,11 +579,19 @@ mod tests {
     }
 
     #[test]
-    fn begin_marks_the_upload_in_flight() {
+    fn begin_marks_the_upload_in_flight_and_notifies_until_settlement() {
         Owner::new().with(|| {
             let state = UploadState::new(false);
-            state.begin();
+            let sinks = Sinks::new();
+            state.begin(sinks.callbacks());
             assert!(state.uploading.get());
+            assert_eq!(sinks.uploading.get(), vec![true]);
+
+            state.settle(
+                Ok(MutationOutcome::Confirmed(response())),
+                sinks.callbacks(),
+            );
+            assert_eq!(sinks.uploading.get(), vec![true, false]);
         });
     }
 
@@ -575,18 +599,18 @@ mod tests {
     fn settle_clears_the_in_flight_flag_on_every_outcome() {
         Owner::new().with(|| {
             let state = UploadState::new(false);
-            state.begin();
+            state.begin(no_callbacks());
             state.settle(Ok(MutationOutcome::Confirmed(response())), no_callbacks());
             assert!(!state.uploading.get());
 
-            state.begin();
+            state.begin(no_callbacks());
             state.settle(
                 Ok(MutationOutcome::CommitIndeterminate(response())),
                 no_callbacks(),
             );
             assert!(!state.uploading.get());
 
-            state.begin();
+            state.begin(no_callbacks());
             state.settle(Err(WebError::validation("boom")), no_callbacks());
             assert!(!state.uploading.get());
         });
