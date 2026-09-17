@@ -989,16 +989,6 @@
   box-shadow: 0 4px 12px rgb(0 0 0 / 8%);
 }
 
-/* At this narrow shell width Firefox's anchored inset leaves the menu outside
-   the viewport, so pin the menu to the viewport edge explicitly. */
-@supports (-moz-appearance: none) {
-  @media (max-width: 400px) {
-    .j-post-action-popover {
-      right: 8px;
-    }
-  }
-}
-
 .j-post-acts {
   display: flex;
   flex-direction: column;
@@ -1839,6 +1829,56 @@
   .j-history-summary .j-field-row {
     grid-template-columns: 1fr;
     gap: 4px;
+  }
+}
+
+/* ─── narrow application shell ─── */
+@media (max-width: 720px) {
+  .j-shell {
+    flex-direction: column;
+  }
+
+  .j-sidebar {
+    box-sizing: border-box;
+    width: 100%;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-right: 0;
+    border-bottom: 1px var(--border-style) var(--line);
+  }
+
+  .j-sidebar .j-search,
+  .j-sidebar .j-sb-head {
+    display: none;
+  }
+
+  .j-sidebar .j-nav {
+    flex-direction: row;
+    flex: 0 0 auto;
+  }
+
+  .j-sidebar .j-nav-item {
+    white-space: nowrap;
+  }
+
+  .j-sidebar .j-sb-foot {
+    flex: 0 0 auto;
+    margin: 0 0 0 auto;
+  }
+
+  .j-main-region {
+    width: 100%;
+    height: auto;
+  }
+
+  .j-topbar,
+  .j-timeline-order {
+    padding-right: 16px;
+    padding-left: 16px;
   }
 }
 
