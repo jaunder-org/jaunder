@@ -97,11 +97,9 @@ impl SiteIdentityMutation {
     pub fn set(key: SiteConfigKey, value: &str) -> anyhow::Result<Option<Self>> {
         match key {
             SiteConfigKey::SiteTitle => Ok(Some(Self::SetTitle(value.parse()?))),
-            SiteConfigKey::SiteTagline => Ok(Some(Self::SetTagline(
-                (!value.trim().is_empty())
-                    .then(|| value.parse::<SiteTagline>())
-                    .transpose()?,
-            ))),
+            SiteConfigKey::SiteTagline => {
+                Ok(Some(Self::SetTagline(SiteTagline::parse_optional(value)?)))
+            }
             SiteConfigKey::SiteBaseUrl => Ok(Some(Self::SetBaseUrl(
                 (!value.is_empty())
                     .then(|| value.parse::<BaseUrl>())
@@ -494,6 +492,21 @@ mod tests {
                 .expect("valid fingerprint"),
         )
         .expect("matching cache row formats")
+    }
+
+    #[test]
+    fn cli_tagline_mutation_rejects_separator_only_values() {
+        assert!(matches!(
+            SiteIdentityMutation::set(SiteConfigKey::SiteTagline, " \t ").unwrap(),
+            Some(SiteIdentityMutation::SetTagline(None))
+        ));
+        for separator in ['\r', '\n', '\u{0085}', '\u{2028}', '\u{2029}'] {
+            let value = format!(" {separator} ");
+            assert!(
+                SiteIdentityMutation::set(SiteConfigKey::SiteTagline, &value).is_err(),
+                "separator {separator:?} must not become an empty clear"
+            );
+        }
     }
 
     #[tokio::test]

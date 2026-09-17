@@ -58,6 +58,24 @@ impl FromStr for SiteTitle {
 #[derive(Clone, Debug, PartialEq, Eq, StrNewtype)]
 pub struct SiteTagline(String);
 
+impl SiteTagline {
+    /// Parses an optional configured tagline. Only a truly blank value means
+    /// absence; prohibited line separators remain validation errors even when
+    /// the remaining characters are whitespace.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidSiteTagline::LineSeparator`] or
+    /// [`InvalidSiteTagline::TooLong`] when the offered value is invalid.
+    pub fn parse_optional(raw: &str) -> Result<Option<Self>, InvalidSiteTagline> {
+        match raw.parse() {
+            Ok(tagline) => Ok(Some(tagline)),
+            Err(InvalidSiteTagline::Blank) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+}
+
 /// Error returned when a string cannot be parsed as a [`SiteTagline`].
 #[derive(Debug, Error)]
 pub enum InvalidSiteTagline {
@@ -162,6 +180,7 @@ mod tests {
     #[test]
     fn site_tagline_rejects_blank_overlong_and_every_line_separator() {
         assert!(" \t ".parse::<SiteTagline>().is_err());
+        assert_eq!(SiteTagline::parse_optional(" \t ").unwrap(), None);
         assert!("x".repeat(281).parse::<SiteTagline>().is_err());
         for separator in ['\r', '\n', '\u{0085}', '\u{2028}', '\u{2029}'] {
             assert!(
@@ -169,6 +188,10 @@ mod tests {
                     .parse::<SiteTagline>()
                     .is_err()
             );
+            assert!(matches!(
+                SiteTagline::parse_optional(&format!(" {separator} ")),
+                Err(InvalidSiteTagline::LineSeparator)
+            ));
         }
     }
 

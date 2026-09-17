@@ -56,6 +56,15 @@ where
     Ok(())
 }
 
+fn check_optional_tagline(key: &'static str, raw: &str) -> Result<(), InvalidSiteConfigValue> {
+    SiteTagline::parse_optional(raw)
+        .map(|_| ())
+        .map_err(|error| InvalidSiteConfigValue {
+            key,
+            reason: error.to_string(),
+        })
+}
+
 /// Emits [`SiteConfigKey`] and its per-key validator from one table.
 ///
 /// Each row is `Variant => "dotted.key" : ValueType { optional }?, bad: "<example>";`.
@@ -73,7 +82,7 @@ macro_rules! site_config_keys {
 
     // -- internal: a row's validator --
     (@validate SiteTagline, $key:expr, $raw:expr) => {
-        if $raw.trim().is_empty() { Ok(()) } else { check::<SiteTagline>($key, $raw) }
+        check_optional_tagline($key, $raw)
     };
     (@validate $ty:ident, $key:expr, $raw:expr) => { check::<$ty>($key, $raw) };
 
@@ -318,6 +327,17 @@ mod tests {
                 got.is_ok(),
                 optional,
                 "{dotted} optional={optional} but validate(\"\")={got:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn optional_tagline_rejects_separator_only_values() {
+        for separator in ['\r', '\n', '\u{0085}', '\u{2028}', '\u{2029}'] {
+            let value = format!(" {separator} ");
+            assert!(
+                SiteConfigKey::SiteTagline.validate(&value).is_err(),
+                "separator {separator:?} must not become an empty clear"
             );
         }
     }
