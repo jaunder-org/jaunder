@@ -114,8 +114,6 @@ jobs:
     if: github.ref_type == 'tag'
     needs: package
     runs-on: ubuntu-24.04
-    permissions:
-      contents: write
     steps:
       - name: Validate release version
         env:
