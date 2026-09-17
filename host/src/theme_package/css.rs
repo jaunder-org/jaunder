@@ -4,7 +4,12 @@ use std::collections::BTreeMap;
 
 use common::theme;
 use lightningcss::{
-    properties::{Property, PropertyId, animation::AnimationName, font::FontFamily},
+    properties::{
+        Property, PropertyId,
+        animation::AnimationName,
+        custom::{Token, TokenList, TokenOrValue},
+        font::FontFamily,
+    },
     rules::{CssRule, font_face::FontFaceProperty, keyframes::KeyframesName},
     selector::{Combinator, Component, Selector, SelectorList},
     stylesheet::{ParserOptions, PrinterOptions, StyleSheet},
@@ -199,6 +204,15 @@ fn namespace_fonts(
                     }
                     *family = font_family_from_name(&renamed)?;
                 }
+                FontFaceProperty::Custom(property)
+                    if property.name.as_ref().eq_ignore_ascii_case("font-display") =>
+                {
+                    if !is_standard_font_display(&property.value) {
+                        return Err(ThemePackageError::Css(
+                            "@font-face font-display must be exactly one standard keyword".into(),
+                        ));
+                    }
+                }
                 FontFaceProperty::Custom(_) => {
                     return Err(ThemePackageError::Css(
                         "custom-property token streams cannot hide global references".into(),
@@ -214,6 +228,16 @@ fn namespace_fonts(
         }
     }
     Ok(())
+}
+
+fn is_standard_font_display(value: &TokenList<'_>) -> bool {
+    matches!(
+        value.0.as_slice(),
+        [TokenOrValue::Token(Token::Ident(keyword))]
+            if ["auto", "block", "swap", "fallback", "optional"]
+                .iter()
+                .any(|standard| keyword.eq_ignore_ascii_case(standard))
+    )
 }
 
 fn custom_font_family_name(family: &FontFamily<'_>) -> Result<String, ThemePackageError> {
@@ -613,6 +637,48 @@ mod tests {
         assert!(!css.contains("16px Display Sans"), "{css}");
         assert!(css.contains("serif"));
         assert!(css.contains("sans-serif"));
+    }
+
+    #[test]
+    fn accepts_only_standard_font_display_descriptors() {
+        let assets = BTreeMap::from([("font.woff2".to_owned(), "/theme-assets/font".to_owned())]);
+        for display in ["auto", "block", "SWAP", "fallback", "optional"] {
+            let compiled = compile(
+                &format!(
+                    "@font-face {{ font-family: Brand; src: url(font.woff2); font-display: {display} }} .a {{ font-family: Brand, serif }}"
+                ),
+                &assets,
+            )
+            .unwrap();
+            let css = std::str::from_utf8(compiled.bytes()).unwrap();
+            assert!(css.contains("font-display:"), "{css}");
+        }
+
+        for display in [
+            "instant",
+            "var(--font-display)",
+            "attr(data-font-display)",
+            "swap optional",
+            "url(https://example.test/policy)",
+        ] {
+            assert!(
+                compile(
+                    &format!(
+                        "@font-face {{ font-family: Brand; src: url(font.woff2); font-display: {display} }}"
+                    ),
+                    &assets,
+                )
+                .is_err(),
+                "{display}"
+            );
+        }
+        assert!(
+            compile(
+                "@font-face { font-family: Brand; src: url(font.woff2); font-unknown: value }",
+                &assets,
+            )
+            .is_err()
+        );
     }
 
     #[test]
