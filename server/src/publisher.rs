@@ -372,17 +372,21 @@ impl web::site::SiteIdentityPublisher for SiteIdentityPublisherOperation {
                 identity,
             )
             .await
-            .map_err(|error| {
-                let source = match error.downcast::<storage::SiteIdentityMutationError>() {
-                    Ok(error) => Box::new(error),
-                    Err(error) => match error.downcast::<sqlx::Error>() {
-                        Ok(error) => Box::new(error),
-                        Err(error) => error.into_boxed_dyn_error(),
-                    },
-                };
-                web::site::SiteIdentityPublisherError::new(source)
-            })
+            .map_err(map_site_identity_publisher_error)
     }
+}
+
+fn map_site_identity_publisher_error(
+    error: anyhow::Error,
+) -> web::site::SiteIdentityPublisherError {
+    let source = match error.downcast::<storage::SiteIdentityMutationError>() {
+        Ok(error) => Box::new(error),
+        Err(error) => match error.downcast::<sqlx::Error>() {
+            Ok(error) => Box::new(error),
+            Err(error) => error.into_boxed_dyn_error(),
+        },
+    };
+    web::site::SiteIdentityPublisherError::new(source)
 }
 
 #[async_trait::async_trait]
@@ -773,6 +777,25 @@ mod tests {
         );
         drop(first);
         let _second = second.await.expect("gate task joins");
+    }
+
+    #[test]
+    fn aggregate_identity_publisher_error_preserves_typed_storage_and_sql_sources() {
+        let storage_error = map_site_identity_publisher_error(anyhow::Error::new(
+            storage::SiteIdentityMutationError::Config(Error::PoolClosed),
+        ));
+        assert!(
+            std::error::Error::source(&storage_error)
+                .and_then(|source| source.downcast_ref::<storage::SiteIdentityMutationError>())
+                .is_some()
+        );
+
+        let sql_error = map_site_identity_publisher_error(anyhow::Error::new(Error::PoolClosed));
+        assert!(
+            std::error::Error::source(&sql_error)
+                .and_then(|source| source.downcast_ref::<Error>())
+                .is_some()
+        );
     }
 
     #[apply(backends)]

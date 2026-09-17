@@ -147,6 +147,32 @@ async fn site_timeline_resolves_one_configured_identity_for_head_body_and_seed(
     );
 }
 
+#[apply(backends)]
+#[tokio::test]
+async fn site_timeline_maps_identity_storage_failure_at_the_projector_boundary(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let mut site_config = MockSiteConfigStorage::new();
+    site_config
+        .expect_get_identity()
+        .times(1)
+        .return_once(|| Err(sqlx::Error::PoolClosed));
+
+    let response = projector_app_with_site_config(
+        env.posts(),
+        env.users(),
+        env.themes(),
+        Arc::new(site_config) as Arc<dyn SiteConfigStorage>,
+    )
+    .oneshot(get("/"))
+    .await
+    .expect("request");
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_sanitized_internal_server_error(response).await;
+}
+
 /// The malformed-row case crosses the real Local projector boundary rather than
 /// stopping at `SiteConfigStorage::get_identity`: it must retain the cacheable
 /// default-title projection while emitting no tagline presentation or metadata.

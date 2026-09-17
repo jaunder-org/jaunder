@@ -873,7 +873,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn raw_site_config_restore_preserves_exact_value_and_absence() {
+    async fn raw_site_config_commands_dispatch_identity_snapshot_and_restore() {
         let (_dir, db) = temp_db().await;
         let raw = "  legacy title with trailing whitespace  \n";
         let factory =
@@ -886,15 +886,28 @@ mod tests {
             .await;
         let generation_before = factory.publisher().snapshot().await.unwrap().generation;
 
-        cmd_site_config_restore(
-            &db,
+        for key in [
             RestorableIdentityConfigKey::SiteTitle,
-            RawSiteConfigSnapshot {
+            RestorableIdentityConfigKey::SiteTagline,
+        ] {
+            run(cli(Commands::SiteConfigSnapshot {
+                db: db.clone(),
+                key,
+            }))
+            .await
+            .expect("snapshot dispatches each restorable identity key");
+        }
+
+        run(cli(Commands::SiteConfigRestore {
+            db: db.clone(),
+            key: RestorableIdentityConfigKey::SiteTitle,
+            snapshot: serde_json::to_string(&RawSiteConfigSnapshot {
                 value: Some(raw.to_owned()),
-            },
-        )
+            })
+            .unwrap(),
+        }))
         .await
-        .unwrap();
+        .expect("exact JSON title snapshot restores through dispatch");
 
         assert_eq!(
             factory
@@ -919,17 +932,17 @@ mod tests {
             "raw identity restoration deletes cached feeds"
         );
 
-        cmd_site_config_restore(
-            &db,
-            RestorableIdentityConfigKey::SiteTitle,
-            RawSiteConfigSnapshot { value: None },
-        )
+        run(cli(Commands::SiteConfigRestore {
+            db: db.clone(),
+            key: RestorableIdentityConfigKey::SiteTagline,
+            snapshot: r#"{"value":null}"#.to_owned(),
+        }))
         .await
-        .unwrap();
+        .expect("exact JSON absence restores through tagline dispatch");
         assert_eq!(
             factory
                 .site_config()
-                .get_raw(SiteConfigKey::SiteTitle)
+                .get_raw(SiteConfigKey::SiteTagline)
                 .await
                 .unwrap(),
             None

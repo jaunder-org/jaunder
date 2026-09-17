@@ -1,11 +1,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use common::tagged_url::{BaseUrl, HubUrl};
+use common::tagged_url::HubUrl;
 use host::config_key::SiteConfigKey;
 use storage::{
-    BaseUrlMutationError, FeedWindowMutation, PasskeyStorage, PublisherStorage, SiteConfigStorage,
-    WriteScope, clear_base_url_with_passkey_guard, set_base_url_with_passkey_guard,
+    FeedWindowMutation, PasskeyStorage, PublisherStorage, SiteConfigStorage, WriteScope,
 };
 
 use crate::publisher::{PublisherService, SiteIdentityMutation};
@@ -20,33 +19,13 @@ use super::support;
 pub(super) async fn cmd_site_config_set(
     site_config: Arc<dyn SiteConfigStorage>,
     write_scope: &WriteScope,
-    passkeys: Arc<dyn PasskeyStorage>,
     key: SiteConfigKey,
     value: &str,
 ) -> anyhow::Result<()> {
     let value_for_set = value.to_owned();
     let outcome = write_scope
         .run(move |transaction| {
-            Box::pin(async move {
-                if key == SiteConfigKey::SiteBaseUrl {
-                    let base_url = (!value_for_set.is_empty())
-                        .then(|| value_for_set.parse::<BaseUrl>())
-                        .transpose()
-                        .map_err(BaseUrlMutationError::from)?;
-                    set_base_url_with_passkey_guard(
-                        transaction,
-                        site_config.as_ref(),
-                        passkeys.as_ref(),
-                        base_url,
-                    )
-                    .await
-                } else {
-                    site_config
-                        .set(transaction, key, &value_for_set)
-                        .await
-                        .map_err(BaseUrlMutationError::from)
-                }
-            })
+            Box::pin(async move { site_config.set(transaction, key, &value_for_set).await })
         })
         .await?;
     support::require_confirmed_mutation(outcome, "site_config set")?;
@@ -160,26 +139,9 @@ pub(super) async fn cmd_site_config_unset(
     site_config: Arc<dyn SiteConfigStorage>,
     write_scope: &WriteScope,
     key: SiteConfigKey,
-    passkeys: Arc<dyn PasskeyStorage>,
 ) -> anyhow::Result<()> {
     let outcome = write_scope
-        .run(move |transaction| {
-            Box::pin(async move {
-                if key == SiteConfigKey::SiteBaseUrl {
-                    clear_base_url_with_passkey_guard(
-                        transaction,
-                        site_config.as_ref(),
-                        passkeys.as_ref(),
-                    )
-                    .await
-                } else {
-                    site_config
-                        .delete(transaction, key)
-                        .await
-                        .map_err(BaseUrlMutationError::from)
-                }
-            })
-        })
+        .run(move |transaction| Box::pin(async move { site_config.delete(transaction, key).await }))
         .await?;
     let removed = support::require_confirmed_mutation(outcome, "site_config unset")?;
     if removed {
