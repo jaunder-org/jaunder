@@ -104,9 +104,21 @@ jobs:
 workflow checks source, creates a temporary canonical thumbnail and fails if it
 differs from committed `preview.png`, then uploads the deterministic
 `theme-package.zip` in the `theme-package` artifact on branch and pull-request
-runs. On a release tag it creates or updates a published GitHub release and
-attaches that exact `theme-package.zip`; callers need `contents: write` for this
-path (`contents: read` otherwise).
+runs. On a SemVer tag with a `v` prefix (`vMAJOR.MINOR.PATCH`, optionally
+followed by a prerelease and build metadata) it creates a GitHub release and
+attaches that exact `theme-package.zip`; stable tags create published releases,
+and prerelease tags such as `v1.2.3-rc.1` create prereleases. Core version
+numbers and numeric prerelease identifiers cannot have leading zeroes. Callers
+need `contents: write` for this path (`contents: read` otherwise). A rerun may
+verify or restore a missing asset, but it refuses to replace different bytes at
+an existing version: changed packages receive a new tag.
+
+The release tag is the Theme repository's distribution version. Manifest
+`schema` and `style_contract` values are Jaunder compatibility versions, not the
+Theme's release version. Schema 1 deliberately has no release-version field; a
+versioned release URL identifies the distribution while the deterministic ZIP
+bytes identify the exact package. Installed-version metadata or update discovery
+would require a separately designed manifest revision.
 
 Importing the ZIP into Studio still creates a private, unselected draft. Preview
 it, explicitly publish it, then explicitly select the published theme;
