@@ -77,6 +77,48 @@ test("an app password can be minted from the sessions page", async ({
   const token = ((await tokenEl.textContent()) ?? "").trim();
   expect(token.length).toBeGreaterThan(10);
 
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async (value: string) => {
+          document.documentElement.dataset.copiedAppPassword = value;
+        },
+      },
+    });
+  });
+  const copyButton = page.locator("[data-app-password-token] button");
+  await click(
+    page,
+    '[data-app-password-token] button:has-text("Copy app password")',
+  );
+  expect(
+    await page.evaluate(
+      () => document.documentElement.dataset.copiedAppPassword,
+    ),
+  ).toBe(token);
+  await expect(copyButton).toHaveText("Copied");
+  await expect(copyButton).toHaveText("Copy app password", { timeout: 3_000 });
+
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async () => {
+          throw new Error("clipboard unavailable");
+        },
+      },
+    });
+  });
+  await click(
+    page,
+    '[data-app-password-token] button:has-text("Copy app password")',
+  );
+  await expect(page.locator("[data-app-password-copy-error]")).toHaveText(
+    "Could not copy the App Password. Select it manually instead.",
+  );
+  await expect(tokenEl).toHaveText(token);
+
   // The new app password appears in the session list under its label.
   await expect(page.locator("li", { hasText: "MarsEdit e2e" })).toBeVisible();
 });
