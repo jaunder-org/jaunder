@@ -362,6 +362,12 @@ Lets the warning tests assert on emitted warnings without touching the real
       (when (buffer-live-p created) (kill-buffer created))
       (delete-directory root t))))
 
+(ert-deftest jaunder-invalid-tag-repair-rejects-noninteractive-defects ()
+  "Only actionable grammar defects may enter the interactive repair path."
+  (should-error
+   (jaunder--invalid-tag-repair "topic" '(wrong-type . 0))
+   :type 'error))
+
 (ert-deftest jaunder-new-post-reoffers-invalid-leading-tag-character ()
   "An invalid Tag stays editable and explains the required first character."
   (let ((tag-prompt-count 0))
