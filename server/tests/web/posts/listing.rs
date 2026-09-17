@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use axum::{Router, http::StatusCode};
-use common::seed::{Page, PublicPresentation, RenderedPost, TimelineCursor, TimelineOrder};
+use common::seed::{
+    LocalTimelinePresentation, Page, PublicPresentation, RenderedPost, TimelineCursor,
+    TimelineOrder,
+};
 use common::tag::TagLabel;
 use common::test_support::{parse_post_body, parse_tag_label};
 use common::theme::Theme;
@@ -810,10 +813,10 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
 
     let (status, body) = list_local_timeline(app.clone(), None, 50, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let first_page: Page<RenderedPost, TimelineCursor> =
-        serde_json::from_str::<PublicPresentation<Page<RenderedPost, TimelineCursor>>>(&body)
-            .unwrap()
-            .page;
+    let first_page = serde_json::from_str::<PublicPresentation<LocalTimelinePresentation>>(&body)
+        .unwrap()
+        .page
+        .page;
     assert_eq!(first_page.posts.len(), 50, "body: {body}");
     assert!(first_page.has_more, "body: {body}");
     assert!(first_page.next_cursor.is_some(), "body: {body}");
@@ -848,10 +851,10 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
 
     let (status, body) = list_local_timeline(app.clone(), first_page.next_cursor, 50, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let second_page: Page<RenderedPost, TimelineCursor> =
-        serde_json::from_str::<PublicPresentation<Page<RenderedPost, TimelineCursor>>>(&body)
-            .unwrap()
-            .page;
+    let second_page = serde_json::from_str::<PublicPresentation<LocalTimelinePresentation>>(&body)
+        .unwrap()
+        .page
+        .page;
     assert_eq!(second_page.posts.len(), 2, "body: {body}");
     assert!(!second_page.has_more, "body: {body}");
 }

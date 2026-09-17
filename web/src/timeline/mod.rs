@@ -6,9 +6,10 @@
 //! The `#[server]` listing fns live in the `api` leaf and their host-only storage
 //! helpers in `server`. Publication order is carried through the cursor type, so
 //! pages from opposite directions cannot mix at the type boundary. Public listing
-//! responses carry `PublicPresentation<Page<RenderedPost, TimelineCursor>>`; the
-//! private Home timeline retains `Page<RenderedPost, TimelineCursor>`. Both wire types
-//! are defined in `common::seed`.
+//! responses carry `PublicPresentation`; Local wraps its page with Site Identity in
+//! `LocalTimelinePresentation`, while scoped listings carry the page directly. The
+//! private Home timeline retains `Page<RenderedPost, TimelineCursor>`. These wire
+//! types are defined in `common::seed`.
 //! Alongside them sit the pure host-tested `state` and `render` leaves and the
 //! wasm-only reactive `component`. `state` holds the reactive
 //! `TimelineState` signal bundle as well as the pure value model (#671) — both

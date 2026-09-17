@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::{Router, http::StatusCode};
 use common::ids::{AudienceId, PostId, SubscriptionId, UserId};
-use common::seed::{Page, PublicPresentation, RenderedPost};
+use common::seed::{LocalTimelinePresentation, Page, PublicPresentation, RenderedPost};
 use common::test_support::{parse_audience_name, parse_post_body};
 use jiff::ToSpan;
 use server_fn::ServerFn;
@@ -477,11 +477,11 @@ async fn assert_local_timeline_visibility(
             "{viewer} {order}; body: {}",
             response.body
         );
-        let page: Page<RenderedPost, common::seed::TimelineCursor> = serde_json::from_str::<
-            PublicPresentation<Page<RenderedPost, common::seed::TimelineCursor>>,
-        >(&response.body)
-        .unwrap()
-        .page;
+        let page =
+            serde_json::from_str::<PublicPresentation<LocalTimelinePresentation>>(&response.body)
+                .unwrap()
+                .page
+                .page;
         assert_eq!(
             &timeline_slugs(&page),
             expected,

@@ -1,8 +1,8 @@
 //! The timeline vertical's `#[server]` endpoints: cursor-paginated public
-//! listings return
-//! [`PublicPresentation<Page<RenderedPost, TimelineCursor>>`](PublicPresentation)
-//! so a client-side destination commits both its data and server-resolved theme.
-//! The authenticated Home timeline remains a private `Page` response.
+//! listings return a [`PublicPresentation`] so a client-side destination commits
+//! both its data and server-resolved theme. Local additionally carries the resolved
+//! Site Identity in [`LocalTimelinePresentation`]; scoped public listings carry a
+//! bare [`Page`]. The authenticated Home timeline remains a private `Page` response.
 //!
 //! The wire types they exchange are defined in `common::seed`; the host-only query
 //! helpers these bodies call live in the [`super::server`] leaf. `timeline/mod.rs` is
