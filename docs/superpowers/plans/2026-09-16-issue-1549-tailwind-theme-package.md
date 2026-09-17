@@ -54,7 +54,7 @@ it before checking the task.
     fails on drift; package assets and defaults resolve; the pinned Jaunder CLI
     accepts the root with `jaunder theme check`; repository checks pass.
 
-- [ ] Task 3: Prove the canonical workflow artifact
+- [x] Task 3: Prove the canonical workflow artifact
   - Contract: the caller pins 40-hex Jaunder and reusable-workflow revisions and
     runs repository generation before Jaunder's canonical workflow.
     `preview.png` is committed; `theme-package.zip` is generated only.
