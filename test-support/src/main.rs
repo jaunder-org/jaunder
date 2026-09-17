@@ -475,11 +475,15 @@ async fn cmd_site_config_snapshot(
         .factory;
     println!(
         "{}",
-        serde_json::to_string(&RawSiteConfigSnapshot {
+        serialize_snapshot(&RawSiteConfigSnapshot {
             value: factory.site_config().get_raw(key).await?,
         })?
     );
     Ok(())
+}
+
+fn serialize_snapshot<T: Serialize>(snapshot: &T) -> anyhow::Result<String> {
+    Ok(serde_json::to_string(snapshot)?)
 }
 
 async fn cmd_site_config_restore(
@@ -525,6 +529,10 @@ async fn cmd_site_config_restore(
             })
         })
         .await?;
+    acknowledge_site_config_restore(&outcome)
+}
+
+fn acknowledge_site_config_restore(outcome: &common::MutationOutcome<()>) -> anyhow::Result<()> {
     if matches!(outcome, common::MutationOutcome::CommitIndeterminate(())) {
         anyhow::bail!("site-config restore commit acknowledgement was indeterminate");
     }
@@ -820,6 +828,38 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_serialization_propagates_serializer_failure() {
+        struct SerializationFailure;
+
+        impl Serialize for SerializationFailure {
+            fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                Err(serde::ser::Error::custom("test serialization failure"))
+            }
+        }
+
+        let error = serialize_snapshot(&SerializationFailure)
+            .expect_err("a snapshot serialization failure must reach the command");
+        assert!(error.to_string().contains("test serialization failure"));
+    }
+
+    #[test]
+    fn site_config_restore_requires_a_confirmed_commit_acknowledgement() {
+        acknowledge_site_config_restore(&common::MutationOutcome::Confirmed(()))
+            .expect("confirmed restore commit is accepted");
+
+        let error =
+            acknowledge_site_config_restore(&common::MutationOutcome::CommitIndeterminate(()))
+                .expect_err("indeterminate restore commit must fail");
+        assert_eq!(
+            error.to_string(),
+            "site-config restore commit acknowledgement was indeterminate"
+        );
+    }
+
+    #[test]
     fn performance_profiles_map_to_contract_profiles() {
         for (argument, expected) in [
             (
@@ -932,6 +972,8 @@ mod tests {
             "raw identity restoration deletes cached feeds"
         );
 
+        let generation_before_tagline_restore =
+            factory.publisher().snapshot().await.unwrap().generation;
         run(cli(Commands::SiteConfigRestore {
             db: db.clone(),
             key: RestorableIdentityConfigKey::SiteTagline,
@@ -946,6 +988,11 @@ mod tests {
                 .await
                 .unwrap(),
             None
+        );
+        assert!(
+            factory.publisher().snapshot().await.unwrap().generation
+                > generation_before_tagline_restore,
+            "tagline restoration advances publisher generation"
         );
     }
 

@@ -112,11 +112,26 @@ pub(super) async fn update_identity_impl(
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+    use std::fmt;
+
     use super::{
-        SiteIdentityMutationError, SiteIdentityPublisherError, map_identity_publisher_error,
+        SiteIdentityMutationError, SiteIdentityPublisherError, find_error,
+        map_identity_publisher_error,
     };
     use crate::error::ErrorKind;
     use storage::{BaseUrlMutationError, PasskeyRpHostLocked};
+
+    #[derive(Debug)]
+    struct OpaquePublisherFailure;
+
+    impl fmt::Display for OpaquePublisherFailure {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("opaque publisher failure")
+        }
+    }
+
+    impl Error for OpaquePublisherFailure {}
 
     fn map(error: SiteIdentityMutationError) -> crate::error::InternalError {
         map_identity_publisher_error(SiteIdentityPublisherError::new(Box::new(error)))
@@ -136,5 +151,44 @@ mod tests {
 
         let storage = map(SiteIdentityMutationError::Config(sqlx::Error::PoolClosed));
         assert_eq!(storage.kind(), ErrorKind::Storage);
+    }
+
+    #[test]
+    fn publisher_wrapper_display_and_source_preserve_the_erased_failure() {
+        let error = SiteIdentityPublisherError::new(Box::new(OpaquePublisherFailure));
+
+        assert_eq!(
+            error.to_string(),
+            "site identity publisher operation failed"
+        );
+        assert_eq!(
+            error.source().map(ToString::to_string).as_deref(),
+            Some("opaque publisher failure")
+        );
+    }
+
+    #[test]
+    fn unrecognized_publisher_failure_uses_the_internal_fallback() {
+        let error = SiteIdentityPublisherError::new(Box::new(OpaquePublisherFailure));
+        let source = error
+            .source()
+            .expect("publisher errors always retain a source");
+        assert!(find_error::<sqlx::Error>(source).is_none());
+
+        let mapped = map_identity_publisher_error(error);
+        assert_eq!(mapped.kind(), ErrorKind::Internal);
+        assert_eq!(
+            mapped.source().map(ToString::to_string).as_deref(),
+            Some("opaque publisher failure")
+        );
+    }
+
+    #[test]
+    fn bare_sqlx_publisher_failure_is_classified_as_storage() {
+        let mapped = map_identity_publisher_error(SiteIdentityPublisherError::new(Box::new(
+            sqlx::Error::PoolClosed,
+        )));
+
+        assert_eq!(mapped.kind(), ErrorKind::Storage);
     }
 }
