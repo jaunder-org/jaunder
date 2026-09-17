@@ -1304,11 +1304,9 @@ test("Local shows published posts for unauthenticated visitors", async ({
   const guestPage = await guestContext.newPage();
   await goto(guestPage, "/", { timeout: firstNav });
 
-  // Site title is still the seeded value: admin-site (the only mutator) runs in
-  // the serial Playwright project and never overlaps this test.
-  await expect(guestPage.locator(SEL.topbarHeading)).toHaveText(
-    "jaunder.local",
-  );
+  // No title is configured in the ordinary fixture, so Local uses the required
+  // identity default. Configuration-mutating specs run later in serial projects.
+  await expect(guestPage.locator(SEL.topbarHeading)).toHaveText("Jaunder");
 
   // Own-scoped: with workers>1 other tests publish into the same global local
   // timeline, so assert a full first page exists rather than an exact count.
@@ -2547,9 +2545,9 @@ test("scheduling from the edit page shows a Scheduled-for badge on the drafts pa
 // #671: `/` is the one timeline whose Loading arm is reachable ONLY by a client-side
 // nav — a full load of it is always projector-seeded (`site_timeline` has no shell
 // fallback, unlike the profile/tag routes), so it never paints Loading. An unseeded
-// arrival must paint `.j-loading` until the fetch resolves — not flash
-// `TimelineRows`' "No posts yet." empty state (#671).
-test("unseeded client-nav to / paints Loading with the masthead intact", async ({
+// arrival must paint `.j-loading` until the aggregate page-and-identity destination
+// resolves — not flash `TimelineRows`' empty state or a made-up default identity.
+test("unseeded client-nav to / defers the masthead until identity resolves", async ({
   page,
 }) => {
   // Enter on a NON-`/` URL. Home reads its projector seed from the INITIAL document
@@ -2569,13 +2567,11 @@ test("unseeded client-nav to / paints Loading with the masthead intact", async (
   const release = await stallServerFn(page, "timeline/list_local_timeline");
   await click(page, ".j-brand");
 
-  // Loading arm: the gate paints `.j-loading`, and the chrome sibling region keeps
-  // the masthead up alongside it. The masthead — not `.j-scroll` — is the anchor,
-  // because `TimelineRows` alone emits `.j-scroll` and it does not exist here.
+  // Loading arm: identity and timeline are one coherent destination, so an
+  // unseeded route paints neither a stale/default masthead nor timeline rows.
   await waitForSelector(page, ".j-loading");
   await expect(page.locator(".j-loading")).toBeVisible();
-  const masthead = page.locator(".j-topbar");
-  await expect(masthead).toBeVisible();
+  await expect(page.locator(".j-topbar")).toHaveCount(0);
   await expect(page.locator(".j-scroll")).toHaveCount(0);
 
   // The nav really was client-side — otherwise the Loading arm above is a full-load
@@ -2587,17 +2583,12 @@ test("unseeded client-nav to / paints Loading with the masthead intact", async (
   );
   expect(sameDocument).toBe(true);
 
-  // Stamp the live node, then let the fetch through.
-  await masthead.evaluate((el) => {
-    el.setAttribute("data-j-probe", "1");
-  });
   release();
 
-  // Rows arm: the SAME masthead node survives the transition. Emitting `{children}`
-  // inside each match arm would have torn it down and rebuilt it, losing the stamp —
-  // the #653 hazard class, on projector-coincident markup.
+  // The resolved aggregate commits identity and rows together.
   await waitForSelector(page, ".j-scroll");
-  await expect(page.locator(".j-topbar[data-j-probe='1']")).toHaveCount(1);
+  await expect(page.locator(".j-topbar")).toBeVisible();
+  await expect(page.locator(SEL.topbarHeading)).toHaveText("Jaunder");
   await expect(page.locator(".j-loading")).toHaveCount(0);
 
   // ...and still precedes the rows. Playwright locators do not express document

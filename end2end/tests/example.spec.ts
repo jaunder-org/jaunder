@@ -9,7 +9,7 @@ test("Local has its masthead actions without a promotional hero", async ({
 
   await expect(page).toHaveTitle("Jaunder");
 
-  await expect(page.locator(SEL.topbarHeading)).toHaveText("jaunder.local");
+  await expect(page.locator(SEL.topbarHeading)).toHaveText("Jaunder");
   await expect(page.locator(".j-hero")).toHaveCount(0);
   await expect(page.getByText("One timeline. Every protocol.")).toHaveCount(0);
   await expect(

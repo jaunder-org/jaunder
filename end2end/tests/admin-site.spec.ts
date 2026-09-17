@@ -1,12 +1,14 @@
 import { reenterAdminSettings } from "./admin-settings";
 import { test, expect } from "./fixtures";
 import { click, goto, signInAs, waitForSelector } from "./helpers";
+import { navigateInApp } from "./navigate";
 import { SEL } from "./selectors";
 import { seedConfigViaTool } from "./seed";
 
 // Site Settings persists the complete Local identity through one aggregate save.
 test("admin site settings page loads, changes, and clears Local identity", async ({
   page,
+  tracedContext,
 }) => {
   await signInAs(page, "testoperator");
   await goto(page, "/admin/site");
@@ -57,6 +59,40 @@ test("admin site settings page loads, changes, and clears Local identity", async
   await expect(page.locator(".j-topbar .j-sub")).toHaveText(
     "The changed Local tagline",
   );
+  await expect(page.locator("head > title")).toHaveCount(1);
+  await expect.poll(() => page.title()).toBe("Changed Test Site");
+
+  // Route-owned Local metadata temporarily overrides one stable fallback owner.
+  // In a fresh anonymous context, navigating away restores the fallback; returning
+  // resolves the configured title without ever creating duplicate title elements.
+  const guestContext = await tracedContext();
+  const guestPage = await guestContext.newPage();
+  try {
+    await goto(guestPage, "/");
+    await expect(guestPage.locator("head > title")).toHaveCount(1);
+    await expect.poll(() => guestPage.title()).toBe("Changed Test Site");
+    await click(guestPage, "a[href='/login']");
+    await expect(guestPage).toHaveURL(/\/login$/);
+    await expect(guestPage.locator("head > title")).toHaveCount(1);
+    await expect.poll(() => guestPage.title()).toBe("Jaunder");
+
+    const returnPage = await guestContext.newPage();
+    await goto(returnPage, "/forgot-password");
+    await expect(returnPage.locator("head > title")).toHaveCount(1);
+    await expect.poll(() => returnPage.title()).toBe("Jaunder");
+    await navigateInApp(
+      returnPage,
+      () => returnPage.locator(".j-brand").click(),
+      {
+        url: "/",
+        ready: 'h1:has-text("Changed Test Site")',
+      },
+    );
+    await expect(returnPage.locator("head > title")).toHaveCount(1);
+    await expect.poll(() => returnPage.title()).toBe("Changed Test Site");
+  } finally {
+    await guestContext.close();
+  }
 });
 
 test("Site Settings clears a persisted Local tagline", async ({ page }) => {
