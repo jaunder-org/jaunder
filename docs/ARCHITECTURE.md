@@ -1536,14 +1536,29 @@ ordering; `/app` confirms the real session before fetching the current User's
 own published Posts
 ([authenticated-root redirect decision](adr/0193-authenticated-root-redirects-home.md)).
 Anonymous `/` projection remains byte-identical and cacheable. A stale marker is
-bounded by Home's existing unauthenticated redirect to `/login`. A live session
+bounded by the shared private-route gate: Home remains unmounted until Session
+reconciliation confirms a User or replaces the route with Login. A live session
 missing its marker may paint public Local once; background reconciliation
-restores the marker and replaces the route with Home. Login, registration, and
-authenticated brand navigation target `/app` directly, so same-document
-transitions do not rely on the pre-paint script rerunning. The proposed decision
-supersedes only ADR-0044 Decision 5's stay-on-`/` default and deferred redirect
-preference; ADR-0044's cacheability, advisory-marker, pre-paint,
-additive-decoration, and server-confirmation boundaries remain in force.
+restores the marker and replaces the route with Home. Direct Login,
+registration, and authenticated brand navigation target `/app`, while Login
+reached through a private-route gate returns confirmed password or Passkey
+authentication to the validated private path, query, and fragment. These are
+same-document transitions and do not rely on the pre-paint script rerunning. The
+proposed decision supersedes only ADR-0044 Decision 5's stay-on-`/` default and
+deferred redirect preference; ADR-0044's cacheability, advisory-marker,
+pre-paint, additive-decoration, and server-confirmation boundaries remain in
+force.
+
+`web/src/app/route_policy.rs` owns the SPA route catalog and declares every
+route `Public` or `Private` beside its router path and component. The router,
+private-route Session gate, safe `PrivateDestination` parser, and flow-document
+route inventory all consume that declaration source; there is no second runtime
+route registry. Pending reconciliation withholds private components, failures
+present Retry, confirmed absence replace-navigates to Login with an encoded
+private return destination, and confirmed Users enter the destination page,
+where existing authorization boundaries still decide access. Return validation
+admits only declared private root-relative routes, preventing public, unknown,
+server-owned, protocol-relative, absolute, and recursive Login destinations.
 
 ### Crates, features, and the build
 

@@ -34,6 +34,9 @@ Out:
     complete inventory, parameterized-route matching, round trips, and rejection
     of absolute, protocol-relative, backslash-path, public, server-owned,
     unknown, and malformed targets.
+  - Evidence note: the focused route-policy suite and broad commit gate pass.
+    The exact package command reaches those tests but later stops at the
+    pre-existing markup-adapter host-feature panic tracked by #1568.
 
 - [x] Task 2: Gate private route presentation on authoritative Session
       reconciliation.
@@ -60,7 +63,7 @@ Out:
     virtual-authenticator Passkey flow prove exact path/query/fragment return
     plus direct-Login fallback.
 
-- [ ] Task 4: Complete conformance, documentation, and visual evidence.
+- [x] Task 4: Complete conformance, documentation, and visual evidence.
   - Contract: project the private-route gate and route-policy ownership into
     `docs/ARCHITECTURE.md`; keep the issue spec as the acceptance snapshot
     rather than a second runtime registry. Capture signed-out `/sessions`
