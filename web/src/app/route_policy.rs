@@ -7,7 +7,7 @@ use url::Url;
 
 /// Browser access required by an application route.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Access {
+pub(crate) enum Access {
     Public,
     Private,
 }
@@ -71,6 +71,30 @@ fn has_valid_percent_encoding(value: &str) -> bool {
         }
     }
     true
+}
+
+impl PrivateDestination {
+    /// Joins the router's location fields and validates the resulting private route.
+    #[must_use]
+    pub fn from_location(pathname: &str, search: &str, hash: &str) -> Option<Self> {
+        let query_separator = if search.is_empty() { "" } else { "?" };
+        let hash_separator = if hash.is_empty() || hash.starts_with('#') {
+            ""
+        } else {
+            "#"
+        };
+        Self::parse(&format!(
+            "{pathname}{query_separator}{search}{hash_separator}{hash}"
+        ))
+    }
+
+    /// Builds the Login URL carrying this validated return destination.
+    #[must_use]
+    pub fn login_path(&self) -> String {
+        let return_to: String =
+            url::form_urlencoded::byte_serialize(self.as_ref().as_bytes()).collect();
+        format!("/login?return_to={return_to}")
+    }
 }
 
 impl AsRef<str> for PrivateDestination {
@@ -235,6 +259,32 @@ mod tests {
         assert_eq!(
             destination.as_ref(),
             "/posts/42/history/7?order=oldest#revision"
+        );
+    }
+
+    #[test]
+    fn router_location_fields_preserve_query_and_fragment() {
+        let destination =
+            PrivateDestination::from_location("/posts/42/history/7", "order=oldest", "#revision")
+                .expect("a private route is a valid destination");
+        assert_eq!(
+            destination.as_ref(),
+            "/posts/42/history/7?order=oldest#revision"
+        );
+
+        let fragment_without_prefix =
+            PrivateDestination::from_location("/sessions", "", "credentials")
+                .expect("a router fragment without its prefix is normalized");
+        assert_eq!(fragment_without_prefix.as_ref(), "/sessions#credentials");
+    }
+
+    #[test]
+    fn private_destination_encodes_the_login_return_transport() {
+        let destination = PrivateDestination::parse("/posts/42/history/7?order=oldest#revision")
+            .expect("a private route is a valid destination");
+        assert_eq!(
+            destination.login_path(),
+            "/login?return_to=%2Fposts%2F42%2Fhistory%2F7%3Forder%3Doldest%23revision"
         );
     }
 

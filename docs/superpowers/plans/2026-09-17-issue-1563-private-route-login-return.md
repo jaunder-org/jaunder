@@ -35,7 +35,7 @@ Out:
     of absolute, protocol-relative, backslash-path, public, server-owned,
     unknown, and malformed targets.
 
-- [ ] Task 2: Gate private route presentation on authoritative Session
+- [x] Task 2: Gate private route presentation on authoritative Session
       reconciliation.
   - Contract: a shared private-route gate consumes `SessionContext.reconcile`;
     pending state mounts no private page, confirmed anonymous state captures the

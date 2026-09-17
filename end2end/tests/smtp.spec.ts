@@ -3,7 +3,13 @@ import { expectAccessible } from "./accessibility";
 import { reenterAdminSettings } from "./admin-settings";
 import { bootCount, trackBoots } from "./bootBudget";
 import { test, expect } from "./fixtures";
-import { goto, signInAs, stallServerFn, waitForSelector } from "./helpers";
+import {
+  BASE_URL,
+  goto,
+  signInAs,
+  stallServerFn,
+  waitForSelector,
+} from "./helpers";
 import { navigateInApp } from "./navigate";
 import { SEL } from "./selectors";
 
@@ -53,12 +59,11 @@ async function disableSmtpIfEnabled(page: Page) {
   }
 }
 
-test("anonymous navigation hides SMTP and direct access is denied", async ({
-  page,
-}) => {
+test("anonymous SMTP route redirects to Login", async ({ page }) => {
   await goto(page, "/admin/smtp");
+  await page.waitForURL(`${BASE_URL}/login?return_to=%2Fadmin%2Fsmtp`);
+  await expect(page.locator(SEL.username)).toBeVisible();
   await expect(page.locator(smtpLink)).toHaveCount(0);
-  await expect(page.locator(SEL.error)).toBeVisible();
 });
 
 test("member navigation hides SMTP and direct access is denied", async ({

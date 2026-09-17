@@ -3,6 +3,7 @@
 //! that must coincide byte-for-byte lives in the sibling `super::render` leaf. No
 //! `#[cfg]` of its own — wasm-only via its `mod` line in `mod.rs`.
 
+use super::PrivateDestination;
 use crate::backup::BackupBanner;
 use crate::sidebar::Sidebar;
 use crate::site::SiteBaseUrlBanner;
@@ -13,9 +14,9 @@ use common::theme::{PublishedThemePresentation, Theme};
 use leptos::prelude::*;
 use leptos_meta::{Title, provide_meta_context};
 use leptos_router::{
-    StaticSegment,
+    NavigateOptions, StaticSegment,
     components::{Outlet, ParentRoute, Route, Router, Routes},
-    hooks::use_location,
+    hooks::{use_location, use_navigate},
 };
 use wasm_bindgen::JsCast;
 #[must_use]
@@ -386,6 +387,74 @@ fn AppShell() -> impl IntoView {
     }
 }
 
+/// Withholds a private route's view until the shared session reconcile confirms it.
+///
+/// The marker-backed `current` session remains appropriate for chrome, but it is
+/// advisory; only this Resource's cookie-checked value can admit a private page.
+#[component]
+fn PrivateRoute(private: bool, children: ChildrenFn) -> impl IntoView {
+    let session = crate::auth::use_session();
+    let location = use_location();
+    let navigate = use_navigate();
+    let retry = RwSignal::new(0_u64);
+    let confirmation = Resource::new(
+        move || (location.pathname.get(), retry.get()),
+        move |_| async move { session.reconcile.await },
+    );
+    let destination = move || {
+        PrivateDestination::from_location(
+            &location.pathname.get(),
+            &location.search.get(),
+            &location.hash.get(),
+        )
+    };
+
+    Effect::new(move |_| {
+        if private
+            && matches!(confirmation.get(), Some(Ok(None)))
+            && let Some(destination) = destination()
+        {
+            navigate(
+                &destination.login_path(),
+                NavigateOptions {
+                    replace: true,
+                    ..NavigateOptions::default()
+                },
+            );
+        }
+    });
+
+    view! {
+        {move || {
+            if !private {
+                return children().into_any();
+            }
+            match confirmation.get() {
+                None | Some(Ok(None)) => {
+                    view! { <p class="j-loading">"Loading\u{2026}"</p> }.into_any()
+                }
+                Some(Err(error)) => {
+                    view! {
+                        <p class="error">{error.to_string()}</p>
+                        <button
+                            type="button"
+                            class="j-btn"
+                            on:click=move |_| {
+                                session.reconcile.refetch();
+                                retry.update(|value| *value += 1);
+                            }
+                        >
+                            "Retry"
+                        </button>
+                    }
+                        .into_any()
+                }
+                Some(Ok(Some(_))) => children().into_any(),
+            }
+        }}
+    }
+}
+
 /// Supplies the historic application fallback title everywhere except Local.
 ///
 /// This subscriber mounts after the route tree so nested route parameters settle
@@ -403,7 +472,14 @@ macro_rules! app_router {
             <Router>
                 <Routes fallback=|| "Page not found.".into_view()>
                     <ParentRoute path=StaticSegment("") view=AppShell>
-                        $(<Route path=$path view=$view />)*
+                        $(<Route
+                            path=$path
+                            view=move || view! {
+                                <PrivateRoute private=matches!(super::route_policy::Access::$access, super::route_policy::Access::Private)>
+                                    { $view() }
+                                </PrivateRoute>
+                            }
+                        />)*
                     </ParentRoute>
                 </Routes>
                 <AppDefaultTitle />

@@ -301,12 +301,11 @@ test("Chromium passkeys enroll, authenticate discoverably, refresh metadata, and
   }
 });
 
-test("passkeys require authentication", async ({ page }) => {
+test("anonymous passkeys route redirects to Login", async ({ page }) => {
   await goto(page, "/passkeys");
-  await waitForSelector(page, '[data-test="passkeys-auth-required"]');
-  await expect(page.locator('[data-test="passkeys-auth-required"]')).toHaveText(
-    "Sign in to manage passkeys.",
-  );
+  await page.waitForURL(`${BASE_URL}/login?return_to=%2Fpasskeys`);
+  await expect(page.locator(SEL.username)).toBeVisible();
+  await expect(page.locator(PASSKEY_PAGE)).toHaveCount(0);
 });
 
 test("authenticated sidebar reaches passkeys", async ({ page, user }) => {
