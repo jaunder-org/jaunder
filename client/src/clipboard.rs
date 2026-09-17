@@ -15,20 +15,29 @@ use wasm_bindgen_futures::JsFuture;
 /// when invoking or awaiting the clipboard write fails.
 pub async fn write_text(value: &str) -> Result<(), ()> {
     let window = web_sys::window().ok_or(())?;
-    let navigator = window.navigator();
+    let clipboard = clipboard_for(&window.navigator())?;
+    let promise = write_promise(&clipboard, value)?;
+    JsFuture::from(promise).await.map(|_| ()).map_err(|_| ())
+}
+
+fn clipboard_for(navigator: &web_sys::Navigator) -> Result<JsValue, ()> {
     let clipboard =
         Reflect::get(navigator.as_ref(), &JsValue::from_str("clipboard")).map_err(|_| ())?;
     if clipboard.is_null() || clipboard.is_undefined() {
-        return Err(());
+        Err(())
+    } else {
+        Ok(clipboard)
     }
-    let write_text = Reflect::get(&clipboard, &JsValue::from_str("writeText"))
+}
+
+fn write_promise(clipboard: &JsValue, value: &str) -> Result<Promise, ()> {
+    let write_text = Reflect::get(clipboard, &JsValue::from_str("writeText"))
         .map_err(|_| ())?
         .dyn_into::<Function>()
         .map_err(|_| ())?;
-    let promise = write_text
-        .call1(&clipboard, &JsValue::from_str(value))
+    write_text
+        .call1(clipboard, &JsValue::from_str(value))
         .map_err(|_| ())?
         .dyn_into::<Promise>()
-        .map_err(|_| ())?;
-    JsFuture::from(promise).await.map(|_| ()).map_err(|_| ())
+        .map_err(|_| ())
 }
