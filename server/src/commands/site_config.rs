@@ -1,10 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use common::{
-    site::{SiteTagline, SiteTitle},
-    tagged_url::{BaseUrl, HubUrl},
-};
+use common::tagged_url::{BaseUrl, HubUrl};
 use host::config_key::SiteConfigKey;
 use storage::{
     BaseUrlMutationError, FeedWindowMutation, PasskeyStorage, PublisherStorage, SiteConfigStorage,
@@ -64,29 +61,13 @@ pub(super) async fn cmd_site_identity_set(
     write_scope: WriteScope,
     site_config: Arc<dyn SiteConfigStorage>,
     passkeys: Arc<dyn PasskeyStorage>,
-    key: SiteConfigKey,
-    value: &str,
+    mutation: SiteIdentityMutation,
 ) -> anyhow::Result<()> {
-    let mutation = match key {
-        SiteConfigKey::SiteTitle => SiteIdentityMutation::SetTitle(value.parse::<SiteTitle>()?),
-        SiteConfigKey::SiteTagline => SiteIdentityMutation::SetTagline(
-            (!value.trim().is_empty())
-                .then(|| value.parse::<SiteTagline>())
-                .transpose()?,
-        ),
-        SiteConfigKey::SiteBaseUrl => SiteIdentityMutation::SetBaseUrl(
-            (!value.is_empty())
-                .then(|| value.parse::<BaseUrl>())
-                .transpose()?,
-        ),
-        _ => unreachable!("only identity keys reach this command"),
-    };
     let publisher = PublisherService::new(storage_path, publisher, write_scope);
     let outcome = publisher
         .mutate_identity_with_feedback(site_config, passkeys, mutation)
         .await?;
     support::require_confirmed_mutation(outcome, "site identity mutation")?;
-    eprintln!("set site_config {key} = {value}");
     Ok(())
 }
 
@@ -97,14 +78,9 @@ pub(super) async fn cmd_site_identity_unset(
     write_scope: WriteScope,
     site_config: Arc<dyn SiteConfigStorage>,
     passkeys: Arc<dyn PasskeyStorage>,
+    mutation: SiteIdentityMutation,
     key: SiteConfigKey,
 ) -> anyhow::Result<()> {
-    let mutation = match key {
-        SiteConfigKey::SiteTitle => SiteIdentityMutation::UnsetTitle,
-        SiteConfigKey::SiteTagline => SiteIdentityMutation::UnsetTagline,
-        SiteConfigKey::SiteBaseUrl => SiteIdentityMutation::UnsetBaseUrl,
-        _ => unreachable!("only identity keys reach this command"),
-    };
     let publisher = PublisherService::new(storage_path, publisher, write_scope);
     let outcome = publisher
         .mutate_identity_with_feedback(site_config, passkeys, mutation)

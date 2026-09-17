@@ -2,6 +2,15 @@ use crate::error::WebResult;
 use common::MutationOutcome;
 use common::site::{SiteIdentity, SiteTagline, SiteTitle};
 use common::tagged_url::BaseUrl;
+use serde::{Deserialize, Serialize};
+
+/// One cohesive Site Settings identity mutation (ADR-0129).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UpdateIdentityRequest {
+    pub title: SiteTitle,
+    pub tagline: Option<SiteTagline>,
+    pub base_url: Option<BaseUrl>,
+}
 
 #[cfg(feature = "server")]
 use {
@@ -53,22 +62,15 @@ pub async fn update_media_uploads_enabled(uploads_enabled: bool) -> WebResult<Mu
         .map_err(from_write_scope_error)
 }
 
-#[macros::server]
-pub async fn update_identity(
-    title: SiteTitle,
-    tagline: Option<SiteTagline>,
-    base_url: Option<BaseUrl>,
-) -> WebResult<MutationOutcome<()>> {
-    // `base_url` is a typed `Option<BaseUrl>` wire arg (ADR-0065): the
-    // validating serde bridge already rejected a malformed/non-http(s) value at
-    // decode time, and an omitted field decodes to `None` (clearing-via-omit) —
-    // no server-side parse/`non_empty` bridge is needed.
-    let identity = SiteIdentity {
-        title,
-        tagline,
-        base_url,
-    };
-    update_identity_impl(identity).await
+#[macros::server(skip_all)]
+pub async fn update_identity(request: UpdateIdentityRequest) -> WebResult<MutationOutcome<()>> {
+    // The aggregate's fields are validated at the typed wire boundary (ADR-0065).
+    update_identity_impl(SiteIdentity {
+        title: request.title,
+        tagline: request.tagline,
+        base_url: request.base_url,
+    })
+    .await
 }
 
 /// Whether to show the "site base URL not configured" warning banner (#575):

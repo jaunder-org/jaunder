@@ -76,8 +76,6 @@ enum SiteIdentityMutationError {
     Config(#[from] sqlx::Error),
     #[error(transparent)]
     Publisher(#[from] PublisherStorageError),
-    #[error(transparent)]
-    Aggregate(#[from] storage::SiteIdentityMutationError),
 }
 
 pub enum SiteIdentityMutation {
@@ -87,6 +85,42 @@ pub enum SiteIdentityMutation {
     UnsetTitle,
     UnsetTagline,
     UnsetBaseUrl,
+}
+
+impl SiteIdentityMutation {
+    /// Builds the one-key CLI identity mutation without widening the closed
+    /// `SiteConfigKey` registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when an identity-key value fails typed validation.
+    pub fn set(key: SiteConfigKey, value: &str) -> anyhow::Result<Option<Self>> {
+        match key {
+            SiteConfigKey::SiteTitle => Ok(Some(Self::SetTitle(value.parse()?))),
+            SiteConfigKey::SiteTagline => Ok(Some(Self::SetTagline(
+                (!value.trim().is_empty())
+                    .then(|| value.parse::<SiteTagline>())
+                    .transpose()?,
+            ))),
+            SiteConfigKey::SiteBaseUrl => Ok(Some(Self::SetBaseUrl(
+                (!value.is_empty())
+                    .then(|| value.parse::<BaseUrl>())
+                    .transpose()?,
+            ))),
+            _ => Ok(None),
+        }
+    }
+
+    /// Returns the one-key CLI identity clear operation from the closed key set.
+    #[must_use]
+    pub fn unset(key: SiteConfigKey) -> Option<Self> {
+        match key {
+            SiteConfigKey::SiteTitle => Some(Self::UnsetTitle),
+            SiteConfigKey::SiteTagline => Some(Self::UnsetTagline),
+            SiteConfigKey::SiteBaseUrl => Some(Self::UnsetBaseUrl),
+            _ => None,
+        }
+    }
 }
 
 /// Shared publisher operation seam. The gate is acquired before every write scope.
@@ -239,7 +273,6 @@ impl PublisherService {
                     site_config
                         .set_identity(transaction, passkeys, publisher, &identity)
                         .await
-                        .map_err(SiteIdentityMutationError::from)
                 })
             })
             .await
@@ -342,7 +375,14 @@ impl web::site::SiteIdentityPublisher for SiteIdentityPublisherOperation {
             )
             .await
             .map_err(|error| {
-                web::site::SiteIdentityPublisherError::new(error.into_boxed_dyn_error())
+                let source = match error.downcast::<storage::SiteIdentityMutationError>() {
+                    Ok(error) => Box::new(error),
+                    Err(error) => match error.downcast::<sqlx::Error>() {
+                        Ok(error) => Box::new(error),
+                        Err(error) => error.into_boxed_dyn_error(),
+                    },
+                };
+                web::site::SiteIdentityPublisherError::new(source)
             })
     }
 }

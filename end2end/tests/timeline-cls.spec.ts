@@ -26,6 +26,7 @@ import { test, expect, slowBrowserTimeoutMs } from "./fixtures";
 import { signInAsNewUser } from "./helpers";
 import { createPostViaApi } from "./posts";
 import { expectNoShiftAcrossMount } from "./layout-shift";
+import { seedConfigViaTool } from "./seed";
 
 /**
  * The four routes, the chrome element that must not move on each, and whether a post
@@ -86,12 +87,33 @@ for (const route of ROUTES) {
     const username = await signInAsNewUser(page);
     await createPostViaApi(page, { body: "cls probe", tags: [username] });
 
-    const guestContext = route.name === "/" ? await tracedContext() : undefined;
-    const probePage =
-      guestContext === undefined ? page : await guestContext.newPage();
+    // The Local projector caches its anonymous document for five minutes, so configure
+    // identity before the guest context's direct document load. This proves the
+    // configured masthead—not only the default one—coincides with CSR on first paint.
+    const configuredLocalIdentity = route.name === "/";
+    let guestContext: Awaited<ReturnType<typeof tracedContext>> | undefined;
     try {
+      if (configuredLocalIdentity) {
+        await seedConfigViaTool("site.title", "CLS <Site>");
+        await seedConfigViaTool("site.tagline", "A <configured> & tagline");
+      }
+      guestContext = configuredLocalIdentity
+        ? await tracedContext()
+        : undefined;
+      const probePage =
+        guestContext === undefined ? page : await guestContext.newPage();
       await expectNoShiftAcrossMount(probePage, {
         url: route.url(username),
+        beforeMount: async (p) => {
+          if (configuredLocalIdentity) {
+            await expect(
+              p.locator('[data-jaunder-part="site-title"]'),
+            ).toHaveText("CLS <Site>");
+            await expect(p.locator(".j-topbar .j-sub")).toHaveText(
+              "A <configured> & tagline",
+            );
+          }
+        },
         targets: (p) => [
           { name: "chrome", locator: p.locator(route.chrome) },
           // Scoped by the author handle rendered at `posts/render.rs:203`, so a
@@ -117,11 +139,30 @@ for (const route of ROUTES) {
           await expect(p.locator(".j-scroll").first()).toBeVisible({
             timeout: slowBrowserTimeoutMs(testInfo, 10_000),
           });
+          if (configuredLocalIdentity) {
+            // `toHaveText` proves text semantics after CSR replaced the projector:
+            // markup-looking config remains decoded text, never DOM markup.
+            await expect(
+              p.locator('[data-jaunder-part="site-title"]'),
+            ).toHaveText("CLS <Site>");
+            await expect(p.locator(".j-topbar .j-sub")).toHaveText(
+              "A <configured> & tagline",
+            );
+          }
         },
         tolerancePx: 0,
       });
     } finally {
       await guestContext?.close();
+      if (configuredLocalIdentity) {
+        // This spec writes process-global config; restore both values even when the
+        // first restoration command fails.
+        try {
+          await seedConfigViaTool("site.tagline", "");
+        } finally {
+          await seedConfigViaTool("site.title", "Jaunder");
+        }
+      }
     }
   });
 }

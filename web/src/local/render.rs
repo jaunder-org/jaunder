@@ -86,6 +86,24 @@ mod tests {
     }
 
     #[test]
+    fn local_masthead_renders_valid_tagline_matrix_representatives_as_text() {
+        // Parser tests own rejection/normalization. This host-rendering boundary keeps
+        // one valid scalar limit, interior-whitespace, and Unicode representative
+        // auditable without duplicating the parser's matrix.
+        for tagline in [
+            "x".repeat(280),
+            "Interior  whitespace".to_owned(),
+            "Привет 🌍".to_owned(),
+        ] {
+            let html = masthead(&identity(Some(&tagline)), &Markup::empty()).into_string();
+            assert!(
+                html.contains(&format!(r#"<div class="j-sub">{tagline}</div>"#)),
+                "valid tagline remains text in Local masthead: {html}"
+            );
+        }
+    }
+
+    #[test]
     fn local_masthead_omits_absent_tagline() {
         let html = masthead(&identity(None), &Markup::empty()).into_string();
         assert!(!html.contains("j-sub"), "{html}");

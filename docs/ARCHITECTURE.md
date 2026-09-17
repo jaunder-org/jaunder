@@ -1633,11 +1633,11 @@ by ADR-0056 before either):
   …).
 
 `web/src/pages/` is gone. Of the 28 directories under `web/src/`, all have
-`mod.rs`, 25 carry a `component.rs`, 15 carry an `api.rs`, and 6 (`audiences`,
-`auth`, `error`, `posts`, `subscriptions`, `timeline`) need a `server.rs`. The
-three without a `component.rs` — `error`, `reactive`, `taglist` — are a
-wire-type home, a primitive, and a pure-markup helper: none has UI, so the
-absence is structural, not lag. Two mechanisms enforce the layout. The
+`mod.rs`, 25 carry a `component.rs`, 15 carry an `api.rs`, and 8 (`audiences`,
+`auth`, `error`, `posts`, `site`, `subscriptions`, `timeline`, `websub`) need a
+`server.rs`. The three without a `component.rs` — `error`, `reactive`, `taglist`
+— are a wire-type home, a primitive, and a pure-markup helper: none has UI, so
+the absence is structural, not lag. Two mechanisms enforce the layout. The
 `target-arch-placement` xtask check
 (`xtask/src/steps/target_arch_placement_check.rs`, policing `web/src`,
 `client/src` and `csr/src`) admits a `target_arch` gate in exactly two shapes:

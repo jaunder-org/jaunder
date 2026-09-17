@@ -10,7 +10,7 @@ mod component;
 
 pub use api::{
     GetIdentity, GetMediaUploadsEnabled, IsBaseUrlWarningVisible, UpdateIdentity,
-    UpdateMediaUploadsEnabled, get_identity, get_media_uploads_enabled,
+    UpdateIdentityRequest, UpdateMediaUploadsEnabled, get_identity, get_media_uploads_enabled,
     is_base_url_warning_visible, update_identity, update_media_uploads_enabled,
 };
 #[cfg(target_arch = "wasm32")]

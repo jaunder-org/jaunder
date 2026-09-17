@@ -28,6 +28,11 @@ export interface MountShiftProbe {
    */
   targets: (page: Page) => ShiftTarget[];
   /**
+   * Optional: assert projector-owned content while WASM is still held. Runs after
+   * fonts settle but before the first geometry sample and mount release.
+   */
+  beforeMount?: (page: Page) => Promise<void>;
+  /**
    * Optional: assert the mount actually decorated the measured content (so a green
    * result can't be a no-op) — e.g. the owner Actions trigger appeared. Runs after
    * the mount, before the after-sample.
@@ -159,6 +164,7 @@ export async function expectNoShiftAcrossMount(
     await page.evaluate(async () => {
       await document.fonts.ready;
     });
+    if (probe.beforeMount) await probe.beforeMount(page);
 
     const targets = probe.targets(page);
     const before = await waitForStableTargetGeometry(page, targets);

@@ -147,6 +147,48 @@ async fn site_timeline_resolves_one_configured_identity_for_head_body_and_seed(
     );
 }
 
+/// The malformed-row case crosses the real Local projector boundary rather than
+/// stopping at `SiteConfigStorage::get_identity`: it must retain the cacheable
+/// default-title projection while emitting no tagline presentation or metadata.
+#[apply(backends)]
+#[tokio::test]
+async fn site_timeline_treats_malformed_persisted_tagline_as_absent(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    env.inject_invalid_site_config(
+        host::config_key::SiteConfigKey::SiteTagline,
+        "invalid\u{2028}persisted tagline",
+    )
+    .await
+    .expect("inject malformed legacy tagline");
+
+    let response =
+        projector_app_with_site_config(env.posts(), env.users(), env.themes(), env.site_config())
+            .oneshot(get("/"))
+            .await
+            .expect("request");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(header::CACHE_CONTROL),
+        Some(&header::HeaderValue::from_static("public, max-age=300")),
+        "invalid optional identity data does not alter Local's five-minute cache policy"
+    );
+    let html = body_string(response).await;
+    assert!(
+        html.contains(r#"data-jaunder-part="site-title">Jaunder"#),
+        "invalid persisted tagline retains the default title: {html}"
+    );
+    assert!(!html.contains("j-sub"), "no Local tagline element: {html}");
+    assert!(
+        html.contains(r#"name="description" content="""#)
+            && html.contains(r#"property="og:description" content="""#),
+        "invalid persisted tagline leaves descriptions absent: {html}"
+    );
+    assert!(
+        !html.contains(r#""tagline":"#),
+        "the Local seed resolves malformed optional tagline to absent: {html}"
+    );
+}
+
 #[apply(backends)]
 #[tokio::test]
 async fn direct_order_urls_embed_matching_seed_order(#[case] backend: Backend) {

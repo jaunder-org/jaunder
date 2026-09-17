@@ -38,8 +38,12 @@ mod tests {
             MutationFeedback::Confirmed(())
         ));
         assert!(matches!(
-            classify::<()>(Ok(MutationOutcome::CommitIndeterminate(())), "unknown"),
-            MutationFeedback::Error(message) if message == "unknown"
+            classify::<()>(
+                Ok(MutationOutcome::CommitIndeterminate(())),
+                "Save acknowledgement was lost; reload to verify the settings.",
+            ),
+            MutationFeedback::Error(message)
+                if message == "Save acknowledgement was lost; reload to verify the settings."
         ));
         assert!(matches!(
             classify::<()>(Err(WebError::validation("invalid")), "unknown"),

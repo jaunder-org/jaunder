@@ -372,6 +372,9 @@ async fn feed_descriptions_follow_site_tagline_surfaces_and_serializers(#[case] 
         .seed(Arc::clone(&env.users()), env.write_scope())
         .await;
 
+    // The configured/absent cases audit scope across every surface. Other valid
+    // parser representatives below exercise each wire serializer once instead of
+    // multiplying the same scope assertion across the input matrix.
     for (tagline, markup_is_escaped) in [
         (None, false),
         (Some("Configured Local description"), false),
@@ -399,6 +402,47 @@ async fn feed_descriptions_follow_site_tagline_surfaces_and_serializers(#[case] 
                 );
             }
         }
+    }
+
+    // These valid representatives close the feed/protocol matrix without repeating
+    // User/UserTag omission already asserted above.
+    for tagline in [
+        "x".repeat(280),
+        "Interior  whitespace".to_owned(),
+        "Привет 🌍".to_owned(),
+    ] {
+        set_tagline(&env, &publisher, Some(&tagline)).await;
+        for extension in ["rss", "atom", "json"] {
+            let row = render_feed(
+                Arc::clone(&env.publisher()),
+                Arc::clone(&env.posts()),
+                fp(&format!("/feed.{extension}")),
+            )
+            .await;
+            assert_description(&row, Some(&tagline), false);
+        }
+    }
+}
+
+/// A raw legacy row bypasses typed writes. Both the publisher snapshot and feed
+/// regeneration must treat the malformed Site Tagline as absent, not only storage's
+/// direct identity read.
+#[apply(backends)]
+#[tokio::test]
+async fn malformed_persisted_tagline_is_absent_during_feed_regeneration(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    env.inject_invalid_site_config(host::config_key::SiteConfigKey::SiteTagline, "bad\nrow")
+        .await
+        .expect("inject malformed legacy tagline");
+
+    for extension in ["rss", "atom", "json"] {
+        let row = render_feed(
+            Arc::clone(&env.publisher()),
+            Arc::clone(&env.posts()),
+            fp(&format!("/feed.{extension}")),
+        )
+        .await;
+        assert_description(&row, None, false);
     }
 }
 

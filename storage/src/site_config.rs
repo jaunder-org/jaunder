@@ -1040,11 +1040,13 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        FeedsConfigReadGate, SMTP_CONFIG_KEYS, SiteConfigKey, SmtpConfigUpdateError,
-        clear_base_url_with_passkey_guard, set_base_url_with_passkey_guard,
+        FeedsConfigReadGate, SMTP_CONFIG_KEYS, SiteConfigKey, SiteIdentityMutationError,
+        SmtpConfigUpdateError, clear_base_url_with_passkey_guard, set_base_url_with_passkey_guard,
     };
     use crate::sql::QueryStorageExt;
-    use crate::test_support::{Backend, SeedUser, backends, backends_matrix, confirmed};
+    use crate::test_support::{
+        Backend, SeedFeedCache, SeedUser, backends, backends_matrix, confirmed,
+    };
     use common::backup::{BackupConfig, BackupMode, RetentionCount};
     use common::media::{MaxFileSize, UserQuota};
     use common::registration::RegistrationPolicy;
@@ -1059,9 +1061,12 @@ mod tests {
         parse_smtp_username, parse_url, parse_user_quota,
     };
     use common::visibility::DefaultAudience;
-    use host::smtp_config::{SmtpConfigUpdate, SmtpCredentialsUpdate};
     use host::test_support::parse_smtp_password;
     use host::test_support::{parse_feed_min_days, parse_feed_min_items};
+    use host::{
+        feed::FeedPath,
+        smtp_config::{SmtpConfigUpdate, SmtpCredentialsUpdate},
+    };
     use rstest::*;
     use rstest_reuse::*;
     use std::time::Duration;
@@ -2207,6 +2212,70 @@ mod tests {
 
         assert_eq!(env.site_config().get_identity().await.unwrap(), expected);
         assert!(env.publisher().snapshot().await.unwrap().generation > before);
+    }
+
+    /// An aggregate callback failure after identity invalidation has run still
+    /// rolls back every identity row, the generation advance, and cache deletion.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn failed_identity_aggregate_after_invalidation_preserves_prior_snapshot(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let cache_path: FeedPath = "/feed.rss".parse().expect("valid feed path");
+        let cached = SeedFeedCache::new(cache_path.clone())
+            .seed(env.feed_cache(), env.write_scope())
+            .await;
+        let before = env
+            .publisher()
+            .snapshot()
+            .await
+            .expect("publisher snapshot");
+        let identity = SiteIdentity {
+            title: parse_site_title("Changed Site"),
+            tagline: Some("Changed tagline".parse().expect("valid tagline")),
+            base_url: Some(parse_url("https://changed.example.test/")),
+        };
+        let site_config = env.site_config();
+        let passkeys = env.passkeys();
+        let publisher = env.publisher();
+
+        let error = env
+            .write_scope()
+            .run(move |transaction| {
+                Box::pin(async move {
+                    site_config
+                        .set_identity(transaction, passkeys, publisher, &identity)
+                        .await?;
+                    Err::<(), _>(SiteIdentityMutationError::Publisher(
+                        crate::PublisherStorageError::Db(sqlx::Error::PoolClosed),
+                    ))
+                })
+            })
+            .await
+            .expect_err("failure after invalidation rolls back the aggregate");
+        assert!(matches!(
+            error,
+            crate::WriteScopeError::Operation(SiteIdentityMutationError::Publisher(
+                crate::PublisherStorageError::Db(sqlx::Error::PoolClosed)
+            ))
+        ));
+        assert_eq!(
+            env.publisher()
+                .snapshot()
+                .await
+                .expect("publisher snapshot"),
+            before,
+            "identity and generation roll back together"
+        );
+        assert_eq!(
+            env.feed_cache()
+                .get(&cache_path)
+                .await
+                .expect("cached feed lookup"),
+            Some(cached),
+            "identity invalidation's cache deletion rolls back"
+        );
     }
 
     #[apply(backends)]

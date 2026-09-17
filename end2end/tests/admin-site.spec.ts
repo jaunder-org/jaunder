@@ -256,7 +256,7 @@ test("site base URL warning banner revalidates in place after relevant settings 
       page.waitForResponse((response) =>
         response.url().includes("/api/site/is_base_url_warning_visible"),
       ),
-      saveButton.click(),
+      baseUrl.press("Enter"),
     ]);
     await expect(banner).toBeVisible();
 
