@@ -1234,6 +1234,11 @@ mod tests {
         assert!(
             profile
                 .seeded_page(Some(PageSeed::SiteTimeline {
+                    identity: common::site::SiteIdentity {
+                        title: "Jaunder".parse().unwrap(),
+                        tagline: None,
+                        base_url: None,
+                    },
                     order: TimelineOrder::Newest,
                     page: page(true),
                 }))

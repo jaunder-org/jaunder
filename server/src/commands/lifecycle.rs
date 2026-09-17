@@ -590,6 +590,27 @@ fn theme_manager(
     Arc::new(ThemeManager::new(themes, media, write_scope, content_locks))
 }
 
+fn publisher_context(
+    publisher: Arc<PublisherService>,
+    dependencies: &ServeStorage,
+) -> impl Fn() + Clone + Send + Sync + 'static {
+    crate::context::publisher_context_provider(
+        publisher,
+        Arc::clone(&dependencies.site_config),
+        Arc::clone(&dependencies.passkeys),
+    )
+}
+
+fn public_projector(dependencies: &ServeStorage) -> crate::projector::PublicProjector {
+    crate::projector::PublicProjector::new(
+        Arc::clone(&dependencies.posts),
+        Arc::clone(&dependencies.users),
+        Arc::clone(&dependencies.themes),
+        Arc::clone(&dependencies.site_config),
+        crate::projector::Shell(crate::site::shell_html()),
+    )
+}
+
 fn compose_server_router(
     dependencies: &ServeStorage,
     storage_path: PathBuf,
@@ -650,7 +671,7 @@ fn compose_server_router(
         ),
         crate::context::theme_context_provider(Arc::clone(&dependencies.themes)),
         crate::context::post_media_ownership_context_provider(ownership.clone()),
-        crate::context::publisher_context_provider(Arc::clone(&publisher)),
+        publisher_context(Arc::clone(&publisher), dependencies),
         crate::context::service_context_provider(
             mailer,
             Arc::clone(&locks),
@@ -661,12 +682,7 @@ fn compose_server_router(
             prod,
         ),
     );
-    let public_projector = crate::projector::PublicProjector::new(
-        Arc::clone(&dependencies.posts),
-        Arc::clone(&dependencies.users),
-        Arc::clone(&dependencies.themes),
-        crate::projector::Shell(crate::site::shell_html()),
-    );
+    let public_projector = public_projector(dependencies);
     let app = crate::application_routes(
         crate::client_telemetry_routes(
             Arc::clone(&dependencies.sessions),

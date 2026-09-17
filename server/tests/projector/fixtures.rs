@@ -6,11 +6,14 @@ use axum::{
     http::{Request, StatusCode, header},
     response::Response,
 };
-use common::post_title::PostTitle;
 use common::theme::{PublicThemeSelection, Theme};
+use common::{post_title::PostTitle, site::SiteIdentity};
 use jiff::tz::Offset;
 use storage::test_support::{SeedRawPost, SeedUser};
-use storage::{MockThemeStorage, PostStorage, RenderedHtml, ThemeOwner, ThemeStorage, UserStorage};
+use storage::{
+    MockSiteConfigStorage, MockThemeStorage, PostStorage, RenderedHtml, SiteConfigStorage,
+    ThemeOwner, ThemeStorage, UserStorage,
+};
 
 /// A recognizable stand-in for the real `index.html`, so tests can tell a
 /// shell-fallback response apart from a projected one.
@@ -40,13 +43,36 @@ pub(super) fn projector_app_with_dependencies(
     users: Arc<dyn UserStorage>,
     themes: Arc<dyn ThemeStorage>,
 ) -> Router {
+    projector_app_with_site_config(posts, users, themes, default_site_config())
+}
+
+/// A projector router with an independently replaceable Site Config dependency.
+pub(super) fn projector_app_with_site_config(
+    posts: Arc<dyn PostStorage>,
+    users: Arc<dyn UserStorage>,
+    themes: Arc<dyn ThemeStorage>,
+    site_config: Arc<dyn SiteConfigStorage>,
+) -> Router {
     let projector = jaunder::projector::PublicProjector::new(
         posts,
         users,
         themes,
+        site_config,
         jaunder::projector::Shell(TEST_SHELL.into()),
     );
     jaunder::projector::register(Router::new(), projector)
+}
+
+fn default_site_config() -> Arc<dyn SiteConfigStorage> {
+    let mut site_config = MockSiteConfigStorage::new();
+    site_config.expect_get_identity().returning(|| {
+        Ok(SiteIdentity {
+            title: "Jaunder".parse().unwrap(),
+            tagline: None,
+            base_url: None,
+        })
+    });
+    Arc::new(site_config)
 }
 
 /// A site selection store whose read fails after the route's content query succeeds.

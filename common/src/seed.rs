@@ -14,6 +14,7 @@ use crate::post_summary::PostSummary;
 use crate::post_title::PostTitle;
 use crate::render::{self, PostFormat, RenderedHtml};
 use crate::root_relative_url::RootRelativeUrl;
+use crate::site::SiteIdentity;
 use crate::slug::Slug;
 use crate::tag::{Tag, TagLabel};
 use crate::theme::PublishedThemePresentation;
@@ -172,6 +173,16 @@ pub struct PublicPresentation<Page> {
     pub page: Page,
 }
 
+/// Server-resolved Local destination for client-side navigation.
+///
+/// Local's identity travels with its page and theme so the client never performs
+/// an independent identity read for the same paint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalTimelinePresentation {
+    pub identity: SiteIdentity,
+    pub page: Page<RenderedPost, TimelineCursor>,
+}
+
 /// The initial data a public page is rendered from — serialized into the
 /// projector's `#jaunder-seed` blob and adopted by the CSR client on boot.
 ///
@@ -181,6 +192,7 @@ pub struct PublicPresentation<Page> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PageSeed {
     SiteTimeline {
+        identity: SiteIdentity,
         order: TimelineOrder,
         page: Page<RenderedPost, TimelineCursor>,
     },
@@ -296,10 +308,35 @@ mod tests {
     }
 
     #[test]
+    fn local_timeline_presentation_round_trips_configured_identity() {
+        let presentation = LocalTimelinePresentation {
+            identity: SiteIdentity {
+                title: "Jaunder <Sandbox>".parse().unwrap(),
+                tagline: Some("Thoughtful <publishing>.".parse().unwrap()),
+                base_url: None,
+            },
+            page: Page {
+                posts: vec![],
+                next_cursor: None,
+                has_more: false,
+            },
+        };
+
+        let json = serde_json::to_string(&presentation).unwrap();
+        let round_trip: LocalTimelinePresentation = serde_json::from_str(&json).unwrap();
+        assert_eq!(round_trip, presentation);
+    }
+
+    #[test]
     fn public_presentation_serializes_the_server_resolved_theme_with_the_page() {
         let presentation = PublicPresentation {
             theme: crate::theme::PublishedThemePresentation::built_in(crate::theme::Theme::Reader),
             page: PageSeed::SiteTimeline {
+                identity: SiteIdentity {
+                    title: "Jaunder".parse().unwrap(),
+                    tagline: None,
+                    base_url: None,
+                },
                 order: TimelineOrder::Newest,
                 page: Page {
                     posts: vec![],
@@ -311,7 +348,7 @@ mod tests {
 
         assert_eq!(
             serde_json::to_string(&presentation).unwrap(),
-            r#"{"theme":{"identity":{"kind":"built_in","value":"reader"},"revision":null,"stylesheet_url":"/style/jaunder-themes.css","logo_url":null,"header_url":null},"page":{"SiteTimeline":{"order":"newest","page":{"posts":[],"next_cursor":null,"has_more":false}}}}"#
+            r#"{"theme":{"identity":{"kind":"built_in","value":"reader"},"revision":null,"stylesheet_url":"/style/jaunder-themes.css","logo_url":null,"header_url":null},"page":{"SiteTimeline":{"identity":{"title":"Jaunder","base_url":null},"order":"newest","page":{"posts":[],"next_cursor":null,"has_more":false}}}}"#
         );
     }
 }

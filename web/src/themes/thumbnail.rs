@@ -9,6 +9,7 @@ use common::{
     render::sanitize,
     root_relative_url::RootRelativeUrl,
     seed::{Page, PageSeed, PublicPresentation, RenderedPost, TagSummary, TimelineOrder},
+    site::{SiteIdentity, SiteTitle},
     tag::TagLabel,
     theme::{PublishedThemeIdentity, PublishedThemePresentation, ThemeRevisionDigest},
 };
@@ -40,6 +41,11 @@ pub fn thumbnail_document(
             header_url,
         },
         page: PageSeed::SiteTimeline {
+            identity: SiteIdentity {
+                title: SiteTitle::default(),
+                tagline: None,
+                base_url: None,
+            },
             order: TimelineOrder::Newest,
             page: Page {
                 posts: vec![fixture_post()?],

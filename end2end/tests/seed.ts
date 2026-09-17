@@ -272,6 +272,47 @@ export async function redriveDeadLettersViaCli(
   });
 }
 
+/** Exact raw site-config row state, including presence versus an empty value. */
+export type RawSiteConfigSnapshot = {
+  value: string | null;
+};
+
+/** Snapshot a raw site-config row through the test-support storage seam. */
+export async function snapshotConfigViaTool(
+  key: string,
+): Promise<RawSiteConfigSnapshot> {
+  return withTimedAction(
+    null,
+    "tool.config.snapshot",
+    async () =>
+      runSeedToolJson([
+        "site-config-snapshot",
+        "--key",
+        key,
+      ]) as unknown as RawSiteConfigSnapshot,
+  );
+}
+
+/** Restore an exact raw site-config row through the test-support storage seam. */
+export async function restoreConfigViaTool(
+  key: string,
+  snapshot: RawSiteConfigSnapshot,
+): Promise<void> {
+  await withTimedAction(null, "tool.config.restore", async () => {
+    execFileSync(
+      process.env.JAUNDER_E2E_SEED_PROCESS ?? "test-support",
+      [
+        "site-config-restore",
+        "--key",
+        key,
+        "--snapshot",
+        JSON.stringify(snapshot),
+      ],
+      { stdio: "pipe", env: process.env },
+    );
+  });
+}
+
 /**
  * Set a single site-config key/value via the shipped `jaunder site-config set`
  * subcommand (#8) — the same in-process storage write the canonical e2e seed

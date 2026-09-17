@@ -16,7 +16,7 @@ use crate::steps::scan::run_source_scan;
 
 const POLICED_ROOTS: &[&str] = &["storage/src", "server/src", "web/src"];
 
-/// The authoritative, closed application-mutation census. Counts add to 81.
+/// The authoritative, closed application-mutation census. Counts add to 94.
 const AUDITED_TRAITS: &[(&str, &[&str])] = &[
     (
         "AudienceStorage",
@@ -89,6 +89,7 @@ const AUDITED_TRAITS: &[(&str, &[&str])] = &[
     (
         "PublisherStorage",
         &[
+            "invalidate_identity",
             "mutate_hub",
             "mutate_feed_window",
             "repair_malformed_hub",
@@ -546,7 +547,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_eighty_one_method_census_passes() {
+    fn exact_ninety_four_method_census_passes() {
         let source = complete_census().replacen(
             "trait MediaStorage {",
             "trait MediaStorage { async fn media_entry_is_reclaimable(&self, transaction: &mut WriteTransaction);",

@@ -8,11 +8,17 @@ use std::time::Duration;
 use anyhow::Context;
 use common::MutationOutcome;
 use common::tagged_url::HubUrl;
+use common::{
+    site::{SiteIdentity, SiteTagline, SiteTitle},
+    tagged_url::BaseUrl,
+};
+use host::config_key::SiteConfigKey;
 use sqlx::Error;
 use storage::{
-    CacheCommitOutcome, FeedCacheRow, FeedWindowMutation, FeedWindowMutationOutcome,
-    HubMutationOutcome, PublisherGeneration, PublisherSnapshot, PublisherStorage,
-    PublisherStorageError, WriteScope, WriteScopeError,
+    BaseUrlMutationError, CacheCommitOutcome, FeedCacheRow, FeedWindowMutation,
+    FeedWindowMutationOutcome, HubMutationOutcome, PasskeyStorage, PublisherGeneration,
+    PublisherSnapshot, PublisherStorage, PublisherStorageError, SiteConfigStorage, WriteScope,
+    WriteScopeError, clear_base_url_with_passkey_guard, set_base_url_with_passkey_guard,
 };
 use web::websub::{WebsubPublisher, WebsubPublisherError};
 ///
@@ -60,6 +66,59 @@ fn require_confirmed_malformed_hub_repair<T>(committed: &MutationOutcome<T>) -> 
         ));
     }
     Ok(())
+}
+
+#[derive(Debug, thiserror::Error)]
+enum SiteIdentityMutationError {
+    #[error(transparent)]
+    BaseUrl(#[from] BaseUrlMutationError),
+    #[error(transparent)]
+    Config(#[from] sqlx::Error),
+    #[error(transparent)]
+    Publisher(#[from] PublisherStorageError),
+}
+
+pub enum SiteIdentityMutation {
+    SetTitle(SiteTitle),
+    SetTagline(Option<SiteTagline>),
+    SetBaseUrl(Option<BaseUrl>),
+    UnsetTitle,
+    UnsetTagline,
+    UnsetBaseUrl,
+}
+
+impl SiteIdentityMutation {
+    /// Builds the one-key CLI identity mutation without widening the closed
+    /// `SiteConfigKey` registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when an identity-key value fails typed validation.
+    pub fn set(key: SiteConfigKey, value: &str) -> anyhow::Result<Option<Self>> {
+        match key {
+            SiteConfigKey::SiteTitle => Ok(Some(Self::SetTitle(value.parse()?))),
+            SiteConfigKey::SiteTagline => {
+                Ok(Some(Self::SetTagline(SiteTagline::parse_optional(value)?)))
+            }
+            SiteConfigKey::SiteBaseUrl => Ok(Some(Self::SetBaseUrl(
+                (!value.is_empty())
+                    .then(|| value.parse::<BaseUrl>())
+                    .transpose()?,
+            ))),
+            _ => Ok(None),
+        }
+    }
+
+    /// Returns the one-key CLI identity clear operation from the closed key set.
+    #[must_use]
+    pub fn unset(key: SiteConfigKey) -> Option<Self> {
+        match key {
+            SiteConfigKey::SiteTitle => Some(Self::UnsetTitle),
+            SiteConfigKey::SiteTagline => Some(Self::UnsetTagline),
+            SiteConfigKey::SiteBaseUrl => Some(Self::UnsetBaseUrl),
+            _ => None,
+        }
+    }
 }
 
 /// Shared publisher operation seam. The gate is acquired before every write scope.
@@ -123,6 +182,102 @@ impl PublisherService {
         Ok(self.publisher.snapshot().await?)
     }
 
+    /// Mutates one identity key under the publisher gate, invalidating cached
+    /// Syndication Feeds in the same write scope.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the publisher gate, write scope, or storage mutation fails.
+    pub async fn mutate_identity_with_feedback(
+        &self,
+        site_config: Arc<dyn SiteConfigStorage>,
+        passkeys: Arc<dyn PasskeyStorage>,
+        mutation: SiteIdentityMutation,
+    ) -> anyhow::Result<MutationOutcome<PublisherGeneration>> {
+        let _gate = PublisherGateGuard::acquire(&self.storage_path).await?;
+        let publisher = Arc::clone(&self.publisher);
+        self.write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    match mutation {
+                        SiteIdentityMutation::SetTitle(title) => {
+                            site_config
+                                .set(transaction, SiteConfigKey::SiteTitle, &title)
+                                .await?;
+                        }
+                        SiteIdentityMutation::SetTagline(tagline) => {
+                            site_config
+                                .set(
+                                    transaction,
+                                    SiteConfigKey::SiteTagline,
+                                    tagline.as_ref().map_or("", AsRef::as_ref),
+                                )
+                                .await?;
+                        }
+                        SiteIdentityMutation::SetBaseUrl(base_url) => {
+                            set_base_url_with_passkey_guard(
+                                transaction,
+                                site_config.as_ref(),
+                                passkeys.as_ref(),
+                                base_url,
+                            )
+                            .await?;
+                        }
+                        SiteIdentityMutation::UnsetTitle => {
+                            site_config
+                                .delete(transaction, SiteConfigKey::SiteTitle)
+                                .await?;
+                        }
+                        SiteIdentityMutation::UnsetTagline => {
+                            site_config
+                                .delete(transaction, SiteConfigKey::SiteTagline)
+                                .await?;
+                        }
+                        SiteIdentityMutation::UnsetBaseUrl => {
+                            clear_base_url_with_passkey_guard(
+                                transaction,
+                                site_config.as_ref(),
+                                passkeys.as_ref(),
+                            )
+                            .await?;
+                        }
+                    }
+                    publisher
+                        .invalidate_identity(transaction)
+                        .await
+                        .map_err(SiteIdentityMutationError::from)
+                })
+            })
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Mutates the complete site identity under one publisher gate and write scope.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the publisher gate, write scope, or aggregate mutation fails.
+    pub async fn mutate_site_identity_with_feedback(
+        &self,
+        site_config: Arc<dyn SiteConfigStorage>,
+        passkeys: Arc<dyn PasskeyStorage>,
+        identity: SiteIdentity,
+    ) -> anyhow::Result<MutationOutcome<()>> {
+        let _gate = PublisherGateGuard::acquire(&self.storage_path).await?;
+        let publisher = Arc::clone(&self.publisher);
+        self.write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    site_config
+                        .set_identity(transaction, passkeys, publisher, &identity)
+                        .await
+                })
+            })
+            .await
+            .map(|outcome| outcome.map(|()| ()))
+            .map_err(Into::into)
+    }
+
     /// Mutates the normalized hub under the same gate used by publication and
     /// preserves the write acknowledgement for operator feedback.
     ///
@@ -181,6 +336,59 @@ impl PublisherService {
         }
     }
 }
+/// Server-side adapter for the web site's aggregate identity capability.
+#[derive(Clone)]
+pub struct SiteIdentityPublisherOperation {
+    publisher: Arc<PublisherService>,
+    site_config: Arc<dyn SiteConfigStorage>,
+    passkeys: Arc<dyn PasskeyStorage>,
+}
+
+impl SiteIdentityPublisherOperation {
+    #[must_use]
+    pub fn new(
+        publisher: Arc<PublisherService>,
+        site_config: Arc<dyn SiteConfigStorage>,
+        passkeys: Arc<dyn PasskeyStorage>,
+    ) -> Self {
+        Self {
+            publisher,
+            site_config,
+            passkeys,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl web::site::SiteIdentityPublisher for SiteIdentityPublisherOperation {
+    async fn mutate_identity(
+        &self,
+        identity: SiteIdentity,
+    ) -> Result<MutationOutcome<()>, web::site::SiteIdentityPublisherError> {
+        self.publisher
+            .mutate_site_identity_with_feedback(
+                Arc::clone(&self.site_config),
+                Arc::clone(&self.passkeys),
+                identity,
+            )
+            .await
+            .map_err(map_site_identity_publisher_error)
+    }
+}
+
+fn map_site_identity_publisher_error(
+    error: anyhow::Error,
+) -> web::site::SiteIdentityPublisherError {
+    let source = match error.downcast::<storage::SiteIdentityMutationError>() {
+        Ok(error) => Box::new(error),
+        Err(error) => match error.downcast::<sqlx::Error>() {
+            Ok(error) => Box::new(error),
+            Err(error) => error.into_boxed_dyn_error(),
+        },
+    };
+    web::site::SiteIdentityPublisherError::new(source)
+}
+
 #[async_trait::async_trait]
 impl WebsubPublisher for PublisherService {
     async fn hub_url(&self) -> Result<Option<HubUrl>, WebsubPublisherError> {
@@ -288,6 +496,21 @@ mod tests {
                 .expect("valid fingerprint"),
         )
         .expect("matching cache row formats")
+    }
+
+    #[test]
+    fn cli_tagline_mutation_rejects_separator_only_values() {
+        assert!(matches!(
+            SiteIdentityMutation::set(SiteConfigKey::SiteTagline, " \t ").unwrap(),
+            Some(SiteIdentityMutation::SetTagline(None))
+        ));
+        for separator in ['\r', '\n', '\u{0085}', '\u{2028}', '\u{2029}'] {
+            let value = format!(" {separator} ");
+            assert!(
+                SiteIdentityMutation::set(SiteConfigKey::SiteTagline, &value).is_err(),
+                "separator {separator:?} must not become an empty clear"
+            );
+        }
     }
 
     #[tokio::test]
@@ -554,6 +777,56 @@ mod tests {
         );
         drop(first);
         let _second = second.await.expect("gate task joins");
+    }
+
+    #[test]
+    fn aggregate_identity_publisher_error_preserves_typed_storage_and_sql_sources() {
+        let storage_error = map_site_identity_publisher_error(anyhow::Error::new(
+            storage::SiteIdentityMutationError::Config(Error::PoolClosed),
+        ));
+        assert!(
+            std::error::Error::source(&storage_error)
+                .and_then(|source| source.downcast_ref::<storage::SiteIdentityMutationError>())
+                .is_some()
+        );
+
+        let sql_error = map_site_identity_publisher_error(anyhow::Error::new(Error::PoolClosed));
+        assert!(
+            std::error::Error::source(&sql_error)
+                .and_then(|source| source.downcast_ref::<Error>())
+                .is_some()
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn aggregate_identity_operation_writes_one_fenced_snapshot(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let operation = SiteIdentityPublisherOperation::new(
+            Arc::new(PublisherService::new(
+                env.base.path().to_path_buf(),
+                env.publisher(),
+                env.write_scope(),
+            )),
+            env.site_config(),
+            env.passkeys(),
+        );
+        let before = env.publisher().snapshot().await.unwrap().generation;
+        let identity = SiteIdentity {
+            title: "Configured".parse().unwrap(),
+            tagline: Some("A tagline".parse().unwrap()),
+            base_url: Some(parse_url("https://identity.example/")),
+        };
+
+        assert!(matches!(
+            web::site::SiteIdentityPublisher::mutate_identity(&operation, identity.clone())
+                .await
+                .unwrap(),
+            MutationOutcome::Confirmed(())
+        ));
+        let snapshot = env.publisher().snapshot().await.unwrap();
+        assert_eq!(snapshot.identity, identity);
+        assert!(snapshot.generation > before);
     }
 
     #[apply(backends)]

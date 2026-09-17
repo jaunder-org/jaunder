@@ -3,23 +3,27 @@ use std::sync::Arc;
 use axum::http::{StatusCode, header};
 use tower::ServiceExt;
 
-use common::seed::{Page, PageSeed, PublicPresentation};
 use common::theme::{PublishedThemePresentation, Theme};
 use common::time::{PermalinkDate, UtcInstant};
 use common::visibility::ViewerIdentity;
+use common::{
+    seed::{Page, PageSeed, PublicPresentation},
+    site::SiteIdentity,
+};
 use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::body_string;
 
 use storage::{
-    MockUserStorage, UserStorage,
+    MockSiteConfigStorage, MockUserStorage, SiteConfigStorage, UserStorage,
     test_support::{Backend, backends},
 };
 
 use super::fixtures::{
     TEST_SHELL, assert_sanitized_internal_server_error, failing_site_theme_selection, get,
-    projector_app, projector_app_with_dependencies, seed_published_post, seed_tagged_post,
+    projector_app, projector_app_with_dependencies, projector_app_with_site_config,
+    seed_published_post, seed_tagged_post,
 };
 
 #[apply(backends)]
@@ -56,6 +60,159 @@ async fn site_timeline_projects_local_posts(#[case] backend: Backend) {
     let html = body_string(resp).await;
     assert!(html.contains(title.as_ref()), "post present: {html}");
     assert!(html.contains(r#"id="jaunder-seed""#), "data blob present");
+    assert!(
+        html.contains(r#"data-jaunder-part="site-title">Jaunder"#),
+        "Local body identity: {html}"
+    );
+    assert!(
+        html.contains(r#""identity":{"title":"Jaunder"#),
+        "Local seed identity: {html}"
+    );
+    assert_eq!(
+        html.matches("data-jaunder-projected-local-metadata")
+            .count(),
+        4,
+        "Local head metadata cardinality: {html}"
+    );
+    assert!(
+        html.contains(r#"name="description" content="""#),
+        "absent tagline leaves standard description empty: {html}"
+    );
+    assert!(
+        html.contains(r#"property="og:description" content="""#),
+        "absent tagline leaves Open Graph description empty: {html}"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn site_timeline_resolves_one_configured_identity_for_head_body_and_seed(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let mut site_config = MockSiteConfigStorage::new();
+    site_config.expect_get_identity().times(1).return_once(|| {
+        Ok(SiteIdentity {
+            title: "Jaunder <Sandbox>".parse().unwrap(),
+            tagline: Some("Thoughtful & <publishing>.".parse().unwrap()),
+            base_url: None,
+        })
+    });
+
+    let response = projector_app_with_site_config(
+        env.posts(),
+        env.users(),
+        env.themes(),
+        Arc::new(site_config) as Arc<dyn SiteConfigStorage>,
+    )
+    .oneshot(get("/"))
+    .await
+    .expect("request");
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = body_string(response).await;
+
+    assert!(
+        html.contains(
+            r"<title data-jaunder-projected-local-metadata>Jaunder &lt;Sandbox&gt;</title>"
+        ),
+        "configured title in head: {html}"
+    );
+    assert!(
+        html.contains(r#"name="description" content="Thoughtful &amp; &lt;publishing&gt;.""#),
+        "configured tagline in standard metadata: {html}"
+    );
+    assert!(
+        html.contains(r#"property="og:title" content="Jaunder &lt;Sandbox&gt;""#),
+        "configured title in Open Graph metadata: {html}"
+    );
+    assert!(
+        html.contains(
+            r#"property="og:description" content="Thoughtful &amp; &lt;publishing&gt;.""#
+        ),
+        "configured tagline in Open Graph metadata: {html}"
+    );
+    assert!(
+        html.contains(r#"data-jaunder-part="site-title">Jaunder &lt;Sandbox&gt;</span>"#),
+        "same configured title in projected body: {html}"
+    );
+    assert!(
+        html.contains(r#"<div class="j-sub">Thoughtful &amp; &lt;publishing&gt;.</div>"#),
+        "same configured tagline in projected body: {html}"
+    );
+    assert!(
+        html.contains(
+            r#""identity":{"title":"Jaunder <Sandbox>","tagline":"Thoughtful & <publishing>.","base_url":null}"#
+        ),
+        "same configured identity in seed: {html}"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn site_timeline_maps_identity_storage_failure_at_the_projector_boundary(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let mut site_config = MockSiteConfigStorage::new();
+    site_config
+        .expect_get_identity()
+        .times(1)
+        .return_once(|| Err(sqlx::Error::PoolClosed));
+
+    let response = projector_app_with_site_config(
+        env.posts(),
+        env.users(),
+        env.themes(),
+        Arc::new(site_config) as Arc<dyn SiteConfigStorage>,
+    )
+    .oneshot(get("/"))
+    .await
+    .expect("request");
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_sanitized_internal_server_error(response).await;
+}
+
+/// The malformed-row case crosses the real Local projector boundary rather than
+/// stopping at `SiteConfigStorage::get_identity`: it must retain the cacheable
+/// default-title projection while emitting no tagline presentation or metadata.
+#[apply(backends)]
+#[tokio::test]
+async fn site_timeline_treats_malformed_persisted_tagline_as_absent(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    env.inject_invalid_site_config(
+        host::config_key::SiteConfigKey::SiteTagline,
+        "invalid\u{2028}persisted tagline",
+    )
+    .await
+    .expect("inject malformed legacy tagline");
+
+    let response =
+        projector_app_with_site_config(env.posts(), env.users(), env.themes(), env.site_config())
+            .oneshot(get("/"))
+            .await
+            .expect("request");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(header::CACHE_CONTROL),
+        Some(&header::HeaderValue::from_static("public, max-age=300")),
+        "invalid optional identity data does not alter Local's five-minute cache policy"
+    );
+    let html = body_string(response).await;
+    assert!(
+        html.contains(r#"data-jaunder-part="site-title">Jaunder"#),
+        "invalid persisted tagline retains the default title: {html}"
+    );
+    assert!(!html.contains("j-sub"), "no Local tagline element: {html}");
+    assert!(
+        html.contains(r#"name="description" content="""#)
+            && html.contains(r#"property="og:description" content="""#),
+        "invalid persisted tagline leaves descriptions absent: {html}"
+    );
+    assert!(
+        !html.contains(r#""tagline":"#),
+        "the Local seed resolves malformed optional tagline to absent: {html}"
+    );
 }
 
 #[apply(backends)]
@@ -324,6 +481,11 @@ async fn every_page_seed_variant_serializes_without_null_fallback(#[case] backen
     let tag: common::tag::Tag = "rust".parse().expect("representative tag");
     let seeds = [
         PageSeed::SiteTimeline {
+            identity: SiteIdentity {
+                title: "Jaunder".parse().unwrap(),
+                tagline: None,
+                base_url: None,
+            },
             order: common::seed::TimelineOrder::Newest,
             page: page.clone(),
         },

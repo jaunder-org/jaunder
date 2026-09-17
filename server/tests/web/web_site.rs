@@ -1,12 +1,16 @@
 use axum::http::StatusCode;
-use common::site::SiteIdentity;
+use common::{MutationOutcome, site::SiteIdentity};
+use host::feed::FeedPath;
 use server_fn::ServerFn;
 
 use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{create_operator_and_session, create_user_and_session, make_app, post_form};
-use storage::test_support::{Backend, TestEnv, backends, confirmed, passkey_credential_fixture};
+use storage::test_support::{
+    Backend, SeedFeedCache, TestEnv, backends, confirmed, passkey_credential_fixture,
+    write_scope_with_commit_acknowledgement_loss,
+};
 
 async fn enroll_passkey(env: &TestEnv, user_id: common::ids::UserId) {
     let passkeys = env.passkeys();
@@ -109,7 +113,7 @@ async fn update_site_identity_round_trips_via_get(#[case] backend: Backend) {
     .await
     .cookie();
 
-    let update_body = "title=My+Blog&base_url=https%3A%2F%2Fexample.com%2F";
+    let update_body = "request[title]=My+Blog&request[base_url]=https%3A%2F%2Fexample.com%2F";
     let (update_status, update_body_resp) = post_form(
         app.clone(),
         <web::site::UpdateIdentity as ServerFn>::PATH,
@@ -134,12 +138,7 @@ async fn update_site_identity_round_trips_via_get(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
-async fn update_site_identity_rejects_empty_title(#[case] backend: Backend) {
-    // A whitespace-only `title` fails at typed-arg decode — the validating serde
-    // bridge for `SiteTitle` rejects an empty/whitespace-only value, a non-OK server
-    // -function error rather than a specific in-body Validation message (ADR-0065).
-    // The client's disable-until-valid gate keeps a real browser from reaching this;
-    // a raw POST is the malformed-client path.
+async fn update_site_identity_clears_tagline_when_omitted(#[case] backend: Backend) {
     let env = backend.setup().await;
     let app = make_app!(&env, &env.base);
     let cookie = create_operator_and_session(
@@ -153,23 +152,57 @@ async fn update_site_identity_rejects_empty_title(#[case] backend: Backend) {
     let (status, body) = post_form(
         app.clone(),
         <web::site::UpdateIdentity as ServerFn>::PATH,
-        "title=+++&base_url=https%3A%2F%2Fexample.com",
+        "request[title]=My+Blog&request[tagline]=A+tagline&request[base_url]=https%3A%2F%2Fexample.com%2F",
         Some(&cookie),
     )
     .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
 
-    assert_ne!(status, StatusCode::OK, "empty title should fail: {body}");
+    // The direct-bound optional field dispatches `None` by omitting `tagline`,
+    // which clears the aggregate identity value rather than retaining it.
+    let (status, body) = post_form(
+        app.clone(),
+        <web::site::UpdateIdentity as ServerFn>::PATH,
+        "request[title]=My+Blog&request[base_url]=https%3A%2F%2Fexample.com%2F",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+
+    let (status, body) = post_form(
+        app,
+        <web::site::GetIdentity as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let identity: SiteIdentity = serde_json::from_str(&body).unwrap();
+    assert_eq!(identity.tagline, None);
 }
 
 #[apply(backends)]
 #[tokio::test]
-async fn update_site_identity_rejects_non_http_base_url(#[case] backend: Backend) {
-    // A non-http(s) `base_url` fails at typed-arg decode — the validating serde
-    // bridge for `Option<BaseUrl>` rejects it, a non-OK server-function error
-    // rather than a specific Validation message (ADR-0065). The client's
-    // disable-until-valid gate keeps a real browser from reaching this; a raw POST
-    // is the malformed-client path.
+async fn update_site_identity_preserves_loaded_tagline(#[case] backend: Backend) {
     let env = backend.setup().await;
+    let site_config = env.site_config();
+    let configured_tagline = "Existing tagline";
+    confirmed(
+        env.write_scope()
+            .run(move |transaction| {
+                Box::pin(async move {
+                    site_config
+                        .set(
+                            transaction,
+                            host::config_key::SiteConfigKey::SiteTagline,
+                            configured_tagline,
+                        )
+                        .await
+                })
+            })
+            .await
+            .unwrap(),
+    );
     let app = make_app!(&env, &env.base);
     let cookie = create_operator_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -182,23 +215,30 @@ async fn update_site_identity_rejects_non_http_base_url(#[case] backend: Backend
     let (status, body) = post_form(
         app.clone(),
         <web::site::UpdateIdentity as ServerFn>::PATH,
-        "title=My+Blog&base_url=ftp%3A%2F%2Fexample.com",
+        "request[title]=Renamed&request[tagline]=Existing+tagline&request[base_url]=https%3A%2F%2Fexample.com%2F",
         Some(&cookie),
     )
     .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
 
-    assert_ne!(
-        status,
-        StatusCode::OK,
-        "non-http base_url should fail: {body}"
-    );
+    let (status, body) = post_form(
+        app,
+        <web::site::GetIdentity as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let identity: SiteIdentity = serde_json::from_str(&body).unwrap();
+    assert_eq!(identity.title, "Renamed");
+    assert_eq!(identity.tagline.as_deref(), Some(configured_tagline));
 }
 
 #[apply(backends)]
 #[tokio::test]
-async fn update_site_identity_rejects_malformed_base_url(#[case] backend: Backend) {
-    // A syntactically malformed `base_url` (not a URL at all) also fails at
-    // typed-arg decode — same non-OK path as the non-http case (ADR-0065).
+async fn malformed_site_tagline_wire_rejection_preserves_the_aggregate_snapshot(
+    #[case] backend: Backend,
+) {
     let env = backend.setup().await;
     let app = make_app!(&env, &env.base);
     let cookie = create_operator_and_session(
@@ -208,20 +248,202 @@ async fn update_site_identity_rejects_malformed_base_url(#[case] backend: Backen
     )
     .await
     .cookie();
-
     let (status, body) = post_form(
         app.clone(),
         <web::site::UpdateIdentity as ServerFn>::PATH,
-        "title=My+Blog&base_url=not-a-url",
+        "request[title]=Prior+Site&request[tagline]=Prior+tagline&request[base_url]=https%3A%2F%2Fprior.example.test%2F",
         Some(&cookie),
     )
     .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let cache_path: FeedPath = "/feed.rss".parse().expect("valid feed path");
+    let cached = SeedFeedCache::new(cache_path.clone())
+        .seed(env.feed_cache(), env.write_scope())
+        .await;
+    let before = env
+        .publisher()
+        .snapshot()
+        .await
+        .expect("publisher snapshot");
 
-    assert_ne!(
-        status,
-        StatusCode::OK,
-        "malformed base_url should fail: {body}"
+    for body in [
+        format!(
+            "request[title]=Changed+Site&request[tagline]={}&request[base_url]=https%3A%2F%2Fchanged.example.test%2F",
+            "x".repeat(281)
+        ),
+        "request[title]=Changed+Site&request[tagline]=before%0Aafter&request[base_url]=https%3A%2F%2Fchanged.example.test%2F".to_owned(),
+    ] {
+        let (status, response) = post_form(
+            app.clone(),
+            <web::site::UpdateIdentity as ServerFn>::PATH,
+            &body,
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "typed wire validation must reject the malformed tagline: {response}"
+        );
+        assert!(
+            response.contains("site tagline cannot"),
+            "the client-validation wire rejection retains its validation detail: {response}"
+        );
+        assert_eq!(
+            env.publisher().snapshot().await.expect("publisher snapshot"),
+            before,
+            "wire validation rejects before identity or publisher writes"
+        );
+        assert_eq!(
+            env.feed_cache()
+                .get(&cache_path)
+                .await
+                .expect("cached feed lookup"),
+            Some(cached.clone()),
+            "wire validation leaves cached feeds untouched"
+        );
+    }
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn aggregate_identity_commit_acknowledgement_loss_reaches_the_wire(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let write_scope = write_scope_with_commit_acknowledgement_loss(&env.write_scope());
+    let app = make_app!(&env, &env.base; override_write_scope = write_scope);
+    let cookie = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
+
+    let (status, body) = post_form(
+        app,
+        <web::site::UpdateIdentity as ServerFn>::PATH,
+        "request[title]=Uncertain+Site&request[tagline]=Uncertain+tagline&request[base_url]=https%3A%2F%2Funcertain.example.test%2F",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert!(matches!(
+        serde_json::from_str::<MutationOutcome<()>>(&body).expect("mutation outcome"),
+        MutationOutcome::CommitIndeterminate(())
+    ));
+    let identity = env
+        .site_config()
+        .get_identity()
+        .await
+        .expect("identity read");
+    assert_eq!(identity.title, "Uncertain Site");
+    assert_eq!(identity.tagline.as_deref(), Some("Uncertain tagline"));
+    assert_eq!(
+        identity.base_url.as_deref(),
+        Some("https://uncertain.example.test/")
     );
+}
+
+/// Typed wire rejection must occur before any part of the identity aggregate
+/// or its publisher cache invalidation can change.
+#[apply(backends)]
+#[tokio::test]
+async fn invalid_identity_wire_rejection_preserves_the_aggregate_snapshot(
+    #[case] backend: Backend,
+) {
+    // Whitespace-only titles and malformed/non-http(s) base URLs fail during
+    // typed argument decoding. A raw POST covers this malformed-client path;
+    // browser validation prevents it in ordinary operation (ADR-0065).
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
+    let (status, body) = post_form(
+        app.clone(),
+        <web::site::UpdateIdentity as ServerFn>::PATH,
+        "request[title]=Prior+Site&request[tagline]=Prior+tagline&request[base_url]=https%3A%2F%2Fprior.example.test%2F",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let identity_before = env.site_config().get_identity().await.expect("identity");
+    let cache_path: FeedPath = "/feed.rss".parse().expect("valid feed path");
+    let cached = SeedFeedCache::new(cache_path.clone())
+        .seed(env.feed_cache(), env.write_scope())
+        .await;
+    let publisher_before = env
+        .publisher()
+        .snapshot()
+        .await
+        .expect("publisher snapshot");
+
+    for (description, request, detail) in [
+        (
+            "empty title",
+            "request[title]=+++&request[base_url]=https%3A%2F%2Fexample.com",
+            Some("site title cannot be empty"),
+        ),
+        (
+            "non-http base URL",
+            "request[title]=My+Blog&request[base_url]=ftp%3A%2F%2Fexample.com",
+            None,
+        ),
+        (
+            "malformed base URL",
+            "request[title]=My+Blog&request[base_url]=not-a-url",
+            None,
+        ),
+    ] {
+        let (status, body) = post_form(
+            app.clone(),
+            <web::site::UpdateIdentity as ServerFn>::PATH,
+            request,
+            Some(&cookie),
+        )
+        .await;
+
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "{description} should fail validation: {body}"
+        );
+        assert!(
+            body.contains("error deserializing server function arguments"),
+            "{description} retains the typed-request validation category: {body}"
+        );
+        if let Some(detail) = detail {
+            assert!(
+                body.contains(detail),
+                "{description} retains its stable validation detail: {body}"
+            );
+        }
+        assert_eq!(
+            env.site_config().get_identity().await.expect("identity"),
+            identity_before,
+            "{description} leaves the complete identity unchanged"
+        );
+        assert_eq!(
+            env.publisher()
+                .snapshot()
+                .await
+                .expect("publisher snapshot"),
+            publisher_before,
+            "{description} rejects before publisher writes"
+        );
+        assert_eq!(
+            env.feed_cache()
+                .get(&cache_path)
+                .await
+                .expect("cached feed lookup"),
+            Some(cached.clone()),
+            "{description} leaves cached feeds untouched"
+        );
+    }
 }
 
 #[apply(backends)]
@@ -243,7 +465,7 @@ async fn update_site_identity_omits_base_url_as_none(#[case] backend: Backend) {
     let (update_status, update_body) = post_form(
         app.clone(),
         <web::site::UpdateIdentity as ServerFn>::PATH,
-        "title=My+Blog",
+        "request[title]=My+Blog",
         Some(&cookie),
     )
     .await;
@@ -275,7 +497,7 @@ async fn update_site_identity_requires_operator(#[case] backend: Backend) {
     .await
     .cookie();
 
-    let body = "title=My+Blog&base_url=https%3A%2F%2Fexample.com";
+    let body = "request[title]=My+Blog&request[base_url]=https%3A%2F%2Fexample.com";
 
     let (anon_status, anon_body) = post_form(
         app.clone(),
@@ -400,7 +622,8 @@ async fn media_upload_capability_and_site_identity_save_independently(#[case] ba
     .await
     .cookie();
 
-    let identity_body = "title=Independent+Site&base_url=https%3A%2F%2Fexample.com";
+    let identity_body =
+        "request[title]=Independent+Site&request[base_url]=https%3A%2F%2Fexample.com";
     let (identity_status, identity_response) = post_form(
         app.clone(),
         <web::site::UpdateIdentity as ServerFn>::PATH,
@@ -438,7 +661,7 @@ async fn media_upload_capability_and_site_identity_save_independently(#[case] ba
     let (identity_update_status, identity_update_response) = post_form(
         app.clone(),
         <web::site::UpdateIdentity as ServerFn>::PATH,
-        "title=Renamed+Site",
+        "request[title]=Renamed+Site",
         Some(&cookie),
     )
     .await;
@@ -505,7 +728,7 @@ async fn base_url_warning_hidden_when_base_url_configured(#[case] backend: Backe
     let (up, up_body) = post_form(
         app.clone(),
         <web::site::UpdateIdentity as ServerFn>::PATH,
-        "title=My+Blog&base_url=https%3A%2F%2Fexample.com%2F",
+        "request[title]=My+Blog&request[base_url]=https%3A%2F%2Fexample.com%2F",
         Some(&cookie),
     )
     .await;
@@ -606,7 +829,7 @@ async fn update_site_identity_rejects_replacing_or_clearing_enrolled_rp_host(
     let (replacement_status, replacement_body) = post_form(
         app.clone(),
         <web::site::UpdateIdentity as ServerFn>::PATH,
-        "title=My+Blog&base_url=https%3A%2F%2Freplacement.example.test%2F",
+        "request[title]=My+Blog&request[base_url]=https%3A%2F%2Freplacement.example.test%2F",
         Some(&cookie),
     )
     .await;
@@ -615,11 +838,15 @@ async fn update_site_identity_rejects_replacing_or_clearing_enrolled_rp_host(
         StatusCode::INTERNAL_SERVER_ERROR,
         "body: {replacement_body}"
     );
+    assert!(
+        replacement_body.contains("conflict"),
+        "RP-host lock must retain its conflict wire error: {replacement_body}"
+    );
 
     let (clear_status, clear_body) = post_form(
         app.clone(),
         <web::site::UpdateIdentity as ServerFn>::PATH,
-        "title=My+Blog",
+        "request[title]=My+Blog",
         Some(&cookie),
     )
     .await;
@@ -627,6 +854,10 @@ async fn update_site_identity_rejects_replacing_or_clearing_enrolled_rp_host(
         clear_status,
         StatusCode::INTERNAL_SERVER_ERROR,
         "body: {clear_body}"
+    );
+    assert!(
+        clear_body.contains("conflict"),
+        "RP-host lock must retain its conflict wire error: {clear_body}"
     );
     let (get_status, get_body) = post_form(
         app.clone(),
@@ -663,7 +894,7 @@ async fn update_site_identity_allows_scheme_and_port_changes_for_enrolled_rp_hos
     let (update_status, update_body) = post_form(
         app.clone(),
         <web::site::UpdateIdentity as ServerFn>::PATH,
-        "title=My+Blog&base_url=http%3A%2F%2Fexample.com%3A8080%2F",
+        "request[title]=My+Blog&request[base_url]=http%3A%2F%2Fexample.com%3A8080%2F",
         Some(&cookie),
     )
     .await;

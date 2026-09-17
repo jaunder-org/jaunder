@@ -162,6 +162,7 @@ pub fn fixture_post_media_ownership() -> PostMediaOwnership {
     site_config.expect_get_identity().returning(|| {
         Ok(SiteIdentity {
             title: SiteTitle::default(),
+            tagline: None,
             base_url: None,
         })
     });

@@ -70,12 +70,16 @@ pub(crate) fn body(seed: &PageSeed) -> Markup {
 pub(crate) fn body_with_logo(seed: &PageSeed, logo: &Markup, header: &Markup) -> Markup {
     match seed {
         PageSeed::Permalink(authored) => Markup::new(html! {
-            (topbar::render(&format!("Post by {}", authored.post.username), None, &Markup::empty(), logo))
+            (topbar::render("Jaunder", &format!("Post by {}", authored.post.username), None, &Markup::empty(), logo))
             (header)
             div class="j-scroll" { div class="j-page" { (permalink_article(&authored.post)) } }
         }),
-        PageSeed::SiteTimeline { order, page } => render_timeline_page(
-            &render::masthead(logo),
+        PageSeed::SiteTimeline {
+            identity,
+            order,
+            page,
+        } => render_timeline_page(
+            &render::masthead(identity, logo),
             header,
             *order,
             &page.posts,
@@ -89,6 +93,7 @@ pub(crate) fn body_with_logo(seed: &PageSeed, logo: &Markup, header: &Markup) ->
             page,
         } => render_timeline_page(
             &topbar::render(
+                "Jaunder",
                 &format!("Posts by {username}"),
                 Some("User timeline"),
                 &Markup::empty(),
@@ -103,6 +108,7 @@ pub(crate) fn body_with_logo(seed: &PageSeed, logo: &Markup, header: &Markup) ->
         ),
         PageSeed::SiteTag { tag, order, page } => render_timeline_page(
             &topbar::render(
+                "Jaunder",
                 &format!("#{tag}"),
                 Some("Posts on this instance"),
                 &Markup::empty(),
@@ -122,6 +128,7 @@ pub(crate) fn body_with_logo(seed: &PageSeed, logo: &Markup, header: &Markup) ->
             page,
         } => render_timeline_page(
             &topbar::render(
+                "Jaunder",
                 &format!("#{tag}"),
                 Some(&format!("Posts by ~{username}")),
                 &Markup::empty(),
@@ -389,11 +396,19 @@ pub(crate) mod test_fixtures {
 mod tests {
     use super::test_fixtures::{one_post_page, sample_post, sample_summary};
     use super::*;
-    use common::seed::Page;
     use common::test_support::{
         parse_display_name, parse_post_summary, parse_post_title, parse_root_relative_url,
         parse_username, parse_utc_instant,
     };
+    use common::{seed::Page, site::SiteIdentity};
+
+    fn site_identity() -> SiteIdentity {
+        SiteIdentity {
+            title: "Jaunder".parse().unwrap(),
+            tagline: None,
+            base_url: None,
+        }
+    }
 
     #[test]
     fn format_post_time_includes_time_portion() {
@@ -568,6 +583,7 @@ mod tests {
             has_more: false,
         };
         let html = body(&PageSeed::SiteTimeline {
+            identity: site_identity(),
             order: common::seed::TimelineOrder::Newest,
             page,
         })
@@ -616,6 +632,7 @@ mod tests {
     #[test]
     fn post_header_has_one_protected_viewer_independent_action_slot() {
         let html = body(&PageSeed::SiteTimeline {
+            identity: site_identity(),
             order: common::seed::TimelineOrder::Newest,
             page: one_post_page(),
         })
@@ -636,11 +653,12 @@ mod tests {
     #[test]
     fn local_body_has_topbar_signin_and_posts_without_hero() {
         let html = body(&PageSeed::SiteTimeline {
+            identity: site_identity(),
             order: common::seed::TimelineOrder::Newest,
             page: one_post_page(),
         })
         .into_string();
-        assert!(html.contains("<h1>jaunder.local</h1>"), "{html}");
+        assert!(html.contains("<h1>Jaunder</h1>"), "{html}");
         assert!(
             html.contains("<a href=\"/login\" class=\"j-btn j-anon-only\">Sign in</a>"),
             "{html}"
@@ -674,6 +692,7 @@ mod tests {
         let mut page = one_post_page();
         page.has_more = true;
         let with = body(&PageSeed::SiteTimeline {
+            identity: site_identity(),
             order: common::seed::TimelineOrder::Newest,
             page,
         })
@@ -684,6 +703,7 @@ mod tests {
         );
 
         let without = body(&PageSeed::SiteTimeline {
+            identity: site_identity(),
             order: common::seed::TimelineOrder::Newest,
             page: one_post_page(),
         })
@@ -694,6 +714,7 @@ mod tests {
     #[test]
     fn style_contract_hooks_preserve_route_presence_and_post_landmarks() {
         let timeline = body(&PageSeed::SiteTimeline {
+            identity: site_identity(),
             order: common::seed::TimelineOrder::Newest,
             page: one_post_page(),
         })

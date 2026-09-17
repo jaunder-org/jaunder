@@ -1,14 +1,13 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use common::tagged_url::{BaseUrl, HubUrl};
+use common::tagged_url::HubUrl;
 use host::config_key::SiteConfigKey;
 use storage::{
-    BaseUrlMutationError, FeedWindowMutation, PasskeyStorage, PublisherStorage, SiteConfigStorage,
-    WriteScope, clear_base_url_with_passkey_guard, set_base_url_with_passkey_guard,
+    FeedWindowMutation, PasskeyStorage, PublisherStorage, SiteConfigStorage, WriteScope,
 };
 
-use crate::publisher::PublisherService;
+use crate::publisher::{PublisherService, SiteIdentityMutation};
 
 use super::support;
 
@@ -20,37 +19,53 @@ use super::support;
 pub(super) async fn cmd_site_config_set(
     site_config: Arc<dyn SiteConfigStorage>,
     write_scope: &WriteScope,
-    passkeys: Arc<dyn PasskeyStorage>,
     key: SiteConfigKey,
     value: &str,
 ) -> anyhow::Result<()> {
     let value_for_set = value.to_owned();
     let outcome = write_scope
         .run(move |transaction| {
-            Box::pin(async move {
-                if key == SiteConfigKey::SiteBaseUrl {
-                    let base_url = (!value_for_set.is_empty())
-                        .then(|| value_for_set.parse::<BaseUrl>())
-                        .transpose()
-                        .map_err(BaseUrlMutationError::from)?;
-                    set_base_url_with_passkey_guard(
-                        transaction,
-                        site_config.as_ref(),
-                        passkeys.as_ref(),
-                        base_url,
-                    )
-                    .await
-                } else {
-                    site_config
-                        .set(transaction, key, &value_for_set)
-                        .await
-                        .map_err(BaseUrlMutationError::from)
-                }
-            })
+            Box::pin(async move { site_config.set(transaction, key, &value_for_set).await })
         })
         .await?;
     support::require_confirmed_mutation(outcome, "site_config set")?;
     eprintln!("set site_config {key} = {value}");
+    Ok(())
+}
+
+/// Change one identity setting through the publisher-gated storage path.
+pub(super) async fn cmd_site_identity_set(
+    storage_path: PathBuf,
+    publisher: Arc<dyn PublisherStorage>,
+    write_scope: WriteScope,
+    site_config: Arc<dyn SiteConfigStorage>,
+    passkeys: Arc<dyn PasskeyStorage>,
+    mutation: SiteIdentityMutation,
+) -> anyhow::Result<()> {
+    let publisher = PublisherService::new(storage_path, publisher, write_scope);
+    let outcome = publisher
+        .mutate_identity_with_feedback(site_config, passkeys, mutation)
+        .await?;
+    support::require_confirmed_mutation(outcome, "site identity mutation")?;
+    Ok(())
+}
+
+/// Unset one identity setting through the publisher-gated storage path.
+pub(super) async fn cmd_site_identity_unset(
+    storage_path: PathBuf,
+    publisher: Arc<dyn PublisherStorage>,
+    write_scope: WriteScope,
+    site_config: Arc<dyn SiteConfigStorage>,
+    passkeys: Arc<dyn PasskeyStorage>,
+    mutation: SiteIdentityMutation,
+    key: SiteConfigKey,
+) -> anyhow::Result<()> {
+    let publisher = PublisherService::new(storage_path, publisher, write_scope);
+    let outcome = publisher
+        .mutate_identity_with_feedback(site_config, passkeys, mutation)
+        .await?;
+    support::require_confirmed_mutation(outcome, "site identity mutation")?;
+    eprintln!("unset site_config {key}");
     Ok(())
 }
 
@@ -124,26 +139,9 @@ pub(super) async fn cmd_site_config_unset(
     site_config: Arc<dyn SiteConfigStorage>,
     write_scope: &WriteScope,
     key: SiteConfigKey,
-    passkeys: Arc<dyn PasskeyStorage>,
 ) -> anyhow::Result<()> {
     let outcome = write_scope
-        .run(move |transaction| {
-            Box::pin(async move {
-                if key == SiteConfigKey::SiteBaseUrl {
-                    clear_base_url_with_passkey_guard(
-                        transaction,
-                        site_config.as_ref(),
-                        passkeys.as_ref(),
-                    )
-                    .await
-                } else {
-                    site_config
-                        .delete(transaction, key)
-                        .await
-                        .map_err(BaseUrlMutationError::from)
-                }
-            })
-        })
+        .run(move |transaction| Box::pin(async move { site_config.delete(transaction, key).await }))
         .await?;
     let removed = support::require_confirmed_mutation(outcome, "site_config unset")?;
     if removed {
@@ -513,6 +511,63 @@ mod tests {
         execute_set(&args, SiteConfigKey::FeedsWebsubHubUrl, "not a hub URL")
             .await
             .expect_err("nonempty malformed hub input is rejected");
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn identity_cli_mutations_invalidate_the_publisher_snapshot(#[case] backend: Backend) {
+        let base = TempDir::new().expect("temp dir");
+        let (args, _pg) = site_config_args(backend, &base).await;
+        let factory = storage::open_existing_database(&args.db, &StorageRuntimeConfig::default())
+            .await
+            .expect("reopen");
+        let publisher = factory.publisher();
+        let initial = publisher
+            .snapshot()
+            .await
+            .expect("initial snapshot")
+            .generation;
+
+        execute_set(&args, SiteConfigKey::SiteTitle, "Configured")
+            .await
+            .unwrap();
+        execute_set(&args, SiteConfigKey::SiteTagline, "A tagline")
+            .await
+            .unwrap();
+        execute_set(
+            &args,
+            SiteConfigKey::SiteBaseUrl,
+            "https://identity.example/",
+        )
+        .await
+        .unwrap();
+        let snapshot = publisher.snapshot().await.expect("configured snapshot");
+        assert!(snapshot.generation > initial);
+        assert_eq!(snapshot.identity.title, "Configured");
+        assert_eq!(snapshot.identity.tagline.as_deref(), Some("A tagline"));
+        assert_eq!(
+            snapshot.identity.base_url.as_deref(),
+            Some("https://identity.example/")
+        );
+
+        execute_unset(&args, SiteConfigKey::SiteTitle)
+            .await
+            .unwrap();
+        execute_unset(&args, SiteConfigKey::SiteTagline)
+            .await
+            .unwrap();
+        execute_unset(&args, SiteConfigKey::SiteBaseUrl)
+            .await
+            .unwrap();
+        let snapshot = publisher.snapshot().await.expect("cleared snapshot");
+        assert_eq!(snapshot.identity.title, common::site::SiteTitle::default());
+        assert_eq!(snapshot.identity.tagline, None);
+        assert_eq!(snapshot.identity.base_url, None);
+        assert!(snapshot.generation > initial);
+
+        execute_set(&args, SiteConfigKey::SiteTagline, "line\nbreak")
+            .await
+            .expect_err("invalid tagline must fail before mutation");
     }
 
     /// A9: list is a faithful dump that judges without hiding.

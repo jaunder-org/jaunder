@@ -14,7 +14,10 @@ use common::{
     visibility::ViewerIdentity,
 };
 use std::sync::Arc;
-use storage::{PostPermalinkAliasMatch, PostStorage, PublicThemeOwner, ThemeStorage, UserStorage};
+use storage::{
+    PostPermalinkAliasMatch, PostStorage, PublicThemeOwner, SiteConfigStorage, ThemeStorage,
+    UserStorage,
+};
 use web::{
     error::{self, InternalError, SwallowedSource},
     posts, timeline,
@@ -44,6 +47,7 @@ pub struct PublicProjector {
     posts: Arc<dyn PostStorage>,
     users: Arc<dyn UserStorage>,
     themes: Arc<dyn ThemeStorage>,
+    site_config: Arc<dyn SiteConfigStorage>,
     shell: Shell,
 }
 
@@ -54,12 +58,14 @@ impl PublicProjector {
         posts: Arc<dyn PostStorage>,
         users: Arc<dyn UserStorage>,
         themes: Arc<dyn ThemeStorage>,
+        site_config: Arc<dyn SiteConfigStorage>,
         shell: Shell,
     ) -> Self {
         Self {
             posts,
             users,
             themes,
+            site_config,
             shell,
         }
     }
@@ -172,6 +178,10 @@ impl PublicProjector {
     }
 
     async fn site_timeline(&self, order: TimelineOrder) -> ProjectionResult {
+        let identity = match self.site_config.get_identity().await {
+            Ok(identity) => identity,
+            Err(error) => return Err(Self::boundary(error, "server.projector.timeline_identity")),
+        };
         let page = match timeline::fetch_local_timeline(
             self.posts.as_ref(),
             None,
@@ -195,7 +205,11 @@ impl PublicProjector {
         };
         Ok(PublicPresentation {
             theme,
-            page: PageSeed::SiteTimeline { order, page },
+            page: PageSeed::SiteTimeline {
+                identity,
+                order,
+                page,
+            },
         })
     }
 

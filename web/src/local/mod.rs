@@ -5,7 +5,10 @@
 
 mod page_state;
 pub(crate) mod render;
-pub use page_state::{site_destination, site_timeline_base_url, site_timeline_seed};
+pub use page_state::{
+    LocalDestination, commit_destination, site_destination, site_timeline_base_url,
+    site_timeline_seed,
+};
 
 #[cfg(target_arch = "wasm32")]
 mod component;

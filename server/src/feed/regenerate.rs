@@ -5,7 +5,9 @@ use common::{
     visibility::ViewerIdentity,
 };
 use host::etag;
-use host::feed::{self, FeedItem, FeedMetadata, FeedPath, FeedTitle, HybridWindow};
+use host::feed::{
+    self, FeedDescription, FeedItem, FeedMetadata, FeedPath, FeedTitle, HybridWindow,
+};
 use storage::{FeedCacheRow, PostRecord, PostStorage, PublisherSnapshot};
 use thiserror::Error;
 
@@ -70,7 +72,10 @@ pub async fn render(
     let canonical_url: CanonicalUrl = tagged_url::compose(base, &canonical_path);
     let meta = FeedMetadata {
         title: FeedTitle::for_surface(&snapshot.identity.title, &surface),
-        description: None,
+        description: FeedDescription::from_site_tagline(
+            snapshot.identity.tagline.as_ref(),
+            &surface,
+        ),
         canonical_url,
         self_url,
         hub_url: snapshot.feeds.websub_hub_url.clone(),

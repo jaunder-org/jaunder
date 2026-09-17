@@ -113,7 +113,13 @@ pub fn render_head(seed: &PageSeed, early_wasm_fetch_script: Option<&str>) -> Ma
                 .to_owned(),
         ),
         PageSeed::Profile { username, .. } => (format!("Posts by {username}"), String::new()),
-        PageSeed::SiteTimeline { .. } => ("Jaunder".to_string(), String::new()),
+        PageSeed::SiteTimeline { identity, .. } => (
+            identity.title.to_string(),
+            identity
+                .tagline
+                .as_ref()
+                .map_or_else(String::new, ToString::to_string),
+        ),
         PageSeed::SiteTag { tag, .. } => (format!("#{tag}"), String::new()),
         PageSeed::UserTag { username, tag, .. } => (format!("#{tag} by {username}"), String::new()),
     };
@@ -129,10 +135,17 @@ pub fn render_head(seed: &PageSeed, early_wasm_fetch_script: Option<&str>) -> Ma
         // without reading that draft; `crossorigin` would be mandatory.
         link rel="stylesheet" href="/style/jaunder.css";
         link rel="stylesheet" href="/style/jaunder-themes.css";
-        title { (title) }
-        meta name="description" content=(description);
-        meta property="og:title" content=(title);
-        meta property="og:description" content=(description);
+        @if matches!(seed, PageSeed::SiteTimeline { .. }) {
+            title data-jaunder-projected-local-metadata { (title) }
+            meta data-jaunder-projected-local-metadata name="description" content=(description);
+            meta data-jaunder-projected-local-metadata property="og:title" content=(title);
+            meta data-jaunder-projected-local-metadata property="og:description" content=(description);
+        } @else {
+            title { (title) }
+            meta name="description" content=(description);
+            meta property="og:title" content=(title);
+            meta property="og:description" content=(description);
+        }
         (render_discovery(seed))
     })
 }
@@ -142,6 +155,10 @@ pub fn render_head(seed: &PageSeed, early_wasm_fetch_script: Option<&str>) -> Ma
 /// `FeedDiscovery`/`RsdDiscovery` own the single post-boot set (#198). Shared here so the
 /// emitter below and the boot-time remover cannot drift.
 pub const DISCOVERY_MARKER_ATTR: &str = "data-jaunder-discovery";
+
+/// Selector for the four projector-painted Local identity metadata nodes. CSR boot
+/// removes only these nodes before Local's reactive metadata takes ownership.
+pub const PROJECTED_LOCAL_METADATA_SELECTOR: &str = "[data-jaunder-projected-local-metadata]";
 
 /// Feed + RSD autodiscovery `<link>`s for the seed's surface, the pure mirror of
 /// the reactive `FeedDiscovery`/`RsdDiscovery` components (`web::feed_discovery`)
@@ -241,7 +258,15 @@ mod tests {
     // projector↔reactive coincidence against the same fixture, not a divergent copy.
     use crate::posts::render::test_fixtures::{one_post_page, sample_post};
     use common::local_storage_key::LocalStorageKey;
-    use common::test_support::parse_username;
+    use common::{site::SiteIdentity, test_support::parse_username};
+
+    fn site_identity() -> SiteIdentity {
+        SiteIdentity {
+            title: "Jaunder".parse().unwrap(),
+            tagline: None,
+            base_url: None,
+        }
+    }
 
     fn custom_theme() -> common::theme::PublishedThemePresentation {
         common::theme::PublishedThemePresentation {
@@ -285,6 +310,7 @@ mod tests {
         let html = render_shell(&PublicPresentation {
             theme: custom_theme(),
             page: PageSeed::SiteTimeline {
+                identity: site_identity(),
                 order: common::seed::TimelineOrder::Newest,
                 page: one_post_page(),
             },
@@ -306,6 +332,7 @@ mod tests {
         // Site: three feed links, all marked, no RSD (#198 — the boot-time remover keys
         // on the marker, so every projector discovery <link> must carry it).
         let site = render_discovery(&PageSeed::SiteTimeline {
+            identity: site_identity(),
             order: common::seed::TimelineOrder::Newest,
             page: one_post_page(),
         })
@@ -342,6 +369,65 @@ mod tests {
     #[test]
     fn discovery_marker_attr_matches_the_literal_written_in_the_markup() {
         assert_eq!(DISCOVERY_MARKER_ATTR, "data-jaunder-discovery");
+    }
+
+    #[test]
+    fn projected_local_metadata_has_stable_exclusive_ownership_markers() {
+        let head = render_head(
+            &PageSeed::SiteTimeline {
+                identity: SiteIdentity {
+                    title: "Jaunder <Sandbox>".parse().unwrap(),
+                    tagline: Some("Thoughtful & <publications>.".parse().unwrap()),
+                    base_url: None,
+                },
+                order: common::seed::TimelineOrder::Newest,
+                page: one_post_page(),
+            },
+            None,
+        )
+        .into_string();
+
+        assert_eq!(
+            head.matches("data-jaunder-projected-local-metadata")
+                .count(),
+            4,
+            "{head}"
+        );
+        assert!(
+            head.contains(
+                "<title data-jaunder-projected-local-metadata>Jaunder &lt;Sandbox&gt;</title>"
+            ),
+            "{head}"
+        );
+        assert!(
+            head.contains(
+                "name=\"description\" content=\"Thoughtful &amp; &lt;publications&gt;.\""
+            ),
+            "{head}"
+        );
+        assert!(
+            head.contains("property=\"og:title\" content=\"Jaunder &lt;Sandbox&gt;\""),
+            "{head}"
+        );
+        assert!(
+            head.contains(
+                "property=\"og:description\" content=\"Thoughtful &amp; &lt;publications&gt;.\""
+            ),
+            "{head}"
+        );
+        assert_eq!(
+            PROJECTED_LOCAL_METADATA_SELECTOR,
+            "[data-jaunder-projected-local-metadata]"
+        );
+    }
+
+    #[test]
+    fn non_local_head_metadata_is_unmarked() {
+        let head = render_head(&PageSeed::Permalink(sample_post()), None).into_string();
+        assert!(
+            !head.contains("data-jaunder-projected-local-metadata"),
+            "{head}"
+        );
     }
 
     #[test]
@@ -391,6 +477,7 @@ mod tests {
             r#"<script>window.__jaunderWasmFetch = fetch("/pkg/wasm-hash.wasm");</script>"#;
         let head = render_head(
             &PageSeed::SiteTimeline {
+                identity: site_identity(),
                 order: common::seed::TimelineOrder::Newest,
                 page: one_post_page(),
             },
@@ -429,10 +516,11 @@ mod tests {
         let cases = [
             (
                 PageSeed::SiteTimeline {
+                    identity: site_identity(),
                     order: common::seed::TimelineOrder::Newest,
                     page: one_post_page(),
                 },
-                "<title>Jaunder</title>",
+                "<title data-jaunder-projected-local-metadata>Jaunder</title>",
             ),
             (
                 PageSeed::Profile {
@@ -473,6 +561,7 @@ mod tests {
                 common::theme::Theme::Studio,
             ),
             page: PageSeed::SiteTimeline {
+                identity: site_identity(),
                 order: common::seed::TimelineOrder::Newest,
                 page: one_post_page(),
             },
@@ -534,6 +623,7 @@ mod tests {
                 common::theme::Theme::Studio,
             ),
             page: PageSeed::SiteTimeline {
+                identity: site_identity(),
                 order: common::seed::TimelineOrder::Newest,
                 page: one_post_page(),
             },

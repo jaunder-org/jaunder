@@ -1,44 +1,124 @@
 import { reenterAdminSettings } from "./admin-settings";
 import { test, expect } from "./fixtures";
-import { goto, signInAs, waitForSelector } from "./helpers";
+import { click, goto, signInAs, waitForSelector } from "./helpers";
+import { navigateInApp } from "./navigate";
 import { SEL } from "./selectors";
 import { seedConfigViaTool } from "./seed";
 
-// M8.5: Site settings admin page allows operators to configure site identity.
-test("admin site settings page loads and allows updating title and base_url", async ({
+// Site Settings persists the complete Local identity through one aggregate save.
+test("admin site settings page loads, changes, and clears Local identity", async ({
   page,
+  tracedContext,
 }) => {
-  // Log in as operator user
   await signInAs(page, "testoperator");
-
   await goto(page, "/admin/site");
 
-  // Wait for the form to be visible
   await waitForSelector(page, "input[name='title']");
+  await waitForSelector(page, "input[name='tagline']");
   await waitForSelector(page, "input[name='base_url']");
 
-  // The save control is a dispatched button (not a native form submit), so it is
-  // located by its text (ADR-0065 direct-bind form, mirroring the profile page).
+  // The save control dispatches the direct-bound typed aggregate (ADR-0065).
   const submitButton = page.locator('button:has-text("Save Site Settings")');
   await expect(submitButton).toBeVisible();
 
   await page.fill('input[name="title"]', "My Test Site");
+  await page.fill('input[name="tagline"]', "The first Local tagline");
   await page.fill('input[name="base_url"]', "https://example.com");
-
-  // Submit the form and wait for the success status to confirm the write committed
   await submitButton.click();
   await waitForSelector(page, "[data-settings-saved]");
 
-  // Re-enter the page in-app and verify the values are persisted: the remount
-  // refetches through site::get, so the form is populated from the server.
+  // An in-app remount re-reads the persisted aggregate identity.
   await reenterAdminSettings(page, "site");
-
-  // The title round-trips verbatim; the base URL round-trips in its canonical form
-  // (`BaseUrl` adds the root path slash).
   await expect(page.locator('input[name="title"]')).toHaveValue("My Test Site");
+  await expect(page.locator('input[name="tagline"]')).toHaveValue(
+    "The first Local tagline",
+  );
   await expect(page.locator('input[name="base_url"]')).toHaveValue(
     "https://example.com/",
   );
+
+  await page.fill('input[name="title"]', "Changed Test Site");
+  await page.fill('input[name="tagline"]', "The changed Local tagline");
+  await submitButton.click();
+  await waitForSelector(page, "[data-settings-saved]");
+  await reenterAdminSettings(page, "site");
+  await expect(page.locator('input[name="title"]')).toHaveValue(
+    "Changed Test Site",
+  );
+  await expect(page.locator('input[name="tagline"]')).toHaveValue(
+    "The changed Local tagline",
+  );
+
+  // Local uses the persisted identity after the operator signs out.
+  await click(page, "a[href='/logout']");
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.locator('[data-jaunder-part="site-title"]')).toHaveText(
+    "Changed Test Site",
+  );
+  await expect(page.locator(".j-topbar h1")).toHaveText("Changed Test Site");
+  await expect(page.locator(".j-topbar .j-sub")).toHaveText(
+    "The changed Local tagline",
+  );
+  await expect(page.locator("head > title")).toHaveCount(1);
+  await expect.poll(() => page.title()).toBe("Changed Test Site");
+
+  // Route-owned Local metadata temporarily overrides one stable fallback owner.
+  // In a fresh anonymous context, navigating away restores the fallback; returning
+  // resolves the configured title without ever creating duplicate title elements.
+  const guestContext = await tracedContext();
+  const guestPage = await guestContext.newPage();
+  try {
+    await goto(guestPage, "/");
+    await expect(guestPage.locator("head > title")).toHaveCount(1);
+    await expect.poll(() => guestPage.title()).toBe("Changed Test Site");
+    await click(guestPage, "a[href='/login']");
+    await expect(guestPage).toHaveURL(/\/login$/);
+    await expect(guestPage.locator("head > title")).toHaveCount(1);
+    await expect.poll(() => guestPage.title()).toBe("Jaunder");
+
+    const returnPage = await guestContext.newPage();
+    await goto(returnPage, "/forgot-password");
+    await expect(returnPage.locator("head > title")).toHaveCount(1);
+    await expect.poll(() => returnPage.title()).toBe("Jaunder");
+    await navigateInApp(
+      returnPage,
+      () => returnPage.locator(".j-brand").click(),
+      {
+        url: "/",
+        ready: 'h1:has-text("Changed Test Site")',
+      },
+    );
+    await expect(returnPage.locator("head > title")).toHaveCount(1);
+    await expect.poll(() => returnPage.title()).toBe("Changed Test Site");
+  } finally {
+    await guestContext.close();
+  }
+});
+
+test("Site Settings clears a persisted Local tagline", async ({ page }) => {
+  await signInAs(page, "testoperator");
+  await goto(page, "/admin/site");
+  await waitForSelector(page, "input[name='tagline']");
+
+  const title = await page.locator('input[name="title"]').inputValue();
+  const tagline = page.locator('input[name="tagline"]');
+  const saveButton = page.locator('button:has-text("Save Site Settings")');
+  await tagline.fill("A tagline to clear");
+  await saveButton.click();
+  await waitForSelector(page, "[data-settings-saved]");
+
+  await tagline.fill("");
+  await saveButton.click();
+  await waitForSelector(page, "[data-settings-saved]");
+  await reenterAdminSettings(page, "site");
+  await expect(page.locator('input[name="tagline"]')).toHaveValue("");
+
+  await click(page, "a[href='/logout']");
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.locator('[data-jaunder-part="site-title"]')).toHaveText(
+    title,
+  );
+  await expect(page.locator(".j-topbar .j-sub")).toHaveCount(0);
 });
 
 // #552: media uploads are a separately saved site capability. Toggling it must
@@ -212,7 +292,7 @@ test("site base URL warning banner revalidates in place after relevant settings 
       page.waitForResponse((response) =>
         response.url().includes("/api/site/is_base_url_warning_visible"),
       ),
-      saveButton.click(),
+      baseUrl.press("Enter"),
     ]);
     await expect(banner).toBeVisible();
 

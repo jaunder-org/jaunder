@@ -435,16 +435,17 @@ Details in the testing section.
   ([structural write scopes and mutation outcomes](adr/0164-structural-write-scopes-and-mutation-outcomes.md)).
   Its explicit `run` boundary supplies a sealed mutable `WriteTransaction`
   capability, never storage lookup or arbitrary SQL. The closed audited
-  application surface has exactly 61 declarations: Audience (5), Email
+  application surface has exactly 94 declarations: Audience (5), Email
   Verification (2), Feed Cache (2), Feed Event (12), Invite (2), Media (2),
-  Password Reset (2), Post (7), Publisher (4), Session (4), Site Config (10),
-  Subscription (2), User Config (2), and User (5). Cross-store account mutations
-  compose these capability-taking primitives as storage-owned functions
+  Password Reset (2), Passkey (11), Post (9), Publisher (5), Session (5), Site
+  Config (11), Subscription (2), User Config (2), Theme (17), and User (5).
+  Cross-store account mutations compose these capability-taking primitives as
+  storage-owned functions
   ([account mutations compose storage primitives](adr/0166-account-mutations-compose-storage-primitives.md)).
   Each declaration takes `&mut WriteTransaction`; there are no pool-backed,
   auto-committing, standalone, or compatibility mutation paths. The structural
   gate derives the observed declarations, compares them with the closed
-  61-method list, rejects unknown, missing, and duplicate declarations, and
+  94-method list, rejects unknown, missing, and duplicate declarations, and
   rejects production transaction starts that bypass the
   `WriteScope`/`WriteTransaction` composition. It excludes administrative
   lifecycle work, dialect code, and internal helpers. Callback failure is
@@ -1632,11 +1633,11 @@ by ADR-0056 before either):
   …).
 
 `web/src/pages/` is gone. Of the 28 directories under `web/src/`, all have
-`mod.rs`, 25 carry a `component.rs`, 15 carry an `api.rs`, and 6 (`audiences`,
-`auth`, `error`, `posts`, `subscriptions`, `timeline`) need a `server.rs`. The
-three without a `component.rs` — `error`, `reactive`, `taglist` — are a
-wire-type home, a primitive, and a pure-markup helper: none has UI, so the
-absence is structural, not lag. Two mechanisms enforce the layout. The
+`mod.rs`, 25 carry a `component.rs`, 15 carry an `api.rs`, and 8 (`audiences`,
+`auth`, `error`, `posts`, `site`, `subscriptions`, `timeline`, `websub`) need a
+`server.rs`. The three without a `component.rs` — `error`, `reactive`, `taglist`
+— are a wire-type home, a primitive, and a pure-markup helper: none has UI, so
+the absence is structural, not lag. Two mechanisms enforce the layout. The
 `target-arch-placement` xtask check
 (`xtask/src/steps/target_arch_placement_check.rs`, policing `web/src`,
 `client/src` and `csr/src`) admits a `target_arch` gate in exactly two shapes:
@@ -2261,7 +2262,18 @@ storage directory and database; `create-pg-db` bootstraps a PostgreSQL database;
 and `restore` round-trip the data, with the backup target auto-derived from the
 storage configuration ([ADR-0064](adr/0064-backup-target-auto-derivation.md),
 [ADR-0054](adr/0054-backup-test-homing-and-uniform-restore-failure.md)); and
-`site-config set/get/list/unset` reads and writes site settings.
+`site-config set/get/list/unset` reads and writes site settings. The operator
+Site Settings card resolves one `SiteIdentity` aggregate: required Local title,
+optional Site Tagline, and canonical base URL. It client-validates the shared
+newtypes before one `update_identity` dispatch; blank tagline and base URL clear
+their optional values. The composition-root-injected `SiteIdentityPublisher`
+performs that aggregate mutation through its bounded write scope, atomically
+advancing the publisher generation and invalidating affected feed caches. A
+confirmed or commit-indeterminate result revalidates the base-URL warning, while
+rollback-confirmed failure leaves that projection alone. Local's projector and
+CSR consume the same resolved identity for its title, optional tagline, and
+metadata; the existing public-theme `masthead` and `site-title` concepts remain
+the complete Style Contract surface.
 
 **Transient-data cleanup.** The
 [bounded transient-data retention decision](adr/0167-bounded-transient-data-retention.md)

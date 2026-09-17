@@ -1,4 +1,4 @@
-use super::{UpdateIdentity, UpdateMediaUploadsEnabled};
+use super::{UpdateIdentity, UpdateIdentityRequest, UpdateMediaUploadsEnabled};
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
 use crate::reactive::Invalidator;
@@ -6,7 +6,7 @@ use crate::topbar::Topbar;
 use crate::warning_revalidation::{SiteBaseUrlWarning, revalidates_warning};
 use client::reactive;
 use common::MutationOutcome;
-use common::site::{SiteIdentity, SiteTitle};
+use common::site::{SiteIdentity, SiteTagline, SiteTitle};
 use common::tagged_url::BaseUrl;
 use leptos::prelude::*;
 
@@ -115,36 +115,56 @@ fn MediaUploadsCard() -> impl IntoView {
 }
 
 /// Renders the site-settings form, seeded from the persisted `identity`. The
-/// component-owned `title` buffer and the optional `base_url` `Field` are created
-/// **here** (inside the resolved-`identity` scope, like the backup form) so the
-/// inputs render already populated. The save button dispatches the typed
-/// `UpdateIdentity` args directly (ADR-0065): an empty base URL is valid, so
-/// `parsed()` yields `None` and the field is omitted on the wire (clear-to-None).
+/// component-owned fields are created **here** (inside the resolved-`identity`
+/// scope, like the backup form) so the inputs render already populated. The save
+/// button dispatches one typed `UpdateIdentityRequest` (ADR-0129): blank optional
+/// tagline and base-URL fields yield `None`, clearing them on the wire.
 fn site_settings_form(
     identity: &SiteIdentity,
     update_action: ServerAction<UpdateIdentity>,
 ) -> impl IntoView {
     let title_field = Field::<SiteTitle>::prefilled(&identity.title);
+    let tagline_field =
+        Field::<SiteTagline>::optional_prefilled(identity.tagline.as_deref().unwrap_or_default());
     let base_url_field =
         Field::<BaseUrl>::optional_prefilled(identity.base_url.as_deref().unwrap_or_default());
-    let submit = move |_| {
+    let submit = move |event: leptos::ev::SubmitEvent| {
+        event.prevent_default();
+        if update_action.pending().get()
+            || !title_field.is_valid()
+            || !tagline_field.is_valid()
+            || !base_url_field.is_valid()
+        {
+            return;
+        }
         if let Some(title) = title_field.parsed() {
             update_action.dispatch(UpdateIdentity {
-                title,
-                base_url: base_url_field.parsed(),
+                request: UpdateIdentityRequest {
+                    title,
+                    tagline: tagline_field.parsed(),
+                    base_url: base_url_field.parsed(),
+                },
             });
         }
     };
     view! {
-        <div class="j-card">
+        <form class="j-card" on:submit=submit>
             <div class="j-card-head">
                 <div>
                     <h2>"Site Settings"</h2>
-                    <div class="j-sub">"Configure the site title and canonical base URL."</div>
+                    <div class="j-sub">
+                        "Configure the Local title, optional tagline, and canonical base URL."
+                    </div>
                 </div>
             </div>
             <div class="j-form-body">
                 <ValidatedInput<SiteTitle> label="Site title" name="title" field=title_field />
+                <ValidatedInput<SiteTagline>
+                    label="Site tagline"
+                    name="tagline"
+                    field=tagline_field
+                    help="Leave blank to omit the Local description."
+                />
                 <ValidatedInput<BaseUrl>
                     label="Base URL"
                     name="base_url"
@@ -155,15 +175,17 @@ fn site_settings_form(
             </div>
             <div class="j-form-actions">
                 <button
-                    type="button"
+                    type="submit"
                     class="j-btn is-primary"
-                    prop:disabled=move || !title_field.is_valid() || !base_url_field.is_valid()
-                    on:click=submit
+                    prop:disabled=move || {
+                        !title_field.is_valid() || !tagline_field.is_valid()
+                            || !base_url_field.is_valid() || update_action.pending().get()
+                    }
                 >
                     "Save Site Settings"
                 </button>
             </div>
-        </div>
+        </form>
     }
 }
 

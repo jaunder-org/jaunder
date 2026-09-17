@@ -406,6 +406,17 @@ fn AppShell() -> impl IntoView {
     }
 }
 
+/// Supplies the historic application fallback title everywhere except Local.
+///
+/// This subscriber mounts after the route tree so nested route parameters settle
+/// before fallback metadata reacts to the same navigation. Local owns its title only
+/// after its coherent destination identity resolves.
+#[component]
+fn AppDefaultTitle() -> impl IntoView {
+    let location = use_location();
+    move || (location.pathname.get() != "/").then(|| view! { <Title text="Jaunder" /> })
+}
+
 #[component]
 pub fn App() -> impl IntoView {
     provide_meta_context();
@@ -417,8 +428,6 @@ pub fn App() -> impl IntoView {
     // those components set/clear on success.
 
     view! {
-        <Title text="Jaunder" />
-
         <Router>
             <Routes fallback=|| "Page not found.".into_view()>
                 <ParentRoute path=StaticSegment("") view=AppShell>
@@ -503,6 +512,7 @@ pub fn App() -> impl IntoView {
                     />
                 </ParentRoute>
             </Routes>
+            <AppDefaultTitle />
         </Router>
     }
 }

@@ -8,9 +8,12 @@ use common::{
 use host::{config_key::SiteConfigKey, password::Password};
 use storage::{BackupRestoreOutcome, FeedWindowMutation, StorageFactory};
 
-use crate::cli::{
-    Commands, DeadLetterAction, DeadLetterCursor, SiteConfigAction, StorageArgs, ThemeAction,
-    WebsubAction,
+use crate::{
+    cli::{
+        Commands, DeadLetterAction, DeadLetterCursor, SiteConfigAction, StorageArgs, ThemeAction,
+        WebsubAction,
+    },
+    publisher::SiteIdentityMutation,
 };
 
 use super::{
@@ -97,7 +100,21 @@ async fn execute_site_config_set(
     value: String,
 ) -> anyhow::Result<()> {
     key.validate(&value)?;
+    let identity_mutation = SiteIdentityMutation::set(key, &value)?;
     let factory = open_existing_storage(&storage).await?;
+    if let Some(mutation) = identity_mutation {
+        site_config::cmd_site_identity_set(
+            storage.storage_path,
+            factory.publisher(),
+            factory.write_scope(),
+            factory.site_config(),
+            factory.passkeys(),
+            mutation,
+        )
+        .await?;
+        eprintln!("set site_config {key} = {value}");
+        return Ok(());
+    }
     match key {
         SiteConfigKey::FeedsMinItems => {
             site_config::cmd_feed_window_set(
@@ -140,7 +157,6 @@ async fn execute_site_config_set(
             site_config::cmd_site_config_set(
                 factory.site_config(),
                 &factory.write_scope(),
-                factory.passkeys(),
                 key,
                 &value,
             )
@@ -150,7 +166,20 @@ async fn execute_site_config_set(
 }
 
 async fn execute_site_config_unset(storage: StorageArgs, key: SiteConfigKey) -> anyhow::Result<()> {
+    let identity_mutation = SiteIdentityMutation::unset(key);
     let factory = open_existing_storage(&storage).await?;
+    if let Some(mutation) = identity_mutation {
+        return site_config::cmd_site_identity_unset(
+            storage.storage_path,
+            factory.publisher(),
+            factory.write_scope(),
+            factory.site_config(),
+            factory.passkeys(),
+            mutation,
+            key,
+        )
+        .await;
+    }
     match key {
         SiteConfigKey::FeedsMinItems => {
             site_config::cmd_feed_window_unset(
@@ -181,13 +210,8 @@ async fn execute_site_config_unset(storage: StorageArgs, key: SiteConfigKey) -> 
             .await
         }
         _ => {
-            site_config::cmd_site_config_unset(
-                factory.site_config(),
-                &factory.write_scope(),
-                key,
-                factory.passkeys(),
-            )
-            .await
+            site_config::cmd_site_config_unset(factory.site_config(), &factory.write_scope(), key)
+                .await
         }
     }
 }

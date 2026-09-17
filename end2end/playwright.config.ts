@@ -94,8 +94,9 @@ export default defineConfig({
     screenshot: "only-on-failure",
     ...(traceParent ? { extraHTTPHeaders: { traceparent: traceParent } } : {}),
   },
-  // admin-site, backup, SMTP, theme, media, invite, and production-baseline mutate global
-  // site configuration or must restore it before dependent projects. Playwright's
+  // admin-site, backup, SMTP, theme, media, timeline-cls, invite, and
+  // production-baseline mutate global site configuration or must restore it before
+  // dependent projects. Playwright's
   // `fullyParallel: false` is only intra-file, so these files live in dependent
   // projects to prevent cross-file overlap under workers=2. Each gated browser
   // runs visual contracts first, parallel ordinary tests second, then the serial
@@ -118,7 +119,7 @@ export default defineConfig({
     {
       name: "chromium",
       testIgnore: ignoreUnavailableSpecializedSpecs(
-        /(admin-site|backup|smtp|theme|invite|media|passkeys|production-baseline-flow)\.spec\.ts/,
+        /(admin-site|backup|smtp|theme|invite|media|passkeys|timeline-cls|production-baseline-flow)\.spec\.ts/,
       ),
       grepInvert: visualTag,
       ...(diagnosticCoverage
@@ -133,7 +134,7 @@ export default defineConfig({
     {
       name: "chromium-admin-site",
       testMatch:
-        /(admin-site|backup|smtp|theme|media|passkeys|production-baseline-flow)\.spec\.ts/,
+        /(admin-site|backup|smtp|theme|media|passkeys|timeline-cls|production-baseline-flow)\.spec\.ts/,
       grepInvert: visualTag,
       fullyParallel: false,
       workers: 1,
@@ -169,7 +170,7 @@ export default defineConfig({
     {
       name: "firefox",
       testIgnore: ignoreUnavailableSpecializedSpecs(
-        /(admin-site|backup|smtp|theme|invite|media|production-baseline-flow)\.spec\.ts/,
+        /(admin-site|backup|smtp|theme|invite|media|timeline-cls|production-baseline-flow)\.spec\.ts/,
       ),
       grepInvert: visualTag,
       ...(diagnosticCoverage
@@ -183,7 +184,7 @@ export default defineConfig({
     {
       name: "firefox-admin-site",
       testMatch:
-        /(admin-site|backup|smtp|theme|media|production-baseline-flow)\.spec\.ts/,
+        /(admin-site|backup|smtp|theme|media|timeline-cls|production-baseline-flow)\.spec\.ts/,
       grepInvert: visualTag,
       fullyParallel: false,
       workers: 1,
@@ -207,14 +208,14 @@ export default defineConfig({
     {
       name: "webkit",
       testIgnore: ignoreUnavailableSpecializedSpecs(
-        /(admin-site|backup|smtp|theme|invite|media|production-baseline-flow)\.spec\.ts/,
+        /(admin-site|backup|smtp|theme|invite|media|timeline-cls|production-baseline-flow)\.spec\.ts/,
       ),
       grepInvert: visualTag,
       use: { ...devices["Desktop Safari"] },
     },
     {
       name: "webkit-theme",
-      testMatch: /(backup|smtp|theme|media)\.spec\.ts/,
+      testMatch: /(backup|smtp|theme|media|timeline-cls)\.spec\.ts/,
       grepInvert: visualTag,
       fullyParallel: false,
       workers: 1,

@@ -9,7 +9,7 @@ use common::{
     post_summary::PostSummary,
     post_title::PostTitle,
     render::RenderedHtml,
-    site::SiteTitle,
+    site::{SiteTagline, SiteTitle},
     tag::TagLabel,
     tagged_url::{CanonicalUrl, FeedUrl, HubUrl, PermalinkUrl},
     time::UtcInstant,
@@ -72,6 +72,19 @@ impl FromStr for FeedDescription {
     }
 }
 
+impl FeedDescription {
+    /// Maps the optional Site Tagline onto the Syndication Feed surfaces it describes.
+    #[must_use]
+    pub fn from_site_tagline(tagline: Option<&SiteTagline>, surface: &FeedSurface) -> Option<Self> {
+        match surface {
+            FeedSurface::Site | FeedSurface::SiteTag { .. } => {
+                tagline.map(|tagline| Self(tagline.to_string()))
+            }
+            FeedSurface::User { .. } | FeedSurface::UserTag { .. } => None,
+        }
+    }
+}
+
 /// Feed-level metadata: what a rendered feed document says about itself.
 ///
 /// `canonical_url` (where the feed's subject lives) and `self_url` (where the feed
@@ -129,7 +142,7 @@ mod tests {
     use crate::feed::test_support::feed_item;
     use common::feed::FeedSurface;
     use common::{
-        site::SiteTitle,
+        site::{SiteTagline, SiteTitle},
         test_support::{parse_post_title, parse_url, parse_utc_instant, rendered_html},
         time::UtcInstant,
     };
@@ -148,6 +161,48 @@ mod tests {
         );
         assert!("".parse::<FeedDescription>().is_err());
         assert!("\t\n".parse::<FeedDescription>().is_err());
+    }
+
+    #[test]
+    fn feed_description_maps_site_tagline_only_to_site_surfaces() {
+        let tagline = "Local description".parse::<SiteTagline>().unwrap();
+        let surfaces = [
+            (FeedSurface::Site, true),
+            (
+                FeedSurface::SiteTag {
+                    tag: "rust".parse().unwrap(),
+                },
+                true,
+            ),
+            (
+                FeedSurface::User {
+                    username: "alice".parse().unwrap(),
+                },
+                false,
+            ),
+            (
+                FeedSurface::UserTag {
+                    username: "alice".parse().unwrap(),
+                    tag: "rust".parse().unwrap(),
+                },
+                false,
+            ),
+        ];
+
+        for (surface, describes_site) in surfaces {
+            assert_eq!(
+                FeedDescription::from_site_tagline(Some(&tagline), &surface)
+                    .as_ref()
+                    .map(AsRef::as_ref),
+                describes_site.then_some("Local description"),
+                "{surface:?} description scope"
+            );
+            assert_eq!(
+                FeedDescription::from_site_tagline(None, &surface),
+                None,
+                "{surface:?} has no description without a tagline"
+            );
+        }
     }
 
     #[test]

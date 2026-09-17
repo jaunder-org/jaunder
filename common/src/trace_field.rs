@@ -22,7 +22,7 @@ use crate::media::{hash::ContentHash, storage::MediaSource};
 use crate::pagination::{PageOffset, PageSize};
 use crate::render::PostFormat;
 use crate::seed::{PageCursor, TimelineCursor, TimelinePageRequest};
-use crate::site::SiteTitle;
+use crate::site::{SiteTagline, SiteTitle};
 use crate::slug::Slug;
 use crate::tag::Tag;
 use crate::tagged_url::BaseUrl;
@@ -66,6 +66,12 @@ impl<T: TraceField + ?Sized> TraceField for &T {
     fn trace_value(&self) -> Self::Value<'_> {
         (*self).trace_value()
     }
+}
+
+impl TraceField for SiteTagline {
+    type Value<'a> = ();
+
+    fn trace_value(&self) -> Self::Value<'_> {}
 }
 
 macro_rules! impl_borrowed_trace_field {
@@ -120,7 +126,7 @@ mod tests {
     use crate::pagination::{PageOffset, PageSize};
     use crate::render::PostFormat;
     use crate::seed::{PageCursor, TimelineCursor, TimelinePageRequest};
-    use crate::site::SiteTitle;
+    use crate::site::{SiteTagline, SiteTitle};
     use crate::slug::Slug;
     use crate::tag::Tag;
     use crate::tagged_url::BaseUrl;
@@ -180,5 +186,12 @@ mod tests {
         assert_eq!(Some(value).trace_value(), Some(7));
         assert_eq!(None::<u32>.trace_value(), None);
         assert_eq!(<&u32 as TraceField>::trace_value(&&value), 7);
+    }
+
+    #[test]
+    fn site_tagline_projects_to_unit_without_recording_its_text() {
+        let tagline: SiteTagline = "private site description".parse().unwrap();
+
+        assert_eq!(tagline.trace_value(), ());
     }
 }

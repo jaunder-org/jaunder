@@ -129,6 +129,7 @@ mod tests {
     use axum::http::{HeaderMap, header};
     use common::{
         seed::{Page, PageSeed, PublicPresentation},
+        site::SiteIdentity,
         theme::Theme,
     };
 
@@ -136,6 +137,11 @@ mod tests {
         PublicPresentation {
             theme: common::theme::PublishedThemePresentation::built_in(theme),
             page: PageSeed::SiteTimeline {
+                identity: SiteIdentity {
+                    title: "Jaunder".parse().unwrap(),
+                    tagline: None,
+                    base_url: None,
+                },
                 order: common::seed::TimelineOrder::Newest,
                 page: Page {
                     posts: vec![],
