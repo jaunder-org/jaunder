@@ -27,8 +27,9 @@ use client::{reactive, telemetry};
 /// fn (no navigation).
 ///
 /// `on_uploaded`, `on_indeterminate`, and `on_error`, when provided, distinguish a
-/// confirmed URL from an uncertain commit and a human-readable error. When
-/// `show_result` is set the widget renders the confirmed URL read-only and any error
+/// confirmed URL from an uncertain commit and a human-readable error. `on_uploading`
+/// reports the lifetime of an admitted upload. When `show_result` is set the widget
+/// renders the confirmed URL read-only and any error
 /// inline below the button — the self-contained mode the compose form uses.
 #[component]
 pub fn MediaUpload(
@@ -41,6 +42,9 @@ pub fn MediaUpload(
     /// Called with an error message when the upload fails or is indeterminate.
     #[prop(into, optional)]
     on_error: Option<Callback<String>>,
+    /// Called with `true` when an upload starts and `false` after it settles.
+    #[prop(into, optional)]
+    on_uploading: Option<Callback<bool>>,
     /// When true, render the uploaded URL and any error inline below the button.
     #[prop(optional)]
     show_result: bool,
@@ -79,17 +83,16 @@ pub fn MediaUpload(
         let Some(form_data) = outcome.into_ready() else {
             return;
         };
-        state.begin();
+        let callbacks = UploadCallbacks {
+            on_uploaded,
+            on_indeterminate,
+            on_error,
+            on_uploading,
+        };
+        state.begin(callbacks);
 
         spawn_local(async move {
-            state.settle(
-                super::upload(form_data).await,
-                UploadCallbacks {
-                    on_uploaded,
-                    on_indeterminate,
-                    on_error,
-                },
-            );
+            state.settle(super::upload(form_data).await, callbacks);
         });
     };
 

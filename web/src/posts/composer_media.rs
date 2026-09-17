@@ -12,6 +12,20 @@ use leptos::prelude::{Get, RwSignal, Set, Update};
 const INVALID_MEDIA_URL: &str = "The uploaded Media URL was invalid.";
 const COPY_FAILED: &str = "Could not copy the Media URL.";
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ComposerMediaError {
+    Upload(String),
+    Copy(String),
+}
+
+impl ComposerMediaError {
+    fn message(&self) -> &str {
+        match self {
+            Self::Upload(message) | Self::Copy(message) => message,
+        }
+    }
+}
+
 /// One confirmed Media upload displayed by the current composer session.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ComposerMedia {
@@ -45,7 +59,8 @@ impl ComposerMedia {
 #[derive(Clone, Copy)]
 pub struct ComposerMediaState {
     rows: RwSignal<Vec<ComposerMedia>>,
-    error: RwSignal<Option<String>>,
+    error: RwSignal<Option<ComposerMediaError>>,
+    uploading: RwSignal<bool>,
 }
 
 impl ComposerMediaState {
@@ -55,23 +70,35 @@ impl ComposerMediaState {
         Self {
             rows: RwSignal::new(Vec::new()),
             error: RwSignal::new(None),
+            uploading: RwSignal::new(false),
         }
     }
 
     /// Record a confirmed upload or surface an invalid returned URL.
-    pub fn record_uploaded(&self, url: RootRelativeUrl) {
-        match ComposerMedia::try_from_uploaded_url(url) {
-            Ok(item) => {
-                self.rows.update(|rows| rows.push(item));
-                self.error.set(None);
-            }
-            Err(_) => self.error.set(Some(INVALID_MEDIA_URL.to_owned())),
+    ///
+    /// Returns whether the returned URL was accepted as a Media row.
+    #[must_use]
+    pub fn record_uploaded(&self, url: RootRelativeUrl) -> bool {
+        if let Ok(item) = ComposerMedia::try_from_uploaded_url(url) {
+            self.rows.update(|rows| rows.push(item));
+            self.error.set(None);
+            true
+        } else {
+            self.error.set(Some(ComposerMediaError::Upload(
+                INVALID_MEDIA_URL.to_owned(),
+            )));
+            false
         }
     }
 
     /// Surface an upload failure supplied by the upload widget.
     pub fn record_error(&self, message: String) {
-        self.error.set(Some(message));
+        self.error.set(Some(ComposerMediaError::Upload(message)));
+    }
+
+    /// Record whether an admitted upload is in flight.
+    pub fn set_uploading(&self, uploading: bool) {
+        self.uploading.set(uploading);
     }
 
     /// Remove one temporary row without touching its persistent Media Record.
@@ -85,7 +112,24 @@ impl ComposerMediaState {
 
     /// Record whether the browser clipboard write succeeded.
     pub fn settle_copy(&self, copied: bool) {
-        self.error.set((!copied).then(|| COPY_FAILED.to_owned()));
+        self.error
+            .set((!copied).then(|| ComposerMediaError::Copy(COPY_FAILED.to_owned())));
+    }
+
+    /// Compact state shown while the Media disclosure is closed.
+    #[must_use]
+    pub fn summary(&self) -> String {
+        if self.uploading.get() {
+            return "Uploading…".to_owned();
+        }
+        if matches!(self.error.get(), Some(ComposerMediaError::Upload(_))) {
+            return "Upload failed".to_owned();
+        }
+        match self.rows.get().as_slice() {
+            [] => "None".to_owned(),
+            [item] => item.display_filename().into_owned(),
+            rows => format!("{} files", rows.len()),
+        }
     }
 
     /// Snapshot the rows for reactive rendering.
@@ -97,7 +141,7 @@ impl ComposerMediaState {
     /// Snapshot the current user-visible error for reactive rendering.
     #[must_use]
     pub fn error(&self) -> Option<String> {
-        self.error.get()
+        self.error.get().map(|error| error.message().to_owned())
     }
 }
 
@@ -137,8 +181,12 @@ mod tests {
     fn session_records_and_dismisses_multiple_uploads() {
         Owner::new().with(|| {
             let state = ComposerMediaState::default();
-            state.record_uploaded(parse_root_relative_url("/media/upload/sha256/first.png"));
-            state.record_uploaded(parse_root_relative_url("/media/upload/sha256/second.png"));
+            assert!(
+                state.record_uploaded(parse_root_relative_url("/media/upload/sha256/first.png"))
+            );
+            assert!(
+                state.record_uploaded(parse_root_relative_url("/media/upload/sha256/second.png"))
+            );
 
             assert_eq!(state.rows().len(), 2);
             assert_eq!(state.error(), None);
@@ -152,17 +200,50 @@ mod tests {
     }
 
     #[test]
+    fn session_summary_tracks_empty_single_multiple_and_failed_media() {
+        Owner::new().with(|| {
+            let state = ComposerMediaState::new();
+            assert_eq!(state.summary(), "None");
+            state.set_uploading(true);
+            assert_eq!(state.summary(), "Uploading…");
+            state.set_uploading(false);
+
+            assert!(
+                state.record_uploaded(parse_root_relative_url("/media/upload/sha256/hero.png"))
+            );
+            assert_eq!(state.summary(), "hero.png");
+
+            assert!(
+                state.record_uploaded(parse_root_relative_url("/media/upload/sha256/detail.png"))
+            );
+            assert_eq!(state.summary(), "2 files");
+
+            state.dismiss(1);
+            assert_eq!(state.summary(), "hero.png");
+
+            state.record_error("Upload failed.".to_owned());
+            assert_eq!(state.summary(), "Upload failed");
+        });
+    }
+
+    #[test]
     fn session_surfaces_upload_and_clipboard_failures() {
         Owner::new().with(|| {
             let state = ComposerMediaState::new();
-            state.record_uploaded(parse_root_relative_url("/media/upload/sha256/photo%2Epng"));
+            assert!(
+                !state.record_uploaded(parse_root_relative_url("/media/upload/sha256/photo%2Epng"))
+            );
             assert_eq!(state.error().as_deref(), Some(INVALID_MEDIA_URL));
 
             state.record_error("Upload failed.".to_owned());
             assert_eq!(state.error().as_deref(), Some("Upload failed."));
 
+            assert!(
+                state.record_uploaded(parse_root_relative_url("/media/upload/sha256/photo.png"))
+            );
             state.settle_copy(false);
             assert_eq!(state.error().as_deref(), Some(COPY_FAILED));
+            assert_eq!(state.summary(), "photo.png");
             state.settle_copy(true);
             assert_eq!(state.error(), None);
         });

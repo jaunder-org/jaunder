@@ -125,27 +125,23 @@ test("authenticated user can create a post through the UI", async ({
   );
 });
 
-test("post create surfaces use textual draft actions and an accessible Media icon", async ({
+test("post create surfaces use textual draft and disclosed Media actions", async ({
   registeredPage,
 }) => {
   const page = await registeredPage("/posts/new");
   const expectApprovedActions = async (scope: Locator): Promise<void> => {
     await expect(scope).toBeVisible();
     await scope.locator(SEL.postBody).fill("Approved actions");
+    const media = scope.getByRole("button", { name: /Media None/ });
+    await media.click();
+    await expect(media).toHaveAttribute("aria-expanded", "true");
     const attach = scope.getByRole("button", { name: "Attach media" });
     const saveDraft = scope.locator(SEL.publishButton("false"));
 
-    await expect(attach).toHaveAttribute("aria-label", "Attach media");
-    await expect(attach.locator("path")).toHaveAttribute(
-      "d",
-      "M10 4v12 M4 10h12",
-    );
-    await expect(attach.locator("svg")).toHaveCount(1);
-    const tooltip = attach.locator('[role="tooltip"]');
-    await expect(tooltip).toHaveText("Attach media");
-    await expect(tooltip).toBeHidden();
-    await attach.focus();
-    await expect(tooltip).toBeVisible();
+    await expect(attach).toBeVisible();
+    await expect(attach).toHaveText("Attach media");
+    await expect(attach.locator("svg")).toHaveCount(0);
+    await expect(attach.locator('[role="tooltip"]')).toHaveCount(0);
 
     await expect(saveDraft).toHaveText("Save draft");
     await expect(saveDraft.locator("svg")).toHaveCount(0);
@@ -184,11 +180,45 @@ test("composer keeps filled body actions before a container-responsive controls 
     ).toHaveCount(1);
     expect(
       await rail
-        .locator(":scope > .j-composer-details, :scope > .j-compose-options")
+        .locator(":scope > .j-composer-details, :scope > .j-composer-controls")
         .evaluateAll((sections) =>
           sections.map((section) => section.className),
         ),
-    ).toEqual(["j-composer-details", "j-compose-options"]);
+    ).toEqual(["j-composer-details", "j-composer-controls"]);
+    await expect(rail.locator("h2")).toHaveCount(0);
+    expect(
+      await rail
+        .locator(".j-composer-details > .j-form-field > .j-form-label")
+        .allTextContents(),
+    ).toEqual(["Tags", "Summary"]);
+    const disclosures = rail.locator(".j-composer-control-summary");
+    await expect(disclosures).toHaveCount(5);
+    expect(
+      (await disclosures.allTextContents()).map((text) =>
+        text.replace("⌄", "").trim().replace(/\s+/g, " "),
+      ),
+    ).toEqual([
+      "MediaNone",
+      "FormatMarkdown",
+      "Slugauto",
+      "PublishNow",
+      "AudiencePrivate",
+    ]);
+    expect(
+      await disclosures
+        .locator(".j-composer-control-label")
+        .evaluateAll((labels) =>
+          labels.every((label) => label.scrollWidth <= label.clientWidth),
+        ),
+    ).toBe(true);
+    expect(
+      await disclosures.evaluateAll((buttons) =>
+        buttons.map((button) => button.getAttribute("aria-expanded")),
+      ),
+    ).toEqual(["false", "false", "false", "false", "false"]);
+    await expect(
+      rail.getByText("Choose who can see this post.", { exact: false }),
+    ).toHaveCount(0);
     await expect(
       rail.getByText("Format controls how Jaunder interprets the Body.", {
         exact: true,
@@ -216,21 +246,8 @@ test("composer keeps filled body actions before a container-responsive controls 
       });
       expect(style.textTransform).not.toBe("uppercase");
     }
-    expect(
-      (await rail.locator("h2, .j-form-label").allTextContents()).map((text) =>
-        text.trim(),
-      ),
-    ).toEqual([
-      "Post details",
-      "Media",
-      "Summary",
-      "Tags",
-      "Format",
-      "Publication options",
-      "Slug",
-      "Publish at (optional)",
-      "Audience",
-    ]);
+    const summary = rail.locator('textarea[name="summary"]');
+    await expect(summary).toHaveCSS("height", "44px");
   };
   const expectFilledActions = async (scope: Locator): Promise<void> => {
     const actions = scope.locator(".j-composer-toolbar .j-btn");
@@ -275,6 +292,27 @@ test("composer keeps filled body actions before a container-responsive controls 
   await expectApprovedMarkup(grid);
   await expectFilledActions(grid);
 
+  const formatDisclosure = grid.getByRole("button", {
+    name: /Format Markdown/,
+  });
+  const audienceDisclosure = grid.getByRole("button", {
+    name: /Audience Private/,
+  });
+  await formatDisclosure.click();
+  await expect(formatDisclosure).toHaveAttribute("aria-expanded", "true");
+  await expect(grid.getByRole("button", { name: "Org" })).toBeVisible();
+  await audienceDisclosure.click();
+  await expect(formatDisclosure).toHaveAttribute("aria-expanded", "false");
+  await expect(audienceDisclosure).toHaveAttribute("aria-expanded", "true");
+  await expect(grid.getByLabel("Audience", { exact: true })).toBeVisible();
+
+  const summary = grid.locator('textarea[name="summary"]');
+  await summary.focus();
+  await expect(summary).toHaveCSS("min-height", "96px");
+  await summary.fill("Compact summary");
+  await page.locator('textarea[name="body"]').focus();
+  await expect(summary).toHaveCSS("min-height", "96px");
+
   await container.evaluate((element) => {
     (element as HTMLElement).style.width = "800px";
   });
@@ -295,6 +333,21 @@ test("composer keeps filled body actions before a container-responsive controls 
     (element as HTMLElement).style.width = "375px";
   });
   await expectStackedWithoutClipping(grid);
+
+  await container.evaluate((element) => {
+    (element as HTMLElement).style.width = "340px";
+  });
+  await expectStackedWithoutClipping(grid);
+  await expect
+    .poll(async () =>
+      grid
+        .locator(".j-composer-controls")
+        .evaluate(
+          (element) =>
+            getComputedStyle(element).gridTemplateColumns.split(" ").length,
+        ),
+    )
+    .toBe(1);
 
   await navigateInApp(page, () => click(page, 'a[href="/app"]'), {
     url: "/app",

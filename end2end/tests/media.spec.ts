@@ -225,6 +225,54 @@ test.describe("Media upload and serving", () => {
     await openMediaLibrary(page);
   });
 
+  test("composer Media summary reports upload progress", async ({ page }) => {
+    await signInAsNewUser(page);
+    await goto(page, "/posts/new");
+
+    const media = page
+      .locator(".j-composer-control-summary")
+      .filter({ hasText: "Media" });
+    await expect(media).toContainText("None");
+    const release = await stallServerFn(page, "media/upload");
+    await page
+      .locator("input[type='file']")
+      .first()
+      .setInputFiles({
+        name: "progress.png",
+        mimeType: "image/png",
+        buffer: Buffer.from("progress"),
+      });
+    await expect(media).toContainText("Uploading…");
+
+    release();
+    await expect(media).toContainText("progress.png");
+  });
+
+  test("failed composer upload identifies and reopens Media", async ({
+    page,
+  }) => {
+    await signInAsNewUser(page);
+    await goto(page, "/posts/new");
+    await failServerFn(page, "media/upload");
+
+    const media = page
+      .locator(".j-composer-control-summary")
+      .filter({ hasText: "Media" });
+    await expect(media).toHaveAttribute("aria-expanded", "false");
+    await page
+      .locator("input[type='file']")
+      .first()
+      .setInputFiles({
+        name: "failed.png",
+        mimeType: "image/png",
+        buffer: Buffer.from("failed"),
+      });
+
+    await expect(media).toContainText("Upload failed");
+    await expect(media).toHaveAttribute("aria-expanded", "true");
+    await expect(page.locator(".j-composer-media > .error")).toBeVisible();
+  });
+
   test("create composer retains multiple uploaded Media rows without URL inputs", async ({
     page,
   }) => {
@@ -249,6 +297,11 @@ test.describe("Media upload and serving", () => {
     await signInAsNewUser(page);
     await goto(page, "/posts/new");
 
+    const media = page
+      .locator(".j-composer-control-summary")
+      .filter({ hasText: "Media" });
+    await expect(media).toContainText("None");
+    await media.click();
     const fileInput = page.locator("input[type='file']").first();
     await fileInput.setInputFiles({
       name: "first image.png",
@@ -256,6 +309,7 @@ test.describe("Media upload and serving", () => {
       buffer: Buffer.from("first image"),
     });
     await expect(page.locator(".j-composer-media-row")).toHaveCount(1);
+    await expect(media).toContainText("first image.png");
     await fileInput.setInputFiles({
       name: "second-image.png",
       mimeType: "image/png",
@@ -263,6 +317,7 @@ test.describe("Media upload and serving", () => {
     });
     const rows = page.locator(".j-composer-media-row");
     await expect(rows).toHaveCount(2);
+    await expect(media).toContainText("2 files");
     await expect(rows.nth(0)).toContainText("first image.png");
     await expect(rows.nth(1)).toContainText("second-image.png");
     await expect(rows.locator("img")).toHaveCount(2);
@@ -297,13 +352,19 @@ test.describe("Media upload and serving", () => {
     await rows.nth(0).getByRole("button", { name: "Dismiss media" }).click();
     await expect(rows).toHaveCount(1);
     await expect(rows.nth(0)).toContainText("second-image.png");
+    await expect(media).toContainText("second-image.png");
   });
 
   test("Home composer uses the same temporary Media rows", async ({ page }) => {
     await signInAsNewUser(page);
     await goto(page, "/app");
     await waitForSelector(page, ".j-composer");
-    const fileInput = page.locator(".j-composer input[type='file']").first();
+    const composer = page.locator(".j-composer");
+    await composer
+      .locator(".j-composer-control-summary")
+      .filter({ hasText: "Media" })
+      .click();
+    const fileInput = composer.locator("input[type='file']").first();
     await fileInput.setInputFiles({
       name: "home-image.png",
       mimeType: "image/png",

@@ -42,11 +42,8 @@ pub(super) fn AudiencePickerWithState(
     };
 
     view! {
-        <fieldset class="j-form-field j-composer-group" aria-describedby="audience-help">
+        <fieldset class="j-form-field j-composer-group">
             <legend class="j-form-label">"Audience"</legend>
-            <p id="audience-help" class="j-form-help">
-                "Choose who can see this post. You can also share it with named audiences."
-            </p>
             <select
                 id="audience-base"
                 class="j-form-input"

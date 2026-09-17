@@ -177,54 +177,114 @@ pub(super) fn ComposerCore(
     }
 }
 
-/// The complete non-body control rail shared by every Post composer.
+/// One compact composer control whose body stays mounted beneath its own summary.
+#[component]
+fn ComposerDisclosure(
+    control: posts::ComposerControl,
+    label: &'static str,
+    value: Signal<String>,
+    disclosures: posts::ComposerDisclosureState,
+    body_id: &'static str,
+    #[prop(optional)] wide: bool,
+    children: Children,
+) -> impl IntoView {
+    view! {
+        <section class="j-composer-control" class:is-wide=wide>
+            <button
+                class="j-composer-control-summary"
+                type="button"
+                aria-expanded=move || {
+                    if disclosures.is_open(control) { "true" } else { "false" }
+                }
+                aria-controls=body_id
+                on:click=move |_| disclosures.toggle(control)
+            >
+                <span class="j-composer-control-label">{label}</span>
+                <span class="j-composer-control-value">{move || value.get()}</span>
+                <span class="j-composer-control-chevron" aria-hidden="true">
+                    "⌄"
+                </span>
+            </button>
+            <div
+                id=body_id
+                class="j-composer-control-body"
+                hidden=move || !disclosures.is_open(control)
+            >
+                {children()}
+            </div>
+        </section>
+    }
+}
+
+/// The always-visible controls shared by every Post composer.
 #[component]
 pub(super) fn ComposerDetails(state: ComposeState) -> impl IntoView {
-    let uploads_enabled = Resource::new(|| (), |()| crate::media::get_uploads_enabled());
     view! {
         <div class="j-composer-details">
-            <h2 class="j-sb-head" style="padding:0">
-                "Post details"
-            </h2>
-            {move || match crate::media::upload_presentation(uploads_enabled.get()) {
-                crate::media::UploadPresentation::Enabled => {
-                    view! { <ComposerMediaField /> }.into_any()
-                }
-                crate::media::UploadPresentation::Error(message) => {
-                    view! { <p class="error">{message}</p> }.into_any()
-                }
-                crate::media::UploadPresentation::Disabled
-                | crate::media::UploadPresentation::Loading => ().into_any(),
-            }}
+            <TagInput tags=state.tags on_change=state.tag_input_changed() />
             <ValidatedTextarea<PostSummary>
                 label="Summary"
                 name="summary"
                 field=state.summary_field
+                rows=1
+                field_class="j-form-field j-composer-summary"
                 placeholder="Optional summary or excerpt"
             />
-            <TagInput tags=state.tags on_change=state.tag_input_changed() />
-            <FormatToggle format=state.format />
         </div>
     }
 }
 
-/// Temporary Media rows for one composer session; dismissing a row never mutates a Media Record.
+/// The Media disclosure and its temporary rows for one composer session.
 #[component]
-fn ComposerMediaField() -> impl IntoView {
+fn ComposerMediaDisclosure(disclosures: posts::ComposerDisclosureState) -> impl IntoView {
+    let uploads_enabled = Resource::new(|| (), |()| crate::media::get_uploads_enabled());
     let state = ComposerMediaState::new();
-    let add_media = Callback::new(move |url| state.record_uploaded(url));
-    let report_error = Callback::new(move |message| state.record_error(message));
+    let summary = Signal::derive(move || state.summary());
+    view! {
+        {move || match crate::media::upload_presentation(uploads_enabled.get()) {
+            crate::media::UploadPresentation::Enabled => {
+                view! {
+                    <ComposerDisclosure
+                        control=posts::ComposerControl::Media
+                        label="Media"
+                        value=summary
+                        disclosures=disclosures
+                        body_id="composer-media-control"
+                        wide=true
+                    >
+                        <ComposerMediaField state disclosures />
+                    </ComposerDisclosure>
+                }
+                    .into_any()
+            }
+            crate::media::UploadPresentation::Error(message) => {
+                view! { <p class="error j-composer-control is-wide">{message}</p> }.into_any()
+            }
+            crate::media::UploadPresentation::Disabled
+            | crate::media::UploadPresentation::Loading => ().into_any(),
+        }}
+    }
+}
+
+#[component]
+fn ComposerMediaField(
+    state: ComposerMediaState,
+    disclosures: posts::ComposerDisclosureState,
+) -> impl IntoView {
+    let add_media = Callback::new(move |url| {
+        posts::record_media_upload(state, disclosures, url);
+    });
+    let report_error = Callback::new(move |message| {
+        state.record_error(message);
+        disclosures.open(posts::ComposerControl::Media);
+    });
     view! {
         <div class="j-composer-media">
-            <div class="j-composer-media-heading">
-                <span class="j-form-label">"Media"</span>
-                <MediaUpload
-                    on_uploaded=add_media
-                    on_error=report_error
-                    icon_only=true
-                    icon_path=Icons::PLUS
-                />
-            </div>
+            <MediaUpload
+                on_uploaded=add_media
+                on_error=report_error
+                on_uploading=Callback::new(move |active| state.set_uploading(active))
+            />
             <div class="j-composer-media-rows">
                 {move || {
                     state
@@ -435,8 +495,7 @@ fn CreationComposer(
                 />
             </div>
             <aside class="j-compose-aside">
-                <ComposerDetails state=state />
-                <ComposeOptions
+                <ComposerControlRail
                     state=state
                     slug_field=slug_field
                     publication=LoadedPublication::Draft
@@ -735,35 +794,102 @@ pub(super) fn SlugOverrideInput(slug_field: Field<Slug>) -> impl IntoView {
     }
 }
 
-/// The advanced options aside shared by the full-page composer and editor.
-///
-/// The immutable loaded publication state owns which controls exist: Drafts show
-/// slug and optional scheduling; Scheduled and live Posts show their persisted
-/// publication time. Audience selection remains available in every branch.
+/// The complete compact control rail shared by full-page creation and editing.
 #[component]
-pub(super) fn ComposeOptions(
+pub(super) fn ComposerControlRail(
     state: ComposeState,
-    /// Page-level rather than held by [`ComposeState`] — see
-    /// [`ComposeState::seed_from`].
     slug_field: Field<Slug>,
     publication: LoadedPublication,
     publication_time: Option<PublicationTimeEditState>,
     schedule_error: Signal<Option<InvalidSchedule>>,
-    /// Present only for the full new-Post composer, whose time choice is provisional.
     creation_schedule: Option<CreationSchedule>,
-    /// The named-audience load shared by the picker and the action gate.
     named: RwSignal<NamedAudienceState>,
 ) -> impl IntoView {
+    use strum::EnumMessage;
+
+    let disclosures = posts::ComposerDisclosureState::new();
+    let format_value = Signal::derive(move || {
+        state
+            .format
+            .get()
+            .get_message()
+            .unwrap_or("HTML")
+            .to_owned()
+    });
+    view! {
+        <ComposerDetails state />
+        <div class="j-composer-controls">
+            <ComposerMediaDisclosure disclosures />
+            <ComposerDisclosure
+                control=posts::ComposerControl::Format
+                label="Format"
+                value=format_value
+                disclosures=disclosures
+                body_id="composer-format-control"
+            >
+                <FormatToggle format=state.format />
+            </ComposerDisclosure>
+            <ComposeOptions
+                state
+                slug_field
+                publication
+                publication_time
+                schedule_error
+                creation_schedule
+                named
+                disclosures
+            />
+        </div>
+    }
+}
+
+/// The defaulted publication controls rendered into the shared disclosure grid.
+#[component]
+pub(super) fn ComposeOptions(
+    state: ComposeState,
+    slug_field: Field<Slug>,
+    publication: LoadedPublication,
+    publication_time: Option<PublicationTimeEditState>,
+    schedule_error: Signal<Option<InvalidSchedule>>,
+    creation_schedule: Option<CreationSchedule>,
+    named: RwSignal<NamedAudienceState>,
+    disclosures: posts::ComposerDisclosureState,
+) -> impl IntoView {
+    let slug_value = Signal::derive(move || posts::slug_disclosure_value(&slug_field.value()));
+    let publish_value = Signal::derive(move || {
+        let value =
+            publication_time.map_or_else(|| state.publish_at.get(), |edit| edit.value.get());
+        posts::publish_disclosure_value(&value)
+    });
+    let audience_value = Signal::derive(move || {
+        posts::audience_disclosure_value(state.audience.get().base).to_owned()
+    });
     view! {
         <div class="j-compose-options">
-            <h2 class="j-sb-head" style="padding:0">
-                "Publication options"
-            </h2>
-            {match publication {
-                LoadedPublication::Draft => {
+            {matches!(publication, LoadedPublication::Draft)
+                .then(|| {
                     view! {
-                        <SlugOverrideInput slug_field=slug_field />
-                        {match creation_schedule {
+                        <ComposerDisclosure
+                            control=posts::ComposerControl::Slug
+                            label="Slug"
+                            value=slug_value
+                            disclosures=disclosures
+                            body_id="composer-slug-control"
+                        >
+                            <SlugOverrideInput slug_field=slug_field />
+                        </ComposerDisclosure>
+                    }
+                })}
+            <ComposerDisclosure
+                control=posts::ComposerControl::Publish
+                label="Publish"
+                value=publish_value
+                disclosures=disclosures
+                body_id="composer-publish-control"
+            >
+                {match publication {
+                    LoadedPublication::Draft => {
+                        match creation_schedule {
                             Some(schedule) => {
                                 view! { <CreationScheduleControl state=state schedule=schedule /> }
                                     .into_any()
@@ -778,22 +904,29 @@ pub(super) fn ComposeOptions(
                                 }
                                     .into_any()
                             }
-                        }}
+                        }
                     }
-                        .into_any()
-                }
-                LoadedPublication::Scheduled(_) | LoadedPublication::Live(_) => {
-                    view! {
-                        <ScheduleControl
-                            state=state
-                            publication_time=publication_time
-                            schedule_error=schedule_error
-                        />
+                    LoadedPublication::Scheduled(_) | LoadedPublication::Live(_) => {
+                        view! {
+                            <ScheduleControl
+                                state=state
+                                publication_time=publication_time
+                                schedule_error=schedule_error
+                            />
+                        }
+                            .into_any()
                     }
-                        .into_any()
-                }
-            }}
-            <AudiencePickerWithState selection=state.audience named=named />
+                }}
+            </ComposerDisclosure>
+            <ComposerDisclosure
+                control=posts::ComposerControl::Audience
+                label="Audience"
+                value=audience_value
+                disclosures=disclosures
+                body_id="composer-audience-control"
+            >
+                <AudiencePickerWithState selection=state.audience named=named />
+            </ComposerDisclosure>
         </div>
     }
 }
