@@ -3844,7 +3844,7 @@ run is still active, classification evidence is incomplete: observation waits
 without consuming poll-error strikes, one-shot observation reports `pending`,
 and pre-arm landing refuses to arm. The run reaching `completed` makes the same
 absence malformed (decision:
-`docs/adr/drafts/active-workflow-incomplete-pr-evidence.md`). Ambiguous
+`docs/adr/0198-active-workflow-incomplete-pr-evidence.md`). Ambiguous
 correlation, unavailable source, remote reuse, and unsupported expressions fail
 closed through poll-error handling rather than being guessed optional. A
 non-Actions status context has no Actions ancestry, so exact ruleset membership

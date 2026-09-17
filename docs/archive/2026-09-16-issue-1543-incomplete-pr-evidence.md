@@ -12,7 +12,7 @@ continues to fail closed.
 
 - The immutable workflow graph and branch ruleset remain the authorities for
   required-target identity and dependency ancestry. The lifecycle refinement is
-  recorded in `docs/adr/drafts/active-workflow-incomplete-pr-evidence.md`.
+  recorded in `docs/adr/0198-active-workflow-incomplete-pr-evidence.md`.
 - The owning Actions workflow run's status is the sole authority for whether an
   absent graph-derived required target may still materialize. Job-list shape is
   not used as a settledness heuristic.

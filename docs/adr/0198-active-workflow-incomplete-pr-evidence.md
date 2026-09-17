@@ -1,16 +1,16 @@
-# ADR-DRAFT: Active-workflow missing PR targets are incomplete evidence
+# ADR-0198: Active-workflow missing PR targets are incomplete evidence
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-16
 - Issue: [#1543](https://github.com/jaunder-org/jaunder/issues/1543)
 
 ## Context
 
-[ADR-0195](../0195-dynamic-pr-check-classification.md) requires the PR observer
-to correlate every graph-derived required target with exactly one
-current-attempt runtime job before using workflow ancestry. Missing correlation
-entered the observer's poll-error and strike policy because uncertainty must
-never classify a failed constituent as optional.
+[ADR-0195](0195-dynamic-pr-check-classification.md) requires the PR observer to
+correlate every graph-derived required target with exactly one current-attempt
+runtime job before using workflow ancestry. Missing correlation entered the
+observer's poll-error and strike policy because uncertainty must never classify
+a failed constituent as optional.
 
 GitHub Actions does not necessarily materialize a `needs`-dependent aggregate
 job while its prerequisites are still running. A failed constituent can
