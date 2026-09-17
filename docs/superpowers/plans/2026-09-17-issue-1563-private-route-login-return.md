@@ -47,7 +47,7 @@ Out:
     authenticated, operator-only, parameterized-route, cold-entry, and
     in-app-navigation behavior without a second document load.
 
-- [ ] Task 3: Return confirmed password and Passkey authentication safely.
+- [x] Task 3: Return confirmed password and Passkey authentication safely.
   - Contract: Login consumes only the typed private destination produced by
     Task 1. Confirmed password and Passkey outcomes navigate client-side to it,
     or to `/app` when absent/invalid; indeterminate outcomes do not navigate.

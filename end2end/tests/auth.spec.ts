@@ -206,7 +206,7 @@ test("authenticated users mount parameterized private routes", async ({
   await expect(page.locator(".j-topbar h1")).toHaveText("Post History");
 });
 
-test("login with valid credentials succeeds", async ({
+test("direct login with valid credentials falls back to Home", async ({
   page,
   user,
 }, testInfo) => {
@@ -237,6 +237,41 @@ test("login with valid credentials succeeds", async ({
   perf.mark("assertions_complete");
   await perf.log();
 });
+
+test("confirmed password login returns to the exact private destination without a reload", async ({
+  page,
+  user,
+}) => {
+  const destination = "/posts/42/history/7?order=oldest#revision";
+  await goto(page, `/login?return_to=${encodeURIComponent(destination)}`);
+  await page.evaluate(() => {
+    (window as Window & { __jaunderNoReload?: boolean }).__jaunderNoReload =
+      true;
+  });
+
+  await fillLoginForm(page, user.username, user.password);
+  await waitForSelector(page, SEL.logoutLink);
+  await expect(page).toHaveURL(`${BASE_URL}${destination}`);
+  await expect(
+    page.evaluate(
+      () =>
+        (window as Window & { __jaunderNoReload?: boolean })
+          .__jaunderNoReload === true,
+    ),
+  ).resolves.toBe(true);
+});
+
+for (const returnTo of ["https://evil.example/app", "/login", "/unknown"]) {
+  test(`invalid login return ${returnTo} falls back to Home`, async ({
+    page,
+    user,
+  }) => {
+    await goto(page, `/login?return_to=${encodeURIComponent(returnTo)}`);
+    await fillLoginForm(page, user.username, user.password);
+    await waitForSelector(page, SEL.logoutLink);
+    await expect(page).toHaveURL(`${BASE_URL}/app`);
+  });
+}
 
 test("login submits with Enter", async ({ page, user }) => {
   await goto(page, "/login");

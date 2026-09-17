@@ -389,7 +389,9 @@ test("stale marker reaches login through Home without a redirect loop", async ({
   );
   // e2e-goto-wrapper:allow the stale-marker redirect chain is the behavior under test.
   await page.goto(`${BASE_URL}/`, { waitUntil: "commit" });
-  await page.waitForURL(/\/login$/, { timeout: firstNav });
+  await page.waitForURL(`${BASE_URL}/login?return_to=%2Fapp`, {
+    timeout: firstNav,
+  });
   await expect(page.locator(SEL.postBody)).toHaveCount(0);
 });
 
@@ -429,7 +431,7 @@ test("anonymous: /app bounces to /login", async ({ page, firstNav }) => {
   // and redirects to /login (D6).
   // e2e-goto-wrapper:allow the subject is the bounce itself, so this waits on the URL and not on the mount — the wrapper would insert a mount barrier on the /app document before the redirect is ever observed
   await page.goto(`${BASE_URL}/app`, { waitUntil: "domcontentloaded" });
-  await page.waitForURL(/\/login$/, {
+  await page.waitForURL(`${BASE_URL}/login?return_to=%2Fapp`, {
     timeout: firstNav,
   });
 });

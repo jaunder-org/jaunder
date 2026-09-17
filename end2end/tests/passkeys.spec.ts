@@ -138,14 +138,12 @@ test("Chromium passkeys enroll, authenticate discoverably, refresh metadata, and
       page,
       "the cold login page is the entry point for discoverable passkey authentication",
     );
-    await goto(page, "/login");
+    const passkeyReturn = "/passkeys?from=login#credentials";
+    await goto(page, `/login?return_to=${encodeURIComponent(passkeyReturn)}`);
     await waitForSelector(page, PASSKEY_LOGIN);
     await click(page, PASSKEY_LOGIN);
     await waitForSelector(page, SEL.logoutLink);
-    await navigateInApp(page, () => click(page, PASSKEYS_LINK), {
-      url: "/passkeys",
-      ready: PASSKEYS_LIST,
-    });
+    await expect(page).toHaveURL(`${BASE_URL}${passkeyReturn}`);
     await expect(
       page.locator('[data-test="passkey-credential"]', {
         hasText: "Primary laptop",
@@ -218,7 +216,7 @@ test("Chromium passkeys enroll, authenticate discoverably, refresh metadata, and
       "a fresh protected-route load reconciles the remotely revoked sibling session",
     );
     await goto(siblingPage, "/app");
-    await siblingPage.waitForURL(`${BASE_URL}/login`);
+    await siblingPage.waitForURL(`${BASE_URL}/login?return_to=%2Fapp`);
     await waitForSelector(siblingPage, SEL.username);
     await expect(siblingPage.locator(SEL.logoutLink)).toHaveCount(0);
 
@@ -262,7 +260,7 @@ test("Chromium passkeys enroll, authenticate discoverably, refresh metadata, and
     // Reset revokes this passkey session. The same page can then establish a
     // new session through the remaining resident credential.
     await navigateInApp(page, () => click(page, '.j-nav a[href="/app"]'), {
-      url: "/login",
+      url: "/login?return_to=%2Fapp",
       ready: SEL.username,
     });
     await click(page, PASSKEY_LOGIN);

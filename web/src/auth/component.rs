@@ -4,18 +4,24 @@
 //! inside this file.
 
 use super::{Login, Logout, SessionUser};
+use crate::app::PrivateDestination;
 use crate::error::WebError;
 use crate::forms::{self, Field, ValidatedInput};
 use crate::passkeys;
 use crate::topbar::Topbar;
 use common::{MutationOutcome, password::PasswordShape, username::Username};
 use leptos::prelude::*;
-use leptos_router::{NavigateOptions, hooks::use_navigate};
+use leptos_router::{
+    NavigateOptions,
+    hooks::{use_navigate, use_query_map},
+};
 
 /// Login page.
 #[component]
 pub fn LoginPage() -> impl IntoView {
     let login_action = ServerAction::<Login>::new();
+    let navigate = use_navigate();
+    let query = use_query_map();
 
     // On a successful login, store the returned session directly: this updates the
     // reactive signal so the chrome flips without a document reload, and mirrors it
@@ -23,8 +29,14 @@ pub fn LoginPage() -> impl IntoView {
     Effect::new(move |_| {
         if let Some(Ok(outcome)) = login_action.value().get() {
             match outcome {
-                MutationOutcome::Confirmed(session)
-                | MutationOutcome::CommitIndeterminate(session) => {
+                MutationOutcome::Confirmed(session) => {
+                    super::set_session(session);
+                    super::use_session().reconcile.refetch();
+                    let destination =
+                        login_return_destination(query.get().get("return_to").as_deref());
+                    navigate(&destination, NavigateOptions::default());
+                }
+                MutationOutcome::CommitIndeterminate(session) => {
                     super::set_session(session);
                     super::use_session().reconcile.refetch();
                 }
@@ -60,6 +72,14 @@ pub fn LoginPage() -> impl IntoView {
             </div>
         </div>
     }
+}
+
+/// Returns the Login flow's safe client-side destination.
+fn login_return_destination(return_to: Option<&str>) -> String {
+    PrivateDestination::parse(return_to.unwrap_or_default()).map_or_else(
+        || "/app".to_owned(),
+        |destination| destination.as_ref().to_owned(),
+    )
 }
 
 /// Native login form: validates typed domain values before dispatching the
@@ -113,6 +133,7 @@ fn LoginForm(action: ServerAction<Login>) -> impl IntoView {
 #[component]
 fn PasskeyLogin() -> impl IntoView {
     let navigate = use_navigate();
+    let query = use_query_map();
     let availability = Resource::new(|| (), |()| passkeys::availability());
     let status = RwSignal::new(None::<String>);
     let working = RwSignal::new(false);
@@ -130,7 +151,9 @@ fn PasskeyLogin() -> impl IntoView {
                 PasskeyAuthentication::Confirmed(session) => {
                     session_context.set(session);
                     session_context.reconcile.refetch();
-                    navigate("/", NavigateOptions::default());
+                    let destination =
+                        login_return_destination(query.get().get("return_to").as_deref());
+                    navigate(&destination, NavigateOptions::default());
                     "Signed in with your passkey.".to_owned()
                 }
                 PasskeyAuthentication::Indeterminate(session) => {
