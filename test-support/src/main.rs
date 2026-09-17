@@ -473,17 +473,9 @@ async fn cmd_site_config_snapshot(
     let factory = storage::open_existing_database_with_observer(db, &runtime)
         .await?
         .factory;
-    println!(
-        "{}",
-        serialize_snapshot(&RawSiteConfigSnapshot {
-            value: factory.site_config().get_raw(key).await?,
-        })?
-    );
+    let value = factory.site_config().get_raw(key).await?;
+    println!("{}", serde_json::json!({ "value": value }));
     Ok(())
-}
-
-fn serialize_snapshot<T: Serialize>(snapshot: &T) -> anyhow::Result<String> {
-    Ok(serde_json::to_string(snapshot)?)
 }
 
 async fn cmd_site_config_restore(
@@ -514,17 +506,10 @@ async fn cmd_site_config_restore(
                             .map_err(SiteIdentityMutationError::from)?;
                     }
                 }
-                if matches!(
-                    key,
-                    SiteConfigKey::SiteTitle
-                        | SiteConfigKey::SiteTagline
-                        | SiteConfigKey::SiteBaseUrl
-                ) {
-                    publisher
-                        .invalidate_identity(transaction)
-                        .await
-                        .map_err(SiteIdentityMutationError::from)?;
-                }
+                publisher
+                    .invalidate_identity(transaction)
+                    .await
+                    .map_err(SiteIdentityMutationError::from)?;
                 Ok::<(), SiteIdentityMutationError>(())
             })
         })
@@ -825,24 +810,6 @@ mod tests {
                 ..
             }
         ));
-    }
-
-    #[test]
-    fn snapshot_serialization_propagates_serializer_failure() {
-        struct SerializationFailure;
-
-        impl Serialize for SerializationFailure {
-            fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
-            where
-                S: serde::Serializer,
-            {
-                Err(serde::ser::Error::custom("test serialization failure"))
-            }
-        }
-
-        let error = serialize_snapshot(&SerializationFailure)
-            .expect_err("a snapshot serialization failure must reach the command");
-        assert!(error.to_string().contains("test serialization failure"));
     }
 
     #[test]
