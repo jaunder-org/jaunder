@@ -989,16 +989,6 @@
   box-shadow: 0 4px 12px rgb(0 0 0 / 8%);
 }
 
-/* At this narrow shell width Firefox's anchored inset leaves the menu outside
-   the viewport, so pin the menu to the viewport edge explicitly. */
-@supports (-moz-appearance: none) {
-  @media (max-width: 400px) {
-    .j-post-action-popover {
-      right: 8px;
-    }
-  }
-}
-
 .j-post-acts {
   display: flex;
   flex-direction: column;
