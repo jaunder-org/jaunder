@@ -1842,6 +1842,56 @@
   }
 }
 
+/* ─── narrow application shell ─── */
+@media (max-width: 720px) {
+  .j-shell {
+    flex-direction: column;
+  }
+
+  .j-sidebar {
+    box-sizing: border-box;
+    width: 100%;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-right: 0;
+    border-bottom: 1px var(--border-style) var(--line);
+  }
+
+  .j-sidebar .j-search,
+  .j-sidebar .j-sb-head {
+    display: none;
+  }
+
+  .j-sidebar .j-nav {
+    flex-direction: row;
+    flex: 0 0 auto;
+  }
+
+  .j-sidebar .j-nav-item {
+    white-space: nowrap;
+  }
+
+  .j-sidebar .j-sb-foot {
+    flex: 0 0 auto;
+    margin: 0 0 0 auto;
+  }
+
+  .j-main-region {
+    width: 100%;
+    height: auto;
+  }
+
+  .j-topbar,
+  .j-timeline-order {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+}
+
 /* ─── utilities ─── */
 .j-spacer {
   flex: 1;
