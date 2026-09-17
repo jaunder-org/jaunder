@@ -17,9 +17,10 @@
 
 ;;; Commentary:
 ;; The user-facing commands and their orchestration: `jaunder-new-post',
-;; `jaunder-publish', and `jaunder-save-draft', plus the ID-first safe-to-resume
-;; write-back that ties the buffer, the mapper, the wire, media, and transport
-;; together (ADR-0047).
+;; `jaunder-publish', and `jaunder-save-draft', plus the transient new-Post
+;; input lifecycle (`C-c C-c' completes and `C-c C-k' abandons) and the ID-first
+;; safe-to-resume write-back that ties the buffer, the mapper, the wire, media,
+;; and transport together (ADR-0047).
 
 ;;; Code:
 
@@ -120,7 +121,8 @@ send); absent it, the render falls back to the local zone via
 (defun jaunder--new-post-in (dir now-string)
   "Create and save a timestamped draft in DIR stamped NOW-STRING; return its path.
 Inserts the minimal org template (empty TITLE, DATE now, empty KEYWORDS and
-DESCRIPTION, JAUNDER_STATUS draft) and leaves point in the body."
+DESCRIPTION, JAUNDER_STATUS draft, and the current JAUNDER_DATE_TZ) and leaves
+point in the body."
   (let* ((path (expand-file-name (format "draft-%s.org" now-string) dir))
          (buf (find-file-noselect path)))
     (with-current-buffer buf
@@ -129,6 +131,9 @@ DESCRIPTION, JAUNDER_STATUS draft) and leaves point in the body."
               "#+KEYWORDS: \n"
               "#+DESCRIPTION: \n"
               "#+PROPERTY: JAUNDER_STATUS draft\n\n")
+      ;; Capture the interpretation zone before editing so a failed first
+      ;; publish has no reason to mutate the author's input.
+      (jaunder--ensure-date-tz)
       (save-buffer))
     path))
 
@@ -237,6 +242,32 @@ the command before file creation has no filesystem side effect."
       (jaunder--set-keyword "DATE" scheduled-date))
     (save-buffer)))
 
+(defvar-keymap jaunder-new-post-mode-map ;; cov:ignore: defvar-keymap expands to synthetic bookkeeping with no instrumentable source form
+  :doc "Keymap for a Post being entered by `jaunder-new-post'."
+  "C-c C-c" #'jaunder-new-post-complete
+  "C-c C-k" #'jaunder-new-post-cancel)
+
+(define-minor-mode jaunder-new-post-mode ;; cov:ignore: define-minor-mode expands to synthetic bookkeeping with no instrumentable source form
+  "Treat the current buffer as transient new-Post input."
+  :lighter nil
+  :keymap jaunder-new-post-mode-map)
+
+(defun jaunder-new-post-complete ()
+  "Publish the new Post and close its input buffer on success."
+  (interactive)
+  (jaunder-publish)
+  (kill-current-buffer))
+
+(defun jaunder-new-post-cancel ()
+  "Delete the local new Post and close its input buffer."
+  (interactive)
+  (let ((path (or (buffer-file-name)
+                  (error "jaunder: new Post buffer is not visiting a file"))))
+    (when (file-exists-p path)
+      (delete-file path))
+    (set-buffer-modified-p nil)
+    (kill-current-buffer)))
+
 (defun jaunder-new-post (&optional prefix)
   "Create an Org Post and visit its body.
 Ordinary invocation resolves the target blog and collects title, Tags, and
@@ -250,6 +281,7 @@ error rather than an implicit target choice."
               (jaunder--new-post-in
                (car entry) (format-time-string "%Y%m%dT%H%M%S"))))
         (switch-to-buffer (find-file-noselect path))
+        (jaunder-new-post-mode 1)
         (goto-char (point-max)))
     (let* ((entry (jaunder--select-new-post-blog))
            (dir (car entry))
@@ -268,6 +300,7 @@ error rather than an implicit target choice."
       (jaunder--write-new-post-metadata
        path title tags status scheduled-date)
       (switch-to-buffer (find-file-noselect path))
+      (jaunder-new-post-mode 1)
       (goto-char (point-max)))))
 
 
