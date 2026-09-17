@@ -44,7 +44,7 @@ it before checking the task.
     its history shows no substantive Theme files in the bootstrap; every visual
     baseline has recorded reproduction conditions and an artifact path.
 
-- [ ] Task 2: Prove generated source and local package validation
+- [x] Task 2: Prove generated source and local package validation
   - Contract: a substantive branch owns pinned Tailwind source and lock data,
     generated root `style.css`, schema-1 `theme.json`, declared WOFF2/raster
     `assets/`, provenance, maintenance and installation docs, and a caller
