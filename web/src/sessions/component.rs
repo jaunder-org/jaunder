@@ -161,19 +161,16 @@ enum AppPasswordPresentation {
 }
 
 impl AppPasswordPresentation {
-    fn status_class(self) -> &'static str {
+    fn parts(self) -> (&'static str, &'static str) {
         match self {
-            Self::Confirmed => "success",
-            Self::CommitIndeterminate => "error",
-        }
-    }
-
-    fn prompt(self) -> &'static str {
-        match self {
-            Self::Confirmed => "Copy this app password now \u{2014} it will not be shown again: ",
-            Self::CommitIndeterminate => {
-                "The app password may have been created, but its status could not be confirmed. Copy it now and refresh to check: "
-            }
+            Self::Confirmed => (
+                "success",
+                "Copy this app password now \u{2014} it will not be shown again: ",
+            ),
+            Self::CommitIndeterminate => (
+                "error",
+                "The app password may have been created, but its status could not be confirmed. Copy it now and refresh to check: ",
+            ),
         }
     }
 }
@@ -189,12 +186,12 @@ fn AppPasswordToken(
     let copy_attempt = RwSignal::new(0_u64);
     let token_text = token.to_string();
     let copy_value = token_text.clone();
+    let (status_class, prompt) = presentation.parts();
 
     view! {
         <div data-app-password-token>
-            <p class=presentation
-                .status_class()>
-                {presentation.prompt()} <code>{token_text}</code> " "
+            <p class=status_class>
+                {prompt} <code>{token_text}</code> " "
                 <button
                     type="button"
                     class="j-btn"
