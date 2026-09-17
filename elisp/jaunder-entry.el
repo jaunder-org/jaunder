@@ -32,16 +32,46 @@ Holds abstract field values only; wire encoding (namespaces, media types,
 body-only content with the metadata header block stripped."
   title categories summary draft content-type body published)
 
+(defun jaunder--ascii-tag-alphanumeric-p (character)
+  "Return non-nil when CHARACTER is an ASCII letter or digit."
+  (or (and (<= ?a character) (<= character ?z))
+      (and (<= ?A character) (<= character ?Z))
+      (and (<= ?0 character) (<= character ?9))))
+
+(defun jaunder--tag-label-defect (label)
+  "Return the first Tag grammar defect in LABEL, or nil when valid.
+A defect is (KIND . OFFSET), where KIND is `wrong-type', `empty',
+`invalid-start', or `invalid-character' and OFFSET is zero-based in the trimmed
+LABEL.  The scanner
+is the single Tag grammar authority used by both validation and interactive
+repair diagnostics."
+  (if (not (stringp label))
+      '(wrong-type . 0)
+    (let ((trimmed (string-trim label)))
+      (cond
+       ((string-empty-p trimmed) '(empty . 0))
+       ((not (jaunder--ascii-tag-alphanumeric-p (aref trimmed 0)))
+        '(invalid-start . 0))
+       (t
+        (let ((offset 1))
+          (while (and (< offset (length trimmed))
+                      (let ((character (aref trimmed offset)))
+                        (or (jaunder--ascii-tag-alphanumeric-p character)
+                            (= character ?-))))
+            (setq offset (1+ offset)))
+          (when (< offset (length trimmed))
+            (cons 'invalid-character offset))))))))
+
 (defun jaunder--valid-tag-slug-p (slug)
   "Return non-nil when SLUG is a canonical lowercase Jaunder Tag."
-  (let ((case-fold-search nil))
-    (and (stringp slug)
-         (string-match-p "\\`[a-z0-9][a-z0-9-]*\\'" slug))))
+  (and (stringp slug)
+       (equal slug (string-trim slug))
+       (equal slug (downcase slug))
+       (null (jaunder--tag-label-defect slug))))
 
 (defun jaunder--valid-tag-label-p (label)
   "Return non-nil when LABEL satisfies Jaunder's case-preserving Tag boundary."
-  (and (stringp label)
-       (jaunder--valid-tag-slug-p (downcase (string-trim label)))))
+  (null (jaunder--tag-label-defect label)))
 
 (provide 'jaunder-entry)
 ;;; jaunder-entry.el ends here

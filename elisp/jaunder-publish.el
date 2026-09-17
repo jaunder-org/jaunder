@@ -190,20 +190,54 @@ available without server completion."
        nil))))
 
 
+(defun jaunder--invalid-tag-repair (answer defect)
+  "Return (PROMPT . CURSOR) for invalid Tag ANSWER and its DEFECT.
+DEFECT comes from `jaunder--tag-label-defect', the shared grammar authority.
+PROMPT explains that first violation.  CURSOR is its zero-based position in the
+original, untrimmed ANSWER so the next prompt can preserve and repair exactly
+what the user entered."
+  (let* ((trimmed (string-trim answer))
+         (leading-whitespace
+          (- (length answer) (length (string-trim-left answer))))
+         (offset (cdr defect)))
+    (pcase (car defect)
+      ('invalid-start
+       (cons
+        (concat
+         "Tag must start with an ASCII letter or digit; remaining characters "
+         "may be ASCII letters, digits, or hyphens; edit: ")
+        leading-whitespace))
+      ('invalid-character
+       (cons
+        (format
+         (concat
+          "Tag character %S at position %d is not allowed; subsequent "
+          "characters allow only ASCII letters, digits, or hyphens; edit: ")
+         (char-to-string (aref trimmed offset))
+         (1+ offset))
+        (+ leading-whitespace offset)))
+      (_ (error "jaunder: unsupported Tag defect %S" (car defect))))))
+
 (defun jaunder--read-new-post-tags (candidates)
   "Prompt for Tags using CANDIDATES until empty input; return accepted labels.
 New valid labels are allowed.  Invalid labels re-prompt, and duplicate
 canonical slugs are omitted while preserving first-entry order."
-  (let (labels seen done)
+  (let (labels seen done retry-input retry-prompt)
     (while (not done)
       (let* ((answer
               (completing-read
-               "Tag (empty to finish): " candidates nil nil))
+               (or retry-prompt "Tag (empty to finish): ")
+               candidates nil nil retry-input))
              (label (string-trim answer))
-             (slug (downcase label)))
+             (slug (downcase label))
+             (defect (jaunder--tag-label-defect answer)))
+        (setq retry-input nil retry-prompt nil)
         (cond
          ((string-empty-p label) (setq done t))
-         ((not (jaunder--valid-tag-label-p label))
+         (defect
+          (let ((repair (jaunder--invalid-tag-repair answer defect)))
+            (setq retry-input (cons answer (cdr repair))
+                  retry-prompt (car repair)))
           (message
            "jaunder: Tag must match [a-z0-9][a-z0-9-]* (case preserved)"))
          ((member slug seen))
