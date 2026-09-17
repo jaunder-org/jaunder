@@ -136,7 +136,10 @@ where
         .await?)
 }
 #[cfg(test)]
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 #[cfg(test)]
 use tokio::sync::{Notify, RwLock};
 
@@ -397,40 +400,12 @@ pub trait SiteConfigStorage: Send + Sync {
     #[cfg(test)]
     async fn install_feeds_config_read_gate(&self, gate: Option<Arc<FeedsConfigReadGate>>);
 
-    /// Returns the site identity (title, optional tagline, and base URL).
-    async fn get_identity(&self) -> Result<SiteIdentity> {
-        let title = self
-            .get_raw(SiteConfigKey::SiteTitle)
-            .await?
-            .and_then(|v| v.parse::<SiteTitle>().ok())
-            .unwrap_or_default();
-        let tagline = self
-            .get_raw(SiteConfigKey::SiteTagline)
-            .await?
-            .and_then(|value| value.parse::<SiteTagline>().ok());
-        let base_url = match self
-            .get_raw(SiteConfigKey::SiteBaseUrl)
-            .await?
-            .and_then(text::non_empty_owned)
-        {
-            None => None,
-            Some(raw) => {
-                if let Ok(url) = raw.parse::<BaseUrl>() {
-                    Some(url)
-                } else {
-                    // Do not mutate while reading: callers that choose to repair this
-                    // legacy value must acquire their own write capability.
-                    tracing::warn!("ignoring unparseable stored site.base_url");
-                    None
-                }
-            }
-        };
-        Ok(SiteIdentity {
-            title,
-            tagline,
-            base_url,
-        })
-    }
+    /// Returns the site identity (title, optional tagline, and base URL) from
+    /// one coherent database snapshot.
+    async fn get_identity(&self) -> Result<SiteIdentity>;
+
+    #[cfg(test)]
+    async fn install_identity_read_gate(&self, gate: Option<Arc<IdentityReadGate>>);
 
     /// Writes the complete identity and advances publisher generation in the
     /// same caller-owned transaction.
@@ -521,6 +496,8 @@ pub struct SiteConfigStore<DB: Database> {
     pool: Pool<DB>,
     #[cfg(test)]
     feeds_config_read_gate: RwLock<Option<Arc<FeedsConfigReadGate>>>,
+    #[cfg(test)]
+    identity_read_gate: RwLock<Option<Arc<IdentityReadGate>>>,
 }
 
 impl<DB: Database> SiteConfigStore<DB> {
@@ -530,6 +507,8 @@ impl<DB: Database> SiteConfigStore<DB> {
             pool,
             #[cfg(test)]
             feeds_config_read_gate: RwLock::new(None),
+            #[cfg(test)]
+            identity_read_gate: RwLock::new(None),
         }
     }
 }
@@ -681,6 +660,43 @@ struct FeedsConfigRow {
     hub: Option<StoredSiteConfigValue>,
 }
 
+/// One coherent raw snapshot of the Local identity configuration.
+#[derive(sqlx::FromRow)]
+struct SiteIdentityRow {
+    title: Option<StoredSiteConfigValue>,
+    tagline: Option<StoredSiteConfigValue>,
+    base_url: Option<StoredSiteConfigValue>,
+}
+
+/// Test-only barrier after the grouped identity statement has captured its database snapshot.
+#[cfg(test)]
+#[derive(Default)]
+pub struct IdentityReadGate {
+    captured: Notify,
+    resume: Notify,
+    identity_read_statements: AtomicUsize,
+}
+
+#[cfg(test)]
+impl IdentityReadGate {
+    async fn wait_for_snapshot(&self) {
+        self.captured.notified().await;
+    }
+
+    fn resume(&self) {
+        self.resume.notify_one();
+    }
+
+    fn record_statement(&self) {
+        self.identity_read_statements
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn statement_count(&self) -> usize {
+        self.identity_read_statements.load(Ordering::Relaxed)
+    }
+}
+
 /// A physically stored site-config key, including an unknown or orphan key.
 #[derive(Debug, macros::SqlxBridge)]
 struct StoredSiteConfigKey(String);
@@ -702,6 +718,7 @@ where
     SiteConfigExportRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     SmtpConfigRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     FeedsConfigRow: for<'r> sqlx::FromRow<'r, DB::Row>,
+    SiteIdentityRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> &'q str: Encode<'q, DB> + Type<DB>,
     String: Type<DB>,
     for<'q> String: Encode<'q, DB>,
@@ -710,6 +727,15 @@ where
     DB::Arguments: sqlx::IntoArguments<DB>,
 {
     async fn get_raw(&self, key: SiteConfigKey) -> Result<Option<String>> {
+        #[cfg(test)]
+        if matches!(
+            key,
+            SiteConfigKey::SiteTitle | SiteConfigKey::SiteTagline | SiteConfigKey::SiteBaseUrl
+        ) && let Some(gate) = self.identity_read_gate.read().await.clone()
+        {
+            gate.record_statement();
+        }
+
         let row = sqlx::query_as::<_, (StoredSiteConfigValue,)>(
             "SELECT value FROM site_config WHERE key = $1",
         )
@@ -733,6 +759,68 @@ where
         .map(|(value,)| value.into_inner())
         .and_then(text::non_empty_owned);
         Ok(raw.and_then(|value| value.parse::<BaseUrl>().ok()))
+    }
+
+    async fn get_identity(&self) -> Result<SiteIdentity> {
+        #[cfg(test)]
+        if let Some(gate) = self.identity_read_gate.read().await.clone() {
+            gate.record_statement();
+        }
+
+        let row = sqlx::query_as::<_, SiteIdentityRow>(
+            "SELECT \
+             MAX(CASE WHEN key = 'site.title' THEN value END) AS title, \
+             MAX(CASE WHEN key = 'site.tagline' THEN value END) AS tagline, \
+             MAX(CASE WHEN key = 'site.base_url' THEN value END) AS base_url \
+             FROM site_config \
+             WHERE key IN ('site.title', 'site.tagline', 'site.base_url')",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        #[cfg(test)]
+        {
+            let gate = self.identity_read_gate.read().await.clone();
+            if let Some(gate) = gate {
+                gate.captured.notify_one();
+                gate.resume.notified().await;
+            }
+        }
+
+        let title = row
+            .title
+            .map(StoredSiteConfigValue::into_inner)
+            .and_then(|value| value.parse::<SiteTitle>().ok())
+            .unwrap_or_default();
+        let tagline = row
+            .tagline
+            .map(StoredSiteConfigValue::into_inner)
+            .and_then(|value| value.parse::<SiteTagline>().ok());
+        let base_url = match row
+            .base_url
+            .map(StoredSiteConfigValue::into_inner)
+            .and_then(text::non_empty_owned)
+        {
+            None => None,
+            Some(raw) => {
+                if let Ok(url) = raw.parse::<BaseUrl>() {
+                    Some(url)
+                } else {
+                    tracing::warn!("ignoring unparseable stored site.base_url");
+                    None
+                }
+            }
+        };
+        Ok(SiteIdentity {
+            title,
+            tagline,
+            base_url,
+        })
+    }
+
+    #[cfg(test)]
+    async fn install_identity_read_gate(&self, gate: Option<Arc<IdentityReadGate>>) {
+        *self.identity_read_gate.write().await = gate;
     }
 
     async fn get_feeds_config(&self) -> Result<FeedsConfig> {
@@ -1040,8 +1128,9 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        FeedsConfigReadGate, SMTP_CONFIG_KEYS, SiteConfigKey, SiteIdentityMutationError,
-        SmtpConfigUpdateError, clear_base_url_with_passkey_guard, set_base_url_with_passkey_guard,
+        FeedsConfigReadGate, IdentityReadGate, SMTP_CONFIG_KEYS, SiteConfigKey,
+        SiteIdentityMutationError, SmtpConfigUpdateError, clear_base_url_with_passkey_guard,
+        set_base_url_with_passkey_guard,
     };
     use crate::sql::QueryStorageExt;
     use crate::test_support::{
@@ -1451,6 +1540,89 @@ mod tests {
         let config = read.await.unwrap().unwrap();
         assert_eq!(config.min_items, parse_feed_min_items("3"));
         assert_eq!(config.min_days, parse_feed_min_days("4"));
+    }
+
+    /// The grouped read captures all three identity fields before an atomic
+    /// replacement proceeds, so it can return only the complete old identity.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn get_identity_keeps_one_snapshot_across_a_concurrent_mutation(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let storage = env.site_config();
+        let old_identity = SiteIdentity {
+            title: "Old title".parse().unwrap(),
+            tagline: Some("Old tagline".parse().unwrap()),
+            base_url: Some("https://old.example.test/".parse().unwrap()),
+        };
+        let new_identity = SiteIdentity {
+            title: "New title".parse().unwrap(),
+            tagline: Some("New tagline".parse().unwrap()),
+            base_url: Some("https://new.example.test/".parse().unwrap()),
+        };
+        let old_storage = Arc::clone(&storage);
+        let old_passkeys = env.passkeys();
+        let old_publisher = env.publisher();
+        confirmed(
+            env.write_scope()
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        old_storage
+                            .set_identity(transaction, old_passkeys, old_publisher, &old_identity)
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
+
+        let gate = Arc::new(IdentityReadGate::default());
+        storage
+            .install_identity_read_gate(Some(Arc::clone(&gate)))
+            .await;
+        let read_storage = Arc::clone(&storage);
+        let read = tokio::spawn(async move { read_storage.get_identity().await });
+        gate.wait_for_snapshot().await;
+
+        let new_storage = Arc::clone(&storage);
+        let new_passkeys = env.passkeys();
+        let new_publisher = env.publisher();
+        confirmed(
+            env.write_scope()
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        new_storage
+                            .set_identity(transaction, new_passkeys, new_publisher, &new_identity)
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
+        storage.install_identity_read_gate(None).await;
+        gate.resume();
+
+        let identity = read.await.unwrap().unwrap();
+        assert_eq!(identity.title, "Old title");
+        assert_eq!(identity.tagline.as_deref(), Some("Old tagline"));
+        assert_eq!(
+            identity.base_url.as_deref(),
+            Some("https://old.example.test/")
+        );
+        assert_eq!(
+            gate.statement_count(),
+            1,
+            "identity reads use exactly one database statement"
+        );
+
+        let identity = storage.get_identity().await.unwrap();
+        assert_eq!(identity.title, "New title");
+        assert_eq!(identity.tagline.as_deref(), Some("New tagline"));
+        assert_eq!(
+            identity.base_url.as_deref(),
+            Some("https://new.example.test/")
+        );
     }
 
     /// An unset `smtp.host` is how an instance says "no outbound mail" — not an error,

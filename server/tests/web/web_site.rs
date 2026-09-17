@@ -344,14 +344,16 @@ async fn aggregate_identity_commit_acknowledgement_loss_reaches_the_wire(#[case]
     );
 }
 
+/// Typed wire rejection must occur before any part of the identity aggregate
+/// or its publisher cache invalidation can change.
 #[apply(backends)]
 #[tokio::test]
-async fn update_site_identity_rejects_empty_title(#[case] backend: Backend) {
-    // A whitespace-only `title` fails at typed-arg decode — the validating serde
-    // bridge for `SiteTitle` rejects an empty/whitespace-only value, a non-OK server
-    // -function error rather than a specific in-body Validation message (ADR-0065).
-    // The client's disable-until-valid gate keeps a real browser from reaching this;
-    // a raw POST is the malformed-client path.
+async fn invalid_identity_wire_rejection_preserves_the_aggregate_snapshot(
+    #[case] backend: Backend,
+) {
+    // Whitespace-only titles and malformed/non-http(s) base URLs fail during
+    // typed argument decoding. A raw POST covers this malformed-client path;
+    // browser validation prevents it in ordinary operation (ADR-0065).
     let env = backend.setup().await;
     let app = make_app!(&env, &env.base);
     let cookie = create_operator_and_session(
@@ -361,79 +363,87 @@ async fn update_site_identity_rejects_empty_title(#[case] backend: Backend) {
     )
     .await
     .cookie();
-
     let (status, body) = post_form(
         app.clone(),
         <web::site::UpdateIdentity as ServerFn>::PATH,
-        "request[title]=+++&request[base_url]=https%3A%2F%2Fexample.com",
+        "request[title]=Prior+Site&request[tagline]=Prior+tagline&request[base_url]=https%3A%2F%2Fprior.example.test%2F",
         Some(&cookie),
     )
     .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let identity_before = env.site_config().get_identity().await.expect("identity");
+    let cache_path: FeedPath = "/feed.rss".parse().expect("valid feed path");
+    let cached = SeedFeedCache::new(cache_path.clone())
+        .seed(env.feed_cache(), env.write_scope())
+        .await;
+    let publisher_before = env
+        .publisher()
+        .snapshot()
+        .await
+        .expect("publisher snapshot");
 
-    assert_ne!(status, StatusCode::OK, "empty title should fail: {body}");
-}
+    for (description, request, detail) in [
+        (
+            "empty title",
+            "request[title]=+++&request[base_url]=https%3A%2F%2Fexample.com",
+            Some("site title cannot be empty"),
+        ),
+        (
+            "non-http base URL",
+            "request[title]=My+Blog&request[base_url]=ftp%3A%2F%2Fexample.com",
+            None,
+        ),
+        (
+            "malformed base URL",
+            "request[title]=My+Blog&request[base_url]=not-a-url",
+            None,
+        ),
+    ] {
+        let (status, body) = post_form(
+            app.clone(),
+            <web::site::UpdateIdentity as ServerFn>::PATH,
+            request,
+            Some(&cookie),
+        )
+        .await;
 
-#[apply(backends)]
-#[tokio::test]
-async fn update_site_identity_rejects_non_http_base_url(#[case] backend: Backend) {
-    // A non-http(s) `base_url` fails at typed-arg decode — the validating serde
-    // bridge for `Option<BaseUrl>` rejects it, a non-OK server-function error
-    // rather than a specific Validation message (ADR-0065). The client's
-    // disable-until-valid gate keeps a real browser from reaching this; a raw POST
-    // is the malformed-client path.
-    let env = backend.setup().await;
-    let app = make_app!(&env, &env.base);
-    let cookie = create_operator_and_session(
-        std::sync::Arc::clone(&env.users()),
-        std::sync::Arc::clone(&env.sessions()),
-        env.write_scope(),
-    )
-    .await
-    .cookie();
-
-    let (status, body) = post_form(
-        app.clone(),
-        <web::site::UpdateIdentity as ServerFn>::PATH,
-        "request[title]=My+Blog&request[base_url]=ftp%3A%2F%2Fexample.com",
-        Some(&cookie),
-    )
-    .await;
-
-    assert_ne!(
-        status,
-        StatusCode::OK,
-        "non-http base_url should fail: {body}"
-    );
-}
-
-#[apply(backends)]
-#[tokio::test]
-async fn update_site_identity_rejects_malformed_base_url(#[case] backend: Backend) {
-    // A syntactically malformed `base_url` (not a URL at all) also fails at
-    // typed-arg decode — same non-OK path as the non-http case (ADR-0065).
-    let env = backend.setup().await;
-    let app = make_app!(&env, &env.base);
-    let cookie = create_operator_and_session(
-        std::sync::Arc::clone(&env.users()),
-        std::sync::Arc::clone(&env.sessions()),
-        env.write_scope(),
-    )
-    .await
-    .cookie();
-
-    let (status, body) = post_form(
-        app.clone(),
-        <web::site::UpdateIdentity as ServerFn>::PATH,
-        "request[title]=My+Blog&request[base_url]=not-a-url",
-        Some(&cookie),
-    )
-    .await;
-
-    assert_ne!(
-        status,
-        StatusCode::OK,
-        "malformed base_url should fail: {body}"
-    );
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "{description} should fail validation: {body}"
+        );
+        assert!(
+            body.contains("error deserializing server function arguments"),
+            "{description} retains the typed-request validation category: {body}"
+        );
+        if let Some(detail) = detail {
+            assert!(
+                body.contains(detail),
+                "{description} retains its stable validation detail: {body}"
+            );
+        }
+        assert_eq!(
+            env.site_config().get_identity().await.expect("identity"),
+            identity_before,
+            "{description} leaves the complete identity unchanged"
+        );
+        assert_eq!(
+            env.publisher()
+                .snapshot()
+                .await
+                .expect("publisher snapshot"),
+            publisher_before,
+            "{description} rejects before publisher writes"
+        );
+        assert_eq!(
+            env.feed_cache()
+                .get(&cache_path)
+                .await
+                .expect("cached feed lookup"),
+            Some(cached.clone()),
+            "{description} leaves cached feeds untouched"
+        );
+    }
 }
 
 #[apply(backends)]

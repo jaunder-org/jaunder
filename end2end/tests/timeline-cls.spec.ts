@@ -26,7 +26,11 @@ import { test, expect, slowBrowserTimeoutMs } from "./fixtures";
 import { signInAsNewUser } from "./helpers";
 import { createPostViaApi } from "./posts";
 import { expectNoShiftAcrossMount } from "./layout-shift";
-import { seedConfigViaTool } from "./seed";
+import {
+  restoreConfigViaTool,
+  snapshotConfigViaTool,
+  seedConfigViaTool,
+} from "./seed";
 
 /**
  * The four routes, the chrome element that must not move on each, and whether a post
@@ -92,8 +96,14 @@ for (const route of ROUTES) {
     // configured masthead—not only the default one—coincides with CSR on first paint.
     const configuredLocalIdentity = route.name === "/";
     let guestContext: Awaited<ReturnType<typeof tracedContext>> | undefined;
+    let priorTitle:
+      Awaited<ReturnType<typeof snapshotConfigViaTool>> | undefined;
+    let priorTagline:
+      Awaited<ReturnType<typeof snapshotConfigViaTool>> | undefined;
     try {
       if (configuredLocalIdentity) {
+        priorTitle = await snapshotConfigViaTool("site.title");
+        priorTagline = await snapshotConfigViaTool("site.tagline");
         await seedConfigViaTool("site.title", "CLS <Site>");
         await seedConfigViaTool("site.tagline", "A <configured> & tagline");
       }
@@ -112,6 +122,27 @@ for (const route of ROUTES) {
             await expect(p.locator(".j-topbar .j-sub")).toHaveText(
               "A <configured> & tagline",
             );
+            await expect(
+              p.locator("[data-jaunder-projected-local-metadata]"),
+            ).toHaveCount(4);
+            const metadata = [
+              ["head > title", "CLS <Site>"],
+              ['head > meta[name="description"]', "A <configured> & tagline"],
+              ['head > meta[property="og:title"]', "CLS <Site>"],
+              [
+                'head > meta[property="og:description"]',
+                "A <configured> & tagline",
+              ],
+            ];
+            for (const [selector, value] of metadata) {
+              const node = p.locator(selector);
+              await expect(node).toHaveCount(1);
+              if (selector === "head > title") {
+                await expect.poll(() => p.title()).toBe(value);
+              } else {
+                await expect(node).toHaveAttribute("content", value);
+              }
+            }
           }
         },
         targets: (p) => [
@@ -148,6 +179,23 @@ for (const route of ROUTES) {
             await expect(p.locator(".j-topbar .j-sub")).toHaveText(
               "A <configured> & tagline",
             );
+            await expect(
+              p.locator("[data-jaunder-projected-local-metadata]"),
+            ).toHaveCount(0);
+            await expect(p.locator("head > title")).toHaveCount(1);
+            await expect.poll(() => p.title()).toBe("CLS <Site>");
+            for (const [selector, content] of [
+              ['head > meta[name="description"]', "A <configured> & tagline"],
+              ['head > meta[property="og:title"]', "CLS <Site>"],
+              [
+                'head > meta[property="og:description"]',
+                "A <configured> & tagline",
+              ],
+            ]) {
+              const metadata = p.locator(selector);
+              await expect(metadata).toHaveCount(1);
+              await expect(metadata).toHaveAttribute("content", content);
+            }
           }
         },
         tolerancePx: 0,
@@ -155,12 +203,16 @@ for (const route of ROUTES) {
     } finally {
       await guestContext?.close();
       if (configuredLocalIdentity) {
-        // This spec writes process-global config; restore both values even when the
-        // first restoration command fails.
+        // This spec writes process-global config; restore the exact prior rows even
+        // when the first restoration command fails.
         try {
-          await seedConfigViaTool("site.tagline", "");
+          if (priorTagline !== undefined) {
+            await restoreConfigViaTool("site.tagline", priorTagline);
+          }
         } finally {
-          await seedConfigViaTool("site.title", "Jaunder");
+          if (priorTitle !== undefined) {
+            await restoreConfigViaTool("site.title", priorTitle);
+          }
         }
       }
     }
