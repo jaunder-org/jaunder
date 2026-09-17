@@ -2546,29 +2546,39 @@ publish. Commands bind the private `jaunder--active-blog` special through
 `jaunder--active-base-url` / `jaunder--active-username`, which error when no
 blog is active ([ADR-0047](adr/0047-emacs-publish-orchestration.md)).
 
-The user-facing commands are `jaunder-new-post`, `jaunder-publish`, and
-`jaunder-save-draft` (publish forced to `app:draft`).
+The primary user-facing commands are `jaunder-new-post`, `jaunder-publish`, and
+`jaunder-save-draft` (publish forced to `app:draft`). New-Post input also
+exposes `jaunder-new-post-complete` and `jaunder-new-post-cancel` through its
+buffer-local lifecycle keys.
 
 `jaunder-new-post` resolves its target before creating a local Post, then
 collects title, repeated Tag labels, and publication state before writing the
-Org metadata block. Tag completion reads the Posts Collection's inline
-categories from the authenticated AtomPub Service Document; discovery failures
-remain visible but degrade to free-text entry so local authoring stays
-available. A prefix argument preserves prompt-free minimal-template creation: it
-uses the longest matching blog, rejects a nonempty configuration with no
-matching root, and falls back to `default-directory` only when the client has no
-configured blogs (`elisp/jaunder-publish.el`, `elisp/jaunder-service.el`).
+Org metadata block. The fresh template records the machine's timezone before
+editing begins, so a failed first publish does not mutate the author's input and
+the initial `#+DATE:` retains a stable interpretation across machines. Tag
+completion reads the Posts Collection's inline categories from the authenticated
+AtomPub Service Document; discovery failures remain visible but degrade to
+free-text entry so local authoring stays available. A prefix argument preserves
+prompt-free minimal-template creation: it uses the longest matching blog,
+rejects a nonempty configuration with no matching root, and falls back to
+`default-directory` only when the client has no configured blogs
+(`elisp/jaunder-publish.el`, `elisp/jaunder-service.el`). Both creation paths
+enable a buffer-local transient input mode: `C-c C-c` publishes and closes the
+buffer only after success, while `C-c C-k` makes no transport request, deletes
+the local draft even after an ordinary save, and closes the buffer. Existing
+Posts, pulled Posts, and unrelated Org buffers never enable that mode
+implicitly.
 
 Publish performs all network mutation before any destructive local change
-(`elisp/jaunder-publish.el:307`): map → validate (non-empty body; a `scheduled`
-Post needs a future `#+DATE:`) → record the machine zone → media localization →
-Entry send → write-back → rename to `<slug>.org`. Media localization first
-collects candidates, then aggregates every missing, unreadable, or non-regular
-resolved path into one preflight error before warning or uploading; it next
-emits the untracked-media warning, uploads each equal resolved path once, and
-applies right-to-left positional substitution using the response
-`<content src>`. The Entry send is a `POST` create, or a `PUT` when `JAUNDER_ID`
-is present, carrying `If-Match` only when the buffer also records a
+(`elisp/jaunder-publish.el:339`): map → validate (non-empty body; a `scheduled`
+Post needs a future `#+DATE:`) → ensure the buffer has a recorded machine zone →
+media localization → Entry send → write-back → rename to `<slug>.org`. Media
+localization first collects candidates, then aggregates every missing,
+unreadable, or non-regular resolved path into one preflight error before warning
+or uploading; it next emits the untracked-media warning, uploads each equal
+resolved path once, and applies right-to-left positional substitution using the
+response `<content src>`. The Entry send is a `POST` create, or a `PUT` when
+`JAUNDER_ID` is present, carrying `If-Match` only when the buffer also records a
 `JAUNDER_SYNCED` ETag. Write-back persists `JAUNDER_ID` first, from the
 `Location` header, before `JAUNDER_SLUG`, `JAUNDER_SYNCED`, `JAUNDER_SYNCED_AT`,
 the resolved publish time, and the rename — so any failure, including a `412`
@@ -2577,7 +2587,7 @@ stale-ETag, is recoverable by a plain re-publish
 applies to the sent body only; the authoring buffer is never modified.
 
 Creates go through `jaunder--create-with-retry`
-(`elisp/jaunder-publish.el:279`), which retries a response-less signalled
+(`elisp/jaunder-publish.el:312`), which retries a response-less signalled
 `plz-error` or a returned 5xx response. `jaunder--http-request` converts a
 response-bearing `plz-error` into the ordinary response plist, so a signalled
 `plz-error` at this boundary is transport failure; non-transport failures such

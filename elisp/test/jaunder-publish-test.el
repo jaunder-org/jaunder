@@ -141,6 +141,7 @@ Lets the warning tests assert on emitted warnings without touching the real
             (unwind-protect
                 (with-current-buffer buf
                   (should (equal (jaunder--buffer-property "JAUNDER_STATUS") "draft"))
+                  (should (jaunder--buffer-property "JAUNDER_DATE_TZ"))
                   (should (jaunder--buffer-keyword "TITLE"))   ; present (may be empty)
                   (should (jaunder--buffer-keyword "DATE")))
               (kill-buffer buf))))
@@ -628,5 +629,189 @@ Lets the warning tests assert on emitted warnings without touching the real
                          (expand-file-name "draft-20260829T000001.org" root))))
       (when (buffer-live-p created) (kill-buffer created))
       (delete-directory root t))))
+
+;;; New-Post input lifecycle ---------------------------------------------
+
+(ert-deftest jaunder-new-post-completes-with-c-c-c-c ()
+  "Completing a new Post publishes it and closes its input buffer."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-complete-" t)))
+         (default-directory root)
+         (jaunder-blogs nil)
+         created
+         published)
+    (unwind-protect
+        (cl-letf (((symbol-function 'read-string)
+                   (lambda (&rest _) (error "unexpected title prompt")))
+                  ((symbol-function 'completing-read)
+                   (lambda (&rest _) (error "unexpected completion prompt")))
+                  ((symbol-function 'jaunder--http-request)
+                   (lambda (&rest _) (error "unexpected server request"))))
+          (jaunder-new-post '(4))
+          (setq created (current-buffer))
+          (should (eq (key-binding (kbd "C-c C-c"))
+                      'jaunder-new-post-complete))
+          (cl-letf (((symbol-function 'jaunder-publish)
+                     (lambda (&rest _) (setq published t))))
+            (call-interactively (key-binding (kbd "C-c C-c"))))
+          (should published)
+          (should-not (buffer-live-p created)))
+      (when (buffer-live-p created) (kill-buffer created))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-new-post-failed-completion-preserves-input ()
+  "A failed completion keeps the new Post buffer and file available to retry."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-retry-" t)))
+         (default-directory root)
+         (jaunder-blogs
+          (list (cons root '(:base-url "https://blog" :username "alice"))))
+         (jaunder-warn-zone-mismatch nil)
+         (jaunder-warn-untracked-media nil)
+         (jaunder-warn-missing-format-media-type nil)
+         (transport-calls 0)
+         created
+         path)
+    (unwind-protect
+        (progn
+          (jaunder-new-post '(4))
+          (setq created (current-buffer)
+                path (buffer-file-name))
+          (insert "Retry body")
+          (save-buffer)
+          (let ((before-buffer (buffer-string))
+                (before-file
+                 (with-temp-buffer
+                   (insert-file-contents path)
+                   (buffer-string))))
+            (cl-letf (((symbol-function 'jaunder--http-request)
+                       (lambda (&rest _)
+                         (setq transport-calls (1+ transport-calls))
+                         '(:status 500)))
+                      ((symbol-function 'sleep-for) (lambda (&rest _))))
+              (should-error
+               (call-interactively (key-binding (kbd "C-c C-c")))))
+            (should (= transport-calls 3))
+            (should (buffer-live-p created))
+            (should (equal (buffer-string) before-buffer))
+            (should (file-exists-p path))
+            (should
+             (equal
+              (with-temp-buffer
+                (insert-file-contents path)
+                (buffer-string))
+              before-file))))
+      (when (buffer-live-p created) (kill-buffer created))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-new-post-c-c-c-k-abandons-saved-input-locally ()
+  "Abandoning a saved new Post deletes it without contacting the server."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-abandon-" t)))
+         (default-directory root)
+         (jaunder-blogs nil)
+         (transport-calls 0)
+         created
+         path)
+    (unwind-protect
+        (cl-letf (((symbol-function 'read-string)
+                   (lambda (&rest _) (error "unexpected title prompt")))
+                  ((symbol-function 'completing-read)
+                   (lambda (&rest _) (error "unexpected completion prompt")))
+                  ((symbol-function 'jaunder--http-request)
+                   (lambda (&rest _)
+                     (setq transport-calls (1+ transport-calls))
+                     (error "unexpected server request"))))
+          (jaunder-new-post '(4))
+          (setq created (current-buffer)
+                path (buffer-file-name))
+          (insert "Saved body")
+          (save-buffer)
+          (should (file-exists-p path))
+          (should (eq (key-binding (kbd "C-c C-k"))
+                      'jaunder-new-post-cancel))
+          (call-interactively (key-binding (kbd "C-c C-k")))
+          (should (= transport-calls 0))
+          (should-not (file-exists-p path))
+          (should-not (buffer-live-p created)))
+      (when (buffer-live-p created) (kill-buffer created))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-new-post-bindings-stay-local-to-both-creation-paths ()
+  "Both creation paths leave ordinary Org and existing Post bindings intact."
+  (let* ((ordinary-root
+          (file-name-as-directory (make-temp-file "jaunder-ordinary-" t)))
+         (minimal-root
+          (file-name-as-directory (make-temp-file "jaunder-minimal-" t)))
+         (existing-path (expand-file-name "existing.org" ordinary-root))
+         (jaunder-blogs
+          (list (cons ordinary-root
+                      '(:base-url "https://ordinary" :username "alice"))
+                (cons minimal-root
+                      '(:base-url "https://minimal" :username "alice"))))
+         ordinary
+         existing
+         created)
+    (unwind-protect
+        (progn
+          (setq ordinary (generate-new-buffer " *jaunder-ordinary-org*"))
+          (with-current-buffer ordinary (org-mode))
+          (with-temp-file existing-path
+            (insert "#+TITLE: Existing\n"
+                    "#+PROPERTY: JAUNDER_ID 42\n"
+                    "#+PROPERTY: JAUNDER_STATUS published\n\n"
+                    "Existing Post\n"))
+          (setq existing (find-file-noselect existing-path))
+          (let ((ordinary-bindings
+                 (with-current-buffer ordinary
+                   (list (key-binding (kbd "C-c C-c"))
+                         (key-binding (kbd "C-c C-k")))))
+                (existing-bindings
+                 (with-current-buffer existing
+                   (list (key-binding (kbd "C-c C-c"))
+                         (key-binding (kbd "C-c C-k"))))))
+            (let ((default-directory ordinary-root))
+              (cl-letf (((symbol-function 'read-string) (lambda (&rest _) ""))
+                        ((symbol-function 'completing-read)
+                         (lambda (prompt &rest _)
+                           (cond
+                            ((string-prefix-p "Tag" prompt) "")
+                            ((string-prefix-p "Status" prompt) "draft")
+                            (t (error "unexpected prompt: %s" prompt)))))
+                        ((symbol-function 'jaunder--http-request)
+                         (lambda (&rest _) '(:status 503))))
+                (jaunder-new-post nil)))
+            (setq created (current-buffer))
+            (should jaunder-new-post-mode)
+            (should (eq (key-binding (kbd "C-c C-c"))
+                        'jaunder-new-post-complete))
+            (should (eq (key-binding (kbd "C-c C-k"))
+                        'jaunder-new-post-cancel))
+            (kill-buffer created)
+            (setq created nil)
+            (let ((default-directory minimal-root))
+              (jaunder-new-post '(4)))
+            (setq created (current-buffer))
+            (should jaunder-new-post-mode)
+            (should (eq (key-binding (kbd "C-c C-c"))
+                        'jaunder-new-post-complete))
+            (should (eq (key-binding (kbd "C-c C-k"))
+                        'jaunder-new-post-cancel))
+            (with-current-buffer ordinary
+              (should-not jaunder-new-post-mode)
+              (should
+               (equal
+                (list (key-binding (kbd "C-c C-c"))
+                      (key-binding (kbd "C-c C-k")))
+                ordinary-bindings)))
+            (with-current-buffer existing
+              (should-not jaunder-new-post-mode)
+              (should
+               (equal
+                (list (key-binding (kbd "C-c C-c"))
+                      (key-binding (kbd "C-c C-k")))
+                existing-bindings)))))
+      (when (buffer-live-p created) (kill-buffer created))
+      (when (buffer-live-p ordinary) (kill-buffer ordinary))
+      (when (buffer-live-p existing) (kill-buffer existing))
+      (delete-directory ordinary-root t)
+      (delete-directory minimal-root t))))
 
 ;;; jaunder-publish-test.el ends here
