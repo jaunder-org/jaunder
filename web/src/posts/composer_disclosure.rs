@@ -102,7 +102,7 @@ mod tests {
     #[test]
     fn one_composer_control_is_open_at_a_time() {
         Owner::new().with(|| {
-            let state = ComposerDisclosureState::new();
+            let state = ComposerDisclosureState::default();
             assert_eq!(state.open_control(), None);
 
             state.toggle(ComposerControl::Format);

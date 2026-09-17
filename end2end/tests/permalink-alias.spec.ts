@@ -2,7 +2,7 @@ import { expect, test } from "./fixtures";
 import { allowSecondBoot, bootCount } from "./bootBudget";
 import { BASE_URL, goto } from "./helpers";
 import { navigateInApp } from "./navigate";
-import { composePost } from "./posts";
+import { composePost, openComposerControl } from "./posts";
 import { SEL } from "./selectors";
 
 test("WordPress-compatible permalink alias redirects only on cold entry", async ({
@@ -12,6 +12,7 @@ test("WordPress-compatible permalink alias redirects only on cold entry", async 
   const title = "Cold alias entry";
   // The E2E site's configurable default may be non-public; the alias is
   // intentionally resolved as an anonymous reader.
+  await openComposerControl(page, "Audience");
   await page.selectOption("#audience-base", "public");
   const summary = await composePost(page, {
     body: `# ${title}\n\nThe canonical post remains readable after its HTTP alias redirects.`,

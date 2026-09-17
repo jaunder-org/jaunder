@@ -17,7 +17,7 @@ import {
 } from "./helpers";
 import { fetchFeedSnapshot } from "./feeds";
 import { navigateInApp } from "./navigate";
-import { openComposerFromSidebar } from "./posts";
+import { openComposerControl, openComposerFromSidebar } from "./posts";
 import { allowSecondBoot } from "./bootBudget";
 import { SEL } from "./selectors";
 
@@ -46,6 +46,7 @@ async function publishWithBaseAudience(
     await goto(page, "/posts/new");
   }
   await page.fill(SEL.postBody, `# ${title}\n\nBody for ${title}`);
+  await openComposerControl(page, "Audience");
   await page.selectOption("#audience-base", base);
   await click(page, SEL.publishButton("true"));
   await waitForSelector(page, SEL.saveSummary);
@@ -298,6 +299,7 @@ test("Named audience: assigned member sees a Friends post; an unassigned non-mem
   // The authenticated sidebar is the real in-app route to the full composer.
   await openComposerFromSidebar(page);
   await page.fill(SEL.postBody, "# Friends Post\n\nBody for Friends Post");
+  await openComposerControl(page, "Audience");
   await page.selectOption("#audience-base", "subscribers");
   await page
     .locator("label", { hasText: "Friends" })
