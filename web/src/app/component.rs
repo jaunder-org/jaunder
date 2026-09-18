@@ -3,29 +3,10 @@
 //! that must coincide byte-for-byte lives in the sibling `super::render` leaf. No
 //! `#[cfg]` of its own — wasm-only via its `mod` line in `mod.rs`.
 
-use crate::audiences::AudiencesPage;
-use crate::auth::{LoginPage, LogoutPage};
-use crate::backup::{BackupBanner, BackupSettingsPage};
-use crate::cockpit::CockpitPage;
-use crate::email::{EmailPage, VerifyEmailPage};
-use crate::invites::InvitesPage;
-use crate::local::LocalPage;
-use crate::media::MediaPage;
-use crate::passkeys::PasskeysPage;
-use crate::password_reset::{ForgotPasswordPage, ResetPasswordPage};
-use crate::posts::{
-    CreatePostPage, DraftsPage, EditPostPage, HistoryPage, PostHistoryPage, PostPage,
-    RevisionHistoryDetailPage, ScheduledPage, SiteTagPage, UserTagPage, UserTimelinePage,
-};
-use crate::profile::ProfilePage;
-use crate::registration::RegisterPage;
-use crate::route_segments::TildeUsername;
-use crate::sessions::SessionsPage;
+use super::PrivateDestination;
+use crate::backup::BackupBanner;
 use crate::sidebar::Sidebar;
-use crate::site::{SiteBaseUrlBanner, SiteSettingsPage};
-use crate::smtp::SmtpSettingsPage;
-use crate::themes::ThemesPage;
-use crate::websub::WebsubPage;
+use crate::site::SiteBaseUrlBanner;
 use std::{cell::RefCell, rc::Rc};
 
 use crate::error::{WebError, WebResult};
@@ -33,9 +14,9 @@ use common::theme::{PublishedThemePresentation, Theme};
 use leptos::prelude::*;
 use leptos_meta::{Title, provide_meta_context};
 use leptos_router::{
-    ParamSegment, StaticSegment,
+    NavigateOptions, StaticSegment,
     components::{Outlet, ParentRoute, Route, Router, Routes},
-    hooks::use_location,
+    hooks::{use_location, use_navigate},
 };
 use wasm_bindgen::JsCast;
 #[must_use]
@@ -406,6 +387,74 @@ fn AppShell() -> impl IntoView {
     }
 }
 
+/// Withholds a private route's view until the shared session reconcile confirms it.
+///
+/// The marker-backed `current` session remains appropriate for chrome, but it is
+/// advisory; only this Resource's cookie-checked value can admit a private page.
+#[component]
+fn PrivateRoute(private: bool, children: ChildrenFn) -> impl IntoView {
+    let session = crate::auth::use_session();
+    let location = use_location();
+    let navigate = use_navigate();
+    let retry = RwSignal::new(0_u64);
+    let confirmation = Resource::new(
+        move || (location.pathname.get(), retry.get()),
+        move |_| async move { session.reconcile.await },
+    );
+    let destination = move || {
+        PrivateDestination::from_location(
+            &location.pathname.get(),
+            &location.search.get(),
+            &location.hash.get(),
+        )
+    };
+
+    Effect::new(move |_| {
+        if private
+            && matches!(confirmation.get(), Some(Ok(None)))
+            && let Some(destination) = destination()
+        {
+            navigate(
+                &destination.login_path(),
+                NavigateOptions {
+                    replace: true,
+                    ..NavigateOptions::default()
+                },
+            );
+        }
+    });
+
+    view! {
+        {move || {
+            if !private {
+                return children().into_any();
+            }
+            match confirmation.get() {
+                None | Some(Ok(None)) => {
+                    view! { <p class="j-loading">"Loading\u{2026}"</p> }.into_any()
+                }
+                Some(Err(error)) => {
+                    view! {
+                        <p class="error">{error.to_string()}</p>
+                        <button
+                            type="button"
+                            class="j-btn"
+                            on:click=move |_| {
+                                session.reconcile.refetch();
+                                retry.update(|value| *value += 1);
+                            }
+                        >
+                            "Retry"
+                        </button>
+                    }
+                        .into_any()
+                }
+                Some(Ok(Some(_))) => children().into_any(),
+            }
+        }}
+    }
+}
+
 /// Supplies the historic application fallback title everywhere except Local.
 ///
 /// This subscriber mounts after the route tree so nested route parameters settle
@@ -417,6 +466,28 @@ fn AppDefaultTitle() -> impl IntoView {
     move || (location.pathname.get() != "/").then(|| view! { <Title text="Jaunder" /> })
 }
 
+macro_rules! app_router {
+    ($(($name:ident, $access:ident, $pattern:literal, $path:expr, $view:path))*) => {
+        view! {
+            <Router>
+                <Routes fallback=|| "Page not found.".into_view()>
+                    <ParentRoute path=StaticSegment("") view=AppShell>
+                        $(<Route
+                            path=$path
+                            view=move || view! {
+                                <PrivateRoute private=matches!(super::route_policy::Access::$access, super::route_policy::Access::Private)>
+                                    { $view() }
+                                </PrivateRoute>
+                            }
+                        />)*
+                    </ParentRoute>
+                </Routes>
+                <AppDefaultTitle />
+            </Router>
+        }
+    };
+}
+
 #[component]
 pub fn App() -> impl IntoView {
     provide_meta_context();
@@ -426,93 +497,5 @@ pub fn App() -> impl IntoView {
     // can redirect, so login/logout/register use client-side pushState with no full
     // document reload. Chrome updates reactively via the shared session context, which
     // those components set/clear on success.
-
-    view! {
-        <Router>
-            <Routes fallback=|| "Page not found.".into_view()>
-                <ParentRoute path=StaticSegment("") view=AppShell>
-                    <Route path=StaticSegment("") view=LocalPage />
-                    // Home is the authenticated publishing cockpit. Static "app" wins
-                    // over the ParamSegment username route.
-                    <Route path=StaticSegment("app") view=CockpitPage />
-                    <Route path=StaticSegment("register") view=RegisterPage />
-                    <Route path=StaticSegment("login") view=LoginPage />
-                    <Route path=StaticSegment("logout") view=LogoutPage />
-                    <Route path=(StaticSegment("profile"), StaticSegment("email")) view=EmailPage />
-                    <Route path=StaticSegment("profile") view=ProfilePage />
-                    <Route path=StaticSegment("sessions") view=SessionsPage />
-                    <Route path=StaticSegment("passkeys") view=PasskeysPage />
-                    <Route path=StaticSegment("audiences") view=AudiencesPage />
-                    <Route path=StaticSegment("invites") view=InvitesPage />
-                    <Route
-                        path=(StaticSegment("admin"), StaticSegment("backups"))
-                        view=BackupSettingsPage
-                    />
-                    <Route
-                        path=(StaticSegment("admin"), StaticSegment("site"))
-                        view=SiteSettingsPage
-                    />
-                    <Route
-                        path=(StaticSegment("admin"), StaticSegment("smtp"))
-                        view=SmtpSettingsPage
-                    />
-                    <Route path=(StaticSegment("admin"), StaticSegment("websub")) view=WebsubPage />
-                    <Route
-                        path=(StaticSegment("posts"), StaticSegment("new"))
-                        view=CreatePostPage
-                    />
-                    <Route path=StaticSegment("drafts") view=DraftsPage />
-                    <Route path=StaticSegment("scheduled") view=ScheduledPage />
-                    <Route path=StaticSegment("media") view=MediaPage />
-                    <Route path=StaticSegment("themes") view=ThemesPage />
-                    <Route path=StaticSegment("history") view=HistoryPage />
-                    <Route
-                        path=(
-                            StaticSegment("posts"),
-                            ParamSegment("post_id"),
-                            StaticSegment("history"),
-                        )
-                        view=PostHistoryPage
-                    />
-                    <Route
-                        path=(
-                            StaticSegment("posts"),
-                            ParamSegment("post_id"),
-                            StaticSegment("history"),
-                            ParamSegment("revision_id"),
-                        )
-                        view=RevisionHistoryDetailPage
-                    />
-                    <Route
-                        path=(
-                            StaticSegment("posts"),
-                            ParamSegment("post_id"),
-                            StaticSegment("edit"),
-                        )
-                        view=EditPostPage
-                    />
-                    <Route path=StaticSegment("verify-email") view=VerifyEmailPage />
-                    <Route path=StaticSegment("forgot-password") view=ForgotPasswordPage />
-                    <Route path=StaticSegment("reset-password") view=ResetPasswordPage />
-                    <Route path=(StaticSegment("tags"), ParamSegment("tag")) view=SiteTagPage />
-                    <Route
-                        path=(ParamSegment("username"), StaticSegment("tags"), ParamSegment("tag"))
-                        view=UserTagPage
-                    />
-                    <Route path=ParamSegment("username") view=UserTimelinePage />
-                    <Route
-                        path=(
-                            TildeUsername("username"),
-                            ParamSegment("year"),
-                            ParamSegment("month"),
-                            ParamSegment("day"),
-                            ParamSegment("slug"),
-                        )
-                        view=PostPage
-                    />
-                </ParentRoute>
-            </Routes>
-            <AppDefaultTitle />
-        </Router>
-    }
+    crate::app_routes!(app_router)
 }

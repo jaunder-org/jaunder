@@ -1,4 +1,4 @@
-use axum::http::StatusCode;
+use axum::http::{StatusCode, header};
 use common::registration::RegistrationPolicy;
 use common::session_label::MAX_SESSION_LABEL_CHARS;
 use common::time::UtcInstant;
@@ -12,8 +12,9 @@ use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{
-    create_user_and_session, make_app, post_form_with_bearer, post_form_with_credentials,
-    post_form_with_secure_flag, post_server_fn_request_fixture_with_secure_flag,
+    body_string, create_user_and_session, make_app, post_form_with_bearer,
+    post_form_with_credentials, post_form_with_secure_flag,
+    post_server_fn_request_fixture_with_secure_flag, post_server_fn_response,
     post_server_fn_with_secure_flag, post_server_fn_with_ua, token_from_set_cookie,
 };
 use storage::{
@@ -782,6 +783,37 @@ async fn login_correct_password_sets_session_cookie(#[case] backend: Backend) {
 
     let cookie_token = token_from_set_cookie(&cookie);
     assert_body_carries_no_token("login", &body, &cookie_token);
+}
+
+// Confirmed password login establishes its cookie and response identity without a
+// server redirect; the Login client owns the safe SPA return destination.
+#[apply(backends)]
+#[tokio::test]
+async fn login_confirmed_response_has_no_redirect(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let app = secure_app!(&env);
+    post_server_fn_with_secure_flag(
+        app.clone(),
+        &register_input("alice", "password123", None),
+        None,
+        true,
+    )
+    .await;
+
+    let response =
+        post_server_fn_response(app, &login_input("alice", "password123", None), None).await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers().contains_key(header::SET_COOKIE));
+    assert!(
+        !response.headers().contains_key(header::LOCATION),
+        "confirmed login navigation belongs to the client"
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body_string(response).await)
+            .expect("valid login JSON body"),
+        serde_json::json!({"Confirmed": {"username": "alice", "is_operator": false}}),
+    );
 }
 
 // #591: login returns a complete marker (flash-free first-login chrome) without

@@ -31,8 +31,9 @@ pub use http::{
     post_form_with_secure_flag, post_json, post_json_with_credentials, post_multipart,
     post_password_reset_form_with_dependencies, post_password_reset_request_with_dependencies,
     post_server_fn, post_server_fn_request_fixture,
-    post_server_fn_request_fixture_with_secure_flag, post_server_fn_with_media_ownership_resolver,
-    post_server_fn_with_secure_flag, post_server_fn_with_ua, prepare_app,
+    post_server_fn_request_fixture_with_secure_flag, post_server_fn_response,
+    post_server_fn_with_media_ownership_resolver, post_server_fn_with_secure_flag,
+    post_server_fn_with_ua, prepare_app,
 };
 pub use posts::{create_post_json, update_post_json};
 pub use registrar::{REGISTERED_SERVER_FN_COUNT, ensure_server_fns_registered};

@@ -711,6 +711,30 @@ where
     post_server_fn_inner::<F, F>(app, input, cookie, None).await
 }
 
+/// Posts a typed server function and retains its complete response contract.
+pub async fn post_server_fn_response<F>(
+    app: axum::Router,
+    input: &F,
+    cookie: Option<&str>,
+) -> axum::response::Response
+where
+    F: serde::Serialize + server_fn::ServerFn,
+{
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri(F::PATH)
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+    if let Some(cookie) = cookie {
+        builder = builder.header(header::COOKIE, cookie);
+    }
+    let request = builder
+        .body(Body::from(
+            serde_qs::to_string(input).expect("server function input encodes"),
+        ))
+        .expect("server function request builds");
+    app.oneshot(request).await.expect("router request succeeds")
+}
+
 /// Fixture counterpart to [`post_server_fn_with_secure_flag`].
 pub async fn post_server_fn_request_fixture_with_secure_flag<F, R>(
     app: axum::Router,

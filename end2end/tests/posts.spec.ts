@@ -2300,15 +2300,13 @@ test("scheduling a post shows a Scheduled-for badge on the drafts page", async (
   await expect(page.locator("article.j-post")).toContainText("Scheduled Draft");
 });
 
-test("scheduled management page requires auth before listing rows", async ({
+test("anonymous scheduled management redirects before listing rows", async ({
   page,
 }) => {
   await goto(page, "/scheduled");
-  await expect(
-    page.locator('[data-test="scheduled-auth-required"]'),
-  ).toBeVisible();
+  await page.waitForURL(`${BASE_URL}/login?return_to=%2Fscheduled`);
+  await expect(page.locator(SEL.username)).toBeVisible();
   await expect(page.locator('[data-test="scheduled-list"]')).toHaveCount(0);
-  await expect(page.locator('a[href="/login"]')).toContainText("Sign in");
 });
 
 test("scheduled management page opens editor for reschedule and pullback", async ({

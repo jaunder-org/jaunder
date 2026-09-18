@@ -45,7 +45,7 @@ test("sessions page revokes another browser session", async ({
     await navigateInApp(
       otherPage,
       () => click(otherPage, '.j-nav a[href="/app"]'),
-      { url: "/login", ready: SEL.username },
+      { url: "/login?return_to=%2Fapp", ready: SEL.username },
     );
     await expect(otherPage.locator(SEL.logoutLink)).toHaveCount(0);
   } finally {

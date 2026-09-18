@@ -111,7 +111,102 @@ test(
   },
 );
 
-test("login with valid credentials succeeds", async ({
+test("private routes withhold content while session reconciliation is pending", async ({
+  page,
+}) => {
+  const release = await stallServerFn(page, "auth/get_session");
+  await goto(page, "/sessions");
+
+  await expect(page.locator(".j-loading")).toBeVisible();
+  await expect(page.locator(".j-topbar h1")).toHaveCount(0);
+  release();
+  await page.waitForURL(`${BASE_URL}/login?return_to=%2Fsessions`);
+});
+
+test("anonymous private entry replaces history and remains in the SPA", async ({
+  page,
+}) => {
+  const release = await stallServerFn(page, "auth/get_session");
+  await goto(page, "/posts/42/history/7?order=oldest#revision");
+  const historyLength = await page.evaluate(() => {
+    (window as Window & { __jaunderNoReload?: boolean }).__jaunderNoReload =
+      true;
+    return history.length;
+  });
+  release();
+
+  await page.waitForURL(
+    `${BASE_URL}/login?return_to=%2Fposts%2F42%2Fhistory%2F7%3Forder%3Doldest%23revision`,
+  );
+  await expect(page.locator(SEL.username)).toBeVisible();
+  const survived = await page.evaluate(
+    () =>
+      (window as Window & { __jaunderNoReload?: boolean }).__jaunderNoReload ===
+      true,
+  );
+  expect(survived).toBe(true);
+  await expect
+    .poll(() => page.evaluate(() => history.length))
+    .toBe(historyLength);
+});
+
+test("private session reconciliation failure retries without redirecting", async ({
+  page,
+}) => {
+  let requests = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/api/auth/get_session")) requests += 1;
+  });
+  await failServerFn(page, "auth/get_session");
+  await goto(page, "/sessions");
+
+  await expect(page.locator(".error")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
+  await expect(page).toHaveURL(`${BASE_URL}/sessions`);
+  const requestsBeforeRetry = requests;
+  await click(page, 'button:has-text("Retry")');
+  await expect.poll(() => requests).toBeGreaterThan(requestsBeforeRetry);
+  await expect(page.locator(".error")).toBeVisible();
+  await expect(page).toHaveURL(`${BASE_URL}/sessions`);
+});
+
+test("authenticated private routes mount member views during in-app navigation", async ({
+  registeredPage,
+}) => {
+  const page = await registeredPage("/sessions");
+  await expect(page.locator(".j-topbar h1")).toHaveText("Sessions");
+
+  await navigateInApp(page, () => page.click('.j-nav a[href="/profile"]'), {
+    url: "/profile",
+    ready: '.j-topbar h1:has-text("Profile")',
+  });
+});
+
+test("authenticated operator mounts the operator-only private route", async ({
+  page,
+}) => {
+  await signInAs(page, "testoperator");
+  await goto(page, "/admin/backups");
+  await expect(page.locator(".j-topbar h1")).toHaveText("Backup Settings");
+});
+
+test("authenticated non-operators remain on an unauthorized operator route", async ({
+  registeredPage,
+}) => {
+  const page = await registeredPage("/admin/backups");
+  await expect(page.locator(".j-topbar h1")).toHaveText("Backup Settings");
+  await expect(page.locator(".error")).toBeVisible();
+  await expect(page).toHaveURL(`${BASE_URL}/admin/backups`);
+});
+
+test("authenticated users mount parameterized private routes", async ({
+  registeredPage,
+}) => {
+  const page = await registeredPage("/posts/42/history");
+  await expect(page.locator(".j-topbar h1")).toHaveText("Post History");
+});
+
+test("direct login with valid credentials falls back to Home", async ({
   page,
   user,
 }, testInfo) => {
@@ -142,6 +237,41 @@ test("login with valid credentials succeeds", async ({
   perf.mark("assertions_complete");
   await perf.log();
 });
+
+test("confirmed password login returns to the exact private destination without a reload", async ({
+  page,
+  user,
+}) => {
+  const destination = "/posts/42/history/7?order=oldest#revision";
+  await goto(page, `/login?return_to=${encodeURIComponent(destination)}`);
+  await page.evaluate(() => {
+    (window as Window & { __jaunderNoReload?: boolean }).__jaunderNoReload =
+      true;
+  });
+
+  await fillLoginForm(page, user.username, user.password);
+  await waitForSelector(page, SEL.logoutLink);
+  await expect(page).toHaveURL(`${BASE_URL}${destination}`);
+  await expect(
+    page.evaluate(
+      () =>
+        (window as Window & { __jaunderNoReload?: boolean })
+          .__jaunderNoReload === true,
+    ),
+  ).resolves.toBe(true);
+});
+
+for (const returnTo of ["https://evil.example/app", "/login", "/unknown"]) {
+  test(`invalid login return ${returnTo} falls back to Home`, async ({
+    page,
+    user,
+  }) => {
+    await goto(page, `/login?return_to=${encodeURIComponent(returnTo)}`);
+    await fillLoginForm(page, user.username, user.password);
+    await waitForSelector(page, SEL.logoutLink);
+    await expect(page).toHaveURL(`${BASE_URL}/app`);
+  });
+}
 
 test("login submits with Enter", async ({ page, user }) => {
   await goto(page, "/login");

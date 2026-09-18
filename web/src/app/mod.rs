@@ -5,6 +5,9 @@
 mod seed;
 pub use seed::decode_projector_seed;
 
+mod route_policy;
+pub use route_policy::PrivateDestination;
+
 mod render;
 pub use render::{
     DISCOVERY_MARKER_ATTR, MODULE_BEFORE_INIT_MARK, PREPAINT_SCRIPT,
