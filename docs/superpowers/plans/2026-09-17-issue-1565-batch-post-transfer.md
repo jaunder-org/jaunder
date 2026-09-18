@@ -111,7 +111,7 @@ Out:
     covers server-only plus server-ahead selection across Collection pagination,
     Local Media Copies, ETag staleness, and failure isolation.
 
-- [ ] **Task 5: Prove the integrated contract and finalize its documentation.**
+- [x] **Task 5: Prove the integrated contract and finalize its documentation.**
   - Contract: integration coverage exercises one mixed multi-page report through
     explicit push, pull, and delete selections, including cancellation and a
     refreshed final classification. User documentation names the mark/region

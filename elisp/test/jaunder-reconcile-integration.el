@@ -642,5 +642,240 @@ When DRAFT is non-nil, create a draft Member."
          (kill-buffer buffer))
        (delete-directory root t)))))
 
+(defun jaunder-reconcile-live--assert-rendered-last-batch (results)
+  "Assert RESULTS appear in the report's exact ordered Last batch rendering."
+  (let ((expected
+         (concat "Last batch\n"
+                 (mapconcat
+                  (lambda (result)
+                    (with-temp-buffer
+                      (jaunder--reconcile-render-result result)
+                      (buffer-string)))
+                  results "")
+                 "\n")))
+    (should (string-match-p (regexp-quote expected) (buffer-string)))))
+
+(defun jaunder-reconcile-live--kill-root-buffers (root)
+  "Kill every visiting buffer rooted at temporary test ROOT."
+  (dolist (buffer (buffer-list))
+    (with-current-buffer buffer
+      (when (and buffer-file-name (file-in-directory-p buffer-file-name root))
+        (set-buffer-modified-p nil)
+        (kill-buffer buffer)))))
+
+(ert-deftest jaunder-reconcile-live-mixed-multipage-batches-refresh-and-cancel ()
+  "One live multipage report retains mixed command results through cancellation."
+  (jaunder-test--with-live-server
+   (let* ((root (file-name-as-directory (make-temp-file "jaunder-reconcile-mixed-live-" t)))
+          (token (file-name-nondirectory (directory-file-name root)))
+          (jaunder-blogs (list (cons root (list :base-url jaunder-test-base-url
+                                                :username jaunder-test-username))))
+          (matched (jaunder-reconcile-live--write-local
+                    root (concat "matched-" token ".org") (concat "matched-" token)))
+          (first-draft (jaunder-reconcile-live--write-local
+                        root (concat "first-draft-" token ".org") "first draft"))
+          (cancelled-draft (jaunder-reconcile-live--write-local
+                            root (concat "cancelled-draft-" token ".org") "cancelled draft"))
+          (untouched-draft (jaunder-reconcile-live--write-local
+                            root (concat "untouched-draft-" token ".org") "untouched draft"))
+          matched-buffer ids)
+     (unwind-protect
+         (jaunder--call-with-blog
+          root
+          (lambda ()
+            ;; Establish a local-ahead row, then make enough server-only Members
+            ;; to require the real Collection pagination boundary.
+            (setq matched-buffer (find-file-noselect matched))
+            (with-current-buffer matched-buffer
+              (jaunder-publish)
+              (goto-char (point-max))
+              (insert "Local batch change.\n")
+              (jaunder--set-property "JAUNDER_LOCAL_AHEAD" "true")
+              (save-buffer))
+            (setq ids (mapcar (lambda (index)
+                                (jaunder-reconcile-live--create-pagination-member
+                                 (format "mixed-page-%s-%d" token index) "Remote batch body."))
+                              (number-sequence 1 26)))
+            (jaunder-reconcile root)
+            (with-current-buffer "*Jaunder Reconcile*"
+              (let* ((matched-id (with-current-buffer matched-buffer
+                                   (jaunder--buffer-property "JAUNDER_ID")))
+                     ;; Collection order is newest first, making this oldest
+                     ;; fixture the first item on the second 25-Member page.
+                     (pull-id (car ids))
+                     (delete-id (car (last ids))))
+                (let ((server-only-ids
+                       (mapcar #'jaunder-inventory-member-id
+                               (jaunder-inventory-server-only
+                                (jaunder-reconcile-report-inventory
+                                 jaunder-reconcile-report)))))
+                  (should (>= (cl-position pull-id server-only-ids :test #'equal) 25)))
+                ;; Explicit push updates the local-ahead Member and creates the draft.
+                (dolist (key (list (format "post:%s" matched-id)
+                                   (format "local:%s" first-draft)))
+                  (puthash key t jaunder-reconcile-marks))
+                (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
+                  (jaunder-reconcile-push-selected))
+                (should (equal (mapcar #'jaunder-reconcile-result-action
+                                       jaunder-reconcile-last-batch-results)
+                               '(push push)))
+                (should (equal (mapcar #'jaunder-reconcile-result-outcome
+                                       jaunder-reconcile-last-batch-results)
+                               '(success success)))
+                (jaunder-reconcile-live--assert-rendered-last-batch
+                 jaunder-reconcile-last-batch-results)
+                (let ((draft-result
+                       (cl-find (format "local:%s" first-draft)
+                                jaunder-reconcile-last-batch-results
+                                :key #'jaunder-reconcile-result-row-key :test #'equal)))
+                  (should (jaunder-reconcile-result-post-id draft-result))
+                  (should (eq (jaunder-reconcile-result-local-effect draft-result) 'created))
+                  (let ((response
+                         (jaunder--http-request
+                          "GET" (jaunder--member-url
+                                 (jaunder-reconcile-result-post-id draft-result)))))
+                    (should (eq (plist-get response :status) 200))
+                    (should (equal (jaunder-reconcile-live--member-representation response)
+                                   (list :title "first draft" :content-type "text/org"
+                                         :body "Body.\n"))))
+                  (should (eq (jaunder-reconcile-row-state
+                               (cl-find (jaunder-reconcile-result-post-id draft-result)
+                                        (jaunder-reconcile-report-rows
+                                         jaunder-reconcile-report)
+                                        :key #'jaunder--reconcile-row-post-id :test #'equal))
+                              'unchanged)))
+                (let ((response (jaunder--http-request "GET" (jaunder--member-url matched-id))))
+                  (should (eq (plist-get response :status) 200))
+                  (should (equal (jaunder-reconcile-live--member-representation response)
+                                 (list :title (concat "matched-" token) :content-type "text/org"
+                                       :body "Body.Local batch change.\n"))))
+                (should (eq (jaunder-reconcile-row-state
+                             (cl-find matched-id (jaunder-reconcile-report-rows
+                                                  jaunder-reconcile-report)
+                                      :key #'jaunder--reconcile-row-post-id :test #'equal))
+                            'unchanged))
+                ;; Start each explicit command with its own selection.
+                (clrhash jaunder-reconcile-marks)
+                ;; The last created Member proves the report traversed page two.
+                (puthash (format "post:%s" pull-id) t jaunder-reconcile-marks)
+                (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
+                  (jaunder-reconcile-pull-selected))
+                (should (equal (mapcar #'jaunder-reconcile-result-post-id
+                                       jaunder-reconcile-last-batch-results)
+                               (list pull-id)))
+                (jaunder-reconcile-live--assert-rendered-last-batch
+                 jaunder-reconcile-last-batch-results)
+                (should (eq (jaunder-reconcile-result-local-effect
+                             (car jaunder-reconcile-last-batch-results))
+                            'created))
+                (should (file-exists-p (expand-file-name
+                                        (concat (jaunder-reconcile-result-slug
+                                                 (car jaunder-reconcile-last-batch-results)) ".org")
+                                        root)))
+                (let* ((pulled (car jaunder-reconcile-last-batch-results))
+                       (path (expand-file-name
+                              (concat (jaunder-reconcile-result-slug pulled) ".org") root))
+                       (bytes (with-temp-buffer
+                                (insert-file-contents path)
+                                (buffer-string))))
+                  (should (= (jaunder-reconcile-result-http-status pulled) 200))
+                  (should (string-match-p
+                           (concat "^#\\+TITLE: mixed-page-" (regexp-quote token) "-1$") bytes))
+                  (should (string-match-p
+                           (concat "^#\\+PROPERTY: JAUNDER_ID " (regexp-quote pull-id) "$") bytes))
+                  (should (equal (with-temp-buffer
+                                   (insert bytes)
+                                   (org-mode)
+                                   (buffer-substring-no-properties
+                                    (jaunder--body-start) (point-max)))
+                                 "Remote batch body.\n"))
+                  (let ((response (jaunder--http-request "GET" (jaunder--member-url pull-id))))
+                    (should (eq (plist-get response :status) 200))
+                    (should (equal (jaunder-reconcile-live--member-representation response)
+                                   (list :title (format "mixed-page-%s-1" token)
+                                         :content-type "text/org" :body "Remote batch body.\n"))))
+                  (should (eq (jaunder-reconcile-row-state
+                               (cl-find pull-id (jaunder-reconcile-report-rows
+                                                 jaunder-reconcile-report)
+                                        :key #'jaunder--reconcile-row-post-id :test #'equal))
+                              'unchanged)))
+                ;; Delete remains a separately confirmed, remote soft-delete action.
+                (clrhash jaunder-reconcile-marks)
+                (puthash (format "post:%s" delete-id) t jaunder-reconcile-marks)
+                (let (prompt)
+                  (cl-letf (((symbol-function 'y-or-n-p)
+                             (lambda (text) (setq prompt text) t)))
+                    (jaunder-reconcile-delete-selected))
+                  (should (string-match-p "SOFT-DELETE" prompt)))
+                (should (equal (mapcar #'jaunder-reconcile-result-outcome
+                                       jaunder-reconcile-last-batch-results)
+                               '(success)))
+                (jaunder-reconcile-live--assert-rendered-last-batch
+                 jaunder-reconcile-last-batch-results)
+                (should (= (jaunder-reconcile-result-http-status
+                            (car jaunder-reconcile-last-batch-results)) 204))
+                (should (eq (plist-get (jaunder--http-request
+                                        "GET" (jaunder--member-url delete-id)) :status)
+                            404))
+                (should-not (cl-find delete-id (jaunder-reconcile-report-rows
+                                                jaunder-reconcile-report)
+                                     :key #'jaunder--reconcile-row-post-id :test #'equal))
+                ;; The public command confirms marked rows.  Its executor is
+                ;; wrapped only to supply the production between-item predicate.
+                (let ((real-execute (symbol-function 'jaunder--reconcile-execute-batch))
+                      (completed 0) prompt)
+                  (clrhash jaunder-reconcile-marks)
+                  (dolist (path (list cancelled-draft untouched-draft))
+                    (puthash (format "local:%s" path) t jaunder-reconcile-marks))
+                  (cl-letf (((symbol-function 'jaunder--reconcile-execute-batch)
+                             (lambda (buffer rows action operation &optional _cancelled-p)
+                               (funcall real-execute buffer rows action
+                                        (lambda (row)
+                                          (setq completed (1+ completed))
+                                          (funcall operation row))
+                                        (lambda () (= completed 1)))))
+                            ((symbol-function 'y-or-n-p)
+                             (lambda (text) (setq prompt text) t)))
+                    (jaunder-reconcile-push-selected))
+                  (should (string-match-p "Push 2 selected" prompt))
+                  (should (= completed 1))
+                  (should (= (length jaunder-reconcile-last-batch-results) 1))
+                  (jaunder-reconcile-live--assert-rendered-last-batch
+                   jaunder-reconcile-last-batch-results)
+                  (let* ((result (car jaunder-reconcile-last-batch-results))
+                         (completed-key (jaunder-reconcile-result-row-key result))
+                         (completed-id (jaunder-reconcile-result-post-id result)))
+                    (should (member completed-key
+                                    (list (format "local:%s" cancelled-draft)
+                                          (format "local:%s" untouched-draft))))
+                    (should (eq (jaunder-reconcile-result-outcome result) 'success))
+                    (should (eq (jaunder-reconcile-result-local-effect result) 'created))
+                    (should (eq (plist-get (jaunder--http-request
+                                            "GET" (jaunder--member-url completed-id)) :status)
+                                200))
+                    (should (eq (jaunder-reconcile-row-state
+                                 (cl-find completed-id (jaunder-reconcile-report-rows
+                                                        jaunder-reconcile-report)
+                                          :key #'jaunder--reconcile-row-post-id :test #'equal))
+                                'unchanged))
+                    (should (eq (jaunder-reconcile-row-state
+                                 (cl-find-if
+                                  (lambda (row)
+                                    (and (eq (jaunder-reconcile-row-state row) 'local-draft)
+                                         (not (equal (jaunder--reconcile-stable-row-key row)
+                                                     completed-key))))
+                                  (jaunder-reconcile-report-rows jaunder-reconcile-report)))
+                                'local-draft))
+                    (should-not (jaunder--read-local-id
+                                 (if (equal completed-key (format "local:%s" cancelled-draft))
+                                     untouched-draft cancelled-draft))))
+                  (should (cl-find matched-id (jaunder-reconcile-report-rows
+                                               jaunder-reconcile-report)
+                                   :key (lambda (row)
+                                          (jaunder--reconcile-row-post-id row))
+                                   :test #'equal)))))))
+       (jaunder-reconcile-live--kill-root-buffers root)
+       (delete-directory root t)))))
+
 (provide 'jaunder-reconcile-integration)
 ;;; jaunder-reconcile-integration.el ends here

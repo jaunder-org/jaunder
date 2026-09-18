@@ -34,8 +34,10 @@ deployable Jaunder server binary.
   live-integration tests live in `*-integration.el` (kept separate so the fast
   pure suite stays serverless).
 - `test/jaunder-integration-helper.el` — the live-server harness
-  (`jaunder-test--with-live-server`): boots a real `jaunder` server in a
-  tempdir, provisions a user + app password, and tears it down (ADR-0035).
+  (`jaunder-test--with-live-server`): the batch runner shares one real `jaunder`
+  server, provisioned with a user + app password, across the suite. A standalone
+  interactive ERT invocation falls back to a throwaway tempdir server for that
+  test's dynamic extent (ADR-0035).
 - `scripts/run-tests.el` — batch ERT runner for the pure suite (globs
   `-test.el`).
 - `scripts/run-integration-tests.el` — batch ERT runner for the live suite
@@ -62,8 +64,10 @@ steps in `cargo xtask check` and `cargo xtask validate` — both via
 
 ### Live integration tests
 
-The `*-integration.el` suite boots a real `jaunder` server per test. It needs a
-built binary, located via `JAUNDER_TEST_BINARY` (falling back to `PATH`):
+The `*-integration.el` runner boots one real `jaunder` server for the full
+suite. Individual tests use a per-test server only when run independently from
+an interactive ERT session. The suite needs a built binary, located via
+`JAUNDER_TEST_BINARY` (falling back to `PATH`):
 
 ```sh
 cargo build -p jaunder
@@ -111,3 +115,36 @@ upstream license notices because it is not packaged by Nixpkgs or MELPA.
 The Post file is installed only after its media verifies. If a pull fails, its
 Post remains server-only while already verified Local Media Copies remain safe;
 rerun `jaunder-reconcile` to retry and reuse those copies.
+
+## Reconciliation batches
+
+`M-x jaunder-reconcile` opens a persistent inventory report for the configured
+root. It only classifies Posts; it never chooses a direction or mutates either
+side on its own. Press `m` on a row to toggle its mark. Alternatively, make an
+active contiguous region over report rows; the region takes precedence over
+marks for the next command. The report keeps display order, so every selected
+batch has a predictable order.
+
+Use `p` to push selected local drafts or safely local-ahead Posts, `g` to pull
+selected server-only or safely server-ahead Posts, and `D` to delete selected
+remote Posts. Each command shows its selected count and asks once before its
+first mutation. Delete has a distinct `SOFT-DELETE` confirmation that shows
+fresh reviewed ETags. It creates Jaunder's retained deletion tombstone rather
+than physically erasing the remote Post; a matched local file is removed only
+after the server confirms deletion, while deleting a server-only Post has no
+local-file effect.
+
+A selection does not bypass safety checks. Unchanged Posts are no-ops, while
+conflicts, duplicate identities, stale ETags, changed local files, occupied
+paths, and rows unsafe for the chosen direction are reported as blocked. Each
+Post is independent: a failure does not undo earlier successes or prevent a
+later eligible Post from running. The executor can be cancelled only between
+Posts, so already completed work remains durable and untouched Posts remain
+unchanged.
+
+After a batch completes or is cancelled, the report rebuilds its inventory and
+classification while retaining an ordered **Last batch** summary. Use that
+refreshed report to review the local and remote effects and retry only the rows
+that remain eligible or whose actionable failure has been resolved. Retried
+creates reuse their recorded create intent until their server-confirmed Post ID
+is written locally, so an interrupted create does not create a duplicate.

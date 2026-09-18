@@ -2649,28 +2649,40 @@ inventory identity against the response, blocks an occupied root-level
 `<slug>.org` before network work, and installs through a same-directory
 temporary file without overwrite. Inventory exhausts Collection pagination and
 joins root-level Org files to Members by Post ID; `jaunder-reconcile` reports
-divergence without resolving it, previews only server-only pulls, and applies
-them after one confirmation. Remote deletion remains the separate explicit,
-ETag-guarded `jaunder-delete-post` command.
+divergence without resolving it automatically and lets the User explicitly
+choose a confirmed batch action. Remote deletion remains an explicit,
+ETag-guarded operation.
 
-#### Committed direction: Explicit batch Post transfer
+#### Explicit batch Post transfer
 
-`jaunder-reconcile` will remain an inventory and selection surface, never an
-automatic synchronizer. Its persistent report will support explicit marked or
-region-selected batch push, pull, and remote-delete commands; operations will be
-deterministic and sequential, and unsafe rows will remain blocked. A matched
-`server-ahead` pull will be the sole extension to server-only replacement
+`jaunder-reconcile` is an inventory and selection surface, never an automatic
+synchronizer. Its persistent report supports arbitrary marks or a contiguous
+active-region selection and explicit, confirmed batch push, pull, and
+remote-delete commands. Operations run deterministically and sequentially;
+unsafe rows are retained as blocked results rather than becoming an overwrite or
+conflict-resolution escape hatch. The buffer refreshes from a new inventory
+after completion or cancellation while retaining the ordered terminal results
+from the last batch, so completed work and independent failures remain visible
+and safe to retry.
+
+A selected matched `server-ahead` Post may be pulled only after revalidating its
+report-snapshotted local path/SHA-256 and remote strong ETag
 ([revalidated matched-Post pull](adr/drafts/revalidated-matched-post-pull.md)).
-The report will snapshot the local file's path and SHA-256 digest plus the
-remote strong ETag. After staging the complete Member and Media, installation
-will revalidate both snapshots, refuse a modified visited buffer or occupied
-canonical destination, atomically replace the current file, and then atomically
-rename it when the canonical slug changed. A clean visited buffer will refresh
-to the installed bytes and filename without becoming modified. A crash between
-replacement and rename will leave one ID-bearing updated file that a later
-inventory can recognize and finish.
+After staging the complete Member and Media, installation refuses a modified
+visited buffer or occupied canonical destination, atomically replaces the
+current file, and then atomically renames it when the canonical slug changed. A
+clean visited buffer refreshes to the installed bytes and filename without
+becoming modified. A crash between replacement and rename leaves one ID-bearing
+updated file that a later inventory recognizes and can finish.
 
-#### Committed direction: Local Media Copies
+Remote delete is separately confirmed with freshly reviewed strong ETags. It
+uses Jaunder's retained soft deletion: a confirmed matched deletion removes its
+local file only after the server's `204`, while a server-only deletion has no
+local-file effect. Completed batch mutations are never rolled back; cancellation
+is honored only between Posts, and rerunning the refreshed report retries only
+the work that remains.
+
+#### Local Media Copies
 
 Pulled Org, Markdown, and HTML source localizes only format-aware link
 destinations that name canonical public media on the active Jaunder origin and
@@ -2697,12 +2709,14 @@ leaf. The root is trusted, author-owned local state. Path creation and immediate
 mutations reject symlinks and non-directory components, staging is exclusive,
 and copies are never overwritten. A malicious replacement after Emacs's final
 check remains out of scope because Emacs Lisp has no dirfd-anchored mutation.
-Existing copies are hash-verified before reuse. A pull stages and verifies all
-distinct media, installs Local Media Copies, rewrites native links to relative
-local targets, and atomically installs the Post last. Failure leaves the Post
-server-only, so rerunning reconciliation retries it. Verified copies installed
-before an ordinary failure or crash remain safe to reuse. There is no rollback,
-cache eviction, matched-Post repair, arbitrary external download, or multi-file
+Existing copies are hash-verified before reuse. A server-only pull stages and
+verifies all distinct media, installs Local Media Copies, rewrites native links
+to relative local targets, and atomically installs the Post last. Failure leaves
+the Post server-only, so rerunning reconciliation retries it. An explicitly
+selected matched `server-ahead` pull uses the same Media trust chain before its
+separate report-snapshot revalidation and replacement path above. Verified
+copies installed before an ordinary failure or crash remain safe to reuse. There
+is no rollback, cache eviction, arbitrary external download, or multi-file
 transaction promise.
 
 ## Domain types and invariants
