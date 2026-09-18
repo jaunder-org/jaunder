@@ -131,19 +131,19 @@ fn AppPasswordCreator(create_action: ServerAction<CreateAppPassword>) -> impl In
                     .map(|result| match result {
                         Ok(MutationOutcome::Confirmed(pw)) => {
                             view! {
-                                <p class="success" data-app-password-token>
-                                    "Copy this app password now \u{2014} it will not be shown again: "
-                                    <code>{pw.token.to_string()}</code>
-                                </p>
+                                <AppPasswordToken
+                                    token=pw.token
+                                    presentation=AppPasswordPresentation::Confirmed
+                                />
                             }
                                 .into_any()
                         }
                         Ok(MutationOutcome::CommitIndeterminate(pw)) => {
                             view! {
-                                <p class="error" data-app-password-token>
-                                    "The app password may have been created, but its status could not be confirmed. Copy it now and refresh to check: "
-                                    <code>{pw.token.to_string()}</code>
-                                </p>
+                                <AppPasswordToken
+                                    token=pw.token
+                                    presentation=AppPasswordPresentation::CommitIndeterminate
+                                />
                             }
                                 .into_any()
                         }
@@ -152,4 +152,104 @@ fn AppPasswordCreator(create_action: ServerAction<CreateAppPassword>) -> impl In
             }}
         </section>
     }
+}
+
+#[derive(Clone, Copy)]
+enum AppPasswordPresentation {
+    Confirmed,
+    CommitIndeterminate,
+}
+
+impl AppPasswordPresentation {
+    fn parts(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Confirmed => (
+                "success",
+                "Copy this app password now \u{2014} it will not be shown again: ",
+            ),
+            Self::CommitIndeterminate => (
+                "error",
+                "The app password may have been created, but its status could not be confirmed. Copy it now and refresh to check: ",
+            ),
+        }
+    }
+}
+
+/// One-time App Password presentation with an explicit clipboard action and manual fallback.
+#[component]
+fn AppPasswordToken(
+    token: common::token::RawToken,
+    presentation: AppPasswordPresentation,
+) -> impl IntoView {
+    let copied = RwSignal::new(false);
+    let copy_error = RwSignal::new(None::<&'static str>);
+    let copy_attempt = RwSignal::new(0_u64);
+    let token_text = token.to_string();
+    let copy_value = token_text.clone();
+    let (status_class, prompt) = presentation.parts();
+
+    view! {
+        <div data-app-password-token>
+            <p class=status_class>
+                {prompt} <code>{token_text}</code> " "
+                <button
+                    type="button"
+                    class="j-btn"
+                    on:click=move |_| {
+                        copy_app_password(copy_value.clone(), copied, copy_error, copy_attempt);
+                    }
+                >
+                    {move || if copied.get() { "Copied" } else { "Copy app password" }}
+                </button>
+            </p>
+            {move || {
+                copy_error
+                    .get()
+                    .map(|message| {
+                        view! {
+                            <p class="error" data-app-password-copy-error>
+                                {message}
+                            </p>
+                        }
+                    })
+            }}
+        </div>
+    }
+}
+
+fn copy_app_password(
+    token: String,
+    copied: RwSignal<bool>,
+    copy_error: RwSignal<Option<&'static str>>,
+    copy_attempt: RwSignal<u64>,
+) {
+    use leptos::task::spawn_local;
+    use leptos_dom::helpers::set_timeout;
+    use std::time::Duration;
+
+    let attempt = copy_attempt.get_untracked().wrapping_add(1);
+    copy_attempt.set(attempt);
+    spawn_local(async move {
+        let succeeded = client::clipboard::write_text(&token).await.is_ok();
+        if copy_attempt.get_untracked() != attempt {
+            return;
+        }
+        if succeeded {
+            copy_error.set(None);
+            copied.set(true);
+            set_timeout(
+                move || {
+                    if copy_attempt.get_untracked() == attempt {
+                        copied.set(false);
+                    }
+                },
+                Duration::from_secs(2),
+            );
+        } else {
+            copied.set(false);
+            copy_error.set(Some(
+                "Could not copy the App Password. Select it manually instead.",
+            ));
+        }
+    });
 }

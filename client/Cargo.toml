@@ -22,7 +22,6 @@ web-sys = { workspace = true, features = [
   "NodeList",
   # Browser clipboard and WebAuthn ceremonies both start at `Navigator`.
   "Navigator",
-  "Clipboard",
   "CredentialsContainer",
   "Credential",
   "PublicKeyCredential",
