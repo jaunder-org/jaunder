@@ -115,10 +115,12 @@ an existing version: changed packages receive a new tag.
 
 The release tag is the Theme repository's distribution version. Manifest
 `schema` and `style_contract` values are Jaunder compatibility versions, not the
-Theme's release version. Schema 1 deliberately has no release-version field; a
-versioned release URL identifies the distribution while the deterministic ZIP
-bytes identify the exact package. Installed-version metadata or update discovery
-would require a separately designed manifest revision.
+Theme's release version. Theme Package schema 1 and Style Contract 1 were
+introduced in Jaunder 1.0.0, so packages targeting both require Jaunder 1.0.0 or
+later. Schema 1 deliberately has no release-version field; a versioned release
+URL identifies the distribution while the deterministic ZIP bytes identify the
+exact package. Installed-version metadata or update discovery would require a
+separately designed manifest revision.
 
 Importing the ZIP into Studio still creates a private, unselected draft. Preview
 it, explicitly publish it, then explicitly select the published theme;
@@ -168,7 +170,8 @@ Rules:
   accepted value.
 - `style_contract` selects the public document hooks and CSS behavior the theme
   targets. Version 1 is the only accepted value. It is separate from `schema` so
-  the package format and the styling interface can evolve independently.
+  the package format and the styling interface can evolve independently. Schema
+  1 and Style Contract 1 require Jaunder 1.0.0 or later.
 - `name` must contain non-whitespace text.
 - Supported asset types are `font/woff2`, `image/png`, `image/jpeg`,
   `image/webp`, and `image/avif`.
