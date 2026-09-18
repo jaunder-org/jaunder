@@ -184,5 +184,58 @@
                         (buffer-string))
                       contents))))))
 
+(ert-deftest jaunder-delete-post-rechecks-remote-success-identity-and-buffer-disposition ()
+  "A successful remote deletion retains local state if identity or closure changes."
+  (dolist (race '(identity close))
+    (let ((contents "#+PROPERTY: JAUNDER_ID 7\n#+PROPERTY: JAUNDER_SYNCED \"etag\"\n\nBody\n"))
+      (jaunder-delete-test--with-visited-post
+       contents
+       (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
+                 ((symbol-function 'jaunder--http-request)
+                  (lambda (&rest _)
+                    (when (eq race 'identity)
+                      (jaunder--set-property "JAUNDER_ID" "8"))
+                    '(:status 204)))
+		 (if (eq race 'close)
+		     (cl-letf (((symbol-function 'kill-buffer) (lambda (&rest _) nil)))
+		       (should-error (jaunder-delete-post)))
+		   (should-error (jaunder-delete-post)))
+		 (should (eq (file-exists-p path) (eq race 'identity)))
+		 (should (buffer-live-p buffer))))))))
+
+(ert-deftest jaunder-delete-post-covers-confirmation-and-post-response-races ()
+  "A changed buffer or identity is rejected at the matching safety checkpoint."
+  (let ((contents "#+PROPERTY: JAUNDER_ID 7\n#+PROPERTY: JAUNDER_SYNCED \"etag\"\n\nBody\n"))
+    (jaunder-delete-test--with-visited-post
+     contents
+     (cl-letf (((symbol-function 'y-or-n-p)
+                (lambda (_)
+                  (insert "edited")
+                  t)))
+       (should-error (jaunder-delete-post)))
+     (set-buffer-modified-p nil))
+    (jaunder-delete-test--with-visited-post
+     contents
+     (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
+               ((symbol-function 'jaunder--http-request)
+                (lambda (&rest _)
+                  (jaunder--set-property "JAUNDER_ID" "8")
+                  (set-buffer-modified-p nil)
+                  '(:status 204))))
+       (should-error (jaunder-delete-post))
+       (should (file-exists-p path))))))
+
+(ert-deftest jaunder-delete-post-reports-an-uncloseable-clean-buffer ()
+  "A successful DELETE reports the exceptional local-buffer disposition."
+  (let ((contents "#+PROPERTY: JAUNDER_ID 7\n#+PROPERTY: JAUNDER_SYNCED \"etag\"\n\nBody\n"))
+    (jaunder-delete-test--with-visited-post
+     contents
+     (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
+               ((symbol-function 'jaunder--http-request) (lambda (&rest _) '(:status 204)))
+               ((symbol-function 'kill-buffer) (lambda (&rest _) nil)))
+       (should-error (jaunder-delete-post))
+       (should-not (file-exists-p path))
+       (should (buffer-live-p buffer))))))
+
 (provide 'jaunder-delete-test)
 ;;; jaunder-delete-test.el ends here

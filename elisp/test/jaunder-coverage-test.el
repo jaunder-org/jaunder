@@ -9,6 +9,7 @@
 
 (require 'ert)
 (require 'json)
+(require 'seq)
 
 (let ((scripts-dir (expand-file-name "../scripts"
                                      (file-name-directory load-file-name))))
@@ -142,6 +143,91 @@
                    '("-test\\.el\\'" ("ert" nil) "-integration\\.el\\'"
                      "up" "bind" ("ert" :new) "down")))))
 
+
+(ert-deftest jaunder-coverage-installs-narrow-top-level-instrumentation-specs ()
+  "Measured top-level definitions receive Edebug specs without structural exemptions."
+  (let ((old-define-error (get 'define-error 'edebug-form-spec))
+        (old-defvar-local (get 'defvar-local 'edebug-form-spec)))
+    (unwind-protect
+        (progn
+          (put 'define-error 'edebug-form-spec nil)
+          (put 'defvar-local 'edebug-form-spec nil)
+          (jaunder-coverage--install-top-level-form-specs)
+          (should (equal (get 'define-error 'edebug-form-spec)
+                         '(form stringp &optional form)))
+          (should (equal (get 'defvar-local 'edebug-form-spec)
+                         '(symbolp form &optional stringp))))
+      (put 'define-error 'edebug-form-spec old-define-error)
+      (put 'defvar-local 'edebug-form-spec old-defvar-local))))
+
+(ert-deftest jaunder-coverage-edebug-evaluates-only-measurable-top-level-initializers ()
+  "Only `define-error' and `defvar-local' are re-evaluated through Edebug."
+  (jaunder-coverage-test--with-tree
+   '(("jaunder-fixture.el" .
+      "(require 'cl-lib)\n(define-error 'fixture-error \"fixture\")\n(defvar-local fixture-local nil)\n(defun fixture-function () t)\n"))
+   (lambda (root)
+     (let ((file (expand-file-name "jaunder-fixture.el" root))
+           calls)
+       (with-current-buffer (find-file-noselect file)
+         (emacs-lisp-mode)
+         (cl-letf (((symbol-function 'edebug-eval-top-level-form)
+                    (lambda () (push (line-number-at-pos) calls))))
+           (jaunder-coverage--instrument-top-level-initializers (list file))))
+       (should (equal (nreverse calls) '(2 3)))))))
+
+(ert-deftest jaunder-coverage-top-level-initializers-have-real-undercover-stops-and-semantics ()
+  "A fresh Emacs proves real Undercover coverage and runtime semantics together."
+  (jaunder-coverage-test--with-tree
+   '(("jaunder.el" . "(provide 'jaunder)\n")
+     ("jaunder-fixture.el" .
+      "(define-error 'fixture-error \"fixture\")\n(defvar-local fixture-local nil)\n(provide 'jaunder-fixture)\n"))
+   (lambda (root)
+     (let* ((coverage-script (expand-file-name "../scripts/jaunder-coverage.el"
+                                               (file-name-directory load-file-name)))
+            (undercover-dir (file-name-directory (locate-library "undercover")))
+            (driver (make-temp-file "jaunder-coverage-real-" nil ".el"))
+            (output (make-temp-file "jaunder-coverage-real-output-" t))
+            (emacs (concat invocation-directory invocation-name))
+            (fixture (expand-file-name "jaunder-fixture.el" root)))
+       (unwind-protect
+           (progn
+             (with-temp-file driver
+               (prin1
+                `(progn
+                   (require 'seq)
+                   (add-to-list 'load-path ,undercover-dir)
+                   (load ,coverage-script nil nil t)
+                   (jaunder-coverage--load-production ,root)
+                   (let ((census (jaunder-coverage--census-file ,fixture)))
+                     (dolist (line '(1 2))
+                       (unless (seq-some
+                                (lambda (form)
+                                  (seq-some
+                                   (lambda (point)
+                                     (and (= (alist-get 'line point) line)
+                                          (equal (alist-get 'kind point) "ordinary")))
+                                   (alist-get 'points form)))
+                                census)
+                         (error "missing ordinary census point at line %s" line)))
+                     (condition-case nil
+                         (signal 'fixture-error nil)
+                       (fixture-error nil))
+                     (with-temp-buffer
+                       (setq fixture-local 'local)
+                       (unless (local-variable-p 'fixture-local)
+                         (error "fixture-local is not buffer local")))
+                     (jaunder-coverage--write-reports ,output ,root)))
+                (current-buffer)))
+             (with-temp-buffer
+               (should (zerop (call-process emacs nil (current-buffer) nil
+                                            "--batch" "-Q" "-l" driver))))
+             (with-temp-buffer
+               (insert-file-contents (expand-file-name "lcov.info" output))
+               (dolist (line '(1 2))
+                 (should (re-search-forward
+                          (format "DA:%d,[1-9][0-9]*" line) nil t)))))
+         (delete-file driver)
+         (delete-directory output t))))))
 
 (ert-deftest jaunder-coverage-installs-undercover-before-loading-production ()
   "Undercover's handlers and files precede every production `require'."

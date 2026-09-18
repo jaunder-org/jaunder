@@ -133,12 +133,51 @@ this guarantees a later controlled error cannot erase the diagnostic contract."
      (outcome . ,outcome)
      (modules . ,modules))))
 
+(defconst jaunder-coverage--top-level-form-specs
+  '((define-error . (form stringp &optional form))
+    (defvar-local . (symbolp form &optional stringp)))
+  "Edebug specifications for measurable production top-level initialization.
+
+These forms evaluate production state but have no built-in Edebug specification
+that gives Undercover an executable stop.  Keeping this narrow registry in the
+producer instruments only the two observed forms; it does not alter the
+consumer's structural classification.")
+
+(defun jaunder-coverage--install-top-level-form-specs ()
+  "Install Edebug specifications for measurable top-level initialization forms."
+  (dolist (entry jaunder-coverage--top-level-form-specs)
+    (put (car entry) 'edebug-form-spec (cdr entry))))
+
+(defun jaunder-coverage--instrument-top-level-initializers (files)
+  "Edebug-evaluate measurable top-level initialization forms in FILES.
+
+Undercover instruments function definitions through its load handler, but Edebug
+otherwise evaluates `define-error' and `defvar-local' without a recorded stop.
+Evaluate only these already-loaded source forms through Edebug: their definitions
+are the behavior under test, and this leaves function instrumentation intact."
+  (dolist (file files)
+    (with-current-buffer (find-file-noselect file)
+      (save-excursion
+        (goto-char (point-min))
+        (while (progn
+                 (forward-comment (point-max))
+                 (not (eobp)))
+          (let* ((start (point))
+                 (form (read (current-buffer)))
+                 (end (point)))
+            (when (memq (car-safe form)
+                        (mapcar #'car jaunder-coverage--top-level-form-specs))
+              (goto-char start)
+              (edebug-eval-top-level-form)
+              (goto-char end))))))))
+
 (defun jaunder-coverage--load-production (root)
   "Install Undercover before source loading, then eagerly load all modules."
   (let ((files (jaunder-coverage--source-files root)))
     ;; Nix invokes Emacs outside a CI provider; force only this pinned local
     ;; engine so no package lookup or external-service detection participates.
     (setq undercover-force-coverage t)
+    (jaunder-coverage--install-top-level-form-specs)
     (undercover--set-edebug-handlers)
     (undercover--edebug-files files)
     (add-to-list 'load-path root)
@@ -147,7 +186,8 @@ this guarantees a later controlled error cannot erase the diagnostic contract."
     ;; modules visible without evaluating any module before instrumentation.
     (require 'jaunder)
     (dolist (file files)
-      (require (intern (file-name-base file))))))
+      (require (intern (file-name-base file))))
+    (jaunder-coverage--instrument-top-level-initializers files)))
 
 (defun jaunder-coverage--load-tests (directory suffix)
   "Load each test source in DIRECTORY whose filename ends in SUFFIX."
@@ -189,7 +229,7 @@ failure cannot leak the server."
       (goto-char (point-min))
       (while (re-search-forward "^SF:\\(.+\\)$" nil t)
         (let* ((source (file-truename (match-string 1)))
-               (relative (concat "elisp/" (file-name-nondirectory source))))
+	       (relative (concat "elisp/" (file-name-nondirectory source))))
           (unless (member source known)
             (error "LCOV contains non-production source %s" source))
           (push relative present)
@@ -199,7 +239,7 @@ failure cannot leak the server."
         (let ((relative (concat "elisp/" (file-name-nondirectory source))))
           (unless (member relative present)
             (unless (bolp)
-              (insert "\n"))
+	      (insert "\n"))
             (insert "SF:" relative "\nend_of_record\n"))))
       (write-region nil nil path nil 'silent))))
 
@@ -212,15 +252,15 @@ failure cannot leak the server."
         (unless current
           (error "LCOV end_of_record without SF"))
         (push (format "%s: relevant %d, covered %d, missed %d\n"
-                      current relevant covered (- relevant covered))
-              rows)
+		      current relevant covered (- relevant covered))
+	      rows)
         (setq current nil
-              relevant 0
-              covered 0)))
+	      relevant 0
+	      covered 0)))
      (dolist (line (split-string
                     (with-temp-buffer
-                      (insert-file-contents lcov-path)
-                      (buffer-string))
+		      (insert-file-contents lcov-path)
+		      (buffer-string))
                     "\n"))
        (cond
         ((string-prefix-p "SF:" line)

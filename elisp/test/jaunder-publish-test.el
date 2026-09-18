@@ -1091,4 +1091,42 @@ an unconditional update."
       (delete-directory ordinary-root t)
       (delete-directory minimal-root t))))
 
+(ert-deftest jaunder-write-back-rejects-incomplete-create-and-update-checkpoints ()
+  "Create requires all identity fields and updates require a strong validator."
+  (dolist (fixture
+           (list (list t nil "my-post" "\"etag\"")
+                 (list t "42" nil "\"etag\"")
+                 (list t "42" "my-post" nil)
+                 (list nil nil "my-post" "W/\"weak\"")))
+    (with-temp-buffer
+      (org-mode)
+      (insert "#+TITLE: T\n\nBody\n")
+      (cl-letf (((symbol-function 'jaunder--harvest-response-fields)
+                 (lambda (_) `((slug . ,(nth 2 fixture)))))
+                ((symbol-function 'jaunder--location->id)
+                 (lambda (_) (nth 1 fixture)))
+                ((symbol-function 'jaunder--response-header)
+                 (lambda (&rest _) (nth 3 fixture))))
+        (should-error (jaunder--write-back '(:body "ignored") (nth 0 fixture)))))))
+
+(ert-deftest jaunder-write-back-changed-create-without-attempt-time-uses-current-time ()
+  "A changed create records a fresh synchronization time when no attempt time survived."
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+TITLE: T\n\nBody\n")
+    (set-visited-file-name (make-temp-file "jaunder-write-back-" nil ".org") nil t)
+    (unwind-protect
+        (cl-letf (((symbol-function 'format-time-string)
+                   (lambda (&rest _) "2026-09-18T00:00:00Z")))
+          (jaunder--write-back
+           (jaunder-test--response
+            201 '( ("Location" . "https://example.test/posts/7") ("ETag" . "\"etag\""))
+            (concat "<entry xmlns=\"http://www.w3.org/2005/Atom\""
+                    " xmlns:j=\"https://jaunder.org/ns/atompub\">"
+                    "<content type=\"text/org\">Body</content><j:slug>post</j:slug></entry>"))
+           t 'changed)
+          (should (equal (jaunder--buffer-property "JAUNDER_SYNCED_AT")
+                         "2026-09-18T00:00:00Z")))
+      (when (buffer-file-name) (delete-file (buffer-file-name))))))
+
 ;;; jaunder-publish-test.el ends here

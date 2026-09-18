@@ -1456,5 +1456,234 @@
           (should-not (file-exists-p (expand-file-name "renamed.org" root))))
       (delete-directory root t))))
 
+(ert-deftest jaunder-reconcile-selection-and-toggle-reject-non-rows ()
+  "Region selection ignores headings and toggling requires an actual report row."
+  (let* ((row (jaunder--make-reconcile-row :state 'server-only :key "post:7"
+                                           :member (jaunder-reconcile-test--member "7" "post")))
+         (report (jaunder--make-reconcile-report :root "/tmp" :rows (list row)))
+         (buffer (jaunder--render-reconcile-report report)))
+    (unwind-protect
+        (with-current-buffer buffer
+          (goto-char (point-min))
+          (should-error (jaunder-reconcile-toggle-mark) :type 'user-error)
+          (search-forward "server-only (1)")
+          (set-mark (line-beginning-position))
+          (goto-char (line-end-position))
+          (activate-mark)
+          (should-not (jaunder-reconcile-selected-rows))
+          (deactivate-mark))
+      (kill-buffer buffer))))
+
+(ert-deftest jaunder-reconcile-batch-honors-cancellation-before-an-operation ()
+  "Cancellation records no operation and leaves a visible empty batch result."
+  (let* ((row (jaunder--make-reconcile-row :state 'local-draft :key "local:draft"))
+         (report (jaunder--make-reconcile-report :root "/tmp" :rows (list row)))
+         (buffer (jaunder--render-reconcile-report report))
+         called)
+    (unwind-protect
+        (cl-letf (((symbol-function 'jaunder--reconcile-refresh-batch-buffer)
+                   (lambda (&rest _) nil)))
+          (jaunder--reconcile-execute-batch buffer (list row) 'push
+                                            (lambda (_) (setq called t))
+                                            (lambda () t))
+          (should-not called))
+      (kill-buffer buffer))))
+
+(ert-deftest jaunder-reconcile-delete-review-and-local-preservation-branches ()
+  "Invalid review responses and unsafe local removal return explicit evidence."
+  (let ((row (jaunder--make-reconcile-row
+              :state 'unchanged :key "post:7"
+              :member (jaunder-reconcile-test--member "7" "post"))))
+    (dolist (response (list '(:status 200 :headers nil) '(:status 503 :headers nil)))
+      (cl-letf (((symbol-function 'jaunder--http-request) (lambda (&rest _) response)))
+        (should (eq (plist-get (jaunder--reconcile-delete-etag row) :outcome) 'blocked))))
+    (let* ((path (make-temp-file "jaunder-reconcile-delete-local-" nil ".org"))
+           (buffer (find-file-noselect path))
+           (row (jaunder--make-reconcile-row
+		 :local (jaunder-reconcile-test--local path "7"))))
+      (unwind-protect
+          (progn
+            (with-current-buffer buffer (insert "changed"))
+            (should (eq (plist-get (jaunder--reconcile-delete-local-file row) :reason)
+			'local-buffer-modified))
+            (with-current-buffer buffer (set-buffer-modified-p nil))
+            (cl-letf (((symbol-function 'jaunder--reconcile-current-local-id) (lambda (_) "8")))
+              (should (eq (plist-get (jaunder--reconcile-delete-local-file row) :reason)
+                          'matched-identity-changed))))
+	(when (buffer-live-p buffer) (kill-buffer buffer))
+	(delete-file path)))))
+
+(ert-deftest jaunder-reconcile-pull-blocks-invalid-review-and-surfaces-stage-failures ()
+  "A server-ahead pull preserves row identity for invalid reviews and exceptions."
+  (let* ((row (jaunder--make-reconcile-row
+	       :state 'server-ahead :key "post:7" :remote-etag "weak"
+	       :local (jaunder-reconcile-test--local "/tmp/post.org" "7")
+	       :member (jaunder-reconcile-test--member "7" "post")))
+         (jaunder-reconcile-report (jaunder--make-reconcile-report :root "/tmp")))
+    (should (eq (plist-get (jaunder--reconcile-pull-server-ahead-row row) :reason)
+                'reviewed-etag-invalid))
+    (setf (jaunder-reconcile-row-remote-etag row) "\"old\"")
+    (cl-letf (((symbol-function 'jaunder--pull-stage-member) (lambda (&rest _) (error "offline"))))
+      (should (eq (plist-get (jaunder--reconcile-pull-server-ahead-row row) :reason)
+                  'pull-failed)))))
+
+(ert-deftest jaunder-reconcile-selected-commands-reject-empty-selection ()
+  "Every selected operation rejects an empty selection before transport or prompts."
+  (let ((buffer (jaunder--render-reconcile-report
+                 (jaunder--make-reconcile-report :root "/tmp" :rows nil))))
+    (unwind-protect
+        (with-current-buffer buffer
+          (dolist (command '(jaunder-reconcile-push-selected
+			     jaunder-reconcile-pull-selected
+			     jaunder-reconcile-delete-selected))
+	    (should-error (funcall command) :type 'user-error)))
+      (kill-buffer buffer))))
+
+(ert-deftest jaunder-reconcile-report-interactions-cover-row-region-removal-and-stale-point ()
+  "Rows selected by region and marking retain only current report positions."
+  (let* ((row (jaunder--make-reconcile-row :state 'server-only :key "post:7"
+                                           :member (jaunder-reconcile-test--member "7" "post")))
+         (report (jaunder--make-reconcile-report :root "/tmp" :rows (list row)))
+         (buffer (generate-new-buffer " *jaunder-reconcile-interaction*")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (setq-local jaunder-reconcile-report report)
+          (setq-local jaunder-reconcile-marks (make-hash-table :test #'equal))
+          (insert "row")
+          (add-text-properties (point-min) (point-max) `(jaunder-reconcile-row ,row))
+          (set-mark (point-min))
+          (goto-char (point-max))
+          (activate-mark)
+          (should (equal (jaunder-reconcile-selected-rows) (list row)))
+          (deactivate-mark)
+          (goto-char (point-min))
+          (cl-letf (((symbol-function 'jaunder--render-reconcile-report)
+                     (lambda (&rest _) nil)))
+            (jaunder-reconcile-toggle-mark)
+            (jaunder-reconcile-toggle-mark))
+          (jaunder--render-reconcile-report
+           (jaunder--make-reconcile-report :root "/tmp" :rows nil) buffer)
+          (should (= (point) (point-min))))
+      (kill-buffer buffer))))
+
+(ert-deftest jaunder-reconcile-local-safety-and-push-missing-file-are-blocked ()
+  "A late on-disk identity drift and missing push file produce named blocks."
+  (let ((path (make-temp-file "jaunder-reconcile-safety-" nil ".org")))
+    (unwind-protect
+        (progn
+          (with-temp-file path (insert "#+PROPERTY: JAUNDER_ID 7\n"))
+          (let ((row (jaunder--make-reconcile-row
+                      :state 'local-ahead :local (jaunder-reconcile-test--local path "7")
+                      :member (jaunder-reconcile-test--member "7" "post"))))
+            (cl-letf (((symbol-function 'jaunder--buffer-property) (lambda (_) "7"))
+                      ((symbol-function 'jaunder--reconcile-current-local-id) (lambda (_) "8")))
+              (should (eq (jaunder--reconcile-local-mutation-safety-reason row)
+                          'matched-identity-changed))))
+	  (delete-file path)))
+    (let ((row (jaunder--make-reconcile-row
+		:state 'local-draft
+		:local (jaunder-reconcile-test--local "/definitely/missing.org" nil))))
+      (cl-letf (((symbol-function 'jaunder--reconcile-local-mutation-safety-reason) (lambda (_) nil)))
+	(should (eq (plist-get (jaunder--reconcile-push-row row) :reason)
+                    'local-file-missing))))))
+
+(ert-deftest jaunder-reconcile-delete-review-transport-and-buffer-retention-are-explicit ()
+  "Review transport errors and failed buffer closure retain actionable outcomes."
+  (let ((row (jaunder--make-reconcile-row
+	      :member (jaunder-reconcile-test--member "7" "post"))))
+    (cl-letf (((symbol-function 'jaunder--http-request) (lambda (&rest _) (error "offline"))))
+      (should (eq (plist-get (jaunder--reconcile-delete-etag row) :reason)
+                  'member-transport-error))))
+  (let* ((path (make-temp-file "jaunder-reconcile-retain-" nil ".org"))
+         (buffer (find-file-noselect path))
+         (row (jaunder--make-reconcile-row :local (jaunder-reconcile-test--local path "7")
+                                           :member (jaunder-reconcile-test--member "7" "post"))))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer (set-buffer-modified-p nil))
+          (cl-letf (((symbol-function 'jaunder--reconcile-current-local-id) (lambda (_) "7"))
+                    ((symbol-function 'kill-buffer) (lambda (&rest _) nil)))
+            (should (eq (plist-get (jaunder--reconcile-delete-local-file row) :local-effect)
+			'removed-buffer-retained))))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (when (file-exists-p path) (delete-file path)))))
+
+(ert-deftest jaunder-reconcile-fresh-inventory-and-staging-fallbacks-preserve-row-identity ()
+  "Changed inventory, inventory errors, and sparse staged drift remain structured."
+  (let* ((path (make-temp-file "jaunder-reconcile-unique-" nil ".org"))
+         (row (jaunder--make-reconcile-row
+	       :local (jaunder-reconcile-test--local path "7")
+	       :member (jaunder-reconcile-test--member "7" "post")
+	       :key "post:7" :state 'server-ahead :remote-etag "\"old\""))
+         (jaunder-reconcile-report (jaunder--make-reconcile-report :root "/tmp")))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'jaunder--inventory-for-root)
+                     (lambda (&rest _) (jaunder--join-inventory nil nil))))
+            (should (eq (plist-get (jaunder--reconcile-pull-unique-match row) :reason)
+                        'matched-identity-changed)))
+          (cl-letf (((symbol-function 'jaunder--inventory-for-root) (lambda (&rest _) (error "offline"))))
+            (should (eq (plist-get (jaunder--reconcile-pull-unique-match row) :reason)
+                        'fresh-inventory-failed)))
+          (cl-letf (((symbol-function 'jaunder--pull-stage-member)
+                     (lambda (&rest _)
+		       (signal 'jaunder-pull-stage-identity-changed (list nil)))))
+            (let ((result (jaunder--reconcile-pull-server-ahead-row row)))
+	      (should (equal (plist-get result :post-id) "7"))
+	      (should (equal (plist-get result :slug) "post")))))
+      (when (file-exists-p path) (delete-file path)))))
+
+(ert-deftest jaunder-reconcile-replacement-cleans-a-temporary-after-write-failure ()
+  "A failure after temporary allocation removes the uninstalled pull bytes."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-reconcile-cleanup-" t)))
+         (path (expand-file-name "post.org" root)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'rename-file) (lambda (&rest _) (error "rename failed"))))
+          (should-error (jaunder--reconcile-replace-pulled-file path path "replacement"))
+          (should-not (directory-files root nil "\\`\\.jaunder-pull-")))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-reconcile-delete-selected-records-preflight-and-ineligible-reviews ()
+  "Review blocks become ordered terminal results without any remote mutation."
+  (let* ((safe (jaunder--make-reconcile-row :state 'server-only :key "post:7"
+                                            :member (jaunder-reconcile-test--member "7" "post")))
+         (unsafe (jaunder--make-reconcile-row :state 'conflict :key "conflict:7"))
+         (buffer (jaunder--render-reconcile-report
+                  (jaunder--make-reconcile-report :root "/tmp" :rows (list safe unsafe))))
+         methods)
+    (unwind-protect
+        (with-current-buffer buffer
+          (puthash "post:7" t jaunder-reconcile-marks)
+          (puthash "conflict:7" t jaunder-reconcile-marks)
+          (cl-letf (((symbol-function 'jaunder--call-with-blog) (lambda (_ thunk) (funcall thunk)))
+                    ((symbol-function 'jaunder--reconcile-delete-preflight)
+                     (lambda (_) 'local-buffer-modified))
+                    ((symbol-function 'jaunder--reconcile-refresh-batch-buffer)
+                     (lambda (&rest _) nil))
+                    ((symbol-function 'jaunder--http-request)
+                     (lambda (method &rest _)
+                       (push method methods)
+                       (error "unexpected remote mutation")))
+                    ((symbol-function 'y-or-n-p) (lambda (_) t)))
+            (jaunder-reconcile-delete-selected)
+            (should-not methods)
+            (should (= (length jaunder-reconcile-last-batch-results) 2))
+            (should (equal (mapcar #'jaunder-reconcile-result-row-key
+                                   jaunder-reconcile-last-batch-results)
+                           '("conflict:7" "post:7")))
+            (should (equal (mapcar #'jaunder-reconcile-result-outcome
+                                   jaunder-reconcile-last-batch-results)
+                           '(blocked blocked)))
+            (should (equal (mapcar #'jaunder-reconcile-result-reason
+                                   jaunder-reconcile-last-batch-results)
+                           '(delete-ineligible local-buffer-modified)))
+            (let ((ineligible (car jaunder-reconcile-last-batch-results))
+                  (preflight (cadr jaunder-reconcile-last-batch-results)))
+              (should (eq (jaunder-reconcile-result-detail ineligible) 'conflict))
+              (should (equal (jaunder-reconcile-result-post-id preflight) "7"))
+              (should (equal (jaunder-reconcile-result-slug preflight) "post"))
+              (should (eq (jaunder-reconcile-result-local-effect preflight) 'unchanged)))))
+      (kill-buffer buffer))))
+
 (provide 'jaunder-reconcile-test)
 ;;; jaunder-reconcile-test.el ends here

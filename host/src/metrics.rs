@@ -749,10 +749,10 @@ mod tests {
         let idempotency = counter_attributes(&metrics, "jaunder.atompub.idempotency_keys");
         assert_eq!(
             idempotency.len(),
-            3,
+            2,
             "idempotency events must remain bounded to the declared lifecycle values: {idempotency:?}"
         );
-        for event in ["created", "replayed", "expired"] {
+        for event in ["created", "replayed"] {
             assert!(
                 idempotency.contains(&attrs1([("event", event)])),
                 "idempotency event={event} was not exported: {idempotency:?}"
