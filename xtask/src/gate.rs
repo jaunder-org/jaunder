@@ -533,7 +533,117 @@ fn markdown_precommit_step_names_for_test() -> Vec<&'static str> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use serde::Deserialize;
+
     use super::*;
+
+    #[derive(Debug, Deserialize)]
+    struct CiWorkflow {
+        jobs: BTreeMap<String, CiWorkflowJob>,
+    }
+
+    impl CiWorkflow {
+        fn job(&self, id: &str) -> &CiWorkflowJob {
+            self.jobs
+                .get(id)
+                .unwrap_or_else(|| panic!("CI workflow is missing job `{id}`"))
+        }
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct CiWorkflowJob {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        needs: Vec<String>,
+        #[serde(default)]
+        steps: Vec<CiWorkflowStep>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct CiWorkflowStep {
+        #[serde(default)]
+        run: Option<String>,
+    }
+
+    fn parse_ci_workflow(source: &str) -> CiWorkflow {
+        serde_yaml::from_str(source).expect("CI workflow must be valid YAML")
+    }
+
+    fn normalized_command(command: &str) -> String {
+        command.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    fn assert_ci_validate_command(job: &CiWorkflowJob, lane: &str) {
+        let commands = job
+            .steps
+            .iter()
+            .filter_map(|step| step.run.as_deref())
+            .map(normalized_command)
+            .filter(|command| command.contains("cargo xtask ci-validate"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            commands,
+            [format!(
+                "nix develop .#ci --accept-flake-config -c cargo xtask ci-validate {lane}"
+            )],
+            "CI job must own exactly its declared ci-validate command"
+        );
+    }
+
+    fn assert_command(job: &CiWorkflowJob, command: &str) {
+        assert!(
+            job.steps
+                .iter()
+                .filter_map(|step| step.run.as_deref())
+                .map(normalized_command)
+                .any(|run| run.contains(command)),
+            "CI job must run `{command}`"
+        );
+    }
+
+    fn assert_validation_result_checks(job: &CiWorkflowJob) {
+        let run = job
+            .steps
+            .iter()
+            .filter_map(|step| step.run.as_deref())
+            .find(|run| run.contains("needs.validate-host.result"))
+            .expect("validation aggregate must read its required lane results");
+        let lines = run.lines().map(str::trim).collect::<BTreeSet<_>>();
+
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.contains(".result }}"))
+                .copied()
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "host=\"${{ needs.validate-host.result }}\"",
+                "hermetic=\"${{ needs.validate-hermetic.result }}\"",
+                "test_checks=\"${{ needs.validate-test-checks.result }}\"",
+                "coverage=\"${{ needs.validate-coverage.result }}\"",
+                "source_probe=\"${{ needs.validate-source-probe.result }}\"",
+            ]),
+            "validation aggregate must read exactly its five required lane results"
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.starts_with("test \""))
+                .copied()
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "test \"$host\" = \"success\"",
+                "test \"$hermetic\" = \"success\"",
+                "test \"$test_checks\" = \"success\"",
+                "test \"$coverage\" = \"success\"",
+                "test \"$source_probe\" = \"success\"",
+            ]),
+            "validation aggregate must require success from exactly its five lanes"
+        );
+    }
 
     fn position(names: &[&str], name: &str) -> usize {
         names
@@ -890,24 +1000,38 @@ mod tests {
 
     #[test]
     fn ci_shape_keeps_validation_lanes_behind_the_stable_gate() {
-        let workflow = include_str!("../../.github/workflows/ci.yml");
+        let workflow = parse_ci_workflow(include_str!("../../.github/workflows/ci.yml"));
 
-        assert!(workflow.contains("validate-core:"));
-        assert!(workflow.contains("cargo xtask ci-validate core"));
-        assert!(workflow.contains(".xtask/gcroots/elisp-coverage-producer/elisp-coverage/"));
-        assert!(workflow.contains("cargo xtask nix probe-source"));
+        for (job_id, lane) in [
+            ("validate-host", "host"),
+            ("validate-hermetic", "hermetic"),
+            ("validate-test-checks", "test-checks"),
+            ("validate-coverage", "coverage"),
+        ] {
+            assert_ci_validate_command(workflow.job(job_id), lane);
+        }
 
-        assert!(workflow.contains("validate-coverage:"));
-        assert!(workflow.contains("cargo xtask ci-validate\n          coverage"));
-        assert!(workflow.contains(".xtask/gcroots/coverage/status.json"));
-        assert!(workflow.contains("cargo xtask coverage\n          probe-source"));
+        assert_command(
+            workflow.job("validate-source-probe"),
+            "cargo xtask nix probe-source",
+        );
 
-        assert!(workflow.contains("name: Validate (no e2e)"));
-        assert!(workflow.contains("needs: [validate-core, validate-coverage]"));
-        assert!(workflow.contains("needs.validate-core.result"));
-        assert!(workflow.contains("needs.validate-coverage.result"));
-        assert!(workflow.contains("needs: [e2e]"));
-        assert!(!workflow.contains("elisp-integration"));
+        let aggregate = workflow.job("validate-no-e2e");
+        assert_eq!(aggregate.name.as_deref(), Some("Validate (no e2e)"));
+        assert_eq!(
+            aggregate.needs,
+            [
+                "validate-host",
+                "validate-hermetic",
+                "validate-test-checks",
+                "validate-coverage",
+                "validate-source-probe",
+            ]
+        );
+        assert_validation_result_checks(aggregate);
+
+        assert_eq!(workflow.job("e2e-gate").needs, ["e2e"]);
+        assert!(!workflow.jobs.contains_key("elisp-integration"));
     }
 
     #[test]
