@@ -19,6 +19,9 @@
 (require 'jaunder-reconcile)
 (require 'jaunder-pull-media)
 
+(define-error 'jaunder-pull-stage-identity-changed
+              "Member response identity changed since inventory" 'error)
+
 (defun jaunder--pull-error (invariant)
   "Signal a pull mapping error naming broken INVARIANT."
   (error "jaunder pull: %s" invariant))
@@ -247,8 +250,9 @@ as `jaunder--atom->org'.  This function performs no network or filesystem I/O."
 
 
 (cl-defstruct (jaunder-pull-result (:constructor jaunder--make-pull-result))
-  "Outcome of one D3-facing server-only pull."
-  status path)
+  "Outcome of one D3-facing server-only pull.
+Successful results retain server-confirmed metadata for reconciliation."
+  status path id slug etag synced-at http-status local-effect)
 
 (defun jaunder--pull-destination (root slug)
   "Return exact direct-child Org destination under ROOT for SLUG."
@@ -311,6 +315,41 @@ creation, which is atomic and fails if another directory entry won the race."
         (when (and temporary (file-exists-p temporary))
           (delete-file temporary))))))
 
+(defun jaunder--pull-stage-member (root member)
+  "Fetch, verify, and localize MEMBER, returning staged replacement data.
+Local Media Copies are materialized before this returns; the Post itself is not
+mutated.  The caller owns the final destination safety check and installation."
+  (unless (jaunder-inventory-member-p member)
+    (jaunder--pull-error "pull input must be a D1 inventory Member"))
+  (let ((response (jaunder--http-request "GET" (jaunder-inventory-member-edit-uri member))))
+    (unless (and (integerp (plist-get response :status))
+                 (<= 200 (plist-get response :status) 299))
+      (jaunder--pull-error "Member GET returned non-2xx status"))
+    (let* ((entry-xml (plist-get response :body))
+           (identity (jaunder--pull-response-identity entry-xml))
+           (instance-id (jaunder--pull-member-instance-id response))
+           (etag (jaunder--response-header response "ETag")))
+      (unless (and (equal (car identity) (jaunder-inventory-member-id member))
+                   (equal (cdr identity) (jaunder-inventory-member-slug member)))
+        (signal 'jaunder-pull-stage-identity-changed
+                (list (list :post-id (car identity) :slug (cdr identity)
+                            :etag etag :http-status (plist-get response :status)
+                            :detail "Member response identity changed since inventory"))))
+      (let* ((captured-at (current-time))
+             (pulled-member
+              (jaunder--parse-pulled-member entry-xml etag captured-at
+                                            (jaunder--current-zone-name)))
+             (plan (jaunder--pull-media-plan
+                    (jaunder-pulled-member-format pulled-member)
+                    (jaunder-pulled-member-body pulled-member)
+                    (jaunder--active-base-url))))
+        ;; Copies are durable safe partial work; the Post remains the final claim.
+        (jaunder--pull-media-materialize root instance-id plan)
+        (list :etag etag :id (car identity) :slug (cdr identity)
+              :synced-at (format-time-string "%Y-%m-%dT%H:%M:%SZ" captured-at t)
+              :bytes (jaunder--render-pulled-member
+                      pulled-member (jaunder--pull-media-apply-plan plan)))))))
+
 (defun jaunder--pull-member (root member)
   "Pull D1 inventory MEMBER into ROOT, returning `jaunder-pull-result'.
 An existing destination blocks before any Member or media I/O.  A complete
@@ -324,34 +363,15 @@ localized Post is installed only after every Local Media Copy verifies."
       (jaunder--call-with-blog
        root
        (lambda ()
-         (let ((response
-                (jaunder--http-request
-                 "GET" (jaunder-inventory-member-edit-uri member))))
-           (unless (and (integerp (plist-get response :status))
-                        (<= 200 (plist-get response :status) 299))
-             (jaunder--pull-error "Member GET returned non-2xx status"))
-           (let* ((entry-xml (plist-get response :body))
-                  (identity (jaunder--pull-response-identity entry-xml))
-                  (instance-id (jaunder--pull-member-instance-id response)))
-             (unless (and (equal (car identity) (jaunder-inventory-member-id member))
-                          (equal (cdr identity) slug))
-               (jaunder--pull-error "Member response identity changed since inventory"))
-             (let* ((captured-at (current-time))
-                    (zone (jaunder--current-zone-name))
-                    (etag (jaunder--response-header response "ETag"))
-                    (pulled-member
-                     (jaunder--parse-pulled-member entry-xml etag captured-at zone))
-                    (plan
-                     (jaunder--pull-media-plan
-                      (jaunder-pulled-member-format pulled-member)
-                      (jaunder-pulled-member-body pulled-member)
-                      (jaunder--active-base-url))))
-               ;; A Post is the final durable claim: verified copies can safely
-               ;; survive a late failure and make the next reconcile retry cheaper.
-               (jaunder--pull-media-materialize root instance-id plan)
-               (jaunder--install-pulled-bytes
-                path
-                (jaunder--render-pulled-member
-                 pulled-member (jaunder--pull-media-apply-plan plan)))))))))))
+         (let* ((staged (jaunder--pull-stage-member root member))
+                (result (jaunder--install-pulled-bytes path (plist-get staged :bytes))))
+           (when (eq (jaunder-pull-result-status result) 'pulled)
+             (setf (jaunder-pull-result-id result) (plist-get staged :id)
+                   (jaunder-pull-result-slug result) (plist-get staged :slug)
+                   (jaunder-pull-result-etag result) (plist-get staged :etag)
+                   (jaunder-pull-result-synced-at result) (plist-get staged :synced-at)
+                   (jaunder-pull-result-http-status result) 200
+                   (jaunder-pull-result-local-effect result) 'created))
+           result))))))
 (provide 'jaunder-pull)
 ;;; jaunder-pull.el ends here

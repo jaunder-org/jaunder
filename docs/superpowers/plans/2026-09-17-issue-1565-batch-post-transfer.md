@@ -89,7 +89,7 @@ Out:
     matched deletion, stale `412`, soft-deletion wording, local-file safety, and
     continuation after an independent failure.
 
-- [ ] **Task 4: Add revalidated selected pull for missing and matched Posts.**
+- [x] **Task 4: Add revalidated selected pull for missing and matched Posts.**
   - Contract: this slice adds the report binding for pull. It previews the
     selected-operation count and requires one confirmation before its first
     mutation. Pull accepts `server-only` and safely `server-ahead` rows, treats

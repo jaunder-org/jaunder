@@ -195,8 +195,13 @@
                                                                            (buffer-string))
                                                                          source-bytes))
                                                           (should (= gets 1))
-                                                          (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
-                                                            (jaunder-reconcile root))
+                                                          (jaunder-reconcile root)
+                                                          (with-current-buffer "*Jaunder Reconcile*"
+                                                            (puthash (format "post:%s"
+                                                                             (jaunder-inventory-member-id first))
+                                                                     t jaunder-reconcile-marks)
+                                                            (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
+                                                              (jaunder-reconcile-pull-selected)))
                                                           (let* ((path (expand-file-name
                                                                         (concat (jaunder-inventory-member-slug first) ".org")
                                                                         root))

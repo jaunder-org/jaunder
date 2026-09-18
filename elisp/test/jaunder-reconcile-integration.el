@@ -123,6 +123,20 @@
               "\nBody.\n"))
     path))
 
+(defun jaunder-reconcile-live--create-pagination-member (title body &optional draft)
+  "Create TITLE/BODY remotely and return its Location Post ID.
+When DRAFT is non-nil, create a draft Member."
+  (let* ((response
+          (jaunder--http-request
+           "POST" (jaunder--collection-url)
+           (jaunder--atom-entry->xml
+            (jaunder--make-entry :title title :draft draft :content-type "text/org" :body body))
+           "application/atom+xml"))
+         (location (jaunder--response-header response "Location")))
+    (should (eq (plist-get response :status) 201))
+    (should (string-match "/\\([0-9]+\\)/?\\'" location))
+    (match-string 1 location)))
+
 (defun jaunder-reconcile-live--member-representation (response)
   "Return RESPONSE's exact title, content type, and native text representation."
   (let* ((fields (jaunder--harvest-response-fields (plist-get response :body)))
@@ -142,6 +156,249 @@
                  (lambda (text) (setq prompt text) t)))
         (funcall command))
       (list :prompt prompt :results jaunder-reconcile-last-batch-results))))
+
+(ert-deftest jaunder-reconcile-live-selected-pull-crosses-pagination-and-isolates-failure ()
+  "Selected pull handles a paginated server-only Post, a server-ahead Post, and failure."
+  (jaunder-test--with-live-server
+   (let* ((root (file-name-as-directory (make-temp-file "jaunder-reconcile-pull-live-" t)))
+          (nested (expand-file-name "staging/" root))
+          (token (file-name-nondirectory (directory-file-name root)))
+          (jaunder-blogs (list (cons root (list :base-url jaunder-test-base-url
+                                                :username jaunder-test-username))))
+          (local (jaunder-reconcile-live--write-local root
+                                                      (concat "matched-" token ".org")
+                                                      (concat "matched-" token)))
+          local-buffer shadow ids)
+     (unwind-protect
+         (jaunder--call-with-blog
+          root
+          (lambda ()
+            ;; Publish once, then update through a nested second working copy so
+            ;; the direct-root original is genuinely server-ahead.
+            (setq local-buffer (find-file-noselect local))
+            (with-current-buffer local-buffer (jaunder-publish) (save-buffer))
+            (setq local (buffer-file-name local-buffer))
+            (make-directory nested)
+            (setq shadow (expand-file-name "remote-editor.org" nested))
+            (copy-file local shadow)
+            (with-current-buffer (find-file-noselect shadow)
+              (goto-char (point-max)) (insert "Remote change.\n")
+              (jaunder-publish) (save-buffer) (set-buffer-modified-p nil))
+            ;; 26 creates force at least two 25-Member Collection pages.
+            (setq ids (mapcar (lambda (index)
+                                (jaunder-reconcile-live--create-pagination-member
+                                 (format "pull-page-%s-%d" token index) "Server-only body."))
+                              (number-sequence 1 26)))
+            (let* ((inventory (jaunder--inventory-for-root root))
+                   (server-id (car (last ids)))
+                   (server-member (cl-find server-id (jaunder-inventory-server-only inventory)
+                                           :key #'jaunder-inventory-member-id :test #'equal))
+                   (matched-id (with-current-buffer local-buffer
+                                 (jaunder--buffer-property "JAUNDER_ID")))
+                   (matched-member (cl-find matched-id (jaunder-inventory-matched inventory)
+                                            :key (lambda (match)
+                                                   (jaunder-inventory-member-id
+                                                    (jaunder-inventory-match-member match)))
+                                            :test #'equal)))
+              (should server-member)
+              (dolist (id ids)
+                (should (cl-find id (jaunder-inventory-server-only inventory)
+                                 :key #'jaunder-inventory-member-id :test #'equal)))
+              ;; An occupied server-only target is an independent first failure;
+              ;; the following selected server-only and matched pulls continue.
+              (with-temp-file (expand-file-name
+                               (concat (jaunder-inventory-member-slug server-member) ".org") root)
+                (insert "occupied"))
+              (let* ((success-id (nth 24 ids))
+                     (outcome (jaunder-reconcile-live--run-selected
+                               root (list (format "post:%s" server-id)
+                                          (format "post:%s" success-id)
+                                          (format "post:%s" matched-id))
+                               #'jaunder-reconcile-pull-selected))
+                     (results (plist-get outcome :results)))
+                (should (string-match-p "Pull 3 selected" (plist-get outcome :prompt)))
+                (should (equal (mapcar #'jaunder-reconcile-result-outcome results)
+                               '(success blocked success)))
+                (should (equal (mapcar #'jaunder-reconcile-result-post-id results)
+                               (list matched-id server-id success-id)))
+                (let ((matched-result (car results))
+                      (server-result (nth 2 results))
+                      (success-member
+                       (cl-find success-id (jaunder-inventory-server-only inventory)
+                                :key #'jaunder-inventory-member-id :test #'equal)))
+                  (should (equal (jaunder-reconcile-result-post-id matched-result) matched-id))
+                  (should (equal (jaunder-reconcile-result-slug matched-result)
+                                 (jaunder-inventory-member-slug
+                                  (jaunder-inventory-match-member matched-member))))
+                  (should (jaunder--strong-etag-p (jaunder-reconcile-result-etag matched-result)))
+                  (should (stringp (jaunder-reconcile-result-synced-at matched-result)))
+                  (should (= (jaunder-reconcile-result-http-status matched-result) 200))
+                  (should (eq (jaunder-reconcile-result-local-effect matched-result) 'replaced))
+                  (should (equal (jaunder-reconcile-result-post-id server-result) success-id))
+                  (should (equal (jaunder-reconcile-result-slug server-result)
+                                 (jaunder-inventory-member-slug success-member)))
+                  (should (jaunder--strong-etag-p (jaunder-reconcile-result-etag server-result)))
+                  (should (stringp (jaunder-reconcile-result-synced-at server-result)))
+                  (should (= (jaunder-reconcile-result-http-status server-result) 200))
+                  (should (eq (jaunder-reconcile-result-local-effect server-result) 'created)))
+                (should (file-exists-p (expand-file-name
+                                        (concat (jaunder-inventory-member-slug
+                                                 (cl-find success-id (jaunder-inventory-server-only inventory)
+                                                          :key #'jaunder-inventory-member-id :test #'equal))
+                                                ".org") root)))
+                (with-current-buffer local-buffer
+                  (should (string-match-p "Remote change" (buffer-string)))
+                  (should-not (buffer-modified-p))))))))
+     (dolist (buffer (list local-buffer (get-file-buffer shadow)))
+       (when (buffer-live-p buffer)
+         (with-current-buffer buffer (set-buffer-modified-p nil))
+         (kill-buffer buffer)))
+     (delete-directory root t))))
+
+(ert-deftest jaunder-reconcile-live-selected-pull-stale-etag-preserves-matched-post ()
+  "A final live ETag race leaves the selected matched file and visiting buffer intact."
+  (jaunder-test--with-live-server
+   (let* ((root (file-name-as-directory (make-temp-file "jaunder-pull-stale-live-" t)))
+          (nested (expand-file-name "remote/" root))
+          (token (file-name-nondirectory (directory-file-name root)))
+          (title (concat "stale-" token))
+          (jaunder-blogs (list (cons root (list :base-url jaunder-test-base-url
+                                                :username jaunder-test-username))))
+          (path (jaunder-reconcile-live--write-local root (concat title ".org") title))
+          local remote)
+     (unwind-protect
+         (jaunder--call-with-blog
+          root
+          (lambda ()
+            (setq local (find-file-noselect path))
+            (with-current-buffer local (jaunder-publish) (save-buffer))
+            (make-directory nested)
+            (setq path (buffer-file-name local)
+                  remote (expand-file-name "remote.org" nested))
+            (copy-file path remote)
+            ;; Establish the reviewed server-ahead state with a separate working copy.
+            (with-current-buffer (find-file-noselect remote)
+              (goto-char (point-max)) (insert "First remote change.\n")
+              (jaunder-publish) (save-buffer) (set-buffer-modified-p nil)
+              (setq remote (buffer-file-name)))
+            (jaunder-reconcile root)
+            (with-current-buffer "*Jaunder Reconcile*"
+              (let* ((id (with-current-buffer local (jaunder--buffer-property "JAUNDER_ID")))
+                     (before (with-temp-buffer (insert-file-contents-literally path) (buffer-string)))
+                     (real-http (symbol-function 'jaunder--http-request))
+                     (member-gets 0)
+                     racing)
+                (puthash (format "post:%s" id) t jaunder-reconcile-marks)
+                ;; Inject at the real final Member HTTP boundary.  Staging has
+                ;; already fetched the Member; this is the second Member GET.
+                (cl-letf (((symbol-function 'jaunder--http-request)
+                           (lambda (method url &rest arguments)
+                             (when (and (not racing) (equal method "GET")
+                                        (equal url (jaunder--member-url id)))
+                               (setq member-gets (1+ member-gets))
+                               (when (= member-gets 2)
+                                 (let ((racing t))
+                                   (with-current-buffer (find-file-noselect remote)
+                                     (goto-char (point-max))
+                                     (insert "Final remote race.\n")
+                                     (jaunder-publish)
+                                     (save-buffer)
+                                     (set-buffer-modified-p nil)))))
+                             (apply real-http method url arguments)))
+                          ((symbol-function 'y-or-n-p) (lambda (_) t)))
+                  (jaunder-reconcile-pull-selected))
+                (let ((result (car jaunder-reconcile-last-batch-results)))
+                  (should (eq (jaunder-reconcile-result-outcome result) 'blocked))
+                  (should (eq (jaunder-reconcile-result-reason result) 'etag-stale))
+                  (should (integerp (jaunder-reconcile-result-http-status result)))
+                  (should (jaunder-reconcile-result-etag result)))
+                (should (equal (with-temp-buffer (insert-file-contents-literally path) (buffer-string))
+                               before))
+                (with-current-buffer local
+                  (should-not (buffer-modified-p))
+                  (should (equal (buffer-file-name) path)))
+                (let ((remote-member (jaunder--http-request "GET" (jaunder--member-url id))))
+                  (should (eq (plist-get remote-member :status) 200))
+                  (should (string-match-p "Final remote race" (plist-get remote-member :body))))))))
+       (dolist (buffer (list local (get-file-buffer remote)))
+         (when (buffer-live-p buffer) (with-current-buffer buffer (set-buffer-modified-p nil))
+               (kill-buffer buffer)))
+       (delete-directory root t)))))
+
+(ert-deftest jaunder-reconcile-live-selected-pull-continues-after-staging-failure ()
+  "A media trust failure retains safe partial Local Media Copies and continues."
+  (jaunder-test--with-live-server
+   (let* ((root (file-name-as-directory (make-temp-file "jaunder-pull-failure-live-" t)))
+          (first-source (expand-file-name "first.png" root))
+          (failed-source (expand-file-name "failed.png" root))
+          (success-source (expand-file-name "success.png" root))
+          (jaunder-blogs (list (cons root (list :base-url jaunder-test-base-url
+                                                :username jaunder-test-username))))
+          failed-id success-id first-url failed-url success-url)
+     (unwind-protect
+         (jaunder--call-with-blog
+          root
+          (lambda ()
+            (with-temp-file first-source (insert "verified partial media"))
+            (with-temp-file failed-source (insert "rejected media"))
+            (with-temp-file success-source (insert "successful media"))
+            (setq first-url (jaunder--upload-media first-source "image/png")
+                  failed-url (jaunder--upload-media failed-source "image/png")
+                  success-url (jaunder--upload-media success-source "image/png"))
+            (should-not (equal first-url failed-url))
+            (should-not (equal failed-url success-url))
+            (should (= (length (jaunder-pull-media-plan-references
+                                (jaunder--pull-media-plan
+                                 "org" (format "[[%s]]\n[[%s]]" first-url failed-url)
+                                 (jaunder--active-base-url))))
+                       2))
+            ;; Collection order is newest first, so create the successful Member
+            ;; first and the Member whose real media response will fail.
+            (setq success-id
+                  (jaunder-inventory-member-id
+                   (jaunder-pull-integration--create-server-only-member
+                    root (format "[[%s]]" success-url)))
+                  failed-id
+                  (jaunder-inventory-member-id
+                   (jaunder-pull-integration--create-server-only-member
+                    root (format "[[%s]]\n[[%s]]" first-url failed-url))))
+            (jaunder-reconcile root)
+            (with-current-buffer "*Jaunder Reconcile*"
+              (let ((real-media-get (symbol-function 'jaunder--pull-media-get))
+                    (media-gets 0)
+                    (failed-response-seen nil))
+                (puthash (format "post:%s" failed-id) t jaunder-reconcile-marks)
+                (puthash (format "post:%s" success-id) t jaunder-reconcile-marks)
+                ;; Stage the actual Member and Media.  Only the actual media
+                ;; response boundary for FAILED-URL is made untrustworthy.
+                (cl-letf (((symbol-function 'jaunder--pull-media-get)
+                           (lambda (url destination)
+                             (let ((response (funcall real-media-get url destination)))
+                               (setq media-gets (1+ media-gets))
+                               (if (equal url failed-url)
+                                   (progn
+                                     (setq failed-response-seen t)
+                                     (plist-put response :status 503))
+                                 response))))
+                          ((symbol-function 'y-or-n-p) (lambda (_) t)))
+                  (jaunder-reconcile-pull-selected))
+                (let ((results jaunder-reconcile-last-batch-results))
+                  (should failed-response-seen)
+                  (should (equal (mapcar #'jaunder-reconcile-result-post-id results)
+                                 (list failed-id success-id)))
+                  (should (equal (mapcar #'jaunder-reconcile-result-outcome results)
+                                 '(failed success)))
+                  (should (eq (jaunder-reconcile-result-reason (car results)) 'pull-failed))
+                  (should (file-exists-p
+                           (expand-file-name
+                            (concat (jaunder-reconcile-result-slug (cadr results)) ".org")
+                            root)))
+                  ;; The later successful item retains its verified Local Media
+                  ;; Copy despite the earlier item's failed staging.
+                  (should (= (length (directory-files-recursively
+                                      (expand-file-name "local-media" root) "."))
+                             1))))))))
+     (delete-directory root t))))
 
 (ert-deftest jaunder-reconcile-live-selected-push-mixed-batch ()
   "Selected push creates, updates, no-ops, blocks, and keeps ordered results."

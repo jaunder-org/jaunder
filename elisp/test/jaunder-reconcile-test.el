@@ -851,13 +851,14 @@
             (should-not (string-match-p "push one" (buffer-string)))))
       (kill-buffer buffer))))
 
-(ert-deftest jaunder-reconcile-report-mode-binds-explicit-push-and-delete-only ()
-  "Task 3 adds separate selected push and destructive remote-delete bindings."
+(ert-deftest jaunder-reconcile-report-mode-binds-explicit-transfer-commands ()
+  "Report mode exposes separate selected push, pull, and remote-delete commands."
   (let (bindings)
     (map-keymap (lambda (_event binding) (push binding bindings))
                 jaunder-reconcile-report-mode-map)
     (should (memq #'jaunder-reconcile-toggle-mark bindings))
     (should (memq #'jaunder-reconcile-push-selected bindings))
+    (should (memq #'jaunder-reconcile-pull-selected bindings))
     (should (memq #'jaunder-reconcile-delete-selected bindings))
     (should-not (memq #'jaunder--pull-member bindings))))
 
@@ -1083,6 +1084,376 @@
         (when (buffer-live-p buffer)
           (with-current-buffer buffer (set-buffer-modified-p nil))
           (kill-buffer buffer)))
+      (delete-directory root t))))
+
+(defun jaunder-reconcile-test--pulled-bytes (id slug etag)
+  "Return minimal pulled Org bytes for ID, SLUG, and strong ETAG."
+  (format (concat "#+PROPERTY: JAUNDER_STATUS draft\n"
+                  "#+PROPERTY: JAUNDER_FORMAT org\n"
+                  "#+PROPERTY: JAUNDER_SLUG %s\n"
+                  "#+PROPERTY: JAUNDER_ID %s\n"
+                  "#+PROPERTY: JAUNDER_SYNCED %s\n"
+                  "#+PROPERTY: JAUNDER_SYNCED_AT 2026-09-17T00:00:00Z\n\nBody\n")
+          slug id etag))
+
+(defun jaunder-reconcile-test--matched-pull-row (path slug &optional state)
+  "Return a reviewed matched pull row for PATH, SLUG, and optional STATE."
+  (let ((id "7"))
+    (jaunder--make-reconcile-row
+     :state (or state 'server-ahead) :key (format "post:%s" id)
+     :local (jaunder-reconcile-test--local path id)
+     :member (jaunder-reconcile-test--member id slug)
+     :local-sha256 (jaunder--reconcile-file-sha256 path) :remote-etag "\"old\"")))
+
+(ert-deftest jaunder-reconcile-pull-state-matrix-returns-complete-task-two-results ()
+  "Pull accepts exactly server-only/server-ahead, no-ops unchanged, and blocks six states."
+  (dolist (state '(server-only server-ahead unchanged local-ahead conflict
+                               unclassifiable orphan local-draft inventory-conflict))
+    (let* ((member (jaunder-reconcile-test--member "7" "remote"))
+           (row (jaunder--make-reconcile-row :state state :key (symbol-name state)
+                                             :member member))
+           (jaunder-reconcile-report (jaunder--make-reconcile-report :root "/tmp"))
+           called)
+      (cl-letf (((symbol-function 'jaunder--pull-member)
+                 (lambda (&rest _) (setq called 'server-only)
+                   (jaunder--make-pull-result
+                    :status 'pulled :id "7" :slug "remote" :etag "\"current\""
+                    :synced-at "2026-09-17T00:00:00Z" :http-status 200
+                    :local-effect 'created)))
+                ((symbol-function 'jaunder--reconcile-pull-server-ahead-row)
+                 (lambda (_) (setq called 'server-ahead)
+                   (list :outcome 'success :post-id "7" :slug "remote"
+                         :etag "\"current\"" :synced-at "2026-09-17T00:00:00Z"
+                         :http-status 200 :local-effect 'replaced))))
+        (let* ((value (jaunder--reconcile-pull-row row))
+               (result (jaunder--reconcile-terminal-result 'pull row value)))
+          (should (eq (jaunder-reconcile-result-outcome result)
+                      (cond ((eq state 'unchanged) 'no-op)
+                            ((memq state '(server-only server-ahead)) 'success)
+                            (t 'blocked))))
+          (should (equal (jaunder-reconcile-result-post-id result) "7"))
+          (should (equal (jaunder-reconcile-result-slug result) "remote"))
+          (should (eq (jaunder-reconcile-result-local-effect result)
+                      (if (eq state 'server-only) 'created
+                        (if (memq state '(server-ahead unchanged))
+                            (if (eq state 'server-ahead) 'replaced 'unchanged)
+                          'unchanged))))
+          (when (memq state '(server-only server-ahead))
+            (should (equal (jaunder-reconcile-result-etag result) "\"current\""))
+            (should (equal (jaunder-reconcile-result-synced-at result)
+                           "2026-09-17T00:00:00Z"))
+            (should (= (jaunder-reconcile-result-http-status result) 200)))
+          (should (eq called (and (memq state '(server-only server-ahead)) state))))))))
+
+(ert-deftest jaunder-reconcile-pull-selected-confirms-the-full-count-once ()
+  "Selected pull previews both operations and prompts exactly once before executing."
+  (let* ((rows (list (jaunder--make-reconcile-row :state 'server-only :key "post:1"
+                                                  :member (jaunder-reconcile-test--member "1" "one"))
+                     (jaunder--make-reconcile-row :state 'unchanged :key "post:2"
+                                                  :member (jaunder-reconcile-test--member "2" "two"))))
+         (buffer (jaunder--render-reconcile-report
+                  (jaunder--make-reconcile-report :root "/tmp" :rows rows)))
+         prompts executed)
+    (unwind-protect
+        (with-current-buffer buffer
+          (dolist (row rows) (puthash (jaunder-reconcile-row-key row) t jaunder-reconcile-marks))
+          (cl-letf (((symbol-function 'y-or-n-p)
+                     (lambda (prompt) (push prompt prompts) t))
+                    ((symbol-function 'jaunder--call-with-blog)
+                     (lambda (_root thunk) (funcall thunk)))
+                    ((symbol-function 'jaunder--reconcile-execute-batch)
+                     (lambda (_buffer selected action _operation)
+                       (setq executed (list selected action)))))
+            (jaunder-reconcile-pull-selected)
+            (should (equal prompts '("Pull 2 selected Post(s)? ")))
+            (should (equal (mapcar #'jaunder-reconcile-row-key (car executed))
+                           '("post:2" "post:1")))
+            (should (eq (cadr executed) 'pull))))
+      (kill-buffer buffer))))
+
+(ert-deftest jaunder-reconcile-pull-stale-etag-blocks-before-local-replacement ()
+  "A changed staged ETag leaves the reviewed matched file untouched."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-pull-stale-" t)))
+         (path (expand-file-name "old.org" root))
+         (before (jaunder-reconcile-test--pulled-bytes "7" "old" "\"old\""))
+         (row (progn (with-temp-file path (insert before))
+                     (jaunder-reconcile-test--matched-pull-row path "old")))
+         (jaunder-reconcile-report (jaunder--make-reconcile-report :root root)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'jaunder--pull-stage-member)
+                   (lambda (&rest _) (list :etag "\"new\"" :id "7" :slug "old"
+                                           :bytes "replacement")))
+                  ((symbol-function 'jaunder--reconcile-pull-unique-match)
+                   (lambda (&rest _) '(:ok t)))
+                  ((symbol-function 'jaunder--reconcile-pull-remote-revalidation)
+                   (lambda (&rest _) '(:ok t :etag "\"old\"" :http-status 200)))
+                  ((symbol-function 'jaunder--reconcile-replace-pulled-file)
+                   (lambda (&rest _) (error "must not replace"))))
+          (let ((result (jaunder--reconcile-pull-server-ahead-row row)))
+            (should (eq (plist-get result :outcome) 'blocked))
+            (should (eq (plist-get result :reason) 'etag-stale))
+            (should (equal (with-temp-buffer (insert-file-contents-literally path) (buffer-string))
+                           before))))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-reconcile-pull-preflight-blocks-digest-id-and-modified-buffer-races ()
+  "Changed local bytes, identity, or a modified visited buffer blocks matched pull."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-pull-race-" t)))
+         (path (expand-file-name "old.org" root))
+         (bytes (jaunder-reconcile-test--pulled-bytes "7" "old" "\"old\""))
+         row buffer
+         (jaunder-reconcile-report (jaunder--make-reconcile-report :root root)))
+    (unwind-protect
+        (progn
+          (with-temp-file path (insert bytes))
+          (setq row (jaunder-reconcile-test--matched-pull-row path "old"))
+          (with-temp-file path (insert "changed"))
+          (should (eq (jaunder--reconcile-pull-preflight row '(:slug "old"))
+                      'local-bytes-changed))
+          (with-temp-file path (insert bytes))
+          (setq row (jaunder-reconcile-test--matched-pull-row path "old"))
+          (setq buffer (find-file-noselect path))
+          (with-current-buffer buffer (insert "edited"))
+          (should (eq (jaunder--reconcile-pull-preflight row '(:slug "old"))
+                      'local-buffer-modified))
+          (with-current-buffer buffer (set-buffer-modified-p nil))
+          (with-temp-file path (insert (jaunder-reconcile-test--pulled-bytes "8" "old" "\"old\"")))
+          (setf (jaunder-reconcile-row-local-sha256 row)
+                (jaunder--reconcile-file-sha256 path))
+          (should (eq (jaunder--reconcile-pull-preflight row '(:slug "old"))
+                      'matched-identity-changed)))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-reconcile-pull-clean-buffer-renames-and-follows-installed-file ()
+  "A displayed clean buffer follows a full matched pull's canonical rename."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-pull-rename-" t)))
+         (path (expand-file-name "old.org" root))
+         (destination (expand-file-name "new.org" root))
+         (old (jaunder-reconcile-test--pulled-bytes "7" "old" "\"old\""))
+         (new (jaunder-reconcile-test--pulled-bytes "7" "new" "\"old\""))
+         (jaunder-reconcile-report (jaunder--make-reconcile-report :root root))
+         row buffer window point window-start)
+    (unwind-protect
+        (progn
+          (with-temp-file path (insert old))
+          (setq row (jaunder-reconcile-test--matched-pull-row path "new")
+                buffer (find-file-noselect path))
+          (save-window-excursion
+            (setq window (display-buffer buffer))
+            (with-selected-window window
+              (goto-char (point-max))
+              (forward-line -1)
+              (setq point (point))
+              (set-window-start window (line-beginning-position) t)
+              (setq window-start (window-start window)))
+            (cl-letf (((symbol-function 'jaunder--pull-stage-member)
+                       (lambda (&rest _) (list :id "7" :slug "new" :etag "\"old\""
+                                               :synced-at "2026-09-17T00:00:00Z" :bytes new)))
+                      ((symbol-function 'jaunder--reconcile-pull-unique-match)
+                       (lambda (&rest _) '(:ok t)))
+                      ((symbol-function 'jaunder--reconcile-pull-remote-revalidation)
+                       (lambda (&rest _) '(:ok t :etag "\"old\"" :http-status 200))))
+              (should (eq (plist-get (jaunder--reconcile-pull-server-ahead-row row) :outcome)
+                          'success)))
+            (should-not (file-exists-p path))
+            (should (equal (buffer-file-name buffer) destination))
+            (with-current-buffer buffer
+              (should (equal (buffer-string) new))
+              (should-not (buffer-modified-p))
+              (should (= (point) point)))
+            (should (= (window-start window) window-start))))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-reconcile-pull-destination-collision-and-between-step-retry-are-safe ()
+  "An occupied canonical path blocks; a failed rename leaves one retryable ID file."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-pull-retry-" t)))
+         (path (expand-file-name "old.org" root))
+         (destination (expand-file-name "new.org" root))
+         (old (jaunder-reconcile-test--pulled-bytes "7" "old" "\"old\""))
+         (new (jaunder-reconcile-test--pulled-bytes "7" "new" "\"old\""))
+         row (jaunder-reconcile-report (jaunder--make-reconcile-report :root root)))
+    (unwind-protect
+        (progn
+          (with-temp-file path (insert old))
+          (setq row (jaunder-reconcile-test--matched-pull-row path "new"))
+          (with-temp-file destination (insert "other"))
+          (should (eq (jaunder--reconcile-pull-preflight row '(:slug "new"))
+                      'pull-destination-occupied))
+          (delete-file destination)
+          (let ((real-rename (symbol-function 'rename-file)) (moves 0))
+            (cl-letf (((symbol-function 'rename-file)
+                       (lambda (from to &optional ok)
+                         (setq moves (1+ moves))
+                         (if (= moves 2) (error "injected rename failure")
+                           (funcall real-rename from to ok))))
+                      ((symbol-function 'jaunder--pull-stage-member)
+                       (lambda (&rest _) (list :etag "\"old\"" :id "7" :slug "new"
+                                               :synced-at "2026-09-17T00:00:00Z" :bytes new)))
+                      ((symbol-function 'jaunder--reconcile-pull-remote-revalidation)
+                       (lambda (&rest _) '(:ok t :etag "\"old\"" :http-status 200)))
+                      ((symbol-function 'jaunder--reconcile-pull-unique-match)
+                       (lambda (&rest _) '(:ok t))))
+              (let ((result (jaunder--reconcile-pull-server-ahead-row row)))
+                (should (eq (plist-get result :outcome) 'failed))
+                (should (eq (plist-get result :reason) 'pull-rename-failed))
+                (should (eq (plist-get result :local-effect) 'replaced-at-old-path))
+                (should (equal (plist-get result :post-id) "7"))
+                (should (equal (plist-get result :slug) "new"))
+                (should (equal (plist-get result :etag) "\"old\""))
+                (should (equal (plist-get result :synced-at) "2026-09-17T00:00:00Z"))
+                (should (= (plist-get result :http-status) 200)))))
+          (should (file-exists-p path))
+          (should-not (file-exists-p destination))
+          (should (equal (jaunder--reconcile-current-local-id row) "7"))
+          (should (= (length (directory-files root t "\\.org\\'")) 1))
+          (setf (jaunder-reconcile-row-local-sha256 row)
+                (jaunder--reconcile-file-sha256 path))
+          (cl-letf (((symbol-function 'jaunder--pull-stage-member)
+                     (lambda (&rest _) (list :etag "\"old\"" :id "7" :slug "new"
+                                             :synced-at "2026-09-17T00:00:00Z" :bytes new)))
+                    ((symbol-function 'jaunder--reconcile-pull-remote-revalidation)
+                     (lambda (&rest _) '(:ok t :etag "\"old\"" :http-status 200)))
+                    ((symbol-function 'jaunder--reconcile-pull-unique-match)
+                     (lambda (&rest _) '(:ok t))))
+            (should (eq (plist-get (jaunder--reconcile-pull-server-ahead-row row) :outcome)
+                        'success)))
+          (should-not (file-exists-p path))
+          (should (file-exists-p destination))
+          (should (= (length (directory-files root t "\\.org\\'")) 1)))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-reconcile-pull-remote-revalidation-precedes-one-final-local-preflight ()
+  "Remote revalidation races on disk, buffer, and destination block before replacement."
+  (dolist (race '(bytes buffer destination))
+    (let* ((root (file-name-as-directory (make-temp-file "jaunder-pull-order-" t)))
+           (path (expand-file-name "old.org" root))
+           (bytes (jaunder-reconcile-test--pulled-bytes "7" "old" "\"old\""))
+           (row nil) calls
+           (jaunder-reconcile-report (jaunder--make-reconcile-report :root root)))
+      (unwind-protect
+          (progn
+            (with-temp-file path (insert bytes))
+            (setq row (jaunder-reconcile-test--matched-pull-row path "new"))
+            (let ((real-preflight (symbol-function 'jaunder--reconcile-pull-preflight)))
+              (cl-letf (((symbol-function 'jaunder--pull-stage-member)
+                         (lambda (&rest _) (push 'stage calls)
+                           (list :etag "\"old\"" :id "7" :slug "new"
+                                 :synced-at "2026-09-17T00:00:00Z" :bytes bytes)))
+                        ((symbol-function 'jaunder--reconcile-pull-remote-revalidation)
+                         (lambda (&rest _)
+                           (push 'remote-revalidation calls)
+                           (pcase race
+                             ('bytes (with-temp-file path (insert "raced")))
+                             ('buffer (with-current-buffer (find-file-noselect path) (insert "raced")))
+                             ('destination (with-temp-file (expand-file-name "new.org" root)
+                                             (insert "raced"))))
+                           '(:ok t :etag "\"old\"" :http-status 200)))
+                        ((symbol-function 'jaunder--reconcile-pull-unique-match)
+                         (lambda (&rest _) (push 'unique-inventory calls) '(:ok t)))
+                        ((symbol-function 'jaunder--reconcile-pull-preflight)
+                         (lambda (&rest arguments)
+                           (push 'final-preflight calls)
+                           (apply real-preflight arguments)))
+                        ((symbol-function 'jaunder--reconcile-replace-pulled-file)
+                         (lambda (&rest _) (error "must not replace"))))
+                (let ((result (jaunder--reconcile-pull-server-ahead-row row)))
+                  (should (eq (plist-get result :outcome) 'blocked))
+                  (should (equal (nreverse calls)
+                                 '(stage unique-inventory remote-revalidation final-preflight))))))
+            (let ((buffer (get-file-buffer path)))
+              (when (buffer-live-p buffer) (with-current-buffer buffer (set-buffer-modified-p nil))
+                    (kill-buffer buffer)))
+            (delete-directory root t))))))
+
+(ert-deftest jaunder-reconcile-pull-remote-revalidation-reports-distinct-evidence ()
+  "ETag mismatch, malformed ETag, HTTP, and transport failures stay actionable."
+  (let ((row (jaunder--make-reconcile-row :member (jaunder-reconcile-test--member "7" "post"))))
+    (dolist (fixture '(((:status 200 :headers (("etag" . "\"new\""))) etag-stale)
+                       ((:status 200 :headers nil) pull-revalidation-etag-invalid)
+                       ((:status 503 :headers (("etag" . "\"old\""))) pull-revalidation-http-error)))
+      (cl-letf (((symbol-function 'jaunder--http-request) (lambda (&rest _) (car fixture))))
+        (should (eq (plist-get (jaunder--reconcile-pull-remote-revalidation row "\"old\"") :reason)
+                    (cadr fixture)))))
+    (cl-letf (((symbol-function 'jaunder--http-request) (lambda (&rest _) (error "offline"))))
+      (let ((result (jaunder--reconcile-pull-remote-revalidation row "\"old\"")))
+        (should (eq (plist-get result :reason) 'pull-revalidation-transport-error))
+        (should (string-match-p "offline" (plist-get result :detail)))))))
+
+(ert-deftest jaunder-reconcile-pull-fresh-duplicate-identities-return-blocked-evidence ()
+  "Fresh duplicate local and remote IDs are actionable blocked pull results."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-pull-duplicate-" t)))
+         (path (expand-file-name "old.org" root))
+         (bytes (jaunder-reconcile-test--pulled-bytes "7" "old" "\"old\""))
+         (jaunder-reconcile-report (jaunder--make-reconcile-report :root root))
+         row)
+    (unwind-protect
+        (progn
+          (with-temp-file path (insert bytes))
+          (setq row (jaunder-reconcile-test--matched-pull-row path "old"))
+          (dolist (fixture
+                   (list
+                    (cons 'duplicate-local-id
+                          (jaunder--join-inventory
+                           (list (jaunder-reconcile-test--local path "7")
+                                 (jaunder-reconcile-test--local (expand-file-name "copy.org" root) "7"))
+                           (list (jaunder-reconcile-test--member "7" "old"))))
+                    (cons 'duplicate-remote-id 'remote-error)))
+            (cl-letf (((symbol-function 'jaunder--pull-stage-member)
+                       (lambda (&rest _) (list :id "7" :slug "old" :etag "\"old\""
+                                               :synced-at "2026-09-17T00:00:00Z" :bytes bytes)))
+                      ((symbol-function 'jaunder--inventory-for-root)
+                       (lambda (&rest _)
+                         (if (eq (cdr fixture) 'remote-error)
+                             (signal 'jaunder-inventory-duplicate-remote-id '("7"))
+                           (cdr fixture)))))
+              (let ((result (jaunder--reconcile-pull-server-ahead-row row)))
+                (should (eq (plist-get result :outcome) 'blocked))
+                (should (eq (plist-get result :reason) (car fixture)))
+                (should (stringp (plist-get result :detail)))))))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-reconcile-pull-staged-identity-drift-is-structured-blocked ()
+  "A real D2 slug drift retains current Member evidence without local mutation."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-pull-drift-" t)))
+         (path (expand-file-name "old.org" root))
+         (before (jaunder-reconcile-test--pulled-bytes "7" "old" "\"old\""))
+         (entry (concat "<entry xmlns=\"http://www.w3.org/2005/Atom\""
+                        " xmlns:app=\"http://www.w3.org/2007/app\""
+                        " xmlns:j=\"https://jaunder.org/ns/atompub\">"
+                        "<title>Renamed</title>"
+                        "<link rel=\"edit\" href=\"https://example.test/atompub/alice/posts/7\"/>"
+                        "<j:slug>renamed</j:slug><content type=\"text/org\">Body</content>"
+                        "<app:control><app:draft>yes</app:draft></app:control></entry>"))
+         (jaunder--active-blog '(:base-url "https://example.test" :username "alice"))
+         (jaunder-reconcile-report (jaunder--make-reconcile-report :root root))
+         row)
+    (unwind-protect
+        (progn
+          (with-temp-file path (insert before))
+          (setq row (jaunder-reconcile-test--matched-pull-row path "old"))
+          (cl-letf (((symbol-function 'jaunder--http-request)
+                     (lambda (method url &rest _)
+                       (should (equal method "GET"))
+                       (should (equal url "https://example.test/atompub/alice/posts/7"))
+                       (list :status 200
+                             :headers '(("etag" . "\"current\"")
+                                        ("x-jaunder-instance" .
+                                         "12345678-1234-1234-1234-123456789abc"))
+                             :body entry))))
+            (let ((result (jaunder--reconcile-pull-server-ahead-row row)))
+              (should (eq (plist-get result :outcome) 'blocked))
+              (should (eq (plist-get result :reason) 'staged-identity-changed))
+              (should (equal (plist-get result :post-id) "7"))
+              (should (equal (plist-get result :slug) "renamed"))
+              (should (equal (plist-get result :etag) "\"current\""))
+              (should (= (plist-get result :http-status) 200))
+              (should (equal (plist-get result :detail)
+                             "Member response identity changed since inventory"))))
+          (should (equal (with-temp-buffer (insert-file-contents-literally path) (buffer-string))
+                         before))
+          (should-not (file-exists-p (expand-file-name "renamed.org" root))))
       (delete-directory root t))))
 
 (provide 'jaunder-reconcile-test)

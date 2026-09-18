@@ -18,6 +18,17 @@
 (require 'jaunder-datetime)
 (require 'jaunder-publish)
 
+(declare-function jaunder--pull-destination "jaunder-pull")
+(declare-function jaunder--pull-destination-exists-p "jaunder-pull")
+(declare-function jaunder--pull-member "jaunder-pull")
+(declare-function jaunder--pull-stage-member "jaunder-pull")
+(declare-function jaunder-pull-result-status "jaunder-pull")
+(declare-function jaunder-pull-result-id "jaunder-pull")
+(declare-function jaunder-pull-result-slug "jaunder-pull")
+(declare-function jaunder-pull-result-etag "jaunder-pull")
+(declare-function jaunder-pull-result-synced-at "jaunder-pull")
+(declare-function jaunder-pull-result-http-status "jaunder-pull")
+(declare-function jaunder-pull-result-local-effect "jaunder-pull")
 
 (cl-defstruct (jaunder-inventory-member
                (:constructor jaunder--make-inventory-member))
@@ -44,6 +55,9 @@
   "The exhaustive partition of one root and one Collection."
   local-drafts server-only matched orphans conflicts)
 
+
+(define-error 'jaunder-inventory-duplicate-remote-id
+              "Collection contains duplicate Post ID" 'error)
 
 (defun jaunder--inventory-error (invariant)
   "Signal an inventory error naming broken INVARIANT without response details."
@@ -144,7 +158,8 @@ returned."
                      (plist-get response :body) collection-url)))
           (dolist (member (plist-get page :members))
             (when (gethash (jaunder-inventory-member-id member) ids)
-              (jaunder--inventory-error "Collection contains duplicate Post ID"))
+              (signal 'jaunder-inventory-duplicate-remote-id
+                      (list (jaunder-inventory-member-id member))))
             (puthash (jaunder-inventory-member-id member) t ids))
           (setq members (nconc members (plist-get page :members))
                 url (plist-get page :next)))))
@@ -382,7 +397,7 @@ returned."
 (cl-defstruct (jaunder-reconcile-row
                (:constructor jaunder--make-reconcile-row))
   "One immutable classification in a reconciliation report."
-  key state local member reason detail conflict)
+  key state local member reason detail conflict local-sha256 remote-etag)
 
 (cl-defstruct (jaunder-reconcile-report
                (:constructor jaunder--make-reconcile-report))
@@ -409,6 +424,7 @@ returned."
   (setq-local truncate-lines t)
   (define-key jaunder-reconcile-report-mode-map "m" #'jaunder-reconcile-toggle-mark)
   (define-key jaunder-reconcile-report-mode-map "p" #'jaunder-reconcile-push-selected)
+  (define-key jaunder-reconcile-report-mode-map "g" #'jaunder-reconcile-pull-selected)
   (define-key jaunder-reconcile-report-mode-map "D" #'jaunder-reconcile-delete-selected))
 
 (defun jaunder--reconcile-conflict-key (conflict)
@@ -519,6 +535,15 @@ An active region selects only its rows, including when it touches none."
            (time-add value 0)
          (error nil))))
 
+(defun jaunder--reconcile-file-sha256 (path)
+  "Return SHA-256 of PATH's literal bytes, or nil when it cannot be read."
+  (condition-case nil
+      (with-temp-buffer
+        (set-buffer-multibyte nil)
+        (insert-file-contents-literally path)
+        (secure-hash 'sha256 (current-buffer)))
+    (error nil)))
+
 (defun jaunder--classify-match (match outcome stored-etag synced-at mtime &optional persisted-local-ahead)
   "Classify MATCH using Member OUTCOME and its saved local synchronization state.
 OUTCOME is either `(:error ERROR)' for a transport failure or `(:response
@@ -554,11 +579,25 @@ stable first failure reason."
                                 (time-less-p (time-add synced 2) mtime))))
         (jaunder--make-reconcile-row
          :state (cond ((and server-changed local-changed) 'conflict)
-                      (server-changed 'server-ahead)
+                      ((or server-changed
+                           (not (equal
+                                 (jaunder-inventory-local-path
+                                  (jaunder-inventory-match-local match))
+                                 (expand-file-name
+                                  (concat (jaunder-inventory-member-slug
+                                           (jaunder-inventory-match-member match)) ".org")
+                                  (file-name-directory
+                                   (jaunder-inventory-local-path
+                                    (jaunder-inventory-match-local match)))))))
+                       'server-ahead)
                       (local-changed 'local-ahead)
                       (t 'unchanged))
          :local (jaunder-inventory-match-local match)
-         :member (jaunder-inventory-match-member match))))))
+         :member (jaunder-inventory-match-member match)
+         :local-sha256
+         (jaunder--reconcile-file-sha256
+          (jaunder-inventory-local-path (jaunder-inventory-match-local match)))
+         :remote-etag current)))))
 
 (defun jaunder--reconcile-local-markers (local)
   "Return LOCAL's saved ETag, sync instant, and mtime without signalling.
@@ -918,6 +957,223 @@ Return a plist suitable for a terminal result; no DELETE is sent here."
                          :local-effect 'unchanged :reason 'delete-transport-error
                          :detail (error-message-string err)))))))))
 
+(defun jaunder--reconcile-pull-destination (_row slug)
+  "Return the report root's canonical direct-root destination for server SLUG."
+  (jaunder--pull-destination
+   (jaunder-reconcile-report-root jaunder-reconcile-report) slug))
+
+(defun jaunder--reconcile-pull-preflight (row staged)
+  "Return a blocking reason unless ROW remains safe for STAGED replacement."
+  (let* ((local (jaunder-reconcile-row-local row))
+         (path (and local (jaunder-inventory-local-path local)))
+         (id (jaunder--reconcile-row-post-id row))
+         (expected-hash (jaunder-reconcile-row-local-sha256 row))
+         (destination (jaunder--reconcile-pull-destination row (plist-get staged :slug)))
+         (buffer (and path (get-file-buffer path))))
+    (cond
+     ((not (and path (file-regular-p path))) 'local-file-missing)
+     ((not (and expected-hash
+                (equal expected-hash (jaunder--reconcile-file-sha256 path))))
+      'local-bytes-changed)
+     ((and (buffer-live-p buffer) (buffer-modified-p buffer)) 'local-buffer-modified)
+     ((and (buffer-live-p buffer)
+           (not (equal (jaunder--canonical-post-id
+                        (with-current-buffer buffer
+                          (jaunder--buffer-property "JAUNDER_ID"))) id)))
+      'matched-identity-changed)
+     ((not (equal (jaunder--reconcile-current-local-id row) id))
+      'matched-identity-changed)
+     ((and (not (equal path destination))
+           (jaunder--pull-destination-exists-p destination))
+      'pull-destination-occupied))))
+
+(defun jaunder--reconcile-pull-remote-revalidation (row etag)
+  "Return structured current-ETag evidence for ROW against reviewed ETAG."
+  (condition-case err
+      (let* ((response (jaunder--http-request
+                        "GET" (jaunder-inventory-member-edit-uri
+                               (jaunder-reconcile-row-member row))))
+             (status (plist-get response :status))
+             (current (jaunder--response-header response "ETag")))
+        (cond ((not (and (integerp status) (<= 200 status 299)))
+               (list :reason 'pull-revalidation-http-error :http-status status :etag current))
+              ((not (jaunder--strong-etag-p current))
+               (list :reason 'pull-revalidation-etag-invalid :http-status status :etag current))
+              ((not (equal etag current))
+               (list :reason 'etag-stale :http-status status :etag current))
+              (t (list :ok t :http-status status :etag current))))
+    (error (list :reason 'pull-revalidation-transport-error
+                 :detail (error-message-string err)))))
+
+(defun jaunder--reconcile-pull-unique-match (row)
+  "Return structured fresh-inventory evidence that ROW remains uniquely matched.
+A duplicate local or remote Post ID is an actionable blocked result, rather
+than an exception flattened into a generic pull failure."
+  (let* ((root (jaunder-reconcile-report-root jaunder-reconcile-report))
+         (id (jaunder--reconcile-row-post-id row))
+         (path (jaunder-inventory-local-path (jaunder-reconcile-row-local row))))
+    (condition-case err
+        (let* ((inventory (jaunder--inventory-for-root root))
+               (duplicate-local
+                (cl-find-if
+                 (lambda (conflict)
+                   (and (memq 'duplicate-local-id
+                              (jaunder-inventory-conflict-kinds conflict))
+                        (cl-some (lambda (local)
+                                   (and (equal (jaunder-inventory-local-id local) id)
+                                        (equal (jaunder-inventory-local-path local) path)))
+                                 (jaunder-inventory-conflict-locals conflict))))
+                 (jaunder-inventory-conflicts inventory)))
+               (matches (cl-remove-if-not
+                         (lambda (match)
+                           (and (equal (jaunder-inventory-local-path
+                                        (jaunder-inventory-match-local match)) path)
+                                (equal (jaunder-inventory-local-id
+                                        (jaunder-inventory-match-local match)) id)
+                                (equal (jaunder-inventory-member-id
+                                        (jaunder-inventory-match-member match)) id)))
+                         (jaunder-inventory-matched inventory)))
+               (members (cl-remove-if-not
+                         (lambda (member)
+                           (equal (jaunder-inventory-member-id member) id))
+                         (append (jaunder-inventory-server-only inventory)
+                                 (mapcar #'jaunder-inventory-match-member
+                                         (jaunder-inventory-matched inventory))))))
+          (cond (duplicate-local
+                 (list :reason 'duplicate-local-id
+                       :detail (format "fresh inventory has duplicate local Post ID %s" id)))
+                ((and (= (length matches) 1) (= (length members) 1))
+                 (list :ok t))
+                (t (list :reason 'matched-identity-changed
+                         :detail "fresh inventory no longer has the reviewed unique match"))))
+      (jaunder-inventory-duplicate-remote-id
+       (list :reason 'duplicate-remote-id
+             :detail (format "fresh inventory has duplicate remote Post ID %s" id)))
+      (error (list :reason 'fresh-inventory-failed
+                   :detail (error-message-string err))))))
+
+(defun jaunder--reconcile-replace-pulled-file (path destination bytes)
+  "Atomically replace PATH then rename to DESTINATION, reporting committed state."
+  (let ((temporary nil))
+    (unwind-protect
+        (progn
+          (setq temporary (make-temp-file
+                           (expand-file-name ".jaunder-pull-" (file-name-directory path))))
+          (let ((coding-system-for-write 'utf-8-unix))
+            (write-region bytes nil temporary nil 'silent))
+          (rename-file temporary path t)
+          (setq temporary nil)
+          (let ((buffer (get-file-buffer path)))
+            (when (buffer-live-p buffer)
+              (with-current-buffer buffer (revert-buffer t t) (set-buffer-modified-p nil))))
+          (if (equal path destination)
+              (list :path path :local-effect 'replaced)
+            (condition-case err
+                (progn
+                  (rename-file path destination nil)
+                  (let ((buffer (get-file-buffer path)))
+                    (when (buffer-live-p buffer)
+                      (with-current-buffer buffer
+                        (set-visited-file-name destination t t)
+                        (set-buffer-modified-p nil))))
+                  (list :path destination :local-effect 'renamed))
+              (error (list :path path :local-effect 'replaced-at-old-path
+                           :detail (error-message-string err))))))
+      (when (and temporary (file-exists-p temporary)) (delete-file temporary)))))
+
+(defun jaunder--reconcile-pull-install-staged (row staged remote path)
+  "Install STAGED ROW bytes after successful REMOTE revalidation at PATH."
+  (let ((preflight (jaunder--reconcile-pull-preflight row staged)))
+    (if preflight
+        (jaunder--reconcile-blocked row preflight)
+      (let* ((destination (jaunder--reconcile-pull-destination row (plist-get staged :slug)))
+             (installed (jaunder--reconcile-replace-pulled-file
+                         path destination (plist-get staged :bytes)))
+             (committed (eq (plist-get installed :local-effect) 'replaced-at-old-path)))
+        (append (list :outcome (if committed 'failed 'success)
+                      :post-id (plist-get staged :id) :slug (plist-get staged :slug)
+                      :etag (plist-get staged :etag) :synced-at (plist-get staged :synced-at)
+                      :http-status (plist-get remote :http-status)
+                      :local-effect (plist-get installed :local-effect))
+                (when committed
+                  (list :reason 'pull-rename-failed :detail (plist-get installed :detail))))))))
+
+(defun jaunder--reconcile-pull-server-ahead-row (row)
+  "Stage, inventory, and revalidate ROW before one final local preflight.
+The order is Member and Media staging, fresh unique-match inventory, final
+remote strong-ETag revalidation, one local preflight, then replacement."
+  (let* ((reviewed-etag (jaunder-reconcile-row-remote-etag row))
+         (member (jaunder-reconcile-row-member row))
+         (path (jaunder-inventory-local-path (jaunder-reconcile-row-local row))))
+    (if (not (jaunder--strong-etag-p reviewed-etag))
+        (jaunder--reconcile-blocked row 'reviewed-etag-invalid)
+      (condition-case err
+          (let* ((staged (jaunder--pull-stage-member
+                          (jaunder-reconcile-report-root jaunder-reconcile-report) member))
+                 (inventory (jaunder--reconcile-pull-unique-match row)))
+            (if (not (plist-get inventory :ok))
+                (jaunder--reconcile-blocked row (plist-get inventory :reason)
+                                            (plist-get inventory :detail))
+              (let ((remote (jaunder--reconcile-pull-remote-revalidation row reviewed-etag)))
+                (cond
+                 ((not (plist-get remote :ok))
+                  (append (jaunder--reconcile-blocked row (plist-get remote :reason)
+                                                      (plist-get remote :detail))
+                          (list :etag (plist-get remote :etag)
+                                :http-status (plist-get remote :http-status))))
+                 ((not (equal reviewed-etag (plist-get staged :etag)))
+                  (append (jaunder--reconcile-blocked row 'etag-stale)
+                          (list :etag (plist-get remote :etag)
+                                :http-status (plist-get remote :http-status))))
+                 (t (jaunder--reconcile-pull-install-staged row staged remote path))))))
+        (jaunder-pull-stage-identity-changed
+         (let ((evidence (car (cdr err))))
+           (list :outcome 'blocked
+                 :post-id (or (plist-get evidence :post-id)
+                              (jaunder--reconcile-row-post-id row))
+                 :slug (or (plist-get evidence :slug)
+                           (jaunder--reconcile-row-slug row))
+                 :etag (plist-get evidence :etag)
+                 :http-status (plist-get evidence :http-status)
+                 :local-effect 'unchanged :reason 'staged-identity-changed
+                 :detail (plist-get evidence :detail))))
+        (error (list :outcome 'failed :post-id (jaunder--reconcile-row-post-id row)
+                     :slug (jaunder--reconcile-row-slug row) :etag reviewed-etag
+                     :local-effect 'unchanged :reason 'pull-failed
+                     :detail (error-message-string err)))))))
+
+(defun jaunder--reconcile-pull-row (row)
+  "Pull one explicitly selected ROW under the server-only and matched contracts."
+  (pcase (jaunder-reconcile-row-state row)
+    ('unchanged (list :outcome 'no-op :post-id (jaunder--reconcile-row-post-id row)
+                      :slug (jaunder--reconcile-row-slug row) :local-effect 'unchanged
+                      :reason 'unchanged))
+    ('server-only
+     (condition-case err
+         (let ((result (jaunder--pull-member
+                        (jaunder-reconcile-report-root jaunder-reconcile-report)
+                        (jaunder-reconcile-row-member row))))
+           (list :outcome (if (eq (jaunder-pull-result-status result) 'pulled)
+                              'success 'blocked)
+                 :post-id (or (jaunder-pull-result-id result)
+                              (jaunder--reconcile-row-post-id row))
+                 :slug (or (jaunder-pull-result-slug result)
+                           (jaunder--reconcile-row-slug row))
+                 :etag (jaunder-pull-result-etag result)
+                 :synced-at (jaunder-pull-result-synced-at result)
+                 :http-status (jaunder-pull-result-http-status result)
+                 :local-effect (or (jaunder-pull-result-local-effect result)
+                                   (if (eq (jaunder-pull-result-status result) 'pulled)
+                                       'created 'unchanged))
+                 :reason (unless (eq (jaunder-pull-result-status result) 'pulled)
+                           'pull-destination-occupied)))
+       (error (list :outcome 'failed :post-id (jaunder--reconcile-row-post-id row)
+                    :slug (jaunder--reconcile-row-slug row) :local-effect 'unchanged
+                    :reason 'pull-failed :detail (error-message-string err)))))
+    ('server-ahead (jaunder--reconcile-pull-server-ahead-row row))
+    (_ (jaunder--reconcile-blocked row 'pull-ineligible
+                                   (jaunder-reconcile-row-state row)))))
+
 (defun jaunder--reconcile-confirm (prompt count &optional reviewed-etags)
   "Ask once with PROMPT, selected operation COUNT, and REVIEWED-ETAGS."
   (y-or-n-p (concat (format prompt count) reviewed-etags)))
@@ -931,6 +1187,19 @@ Return a plist suitable for a terminal result; no DELETE is sent here."
     (when (jaunder--reconcile-confirm "Push %d selected Post(s)? " (length rows))
       (jaunder--reconcile-execute-batch buffer rows 'push
                                         #'jaunder--reconcile-push-row))))
+
+(defun jaunder-reconcile-pull-selected ()
+  "Explicitly pull selected safe rows after one preview confirmation."
+  (interactive)
+  (let ((rows (jaunder-reconcile-selected-rows))
+        (buffer (current-buffer)))
+    (unless rows (user-error "No reconciliation rows selected"))
+    (when (jaunder--reconcile-confirm "Pull %d selected Post(s)? " (length rows))
+      (jaunder--call-with-blog
+       (jaunder-reconcile-report-root jaunder-reconcile-report)
+       (lambda ()
+         (jaunder--reconcile-execute-batch buffer rows 'pull
+                                           #'jaunder--reconcile-pull-row))))))
 
 (defun jaunder-reconcile-delete-selected ()
   "Explicitly soft-delete selected remote Posts after reviewing fresh ETags."
