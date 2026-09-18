@@ -69,7 +69,7 @@ Out:
     operation, retained successes, terminal-result cardinality, and continuation
     after an injected independent failure.
 
-- [ ] **Task 3: Add explicit selected push and remote-delete operations.**
+- [x] **Task 3: Add explicit selected push and remote-delete operations.**
   - Contract: this slice adds the report bindings for push and delete. Each
     command previews its selected-operation count and requires one confirmation
     before its first mutation; delete uses distinct destructive wording and is

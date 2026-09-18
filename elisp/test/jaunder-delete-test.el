@@ -141,5 +141,48 @@
                                                 (should (equal err '(error "offline")))))
                                             (jaunder-delete-test--assert-post-preserved path buffer contents))))
 
+(ert-deftest jaunder-delete-post-rechecks-confirmation-time-identity-before-delete ()
+  "A clean identity change during confirmation sends no DELETE."
+  (let ((contents "#+PROPERTY: JAUNDER_ID 7\n#+PROPERTY: JAUNDER_SYNCED \"etag\"\n\nBody\n")
+        methods)
+    (jaunder-delete-test--with-visited-post
+     contents
+     (cl-letf (((symbol-function 'y-or-n-p)
+                (lambda (_)
+                  (jaunder--set-property "JAUNDER_ID" "8")
+                  (save-buffer)
+                  t))
+               ((symbol-function 'jaunder--http-request)
+                (lambda (method &rest _)
+                  (push method methods)
+                  (error "unexpected remote mutation: %s" method))))
+       (let ((err (should-error (jaunder-delete-post))))
+         (should (equal (error-message-string err)
+                        "jaunder: Post identity changed before delete")))
+       (should-not methods)
+       (should (file-exists-p path))))))
+
+(ert-deftest jaunder-delete-post-preserves-local-post-if-buffer-changes-during-delete ()
+  "A 204 cannot erase a buffer edited while the DELETE was in flight."
+  (let ((contents "#+PROPERTY: JAUNDER_ID 7\n#+PROPERTY: JAUNDER_SYNCED \"etag\"\n\nBody\n"))
+    (jaunder-delete-test--with-visited-post
+     contents
+     (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
+               ((symbol-function 'jaunder--http-request)
+                (lambda (&rest _)
+                  (insert "Edited while deleting.\n")
+                  '(:status 204))))
+       (let ((err (should-error (jaunder-delete-post))))
+         (should (equal (error-message-string err)
+                        "jaunder: remote delete succeeded but local buffer changed")))
+       (should (file-exists-p path))
+       (should (buffer-live-p buffer))
+       (should (buffer-modified-p buffer))
+       (should (string-match-p "Edited while deleting" (buffer-string)))
+       (should (equal (with-temp-buffer
+                        (insert-file-contents path)
+                        (buffer-string))
+                      contents))))))
+
 (provide 'jaunder-delete-test)
 ;;; jaunder-delete-test.el ends here

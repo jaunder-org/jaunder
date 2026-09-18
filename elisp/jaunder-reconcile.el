@@ -16,6 +16,7 @@
 (require 'jaunder-org)
 (require 'jaunder-transport)
 (require 'jaunder-datetime)
+(require 'jaunder-publish)
 
 
 (cl-defstruct (jaunder-inventory-member
@@ -406,7 +407,9 @@ returned."
 (define-derived-mode jaunder-reconcile-report-mode special-mode "Jaunder-Reconcile"
   "Major mode for selecting rows in a Jaunder reconciliation report."
   (setq-local truncate-lines t)
-  (define-key jaunder-reconcile-report-mode-map "m" #'jaunder-reconcile-toggle-mark))
+  (define-key jaunder-reconcile-report-mode-map "m" #'jaunder-reconcile-toggle-mark)
+  (define-key jaunder-reconcile-report-mode-map "p" #'jaunder-reconcile-push-selected)
+  (define-key jaunder-reconcile-report-mode-map "D" #'jaunder-reconcile-delete-selected))
 
 (defun jaunder--reconcile-conflict-key (conflict)
   "Return a deterministic identity for inventory CONFLICT."
@@ -769,6 +772,202 @@ row and returns a result plist; its independent errors become failed results."
     (when cancelled (setq quit-flag nil))
     (jaunder--reconcile-refresh-batch-buffer buffer)
     (if cancelled 'cancelled 'completed)))
+
+(defun jaunder--reconcile-row-post-id (row)
+  "Return ROW's remote Post ID, when it has an unambiguous Member."
+  (let ((member (jaunder-reconcile-row-member row)))
+    (and member (jaunder-inventory-member-id member))))
+
+(defun jaunder--reconcile-row-slug (row)
+  "Return ROW's reviewed server slug, when it has one."
+  (let ((member (jaunder-reconcile-row-member row)))
+    (and member (jaunder-inventory-member-slug member))))
+
+(defun jaunder--reconcile-blocked (row reason &optional detail)
+  "Return a complete blocked operation value for ROW naming REASON and DETAIL."
+  (list :outcome 'blocked
+        :post-id (jaunder--reconcile-row-post-id row)
+        :slug (jaunder--reconcile-row-slug row)
+        :local-effect 'unchanged :reason reason :detail detail))
+
+(defun jaunder--reconcile-current-local-id (row)
+  "Re-read ROW's local file identity without trusting its report snapshot."
+  (let ((local (jaunder-reconcile-row-local row)))
+    (and local (file-regular-p (jaunder-inventory-local-path local))
+         (condition-case nil
+             (jaunder--canonical-post-id
+              (jaunder--read-local-id (jaunder-inventory-local-path local)))
+           (error nil)))))
+
+(defun jaunder--reconcile-local-mutation-safety-reason (row)
+  "Return a stale or modified local safety reason immediately before mutation."
+  (let* ((local (jaunder-reconcile-row-local row))
+         (path (and local (jaunder-inventory-local-path local)))
+         (expected (if (eq (jaunder-reconcile-row-state row) 'local-draft)
+                       nil (jaunder--reconcile-row-post-id row))))
+    (when local
+      (with-current-buffer (find-file-noselect path)
+        (cond
+         ((buffer-modified-p) 'local-buffer-modified)
+         ((not (equal (jaunder--canonical-post-id
+                       (jaunder--buffer-property "JAUNDER_ID")) expected))
+          (if expected 'matched-identity-changed 'draft-identity-changed))
+         ((not (equal (jaunder--reconcile-current-local-id row) expected))
+          (if expected 'matched-identity-changed 'draft-identity-changed)))))))
+
+(defun jaunder--reconcile-push-row (row)
+  "Push an eligible ROW through the durable ordinary publish path."
+  (pcase (jaunder-reconcile-row-state row)
+    ('unchanged
+     (list :outcome 'no-op :post-id (jaunder--reconcile-row-post-id row)
+           :slug (jaunder--reconcile-row-slug row) :local-effect 'unchanged
+           :reason 'unchanged))
+    ((or 'local-draft 'local-ahead)
+     (let* ((local (jaunder-reconcile-row-local row))
+            (path (and local (jaunder-inventory-local-path local)))
+            (identity-reason (jaunder--reconcile-local-mutation-safety-reason row)))
+       (cond
+        ((not (and path (file-regular-p path)))
+         (jaunder--reconcile-blocked row 'local-file-missing))
+        (identity-reason (jaunder--reconcile-blocked row identity-reason))
+        (t
+         (with-current-buffer (find-file-noselect path)
+           (let ((published (jaunder-publish)))
+             (list :outcome 'success
+                   :post-id (jaunder--buffer-property "JAUNDER_ID")
+                   :slug (jaunder--buffer-property "JAUNDER_SLUG")
+                   :etag (jaunder--buffer-property "JAUNDER_SYNCED")
+                   :synced-at (jaunder--buffer-property "JAUNDER_SYNCED_AT")
+                   :http-status (plist-get published :http-status)
+                   :local-effect (if (eq (jaunder-reconcile-row-state row) 'local-draft)
+                                     'created 'updated))))))))
+    (_ (jaunder--reconcile-blocked row 'push-ineligible
+                                   (jaunder-reconcile-row-state row)))))
+
+(defun jaunder--reconcile-delete-etag (row)
+  "Fetch ROW's current strong ETag for explicit remote deletion.
+Return a plist suitable for a terminal result; no DELETE is sent here."
+  (let* ((member (jaunder-reconcile-row-member row))
+         (id (jaunder--reconcile-row-post-id row))
+         (slug (jaunder--reconcile-row-slug row)))
+    (condition-case err
+        (let* ((response (jaunder--http-request
+                          "GET" (jaunder-inventory-member-edit-uri member)))
+               (status (plist-get response :status))
+               (etag (jaunder--response-header response "ETag")))
+          (if (and (integerp status) (<= 200 status 299)
+                   (jaunder--strong-etag-p etag))
+              (list :post-id id :slug slug :etag etag :http-status status)
+            (list :outcome 'blocked :post-id id :slug slug :etag etag
+                  :http-status status :local-effect 'unchanged
+                  :reason (if (and (integerp status) (<= 200 status 299))
+                              'current-etag-invalid 'member-http-error))))
+      (error (list :outcome 'blocked :post-id id :slug slug
+                   :local-effect 'unchanged :reason 'member-transport-error
+                   :detail (error-message-string err))))))
+
+(defun jaunder--reconcile-delete-preflight (row)
+  "Return a blocking reason when ROW cannot be deleted safely right now."
+  (and (jaunder-reconcile-row-local row)
+       (jaunder--reconcile-local-mutation-safety-reason row)))
+
+(defun jaunder--reconcile-delete-local-file (row)
+  "Remove ROW's matched local file after 204, or return a preservation result."
+  (let ((local (jaunder-reconcile-row-local row)))
+    (if (null local)
+        (list :local-effect 'unchanged)
+      (let* ((path (jaunder-inventory-local-path local))
+             (buffer (get-file-buffer path)))
+        (cond
+         ((and (buffer-live-p buffer) (buffer-modified-p buffer))
+          (list :local-effect 'preserved :reason 'local-buffer-modified))
+         ((not (equal (jaunder--reconcile-current-local-id row)
+                      (jaunder--reconcile-row-post-id row)))
+          (list :local-effect 'preserved :reason 'matched-identity-changed))
+         (t
+          (delete-file path)
+          (if (and (buffer-live-p buffer) (not (kill-buffer buffer)))
+              (list :local-effect 'removed-buffer-retained)
+            (list :local-effect 'removed))))))))
+
+(defun jaunder--reconcile-delete-row (row reviewed)
+  "Delete ROW with its pre-confirmation REVIEWED strong ETag."
+  (if (plist-get reviewed :outcome)
+      reviewed
+    (let ((id (plist-get reviewed :post-id))
+          (slug (plist-get reviewed :slug))
+          (etag (plist-get reviewed :etag)))
+      (let ((preflight (jaunder--reconcile-delete-preflight row)))
+        (if preflight
+            (jaunder--reconcile-blocked row preflight)
+          (condition-case err
+              (let* ((response (jaunder--http-request
+                                "DELETE" (jaunder--member-url id) nil nil
+                                (list (cons "If-Match" etag))) )
+                     (status (plist-get response :status)))
+                (if (eq status 204)
+                    (let ((local (jaunder--reconcile-delete-local-file row)))
+                      (list :outcome 'success :post-id id :slug slug :etag etag
+                            :http-status status
+                            :local-effect (plist-get local :local-effect)
+                            :reason (plist-get local :reason)))
+                  (list :outcome 'failed :post-id id :slug slug :etag etag
+                        :http-status status :local-effect 'unchanged
+                        :reason (if (eq status 412) 'etag-stale 'delete-http-error))))
+            (error (list :outcome 'failed :post-id id :slug slug :etag etag
+                         :local-effect 'unchanged :reason 'delete-transport-error
+                         :detail (error-message-string err)))))))))
+
+(defun jaunder--reconcile-confirm (prompt count &optional reviewed-etags)
+  "Ask once with PROMPT, selected operation COUNT, and REVIEWED-ETAGS."
+  (y-or-n-p (concat (format prompt count) reviewed-etags)))
+
+(defun jaunder-reconcile-push-selected ()
+  "Explicitly push selected safe rows after one preview confirmation."
+  (interactive)
+  (let ((rows (jaunder-reconcile-selected-rows))
+        (buffer (current-buffer)))
+    (unless rows (user-error "No reconciliation rows selected"))
+    (when (jaunder--reconcile-confirm "Push %d selected Post(s)? " (length rows))
+      (jaunder--reconcile-execute-batch buffer rows 'push
+                                        #'jaunder--reconcile-push-row))))
+
+(defun jaunder-reconcile-delete-selected ()
+  "Explicitly soft-delete selected remote Posts after reviewing fresh ETags."
+  (interactive)
+  (let* ((rows (jaunder-reconcile-selected-rows))
+         (buffer (current-buffer))
+         (reviews (make-hash-table :test #'equal)))
+    (unless rows (user-error "No reconciliation rows selected"))
+    (jaunder--call-with-blog
+     (jaunder-reconcile-report-root jaunder-reconcile-report)
+     (lambda ()
+       (dolist (row rows)
+         (puthash (jaunder--reconcile-stable-row-key row)
+                  (if (memq (jaunder-reconcile-row-state row)
+                            '(server-only unchanged local-ahead server-ahead))
+                      (let ((preflight (jaunder--reconcile-delete-preflight row)))
+                        (if preflight
+                            (jaunder--reconcile-blocked row preflight)
+                          (jaunder--reconcile-delete-etag row)))
+                    (jaunder--reconcile-blocked row 'delete-ineligible
+                                                (jaunder-reconcile-row-state row)))
+                  reviews))
+       (when (jaunder--reconcile-confirm
+              "SOFT-DELETE %d selected remote Post(s)? This retains server tombstones. "
+              (length rows)
+              (mapconcat
+               (lambda (row)
+                 (let ((review (gethash (jaunder--reconcile-stable-row-key row) reviews)))
+                   (format "%s ETag=%s"
+                           (or (plist-get review :post-id) "unavailable")
+                           (or (plist-get review :etag) "unavailable"))))
+               rows "; "))
+         (jaunder--reconcile-execute-batch
+          buffer rows 'delete
+          (lambda (row)
+            (jaunder--reconcile-delete-row
+             row (gethash (jaunder--reconcile-stable-row-key row) reviews)))))))))
 
 (defun jaunder-reconcile (root)
   "Reconcile ROOT with its configured AtomPub Collection without resolving it."

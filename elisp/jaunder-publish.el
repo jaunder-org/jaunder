@@ -466,7 +466,10 @@ safe retry."
                                             (plist-get intent :matches)
                                             (and id synced))))
              (when slug (jaunder--rename-to-slug slug))
-             (message "jaunder: published %s" (or slug "")))))))))
+             (message "jaunder: published %s" (or slug ""))
+             ;; Callers that batch ordinary publishing need the actual response
+             ;; status; in particular, durable create replay can return 200.
+             (list :response resp :http-status code :slug slug))))))))
 
 (defun jaunder-save-draft ()
   "Publish the current buffer as a server-side draft (forces `app:draft')."
