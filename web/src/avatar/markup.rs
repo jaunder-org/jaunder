@@ -33,6 +33,7 @@ pub(crate) fn render(name: &str, size: u32) -> Markup {
                 "background:oklch(0.58 0.07 " (hue) ");"
                 "font-size:" (font_size) "px"
             }
+            data-jaunder-part="avatar"
         {
             (initials)
         }
@@ -54,7 +55,7 @@ mod tests {
         assert_eq!(
             render("Mara Ek", 38),
             format!(
-                "<div class=\"j-av\" style=\"width:38px;height:38px;background:oklch(0.58 0.07 {hue});font-size:14px\">ME</div>"
+                "<div class=\"j-av\" style=\"width:38px;height:38px;background:oklch(0.58 0.07 {hue});font-size:14px\" data-jaunder-part=\"avatar\">ME</div>"
             )
         );
     }
