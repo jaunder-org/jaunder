@@ -345,6 +345,18 @@ fn scope_selectors<'i>(
             ));
         }
 
+        // `iter_raw_match_order` yields compounds from right to left while
+        // preserving the component order inside each compound. `Selector::from`
+        // expects serialization order, so reverse the compound sequence without
+        // reversing each compound's internals.
+        components.reverse();
+        let mut compound_start = 0;
+        for index in 0..=components.len() {
+            if index == components.len() || matches!(components[index], Component::Combinator(_)) {
+                components[compound_start..index].reverse();
+                compound_start = index + 1;
+            }
+        }
         let mut scoped: Vec<_> = boundary.iter_raw_match_order().cloned().collect();
         if !mapped_root || needs_descendant {
             scoped.push(Component::Combinator(Combinator::Descendant));
@@ -520,6 +532,30 @@ mod tests {
             std::str::from_utf8(first.bytes())
                 .unwrap()
                 .contains("data-jaunder-theme-surface")
+        );
+    }
+
+    #[test]
+    fn preserves_descendant_selector_order_when_scoping() {
+        let compiled = compile(
+            r#"[data-jaunder-part="tag-list"] a { color: #075985 }
+               .tag-list.featured > a.context-link:hover { color: #075985 }"#,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        let css = std::str::from_utf8(compiled.bytes()).unwrap();
+        assert!(
+            css.contains(
+                r#"[data-jaunder-theme-surface][data-jaunder-style-contract="1"] [data-jaunder-part=tag-list] a"#
+            ),
+            "{css}"
+        );
+        assert!(!css.contains(" a [data-jaunder-part=tag-list]"), "{css}");
+        assert!(
+            css.contains(
+                r#"[data-jaunder-theme-surface][data-jaunder-style-contract="1"] .tag-list.featured>a.context-link:hover"#
+            ),
+            "{css}"
         );
     }
 
