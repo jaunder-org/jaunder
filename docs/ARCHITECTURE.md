@@ -391,16 +391,25 @@ enforces `UNIQUE(user_id, key)`. Storage serializes each `(user_id, key)` pair
 inside the create transaction (`SQLite`'s writer lock; a `PostgreSQL` advisory
 lock plus row lock) and applies the request's authoritative cutoff there. A live
 mapping returns its selected `PostId` as the replay decision without attempting
-new post or feed-event writes; the AtomPub handler fetches that fixed Post
+new Post or feed-event writes; the AtomPub handler fetches that fixed Post
 rather than looking the mapping up again after rollback. An expired mapping is
-removed and its replacement post and key row are written atomically. Fresh
-creation returns `201`; when its original post remains available, same-user key
-reuse returns that original post as `200`, even when the new payload differs.
-Another user may use the same key independently. The
+removed and its replacement Post and key row are written atomically. Fresh
+creation returns `201`; when its original Post remains available, same-User key
+reuse returns that original Post as `200`, even when the new payload differs.
+Another User may use the same key independently. The
 [bounded transient-data retention decision](adr/0167-bounded-transient-data-retention.md)
-replaces indefinite mapping retention with a one-hour semantic replay window: at
-`cutoff <= now`, the mapping no longer coordinates a replay, whether or not a
-later cleanup pass has physically removed it.
+gives mappings a one-hour semantic replay window.
+
+#### Committed direction: Durable AtomPub create intent
+
+A successful keyed create will permanently consume its `(User, Idempotency-Key)`
+pair as durable Post-create correlation
+([durable AtomPub create intent](adr/drafts/durable-atompub-create-intent.md)).
+After the original Post is soft-deleted, reuse will return `409 Conflict` rather
+than authorize a replacement. The mapping will have no semantic expiry and will
+follow the retained Post identity lifecycle. This supersedes only ADR-0167's
+one-hour Post-create mapping rule; that decision's other transient-data policies
+stand.
 
 ### Testing (summary)
 
@@ -2628,6 +2637,17 @@ retry. The server side of that contract was decided in issue
 [#79](https://github.com/jaunder-org/jaunder/issues/79) as a follow-on to
 ADR-0047 — see the Storage section.
 
+#### Committed direction: Durable create recovery
+
+Before the first create request, publish will durably record the key,
+request-content digest, and attempt time in the local Post; every later
+invocation will reuse that create intent until the returned Post ID is safely
+written, then remove it
+([durable AtomPub create intent](adr/drafts/durable-atompub-create-intent.md)).
+If local content changes after an indeterminate create, replay will first
+recover identity but leave the file local-ahead for an explicit conditional
+update rather than mark the changed content synchronized.
+
 ### Pull, reconcile, and durable local media
 
 `jaunder--atom->org` (`elisp/jaunder-pull.el`) maps one authenticated AtomPub
@@ -2641,6 +2661,23 @@ joins root-level Org files to Members by Post ID; `jaunder-reconcile` reports
 divergence without resolving it, previews only server-only pulls, and applies
 them after one confirmation. Remote deletion remains the separate explicit,
 ETag-guarded `jaunder-delete-post` command.
+
+#### Committed direction: Explicit batch Post transfer
+
+`jaunder-reconcile` will remain an inventory and selection surface, never an
+automatic synchronizer. Its persistent report will support explicit marked or
+region-selected batch push, pull, and remote-delete commands; operations will be
+deterministic and sequential, and unsafe rows will remain blocked. A matched
+`server-ahead` pull will be the sole extension to server-only replacement
+([revalidated matched-Post pull](adr/drafts/revalidated-matched-post-pull.md)).
+The report will snapshot the local file's path and SHA-256 digest plus the
+remote strong ETag. After staging the complete Member and Media, installation
+will revalidate both snapshots, refuse a modified visited buffer or occupied
+canonical destination, atomically replace the current file, and then atomically
+rename it when the canonical slug changed. A clean visited buffer will refresh
+to the installed bytes and filename without becoming modified. A crash between
+replacement and rename will leave one ID-bearing updated file that a later
+inventory can recognize and finish.
 
 #### Committed direction: Local Media Copies
 
