@@ -222,6 +222,7 @@ mod markup_tests {
         );
     }
 
+    #[cfg(feature = "server")]
     #[test]
     fn trusted_markup_adapter_preserves_element_and_injects_verbatim() {
         use leptos::prelude::*;
