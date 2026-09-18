@@ -67,14 +67,18 @@ pub enum E2eBrowser {
 /// One independently runnable non-E2E CI validation lane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum CiValidateLane {
-    Core,
+    Host,
+    Hermetic,
+    TestChecks,
     Coverage,
 }
 
 impl CiValidateLane {
     pub(crate) const fn command_name(self) -> &'static str {
         match self {
-            Self::Core => "ci-validate-core",
+            Self::Host => "ci-validate-host",
+            Self::Hermetic => "ci-validate-hermetic",
+            Self::TestChecks => "ci-validate-test-checks",
             Self::Coverage => "ci-validate-coverage",
         }
     }
@@ -906,7 +910,13 @@ mod tests {
     #[test]
     fn ci_validate_parses_the_complete_lane_catalog() {
         for (argument, lane, name) in [
-            ("core", CiValidateLane::Core, "ci-validate-core"),
+            ("host", CiValidateLane::Host, "ci-validate-host"),
+            ("hermetic", CiValidateLane::Hermetic, "ci-validate-hermetic"),
+            (
+                "test-checks",
+                CiValidateLane::TestChecks,
+                "ci-validate-test-checks",
+            ),
             ("coverage", CiValidateLane::Coverage, "ci-validate-coverage"),
         ] {
             let cli = Cli::try_parse_from(["xtask", "ci-validate", argument]).unwrap();

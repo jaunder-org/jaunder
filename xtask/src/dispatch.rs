@@ -547,7 +547,11 @@ const NON_E2E_VALIDATION_SURFACES: [NonE2eValidationSurface; 8] = [
 impl NonE2eValidationSurface {
     const fn belongs_to_lane(self, lane: CiValidateLane) -> bool {
         match lane {
-            CiValidateLane::Core => !matches!(self, Self::RustCoverage),
+            CiValidateLane::Host => matches!(self, Self::HostGateWithoutTests | Self::HostTests),
+            CiValidateLane::Hermetic => matches!(self, Self::NixStaticChecks | Self::WasmBudget),
+            CiValidateLane::TestChecks => {
+                matches!(self, Self::WasmTests | Self::Doctests | Self::ElispCoverage)
+            }
             CiValidateLane::Coverage => matches!(self, Self::RustCoverage),
         }
     }
@@ -675,26 +679,25 @@ mod tests {
             ]
         );
 
-        let core = validation_surface_names(Some(CiValidateLane::Core));
+        let host = validation_surface_names(Some(CiValidateLane::Host));
+        assert_eq!(host, ["host-gate-without-tests", "host-tests"]);
         assert_eq!(
-            core,
-            [
-                "host-gate-without-tests",
-                "nix-static-checks",
-                "wasm-budget",
-                "host-tests",
-                "wasm-tests",
-                "doctests",
-                "elisp-coverage",
-            ]
+            validation_surface_names(Some(CiValidateLane::Hermetic)),
+            ["nix-static-checks", "wasm-budget"]
+        );
+        assert_eq!(
+            validation_surface_names(Some(CiValidateLane::TestChecks)),
+            ["wasm-tests", "doctests", "elisp-coverage"]
         );
         assert_eq!(
             validation_surface_names(Some(CiValidateLane::Coverage)),
             ["rust-coverage"]
         );
 
-        let lane_union = core
+        let lane_union = host
             .iter()
+            .chain(validation_surface_names(Some(CiValidateLane::Hermetic)).iter())
+            .chain(validation_surface_names(Some(CiValidateLane::TestChecks)).iter())
             .chain(validation_surface_names(Some(CiValidateLane::Coverage)).iter())
             .copied()
             .collect::<std::collections::BTreeSet<_>>();

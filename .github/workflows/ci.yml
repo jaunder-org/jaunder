@@ -17,8 +17,8 @@ on:
 # `ubuntu-24.04` as of image 20260720.247, so the pin is behaviour-neutral today;
 # `ubuntu-26.04` exists but is still public preview.)
 #
-# These jobs must also stay x86_64 on a full VM. The core lane's combined Emacs
-# coverage producer and the browser E2E checks build NixOS test machines hardcoded
+# These jobs must also stay x86_64 on a full VM. The test-checks lane's combined
+# Emacs coverage producer and the browser E2E checks build NixOS test machines hardcoded
 # to `x86_64-linux` (`nix/nixos.nix`'s `interactiveTestingVmSystem` /
 # `postgresTestingVmSystem`), and the jaunder-org cachix cache is populated for that
 # system only — an arm64 runner would emulate the VM and rebuild the world cold. They
@@ -26,8 +26,8 @@ on:
 # which rules out the container-based `ubuntu-slim` tier that the result-only gates
 # use below.
 jobs:
-  validate-core:
-    name: Validation core
+  validate-host:
+    name: Validation host
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7.0.1
@@ -35,33 +35,121 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      - name: Validate core lane (via xtask)
+      - name: Validate host lane (via xtask)
         run:
-          nix develop .#ci --accept-flake-config -c cargo xtask ci-validate core
+          nix develop .#ci --accept-flake-config -c cargo xtask ci-validate host
+      - name: Preserve host validation result
+        if: always()
+        run: |
+          if test -f .xtask/last-result.json; then
+            cp .xtask/last-result.json .xtask/host-result.json
+          fi
+      - name: Upload host validation diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: validate-host-diagnostics
+          path: |
+            .xtask/diagnostics/
+            .xtask/last-result.json
+            .xtask/host-result.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  validate-hermetic:
+    name: Validation hermetic
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: ./.github/actions/setup-ci
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Validate hermetic lane (via xtask)
+        run:
+          nix develop .#ci --accept-flake-config -c cargo xtask ci-validate
+          hermetic
+      - name: Preserve hermetic validation result
+        if: always()
+        run: |
+          if test -f .xtask/last-result.json; then
+            cp .xtask/last-result.json .xtask/hermetic-result.json
+          fi
+      - name: Upload hermetic validation diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: validate-hermetic-diagnostics
+          path: |
+            .xtask/diagnostics/
+            .xtask/last-result.json
+            .xtask/hermetic-result.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  validate-test-checks:
+    name: Validation test checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: ./.github/actions/setup-ci
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Validate test checks lane (via xtask)
+        run:
+          nix develop .#ci --accept-flake-config -c cargo xtask ci-validate
+          test-checks
       - name: Build Emacs package for Cachix
         run:
           nix build --accept-flake-config --no-link
           .#emacsPackages.x86_64-linux.jaunder
-      - name: Preserve core validation result
+      - name: Preserve test checks validation result
         if: always()
         run: |
           if test -f .xtask/last-result.json; then
-            cp .xtask/last-result.json .xtask/core-result.json
+            cp .xtask/last-result.json .xtask/test-checks-result.json
           fi
-      - name: Nix source-closure drift probe (#1289)
-        if: always()
-        run:
-          nix develop .#ci --accept-flake-config -c cargo xtask nix probe-source
-      - name: Upload core validation diagnostics
+      - name: Upload test checks validation diagnostics
         if: always()
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: validate-core-diagnostics
+          name: validate-test-checks-diagnostics
           path: |
             .xtask/diagnostics/
             .xtask/gcroots/elisp-coverage-producer/elisp-coverage/
             .xtask/last-result.json
-            .xtask/core-result.json
+            .xtask/test-checks-result.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  validate-source-probe:
+    name: Validation source probe
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: ./.github/actions/setup-ci
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Nix source-closure drift probe (#1289)
+        run:
+          nix develop .#ci --accept-flake-config -c cargo xtask nix probe-source
+      - name: Preserve source probe result
+        if: always()
+        run: |
+          if test -f .xtask/last-result.json; then
+            cp .xtask/last-result.json .xtask/source-probe-result.json
+          fi
+      - name: Upload source probe diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: validate-source-probe-diagnostics
+          path: |
+            .xtask/diagnostics/
+            .xtask/last-result.json
+            .xtask/source-probe-result.json
           if-no-files-found: ignore
           retention-days: 14
 
@@ -109,16 +197,29 @@ jobs:
   validate-no-e2e:
     name: Validate (no e2e)
     runs-on: ubuntu-slim
-    needs: [validate-core, validate-coverage]
+    needs:
+      [
+        validate-host,
+        validate-hermetic,
+        validate-test-checks,
+        validate-coverage,
+        validate-source-probe,
+      ]
     if: always()
     steps:
-      - name: Require both validation lanes to pass
+      - name: Require all validation lanes to pass
         run: |
-          core="${{ needs.validate-core.result }}"
+          host="${{ needs.validate-host.result }}"
+          hermetic="${{ needs.validate-hermetic.result }}"
+          test_checks="${{ needs.validate-test-checks.result }}"
           coverage="${{ needs.validate-coverage.result }}"
-          echo "validation lane results: core=$core coverage=$coverage"
-          test "$core" = "success"
+          source_probe="${{ needs.validate-source-probe.result }}"
+          echo "validation lane results: host=$host hermetic=$hermetic test-checks=$test_checks coverage=$coverage source-probe=$source_probe"
+          test "$host" = "success"
+          test "$hermetic" = "success"
+          test "$test_checks" = "success"
           test "$coverage" = "success"
+          test "$source_probe" = "success"
 
   e2e:
     name: e2e (${{ matrix.backend }}/${{ matrix.browser }})
