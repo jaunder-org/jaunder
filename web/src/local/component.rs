@@ -165,16 +165,15 @@ pub fn LocalPage() -> impl IntoView {
                 identity
                     .get()
                     .map(|identity| {
-                        super::render::masthead(
-                                &identity,
-                                &crate::app::render_theme_logo(&theme.get()),
+                        crate::app::render_theme_hero(
+                                &super::render::masthead(
+                                    &identity,
+                                    &crate::app::render_theme_logo(&theme.get()),
+                                ),
+                                &crate::app::render_theme_header(&theme.get()),
                             )
                             .inject_into(leptos::html::div().class("j-contents"))
                     })
-            }}
-            {move || {
-                crate::app::render_theme_header(&theme.get())
-                    .inject_into(leptos::html::div().class("j-contents"))
             }}
         </TimelineGate>
     }

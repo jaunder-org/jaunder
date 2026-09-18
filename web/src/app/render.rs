@@ -95,6 +95,19 @@ pub fn render_theme_decorations(theme: &common::theme::PublishedThemePresentatio
     })
 }
 
+pub(crate) const HERO_PART: &str = "hero";
+
+/// The stable public hero boundary shared by every public route.
+#[must_use]
+pub fn render_theme_hero(masthead: &Markup, header: &Markup) -> Markup {
+    Markup::new(html! {
+        section data-jaunder-part=(HERO_PART) {
+            (header)
+            (masthead)
+        }
+    })
+}
+
 /// The document `<head>` inner HTML: the host supplies the generated early
 /// wasm fetch script, keeping final runtime asset identity outside `web`.
 #[must_use]
@@ -233,7 +246,7 @@ pub fn render_shell(presentation: &PublicPresentation<PageSeed>) -> Markup {
         div class="j-root" data-theme=(presentation.theme.data_theme()) {
             div class="j-theme-clip" data-jaunder-theme-clip {
                 div class="j-shell" data-jaunder-theme-surface data-jaunder-style-contract=(theme::STYLE_CONTRACT_VERSION) {
-                    aside class="j-sidebar" { (crate::sidebar::render_sidebar(active_key)) }
+                    aside class="j-sidebar" data-jaunder-part="navigation-rail" { (crate::sidebar::render_sidebar(active_key)) }
                     div class="j-main-region" {
                         main class="j-main" data-jaunder-part="main" {
                             (crate::posts::render::body_with_logo(
@@ -317,9 +330,15 @@ mod tests {
         })
         .into_string();
         assert_eq!(html.matches("data-jaunder-part=\"logo\"").count(), 1);
+        assert_eq!(html.matches("data-jaunder-part=\"hero\"").count(), 1);
         assert_eq!(
             html.matches("data-jaunder-part=\"header-image\"").count(),
             1
+        );
+        assert!(
+            html.find("data-jaunder-part=\"header-image\"").unwrap()
+                < html.find("data-jaunder-part=\"masthead\"").unwrap(),
+            "decorative image must precede masthead content within the hero: {html}"
         );
         assert!(
             html.contains("data-jaunder-part=\"site-title\">Jaunder"),
@@ -587,7 +606,8 @@ mod tests {
             html.starts_with(
                 "<div class=\"j-root\" data-theme=\"studio\"><div class=\"j-theme-clip\" \
                  data-jaunder-theme-clip><div class=\"j-shell\" data-jaunder-theme-surface \
-                 data-jaunder-style-contract=\"1\"><aside class=\"j-sidebar\">"
+                 data-jaunder-style-contract=\"1\"><aside class=\"j-sidebar\" \
+                 data-jaunder-part=\"navigation-rail\">"
             ),
             "{html}"
         );

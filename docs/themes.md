@@ -115,10 +115,12 @@ an existing version: changed packages receive a new tag.
 
 The release tag is the Theme repository's distribution version. Manifest
 `schema` and `style_contract` values are Jaunder compatibility versions, not the
-Theme's release version. Schema 1 deliberately has no release-version field; a
-versioned release URL identifies the distribution while the deterministic ZIP
-bytes identify the exact package. Installed-version metadata or update discovery
-would require a separately designed manifest revision.
+Theme's release version. Theme Package schema 1 and Style Contract 1 were
+introduced in Jaunder 1.0.0, so packages targeting both require Jaunder 1.0.0 or
+later. Schema 1 deliberately has no release-version field; a versioned release
+URL identifies the distribution while the deterministic ZIP bytes identify the
+exact package. Installed-version metadata or update discovery would require a
+separately designed manifest revision.
 
 Importing the ZIP into Studio still creates a private, unselected draft. Preview
 it, explicitly publish it, then explicitly select the published theme;
@@ -168,7 +170,8 @@ Rules:
   accepted value.
 - `style_contract` selects the public document hooks and CSS behavior the theme
   targets. Version 1 is the only accepted value. It is separate from `schema` so
-  the package format and the styling interface can evolve independently.
+  the package format and the styling interface can evolve independently. Schema
+  1 and Style Contract 1 require Jaunder 1.0.0 or later.
 - `name` must contain non-whitespace text.
 - Supported asset types are `font/woff2`, `image/png`, `image/jpeg`,
   `image/webp`, and `image/avif`.
@@ -225,7 +228,11 @@ The stable hooks are:
 
 | Hook                 | Meaning                                                        |
 | -------------------- | -------------------------------------------------------------- |
+| `navigation-rail`    | Public navigation rail and its supporting chrome               |
+| `site-brand`         | Jaunder brand link within the navigation rail                  |
+| `navigation-search`  | Search affordance within the navigation rail                   |
 | `primary-navigation` | The public navigation landmark                                 |
+| `hero`               | Stable container for header image and masthead                 |
 | `masthead`           | The public masthead, including the optional Local Site Tagline |
 | `site-title`         | Textual Local site identity                                    |
 | `logo`               | Optional decorative package or Media logo                      |
@@ -248,15 +255,18 @@ The stable hooks are:
 | `continuation`       | Optional pagination continuation                               |
 
 The contract guarantees these concepts, landmarks, route presence, cardinality,
-and accessible source order. The optional Site Tagline is plain text within the
-existing `masthead` concept; target it through that hook and ordinary descendant
-selectors rather than expecting a separate tagline hook. It does not guarantee
-wrapper depth or incidental sibling positions. Owner-only Post Actions controls
-are not Style Contract content: Jaunder mounts them in a trusted sibling outside
-this surface, tethered to a protected Post-header slot. Theme CSS cannot
-directly style or suppress those controls, but a theme that removes or clips a
-Post/header can remove their visual anchor; select **Studio** in `/themes` to
-recover the controls.
+and accessible source order. Every public route has one `hero`; its optional
+decorative `header-image` precedes and shares that stable container with the
+`masthead`, so themes may layer the image behind masthead content without
+inferring wrapper or sibling structure. The optional Site Tagline is plain text
+within the existing `masthead` concept; target it through that hook and ordinary
+descendant selectors rather than expecting a separate tagline hook. The contract
+does not otherwise guarantee wrapper depth or incidental sibling positions.
+Owner-only Post Actions controls are not Style Contract content: Jaunder mounts
+them in a trusted sibling outside this surface, tethered to a protected
+Post-header slot. Theme CSS cannot directly style or suppress those controls,
+but a theme that removes or clips a Post/header can remove their visual anchor;
+select **Studio** in `/themes` to recover the controls.
 
 Jaunder accepts standard declarations and CSS custom properties, subject to the
 same URL and global-name checks. `anchor-name` is reserved for Jaunder's trusted

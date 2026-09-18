@@ -22,6 +22,7 @@
  * `/app` is deliberately absent: it is served `no-store` and is never
  * projector-painted, so it has nothing to coincide with.
  */
+import type { Page } from "@playwright/test";
 import { test, expect, slowBrowserTimeoutMs } from "./fixtures";
 import { signInAsNewUser } from "./helpers";
 import { createPostViaApi } from "./posts";
@@ -31,6 +32,20 @@ import {
   snapshotConfigViaTool,
   seedConfigViaTool,
 } from "./seed";
+
+async function expectSemanticHero(page: Page): Promise<void> {
+  const hero = page.locator('[data-jaunder-part="hero"]');
+  await expect(hero).toHaveCount(1);
+  await expect(hero.locator('[data-jaunder-part="masthead"]')).toHaveCount(1);
+  expect(
+    await page
+      .locator('[data-jaunder-part="masthead"]')
+      .evaluate(
+        (masthead) =>
+          masthead.parentElement?.getAttribute("data-jaunder-part") === "hero",
+      ),
+  ).toBe(true);
+}
 
 /**
  * The four routes, the chrome element that must not move on each, and whether a post
@@ -115,6 +130,7 @@ for (const route of ROUTES) {
       await expectNoShiftAcrossMount(probePage, {
         url: route.url(username),
         beforeMount: async (p) => {
+          await expectSemanticHero(p);
           if (configuredLocalIdentity) {
             await expect(
               p.locator('[data-jaunder-part="site-title"]'),
@@ -170,6 +186,7 @@ for (const route of ROUTES) {
           await expect(p.locator(".j-scroll").first()).toBeVisible({
             timeout: slowBrowserTimeoutMs(testInfo, 10_000),
           });
+          await expectSemanticHero(p);
           if (configuredLocalIdentity) {
             // `toHaveText` proves text semantics after CSR replaced the projector:
             // markup-looking config remains decoded text, never DOM markup.

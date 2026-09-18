@@ -35,11 +35,9 @@ fn permalink_first_paint(
             let title = format!("Post by {}", seed.post.username);
             let html = posts::render::permalink_article(&seed.post);
             view! {
-                <Topbar title=title />
-                {move || {
-                    crate::app::render_theme_header(&theme.get())
-                        .inject_into(leptos::html::div().class("j-contents"))
-                }}
+                <crate::app::ThemeHero theme>
+                    <Topbar title=title />
+                </crate::app::ThemeHero>
                 <div class="j-scroll">
                     <div class="j-page">
                         {html.inject_into(leptos::html::div().class("j-contents"))}
@@ -181,18 +179,14 @@ pub fn PostPage() -> impl IntoView {
                                 let tag_context = TagCtx::ForUser(
                                     fetched.post.post.username.clone(),
                                 );
-                                // Both bound before the `view!`: the props are borrows
-                                // now, so an inline temporary would be dropped inside
-                                // the macro expansion (E0716).
+                                let title = format!("Post by {}", fetched.post.post.username);
+                                // Bound before the `view!`: borrowed props cannot use
+                                // inline temporaries, and the title must not partially
+                                // move the Post borrowed below.
                                 view! {
-                                    <Topbar title=format!(
-                                        "Post by {}",
-                                        fetched.post.post.username,
-                                    ) />
-                                    {move || {
-                                        crate::app::render_theme_header(&theme.get())
-                                            .inject_into(leptos::html::div().class("j-contents"))
-                                    }}
+                                    <crate::app::ThemeHero theme>
+                                        <Topbar title=title />
+                                    </crate::app::ThemeHero>
                                     <div class="j-scroll">
                                         <div class="j-page">
                                             <ScheduledNotice at=scheduled_at />

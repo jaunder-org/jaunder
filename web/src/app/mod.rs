@@ -12,12 +12,13 @@ mod render;
 pub use render::{
     DISCOVERY_MARKER_ATTR, MODULE_BEFORE_INIT_MARK, PREPAINT_SCRIPT,
     PROJECTED_LOCAL_METADATA_SELECTOR, THEME_STYLESHEET_MARKER_ATTR, render_head, render_shell,
-    render_theme_decorations, render_theme_header, render_theme_logo, render_theme_stylesheet,
+    render_theme_decorations, render_theme_header, render_theme_hero, render_theme_logo,
+    render_theme_stylesheet,
 };
 
 #[cfg(target_arch = "wasm32")]
 mod component;
 #[cfg(target_arch = "wasm32")]
 pub use component::{
-    App, ThemeAdoption, ThemePresentationCoordinator, public_theme, theme_presentation,
+    App, ThemeAdoption, ThemeHero, ThemePresentationCoordinator, public_theme, theme_presentation,
 };

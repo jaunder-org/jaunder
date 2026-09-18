@@ -126,6 +126,11 @@
   color: var(--ink);
 }
 
+.j-root[data-theme="custom"] .j-sidebar,
+.j-root[data-theme="custom"] .j-scroll {
+  background: transparent;
+}
+
 .j-trusted-post-actions {
   display: contents;
   pointer-events: none;
