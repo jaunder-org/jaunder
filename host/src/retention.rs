@@ -3,7 +3,6 @@
 /// A database domain with independently owned retention policy.
 #[derive(Clone, Copy, Debug)]
 pub enum Domain {
-    IdempotencyKeys,
     Invites,
     EmailVerifications,
     PasswordResets,
@@ -16,7 +15,6 @@ impl Domain {
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
-            Self::IdempotencyKeys => "idempotency_keys",
             Self::Invites => "invites",
             Self::EmailVerifications => "email_verifications",
             Self::PasswordResets => "password_resets",
@@ -50,7 +48,6 @@ mod tests {
 
     #[test]
     fn labels_are_the_documented_bounded_vocabulary() {
-        assert_eq!(Domain::IdempotencyKeys.label(), "idempotency_keys");
         assert_eq!(Domain::Invites.label(), "invites");
         assert_eq!(Domain::EmailVerifications.label(), "email_verifications");
         assert_eq!(Domain::PasswordResets.label(), "password_resets");

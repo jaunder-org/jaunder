@@ -553,7 +553,13 @@ pub async fn collection_post(
     // as `200`, skipping category re-application (it already carries its tags).
     if let Err(PerformCreationError::IdempotencyConflict(post_id)) = &created {
         let post_id = *post_id;
-        let post = owned_post(posts.as_ref(), &auth_user, &username, post_id).await?;
+        let post = posts
+            .get_post_by_id(post_id, &viewer)
+            .await?
+            .ok_or(HandlerError::Invariant)?;
+        if post.user_id != auth_user.user_id || post.deleted_at.is_some() {
+            return Ok(StatusCode::CONFLICT.into_response());
+        }
         let base = super::required_base_url(site_config).await?;
         metrics::idempotency(IdempotencyEvent::Replayed);
         return post_entry_response(StatusCode::OK, &post, &base, &username);

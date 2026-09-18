@@ -27,7 +27,7 @@ Out:
 
 ## Task outline
 
-- [ ] **Task 1: Make create recovery durable across server and client
+- [x] **Task 1: Make create recovery durable across server and client
       restarts.**
   - Contract: a committed `(User, IdempotencyKey)` never expires or authorizes a
     second Post. Active replay returns the original Member as `200`; replay of a

@@ -25,7 +25,6 @@ use common::slug::{InvalidSlug, Slug};
 use common::time::UtcInstant;
 use common::visibility::AudienceTarget;
 use host::feed;
-use host::metrics::{self, IdempotencyEvent};
 
 // ---------------------------------------------------------------------------
 // Orchestration helpers
@@ -66,16 +65,9 @@ fn map_create_post_scope_error(error: WriteScopeError<CreatePostError>) -> Creat
         WriteScopeError::Begin(error) => CreatePostError::Internal(error),
     }
 }
-/// Emits creation telemetry only after commit confirmation, then removes the
-/// service-only expiry evidence from the public mutation outcome.
 fn finish_post_creation(outcome: MutationOutcome<CreatedPost>) -> MutationOutcome<PostRecord> {
     match outcome {
-        MutationOutcome::Confirmed(created) => {
-            if created.idempotency_key_expired {
-                metrics::idempotency(IdempotencyEvent::Expired);
-            }
-            MutationOutcome::Confirmed(created.record)
-        }
+        MutationOutcome::Confirmed(created) => MutationOutcome::Confirmed(created.record),
         MutationOutcome::CommitIndeterminate(created) => {
             MutationOutcome::CommitIndeterminate(created.record)
         }
@@ -1052,15 +1044,12 @@ pub async fn perform_post_creation_with_media_ownership(
 mod tests {
     use super::*;
     use crate::MediaRecord;
-    use crate::sql::QueryStorageExt;
-    #[cfg(feature = "test-utils")]
-    use crate::test_support::SeedPost;
-    #[cfg(feature = "test-utils")]
-    use crate::test_support::mock_write_scope;
     use crate::test_support::{
-        Backend, SeedUser, TestEnv, backends, confirmed, fixture_post_media_ownership,
-        media_ref_for, media_url_for, seed_media, seed_users,
+        Backend, SeedUser, backends, confirmed, media_ref_for, media_url_for, seed_media,
+        seed_users,
     };
+    #[cfg(feature = "test-utils")]
+    use crate::test_support::{SeedPost, fixture_post_media_ownership, mock_write_scope};
     #[cfg(feature = "test-utils")]
     use crate::{MockFeedEventStorage, MockPostStorage};
     use common::idempotency_key::IdempotencyKey;
@@ -1072,10 +1061,6 @@ mod tests {
     #[cfg(feature = "test-utils")]
     use common::test_support::{parse_tag, parse_tag_label};
     use jiff::ToSpan;
-    use opentelemetry_sdk::metrics::{
-        InMemoryMetricExporter, PeriodicReader, SdkMeterProvider,
-        data::{AggregatedMetrics, MetricData},
-    };
     #[cfg(feature = "test-utils")]
     use sqlx::Error as SqlxError;
 
@@ -3090,159 +3075,6 @@ mod tests {
     fn parse_idempotency_key(key: &str) -> IdempotencyKey {
         key.parse().unwrap()
     }
-    fn expired_idempotency_count(
-        exporter: &InMemoryMetricExporter,
-        provider: &SdkMeterProvider,
-    ) -> u64 {
-        provider.force_flush().expect("flush idempotency metrics");
-        exporter
-            .get_finished_metrics()
-            .expect("idempotency metrics")
-            .iter()
-            .flat_map(opentelemetry_sdk::metrics::data::ResourceMetrics::scope_metrics)
-            .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
-            .filter(|metric| metric.name() == "jaunder.atompub.idempotency_keys")
-            .map(|metric| {
-                let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
-                    unreachable!("idempotency counter metric must export a U64 sum");
-                };
-                sum
-            })
-            .flat_map(opentelemetry_sdk::metrics::data::Sum::data_points)
-            .filter(|point| {
-                point.attributes().any(|attribute| {
-                    attribute.key.as_str() == "event" && attribute.value.to_string() == "expired"
-                })
-            })
-            .map(opentelemetry_sdk::metrics::data::SumDataPoint::value)
-            .max()
-            .unwrap_or(0)
-    }
-
-    async fn perform_owned_creation_at(
-        env: &TestEnv,
-        ownership: &PostMediaOwnership,
-        write_scope: &WriteScope,
-        now: UtcInstant,
-        user_id: UserId,
-        body: &str,
-        key: &IdempotencyKey,
-    ) -> MutationOutcome<PostRecord> {
-        perform_post_creation_with_media_ownership(
-            write_scope,
-            &env.media_content_locks(),
-            Arc::clone(&env.posts()),
-            Arc::clone(&env.feed_events()),
-            ownership,
-            now,
-            creation_with_key(user_id, parse_post_body(body), Some(key)),
-        )
-        .await
-        .expect("production post creation")
-    }
-
-    #[apply(backends)]
-    #[tokio::test]
-    async fn production_creation_reports_only_confirmed_idempotency_expiry(
-        #[case] backend: Backend,
-    ) {
-        // The meter provider is process-global, so this one scenario observes all
-        // three outcome classes before any idempotency emitter is initialized.
-        let exporter = InMemoryMetricExporter::default();
-        let provider = SdkMeterProvider::builder()
-            .with_reader(PeriodicReader::builder(exporter.clone()).build())
-            .build();
-        opentelemetry::global::set_meter_provider(provider.clone());
-
-        let env = backend.setup().await;
-        let user_id = SeedUser::new()
-            .seed(Arc::clone(&env.users()), env.write_scope())
-            .await
-            .user_id;
-        let ownership = PostMediaOwnership::new(
-            Arc::new(LocalOnlyResolver),
-            env.base.instance_id().clone(),
-            Arc::clone(&env.site_config()),
-        );
-        let created_at: UtcInstant = "2026-08-31T12:00:00Z".parse().expect("fixed instant");
-        let cutoff = UtcInstant::from(
-            created_at
-                .value()
-                .checked_add(1.hour())
-                .expect("test instant remains representable"),
-        );
-        let confirmed_key = parse_idempotency_key("confirmed-expiry");
-
-        confirmed(
-            perform_owned_creation_at(
-                &env,
-                &ownership,
-                &env.write_scope(),
-                created_at,
-                user_id,
-                "confirmed original",
-                &confirmed_key,
-            )
-            .await,
-        );
-        assert_eq!(
-            expired_idempotency_count(&exporter, &provider),
-            0,
-            "a confirmed non-expiry must not emit expired telemetry"
-        );
-
-        confirmed(
-            perform_owned_creation_at(
-                &env,
-                &ownership,
-                &env.write_scope(),
-                cutoff,
-                user_id,
-                "confirmed replacement",
-                &confirmed_key,
-            )
-            .await,
-        );
-        assert_eq!(
-            expired_idempotency_count(&exporter, &provider),
-            1,
-            "a confirmed expiry must emit exactly once"
-        );
-
-        let indeterminate_key = parse_idempotency_key("indeterminate-expiry");
-        confirmed(
-            perform_owned_creation_at(
-                &env,
-                &ownership,
-                &env.write_scope(),
-                created_at,
-                user_id,
-                "indeterminate original",
-                &indeterminate_key,
-            )
-            .await,
-        );
-        let indeterminate_scope = env
-            .write_scope()
-            .with_commit_acknowledgement_loss_after_commit_for_test();
-        let outcome = perform_owned_creation_at(
-            &env,
-            &ownership,
-            &indeterminate_scope,
-            cutoff,
-            user_id,
-            "indeterminate replacement",
-            &indeterminate_key,
-        )
-        .await;
-        assert!(matches!(outcome, MutationOutcome::CommitIndeterminate(_)));
-        assert_eq!(
-            expired_idempotency_count(&exporter, &provider),
-            1,
-            "commit-indeterminate expiry must not emit confirmed telemetry"
-        );
-    }
-
     #[apply(backends)]
     #[tokio::test]
     async fn perform_post_creation_dedups_on_idempotency_key(#[case] backend: Backend) {
@@ -3443,14 +3275,14 @@ mod tests {
         .unwrap();
 
         let mapped = storage
-            .post_id_for_idempotency_key(user_id, &key, UtcInstant::now())
+            .post_id_for_idempotency_key(user_id, &key)
             .await
             .unwrap();
         let record = confirmed(record);
         assert_eq!(mapped, Some(record.post_id));
 
         let missing = storage
-            .post_id_for_idempotency_key(user_id, &missing_key, UtcInstant::now())
+            .post_id_for_idempotency_key(user_id, &missing_key)
             .await
             .unwrap();
         assert_eq!(missing, None);
@@ -3470,12 +3302,12 @@ mod tests {
             .await
             .user_id;
         let storage = Arc::clone(&env.posts());
-        let key = parse_idempotency_key("indeterminate-commit-key");
+        let committed_key = parse_idempotency_key("already-committed-key");
         let created_at: UtcInstant = "2026-08-31T12:00:00Z".parse().expect("fixed instant");
         let cutoff = UtcInstant::from(
             created_at
                 .value()
-                .checked_add(1.hour())
+                .checked_add(1_i64.hour())
                 .expect("test instant remains representable"),
         );
 
@@ -3486,12 +3318,36 @@ mod tests {
                 Arc::clone(&storage),
                 Arc::clone(&env.feed_events()),
                 created_at,
-                creation_with_key(user_id, parse_post_body("original body"), Some(&key)),
+                creation_with_key(
+                    user_id,
+                    parse_post_body("original body"),
+                    Some(&committed_key),
+                ),
             )
             .await
             .expect("original keyed create"),
         );
+        let reused = perform_post_creation_at(
+            &env.write_scope(),
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.feed_events()),
+            cutoff,
+            creation_with_key(
+                user_id,
+                parse_post_body("must not replace committed post"),
+                Some(&committed_key),
+            ),
+        )
+        .await
+        .expect_err("a committed key must remain a conflict");
+        assert!(matches!(
+            reused,
+            PerformCreationError::IdempotencyConflict(_)
+        ));
 
+        // Acknowledgement loss needs a fresh key so it reaches the commit path.
+        let key = parse_idempotency_key("indeterminate-commit-key");
         let outcome = create_rendered_post(
             &env.write_scope()
                 .with_commit_acknowledgement_loss_after_commit_for_test(),
@@ -3525,12 +3381,27 @@ mod tests {
         assert_eq!(record.published_at, Some(cutoff));
         assert_eq!(
             storage
-                .post_id_for_idempotency_key(user_id, &key, cutoff)
+                .post_id_for_idempotency_key(user_id, &key)
                 .await
                 .expect("replacement idempotency mapping"),
             Some(record.post_id),
             "the indeterminate creation's durable side effects must survive"
         );
+
+        let replay = perform_post_creation_at(
+            &env.write_scope(),
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.feed_events()),
+            cutoff,
+            creation_with_key(user_id, parse_post_body("retry body"), Some(&key)),
+        )
+        .await
+        .expect_err("the acknowledged-lost key must replay its committed identity");
+        assert!(matches!(
+            replay,
+            PerformCreationError::IdempotencyConflict(post_id) if post_id == record.post_id
+        ));
 
         let stored = storage
             .get_post_by_id(
@@ -3559,27 +3430,17 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn idempotency_mapping_expires_at_the_inclusive_cutoff_and_prunes(
+    async fn idempotency_mapping_remains_durable_after_the_former_expiry_window(
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
         let user_id = SeedUser::new()
-            .seed(
-                std::sync::Arc::clone(&env.users()),
-                env.write_scope().clone(),
-            )
+            .seed(Arc::clone(&env.users()), env.write_scope().clone())
             .await
             .user_id;
         let storage = Arc::clone(&env.posts());
         let key = parse_idempotency_key("retained-key");
         let created_at: UtcInstant = "2026-08-31T12:00:00Z".parse().expect("fixed instant");
-        let cutoff = UtcInstant::from(
-            created_at
-                .value()
-                .checked_add(1.hour())
-                .expect("test instant remains representable"),
-        );
-
         let first = confirmed(
             perform_post_creation_at(
                 &env.write_scope(),
@@ -3593,177 +3454,26 @@ mod tests {
             .expect("first keyed create"),
         );
 
+        let replay = perform_post_creation_at(
+            &env.write_scope(),
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.feed_events()),
+            "2030-08-31T12:00:00Z".parse().expect("later instant"),
+            creation_with_key(user_id, parse_post_body("replacement body"), Some(&key)),
+        )
+        .await
+        .expect_err("same key must not create a replacement");
+        assert!(matches!(
+            replay,
+            PerformCreationError::IdempotencyConflict(post_id) if post_id == first.post_id
+        ));
         assert_eq!(
             storage
-                .post_id_for_idempotency_key(
-                    user_id,
-                    &key,
-                    UtcInstant::from(
-                        cutoff
-                            .value()
-                            .checked_sub(1.second())
-                            .expect("test instant remains representable"),
-                    ),
-                )
+                .post_id_for_idempotency_key(user_id, &key)
                 .await
-                .expect("pre-cutoff lookup"),
+                .expect("durable lookup"),
             Some(first.post_id)
-        );
-        crate::with_closeable_pool!(env.base.pool(), pool, {
-            sqlx::query("UPDATE posts SET deleted_at = created_at WHERE post_id = $1")
-                .bind_storage(first.post_id)
-                .execute(pool)
-                .await
-                .map(|_| ())
-        })
-        .expect("soft-delete original Post");
-        assert_eq!(
-            storage
-                .post_id_for_idempotency_key(user_id, &key, cutoff)
-                .await
-                .expect("cutoff lookup"),
-            None
-        );
-
-        let replacement = confirmed(
-            perform_post_creation_at(
-                &env.write_scope(),
-                &env.media_content_locks(),
-                Arc::clone(&storage),
-                Arc::clone(&env.feed_events()),
-                cutoff,
-                creation_with_key(user_id, parse_post_body("replacement body"), Some(&key)),
-            )
-            .await
-            .expect("cutoff reuse creates a replacement"),
-        );
-        assert_ne!(replacement.post_id, first.post_id);
-        assert_eq!(
-            crate::with_closeable_pool!(env.base.pool(), pool, {
-                sqlx::query_scalar::<_, i64>(
-                    "SELECT COUNT(*) FROM posts WHERE post_id = $1 AND deleted_at IS NOT NULL",
-                )
-                .bind_storage(first.post_id)
-                .fetch_one(pool)
-                .await
-            })
-            .expect("inspect original Post tombstone"),
-            1,
-            "idempotency expiry must not alter a Deleted Post"
-        );
-        assert_eq!(
-            storage
-                .prune_expired_idempotency_keys(UtcInstant::from(
-                    cutoff
-                        .value()
-                        .checked_add(1.hour())
-                        .expect("test instant remains representable"),
-                ))
-                .await
-                .expect("prune expired mapping"),
-            1
-        );
-        assert_eq!(
-            storage
-                .post_id_for_idempotency_key(
-                    user_id,
-                    &key,
-                    UtcInstant::from(
-                        cutoff
-                            .value()
-                            .checked_add(1.hour())
-                            .expect("test instant remains representable"),
-                    ),
-                )
-                .await
-                .expect("lookup after pruning"),
-            None
-        );
-    }
-
-    #[apply(backends)]
-    #[tokio::test]
-    async fn concurrent_exact_cutoff_reuse_creates_one_replacement(#[case] backend: Backend) {
-        let env = backend.setup().await;
-        let user_id = SeedUser::new()
-            .seed(
-                std::sync::Arc::clone(&env.users()),
-                env.write_scope().clone(),
-            )
-            .await
-            .user_id;
-        let storage = Arc::clone(&env.posts());
-        let key = parse_idempotency_key("concurrent-retained-key");
-        let created_at: UtcInstant = "2026-08-31T12:00:00Z".parse().expect("fixed instant");
-        let cutoff = UtcInstant::from(
-            created_at
-                .value()
-                .checked_add(1.hour())
-                .expect("test instant remains representable"),
-        );
-
-        let original = confirmed(
-            perform_post_creation_at(
-                &env.write_scope(),
-                &env.media_content_locks(),
-                Arc::clone(&storage),
-                Arc::clone(&env.feed_events()),
-                created_at,
-                creation_with_key(user_id, parse_post_body("original"), Some(&key)),
-            )
-            .await
-            .expect("original keyed create"),
-        );
-
-        let first_locks = env.media_content_locks();
-        let first_write_scope = env.write_scope();
-        let second_locks = env.media_content_locks();
-        let second_write_scope = env.write_scope();
-        let first_attempt = perform_post_creation_at(
-            &first_write_scope,
-            &first_locks,
-            Arc::clone(&storage),
-            Arc::clone(&env.feed_events()),
-            cutoff,
-            creation_with_key(user_id, parse_post_body("replacement one"), Some(&key)),
-        );
-        let second_attempt = perform_post_creation_at(
-            &second_write_scope,
-            &second_locks,
-            Arc::clone(&storage),
-            Arc::clone(&env.feed_events()),
-            cutoff,
-            creation_with_key(user_id, parse_post_body("replacement two"), Some(&key)),
-        );
-        let outcomes = tokio::join!(first_attempt, second_attempt);
-        let (replacement, replayed_post_id) = match outcomes {
-            (Ok(outcome), Err(PerformCreationError::IdempotencyConflict(post_id)))
-            | (Err(PerformCreationError::IdempotencyConflict(post_id)), Ok(outcome)) => {
-                (confirmed(outcome), post_id)
-            }
-            other => panic!("expected one replacement and one replay decision, got {other:?}"),
-        };
-        assert_eq!(
-            replayed_post_id, replacement.post_id,
-            "the losing request must retain the winner chosen inside its transaction"
-        );
-
-        assert_ne!(replacement.post_id, original.post_id);
-        assert_eq!(
-            storage
-                .post_id_for_idempotency_key(
-                    user_id,
-                    &key,
-                    UtcInstant::from(
-                        cutoff
-                            .value()
-                            .checked_add(1.second())
-                            .expect("test instant remains representable"),
-                    ),
-                )
-                .await
-                .expect("replacement mapping"),
-            Some(replacement.post_id)
         );
         assert_eq!(
             env.base
@@ -3771,7 +3481,71 @@ mod tests {
                 .scalar_i64("SELECT COUNT(*) FROM posts")
                 .await
                 .expect("count durable Posts"),
-            2
+            1
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn concurrent_same_user_key_creates_one_post_and_durable_mapping(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(Arc::clone(&env.users()), env.write_scope().clone())
+            .await
+            .user_id;
+        let storage = Arc::clone(&env.posts());
+        let key = parse_idempotency_key("concurrent-key");
+        let first_scope = env.write_scope();
+        let first_locks = env.media_content_locks();
+        let second_scope = env.write_scope();
+        let second_locks = env.media_content_locks();
+        let first = perform_post_creation(
+            &first_scope,
+            &first_locks,
+            Arc::clone(&storage),
+            Arc::clone(&env.feed_events()),
+            creation_with_key(user_id, parse_post_body("first"), Some(&key)),
+        );
+        let second = perform_post_creation(
+            &second_scope,
+            &second_locks,
+            Arc::clone(&storage),
+            Arc::clone(&env.feed_events()),
+            creation_with_key(user_id, parse_post_body("second"), Some(&key)),
+        );
+        let outcomes = tokio::join!(first, second);
+        let (created, replayed) = match outcomes {
+            (Ok(created), Err(PerformCreationError::IdempotencyConflict(post_id)))
+            | (Err(PerformCreationError::IdempotencyConflict(post_id)), Ok(created)) => {
+                (confirmed(created), post_id)
+            }
+            other => panic!("expected one create and one replay, got {other:?}"),
+        };
+        assert_eq!(replayed, created.post_id);
+        assert_eq!(
+            storage
+                .post_id_for_idempotency_key(user_id, &key)
+                .await
+                .expect("load durable mapping"),
+            Some(created.post_id)
+        );
+        assert_eq!(
+            env.base
+                .pool()
+                .scalar_i64("SELECT COUNT(*) FROM posts")
+                .await
+                .expect("count Posts"),
+            1
+        );
+        assert_eq!(
+            env.base
+                .pool()
+                .scalar_i64("SELECT COUNT(*) FROM idempotency_keys")
+                .await
+                .expect("count durable mappings"),
+            1
         );
     }
 
@@ -3821,14 +3595,14 @@ mod tests {
 
         assert_eq!(
             storage
-                .post_id_for_idempotency_key(user_a, &key, UtcInstant::now())
+                .post_id_for_idempotency_key(user_a, &key)
                 .await
                 .unwrap(),
             Some(post_a.post_id)
         );
         assert_eq!(
             storage
-                .post_id_for_idempotency_key(user_b, &key, UtcInstant::now())
+                .post_id_for_idempotency_key(user_b, &key)
                 .await
                 .unwrap(),
             Some(post_b.post_id)

@@ -2040,7 +2040,6 @@ mod server_tests {
             .returning(|_transaction, _input, _now, _local_media| {
                 Ok(CreatedPost {
                     record: owned_post(UserId::from(1)),
-                    idempotency_key_expired: false,
                 })
             });
         let owner = mutation_owner(posts);

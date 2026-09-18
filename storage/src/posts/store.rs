@@ -51,8 +51,6 @@ use common::visibility::{AudienceTarget, SubscriberRef, TargetKind, ViewerIdenti
 use host::{
     error::{InternalError, InternalResult},
     feed::FeedPath,
-    metrics,
-    retention::Domain,
 };
 
 // ---------------------------------------------------------------------------
@@ -163,20 +161,12 @@ pub trait PostStorage: Send + Sync {
         inputs: &[CreatePostInput],
     ) -> Result<Vec<PostId>, CreatePostError>;
 
-    /// Returns the unexpired `post_id` a `(user_id, key)` idempotency pair maps
-    /// to. A mapping created one hour or more before `now` never replays, even
-    /// if physical cleanup has not run.
+    /// Returns the `post_id` a durable `(user_id, key)` idempotency pair maps to.
     async fn post_id_for_idempotency_key(
         &self,
         user_id: UserId,
         key: &IdempotencyKey,
-        now: UtcInstant,
     ) -> Result<Option<PostId>, sqlx::Error>;
-
-    /// Physically removes every idempotency mapping expired at `now`, in
-    /// fixed-size statements. Each completed statement releases its connection
-    /// before the next one, so an accumulated backlog never extends one lock.
-    async fn prune_expired_idempotency_keys(&self, now: UtcInstant) -> Result<u64, sqlx::Error>;
 
     /// Fetches a post by its ID, applying the viewer-resolution filter: the post
     /// is returned only if `viewer` is the author or a targeted audience admits
@@ -635,14 +625,13 @@ pub trait PostDialect: Backend {
     }
 
     /// Serializes this `(user_id, key)` with competing creates and returns its
-    /// live mapping under a row lock. `SQLite` already holds its writer lock;
+    /// durable mapping under a row lock. `SQLite` already holds its writer lock;
     /// `PostgreSQL` additionally takes a transaction-scoped advisory lock so an
     /// absent mapping is serialized too.
-    async fn lock_live_idempotency_mapping(
+    async fn lock_idempotency_mapping(
         conn: &mut Self::Connection,
         user_id: UserId,
         key: &IdempotencyKey,
-        cutoff: UtcInstant,
     ) -> sqlx::Result<Option<PostId>>;
 
     /// Deletes every `post_media` row for a post. Bind order: `post_id`.
@@ -851,8 +840,7 @@ where
         now: UtcInstant,
     ) -> Result<CreatedPost, CreatePostError> {
         let connection = DB::write_connection(transaction)?;
-        let (post_id, idempotency_key_expired) =
-            lifecycle::write_post_in_tx::<DB>(connection, input, now).await?;
+        let post_id = lifecycle::write_post_in_tx::<DB>(connection, input, now).await?;
         let sql = format!(
             "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
              FROM posts p JOIN users u ON p.user_id = u.user_id WHERE p.post_id = $1",
@@ -862,10 +850,7 @@ where
             .bind_storage(post_id)
             .fetch_one(connection)
             .await?;
-        Ok(CreatedPost {
-            record,
-            idempotency_key_expired,
-        })
+        Ok(CreatedPost { record })
     }
 
     async fn create_post_with_proven_local_media(
@@ -876,8 +861,7 @@ where
         local_media: &ProvenLocalMediaRefs,
     ) -> Result<CreatedPost, CreatePostError> {
         let connection = DB::write_connection(transaction)?;
-        let (post_id, idempotency_key_expired) =
-            lifecycle::write_post_in_tx::<DB>(connection, input, now).await?;
+        let post_id = lifecycle::write_post_in_tx::<DB>(connection, input, now).await?;
         DB::materialize_proven_local_media(connection, input.user_id, local_media).await?;
         let sql = format!(
             "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
@@ -888,10 +872,7 @@ where
             .bind_storage(post_id)
             .fetch_one(connection)
             .await?;
-        Ok(CreatedPost {
-            record,
-            idempotency_key_expired,
-        })
+        Ok(CreatedPost { record })
     }
 
     #[tracing::instrument(
@@ -918,7 +899,7 @@ where
         DB::lock_media_references(connection, &media).await?;
         let mut ids = Vec::with_capacity(inputs.len());
         for input in inputs {
-            let (post_id, _) =
+            let post_id =
                 lifecycle::write_post_in_tx::<DB>(connection, input, UtcInstant::now()).await?;
             ids.push(post_id);
         }
@@ -934,54 +915,14 @@ where
         &self,
         user_id: UserId,
         key: &IdempotencyKey,
-        now: UtcInstant,
     ) -> Result<Option<PostId>, sqlx::Error> {
-        let cutoff = lifecycle::idempotency_replay_cutoff(now);
         sqlx::query_scalar::<_, PostId>(
-            "SELECT post_id FROM idempotency_keys
-             WHERE user_id = $1 AND key = $2 AND created_at > $3",
+            "SELECT post_id FROM idempotency_keys WHERE user_id = $1 AND key = $2",
         )
         .bind_storage(user_id)
         .bind_storage(key)
-        .bind_storage(cutoff)
         .fetch_optional(&self.pool)
         .await
-    }
-
-    #[tracing::instrument(
-        name = "storage.posts.prune_expired_idempotency_keys",
-        skip(self),
-        fields(db.system = DB::DB_SYSTEM)
-    )]
-    async fn prune_expired_idempotency_keys(&self, now: UtcInstant) -> Result<u64, sqlx::Error> {
-        const BATCH_SIZE: RowLimit = RowLimit::at_most(100);
-        let cutoff = lifecycle::idempotency_replay_cutoff(now);
-        let mut deleted = 0;
-
-        loop {
-            let batch = sqlx::query_scalar::<_, RowCount>(
-                "DELETE FROM idempotency_keys
-                 WHERE idempotency_key_id IN (
-                     SELECT idempotency_key_id FROM idempotency_keys
-                     WHERE created_at <= $1
-                     ORDER BY idempotency_key_id
-                     LIMIT $2
-                 )
-                 RETURNING CAST(1 AS BIGINT)",
-            )
-            .bind_storage(cutoff)
-            .bind_storage(BATCH_SIZE)
-            .fetch_all(&self.pool)
-            .await?
-            .len() as u64;
-            if batch > 0 {
-                metrics::retention_pruned(Domain::IdempotencyKeys, batch);
-            }
-            deleted += batch;
-            if batch < BATCH_SIZE.value().unsigned_abs() {
-                return Ok(deleted);
-            }
-        }
     }
 
     #[tracing::instrument(

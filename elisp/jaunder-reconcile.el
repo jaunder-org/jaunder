@@ -414,7 +414,7 @@ returned."
            (time-add value 0)
          (error nil))))
 
-(defun jaunder--classify-match (match outcome stored-etag synced-at mtime)
+(defun jaunder--classify-match (match outcome stored-etag synced-at mtime &optional persisted-local-ahead)
   "Classify MATCH using Member OUTCOME and its saved local synchronization state.
 OUTCOME is either `(:error ERROR)' for a transport failure or `(:response
 RESPONSE)'.  Prerequisites are checked in protocol order so each row has one
@@ -442,7 +442,11 @@ stable first failure reason."
       (let* ((current (jaunder--response-header response "ETag"))
              (synced (jaunder--reconcile-synced-time synced-at))
              (server-changed (not (equal current stored-etag)))
-             (local-changed (time-less-p (time-add synced 2) mtime)))
+             ;; Recovery after a response-lost create may write ID and ETag
+             ;; within the filesystem timestamp tolerance.  Its persisted
+             ;; marker is authoritative until a conditional PUT succeeds.
+             (local-changed (or (equal persisted-local-ahead "true")
+                                (time-less-p (time-add synced 2) mtime))))
         (jaunder--make-reconcile-row
          :state (cond ((and server-changed local-changed) 'conflict)
                       (server-changed 'server-ahead)
@@ -462,8 +466,9 @@ hide otherwise valid synchronization markers."
                (let ((change-major-mode-hook nil) (after-change-major-mode-hook nil))
                  (delay-mode-hooks (org-mode)))
                (list (jaunder--buffer-property "JAUNDER_SYNCED")
-                     (jaunder--buffer-property "JAUNDER_SYNCED_AT")))
-           (error (list nil nil)))))
+                     (jaunder--buffer-property "JAUNDER_SYNCED_AT")
+                     (jaunder--buffer-property "JAUNDER_LOCAL_AHEAD")))
+           (error (list nil nil nil)))))
     (append markers
             (list
              (condition-case nil
@@ -484,7 +489,7 @@ hide otherwise valid synchronization markers."
                    (jaunder-inventory-match-local match))))
     (jaunder--classify-match
      match (jaunder--reconcile-member-outcome (jaunder-inventory-match-member match))
-     (nth 0 markers) (nth 1 markers) (nth 2 markers))))
+     (nth 0 markers) (nth 1 markers) (nth 3 markers) (nth 2 markers))))
 
 (defun jaunder--reconcile-build-report (root inventory)
   "Build a total reconciliation report for ROOT from D1 INVENTORY."

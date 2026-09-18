@@ -518,7 +518,6 @@ fn media_ownership(
 }
 
 fn database_maintenance(
-    posts: Arc<dyn PostStorage>,
     invites: Arc<dyn storage::InviteStorage>,
     email_verifications: Arc<dyn storage::EmailVerificationStorage>,
     password_resets: Arc<dyn storage::PasswordResetStorage>,
@@ -526,14 +525,8 @@ fn database_maintenance(
     passkeys: Arc<dyn storage::PasskeyStorage>,
     write_scope: WriteScope,
 ) -> DatabaseMaintenance {
-    DatabaseMaintenance::new(
-        posts,
-        invites,
-        email_verifications,
-        password_resets,
-        feed_events,
-    )
-    .with_passkeys(passkeys, write_scope)
+    DatabaseMaintenance::new(invites, email_verifications, password_resets, feed_events)
+        .with_passkeys(passkeys, write_scope)
 }
 
 fn feed_worker(
@@ -755,7 +748,6 @@ fn prepare_background_worker_setup_from_dependencies(
     capture: Option<&ServeCapturePaths>,
 ) -> BackgroundWorkerSetup {
     let maintenance = database_maintenance(
-        Arc::clone(&dependencies.posts),
         Arc::clone(&dependencies.invites),
         Arc::clone(&dependencies.email_verifications),
         Arc::clone(&dependencies.password_resets),
@@ -1219,7 +1211,6 @@ mod tests {
         let write_scope = factory.write_scope();
         BackgroundWorkerSetup {
             maintenance: DatabaseMaintenance::new(
-                Arc::clone(&posts),
                 invites,
                 email_verifications,
                 password_resets,

@@ -345,6 +345,19 @@
                      (encode-time 2 0 12 25 8 2026 t)))))
         (should (eq (jaunder-reconcile-row-state row) (nth 2 fixture)))))))
 
+(ert-deftest jaunder-reconcile-persisted-local-ahead-beats-mtime-tolerance ()
+  "Recovery's explicit marker survives a within-tolerance write-back."
+  (let* ((match (jaunder--make-inventory-match
+                 :local (jaunder-reconcile-test--local "/tmp/match.org" "7")
+                 :member (jaunder-reconcile-test--member "7" "match")))
+         (outcome (list :response (list :status 200 :headers '(("etag" . "\"old\"")))))
+         (synced "2026-08-25T12:00:00Z"))
+    (should (eq (jaunder-reconcile-row-state
+                 (jaunder--classify-match
+                  match outcome "\"old\"" synced
+                  (encode-time 1 0 12 25 8 2026 t) "true"))
+                'local-ahead))))
+
 (ert-deftest jaunder-reconcile-two-second-mtime-boundary-is-not-local-change ()
   "Only an mtime more than two seconds after sync marks a local change."
   (let* ((match (jaunder--make-inventory-match
@@ -476,6 +489,7 @@
                            (jaunder--classify-match match outcome
                                                     (nth 0 markers)
                                                     (nth 1 markers)
+                                                    (nth 3 markers)
                                                     (nth 2 markers)))
                           'file-mtime-unreadable)))))
       (delete-directory root t))))
@@ -485,7 +499,7 @@
   (let ((local (jaunder-reconcile-test--local
                 "/definitely-missing/jaunder-post.org" "7")))
     (should (equal (jaunder--reconcile-local-markers local)
-                   '(nil nil nil)))))
+                   '(nil nil nil nil)))))
 
 (ert-deftest jaunder-reconcile-selects-the-most-specific-configured-root ()
   "Nested reconciliation resolves its active blog and inventory root by longest prefix."

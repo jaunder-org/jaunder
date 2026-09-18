@@ -389,27 +389,22 @@ keys carry it through post creation and the owned type is bound for persistence.
 The existing `idempotency_keys` table stores the key as `TEXT NOT NULL` and
 enforces `UNIQUE(user_id, key)`. Storage serializes each `(user_id, key)` pair
 inside the create transaction (`SQLite`'s writer lock; a `PostgreSQL` advisory
-lock plus row lock) and applies the request's authoritative cutoff there. A live
-mapping returns its selected `PostId` as the replay decision without attempting
-new Post or feed-event writes; the AtomPub handler fetches that fixed Post
-rather than looking the mapping up again after rollback. An expired mapping is
-removed and its replacement Post and key row are written atomically. Fresh
-creation returns `201`; when its original Post remains available, same-User key
-reuse returns that original Post as `200`, even when the new payload differs.
-Another User may use the same key independently. The
-[bounded transient-data retention decision](adr/0167-bounded-transient-data-retention.md)
-gives mappings a one-hour semantic replay window.
+lock plus row lock). A durable mapping returns its selected `PostId` as the
+replay decision without attempting new Post or feed-event writes; the AtomPub
+handler fetches that fixed Post rather than looking the mapping up again after
+rollback. Fresh creation returns `201`; while its original Post remains active,
+same-User key reuse returns that original Post as `200`, even when the new
+payload differs. After the original Post is soft-deleted, reuse returns
+`409 Conflict` and the key remains consumed. Another User may use the same key
+independently.
 
-#### Committed direction: Durable AtomPub create intent
-
-A successful keyed create will permanently consume its `(User, Idempotency-Key)`
+A successful keyed create permanently consumes its `(User, Idempotency-Key)`
 pair as durable Post-create correlation
 ([durable AtomPub create intent](adr/drafts/durable-atompub-create-intent.md)).
-After the original Post is soft-deleted, reuse will return `409 Conflict` rather
-than authorize a replacement. The mapping will have no semantic expiry and will
-follow the retained Post identity lifecycle. This supersedes only ADR-0167's
-one-hour Post-create mapping rule; that decision's other transient-data policies
-stand.
+The mapping has no semantic expiry, follows the retained Post identity
+lifecycle, and is not a maintenance-cleanup domain. This supersedes only
+ADR-0167's one-hour Post-create mapping rule; that decision's other
+transient-data policies stand.
 
 ### Testing (summary)
 
@@ -2630,23 +2625,19 @@ response-bearing `plz-error` into the ordinary response plist, so a signalled
 as a missing `auth-source` entry propagate immediately
 ([Emacs auth-source App Password storage](adr/0143-emacs-auth-source-app-password-storage.md)).
 Transport retry uses up to three attempts with one- then two-second backoff
-under **one** `Idempotency-Key`, so the server dedups the replay. The key is
-ephemeral, not stable across invocations: it is a fresh md5 of local entropy per
-call, so a later re-publish gets a new key and an edit is never mistaken for a
-retry. The server side of that contract was decided in issue
-[#79](https://github.com/jaunder-org/jaunder/issues/79) as a follow-on to
-ADR-0047 — see the Storage section.
+under the durable create intent's `Idempotency-Key`, so the server dedups the
+replay.
 
-#### Committed direction: Durable create recovery
-
-Before the first create request, publish will durably record the key,
+Before the first create request, publish durably records the key,
 request-content digest, and attempt time in the local Post; every later
-invocation will reuse that create intent until the returned Post ID is safely
-written, then remove it
+invocation reuses that create intent until the returned Post ID is safely
+written, then removes it
 ([durable AtomPub create intent](adr/drafts/durable-atompub-create-intent.md)).
-If local content changes after an indeterminate create, replay will first
-recover identity but leave the file local-ahead for an explicit conditional
-update rather than mark the changed content synchronized.
+If local content changes after an indeterminate create, replay recovers identity
+but writes an explicit local-ahead marker. Reconciliation consumes that marker
+independently of filesystem timestamp tolerance; only a later successful
+conditional update clears it rather than marking the changed content
+synchronized.
 
 ### Pull, reconcile, and durable local media
 

@@ -58,7 +58,7 @@ enum_attr!(CacheResult { Hit => "hit", Miss => "miss" });
 enum_attr!(BackupResult { Success => "success", Failure => "failure" });
 enum_attr!(PostEvent { Created => "created", Updated => "updated", Published => "published", Deleted => "deleted" });
 enum_attr!(AtompubResult { Ok => "ok", ClientError => "client_error", ServerError => "server_error" });
-enum_attr!(IdempotencyEvent { Created => "created", Replayed => "replayed", Expired => "expired" });
+enum_attr!(IdempotencyEvent { Created => "created", Replayed => "replayed" });
 
 struct Instruments {
     logins: Counter<u64>,
@@ -493,7 +493,6 @@ mod tests {
         post(PostEvent::Published);
         idempotency(IdempotencyEvent::Created);
         idempotency(IdempotencyEvent::Replayed);
-        idempotency(IdempotencyEvent::Expired);
         retention_run(Domain::Invites, CleanupResult::Success);
         retention_pruned(Domain::Invites, 3);
         atompub_request("POST /feed", AtompubResult::ClientError);
@@ -877,7 +876,6 @@ mod tests {
 
         assert_eq!(IdempotencyEvent::Created.as_str(), "created");
         assert_eq!(IdempotencyEvent::Replayed.as_str(), "replayed");
-        assert_eq!(IdempotencyEvent::Expired.as_str(), "expired");
     }
 
     #[test]

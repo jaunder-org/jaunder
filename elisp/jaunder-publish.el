@@ -82,13 +82,16 @@ A no-op when already so named; on collision appends `-N'.  Returns the path."
         (set-visited-file-name final t t)
         final))))
 
-(defun jaunder--write-back (response created)
+(defun jaunder--write-back (response created &optional create-intent-matches conditional-update)
   "Persist server-assigned values from RESPONSE into the current buffer.
 RESPONSE is a `jaunder--http-request' plist.  CREATED non-nil (a POST) writes
-JAUNDER_ID from the `Location' header; an update leaves it unchanged.  Writes
-JAUNDER_ID first, then JAUNDER_SLUG, JAUNDER_SYNCED (ETag, verbatim),
-JAUNDER_SYNCED_AT (now), and the resolved publish time.  Saves the buffer and
-returns the slug.
+JAUNDER_ID from the `Location' header; an update leaves it unchanged.  A create
+whose current Entry differs from its persisted intent recovers identity but does
+not claim synchronization.  A changed recovery records an explicit local-ahead
+marker, which a later successful conditional PUT clears.  Writes JAUNDER_ID
+first, then JAUNDER_SLUG, JAUNDER_SYNCED (ETag, verbatim), JAUNDER_SYNCED_AT
+(the original attempt time for changed recovery, otherwise now), and the
+resolved publish time.  Saves the buffer and returns the slug.
 
 Precondition for the publish-now `#+DATE:' render: the buffer's JAUNDER_DATE_TZ
 must already be recorded (the command calls `jaunder--ensure-date-tz' before the
@@ -98,14 +101,27 @@ send); absent it, the render falls back to the local zone via
          (slug (cdr (assq 'slug fields)))
          (published (cdr (assq 'published fields)))
          (etag (jaunder--response-header response "ETag"))
-         (now (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t)))
+         (now (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t))
+         (synced-at (if (eq create-intent-matches 'changed)
+                        (or (jaunder--buffer-property "JAUNDER_CREATE_ATTEMPT_AT") now)
+                      now)))
     (when created
       (let ((id (jaunder--location->id
                  (jaunder--response-header response "Location"))))
-        (when id (jaunder--set-property "JAUNDER_ID" id))))
+        (when id
+          (jaunder--set-property "JAUNDER_ID" id)
+          ;; The ID must reach disk before clearing the recovery intent.
+          (save-buffer))))
     (when slug (jaunder--set-property "JAUNDER_SLUG" slug))
+    ;; A replay's ETag is the remote baseline even when the local Entry changed
+    ;; after its recorded create attempt.  The original attempt time leaves that
+    ;; changed file visibly local-ahead rather than marker-unclassifiable.
     (when etag (jaunder--set-property "JAUNDER_SYNCED" etag))
-    (jaunder--set-property "JAUNDER_SYNCED_AT" now)
+    (jaunder--set-property "JAUNDER_SYNCED_AT" synced-at)
+    (when (eq create-intent-matches 'changed)
+      (jaunder--set-property "JAUNDER_LOCAL_AHEAD" "true"))
+    (when conditional-update
+      (jaunder--remove-property "JAUNDER_LOCAL_AHEAD"))
     (when published
       ;; published→UTC (drop the offset): the canonical value the server stamped.
       (let ((utc (format-time-string "%Y-%m-%dT%H:%M:%SZ"
@@ -116,6 +132,11 @@ send); absent it, the render falls back to the local zone via
         (unless (jaunder--buffer-keyword "DATE")
           (jaunder--set-keyword "DATE" (jaunder--utc->org-date utc tz)))))
     (save-buffer)
+    (when (jaunder--buffer-property "JAUNDER_ID")
+      (jaunder--remove-property "JAUNDER_CREATE_KEY")
+      (jaunder--remove-property "JAUNDER_CREATE_DIGEST")
+      (jaunder--remove-property "JAUNDER_CREATE_ATTEMPT_AT")
+      (save-buffer))
     slug))
 
 (defun jaunder--new-post-in (dir now-string)
@@ -343,15 +364,14 @@ error rather than an implicit target choice."
 Self-contained (no `org-id' dependency): an md5 of local entropy."
   (md5 (format "%s%s%s" (random) (float-time) (emacs-pid))))
 
-(defun jaunder--create-with-retry (url xml)
+(defun jaunder--create-with-retry (url xml &optional key)
   "POST XML to URL as a create, retrying transient failures with one key.
 Sends a stable `Idempotency-Key' header so the server dedups a retried create.
 Retries a signalled transport error or a 5xx status, up to 3 attempts total
 (backoff ~1s then ~2s); a 4xx or 2xx returns immediately.  Returns the
 `jaunder--http-request' response plist.  The ephemeral key lives only for this
-call — a later re-publish gets a fresh key, so an edit is never mistaken for a
-retry."
-  (let ((key (jaunder--idempotency-key))
+call unless KEY is supplied by durable create recovery."
+  (let ((key (or key (jaunder--idempotency-key)))
         (delays '(1 2))
         (attempt 0)
         resp)
@@ -370,14 +390,33 @@ retry."
          (t (setq resp r)))))
     resp))
 
+(defun jaunder--create-intent (xml)
+  "Persist and return the durable create intent for exact sent XML.
+The digest distinguishes a later local edit from the Entry that may already
+have committed after a response-less request."
+  (let ((key (or (jaunder--buffer-property "JAUNDER_CREATE_KEY")
+                 (jaunder--idempotency-key))))
+    (unless (jaunder--buffer-property "JAUNDER_CREATE_KEY")
+      (jaunder--set-property "JAUNDER_CREATE_KEY" key)
+      (jaunder--set-property "JAUNDER_CREATE_DIGEST" (secure-hash 'sha256 xml))
+      (jaunder--set-property "JAUNDER_CREATE_ATTEMPT_AT"
+                             (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t))
+      (save-buffer))
+    (list :key key
+          :matches (if (equal (jaunder--buffer-property "JAUNDER_CREATE_DIGEST")
+                              (secure-hash 'sha256 xml))
+                       'matched
+                     'changed))))
+
 (defun jaunder-publish (&optional force-draft)
   "Publish the current buffer's org post over AtomPub.
 Resolves the blog from the buffer's file, records the machine zone when unset,
 maps + validates, uploads media (sent body only), sends (POST create / PUT with
 If-Match on update), writes back server values (ID first), and renames the temp
 file to <slug>.org.  With FORCE-DRAFT (see `jaunder-save-draft') pushes an
-`app:draft' regardless of JAUNDER_STATUS.  A non-2xx status leaves the on-disk
-file pristine."
+`app:draft' regardless of JAUNDER_STATUS.  A non-2xx create leaves any
+previously authored content intact but retains its durable create intent for
+safe retry."
   (interactive)
   (let ((file (or (buffer-file-name)
                   (error "jaunder: buffer is not visiting a file"))))
@@ -409,6 +448,7 @@ file pristine."
          (setf (jaunder-entry-body entry)
                (jaunder--localize-media (jaunder-entry-body entry)))
          (let* ((xml (jaunder--atom-entry->xml entry))
+                (intent (unless id (jaunder--create-intent xml)))
                 (resp (if id
                           (jaunder--http-request
                            "PUT"
@@ -418,11 +458,13 @@ file pristine."
                         (jaunder--create-with-retry
                          (jaunder--build-url (jaunder--active-base-url) "atompub"
                                              (jaunder--active-username) "posts")
-                         xml)))
+                         xml (plist-get intent :key))))
                 (code (plist-get resp :status)))
            (unless (memq code '(200 201))
              (error "jaunder: publish failed (HTTP %s)" code))
-           (let ((slug (jaunder--write-back resp (null id))))
+           (let ((slug (jaunder--write-back resp (null id)
+                                            (plist-get intent :matches)
+                                            (and id synced))))
              (when slug (jaunder--rename-to-slug slug))
              (message "jaunder: published %s" (or slug "")))))))))
 
