@@ -675,5 +675,13 @@
                              (buffer-string))
                            "winner"))))
       (delete-directory root t))))
+(ert-deftest jaunder-pull-stage-member-rejects-non-inventory-input-before-network ()
+  "Staging accepts only the inventory Member shape established by reconciliation."
+  (let (requested)
+    (cl-letf (((symbol-function 'jaunder--http-request)
+               (lambda (&rest _) (setq requested t))))
+      (should-error (jaunder--pull-stage-member "/tmp" 'not-a-member)))
+    (should-not requested)))
+
 (provide 'jaunder-pull-test)
 ;;; jaunder-pull-test.el ends here

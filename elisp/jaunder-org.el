@@ -109,6 +109,18 @@ touched."
    (format "^[ \t]*#\\+PROPERTY:[ \t]+%s\\(?:[ \t].*\\)?$" (regexp-quote key))
    (format "#+PROPERTY: %s %s" key value)))
 
+(defun jaunder--remove-property (key)
+  "Remove the file-level #+PROPERTY: KEY when it exists."
+  (save-excursion
+    (goto-char (point-min))
+    (let ((case-fold-search t)
+          (limit (jaunder--body-start)))
+      (when (re-search-forward
+             (format "^[ \t]*#\\+PROPERTY:[ \t]+%s\\(?:[ \t].*\\)?\\n?"
+                     (regexp-quote key))
+             limit t)
+        (replace-match "")))))
+
 (defun jaunder--set-keyword (keyword value)
   "Set the file-level #+KEYWORD: to VALUE (idempotent replace or insert)."
   (jaunder--set-keyword-line

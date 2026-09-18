@@ -18,7 +18,7 @@ use host::{
 };
 use storage::{
     EmailVerificationStorage, FeedEventStorage, InviteStorage, PasskeyStorage,
-    PasswordResetStorage, PostStorage, WriteScope,
+    PasswordResetStorage, WriteScope,
 };
 use tokio_cron_scheduler::{Job, JobScheduler};
 
@@ -29,7 +29,6 @@ pub(crate) const DATABASE_MAINTENANCE_INTERVAL: Duration = Duration::new(86_400,
 /// This composition-root service knows the schedule and ordering only. Cutoffs,
 /// batches, and SQL remain owned by each storage domain.
 pub(crate) struct DatabaseMaintenance {
-    posts: Arc<dyn PostStorage>,
     invites: Arc<dyn InviteStorage>,
     email_verifications: Arc<dyn EmailVerificationStorage>,
     password_resets: Arc<dyn PasswordResetStorage>,
@@ -39,14 +38,12 @@ pub(crate) struct DatabaseMaintenance {
 
 impl DatabaseMaintenance {
     pub(crate) fn new(
-        posts: Arc<dyn PostStorage>,
         invites: Arc<dyn InviteStorage>,
         email_verifications: Arc<dyn EmailVerificationStorage>,
         password_resets: Arc<dyn PasswordResetStorage>,
         feed_events: Arc<dyn FeedEventStorage>,
     ) -> Self {
         Self {
-            posts,
             invites,
             email_verifications,
             password_resets,
@@ -68,10 +65,6 @@ impl DatabaseMaintenance {
 
     /// Runs every cleanup domain against one frozen eligibility instant.
     pub(crate) async fn run_at(&self, now: UtcInstant) {
-        report_cleanup(
-            Domain::IdempotencyKeys,
-            self.posts.prune_expired_idempotency_keys(now).await,
-        );
         report_cleanup(Domain::Invites, self.invites.prune_invites(now).await);
         report_cleanup(
             Domain::EmailVerifications,
@@ -196,14 +189,18 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use common::{
+        idempotency_key::IdempotencyKey, test_support::parse_post_body, visibility::AudienceTarget,
+    };
     use rstest::*;
     use rstest_reuse::*;
     use sqlx::Error as SqlxError;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use storage::{
         FeedEventError, MockEmailVerificationStorage, MockFeedEventStorage, MockInviteStorage,
-        MockPasskeyStorage, MockPasswordResetStorage, MockPostStorage,
-        test_support::{Backend, backends, mock_write_scope},
+        MockPasskeyStorage, MockPasswordResetStorage, PerformCreationError,
+        PostBookkeepingExpectation, PostCreation, PostFormat, perform_post_creation_at,
+        test_support::{Backend, SeedUser, backends, confirmed, mock_write_scope},
     };
     use tokio::time;
     #[derive(Clone)]
@@ -247,19 +244,109 @@ mod tests {
     }
 
     fn maintenance(
-        posts: MockPostStorage,
         invites: MockInviteStorage,
         email_verifications: MockEmailVerificationStorage,
         password_resets: MockPasswordResetStorage,
         feed_events: MockFeedEventStorage,
     ) -> DatabaseMaintenance {
         DatabaseMaintenance::new(
-            Arc::new(posts),
             Arc::new(invites),
             Arc::new(email_verifications),
             Arc::new(password_resets),
             Arc::new(feed_events),
         )
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn maintenance_keeps_aged_keyed_post_replayable(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(Arc::clone(&env.users()), env.write_scope())
+            .await
+            .user_id;
+        let posts = env.posts();
+        let key: IdempotencyKey = "maintenance-survival-key".parse().expect("valid key");
+        let created_at: UtcInstant = "2026-08-31T12:00:00Z".parse().expect("fixed instant");
+        let created = confirmed(
+            perform_post_creation_at(
+                &env.write_scope(),
+                &env.media_content_locks(),
+                Arc::clone(&posts),
+                env.feed_events(),
+                created_at,
+                PostCreation {
+                    user_id,
+                    body: parse_post_body("original body"),
+                    title: None,
+                    format: PostFormat::Markdown,
+                    slug_override: None,
+                    published_at: Some(created_at),
+                    max_attempts: 100,
+                    summary: None,
+                    audiences: vec![AudienceTarget::Public],
+                    tags: Vec::new(),
+                    idempotency_key: Some(&key),
+                    expectations: PostBookkeepingExpectation::default(),
+                },
+            )
+            .await
+            .expect("keyed create"),
+        );
+        env.base
+            .pool()
+            .execute(
+                "UPDATE idempotency_keys SET created_at = '2000-01-01 00:00:00+00' \
+                 WHERE key = 'maintenance-survival-key'",
+            )
+            .await
+            .expect("age retained mapping");
+
+        DatabaseMaintenance::new(
+            env.invites(),
+            env.email_verifications(),
+            env.password_resets(),
+            env.feed_events(),
+        )
+        .with_passkeys(env.passkeys(), env.write_scope())
+        .run_at("2030-08-31T12:00:00Z".parse().expect("maintenance instant"))
+        .await;
+
+        let replay = perform_post_creation_at(
+            &env.write_scope(),
+            &env.media_content_locks(),
+            Arc::clone(&posts),
+            env.feed_events(),
+            "2030-08-31T12:00:00Z".parse().expect("replay instant"),
+            PostCreation {
+                user_id,
+                body: parse_post_body("replacement body"),
+                title: None,
+                format: PostFormat::Markdown,
+                slug_override: None,
+                published_at: Some(created_at),
+                max_attempts: 100,
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+                tags: Vec::new(),
+                idempotency_key: Some(&key),
+                expectations: PostBookkeepingExpectation::default(),
+            },
+        )
+        .await
+        .expect_err("maintenance must not retire the durable mapping");
+        assert!(matches!(
+            replay,
+            PerformCreationError::IdempotencyConflict(post_id) if post_id == created.post_id
+        ));
+        assert_eq!(
+            env.base
+                .pool()
+                .scalar_i64("SELECT COUNT(*) FROM posts")
+                .await
+                .expect("count Posts"),
+            1
+        );
     }
 
     #[tokio::test]
@@ -354,7 +441,6 @@ mod tests {
             Arc::new(stores.1),
             Arc::new(stores.2),
             Arc::new(stores.3),
-            Arc::new(stores.4),
         )
         .with_passkeys(Arc::new(passkeys), mock_write_scope())
         .run_at(now)
@@ -364,17 +450,11 @@ mod tests {
     fn successful_stores(
         expected_now: UtcInstant,
     ) -> (
-        MockPostStorage,
         MockInviteStorage,
         MockEmailVerificationStorage,
         MockPasswordResetStorage,
         MockFeedEventStorage,
     ) {
-        let mut posts = MockPostStorage::new();
-        posts
-            .expect_prune_expired_idempotency_keys()
-            .withf(move |actual| *actual == expected_now)
-            .returning(|_| Ok(1));
         let mut invites = MockInviteStorage::new();
         invites
             .expect_prune_invites()
@@ -395,13 +475,7 @@ mod tests {
             .expect_prune_terminal_events()
             .withf(move |actual| *actual == expected_now)
             .returning(|_| Ok(5));
-        (
-            posts,
-            invites,
-            email_verifications,
-            password_resets,
-            feed_events,
-        )
+        (invites, email_verifications, password_resets, feed_events)
     }
 
     // guard:no-backend — storage mocks verify composition-root time and isolation.
@@ -409,7 +483,7 @@ mod tests {
     async fn run_at_freezes_one_instant_for_every_domain() {
         let now: UtcInstant = "2026-08-31T12:00:00Z".parse().expect("fixed instant");
         let stores = successful_stores(now);
-        maintenance(stores.0, stores.1, stores.2, stores.3, stores.4)
+        maintenance(stores.0, stores.1, stores.2, stores.3)
             .run_at(now)
             .await;
     }
@@ -418,12 +492,6 @@ mod tests {
     #[tokio::test]
     async fn run_at_continues_after_each_domain_failure() {
         let now: UtcInstant = "2026-08-31T12:00:00Z".parse().expect("fixed instant");
-        let mut posts = MockPostStorage::new();
-        posts
-            .expect_prune_expired_idempotency_keys()
-            .withf(move |actual| *actual == now)
-            .times(1)
-            .returning(|_| Err(SqlxError::PoolClosed));
         let mut invites = MockInviteStorage::new();
         invites
             .expect_prune_invites()
@@ -449,34 +517,23 @@ mod tests {
             .times(1)
             .returning(|_| Err(FeedEventError::Db(SqlxError::PoolClosed)));
 
-        maintenance(
-            posts,
-            invites,
-            email_verifications,
-            password_resets,
-            feed_events,
-        )
-        .run_at(now)
-        .await;
+        maintenance(invites, email_verifications, password_resets, feed_events)
+            .run_at(now)
+            .await;
     }
     // guard:no-backend — mocks prove a swallowed failure remains eligible next run.
     #[tokio::test]
     async fn failed_domain_is_retried_on_the_next_run() {
         let attempts = Arc::new(AtomicUsize::new(0));
-        let post_attempts = Arc::clone(&attempts);
-        let mut posts = MockPostStorage::new();
-        posts
-            .expect_prune_expired_idempotency_keys()
-            .times(2)
-            .returning(move |_| {
-                if post_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
-                    Err(SqlxError::PoolClosed)
-                } else {
-                    Ok(1)
-                }
-            });
+        let invite_attempts = Arc::clone(&attempts);
         let mut invites = MockInviteStorage::new();
-        invites.expect_prune_invites().times(2).returning(|_| Ok(0));
+        invites.expect_prune_invites().times(2).returning(move |_| {
+            if invite_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                Err(SqlxError::PoolClosed)
+            } else {
+                Ok(0)
+            }
+        });
         let mut email_verifications = MockEmailVerificationStorage::new();
         email_verifications
             .expect_prune_email_verifications()
@@ -492,13 +549,7 @@ mod tests {
             .expect_prune_terminal_events()
             .times(2)
             .returning(|_| Ok(0));
-        let maintenance = maintenance(
-            posts,
-            invites,
-            email_verifications,
-            password_resets,
-            feed_events,
-        );
+        let maintenance = maintenance(invites, email_verifications, password_resets, feed_events);
 
         let first: UtcInstant = "2026-08-31T12:00:00Z".parse().expect("first instant");
         let second: UtcInstant = "2026-09-01T12:00:00Z".parse().expect("second instant");
@@ -511,11 +562,6 @@ mod tests {
     // guard:no-backend — failing storage mocks prove maintenance is startup-best-effort.
     #[tokio::test]
     async fn start_survives_database_cleanup_failures() {
-        let mut posts = MockPostStorage::new();
-        posts
-            .expect_prune_expired_idempotency_keys()
-            .times(1)
-            .returning(|_| Err(SqlxError::PoolClosed));
         let mut invites = MockInviteStorage::new();
         invites
             .expect_prune_invites()
@@ -537,16 +583,10 @@ mod tests {
             .times(1)
             .returning(|_| Err(FeedEventError::Db(SqlxError::PoolClosed)));
 
-        let mut scheduler = maintenance(
-            posts,
-            invites,
-            email_verifications,
-            password_resets,
-            feed_events,
-        )
-        .start(Duration::from_mins(1))
-        .await
-        .expect("cleanup failures must not fail scheduler startup");
+        let mut scheduler = maintenance(invites, email_verifications, password_resets, feed_events)
+            .start(Duration::from_mins(1))
+            .await
+            .expect("cleanup failures must not fail scheduler startup");
         scheduler.shutdown().await.expect("shutdown scheduler");
     }
 
@@ -554,17 +594,12 @@ mod tests {
     #[tokio::test]
     async fn start_runs_immediately_then_repeats() {
         let calls = Arc::new(AtomicUsize::new(0));
-
-        let post_calls = Arc::clone(&calls);
-        let mut posts = MockPostStorage::new();
-        posts
-            .expect_prune_expired_idempotency_keys()
-            .returning(move |_| {
-                post_calls.fetch_add(1, Ordering::SeqCst);
-                Ok(0)
-            });
+        let invite_calls = Arc::clone(&calls);
         let mut invites = MockInviteStorage::new();
-        invites.expect_prune_invites().returning(|_| Ok(0));
+        invites.expect_prune_invites().returning(move |_| {
+            invite_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(0)
+        });
         let mut email_verifications = MockEmailVerificationStorage::new();
         email_verifications
             .expect_prune_email_verifications()
@@ -578,16 +613,10 @@ mod tests {
             .expect_prune_terminal_events()
             .returning(|_| Ok(0));
 
-        let mut scheduler = maintenance(
-            posts,
-            invites,
-            email_verifications,
-            password_resets,
-            feed_events,
-        )
-        .start(Duration::from_secs(1))
-        .await
-        .expect("start maintenance scheduler");
+        let mut scheduler = maintenance(invites, email_verifications, password_resets, feed_events)
+            .start(Duration::from_secs(1))
+            .await
+            .expect("start maintenance scheduler");
 
         time::timeout(Duration::from_secs(3), async {
             while calls.load(Ordering::SeqCst) < 2 {

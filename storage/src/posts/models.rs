@@ -335,8 +335,6 @@ impl From<common::org::OrgBookkeeping> for PostBookkeepingExpectation {
 /// has committed.
 pub struct CreatedPost {
     pub record: PostRecord,
-    /// Whether the transaction retired an expired mapping before replacing it.
-    pub idempotency_key_expired: bool,
 }
 
 /// The old/new state evidence a Post mutation supplies to its owning service.

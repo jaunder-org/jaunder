@@ -270,11 +270,10 @@ impl PostDialect for Postgres {
         Ok(())
     }
 
-    async fn lock_live_idempotency_mapping(
+    async fn lock_idempotency_mapping(
         conn: &mut <Self as sqlx::Database>::Connection,
         user_id: UserId,
         key: &IdempotencyKey,
-        cutoff: UtcInstant,
     ) -> sqlx::Result<Option<PostId>> {
         sqlx::query("SELECT pg_advisory_xact_lock($1)")
             .bind_storage(lifecycle::idempotency_advisory_lock_key(user_id, key))
@@ -282,12 +281,11 @@ impl PostDialect for Postgres {
             .await?;
         sqlx::query_scalar(
             "SELECT post_id FROM idempotency_keys
-             WHERE user_id = $1 AND key = $2 AND created_at > $3
+             WHERE user_id = $1 AND key = $2
              FOR UPDATE",
         )
         .bind_storage(user_id)
         .bind_storage(key)
-        .bind_storage(cutoff)
         .fetch_optional(&mut *conn)
         .await
     }

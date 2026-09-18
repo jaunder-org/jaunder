@@ -96,7 +96,7 @@ async fn create_with_same_idempotency_key_dedups(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
-async fn replay_for_deleted_post_returns_not_found(#[case] backend: Backend) {
+async fn replay_for_deleted_post_returns_conflict(#[case] backend: Backend) {
     // A live retry mapping must not bypass the active-Post boundary after deletion.
     let env = backend.setup().await;
     let base = &env.base;
@@ -125,7 +125,7 @@ async fn replay_for_deleted_post_returns_not_found(#[case] backend: Backend) {
     assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
 
     let replayed = create_post_keyed(app, &session, &xml, Some("deleted-key")).await;
-    assert_eq!(replayed.status(), StatusCode::NOT_FOUND);
+    assert_eq!(replayed.status(), StatusCode::CONFLICT);
     assert_eq!(
         base.pool()
             .scalar_i64("SELECT COUNT(*) FROM posts")
@@ -138,7 +138,7 @@ async fn replay_for_deleted_post_returns_not_found(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
-async fn create_with_expired_idempotency_key_creates_a_replacement(#[case] backend: Backend) {
+async fn create_with_old_idempotency_key_replays_the_original(#[case] backend: Backend) {
     let env = backend.setup().await;
     let base = &env.base;
     let session = create_user_and_session(
@@ -163,15 +163,15 @@ async fn create_with_expired_idempotency_key_creates_a_replacement(#[case] backe
         .expect("age the retained mapping as a restored backup may");
 
     let replacement_xml = entry_xml("Replacement", "text", "replacement body");
-    let replacement = create_post_keyed(app, &session, &replacement_xml, Some("expired-key")).await;
-    assert_eq!(replacement.status(), StatusCode::CREATED);
-    assert_ne!(location_of(&replacement), first_location);
+    let replay = create_post_keyed(app, &session, &replacement_xml, Some("expired-key")).await;
+    assert_eq!(replay.status(), StatusCode::OK);
+    assert_eq!(location_of(&replay), first_location);
     assert_eq!(
         base.pool()
             .scalar_i64("SELECT COUNT(*) FROM posts")
             .await
             .expect("count durable Posts"),
-        2
+        1
     );
 }
 

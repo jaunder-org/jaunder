@@ -1,6 +1,5 @@
 //! Post lifecycle bookkeeping, revisions, and shared mutation support.
 
-use jiff::ToSpan;
 use sha2::{Digest, Sha256};
 use sqlx::{AssertSqlSafe, Database, Decode, Encode, Executor, Pool, Result, Row, Type};
 
@@ -14,7 +13,7 @@ use crate::posts::models::{
 use crate::posts::store::PostDialect;
 use crate::posts::tags;
 use crate::posts::visibility;
-use crate::sql::{Exists, QueryStorageExt, RowCount};
+use crate::sql::{Exists, QueryStorageExt};
 use crate::write_scope::WriteTransaction;
 use common::idempotency_key::IdempotencyKey;
 use common::ids::{AudienceId, PostId, RevisionId, UserId};
@@ -27,18 +26,6 @@ use common::slug::Slug;
 use common::tag::TagLabel;
 use common::time::UtcInstant;
 use host::etag;
-
-const IDEMPOTENCY_REPLAY_WINDOW_HOURS: i64 = 1;
-
-pub(crate) fn idempotency_replay_cutoff(now: UtcInstant) -> UtcInstant {
-    // At Timestamp::MIN no mapping can predate the replay window, so clamping
-    // keeps the replay predicate correct at the representable boundary.
-    UtcInstant::from(
-        now.value()
-            .saturating_sub(IDEMPOTENCY_REPLAY_WINDOW_HOURS.hours())
-            .map_or(jiff::Timestamp::MIN, std::convert::identity),
-    )
-}
 
 /// Persistence operation for a post's publication/deletion lifecycle.
 #[derive(Clone, Copy, Debug)]
@@ -484,11 +471,10 @@ pub(crate) async fn write_post_in_tx<DB>(
     conn: &mut DB::Connection,
     input: &CreatePostInput,
     now: UtcInstant,
-) -> Result<(PostId, bool), CreatePostError>
+) -> Result<PostId, CreatePostError>
 where
     DB: PostDialect,
     for<'q> i64: Decode<'q, DB> + Encode<'q, DB> + Type<DB>,
-    for<'q> RowCount: Decode<'q, DB> + Type<DB>,
     for<'q> Option<AudienceId>: Encode<'q, DB> + Type<DB>,
     for<'q> &'q str: Encode<'q, DB> + Type<DB>,
     for<'q> Option<&'q str>: Encode<'q, DB> + Type<DB>,
@@ -512,28 +498,11 @@ where
 {
     DB::lock_media_references(conn, &media::media_lock_set(input.rendered.media())).await?;
 
-    let idempotency_key_expired = if let Some(key) = input.idempotency_key.as_ref() {
-        let cutoff = idempotency_replay_cutoff(now);
-        if let Some(post_id) =
-            DB::lock_live_idempotency_mapping(conn, input.user_id, key, cutoff).await?
-        {
-            return Err(CreatePostError::IdempotencyConflict(post_id));
-        }
-        sqlx::query_scalar::<_, RowCount>(
-            "DELETE FROM idempotency_keys
-             WHERE user_id = $1 AND key = $2 AND created_at <= $3
-             RETURNING CAST(1 AS BIGINT)",
-        )
-        .bind_storage(input.user_id)
-        .bind_storage(key)
-        .bind_storage(cutoff)
-        .fetch_optional(&mut *conn)
-        .await
-        .map_err(CreatePostError::Internal)?
-        .is_some()
-    } else {
-        false
-    };
+    if let Some(key) = input.idempotency_key.as_ref()
+        && let Some(post_id) = DB::lock_idempotency_mapping(conn, input.user_id, key).await?
+    {
+        return Err(CreatePostError::IdempotencyConflict(post_id));
+    }
 
     let post_id = sqlx::query_scalar::<_, PostId>(
         "INSERT INTO posts (user_id, title, slug, body, format, rendered_html, created_at, updated_at, published_at, summary)
@@ -584,7 +553,7 @@ where
         .map_err(CreatePostError::Internal)?;
     }
 
-    Ok((post_id, idempotency_key_expired))
+    Ok(post_id)
 }
 
 /// Captures the locked current state and every normalized child before mutation.
@@ -652,15 +621,6 @@ mod tests {
     use crate::posts::models::PostFormat;
     use common::ids::PostId;
     use common::test_support::{parse_etag, parse_slug};
-    use common::time::UtcInstant;
-
-    #[test]
-    fn idempotency_replay_cutoff_clamps_at_the_earliest_timestamp() {
-        assert_eq!(
-            super::idempotency_replay_cutoff(UtcInstant::from(jiff::Timestamp::MIN)),
-            UtcInstant::from(jiff::Timestamp::MIN)
-        );
-    }
 
     #[test]
     fn org_bookkeeping_conversion_preserves_each_persistence_expectation() {

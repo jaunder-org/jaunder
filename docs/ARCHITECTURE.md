@@ -389,18 +389,22 @@ keys carry it through post creation and the owned type is bound for persistence.
 The existing `idempotency_keys` table stores the key as `TEXT NOT NULL` and
 enforces `UNIQUE(user_id, key)`. Storage serializes each `(user_id, key)` pair
 inside the create transaction (`SQLite`'s writer lock; a `PostgreSQL` advisory
-lock plus row lock) and applies the request's authoritative cutoff there. A live
-mapping returns its selected `PostId` as the replay decision without attempting
-new post or feed-event writes; the AtomPub handler fetches that fixed Post
-rather than looking the mapping up again after rollback. An expired mapping is
-removed and its replacement post and key row are written atomically. Fresh
-creation returns `201`; when its original post remains available, same-user key
-reuse returns that original post as `200`, even when the new payload differs.
-Another user may use the same key independently. The
-[bounded transient-data retention decision](adr/0167-bounded-transient-data-retention.md)
-replaces indefinite mapping retention with a one-hour semantic replay window: at
-`cutoff <= now`, the mapping no longer coordinates a replay, whether or not a
-later cleanup pass has physically removed it.
+lock plus row lock). A durable mapping returns its selected `PostId` as the
+replay decision without attempting new Post or feed-event writes; the AtomPub
+handler fetches that fixed Post rather than looking the mapping up again after
+rollback. Fresh creation returns `201`; while its original Post remains active,
+same-User key reuse returns that original Post as `200`, even when the new
+payload differs. After the original Post is soft-deleted, reuse returns
+`409 Conflict` and the key remains consumed. Another User may use the same key
+independently.
+
+A successful keyed create permanently consumes its `(User, Idempotency-Key)`
+pair as durable Post-create correlation
+([durable AtomPub create intent](adr/drafts/durable-atompub-create-intent.md)).
+The mapping has no semantic expiry, follows the retained Post identity
+lifecycle, and is not a maintenance-cleanup domain. This supersedes only
+ADR-0167's one-hour Post-create mapping rule; that decision's other
+transient-data policies stand.
 
 ### Testing (summary)
 
@@ -2621,12 +2625,19 @@ response-bearing `plz-error` into the ordinary response plist, so a signalled
 as a missing `auth-source` entry propagate immediately
 ([Emacs auth-source App Password storage](adr/0143-emacs-auth-source-app-password-storage.md)).
 Transport retry uses up to three attempts with one- then two-second backoff
-under **one** `Idempotency-Key`, so the server dedups the replay. The key is
-ephemeral, not stable across invocations: it is a fresh md5 of local entropy per
-call, so a later re-publish gets a new key and an edit is never mistaken for a
-retry. The server side of that contract was decided in issue
-[#79](https://github.com/jaunder-org/jaunder/issues/79) as a follow-on to
-ADR-0047 — see the Storage section.
+under the durable create intent's `Idempotency-Key`, so the server dedups the
+replay.
+
+Before the first create request, publish durably records the key,
+request-content digest, and attempt time in the local Post; every later
+invocation reuses that create intent until the returned Post ID is safely
+written, then removes it
+([durable AtomPub create intent](adr/drafts/durable-atompub-create-intent.md)).
+If local content changes after an indeterminate create, replay recovers identity
+but writes an explicit local-ahead marker. Reconciliation consumes that marker
+independently of filesystem timestamp tolerance; only a later successful
+conditional update clears it rather than marking the changed content
+synchronized.
 
 ### Pull, reconcile, and durable local media
 
@@ -2638,11 +2649,40 @@ inventory identity against the response, blocks an occupied root-level
 `<slug>.org` before network work, and installs through a same-directory
 temporary file without overwrite. Inventory exhausts Collection pagination and
 joins root-level Org files to Members by Post ID; `jaunder-reconcile` reports
-divergence without resolving it, previews only server-only pulls, and applies
-them after one confirmation. Remote deletion remains the separate explicit,
-ETag-guarded `jaunder-delete-post` command.
+divergence without resolving it automatically and lets the User explicitly
+choose a confirmed batch action. Remote deletion remains an explicit,
+ETag-guarded operation.
 
-#### Committed direction: Local Media Copies
+#### Explicit batch Post transfer
+
+`jaunder-reconcile` is an inventory and selection surface, never an automatic
+synchronizer. Its persistent report supports arbitrary marks or a contiguous
+active-region selection and explicit, confirmed batch push, pull, and
+remote-delete commands. Operations run deterministically and sequentially;
+unsafe rows are retained as blocked results rather than becoming an overwrite or
+conflict-resolution escape hatch. The buffer refreshes from a new inventory
+after completion or cancellation while retaining the ordered terminal results
+from the last batch, so completed work and independent failures remain visible
+and safe to retry.
+
+A selected matched `server-ahead` Post may be pulled only after revalidating its
+report-snapshotted local path/SHA-256 and remote strong ETag
+([revalidated matched-Post pull](adr/drafts/revalidated-matched-post-pull.md)).
+After staging the complete Member and Media, installation refuses a modified
+visited buffer or occupied canonical destination, atomically replaces the
+current file, and then atomically renames it when the canonical slug changed. A
+clean visited buffer refreshes to the installed bytes and filename without
+becoming modified. A crash between replacement and rename leaves one ID-bearing
+updated file that a later inventory recognizes and can finish.
+
+Remote delete is separately confirmed with freshly reviewed strong ETags. It
+uses Jaunder's retained soft deletion: a confirmed matched deletion removes its
+local file only after the server's `204`, while a server-only deletion has no
+local-file effect. Completed batch mutations are never rolled back; cancellation
+is honored only between Posts, and rerunning the refreshed report retries only
+the work that remains.
+
+#### Local Media Copies
 
 Pulled Org, Markdown, and HTML source localizes only format-aware link
 destinations that name canonical public media on the active Jaunder origin and
@@ -2669,12 +2709,14 @@ leaf. The root is trusted, author-owned local state. Path creation and immediate
 mutations reject symlinks and non-directory components, staging is exclusive,
 and copies are never overwritten. A malicious replacement after Emacs's final
 check remains out of scope because Emacs Lisp has no dirfd-anchored mutation.
-Existing copies are hash-verified before reuse. A pull stages and verifies all
-distinct media, installs Local Media Copies, rewrites native links to relative
-local targets, and atomically installs the Post last. Failure leaves the Post
-server-only, so rerunning reconciliation retries it. Verified copies installed
-before an ordinary failure or crash remain safe to reuse. There is no rollback,
-cache eviction, matched-Post repair, arbitrary external download, or multi-file
+Existing copies are hash-verified before reuse. A server-only pull stages and
+verifies all distinct media, installs Local Media Copies, rewrites native links
+to relative local targets, and atomically installs the Post last. Failure leaves
+the Post server-only, so rerunning reconciliation retries it. An explicitly
+selected matched `server-ahead` pull uses the same Media trust chain before its
+separate report-snapshot revalidation and replacement path above. Verified
+copies installed before an ordinary failure or crash remain safe to reuse. There
+is no rollback, cache eviction, arbitrary external download, or multi-file
 transaction promise.
 
 ## Domain types and invariants
