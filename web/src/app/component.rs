@@ -44,6 +44,22 @@ pub fn public_theme() -> RwSignal<PublishedThemePresentation> {
         .unwrap_or_else(|| RwSignal::new(PublishedThemePresentation::built_in(Theme::Studio)))
 }
 
+/// The reactive twin of [`super::render::render_theme_hero`].
+///
+/// Keeping the wrapper, header ordering, and semantic hook here makes every CSR
+/// route share one hero seam; route components supply only their masthead.
+#[component]
+pub fn ThemeHero(theme: RwSignal<PublishedThemePresentation>, children: Children) -> impl IntoView {
+    view! {
+        <section data-jaunder-part=super::render::HERO_PART>
+            {move || {
+                super::render::render_theme_header(&theme.get())
+                    .inject_into(leptos::html::div().class("j-contents"))
+            }} {children()}
+        </section>
+    }
+}
+
 /// The outcome of waiting for a navigation presentation to settle.
 ///
 /// A superseded navigation deliberately does not alter either the old or the

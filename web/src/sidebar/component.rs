@@ -64,7 +64,7 @@ pub fn Sidebar() -> impl IntoView {
         },
     );
     view! {
-        <aside class="j-sidebar">
+        <aside class="j-sidebar" data-jaunder-part="navigation-rail">
             {move || {
                 let active_key = active_for_path();
                 match session.get() {
@@ -102,11 +102,11 @@ fn authed_sidebar(
     let username = username.clone();
     view! {
         <div class="j-contents">
-            <a class="j-brand" href="/app">
+            <a class="j-brand" href="/app" data-jaunder-part="site-brand">
                 <div class="j-brand-mark">"j"</div>
                 <div class="j-brand-text">"Jaunder"</div>
             </a>
-            <div class="j-search">
+            <div class="j-search" data-jaunder-part="navigation-search">
                 <Icon path=Icons::SEARCH size=14 />
                 <span>"Search"</span>
                 <span class="j-kbd">"⌘K"</span>

@@ -240,11 +240,11 @@ pub(super) fn test_selector(key: &str) -> Option<&'static str> {
 #[must_use]
 pub(crate) fn render_sidebar(active_key: &str) -> Markup {
     Markup::new(html! {
-        a class="j-brand" href="/" {
+        a class="j-brand" href="/" data-jaunder-part="site-brand" {
             div class="j-brand-mark" { "j" }
             div class="j-brand-text" { "Jaunder" }
         }
-        div class="j-search" {
+        div class="j-search" data-jaunder-part="navigation-search" {
             (icon::render(Icons::SEARCH, 14))
             span { "Search" }
             span class="j-kbd" { "\u{2318}K" }

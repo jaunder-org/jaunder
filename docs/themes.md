@@ -228,7 +228,11 @@ The stable hooks are:
 
 | Hook                 | Meaning                                                        |
 | -------------------- | -------------------------------------------------------------- |
+| `navigation-rail`    | Public navigation rail and its supporting chrome               |
+| `site-brand`         | Jaunder brand link within the navigation rail                  |
+| `navigation-search`  | Search affordance within the navigation rail                   |
 | `primary-navigation` | The public navigation landmark                                 |
+| `hero`               | Stable container for header image and masthead                 |
 | `masthead`           | The public masthead, including the optional Local Site Tagline |
 | `site-title`         | Textual Local site identity                                    |
 | `logo`               | Optional decorative package or Media logo                      |
@@ -251,15 +255,18 @@ The stable hooks are:
 | `continuation`       | Optional pagination continuation                               |
 
 The contract guarantees these concepts, landmarks, route presence, cardinality,
-and accessible source order. The optional Site Tagline is plain text within the
-existing `masthead` concept; target it through that hook and ordinary descendant
-selectors rather than expecting a separate tagline hook. It does not guarantee
-wrapper depth or incidental sibling positions. Owner-only Post Actions controls
-are not Style Contract content: Jaunder mounts them in a trusted sibling outside
-this surface, tethered to a protected Post-header slot. Theme CSS cannot
-directly style or suppress those controls, but a theme that removes or clips a
-Post/header can remove their visual anchor; select **Studio** in `/themes` to
-recover the controls.
+and accessible source order. Every public route has one `hero`; its optional
+decorative `header-image` precedes and shares that stable container with the
+`masthead`, so themes may layer the image behind masthead content without
+inferring wrapper or sibling structure. The optional Site Tagline is plain text
+within the existing `masthead` concept; target it through that hook and ordinary
+descendant selectors rather than expecting a separate tagline hook. The contract
+does not otherwise guarantee wrapper depth or incidental sibling positions.
+Owner-only Post Actions controls are not Style Contract content: Jaunder mounts
+them in a trusted sibling outside this surface, tethered to a protected
+Post-header slot. Theme CSS cannot directly style or suppress those controls,
+but a theme that removes or clips a Post/header can remove their visual anchor;
+select **Studio** in `/themes` to recover the controls.
 
 Jaunder accepts standard declarations and CSS custom properties, subject to the
 same URL and global-name checks. `anchor-name` is reserved for Jaunder's trusted

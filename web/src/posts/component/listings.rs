@@ -73,11 +73,9 @@ fn PublicListingPage(route: Memo<ListingRoute>) -> impl IntoView {
                     view! { <RsdDiscovery username=&username /> }
                 })
         }}
-        <Topbar title=move || route.get().title() sub=move || route.get().subtitle() />
-        {move || {
-            crate::app::render_theme_header(&theme.get())
-                .inject_into(leptos::html::div().class("j-contents"))
-        }}
+        <crate::app::ThemeHero theme>
+            <Topbar title=move || route.get().title() sub=move || route.get().subtitle() />
+        </crate::app::ThemeHero>
         {move || {
             route
                 .get()

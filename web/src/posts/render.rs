@@ -70,8 +70,10 @@ pub(crate) fn body(seed: &PageSeed) -> Markup {
 pub(crate) fn body_with_logo(seed: &PageSeed, logo: &Markup, header: &Markup) -> Markup {
     match seed {
         PageSeed::Permalink(authored) => Markup::new(html! {
-            (topbar::render("Jaunder", &format!("Post by {}", authored.post.username), None, &Markup::empty(), logo))
-            (header)
+            (crate::app::render_theme_hero(
+                &topbar::render("Jaunder", &format!("Post by {}", authored.post.username), None, &Markup::empty(), logo),
+                header,
+            ))
             div class="j-scroll" { div class="j-page" { (permalink_article(&authored.post)) } }
         }),
         PageSeed::SiteTimeline {
@@ -312,8 +314,7 @@ fn render_timeline_page(
     empty_text: &str,
 ) -> Markup {
     Markup::new(html! {
-        (chrome)
-        (header)
+        (crate::app::render_theme_hero(chrome, header))
         div class="j-scroll" {
             (crate::timeline::render::order_control(order))
             div data-jaunder-part="post-list" {
@@ -651,7 +652,7 @@ mod tests {
     }
 
     #[test]
-    fn local_body_has_topbar_signin_and_posts_without_hero() {
+    fn local_body_has_semantic_hero_topbar_signin_and_posts() {
         let html = body(&PageSeed::SiteTimeline {
             identity: site_identity(),
             order: common::seed::TimelineOrder::Newest,
@@ -669,7 +670,11 @@ mod tests {
             ),
             "{html}"
         );
-        assert!(!html.contains("<div class=\"j-hero\">"), "{html}");
+        assert_eq!(
+            html.matches("data-jaunder-part=\"hero\"").count(),
+            1,
+            "{html}"
+        );
         // The shared pure order control immediately precedes the semantic post list.
         let control = html
             .find("data-jaunder-part=\"timeline-order\"")
