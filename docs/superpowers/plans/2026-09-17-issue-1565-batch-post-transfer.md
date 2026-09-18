@@ -45,7 +45,7 @@ Out:
     response loss, changed-content recovery, ID-first cleanup, and ordinary
     single-Post publishing.
 
-- [ ] **Task 2: Turn the reconciliation report into a selection and execution
+- [x] **Task 2: Turn the reconciliation report into a selection and execution
       surface.**
   - Contract: a dedicated report mode owns stable row identities, arbitrary
     marks, contiguous-region selection, and state/reason display. It exposes no

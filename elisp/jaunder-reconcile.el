@@ -5,8 +5,7 @@
 ;;; Commentary:
 ;; Enumerate an AtomPub Collection and the directly contained Org files of one
 ;; configured root.  Inventory is side-effect-free; reconciliation classifies
-;; it, renders a persistent report, and optionally delegates server-only pulls
-;; to the D2 safe-pull operation.
+;; it and renders a persistent selection report without transferring Posts.
 
 ;;; Code:
 
@@ -18,7 +17,6 @@
 (require 'jaunder-transport)
 (require 'jaunder-datetime)
 
-(declare-function jaunder--pull-member "jaunder-pull")
 
 (cl-defstruct (jaunder-inventory-member
                (:constructor jaunder--make-inventory-member))
@@ -383,12 +381,116 @@ returned."
 (cl-defstruct (jaunder-reconcile-row
                (:constructor jaunder--make-reconcile-row))
   "One immutable classification in a reconciliation report."
-  state local member reason detail conflict)
+  key state local member reason detail conflict)
 
 (cl-defstruct (jaunder-reconcile-report
                (:constructor jaunder--make-reconcile-report))
   "The complete reconciliation result for one configured root."
   root inventory rows)
+
+(cl-defstruct (jaunder-reconcile-result
+               (:constructor jaunder--make-reconcile-result))
+  "One terminal outcome recorded by the reconciliation batch executor."
+  action row-key outcome post-id slug etag synced-at http-status local-effect
+  reason detail)
+
+(defvar-local jaunder-reconcile-report nil
+  "The inventory report currently displayed in this reconciliation buffer.")
+
+(defvar-local jaunder-reconcile-marks nil
+  "Hash table of stable row keys explicitly marked in this reconciliation buffer.")
+
+(defvar-local jaunder-reconcile-last-batch-results nil
+  "Ordered terminal results from the most recent batch in this buffer.")
+
+(define-derived-mode jaunder-reconcile-report-mode special-mode "Jaunder-Reconcile"
+  "Major mode for selecting rows in a Jaunder reconciliation report."
+  (setq-local truncate-lines t)
+  (define-key jaunder-reconcile-report-mode-map "m" #'jaunder-reconcile-toggle-mark))
+
+(defun jaunder--reconcile-conflict-key (conflict)
+  "Return a deterministic identity for inventory CONFLICT."
+  (format "conflict:local=%s;post=%s"
+          (mapconcat #'jaunder-inventory-local-path
+                     (jaunder-inventory-conflict-locals conflict) ",")
+          (mapconcat #'jaunder-inventory-member-id
+                     (jaunder-inventory-conflict-members conflict) ",")))
+
+(defun jaunder--reconcile-stable-row-key (row)
+  "Return ROW's stable identity, deriving it from its inventory identity if needed."
+  (or (jaunder-reconcile-row-key row)
+      (let ((local (jaunder-reconcile-row-local row))
+            (member (jaunder-reconcile-row-member row)))
+        (setf (jaunder-reconcile-row-key row)
+              (cond ((and member (jaunder-inventory-member-id member))
+                     (format "post:%s" (jaunder-inventory-member-id member)))
+                    (local (format "local:%s" (jaunder-inventory-local-path local)))
+                    (t (jaunder--reconcile-conflict-key
+                        (jaunder-reconcile-row-conflict row))))))))
+
+(defun jaunder--reconcile-row-key-position (row-key)
+  "Return this buffer position for ROW-KEY, comparing stable string identities."
+  (let ((position (point-min)) found)
+    (while (and (< position (point-max)) (not found))
+      (if (equal (get-text-property position 'jaunder-reconcile-row-key) row-key)
+          (setq found position)
+        (setq position (next-single-property-change
+                        position 'jaunder-reconcile-row-key nil (point-max)))))
+    found))
+
+(defun jaunder--reconcile-displayed-rows (report)
+  "Return REPORT rows in the exact state-section order rendered to its buffer."
+  (apply #'append
+         (mapcar
+          (lambda (state)
+            (cl-remove-if-not (lambda (row) (eq (jaunder-reconcile-row-state row) state))
+                              (jaunder-reconcile-report-rows report)))
+          jaunder--reconcile-state-order)))
+
+(defun jaunder--reconcile-resolve-selection (report marks region)
+  "Return REPORT rows selected by REGION or MARKS in displayed order.
+REGION is an inclusive zero-based cons of displayed-row indexes and takes
+precedence over arbitrary MARKS when present.  Selection never changes row
+eligibility."
+  (let ((rows (jaunder--reconcile-displayed-rows report)))
+    (if region
+        (cl-loop for row in rows for index from 0
+                 when (and (<= (car region) index) (<= index (cdr region)))
+                 collect row)
+      (cl-remove-if-not (lambda (row)
+                          (gethash (jaunder--reconcile-stable-row-key row) marks))
+                        rows))))
+
+(defun jaunder-reconcile-selected-rows ()
+  "Return marked rows, or rows touched by the active contiguous region.
+The returned rows retain report display order rather than point traversal order.
+An active region selects only its rows, including when it touches none."
+  (if (use-region-p)
+      (let ((region-keys (make-hash-table :test #'equal))
+            (position (region-beginning))
+            (end (region-end)))
+        (while (< position end)
+          (let ((row (get-text-property position 'jaunder-reconcile-row))
+                (next (next-single-property-change
+                       position 'jaunder-reconcile-row nil end)))
+            (when row
+              (puthash (jaunder--reconcile-stable-row-key row) t region-keys))
+            (setq position next)))
+        (jaunder--reconcile-resolve-selection
+         jaunder-reconcile-report region-keys nil))
+    (jaunder--reconcile-resolve-selection
+     jaunder-reconcile-report jaunder-reconcile-marks nil)))
+
+(defun jaunder-reconcile-toggle-mark ()
+  "Toggle the mark for the reconciliation row at point."
+  (interactive)
+  (let ((row (get-text-property (point) 'jaunder-reconcile-row)))
+    (unless row (user-error "Point is not on a reconciliation row"))
+    (let ((key (jaunder--reconcile-stable-row-key row)))
+      (if (gethash key jaunder-reconcile-marks)
+          (remhash key jaunder-reconcile-marks)
+        (puthash key t jaunder-reconcile-marks)))
+    (jaunder--render-reconcile-report jaunder-reconcile-report (current-buffer))))
 
 (defconst jaunder--reconcile-state-order
   '(unchanged server-ahead local-ahead conflict unclassifiable
@@ -532,11 +634,38 @@ hide otherwise valid synchronization markers."
                     (jaunder-inventory-member-id member)
                     (jaunder-inventory-member-slug member)))))
 
-(defun jaunder--render-reconcile-report (report)
-  "Render REPORT into the persistent `*Jaunder Reconcile*' buffer."
-  (let ((buffer (get-buffer-create "*Jaunder Reconcile*")))
+(defun jaunder--reconcile-render-result (result)
+  "Insert one terminal batch RESULT."
+  (insert (format "- %s %s: %s"
+                  (jaunder-reconcile-result-action result)
+                  (jaunder-reconcile-result-row-key result)
+                  (jaunder-reconcile-result-outcome result)))
+  (dolist (field `(("Post ID" . ,(jaunder-reconcile-result-post-id result))
+                   ("slug" . ,(jaunder-reconcile-result-slug result))
+                   ("ETag" . ,(jaunder-reconcile-result-etag result))
+                   ("synced at" . ,(jaunder-reconcile-result-synced-at result))
+                   ("HTTP" . ,(jaunder-reconcile-result-http-status result))
+                   ("local effect" . ,(jaunder-reconcile-result-local-effect result))))
+    (when (cdr field) (insert (format "; %s=%s" (car field) (cdr field)))))
+  (when (jaunder-reconcile-result-reason result)
+    (insert (format "; %s" (jaunder-reconcile-result-reason result)))
+    (when (jaunder-reconcile-result-detail result)
+      (insert (format " (%s)" (jaunder-reconcile-result-detail result)))))
+  (insert "\n"))
+
+(defun jaunder--render-reconcile-report (report &optional target)
+  "Render REPORT and TARGET's retained batch summary into its persistent buffer."
+  (let ((buffer (or target (get-buffer-create "*Jaunder Reconcile*"))))
     (with-current-buffer buffer
-      (let ((inhibit-read-only t))
+      (let* ((row (get-text-property (point) 'jaunder-reconcile-row))
+             (row-key (and row (jaunder--reconcile-stable-row-key row)))
+             (column (current-column))
+             (inhibit-read-only t))
+        (unless (derived-mode-p 'jaunder-reconcile-report-mode)
+          (jaunder-reconcile-report-mode))
+        (setq-local jaunder-reconcile-report report)
+        (unless jaunder-reconcile-marks
+          (setq-local jaunder-reconcile-marks (make-hash-table :test #'equal)))
         (erase-buffer)
         (insert (format "Jaunder reconciliation: %s\n\n"
                         (jaunder-reconcile-report-root report)))
@@ -546,23 +675,100 @@ hide otherwise valid synchronization markers."
                        (jaunder-reconcile-report-rows report))))
             (insert (format "%s (%d)\n" state (length rows)))
             (dolist (row rows)
-              (insert (format "- %s" (jaunder--reconcile-row-label row)))
-              (when (jaunder-reconcile-row-reason row)
-                (insert (format ": %s" (jaunder-reconcile-row-reason row)))
-                (when (jaunder-reconcile-row-detail row)
-                  (insert (format " (%s)" (jaunder-reconcile-row-detail row)))))
-              (insert "\n")
+              (let ((start (point))
+                    (marked (gethash (jaunder--reconcile-stable-row-key row)
+                                     jaunder-reconcile-marks)))
+                (insert (format "%s %s" (if marked "*" "-")
+                                (jaunder--reconcile-row-label row)))
+                (when (jaunder-reconcile-row-reason row)
+                  (insert (format ": %s" (jaunder-reconcile-row-reason row)))
+                  (when (jaunder-reconcile-row-detail row)
+                    (insert (format " (%s)" (jaunder-reconcile-row-detail row)))))
+                (insert "\n")
+                (add-text-properties start (point)
+                                     `(jaunder-reconcile-row ,row
+                                                             jaunder-reconcile-row-key
+                                                             ,(jaunder--reconcile-stable-row-key row))))
               (when (eq state 'inventory-conflict)
                 (jaunder--reconcile-render-conflict
                  (jaunder-reconcile-row-conflict row))))
-            (when (memq state '(server-ahead local-ahead))
-              (insert (if (eq state 'server-ahead)
-                          "  Pull this Post manually after reviewing server changes.\n"
-                        "  Publish this Post manually after reviewing local changes.\n")))
             (insert "\n")))
-        (goto-char (point-min))
-        (special-mode)))
+        (when jaunder-reconcile-last-batch-results
+          (insert "Last batch\n")
+          (dolist (result jaunder-reconcile-last-batch-results)
+            (jaunder--reconcile-render-result result))
+          (insert "\n"))
+        (if row-key
+            (let ((row-position (jaunder--reconcile-row-key-position row-key)))
+              (if row-position
+                  (goto-char
+                   (min (save-excursion
+                          (goto-char row-position)
+                          (line-end-position))
+                        (+ row-position column)))
+                (goto-char (point-min))))
+          (goto-char (point-min)))))
     buffer))
+
+(defun jaunder--reconcile-terminal-result (action row value)
+  "Convert VALUE from one ROW operation into the required terminal result shape."
+  (let ((result (jaunder--make-reconcile-result
+                 :action action :row-key (jaunder--reconcile-stable-row-key row)
+                 :outcome (or (plist-get value :outcome) 'success)
+                 :post-id (plist-get value :post-id) :slug (plist-get value :slug)
+                 :etag (plist-get value :etag)
+                 :synced-at (unless (eq action 'delete) (plist-get value :synced-at))
+                 :http-status (plist-get value :http-status)
+                 :local-effect (or (plist-get value :local-effect) 'unchanged)
+                 :reason (plist-get value :reason) :detail (plist-get value :detail))))
+    result))
+
+(defun jaunder--reconcile-refresh-batch-buffer (buffer)
+  "Rebuild BUFFER's report from a fresh inventory without discarding its results."
+  (with-current-buffer buffer
+    (let ((root (jaunder-reconcile-report-root jaunder-reconcile-report)))
+      (jaunder--call-with-blog
+       root
+       (lambda ()
+         (jaunder--render-reconcile-report
+          (jaunder--reconcile-build-report root (jaunder--inventory-for-root root)) buffer))))))
+
+(defun jaunder--reconcile-execute-batch (buffer rows action operation &optional cancelled-p)
+  "Run OPERATION for ROWS sequentially, retaining every terminal result in BUFFER.
+CANCELLED-P is checked only between completed items.  OPERATION receives one
+row and returns a result plist; its independent errors become failed results."
+  (with-current-buffer buffer
+    (setq-local jaunder-reconcile-last-batch-results nil)
+    (setq rows (cl-remove-if-not
+                (lambda (displayed-row)
+                  (memq displayed-row rows))
+                (jaunder--reconcile-displayed-rows jaunder-reconcile-report))))
+  (let ((total (length rows)) (completed 0) cancelled)
+    (dolist (row rows)
+      (unless cancelled
+        (if (or (and cancelled-p (funcall cancelled-p)) quit-flag)
+            (setq cancelled t)
+          (setq completed (1+ completed))
+          (message "Jaunder %s: %d/%d" action completed total)
+          (let (quit-requested value)
+            (setq value
+                  (condition-case err
+                      (let ((inhibit-quit t))
+                        (prog1 (funcall operation row)
+                          (setq quit-requested quit-flag
+                                quit-flag nil)))
+                    (error (list :outcome 'failed :reason 'operation-failed
+                                 :detail (error-message-string err)))))
+            (with-current-buffer buffer
+              (setq-local jaunder-reconcile-last-batch-results
+                          (append jaunder-reconcile-last-batch-results
+                                  (list (jaunder--reconcile-terminal-result action row value)))))
+            (when (or quit-requested
+                      (and cancelled-p (funcall cancelled-p)) quit-flag)
+              (setq cancelled t))))))
+    (when cancelled (setq quit-flag nil))
+    (jaunder--reconcile-refresh-batch-buffer buffer)
+    (if cancelled 'cancelled 'completed)))
 
 (defun jaunder-reconcile (root)
   "Reconcile ROOT with its configured AtomPub Collection without resolving it."
@@ -573,16 +779,12 @@ hide otherwise valid synchronization markers."
      (let* ((configured-root (car (jaunder--blog-entry-for root)))
             (inventory (jaunder--inventory-for-root configured-root))
             (report (jaunder--reconcile-build-report configured-root inventory))
-            (preview (jaunder-inventory-server-only inventory))
             (buffer (jaunder--render-reconcile-report report)))
+       (with-current-buffer buffer
+         (setq-local jaunder-reconcile-last-batch-results nil)
+         (setq-local jaunder-reconcile-marks (make-hash-table :test #'equal))
+         (jaunder--render-reconcile-report report buffer))
        (display-buffer buffer)
-       (when (and preview
-                  (y-or-n-p (format "Pull %d server-only Post%s? "
-                                    (length preview) (if (= (length preview) 1) "" "s"))))
-         (require 'jaunder-pull)
-         (dolist (member preview)
-           (jaunder--pull-member configured-root member))
-         (jaunder--render-reconcile-report report))
        report))))
 
 
