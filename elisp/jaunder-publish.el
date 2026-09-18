@@ -18,9 +18,9 @@
 ;;; Commentary:
 ;; The user-facing commands and their orchestration: `jaunder-new-post',
 ;; `jaunder-publish', and `jaunder-save-draft', plus the transient new-Post
-;; input lifecycle (`C-c C-c' completes and `C-c C-k' abandons) and the ID-first
-;; safe-to-resume write-back that ties the buffer, the mapper, the wire, media,
-;; and transport together (ADR-0047).
+;; input lifecycle (`C-c C-c' completes and `C-c C-k' abandons) and the
+;; safe-to-resume identity-checkpoint write-back that ties the buffer, the
+;; mapper, the wire, media, and transport together (ADR-0047).
 
 ;;; Code:
 
@@ -84,14 +84,12 @@ A no-op when already so named; on collision appends `-N'.  Returns the path."
 
 (defun jaunder--write-back (response created &optional create-intent-matches conditional-update)
   "Persist server-assigned values from RESPONSE into the current buffer.
-RESPONSE is a `jaunder--http-request' plist.  CREATED non-nil (a POST) writes
-JAUNDER_ID from the `Location' header; an update leaves it unchanged.  A create
-whose current Entry differs from its persisted intent recovers identity but does
-not claim synchronization.  A changed recovery records an explicit local-ahead
-marker, which a later successful conditional PUT clears.  Writes JAUNDER_ID
-first, then JAUNDER_SLUG, JAUNDER_SYNCED (ETag, verbatim), JAUNDER_SYNCED_AT
-(the original attempt time for changed recovery, otherwise now), and the
-resolved publish time.  Saves the buffer and returns the slug.
+RESPONSE is a `jaunder--http-request' plist.  A CREATED response must provide
+an ID, canonical slug, and strong ETag.  Those server identity fields,
+JAUNDER_SYNCED_AT, and a changed-create local-ahead marker are checkpointed in
+one save before a later save clears the durable create intent.  An update leaves
+JAUNDER_ID unchanged; its successful conditional write clears local-ahead.
+Returns the slug.
 
 Precondition for the publish-now `#+DATE:' render: the buffer's JAUNDER_DATE_TZ
 must already be recorded (the command calls `jaunder--ensure-date-tz' before the
@@ -101,22 +99,27 @@ send); absent it, the render falls back to the local zone via
          (slug (cdr (assq 'slug fields)))
          (published (cdr (assq 'published fields)))
          (etag (jaunder--response-header response "ETag"))
+         (id (jaunder--location->id
+              (jaunder--response-header response "Location")))
          (now (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t))
          (synced-at (if (eq create-intent-matches 'changed)
                         (or (jaunder--buffer-property "JAUNDER_CREATE_ATTEMPT_AT") now)
                       now)))
+    ;; Refuse a partial create checkpoint: an ID without this validator would
+    ;; turn a restart into an unconditional PUT.
     (when created
-      (let ((id (jaunder--location->id
-                 (jaunder--response-header response "Location"))))
-        (when id
-          (jaunder--set-property "JAUNDER_ID" id)
-          ;; The ID must reach disk before clearing the recovery intent.
-          (save-buffer))))
+      (unless id (error "jaunder: create response has no Member ID"))
+      (unless slug (error "jaunder: create response has no canonical slug"))
+      (unless (jaunder--strong-etag-p etag)
+        (error "jaunder: create response must carry a strong ETag")))
+    (when (and (not created) (not (jaunder--strong-etag-p etag)))
+      (error "jaunder: update response must carry a strong ETag"))
+    (when created (jaunder--set-property "JAUNDER_ID" id))
     (when slug (jaunder--set-property "JAUNDER_SLUG" slug))
     ;; A replay's ETag is the remote baseline even when the local Entry changed
     ;; after its recorded create attempt.  The original attempt time leaves that
     ;; changed file visibly local-ahead rather than marker-unclassifiable.
-    (when etag (jaunder--set-property "JAUNDER_SYNCED" etag))
+    (jaunder--set-property "JAUNDER_SYNCED" etag)
     (jaunder--set-property "JAUNDER_SYNCED_AT" synced-at)
     (when (eq create-intent-matches 'changed)
       (jaunder--set-property "JAUNDER_LOCAL_AHEAD" "true"))
@@ -131,6 +134,8 @@ send); absent it, the render falls back to the local zone via
         ;; "publish now": no author #+DATE: — render it from the server time.
         (unless (jaunder--buffer-keyword "DATE")
           (jaunder--set-keyword "DATE" (jaunder--utc->org-date utc tz)))))
+    ;; This is the create identity checkpoint.  It deliberately precedes the
+    ;; intent cleanup below so an interruption retains a conditional baseline.
     (save-buffer)
     (when (jaunder--buffer-property "JAUNDER_ID")
       (jaunder--remove-property "JAUNDER_CREATE_KEY")
@@ -412,9 +417,11 @@ have committed after a response-less request."
   "Publish the current buffer's org post over AtomPub.
 Resolves the blog from the buffer's file, records the machine zone when unset,
 maps + validates, uploads media (sent body only), sends (POST create / PUT with
-If-Match on update), writes back server values (ID first), and renames the temp
-file to <slug>.org.  With FORCE-DRAFT (see `jaunder-save-draft') pushes an
-`app:draft' regardless of JAUNDER_STATUS.  A non-2xx create leaves any
+If-Match on update), writes back a durable identity checkpoint, and renames to
+<slug>.org.
+
+With FORCE-DRAFT (see `jaunder-save-draft') pushes an `app:draft' regardless of
+JAUNDER_STATUS.  A non-2xx create leaves any
 previously authored content intact but retains its durable create intent for
 safe retry."
   (interactive)
@@ -433,6 +440,10 @@ safe retry."
          ;; Validate BEFORE any buffer write, so a rejected publish leaves the
          ;; on-disk file pristine.
          (jaunder--validate-publish entry status date-raw tz)
+         ;; An ID-bearing create recovery must never fall through to an
+         ;; unconditional PUT.  Its intent remains durable for safe recovery.
+         (when (and id (not (jaunder--strong-etag-p synced)))
+           (error "jaunder: JAUNDER_ID requires a strong JAUNDER_SYNCED ETag"))
          ;; Record the machine zone (idempotent) so #+DATE: is interpreted in a
          ;; recorded zone on later machines.  A first-publish's org->atom above
          ;; already used the local zone, which equals the captured name.

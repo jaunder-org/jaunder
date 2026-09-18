@@ -193,10 +193,12 @@ Lets the warning tests assert on emitted warnings without touching the real
       (should-not (jaunder--buffer-property "JAUNDER_LOCAL_AHEAD"))
       (when (buffer-file-name) (delete-file (buffer-file-name))))))
 
-(ert-deftest jaunder-id-first-write-back-failure-recovers-without-another-post ()
-  "A failure after durable ID save retains intent until a PUT cleans it up."
-  (let* ((root (file-name-as-directory (make-temp-file "jaunder-id-first-" t)))
-         (path (expand-file-name "my-post.org" root))
+(ert-deftest jaunder-create-checkpoint-interruption-reopens-with-conditional-retry ()
+  "A create checkpoint atomically persists identity and its strong validator.
+An interruption before intent cleanup must reopen into a conditional PUT, never
+an unconditional update."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-create-checkpoint-" t)))
+         (path (expand-file-name "draft.org" root))
          (jaunder-blogs (list (cons root '(:base-url "https://blog" :username "alice"))))
          (jaunder-warn-zone-mismatch nil)
          (jaunder-warn-untracked-media nil)
@@ -211,41 +213,77 @@ Lets the warning tests assert on emitted warnings without touching the real
                    "<j:slug>my-post</j:slug></entry>"))))
     (unwind-protect
         (let ((buffer (progn
+                        ;; A true draft has no previous synchronization baseline.
                         (with-temp-file path
-                          (insert (concat "#+TITLE: T\n#+PROPERTY: JAUNDER_STATUS published\n"
-                                          "#+PROPERTY: JAUNDER_SYNCED \"old\"\n"
-                                          "#+PROPERTY: JAUNDER_CREATE_KEY recovery-key\n"
-                                          "#+PROPERTY: JAUNDER_CREATE_DIGEST digest\n"
-                                          "#+PROPERTY: JAUNDER_CREATE_ATTEMPT_AT 2026-01-01T00:00:00Z\n\nBody\n")))
+                          (insert "#+TITLE: T\n#+PROPERTY: JAUNDER_STATUS published\n\nBody\n"))
                         (find-file-noselect path))))
           (with-current-buffer buffer
+            ;; Persist the create intent as the normal pre-POST path does.
+            (jaunder--create-intent "sent XML")
             (let ((save-count 0)
                   (real-save-buffer (symbol-function 'save-buffer)))
               (cl-letf (((symbol-function 'save-buffer)
                          (lambda (&rest args)
                            (setq save-count (1+ save-count))
                            (if (= save-count 2)
-                               (error "injected final save failure")
+                               (error "injected intent cleanup failure")
                              (apply real-save-buffer args)))))
-                (should-error (jaunder--write-back response t))))
-            (should (equal (jaunder--buffer-property "JAUNDER_ID") "42"))
-            (should (jaunder--buffer-property "JAUNDER_CREATE_KEY"))
-            (revert-buffer t t)
-            (should (equal (jaunder--buffer-property "JAUNDER_ID") "42"))
-            (should (jaunder--buffer-property "JAUNDER_CREATE_KEY"))
+                (should-error (jaunder--write-back response t 'matched))))
+            ;; Simulate an Emacs restart, reading only the first checkpoint.
+            (set-buffer-modified-p nil)
+            (kill-buffer buffer)
+            (setq buffer (find-file-noselect path))
+            (with-current-buffer buffer
+              (should (equal (jaunder--buffer-property "JAUNDER_ID") "42"))
+              (should (equal (jaunder--buffer-property "JAUNDER_SLUG") "my-post"))
+              (should (equal (jaunder--buffer-property "JAUNDER_SYNCED") "\"remote\""))
+              (should (jaunder--strong-etag-p
+                       (jaunder--buffer-property "JAUNDER_SYNCED")))
+              (should (stringp (jaunder--buffer-property "JAUNDER_SYNCED_AT")))
+              (should (jaunder--buffer-property "JAUNDER_CREATE_KEY"))
+              (let (methods put-headers)
+                (cl-letf (((symbol-function 'jaunder--http-request)
+                           (lambda (method _url _body _content-type headers)
+                             (push method methods)
+                             (setq put-headers headers)
+                             (jaunder-test--response
+                              200 '(("ETag" . "\"remote\""))
+                              (concat "<entry xmlns=\"http://www.w3.org/2005/Atom\""
+                                      " xmlns:j=\"https://jaunder.org/ns/atompub\">"
+                                      "<content type=\"text/org\">Body</content>"
+                                      "<j:slug>my-post</j:slug></entry>")))))
+                  (jaunder-publish))
+                (should (equal methods '("PUT")))
+                (should (equal put-headers '(("If-Match" . "\"remote\""))))
+                (should-not (jaunder--buffer-property "JAUNDER_CREATE_KEY")))
+              (set-buffer-modified-p nil)
+              (kill-buffer buffer))))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-publish-blocks-id-bearing-recovery-without-strong-etag ()
+  "An incomplete create checkpoint must never reach an unconditional PUT."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-missing-etag-" t)))
+         (path (expand-file-name "draft.org" root))
+         (jaunder-blogs (list (cons root '(:base-url "https://blog" :username "alice"))))
+         (jaunder-warn-zone-mismatch nil)
+         (jaunder-warn-untracked-media nil)
+         (jaunder-warn-missing-format-media-type nil))
+    (unwind-protect
+        (let ((buffer (progn
+                        (with-temp-file path
+                          (insert (concat "#+TITLE: T\n#+PROPERTY: JAUNDER_STATUS published\n"
+                                          "#+PROPERTY: JAUNDER_ID 42\n"
+                                          "#+PROPERTY: JAUNDER_CREATE_KEY recovery-key\n"
+                                          "#+PROPERTY: JAUNDER_CREATE_DIGEST digest\n\nBody\n")))
+                        (find-file-noselect path))))
+          (with-current-buffer buffer
             (let (methods)
               (cl-letf (((symbol-function 'jaunder--http-request)
-                         (lambda (method _url &rest _)
-                           (push method methods)
-                           (jaunder-test--response
-                            200 '(("ETag" . "\"remote\""))
-                            (concat "<entry xmlns=\"http://www.w3.org/2005/Atom\""
-                                    " xmlns:j=\"https://jaunder.org/ns/atompub\">"
-                                    "<content type=\"text/org\">Body</content>"
-                                    "<j:slug>my-post</j:slug></entry>")))))
-                (jaunder-publish))
-              (should (equal methods '("PUT")))
-              (should-not (jaunder--buffer-property "JAUNDER_CREATE_KEY")))
+                         (lambda (method &rest _)
+                           (push method methods))))
+                (should-error (jaunder-publish)
+                              :type 'error))
+              (should-not methods))
             (set-buffer-modified-p nil)
             (kill-buffer buffer)))
       (delete-directory root t))))
