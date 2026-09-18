@@ -602,8 +602,8 @@ pub async fn delete(
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "server")]
-    use super::BrowserCredentialId;
-    use super::{BrowserPasskeyLabel, CeremonyHandle, InvalidBrowserPasskeyLabel};
+    use super::{BrowserCredentialId, CeremonyHandle};
+    use super::{BrowserPasskeyLabel, InvalidBrowserPasskeyLabel};
     #[cfg(feature = "server")]
     use super::{finish_authentication, start_authentication};
     use std::str::FromStr;
@@ -640,6 +640,7 @@ mod tests {
         assert_eq!(String::from(label), "My passkey");
     }
 
+    #[cfg(feature = "server")]
     #[test]
     fn ceremony_handle_rejects_noncanonical_wire_values() {
         assert!(CeremonyHandle::try_from("not-a-handle".to_owned()).is_err());
