@@ -15,7 +15,7 @@ pub fn Avatar<'a>(name: &'a Username, #[prop(default = 38)] size: u32) -> impl I
         "width:{size}px;height:{size}px;background:oklch(0.58 0.07 {hue});font-size:{font_size}px"
     );
     view! {
-        <div class="j-av" style=style>
+        <div class="j-av" style=style data-jaunder-part="avatar">
             {initials}
         </div>
     }
