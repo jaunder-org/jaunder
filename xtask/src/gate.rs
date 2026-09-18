@@ -533,7 +533,10 @@ fn markdown_precommit_step_names_for_test() -> Vec<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        process::Command as ProcessCommand,
+    };
 
     use serde::Deserialize;
 
@@ -1032,6 +1035,54 @@ mod tests {
 
         assert_eq!(workflow.job("e2e-gate").needs, ["e2e"]);
         assert!(!workflow.jobs.contains_key("elisp-integration"));
+    }
+
+    #[test]
+    fn validation_aggregate_fails_for_each_lane_result() {
+        let workflow = parse_ci_workflow(include_str!("../../.github/workflows/ci.yml"));
+        let script = workflow
+            .job("validate-no-e2e")
+            .steps
+            .iter()
+            .filter_map(|step| step.run.as_deref())
+            .find(|run| run.contains("needs.validate-host.result"))
+            .expect("validation aggregate script");
+        let lane_results = [
+            "${{ needs.validate-host.result }}",
+            "${{ needs.validate-hermetic.result }}",
+            "${{ needs.validate-test-checks.result }}",
+            "${{ needs.validate-coverage.result }}",
+            "${{ needs.validate-source-probe.result }}",
+        ];
+
+        let inject = |failed: Option<&str>| {
+            lane_results.iter().fold(script.to_owned(), |script, lane| {
+                script.replace(
+                    lane,
+                    if failed == Some(*lane) {
+                        "failure"
+                    } else {
+                        "success"
+                    },
+                )
+            })
+        };
+        let run = |script: &str| {
+            ProcessCommand::new("bash")
+                .arg("-eu")
+                .arg("-c")
+                .arg(script)
+                .output()
+                .expect("execute validation aggregate script")
+        };
+
+        assert!(run(&inject(None)).status.success());
+        for failed_lane in lane_results {
+            assert!(
+                !run(&inject(Some(failed_lane))).status.success(),
+                "aggregate must fail when `{failed_lane}` is not successful"
+            );
+        }
     }
 
     #[test]

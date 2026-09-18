@@ -50,7 +50,7 @@ Out:
     and aggregate dependency; each new `cargo xtask ci-validate <lane>` command
     reaches only its declared surface.
 
-- [ ] Task 2: Measure and retain the validation fan-out.
+- [x] Task 2: Measure and retain the validation fan-out.
   - Contract: collect at least three successful cache-state-matched control and
     treatment runs at immutable heads, separating setup, command, Nix
     realization/substitution, source-probe, aggregate runner-time, and workflow
