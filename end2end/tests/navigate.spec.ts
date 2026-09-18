@@ -59,6 +59,26 @@ test("Compose sidebar navigation reaches the full composer without a document lo
   expect(loads).toBe(0);
 });
 
+test("Sessions sidebar navigation reaches session management without a document load", async ({
+  registeredPage,
+}) => {
+  const page = await registeredPage("/app");
+  let loads = 0;
+  page.on("domcontentloaded", () => {
+    loads += 1;
+  });
+
+  const sessionsLink = page.locator('a[href="/sessions"]');
+  await expect(sessionsLink).toHaveText("Sessions");
+  await navigateInApp(page, () => sessionsLink.click(), {
+    url: "/sessions",
+    ready: "[data-app-passwords]",
+  });
+  await expect(page.locator(SEL.topbarHeading)).toHaveText("Sessions");
+  await expect(sessionsLink).toHaveClass(/is-active/);
+  expect(loads).toBe(0);
+});
+
 test("it fails loudly when the destination never renders", async ({
   registeredPage,
 }) => {
