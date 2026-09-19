@@ -1445,6 +1445,119 @@ test("Home shows only the authenticated User's published Posts with pagination",
   await secondContext.close();
 });
 
+test("Home uses one responsive page scroll for its composer and Posts", async ({
+  page,
+  firstNav,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const me = await signInAsNewUser(page);
+  await seedPostsViaTool(me, HOME_POST_SELF_COUNT, "Home Scroll Post");
+  await goto(page, "/app", { timeout: firstNav });
+
+  const topbar = page.locator(".j-topbar");
+  const composer = page.locator(".j-composer");
+  const timeline = page
+    .locator(".j-scroll")
+    .filter({ has: page.locator('[data-jaunder-part="post-list"]') });
+  const order = page.locator('[data-jaunder-part="timeline-order"]');
+  await expect(page.locator("article.j-post")).toHaveCount(TIMELINE_PAGE_SIZE);
+
+  const expectDocumentOwnsScroll = async () => {
+    const overflow = await page.evaluate(() => {
+      const root = document.scrollingElement!;
+      const regions = [".j-composer", ".j-scroll"].map((selector) => {
+        const element = document.querySelector(selector)!;
+        return {
+          clientHeight: element.clientHeight,
+          overflowY: getComputedStyle(element).overflowY,
+          scrollHeight: element.scrollHeight,
+        };
+      });
+      return {
+        documentClientHeight: root.clientHeight,
+        documentScrollHeight: root.scrollHeight,
+        regions,
+      };
+    });
+    expect(overflow.documentScrollHeight).toBeGreaterThan(
+      overflow.documentClientHeight + 500,
+    );
+    for (const region of overflow.regions) {
+      expect(region.overflowY).not.toMatch(/auto|scroll/);
+      expect(region.scrollHeight).toBeLessThanOrEqual(region.clientHeight + 1);
+    }
+  };
+
+  // Page Down must move the one page scroll while wide Home chrome stays pinned.
+  await expectDocumentOwnsScroll();
+  const desktopOrderTop = (await order.boundingBox())!.y;
+  await page.keyboard.press("PageDown");
+  await expect
+    .poll(() => page.evaluate(() => window.scrollY))
+    .toBeGreaterThan(200);
+  const pinnedTopbar = (await topbar.boundingBox())!;
+  expect(pinnedTopbar.y).toBeCloseTo(0, 0);
+  expect((await composer.boundingBox())!.y).toBeCloseTo(pinnedTopbar.height, 0);
+  expect((await order.boundingBox())!.y).toBeLessThan(desktopOrderTop - 200);
+
+  // An expanded field yields stickiness to the document rather than trapping tall
+  // control content inside the pinned composer.
+  await page.evaluate(() => window.scrollTo(0, 0));
+  const formatControl = page.getByRole("button", { name: /Format Markdown/ });
+  await formatControl.click();
+  await expect(formatControl).toHaveAttribute("aria-expanded", "true");
+  expect(
+    await page
+      .locator(".j-home-chrome")
+      .evaluate((element) => getComputedStyle(element).position),
+  ).toBe("static");
+  const formatGroup = page.getByRole("group", { name: "Format" });
+  await formatGroup.scrollIntoViewIfNeeded();
+  expect(await composer.evaluate((element) => element.scrollTop)).toBe(0);
+  const formatBox = (await formatGroup.boundingBox())!;
+  expect(formatBox.y + formatBox.height).toBeLessThanOrEqual(
+    await page.evaluate(() => window.innerHeight),
+  );
+  await formatControl.click();
+
+  // Ordering and continuation remain in the same document-owned scroll after each
+  // timeline replacement and pagination append.
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await Promise.all([
+    page.waitForURL(`${BASE_URL}/app?order=oldest`),
+    click(page, '[data-jaunder-part="timeline-order"] button'),
+  ]);
+  await expect(page.locator("article.j-post").first()).toContainText(
+    "Home Scroll Post 0",
+  );
+  await expectDocumentOwnsScroll();
+  await click(page, 'button:has-text("Load more")');
+  await expect(page.locator("article.j-post")).toHaveCount(
+    HOME_POST_SELF_COUNT,
+  );
+  await expectDocumentOwnsScroll();
+
+  // The stacked mobile composer joins normal page flow and never traps disclosure
+  // controls inside its own scrolling region.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await expectDocumentOwnsScroll();
+  const mobileComposerTop = (await composer.boundingBox())!.y;
+  await page.keyboard.press("PageDown");
+  await expect
+    .poll(() => page.evaluate(() => window.scrollY))
+    .toBeGreaterThan(200);
+  expect((await composer.boundingBox())!.y).toBeLessThan(
+    mobileComposerTop - 200,
+  );
+
+  await page
+    .getByRole("button", { name: /Format Markdown/ })
+    .scrollIntoViewIfNeeded();
+  expect(await composer.evaluate((element) => element.scrollTop)).toBe(0);
+  expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+});
+
 test("authenticated user can delete a published post", async ({
   registeredPage,
 }) => {

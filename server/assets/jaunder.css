@@ -268,6 +268,58 @@
   background: var(--surface);
 }
 
+/* Home keeps its publishing chrome available while the browser owns one
+   continuous scroll through the User's Posts. Other timelines retain the
+   fixed-shell scroll region above. */
+.j-root[data-home="true"] {
+  height: auto;
+  min-height: 100dvh;
+  overflow: visible;
+}
+
+.j-root[data-home="true"] .j-shell,
+.j-root[data-home="true"] .j-main-region {
+  height: auto;
+  min-height: 100dvh;
+}
+
+.j-root[data-home="true"] .j-sidebar {
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  height: 100dvh;
+}
+
+.j-root[data-home="true"] .j-main {
+  overflow: visible;
+}
+
+.j-root[data-home="true"] .j-scroll {
+  flex: none;
+  overflow: visible;
+}
+
+.j-home-chrome {
+  position: sticky;
+  z-index: 10;
+  top: 0;
+  background: var(--surface);
+}
+
+/* Expanded fields and operational warnings need the document flow's full height.
+   Yield stickiness rather than introducing a second vertical scrollbar or
+   allowing sticky surfaces to overlap. */
+.j-home-chrome:has(.j-composer-control-summary[aria-expanded="true"]),
+.j-main-region:has(> .j-warn-banner) .j-home-chrome {
+  position: static;
+}
+
+.j-root[data-home="true"] .j-composer {
+  flex: none;
+  min-height: 0;
+  overflow: visible;
+}
+
 .j-timeline-order {
   display: flex;
   justify-content: flex-end;
@@ -1169,6 +1221,10 @@
 }
 
 @container (max-width: 800px) {
+  .j-home-chrome {
+    position: static;
+  }
+
   .j-compose-grid,
   .j-composer-layout {
     grid-template-columns: minmax(0, 1fr);
@@ -1406,10 +1462,10 @@
 
 .j-compose-grid .j-form-label,
 .j-composer-layout .j-form-label {
- font-size: 12px;
- font-weight: 600;
- letter-spacing: 0.4px;
- color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: var(--muted);
 }
 
 .j-form-help {
@@ -1967,9 +2023,12 @@
     flex-direction: column;
   }
 
-  .j-sidebar {
+  .j-sidebar,
+  .j-root[data-home="true"] .j-sidebar {
     box-sizing: border-box;
+    position: static;
     width: 100%;
+    height: auto;
     flex-direction: row;
     align-items: center;
     gap: 8px;

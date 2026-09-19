@@ -357,6 +357,7 @@ fn AppShell() -> impl IntoView {
                     Theme::Studio.token().to_owned()
                 }
             }
+            data-home=move || (location.pathname.get() == "/app").then_some("true")
         >
             {move || {
                 if common::theme::is_public_presentation_path(&location.pathname.get()) {

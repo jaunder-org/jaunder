@@ -107,8 +107,10 @@ pub fn CockpitPage() -> impl IntoView {
                 None => view! { <Topbar title="Home" /> }.into_any(),
                 Some(_) => {
                     view! {
-                        <Topbar title="Home" sub="Your published Posts" />
-                        <InlineComposer on_publish=on_mutate />
+                        <div class="j-home-chrome">
+                            <Topbar title="Home" sub="Your published Posts" />
+                            <InlineComposer on_publish=on_mutate />
+                        </div>
                     }
                         .into_any()
                 }
