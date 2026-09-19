@@ -110,6 +110,21 @@ jobs:
           if test -f .xtask/last-result.json; then
             cp .xtask/last-result.json .xtask/test-checks-result.json
           fi
+      # Keep the broad source probe on this Nix-heavy runner so controlled cold
+      # changes reuse its realized store instead of rebuilding the closure on a
+      # fifth VM. `always()` preserves the independent failure signal when an
+      # earlier test-check step fails.
+      - name: Nix source-closure drift probe (#1289)
+        if: always()
+        run: |
+          rm -f .xtask/last-result.json
+          nix develop .#ci --accept-flake-config -c cargo xtask nix probe-source
+      - name: Preserve source probe result
+        if: always()
+        run: |
+          if test -f .xtask/last-result.json; then
+            cp .xtask/last-result.json .xtask/source-probe-result.json
+          fi
       - name: Upload test checks validation diagnostics
         if: always()
         uses: actions/upload-artifact@v7.0.1
@@ -120,35 +135,6 @@ jobs:
             .xtask/gcroots/elisp-coverage-producer/elisp-coverage/
             .xtask/last-result.json
             .xtask/test-checks-result.json
-          if-no-files-found: ignore
-          retention-days: 14
-
-  validate-source-probe:
-    name: Validation source probe
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: ./.github/actions/setup-ci
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      - name: Nix source-closure drift probe (#1289)
-        run:
-          nix develop .#ci --accept-flake-config -c cargo xtask nix probe-source
-      - name: Preserve source probe result
-        if: always()
-        run: |
-          if test -f .xtask/last-result.json; then
-            cp .xtask/last-result.json .xtask/source-probe-result.json
-          fi
-      - name: Upload source probe diagnostics
-        if: always()
-        uses: actions/upload-artifact@v7.0.1
-        with:
-          name: validate-source-probe-diagnostics
-          path: |
-            .xtask/diagnostics/
-            .xtask/last-result.json
             .xtask/source-probe-result.json
           if-no-files-found: ignore
           retention-days: 14
@@ -203,7 +189,6 @@ jobs:
         validate-hermetic,
         validate-test-checks,
         validate-coverage,
-        validate-source-probe,
       ]
     if: always()
     steps:
@@ -213,13 +198,11 @@ jobs:
           hermetic="${{ needs.validate-hermetic.result }}"
           test_checks="${{ needs.validate-test-checks.result }}"
           coverage="${{ needs.validate-coverage.result }}"
-          source_probe="${{ needs.validate-source-probe.result }}"
-          echo "validation lane results: host=$host hermetic=$hermetic test-checks=$test_checks coverage=$coverage source-probe=$source_probe"
+          echo "validation lane results: host=$host hermetic=$hermetic test-checks=$test_checks coverage=$coverage"
           test "$host" = "success"
           test "$hermetic" = "success"
           test "$test_checks" = "success"
           test "$coverage" = "success"
-          test "$source_probe" = "success"
 
   e2e:
     name: e2e (${{ matrix.backend }}/${{ matrix.browser }})

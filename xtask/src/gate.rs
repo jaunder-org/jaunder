@@ -567,6 +567,10 @@ mod tests {
 
     #[derive(Debug, Deserialize)]
     struct CiWorkflowStep {
+        #[serde(default, rename = "if")]
+        condition: Option<String>,
+        #[serde(default, rename = "continue-on-error")]
+        continue_on_error: Option<bool>,
         #[serde(default)]
         run: Option<String>,
     }
@@ -627,9 +631,8 @@ mod tests {
                 "hermetic=\"${{ needs.validate-hermetic.result }}\"",
                 "test_checks=\"${{ needs.validate-test-checks.result }}\"",
                 "coverage=\"${{ needs.validate-coverage.result }}\"",
-                "source_probe=\"${{ needs.validate-source-probe.result }}\"",
             ]),
-            "validation aggregate must read exactly its five required lane results"
+            "validation aggregate must read exactly its four required lane results"
         );
         assert_eq!(
             lines
@@ -642,9 +645,8 @@ mod tests {
                 "test \"$hermetic\" = \"success\"",
                 "test \"$test_checks\" = \"success\"",
                 "test \"$coverage\" = \"success\"",
-                "test \"$source_probe\" = \"success\"",
             ]),
-            "validation aggregate must require success from exactly its five lanes"
+            "validation aggregate must require success from exactly its four lanes"
         );
     }
 
@@ -1014,10 +1016,24 @@ mod tests {
             assert_ci_validate_command(workflow.job(job_id), lane);
         }
 
-        assert_command(
-            workflow.job("validate-source-probe"),
-            "cargo xtask nix probe-source",
+        let test_checks = workflow.job("validate-test-checks");
+        assert_command(test_checks, "cargo xtask nix probe-source");
+        let source_probe = test_checks
+            .steps
+            .iter()
+            .find(|step| {
+                step.run
+                    .as_deref()
+                    .is_some_and(|run| run.contains("cargo xtask nix probe-source"))
+            })
+            .expect("test-checks lane owns the source probe");
+        assert_eq!(source_probe.condition.as_deref(), Some("always()"));
+        assert_ne!(source_probe.continue_on_error, Some(true));
+        assert!(
+            normalized_command(source_probe.run.as_deref().expect("probe command"))
+                .starts_with("rm -f .xtask/last-result.json nix develop")
         );
+        assert!(!workflow.jobs.contains_key("validate-source-probe"));
 
         let aggregate = workflow.job("validate-no-e2e");
         assert_eq!(aggregate.name.as_deref(), Some("Validate (no e2e)"));
@@ -1028,7 +1044,6 @@ mod tests {
                 "validate-hermetic",
                 "validate-test-checks",
                 "validate-coverage",
-                "validate-source-probe",
             ]
         );
         assert_validation_result_checks(aggregate);
@@ -1052,7 +1067,6 @@ mod tests {
             "${{ needs.validate-hermetic.result }}",
             "${{ needs.validate-test-checks.result }}",
             "${{ needs.validate-coverage.result }}",
-            "${{ needs.validate-source-probe.result }}",
         ];
 
         let inject = |failed: Option<&str>| {
