@@ -95,6 +95,161 @@ pub enum PostFormat {
 #[derive(Clone, Debug, PartialEq, Eq, macros::SqlxBridge)]
 pub struct RenderedHtml(pub(crate) String);
 
+/// A provider embed that Jaunder has validated and can therefore assemble into
+/// fixed active markup.
+///
+/// Provider selection and identifiers remain private: callers choose a provider
+/// only through its validating constructor and cannot provide an alternate URL
+/// or fragment. That keeps the structured assembly boundary narrower than
+/// `RenderedHtml`'s raw field while still letting host rendering preserve
+/// provider placement.
+///
+/// No direct construction:
+/// ```compile_fail
+/// # use common::render::TrustedProviderEmbed;
+/// let _ = TrustedProviderEmbed { provider: () };
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TrustedProviderEmbed {
+    provider: ProviderEmbed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ProviderEmbed {
+    Youtube(YoutubeVideoId),
+    Vimeo(VimeoVideoId),
+}
+
+/// A validated `YouTube` identifier held privately by [`TrustedProviderEmbed`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct YoutubeVideoId(String);
+
+/// A validated Vimeo identifier held privately by [`TrustedProviderEmbed`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct VimeoVideoId(String);
+
+/// Rejects an identifier that cannot be used in fixed provider markup.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum InvalidTrustedProviderEmbed {
+    /// A `YouTube` ID did not meet `YouTube`'s bounded identifier grammar.
+    #[error(
+        "YouTube video ID must contain exactly 11 ASCII letters, digits, underscores, or hyphens"
+    )]
+    Youtube,
+    /// A Vimeo ID did not meet Vimeo's bounded identifier grammar.
+    #[error("Vimeo video ID must contain 1 to 20 ASCII digits and cannot start with zero")]
+    Vimeo,
+}
+
+impl TrustedProviderEmbed {
+    /// Validates an exact `YouTube` video identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidTrustedProviderEmbed::Youtube`] when `id` does not
+    /// satisfy the bounded provider grammar.
+    pub fn youtube(id: &str) -> Result<Self, InvalidTrustedProviderEmbed> {
+        let valid = id.len() == 11
+            && id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'));
+        valid
+            .then(|| Self {
+                provider: ProviderEmbed::Youtube(YoutubeVideoId(id.to_owned())),
+            })
+            .ok_or(InvalidTrustedProviderEmbed::Youtube)
+    }
+
+    /// Validates an exact Vimeo video identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidTrustedProviderEmbed::Vimeo`] when `id` does not
+    /// satisfy the bounded provider grammar.
+    pub fn vimeo(id: &str) -> Result<Self, InvalidTrustedProviderEmbed> {
+        let valid = (1..=20).contains(&id.len())
+            && id.as_bytes().first().is_some_and(u8::is_ascii_digit)
+            && !id.starts_with('0')
+            && id.bytes().all(|byte| byte.is_ascii_digit());
+        valid
+            .then(|| Self {
+                provider: ProviderEmbed::Vimeo(VimeoVideoId(id.to_owned())),
+            })
+            .ok_or(InvalidTrustedProviderEmbed::Vimeo)
+    }
+
+    #[cfg(feature = "sanitize")]
+    fn html(&self) -> String {
+        match &self.provider {
+            ProviderEmbed::Youtube(id) => provider_embed_html(
+                "j-provider-embed-youtube",
+                &format!("https://www.youtube-nocookie.com/embed/{}", id.0),
+                &format!("https://www.youtube.com/watch?v={}", id.0),
+                "YouTube video player",
+                "Watch on YouTube",
+            ),
+            ProviderEmbed::Vimeo(id) => provider_embed_html(
+                "j-provider-embed-vimeo",
+                &format!("https://player.vimeo.com/video/{}", id.0),
+                &format!("https://vimeo.com/{}", id.0),
+                "Vimeo video player",
+                "Watch on Vimeo",
+            ),
+        }
+    }
+}
+
+/// One ordered part of a rendered Post body.
+///
+/// Raw HTML is deliberately represented only as [`Self::Untrusted`], which
+/// [`assemble_rendered_html`] sanitizes before it can reach `RenderedHtml`.
+/// `Embed` accepts only a [`TrustedProviderEmbed`] constructed through a
+/// provider-specific validator.
+#[derive(Clone, Copy, Debug)]
+pub enum RenderedHtmlPart<'a> {
+    /// Parser output originating from Post source and requiring sanitization.
+    Untrusted(&'a str),
+    /// Fixed markup selected by a validated provider identifier.
+    Embed(&'a TrustedProviderEmbed),
+}
+
+/// Assembles sanitized source output and validated provider embeds into rendered HTML.
+///
+/// The caller controls only the order of untrusted source fragments and typed embeds.
+/// Every source fragment crosses the single sanitizer before joining; only the closed
+/// provider enum can contribute active iframe markup.
+#[cfg(feature = "sanitize")]
+#[must_use]
+pub fn assemble_rendered_html(parts: &[RenderedHtmlPart<'_>]) -> RenderedHtml {
+    let mut html = String::new();
+    for part in parts {
+        match part {
+            RenderedHtmlPart::Untrusted(raw) => html.push_str(&SANITIZER.clean(raw).to_string()),
+            RenderedHtmlPart::Embed(embed) => html.push_str(&embed.html()),
+        }
+    }
+    RenderedHtml(html)
+}
+
+#[cfg(feature = "sanitize")]
+fn provider_embed_html(
+    provider_class: &str,
+    embed_url: &str,
+    fallback_url: &str,
+    title: &str,
+    fallback_label: &str,
+) -> String {
+    format!(
+        concat!(
+            "<figure class=\"j-provider-embed {}\" data-jaunder-part=\"post-shortcode\">",
+            "<div class=\"j-provider-embed-frame\">",
+            "<iframe src=\"{}\" loading=\"lazy\" title=\"{}\" allowfullscreen></iframe>",
+            "</div><figcaption><a href=\"{}\">{}</a></figcaption></figure>"
+        ),
+        provider_class, embed_url, title, fallback_url, fallback_label
+    )
+}
+
 /// The single allowlist every [`sanitize`] call scrubs against. It is ammonia's
 /// audited default, widened for fenced-code language markers and the bounded
 /// non-executable media surface recorded by
@@ -503,6 +658,83 @@ mod tests {
     fn rendered_html_test_fixture_preserves_exact_bytes() {
         let raw = "<script>fixture markup</script>";
         assert_eq!(crate::test_support::rendered_html(raw).as_ref(), raw);
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn trusted_provider_embeds_use_fixed_urls_and_reject_unsafe_identifiers() {
+        let youtube = TrustedProviderEmbed::youtube("dQw4w9WgXcQ").expect("valid YouTube ID");
+        let vimeo = TrustedProviderEmbed::vimeo("123456789").expect("valid Vimeo ID");
+
+        let html = assemble_rendered_html(&[
+            RenderedHtmlPart::Untrusted("<p>before</p>"),
+            RenderedHtmlPart::Embed(&youtube),
+            RenderedHtmlPart::Untrusted("<p>between</p>"),
+            RenderedHtmlPart::Embed(&vimeo),
+            RenderedHtmlPart::Untrusted("<p>after</p>"),
+        ]);
+
+        assert!(html.contains("https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ"));
+        assert!(html.contains("https://www.youtube.com/watch?v=dQw4w9WgXcQ"));
+        assert!(html.contains("https://player.vimeo.com/video/123456789"));
+        assert!(html.contains("https://vimeo.com/123456789"));
+        assert!(html.contains("loading=\"lazy\""));
+        assert!(html.contains("allowfullscreen"));
+        assert!(html.contains("j-provider-embed"));
+        assert!(html.find("before").unwrap() < html.find("between").unwrap());
+        assert!(html.find("between").unwrap() < html.find("after").unwrap());
+
+        for invalid in ["dQw4w9WgXcQ?start=1", "dQw4w9WgXc", "<script>"] {
+            assert!(TrustedProviderEmbed::youtube(invalid).is_err(), "{invalid}");
+        }
+        for invalid in ["0", "0123", "12x", "123456789012345678901"] {
+            assert!(TrustedProviderEmbed::vimeo(invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn trusted_provider_embed_markup_is_exact() {
+        let youtube = TrustedProviderEmbed::youtube("dQw4w9WgXcQ").expect("valid YouTube ID");
+        let vimeo = TrustedProviderEmbed::vimeo("123456789").expect("valid Vimeo ID");
+
+        assert_eq!(
+            assemble_rendered_html(&[RenderedHtmlPart::Embed(&youtube)]).as_ref(),
+            concat!(
+                "<figure class=\"j-provider-embed j-provider-embed-youtube\" data-jaunder-part=\"post-shortcode\">",
+                "<div class=\"j-provider-embed-frame\">",
+                "<iframe src=\"https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ\" loading=\"lazy\" title=\"YouTube video player\" allowfullscreen></iframe>",
+                "</div><figcaption><a href=\"https://www.youtube.com/watch?v=dQw4w9WgXcQ\">Watch on YouTube</a></figcaption></figure>"
+            )
+        );
+        assert_eq!(
+            assemble_rendered_html(&[RenderedHtmlPart::Embed(&vimeo)]).as_ref(),
+            concat!(
+                "<figure class=\"j-provider-embed j-provider-embed-vimeo\" data-jaunder-part=\"post-shortcode\">",
+                "<div class=\"j-provider-embed-frame\">",
+                "<iframe src=\"https://player.vimeo.com/video/123456789\" loading=\"lazy\" title=\"Vimeo video player\" allowfullscreen></iframe>",
+                "</div><figcaption><a href=\"https://vimeo.com/123456789\">Watch on Vimeo</a></figcaption></figure>"
+            )
+        );
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn trusted_provider_assembly_sanitizes_author_html_without_leaking_artifacts() {
+        let embed = TrustedProviderEmbed::youtube("dQw4w9WgXcQ").expect("valid YouTube ID");
+        let html = assemble_rendered_html(&[
+            RenderedHtmlPart::Untrusted(
+                r#"<iframe src="https://evil.example/embed"></iframe><IFRAME SRC="https://evil.example/disguised"></IFRAME><p data-jaunder-embed="x">safe</p>"#,
+            ),
+            RenderedHtmlPart::Embed(&embed),
+            RenderedHtmlPart::Untrusted("<script>active</script>"),
+        ]);
+
+        assert!(!html.contains("evil.example"), "{html}");
+        assert!(!html.contains("data-jaunder-embed"), "{html}");
+        assert!(!html.contains("<script"), "{html}");
+        assert!(!html.contains("active"), "{html}");
+        assert!(html.contains("https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ"));
     }
 
     // The sanitizer is a public feature-gated seam. Assert only its observable

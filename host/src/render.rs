@@ -337,6 +337,21 @@ mod tests {
     // -- Markdown tests --
 
     #[test]
+    fn trusted_provider_frames_are_external_embeds_not_media_references() {
+        use common::render::{RenderedHtmlPart, TrustedProviderEmbed, assemble_rendered_html};
+
+        let embed = TrustedProviderEmbed::youtube("dQw4w9WgXcQ").expect("valid YouTube ID");
+        let html = assemble_rendered_html(&[RenderedHtmlPart::Embed(&embed)]);
+
+        assert!(html.contains("<iframe"), "{html}");
+        assert!(extract_media_refs(html.as_ref()).is_empty());
+        assert!(
+            !MEDIA_URL_ATTRS.contains(&("iframe", "src")),
+            "provider frames are external presentation, not Media references"
+        );
+    }
+
+    #[test]
     fn markdown_headings() {
         let html = render_markdown("# H1\n## H2\n### H3");
         assert!(html.contains("<h1>H1</h1>"));

@@ -779,6 +779,23 @@ only for the media listing, where the reader may skip.
 
 ### Committed direction
 
+- **Bounded Post Shortcode embeds**
+  ([decision](adr/drafts/bounded-post-shortcode-embeds.md)): Markdown and Org
+  top-level paragraphs will recognize a fixed complete-line grammar. Host-owned
+  source recognition will dispatch YouTube and Vimeo names to a closed closed
+  `common::render::TrustedProviderEmbed` type with private validated provider
+  state and fixed markup. Untrusted parser output will remain sanitized before a
+  common-owned trusted assembly path substitutes those typed provider frames;
+  raw author iframes will remain stripped. This will extend ADR-0159's narrow
+  host-only `common/sanitize` minting exception for the closed provider values
+  and structured assembly door, leaving source recognition and general rendering
+  machinery in `host`. It will amend `RenderedHtml`'s invariant to no
+  **author-controlled** active markup without admitting a raw-markup or
+  arbitrary-URL constructor. HTML Posts, code/literal/container contexts,
+  unknown providers, and malformed or extended forms will remain literal. The
+  native source will not be rewritten, all rendered surfaces will share the
+  expansion, and provider URLs will not create Media references.
+
 Nothing below is built. **There is no ingestion tier**: all 25 migrations
 (`storage/migrations/{sqlite,postgres}/`) are publishing-side, and no table
 holds fetched remote content.
