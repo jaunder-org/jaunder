@@ -604,6 +604,48 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
+    async fn migration_0039_invalidates_pre_rendered_title_feed_cache_rows(
+        #[case] backend: Backend,
+    ) {
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(38).await.unwrap();
+        db.pool
+            .execute(
+                "INSERT INTO feed_cache \
+                 (feed_url, body, etag, content_type, representation_modified_at, generated_at, semantic_fingerprint) VALUES \
+                 ('/feed.rss', '<rss/>', '\"legacy\"', 'application/rss+xml; charset=utf-8', \
+                 CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, \
+                 '0000000000000000000000000000000000000000000000000000000000000000')",
+            )
+            .await
+            .unwrap();
+        db.pool
+            .execute("INSERT INTO site_config (key, value) VALUES ('legacy.unrelated', 'retained')")
+            .await
+            .unwrap();
+
+        db.migrate_current().await.unwrap();
+
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM feed_cache")
+                .await
+                .unwrap(),
+            0,
+            "pre-Rendered-Title cache bytes cannot be served"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM site_config WHERE key = 'legacy.unrelated' AND value = 'retained'")
+                .await
+                .unwrap(),
+            1,
+            "cache invalidation must not erase unrelated durable state"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
     async fn migration_0034_removes_legacy_theme_rows_after_0033_backfill(
         #[case] backend: Backend,
     ) {

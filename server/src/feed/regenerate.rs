@@ -121,9 +121,14 @@ fn build_feed_items(base: &BaseUrl, records: &[PostRecord]) -> Vec<FeedItem> {
             let published_at = p.published_at.unwrap_or(p.created_at);
             FeedItem {
                 id: p.post_id,
-                // FeedItem carries the post's PostTitle unflattened (#470); renderers
-                // read it out via Deref/Display at the external-crate boundary.
-                title: p.title.clone(),
+                // Feed readers consume persisted Rendered Title projections only; they
+                // never parse authored Markdown, Org, or HTML source.
+                rendered_title: p.rendered_title.clone(),
+                visible_title: p
+                    .rendered_title
+                    .as_ref()
+                    .map(common::render::RenderedPostTitle::visible_text)
+                    .filter(|title| !title.is_empty()),
                 // Compose the root-relative permalink to an absolute per-item feed URL
                 // (atom Entry.id/link, RSS link/guid, JSON item url) — no relative atom:id
                 // (#560, D1). `base` is the required site origin.
@@ -151,6 +156,45 @@ fn build_feed_items(base: &BaseUrl, records: &[PostRecord]) -> Vec<FeedItem> {
 mod tests {
     use super::*;
     use sqlx::Error as SqlxError;
+
+    #[test]
+    fn build_feed_items_keeps_present_empty_rendered_title_but_omits_visible_title() {
+        use common::{
+            ids::{PostId, UserId},
+            test_support::{
+                parse_post_body, parse_slug, parse_username, parse_utc_instant, rendered_html,
+            },
+        };
+        use storage::{PostFormat, PostRecord};
+
+        let at = parse_utc_instant("2026-09-19T12:00:00Z");
+        let record = PostRecord {
+            post_id: PostId::from(1),
+            user_id: UserId::from(2),
+            author_username: parse_username("alice"),
+            author_display_name: None,
+            title: Some("content-free source".parse().unwrap()),
+            rendered_title: Some(common::render::RenderedPostTitle::empty()),
+            slug: parse_slug("empty-rendered-title"),
+            body: parse_post_body("body"),
+            format: PostFormat::Markdown,
+            rendered_html: rendered_html("<p>body</p>"),
+            created_at: at,
+            updated_at: at,
+            published_at: Some(at),
+            deleted_at: None,
+            summary: None,
+            tags: vec![],
+        };
+        let base: BaseUrl = "https://example.com/".parse().unwrap();
+        let items = build_feed_items(&base, &[record]);
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].rendered_title,
+            Some(common::render::RenderedPostTitle::empty())
+        );
+        assert_eq!(items[0].visible_title, None);
+    }
 
     #[test]
     fn regenerate_error_storage_preserves_sqlx_source() {

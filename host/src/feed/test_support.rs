@@ -38,7 +38,8 @@ pub fn feed_item(
 ) -> FeedItem {
     FeedItem {
         id,
-        title: None,
+        rendered_title: None,
+        visible_title: None,
         permalink,
         summary: None,
         content_html,

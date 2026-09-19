@@ -79,7 +79,7 @@ Out:
     coincidence. Focused regressions prove slug derivation and browser document
     titles still use authored title syntax unchanged.
 
-- [ ] Task 4: Project titles correctly into every Syndication Feed format
+- [x] Task 4: Project titles correctly into every Syndication Feed format
   - Depends on: Tasks 1–2.
   - Contract: feed assembly carries the persisted fragment and its visible-text
     projection. Atom emits `type="html"`; RSS and JSON Feed emit marker-free

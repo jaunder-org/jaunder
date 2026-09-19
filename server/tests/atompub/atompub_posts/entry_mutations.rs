@@ -8,6 +8,7 @@ use common::MutationOutcome;
 use common::ids::PostId;
 use common::tag::{MAX_TAGS_PER_POST, TagLabel};
 use common::test_support::parse_post_body;
+use common::visibility::ViewerIdentity;
 use rstest::*;
 use rstest_reuse::*;
 use tower::ServiceExt;
@@ -358,6 +359,122 @@ async fn create_format_media_type_round_trips(
     assert!(
         body.contains(&format!("type=\"{content_type}\"")),
         "member should round-trip type={content_type}: {body}"
+    );
+}
+
+#[apply(backends_matrix)]
+#[case::markdown("text/markdown", "Markdown *em* &amp; _under_", "body")]
+#[case::org("text/org", "Org /em/ &amp; _under_", "* heading\nbody")]
+#[case::html(
+    "html",
+    "&lt;em&gt;HTML&lt;/em&gt; &amp; source",
+    "&lt;p&gt;body&lt;/p&gt;"
+)]
+#[tokio::test]
+async fn atompub_create_get_update_get_preserves_authored_title_syntax(
+    backend: Backend,
+    #[case] content_type: &str,
+    #[case] title_xml: &str,
+    #[case] content: &str,
+) {
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
+    let create = app
+        .clone()
+        .oneshot(atompub_post_xml(
+            &session,
+            "posts",
+            &entry_xml(title_xml, content_type, content),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(create.status(), StatusCode::CREATED);
+    let post_id = PostId::from(location_post_id(&create));
+    let location = atompub_location(
+        create
+            .headers()
+            .get(header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap(),
+    );
+    let first_read = body_string(
+        make_app!(&env, base)
+            .oneshot(
+                atompub_at(&session, Method::GET, &location)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(
+        first_read.contains(&format!("<title>{title_xml}</title>")),
+        "AtomPub GET must preserve authored title source syntax: {first_read}"
+    );
+    let expected = title_xml
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&");
+    assert_eq!(
+        env.posts()
+            .get_post_by_id(post_id, &ViewerIdentity::local(session.user_id))
+            .await
+            .unwrap()
+            .unwrap()
+            .title
+            .as_ref()
+            .map(ToString::to_string),
+        Some(expected.clone())
+    );
+
+    let updated_xml = format!("{title_xml} updated");
+    let update = make_app!(&env, base)
+        .oneshot(atompub_put_xml(
+            &session,
+            &format!("posts/{post_id}"),
+            &entry_xml(&updated_xml, content_type, content),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(update.status(), StatusCode::OK);
+    let expected_updated = updated_xml
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&");
+    let reread = body_string(
+        make_app!(&env, base)
+            .oneshot(
+                atompub_at(&session, Method::GET, &location)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(
+        reread.contains(&format!("<title>{updated_xml}</title>")),
+        "AtomPub GET after update must preserve authored title source syntax: {reread}"
+    );
+    assert_eq!(
+        env.posts()
+            .get_post_by_id(post_id, &ViewerIdentity::local(session.user_id))
+            .await
+            .unwrap()
+            .unwrap()
+            .title
+            .as_ref()
+            .map(ToString::to_string),
+        Some(expected_updated)
     );
 }
 
