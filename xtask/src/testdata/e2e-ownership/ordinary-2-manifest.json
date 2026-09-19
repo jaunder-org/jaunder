@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "complete": true,
+  "lane": "sqlite-firefox-ordinary-2-of-2",
+  "backend": "sqlite",
+  "browser": "firefox",
+  "partition": "ordinary",
+  "shard_index": 2,
+  "shard_count": 2,
+  "tests": [
+    {
+      "project_id": "firefox-ordinary",
+      "project_name": "firefox-ordinary",
+      "test_id": "two"
+    }
+  ]
+}

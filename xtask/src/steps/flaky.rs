@@ -33,8 +33,8 @@ pub struct FlakySpec {
 /// Playwright wrote one) is a silent no-op — `e2e_combo` already owns that
 /// failure.
 pub fn collect(result: &mut CommandResult, backend: &str, browser: &str) {
-    let path =
-        format!(".xtask/diagnostics/e2e-{backend}-{browser}/playwright-report-{backend}.json");
+    let lane = format!("{backend}-{browser}-unsplit");
+    let path = format!(".xtask/diagnostics/e2e-{lane}/playwright-report-{lane}.json");
     let Ok(json) = std::fs::read_to_string(&path) else {
         return;
     };

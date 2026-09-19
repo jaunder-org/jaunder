@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "complete": true,
+  "lane": "sqlite-firefox-serial-special",
+  "backend": "sqlite",
+  "browser": "firefox",
+  "partition": "serial-special",
+  "shard_index": null,
+  "shard_count": null,
+  "tests": [
+    {
+      "project_id": "firefox-special-visual",
+      "project_name": "firefox-special-visual",
+      "test_id": "visual"
+    }
+  ]
+}

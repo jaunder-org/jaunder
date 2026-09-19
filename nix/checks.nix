@@ -133,12 +133,12 @@ let
 # scoped record winning, and owns the default-empty source-controlled allowlist.
 # The CLI receives the capture directory rather than restating the diagnostic
 # filename defined by `host::capture`.
-e2ePanicGate = backend: ''
-  machine.succeed("journalctl -u jaunder.service --no-pager -o cat > /tmp/jaunder-journal-${backend}.log")
+e2ePanicGate = backend: identity: ''
+  machine.succeed("journalctl -u jaunder.service --no-pager -o cat > /tmp/jaunder-journal-${identity}.log")
   # copy_from_machine's 2nd arg is a target *directory*; "" lands the file
   # flat at $out/jaunder-journal-${backend}.log (the per-backend name comes
   # from the source).
-  machine.copy_from_machine("/tmp/jaunder-journal-${backend}.log", "")
+  machine.copy_from_machine("/tmp/jaunder-journal-${identity}.log", "")
   panic_status, panic_out = machine.execute(
       "test-support verify-no-panics"
       + " --capture-dir /var/lib/jaunder/capture"
@@ -186,7 +186,7 @@ performanceGlobalTimeout = 6000;
 # the actual endpoints before any exporter runs. Seed-span verification
 # then stops the collector to flush short-lived process spans into the
 # JSONL file the VM owns.
-e2eOtelTestHelpers = backend: ''
+e2eOtelTestHelpers = identity: ''
   def wait_for_otel_receivers():
     machine.wait_for_open_port(4317, timeout=30)
     machine.wait_for_open_port(4318, timeout=30)
@@ -194,9 +194,9 @@ e2eOtelTestHelpers = backend: ''
   def retain_e2e_capture():
     # The ordinary and pre-Playwright paths retain one whole-directory artifact,
     # so a failure cannot silently lose a capture stream that ordinary retention preserves.
-    machine.execute("test -d /var/lib/jaunder/capture && tar czf /tmp/capture-${backend}.tar.gz -C /var/lib/jaunder capture 2>/dev/null || true")
-    if machine.execute("test -e /tmp/capture-${backend}.tar.gz")[0] == 0:
-      machine.copy_from_machine("/tmp/capture-${backend}.tar.gz", "")
+    machine.execute("test -d /var/lib/jaunder/capture && tar czf /tmp/capture-${identity}.tar.gz -C /var/lib/jaunder capture 2>/dev/null || true")
+    if machine.execute("test -e /tmp/capture-${identity}.tar.gz")[0] == 0:
+      machine.copy_from_machine("/tmp/capture-${identity}.tar.gz", "")
 
   def assert_seed_storage_spans():
     stop_status, stop_out = machine.execute(
@@ -233,7 +233,7 @@ e2eOtelTestHelpers = backend: ''
 # explicit unavailable evidence instead of inventing a boundary the VM cannot
 # observe. The sidecar lives in the VM long enough to use the established
 # diagnostic copy path, keeping successful and --keep-failed outputs identical.
-e2ePhaseTimingHelpers = backend: browser: ''
+e2ePhaseTimingHelpers = backend: browser: identity: ''
   import base64
   import json
   import shlex
@@ -289,6 +289,7 @@ e2ePhaseTimingHelpers = backend: browser: ''
           "schema_version": 1,
           "backend": "${backend}",
           "browser": "${browser}",
+          "lane": "${identity}",
           "phases": e2e_phases,
         },
         separators=(",", ":"),
@@ -299,7 +300,7 @@ e2ePhaseTimingHelpers = backend: browser: ''
     # exposes a successfully written sidecar in either output location.
     manifest_status, manifest_out = machine.execute(
       "printf %s " + shlex.quote(payload)
-      + " | base64 -d > /tmp/e2e-phase-${backend}.json"
+      + " | base64 -d > /tmp/e2e-phase-${identity}.json"
     )
     if manifest_status != 0:
       print("failed to write e2e phase manifest: " + manifest_out)
@@ -309,6 +310,13 @@ e2eRunAndCapture =
   {
     backend,
     browser,
+    identity,
+    partition,
+    shardIndex ? null,
+    shardCount ? null,
+    projectArgs,
+    shardArg,
+    expectedCensusProjectArgs ? "",
     traceId,
     traceParent,
     # The same DB the running server uses, exported into the Playwright
@@ -318,6 +326,20 @@ e2eRunAndCapture =
     extraEnv ? "",
   }:
   ''
+    ${pkgs.lib.optionalString (expectedCensusProjectArgs != "") ''
+    expected_census_status, expected_census_out = machine.execute(
+      "cd /tmp/e2e"
+      + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
+      + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
+      + " JAUNDER_E2E_CENSUS_PREPARE=1"
+      + " JAUNDER_E2E_CENSUS_TOPOLOGY=${backend}-${browser}-experimental"
+      + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
+      + " --list --config playwright.config.ts ${expectedCensusProjectArgs}",
+      timeout=${toString e2ePlaywrightTimeout},
+    )
+    print(expected_census_out)
+    assert expected_census_status == 0, "e2e expected census preflight failed for ${backend}-${browser}-experimental"
+    ''}
     gate_started_at = time.monotonic()
     pw_status, pw_out = machine.execute(
       "cd /tmp/e2e"
@@ -328,12 +350,18 @@ e2eRunAndCapture =
       + " JAUNDER_CAPTURE_DIR=/var/lib/jaunder/capture"
       + " JAUNDER_DB=${jaunderDb}"
       + " JAUNDER_STORAGE_PATH=/var/lib/jaunder/data"
+      + " JAUNDER_E2E_LANE=${identity}"
+      + " JAUNDER_E2E_BACKEND=${backend}"
+      + " JAUNDER_E2E_BROWSER=${browser}"
+      + " JAUNDER_E2E_PARTITION=${partition}"
+      + " JAUNDER_E2E_SHARD_INDEX=${if shardIndex == null then "" else toString shardIndex}"
+      + " JAUNDER_E2E_SHARD_COUNT=${if shardCount == null then "" else toString shardCount}"
       + " JAUNDER_E2E_TRACE_ID=${traceId}"
       + " JAUNDER_E2E_TRACEPARENT=${traceParent}"
       + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
       + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
       + " --config playwright.config.ts"
-      + " --project ${browser} --project ${browser}-admin",
+      + " ${projectArgs}${shardArg}",
       timeout=${toString e2ePlaywrightTimeout},
     )
     record_e2e_phase(
@@ -360,16 +388,20 @@ e2eRunAndCapture =
         if machine.execute("test -e " + path)[0] == 0:
             machine.copy_from_machine(path, "")
 
-    machine.execute("test -s /tmp/e2e/test-results/results.json && cp /tmp/e2e/test-results/results.json /tmp/playwright-report-${backend}.json")
-    _grab("/tmp/playwright-report-${backend}.json")
-    machine.execute("test -s /tmp/e2e/test-results/duration-budget-manifest.json && cp /tmp/e2e/test-results/duration-budget-manifest.json /tmp/duration-budget-manifest-${backend}.json")
-    _grab("/tmp/duration-budget-manifest-${backend}.json")
+    machine.execute("test -s /tmp/e2e/test-results/results.json && cp /tmp/e2e/test-results/results.json /tmp/playwright-report-${identity}.json")
+    _grab("/tmp/playwright-report-${identity}.json")
+    machine.execute("test -s /tmp/e2e/test-results/duration-budget-manifest.json && cp /tmp/e2e/test-results/duration-budget-manifest.json /tmp/duration-budget-manifest-${identity}.json")
+    _grab("/tmp/duration-budget-manifest-${identity}.json")
+    machine.execute("test -s /tmp/e2e/test-results/e2e-expected-census.json && cp /tmp/e2e/test-results/e2e-expected-census.json /tmp/e2e-census-${identity}.json")
+    _grab("/tmp/e2e-census-${identity}.json")
+    machine.execute("test -s /tmp/e2e/test-results/e2e-lane-manifest.json && cp /tmp/e2e/test-results/e2e-lane-manifest.json /tmp/e2e-lane-manifest-${identity}.json")
+    _grab("/tmp/e2e-lane-manifest-${identity}.json")
 
-    machine.execute("tar czf /tmp/playwright-artifacts-${backend}.tar.gz -C /tmp/e2e test-results 2>/dev/null || true")
-    _grab("/tmp/playwright-artifacts-${backend}.tar.gz")
+    machine.execute("tar czf /tmp/playwright-artifacts-${identity}.tar.gz -C /tmp/e2e test-results 2>/dev/null || true")
+    _grab("/tmp/playwright-artifacts-${identity}.tar.gz")
 
-    machine.execute("journalctl --no-pager -o short-precise > /tmp/system-journal-${backend}.log")
-    _grab("/tmp/system-journal-${backend}.log")
+    machine.execute("journalctl --no-pager -o short-precise > /tmp/system-journal-${identity}.log")
+    _grab("/tmp/system-journal-${identity}.log")
 
     # Capture-dir contract (#227, #332): the shared helper retains the complete
     # capture directory for ordinary and seed-failure paths alike. It holds diag.log,
@@ -383,7 +415,7 @@ e2eRunAndCapture =
     )
 
     post_gate_started_at = time.monotonic()
-    ${e2ePanicGate backend}
+    ${e2ePanicGate backend identity}
     record_e2e_phase(
       "post-gate-checks",
       post_gate_started_at,
@@ -394,13 +426,13 @@ e2eRunAndCapture =
     # The sidecar follows the established unconditional diagnostic lift. If a
     # guest-side write failed, _grab deliberately does not hide the original
     # Playwright or panic verdict while still preserving every other artifact.
-    _grab("/tmp/e2e-phase-${backend}.json")
+    _grab("/tmp/e2e-phase-${identity}.json")
 
     # Preserve ADR-0032's panic assertion before the Playwright assertion.
-    assert panic_status == 0, "e2e zero-panic gate failed (exit %d) for ${backend}/${browser}; see jaunder-journal-${backend}.log + e2e-phase-${backend}.json + build.log" % panic_status
+    assert panic_status == 0, "e2e zero-panic gate failed (exit %d) for ${identity}; see jaunder-journal-${identity}.log + e2e-phase-${identity}.json + build.log" % panic_status
 
     # Fail the check now — after all artifacts are safely copied out.
-    assert pw_status == 0, "e2e Playwright failed (exit %d) for ${backend}/${browser}; see playwright-report-${backend}.json + duration-budget-manifest-${backend}.json + playwright-artifacts-${backend}.tar.gz + e2e-phase-${backend}.json + build.log" % pw_status
+    assert pw_status == 0, "e2e Playwright failed (exit %d) for ${identity}; see playwright-report-${identity}.json + duration-budget-manifest-${identity}.json + playwright-artifacts-${identity}.tar.gz + e2e-phase-${identity}.json + e2e-census-${identity}.json + e2e-lane-manifest-${identity}.json + build.log" % pw_status
   '';
 
 mkE2eCheck =
@@ -408,6 +440,13 @@ mkE2eCheck =
     backend,
     checkName,
     browser,
+    identity,
+    partition,
+    shardIndex ? null,
+    shardCount ? null,
+    projectArgs,
+    shardArg,
+    expectedCensusProjectArgs ? "",
     traceId,
     traceParent,
     extraEnv ? "",
@@ -568,7 +607,7 @@ mkE2eCheck =
     testScript =
       if producer == null then
         ''
-          ${e2ePhaseTimingHelpers backend browser}${e2eOtelTestHelpers backend}${beforeMachineStart}vm_startup_started_at = time.monotonic()
+          ${e2ePhaseTimingHelpers backend browser identity}${e2eOtelTestHelpers identity}${beforeMachineStart}vm_startup_started_at = time.monotonic()
           machine.start()
           machine.wait_for_unit("otel-collector.service", timeout=60)
           # `active` precedes the OTLP receiver binds; seeding immediately can
@@ -591,6 +630,13 @@ mkE2eCheck =
             inherit
               backend
               browser
+              identity
+              partition
+              shardIndex
+              shardCount
+              projectArgs
+              shardArg
+              expectedCensusProjectArgs
               traceId
               traceParent
               extraEnv
@@ -621,34 +667,28 @@ e2eSalt = "";
 # per-combo ids). Add a row here and the gate checks, the single-worker
 # diagnostic packages, and the `e2e-checks` aggregate all extend
 # automatically.
-e2eCombos = [
-  {
-    backend = "sqlite";
-    browser = "chromium";
-    traceDigit = "1";
-  }
-  {
-    backend = "sqlite";
-    browser = "firefox";
-    traceDigit = "2";
-  }
-  {
-    backend = "postgres";
-    browser = "chromium";
-    traceDigit = "3";
-  }
-  {
-    backend = "postgres";
-    browser = "firefox";
-    traceDigit = "4";
-  }
-];
+e2eLaneCatalog = (builtins.fromJSON (builtins.readFile ../end2end/e2e-lanes.json)).lanes;
+# The production matrix retains its current four unsplit lanes. The disabled
+# Firefox entries below are still first-class derivations for Task 5, not CI jobs.
+e2eCombos = builtins.filter (lane: lane.enabled) e2eLaneCatalog;
+e2eExperimentalLanes = builtins.filter (lane: !lane.enabled) e2eLaneCatalog;
+# The unsharded expected census selects the catalog's full candidate project union.
+e2eExperimentalCensusProjectArgs =
+  pkgs.lib.concatMapStringsSep " " (project: "--project ${project}")
+    (pkgs.lib.unique (pkgs.lib.concatMap (lane: lane.projects) e2eExperimentalLanes));
 
 mkE2eCombo =
   {
     backend,
     browser,
+    partition,
+    identity,
     traceDigit,
+    projects,
+    enabled,
+    shardIndex ? null,
+    shardCount ? null,
+    expectedCensusProjectArgs ? "",
     nameSuffix ? "",
     extraEnv ? "",
     vmMemory ? 2048,
@@ -657,9 +697,11 @@ mkE2eCombo =
   let
     traceId = pkgs.lib.concatStrings (pkgs.lib.genList (_: traceDigit) 32);
     traceParent = "00-${traceId}-${pkgs.lib.concatStrings (pkgs.lib.genList (_: traceDigit) 16)}-01";
+    projectArgs = pkgs.lib.concatMapStringsSep " " (project: "--project ${project}") projects;
+    shardArg = pkgs.lib.optionalString (shardIndex != null) " --shard=${toString shardIndex}/${toString shardCount}";
   in
   mkE2eCheck {
-    checkName = "jaunder-e2e-${backend}-${browser}${nameSuffix}";
+    checkName = "jaunder-e2e-${identity}${nameSuffix}";
     # The salt rides the combo's generic extra-env string, which is
     # interpolated into the VM testScript above — so it reaches the
     # derivation hash. The variable itself is inert: nothing reads
@@ -669,6 +711,13 @@ mkE2eCombo =
     inherit backend;
     inherit
       browser
+      identity
+      partition
+      shardIndex
+      shardCount
+      projectArgs
+      shardArg
+      expectedCensusProjectArgs
       traceId
       traceParent
       vmMemory
@@ -685,6 +734,8 @@ mkE2eCombo =
 # arm increased SQLite flakiness. See docs/observability.md #828.
 e2eGateChecks = pkgs.lib.listToAttrs (
   map (c: {
+    # Keep CI's matrix-facing names stable; the derivation and every emitted
+    # artifact carry the catalog identity.
     name = "e2e-${c.backend}-${c.browser}";
     value = mkE2eCombo (
       c
@@ -698,6 +749,20 @@ e2eGateChecks = pkgs.lib.listToAttrs (
       }
     );
   }) e2eCombos
+);
+
+# Disabled catalog lanes remain isolated VM derivations for the retained
+# experiment, but are not exposed through checks or the production CI matrix.
+e2eExperimentalPackages = pkgs.lib.listToAttrs (
+  map (lane: {
+    name = "e2e-${lane.identity}";
+    value = mkE2eCombo (lane // {
+      extraEnv = " JAUNDER_E2E_RETRIES=1";
+      expectedCensusProjectArgs = e2eExperimentalCensusProjectArgs;
+      vmMemory = 3072;
+      vmCores = 2;
+    });
+  }) e2eExperimentalLanes
 );
 
 # Single-worker variants: same combos as the gate checks but pinned to
@@ -780,7 +845,7 @@ mkPerformanceProducer =
       import shlex
       import time
 
-      ${e2eOtelTestHelpers backend}
+      ${e2eOtelTestHelpers "performance-${backend}-${producerKind}"}
       machine.start()
       provisioning_started = time.monotonic_ns()
       machine.wait_for_unit("otel-collector.service", timeout=60)
@@ -1674,7 +1739,7 @@ mkWasmCoverageMeasurementProducer =
           value = check.driver;
         }) checks;
     in
-    drivers e2eGateChecks // drivers e2eSingleWorkerPackages;
+    drivers e2eGateChecks // drivers e2eExperimentalPackages // drivers e2eSingleWorkerPackages;
   e2eSupportPackages = {
     # These derivations already sit beneath each NixOS test result and have
     # names caught by the broad Cachix exclusion. They contain test machinery,
@@ -1785,6 +1850,7 @@ mkWasmCoverageMeasurementProducer =
     (map (name: "checks.${system}.${name}") (builtins.attrNames coverageFinalCacheChecks))
     ++ (map (name: "checks.${system}.${name}") (builtins.attrNames e2eGateChecks))
     ++ [ "checks.${system}.e2e" "packages.${system}.e2e-checks" ]
+    ++ (map (name: "packages.${system}.${name}") (builtins.attrNames e2eExperimentalPackages))
     ++ (map (name: "packages.${system}.${name}") (builtins.attrNames e2eSingleWorkerPackages));
   cacheSafetyDriverAttrs =
     map (name: "packages.${system}.${name}") (builtins.attrNames e2eTestDriverPackages);
@@ -1898,6 +1964,7 @@ wasm-coverage-measure-firefox-instrumented = mkWasmCoverageMeasurementProducer {
   cacheBuster = measurementCacheBuster;
 };
     }
+    // e2eExperimentalPackages
     // e2eSingleWorkerPackages
   );
 
@@ -2108,6 +2175,7 @@ static-code =
       TZDIR = "${pkgs.tzdata}/share/zoneinfo";
       E2E_TYPES_NODE_MODULES = "${e2ePackage}/node_modules";
       E2E_PLAYWRIGHT_TEST = "${pkgs.playwright-test}/lib/node_modules/@playwright/test";
+      JAUNDER_E2E_PLAYWRIGHT_CLI = "${pkgs.playwright-test}/lib/node_modules/@playwright/test/cli.js";
       JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME = "${appOfflineCargoHome}";
       JAUNDER_DEVTOOL_TOOLS_CARGO_HOME = "${toolsOfflineCargoHome}";
     }
@@ -2117,6 +2185,7 @@ static-code =
       cp --no-preserve=mode -r ${staticCodeSrc} src
       cd src
       devtool check --group code --sandbox-cargo
+      node end2end/e2eCensusContract.ts
       touch $out
     '';
 # Doctests: the one suite nextest structurally cannot run, so the

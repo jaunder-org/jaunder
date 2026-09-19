@@ -105,10 +105,10 @@ struct Offender<'a> {
 ///
 /// This runs only after a successful VM check and after the diagnostic lift, so
 /// an input failure is loud without replacing the primary failure diagnostics.
-pub(crate) fn validate_lifted_combo(backend: &str, browser: &str) -> StepResult {
-    let diagnostics = Path::new(".xtask/diagnostics").join(format!("e2e-{backend}-{browser}"));
-    let report = diagnostics.join(format!("playwright-report-{backend}.json"));
-    let manifest = diagnostics.join(format!("duration-budget-manifest-{backend}.json"));
+pub(crate) fn validate_lifted_combo(backend: &str, browser: &str, lane: &str) -> StepResult {
+    let diagnostics = Path::new(".xtask/diagnostics").join(format!("e2e-{lane}"));
+    let report = diagnostics.join(format!("playwright-report-{lane}.json"));
+    let manifest = diagnostics.join(format!("duration-budget-manifest-{lane}.json"));
 
     match validate_files(&report, &manifest) {
         Ok(detail) => StepResult::ok("e2e-duration-budget").detail(detail),

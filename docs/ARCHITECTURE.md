@@ -2028,11 +2028,12 @@ order, so the span build and the OTLP POST run before `context.close()`.
 
 In the e2e VMs an otel-collector writes `otel-traces.jsonl` into the capture dir
 ([ADR-0057](adr/0057-e2e-capture-dir-contract.md), #332). Each VM also copies
-out `playwright-report-<backend>.json` (Playwright's `results.json`) and the
-service and system journals alongside the capture tarball, per the
-[ADR-0037](adr/0037-e2e-failure-diagnostics-capture.md) rule that artifacts are
-copied before the Playwright exit is asserted. `cargo xtask traces analyze`
-consumes the trace files offline (see the tooling section).
+out `playwright-report-<backend>-<browser>-unsplit.json` (Playwright's
+`results.json`) and the service and system journals alongside the capture
+tarball, per the [ADR-0037](adr/0037-e2e-failure-diagnostics-capture.md) rule
+that artifacts are copied before the Playwright exit is asserted.
+`cargo xtask traces analyze` consumes the trace files offline (see the tooling
+section).
 
 For host-side gates that reconcile Playwright execution with trace evidence, the
 lifted Playwright JSON report defines the executed project population. The
@@ -2174,8 +2175,9 @@ layer plus a panic hook appending `kind: "panic"` JSONL records through its own
 ([ADR-0032](adr/0032-e2e-zero-panic-gate.md)) receives the diagnostic leaf path,
 scans raw bytes from the union of that stream and a required server log, and
 de-duplicates by panic location with the scoped record winning. Per combo the
-e2e harness tars the directory out as `capture-<backend>.tar.gz` — those three
-files plus `otel-traces.jsonl` — into the
+e2e harness tars the directory out as
+`capture-<backend>-<browser>-unsplit.tar.gz` — those three files plus
+`otel-traces.jsonl` — into the
 [ADR-0037](adr/0037-e2e-failure-diagnostics-capture.md) artifact set.
 
 ### Committed direction

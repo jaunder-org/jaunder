@@ -1,0 +1,19 @@
+{
+  "suites": [
+    {
+      "suites": [],
+      "specs": [
+        {
+          "id": "visual",
+          "tests": [
+            {
+              "projectId": "firefox-special-visual",
+              "projectName": "firefox-special-visual",
+              "results": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -228,6 +228,12 @@ pub enum Command {
         #[arg(value_enum)]
         browser: E2eBrowser,
     },
+    /// Build the three disabled Firefox candidate lanes and reconcile their
+    /// independently lifted ownership evidence. Host-only; never a CI gate.
+    E2eExperimental {
+        #[arg(value_enum)]
+        backend: E2eBackend,
+    },
     /// Run the host e2e loop, owning each lifecycle: build the CSR bundle +
     /// server, start `jaunder serve` on an ephemeral port with the VM's capture
     /// env + a per-run temp DB, seed via the shared `devtool seed-e2e`, run
@@ -568,7 +574,7 @@ pub enum TracesCommand {
     /// totals). A manual tool — not part of `check`/`validate`. Prints human
     /// tables only; `--json` is rejected.
     #[command(after_help = "EXAMPLES:\n  \
-        # trace files extracted from an e2e capture-<backend>.tar.gz bundle (capture/otel-traces.jsonl):\n  \
+        # trace files extracted from a capture-<backend>-<browser>-unsplit.tar.gz bundle (capture/otel-traces.jsonl):\n  \
         cargo xtask traces analyze sqlite-otel-traces.jsonl postgres-otel-traces.jsonl\n  \
         cargo xtask traces analyze --top 40 --project firefox trace-a.jsonl trace-b.jsonl\n  \
         cargo xtask traces analyze --trace 1111...1111 traces.jsonl")]
@@ -584,7 +590,7 @@ pub enum TracesCommand {
         #[arg(long)]
         project: Option<String>,
         /// Playwright `json` reporter output(s), e.g.
-        /// `.xtask/diagnostics/e2e-sqlite-chromium/playwright-report-sqlite.json`.
+        /// `.xtask/diagnostics/e2e-sqlite-chromium-unsplit/playwright-report-sqlite-chromium-unsplit.json`.
         /// Supplies the per-test span-coverage section's denominator — the traces
         /// alone cannot say how long a test took wall-clock. Omit and that one
         /// section is skipped with a note.
@@ -645,6 +651,7 @@ impl Cli {
             Command::Census => "census",
             Command::AuditWasm { .. } => "audit-wasm",
             Command::E2e { .. } => "e2e",
+            Command::E2eExperimental { .. } => "e2e-experimental",
             Command::E2eLocal { .. } => "e2e-local",
             Command::TestLocal { .. } => "test-local",
             Command::BuildCsr { .. } => "build-csr",

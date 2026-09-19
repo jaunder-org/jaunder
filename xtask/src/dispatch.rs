@@ -78,10 +78,9 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let mut result = CommandResult::new("validate");
             if run_non_e2e_validation(&sh, policy, allow_dirty, None, &mut result) && !no_e2e {
                 // Each browser/backend combo is realized, lifted, and reconciled
-                // separately; their same-named per-backend inputs cannot safely
-                // survive the aggregate `e2e-checks` symlink join. The coverage
-                // verifier therefore resolves the already-realized authoritative
-                // combo's individual output rather than reading the join.
+                // separately. The flow-coverage verifier resolves the already-realized
+                // authoritative combo's individual output because only that combo owns
+                // the empirical snapshot verdict.
                 let e2e = steps::nix::e2e(&mut result);
                 steps::server_fn_coverage_check::verify_after_validate(
                     &mut result,
@@ -166,6 +165,13 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                     }
                 }
             }
+            lifecycle::finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::E2eExperimental { backend } => {
+            let start = Instant::now();
+            let mut result = CommandResult::new("e2e-experimental");
+            steps::nix::e2e_experimental(&mut result, backend.as_str());
             lifecycle::finalize(&mut result, start);
             Ok(result)
         }

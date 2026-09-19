@@ -65,7 +65,7 @@ Out:
     and workflow tests require the source probe to run under `always()` in the
     combined test-check/probe job.
 
-- [ ] Task 3: Introduce a first-class e2e lane identity and ownership contract.
+- [x] Task 3: Introduce a first-class e2e lane identity and ownership contract.
   - Contract: one shared catalog defines each gate lane by backend, browser,
     partition, and optional shard index/count. Nix derivation names, trace
     identities, Playwright report/manifest names, capture paths, xtask

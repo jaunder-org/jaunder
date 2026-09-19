@@ -401,25 +401,26 @@ invoke it.
   branch-boundary confidence. The VM path is what green means before you push.
 - **Duration-pressure gate** — After an otherwise-successful VM combo has
   captured diagnostics, it reconciles the copied
-  `playwright-report-<backend>.json` and
-  `duration-budget-manifest-<backend>.json` in
-  `.xtask/diagnostics/e2e-<backend>-<browser>/`. Missing, malformed, incomplete,
-  or mismatched inputs fail closed. Every reported attempt is checked, including
-  retries: an attempt using **80% or more** of its effective whole-test timeout
-  fails the combo even when a later retry passes. This detects insufficient
-  headroom; it does not right-size timeout budgets. Keep deriving an exceptional
-  whole-test budget from its polling deadline rather than from observed
-  duration.
+  `playwright-report-<backend>-<browser>-unsplit.json` and
+  `duration-budget-manifest-<backend>-<browser>-unsplit.json` in
+  `.xtask/diagnostics/e2e-<backend>-<browser>-unsplit/`. Missing, malformed,
+  incomplete, or mismatched inputs fail closed. Every reported attempt is
+  checked, including retries: an attempt using **80% or more** of its effective
+  whole-test timeout fails the combo even when a later retry passes. This
+  detects insufficient headroom; it does not right-size timeout budgets. Keep
+  deriving an exceptional whole-test budget from its polling deadline rather
+  than from observed duration.
 
 - **Boot-decomposition coverage gate** — After the same successful VM combo
   lifts diagnostics, it reconciles the executed browser-project set in
-  `playwright-report-<backend>.json` with `capture-<backend>.tar.gz`'s
-  `capture/otel-traces.jsonl`. Each reported project needs non-dropped, mounted,
-  current-schema navigation evidence with complete document-frame boot phases
-  that close within 1 ms; `e2e.test` and secondary `e2e.page` spans both count.
-  Missing, empty, malformed, duplicate, or mismatched evidence fails closed.
-  This certifies trace evidence, not a boot time budget, source coverage, or
-  `#[server]` request-flow coverage.
+  `playwright-report-<backend>-<browser>-unsplit.json` with
+  `capture-<backend>-<browser>-unsplit.tar.gz`'s `capture/otel-traces.jsonl`.
+  Each reported project needs non-dropped, mounted, current-schema navigation
+  evidence with complete document-frame boot phases that close within 1 ms;
+  `e2e.test` and secondary `e2e.page` spans both count. Missing, empty,
+  malformed, duplicate, or mismatched evidence fails closed. This certifies
+  trace evidence, not a boot time budget, source coverage, or `#[server]`
+  request-flow coverage.
 
 #### Visual snapshot workflow
 
@@ -872,7 +873,7 @@ baseline.
   cargo xtask traces analyze \
     .xtask/e2e-local/<run-id>/chromium/capture/otel-traces.jsonl
 
-  # VM captures are extracted from capture-<backend>.tar.gz; traces run does this.
+  # VM captures are extracted from capture-<backend>-<browser>-unsplit.tar.gz; traces run does this.
   cargo xtask traces analyze \
     /path/to/sqlite-otel-traces.jsonl \
     /path/to/postgres-otel-traces.jsonl
@@ -891,13 +892,14 @@ baseline.
 - **Failure logs — look here first (#144)**: on a red e2e combo, read the scoped
   server-diagnostic log before the journal. It is a small JSONL file of only the
   server's **WARN+ events and panics** (no kernel/INFO noise), copied per combo
-  to `.xtask/diagnostics/e2e-<backend>-<browser>/capture-<backend>.tar.gz`
+  to
+  `.xtask/diagnostics/e2e-<backend>-<browser>-unsplit/capture-<backend>-<browser>-unsplit.tar.gz`
   (which contains `diag.log`; in the VM: `/var/lib/jaunder/capture/diag.log`).
   Panic records carry `"kind": "panic"`. The zero-panic gate
   ([ADR-0032](docs/adr/0032-e2e-zero-panic-gate.md)) now sources `panicked at`
   from this file unioned with the journal; the full journal
-  (`jaunder-journal-<backend>.log`) stays captured as the last-resort fallback.
-  See `docs/observability.md` for the JSONL shape.
+  (`jaunder-journal-<backend>-<browser>-unsplit.log`) stays captured as the
+  last-resort fallback. See `docs/observability.md` for the JSONL shape.
 
 - **Failed Nix check — read `failure-excerpt.log` first (#145)**: when a
   `cargo xtask check`/`validate` Nix check fails (`nix-coverage`, an `e2e-*`
