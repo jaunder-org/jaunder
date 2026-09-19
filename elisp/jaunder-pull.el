@@ -347,7 +347,8 @@ standalone server-only pulls acquire equivalent complete evidence themselves."
                                             (jaunder--current-zone-name)))
              (source-body (jaunder-pulled-member-body pulled-member))
              (inventory (and (equal (jaunder-pulled-member-format pulled-member) "org")
-                             (string-match-p "\\[\\[https?:" source-body)
+                             (let ((case-fold-search t))
+                               (string-match-p "\\[\\[https?:" source-body))
                              (or jaunder--pull-link-inventory
                                  (jaunder--inventory-for-root root))))
              (evidence (and inventory

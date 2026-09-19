@@ -250,11 +250,12 @@
          (target-member (jaunder--make-inventory-member
                          :id "7" :slug "target"
                          :edit-uri "https://h/atompub/alice/posts/7"
-                         :alternate-href "https://h/@alice/target"))
+                         :alternate-href "HTTPS://h/@alice/target"))
          (source (jaunder-pull-test--member))
          (inventory (jaunder--join-inventory (list local) (list target-member source)))
          (jaunder-blogs (list (cons (file-name-as-directory root)
                                     '(:base-url "https://h" :username "alice"))))
+         (case-fold-search nil)
          planned-body inventory-calls)
     (unwind-protect
         (progn
@@ -269,7 +270,7 @@
                                     "<title></title>"
                                     "<link rel=\"edit\" href=\"https://h/atompub/alice/posts/42\"/>"
                                     "<j:slug>untitled-note</j:slug>"
-                                    "<content type=\"text/org\">[[https://h/@alice/target][Target]]</content>"
+                                    "<content type=\"text/org\">[[HTTPS://h/@alice/target][Target]]</content>"
                                     "<app:control><app:draft>yes</app:draft></app:control>"))))
                     ((symbol-function 'jaunder--inventory-for-root)
                      (lambda (&rest _) (setq inventory-calls (1+ (or inventory-calls 0)))
