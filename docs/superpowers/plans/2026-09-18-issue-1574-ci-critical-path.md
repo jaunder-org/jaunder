@@ -13,8 +13,8 @@
 In:
 
 - Distribute non-e2e core validation without changing its complete surface.
-- Run the Nix source-closure probe independently under the stable validation
-  aggregate.
+- Run the Nix source-closure probe on the Nix-heavy test-checks runner while
+  preserving its independent result and failure signal.
 - Prototype and retain qualifying Firefox e2e partitioning with isolated VMs.
 - Reconcile test ownership, reports, retries, duration evidence, traces, and
   diagnostics across e2e lanes.
@@ -42,15 +42,16 @@ Out:
   - Contract: keep doctest producer/gate and Elisp producer/consumer within
     their owning test-check lane; every lane retains the clean-tree precheck and
     ordinary command lifecycle.
-  - Contract: `.github/workflows/ci.yml` runs the source-closure probe in its
-    own required job and keeps `Validate (no e2e)` as the sole stable result
-    context over host, hermetic, test-check, coverage, and probe results.
+  - Contract: `.github/workflows/ci.yml` runs the source-closure probe under
+    `always()` after preserving the test-check result, keeps both diagnostics,
+    and retains `Validate (no e2e)` as the sole stable result context over host,
+    hermetic, combined test-check/probe, and coverage jobs.
   - Verification: catalog tests prove complete/duplicate-free lane membership
     and local-order stability; workflow contract tests prove every lane command
     and aggregate dependency; each new `cargo xtask ci-validate <lane>` command
     reaches only its declared surface.
 
-- [ ] Task 2: Measure and retain the validation fan-out.
+- [x] Task 2: Measure and retain the validation fan-out.
   - Contract: collect at least three successful cache-state-matched control and
     treatment runs at immutable heads, separating setup, command, Nix
     realization/substitution, source-probe, aggregate runner-time, and workflow
@@ -60,9 +61,9 @@ Out:
     clears issue #1574's latency threshold, with any runner-time increase called
     out explicitly.
   - Verification: the retained workflow's `Validate (no e2e)` succeeds only
-    after all five required results succeed; inject or observe one failure per
-    new lane to prove aggregate failure propagation rather than relying only on
-    green runs.
+    after all four required jobs succeed; aggregate injection covers each job,
+    and workflow tests require the source probe to run under `always()` in the
+    combined test-check/probe job.
 
 - [ ] Task 3: Introduce a first-class e2e lane identity and ownership contract.
   - Contract: one shared catalog defines each gate lane by backend, browser,

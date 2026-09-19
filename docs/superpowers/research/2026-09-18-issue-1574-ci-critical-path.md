@@ -3,10 +3,11 @@
 ## Decision frame
 
 This report records the Task 2 retention evidence for
-[#1574](https://github.com/jaunder-org/jaunder/issues/1574). The treatment
-replaces the serialized non-e2e core job with independent host, hermetic,
-test-check, coverage, and source-probe jobs behind the unchanged
-`Validate (no e2e)` context. Local `validate --no-e2e` remains serial.
+[#1574](https://github.com/jaunder-org/jaunder/issues/1574). The retained
+treatment replaces the serialized non-e2e core job with independent host,
+hermetic, test-check, and coverage jobs behind the unchanged `Validate (no e2e)`
+context. The source probe runs after test checks on their Nix-heavy runner while
+preserving a separate result. Local `validate --no-e2e` remains serial.
 
 The acceptance target is a 20% reduction in the validation critical path across
 at least three successful cache-state-matched observations. Aggregate runner
@@ -22,7 +23,13 @@ three samples, p95 is linearly interpolated between the second- and
 third-slowest values; medians are also reported so the decision is not driven by
 one run.
 
-## Cache-state selection
+## Five-job candidate
+
+The first candidate used an independent source-probe job. Its cohorts establish
+the maximum measured fan-out benefit and expose the cold runner-cost problem
+that motivated the retained four-job optimization.
+
+### Cache-state selection
 
 The three controls are consecutive successful `main` runs on immutable heads.
 The three treatments are same-head reruns of
@@ -60,7 +67,7 @@ Two observations are excluded from threshold arithmetic:
   is successful but has four fetch plans and 23 copied paths. Attempts 2–4
   provide the required exact warm match instead.
 
-## Raw observations
+### Raw observations
 
 | Arm       | Run / attempt / immutable head                                                                                                                  | Validation path | Workflow path | Runner proxy | Validation runner proxy | Validation setup sum | Validation command sum | Source probe |
 | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | --------------: | ------------: | -----------: | ----------------------: | -------------------: | ---------------------: | -----------: |
@@ -79,7 +86,7 @@ separate top-level job step took 230–254 seconds because it now owns its Nix
 entry overhead rather than following the core command in an already-prepared
 job.
 
-### Nix-backed command evidence
+#### Nix-backed command evidence
 
 The table below sums the independently recorded `static-docs`, `static-code`,
 WASM-budget, WASM-test, Rust-coverage, doctest, and Elisp-producer steps. It is
@@ -99,7 +106,7 @@ The diagnostics do not timestamp each individual substituted path, so exact
 per-path transfer time is unavailable. No local realization is inferred where
 Nix did not announce one.
 
-## Warm normalized comparison
+### Warm normalized comparison
 
 | Metric                      | Control median | Treatment median |   Median change | Control p95 | Treatment p95 |         p95 change |
 | --------------------------- | -------------: | ---------------: | --------------: | ----------: | ------------: | -----------------: |
@@ -118,7 +125,7 @@ principally because median setup rises from 2:08 to 6:59. The observed
 whole-workflow runner proxy rises 13:42 (13.1%), though e2e variation
 contributes to that total.
 
-## Controlled cold source-invalidating cohort
+### Controlled cold source-invalidating cohort
 
 The warm cohort answers steady-state behavior but not the cold source-changing
 case. Draft baseline PR
@@ -184,40 +191,71 @@ job restored the same exact host-cache key used above.
 | Warm        | [35443728843 attempt 3](https://github.com/jaunder-org/jaunder/actions/runs/35443728843/attempts/3), `c96adb59923bc6be36ded103d6581a7d26295500` |           20:45 |         22:29 |       114:14 |                   43:06 |                 5:37 |                  33:53 |         2:27 |
 | Warm        | [35443728843 attempt 4](https://github.com/jaunder-org/jaunder/actions/runs/35443728843/attempts/4), `c96adb59923bc6be36ded103d6581a7d26295500` |           16:10 |         22:19 |       107:39 |                   37:40 |                 5:52 |                  29:14 |         1:28 |
 
+The preserved Nix build logs close the retained candidate's cache-state match.
+Counts below cover the same eight selected build logs per observation; the full
+source-probe step added no local-build plan, fetch plan, or copied-path record.
+All six candidate runs also restored the exact host cache key recorded above.
+
+| Cache state    | Observation           | Local-build plans / derivations | Fetch plans | Copied paths |
+| -------------- | --------------------- | ------------------------------: | ----------: | -----------: |
+| Cold baseline  | 35407696576           |                          3 / 22 |           5 |          470 |
+| Cold baseline  | 35410824248           |                          2 / 20 |           5 |          471 |
+| Cold baseline  | 35413288969           |                          2 / 20 |           5 |          472 |
+| Cold candidate | 35439369264           |                          4 / 26 |           4 |          469 |
+| Cold candidate | 35441533690           |                          2 / 21 |           5 |          473 |
+| Cold candidate | 35443728843 attempt 1 |                          2 / 21 |           5 |          473 |
+| Warm controls  | all three             |                           0 / 0 |      3 each |      22 each |
+| Warm candidate | attempts 2–4          |                      0 / 0 each |      3 each |      22 each |
+
+The warm arms are exact realization/substitution matches. Both cold arms perform
+broad local source realization with the same order of build plans and copied
+paths; the first candidate head additionally realizes the new workflow/xtask
+source, so cold matching is categorical rather than a claim of identical
+per-derivation work.
+
 The optimization worked mechanically: cold source-probe p95 fell from 16:54 in
 the independent treatment to 2:26, cold validation-runner p95 fell by 12:07, and
 cold whole-workflow runner p95 fell by 8:36. Against the cold baseline it still
 delivered a 38.2% validation-p95 reduction, while limiting the whole-workflow
 runner-p95 increase to 15.9% and the validation-runner-p95 increase to 45.8%.
 
-It did **not** satisfy the full retention gate. Against the exact warm controls,
-validation p95 moved from 24:57 to 20:38, only a 17.3% reduction; the median
-moved from 24:22 to 19:33, a 19.8% reduction. Warm whole-workflow runner p95
-rose 8.1%, and warm validation-runner p95 rose 21.2%. The warm path was owned by
-the unchanged host lane, not by the colocated source probe, but the decision
-rule is cohort-level rather than causal: the measured four-job candidate misses
-the required 20% p95 improvement and is therefore rejected.
+Against the exact warm controls, validation p95 moved from 24:57 to 20:38, a
+17.3% reduction; the median moved from 24:22 to 19:33, a 19.8% reduction. Warm
+whole-workflow runner p95 rose 8.1%, and warm validation-runner p95 rose 21.2%.
+The candidate therefore missed the original 20% p95 gate by 40 seconds, while
+the median missed 20% by about three seconds. The warm path was owned by the
+unchanged host lane, not by the colocated source probe.
 
-## Provisional verdict and failure propagation
+## Retained verdict and failure propagation
 
-The five-result aggregate now clears the validation latency threshold under both
-exact warm-cache and controlled cold-source cohorts. Retention remains **pending
-explicit repository-owner review** of the measured runner-cost trade: +11.9%
-warm / +19.5% cold whole-workflow p95 and +21.1% warm / +61.1% cold validation
-p95. Until that amount is accepted, Task 2 is not complete and the fan-out must
-not be described as the final architecture.
+**Retain the four-job candidate after explicit repository-owner review.** The
+owner revised the close-call retention decision after reviewing the six green
+candidate observations, the run mix, and the measured cost. Exact same-head
+reruns were only about 11% of the latest non-experiment execution sample, while
+21 of the latest 30 merged PRs changed at least one product, web/e2e, host, or
+Elisp source boundary. The controlled `common` marker remains a broad worst case
+rather than a claim that every source-changing PR invalidates every boundary.
 
-Every treatment attempt passed all five validation jobs, the stable aggregate,
-all four e2e jobs, and `e2e gate`. The union and ordering contracts remain
-covered by the xtask catalog/workflow tests; no verdict moved to Cachix.
+The retained trade is explicit: 17.3% warm and 38.2% broad-cold validation-p95
+reductions, for +8.1% warm / +15.9% broad-cold whole-workflow runner p95 and
++21.2% warm / +45.8% broad-cold validation-runner p95. This is preferred to the
+five-job variant, which was slightly faster but raised broad-cold validation
+runner p95 by 61.1%. Firefox still owns overall workflow latency, so Tasks 3–5
+must be evaluated separately.
+
+Every candidate observation passed all four validation jobs, the source-probe
+step, the stable aggregate, all four e2e jobs, and `e2e gate`. The union and
+ordering contracts remain covered by the xtask catalog/workflow tests; no
+verdict moved to Cachix.
 
 `xtask/src/gate.rs` additionally parses the live workflow aggregate script and
 executes it with synthetic result injection. The all-success vector passes; each
-of host, hermetic, test-checks, coverage, and source-probe is then changed to
-`failure` individually, and every injected case must return non-zero. This
-proves failure propagation for every lane without weakening or temporarily
-committing a production CI job.
+of host, hermetic, combined test-check/probe, and coverage is changed to
+`failure` individually, and every injected case returns non-zero. Workflow
+contract coverage also requires the colocated source probe to run under
+`always()` without `continue-on-error`, preserving its failure signal and
+diagnostics after an earlier test-check failure.
 
-If retained, the topology intentionally supersedes ADR-0192's two-lane shape.
-Task 6 must record the owner-approved decision and project it into architecture
-and contributor documentation before merge.
+The retained topology intentionally supersedes ADR-0192's two-lane shape. Task 6
+must record this owner-approved decision and project it into architecture and
+contributor documentation before merge.
