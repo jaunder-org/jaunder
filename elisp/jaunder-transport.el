@@ -142,7 +142,9 @@ the auth header under load (ADR-0038)."
         (verb (intern (downcase method))))
     (condition-case err
         (jaunder--plz-response->plist
-         (plz verb url :headers headers :body body :as 'response))
+         ;; plz's text mode maps to curl --data, which strips CR/LF while
+         ;; reading stdin or a file. Source documents and Media are byte streams.
+         (plz verb url :headers headers :body body :body-type 'binary :as 'response))
       (plz-error
        (let* ((pe (seq-find #'plz-error-p (cdr err)))
               (resp (and pe (plz-error-response pe))))

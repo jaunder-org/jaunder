@@ -230,6 +230,7 @@
   (let* ((root (make-temp-file "jaunder-inventory-" t))
          (empty (expand-file-name "empty.org" root))
          (hook-ran nil)
+         messages
          (hook (lambda () (setq hook-ran t)))
          (org-mode-hook (list hook))
          (change-major-mode-hook (list hook))
@@ -237,13 +238,21 @@
     (unwind-protect
         (progn
           (write-region "#+PROPERTY: JAUNDER_ID \n\nBody" nil empty nil 'silent)
-          (let ((local (car (jaunder--scan-root-locals root))))
-            (should (equal (jaunder-inventory-local-id local) ""))
-            (should-not hook-ran)
-            (should (member 'invalid-local-id
-                            (jaunder-inventory-conflict-kinds
-                             (car (jaunder-inventory-conflicts
-                                   (jaunder--join-inventory (list local) nil))))))))
+          (cl-letf (((symbol-function 'message)
+                     (lambda (format-string &rest args)
+                       (push (apply #'format-message format-string args) messages))))
+            (let ((local (car (jaunder--scan-root-locals root))))
+              (should (equal (jaunder-inventory-local-id local) ""))
+              (should-not hook-ran)
+              (should-not
+               (cl-find-if
+                (lambda (text)
+                  (string-match-p "Making change-major-mode-hook buffer-local" text))
+                messages))
+              (should (member 'invalid-local-id
+                              (jaunder-inventory-conflict-kinds
+                               (car (jaunder-inventory-conflicts
+                                     (jaunder--join-inventory (list local) nil)))))))))
       (delete-directory root t))))
 
 (ert-deftest jaunder-inventory-join-partitions-every-ordinary-class ()
@@ -892,8 +901,57 @@
                 (should (eq (plist-get result :outcome)
                             (cond ((eq state 'unchanged) 'no-op)
                                   ((memq state '(local-draft local-ahead)) 'success)
-                                  (t 'blocked))))))
+                                  (t 'blocked))))
+                (when (memq state '(local-draft local-ahead))
+                  (should-not (get-file-buffer path)))))
             (delete-file path))))))
+
+(ert-deftest jaunder-reconcile-push-preserves-a-preexisting-source-buffer ()
+  (let* ((path (make-temp-file "jaunder-reconcile-open-" nil ".org"))
+         (buffer (find-file-noselect path))
+         (row (jaunder--make-reconcile-row
+               :state 'local-draft :key "draft"
+               :local (jaunder-reconcile-test--local path nil))))
+    (unwind-protect
+        (cl-letf (((symbol-function 'jaunder-publish) (lambda () nil))
+                  ((symbol-function 'jaunder--reconcile-local-mutation-safety-reason)
+                   (lambda (_) nil))
+                  ((symbol-function 'jaunder--buffer-property) (lambda (_) nil)))
+          (jaunder--reconcile-push-row row)
+          (should (buffer-live-p buffer))
+          (should (eq (get-file-buffer path) buffer)))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (delete-file path))))
+
+(ert-deftest jaunder-reconcile-push-reports-a-canonical-source-rename ()
+  (let* ((root (make-temp-file "jaunder-reconcile-rename-" t))
+         (path (expand-file-name "65.org" root))
+         (destination (expand-file-name "canonical-post.org" root))
+         (row (jaunder--make-reconcile-row
+               :state 'local-draft :key "draft"
+               :local (jaunder-reconcile-test--local path nil))))
+    (unwind-protect
+        (progn
+          (write-region "Body\n" nil path nil 'silent)
+          (cl-letf (((symbol-function 'jaunder-publish)
+                     (lambda ()
+                       (jaunder--rename-to-slug "canonical-post")
+                       '(:http-status 201)))
+                    ((symbol-function 'jaunder--reconcile-local-mutation-safety-reason)
+                     (lambda (_) nil))
+                    ((symbol-function 'jaunder--buffer-property)
+                     (lambda (key)
+                       (cdr (assoc key '(("JAUNDER_ID" . "7")
+                                         ("JAUNDER_SLUG" . "canonical-post")
+                                         ("JAUNDER_SYNCED" . "\"etag\"")
+                                         ("JAUNDER_SYNCED_AT" . "2026-09-17T00:00:00Z")))))))
+            (let ((result (jaunder--reconcile-push-row row)))
+              (should (equal (plist-get result :detail)
+                             (format "renamed %s -> %s" path destination)))
+              (should-not (get-file-buffer destination))
+              (should-not (file-exists-p path))
+              (should (file-exists-p destination)))))
+      (delete-directory root t))))
 
 (ert-deftest jaunder-reconcile-selected-commands-preview-once-and-never-delete-implicitly ()
   "Push and delete each prompt once; only delete's confirmed executor can DELETE."

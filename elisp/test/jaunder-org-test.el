@@ -44,6 +44,19 @@
                    "#+KEYWORDS: rust, programming\n#+KEYWORDS: emacs\n\nBody\n"))
                  '("rust" "programming" "emacs"))))
 
+(ert-deftest jaunder-org->atom-legacy-category-and-tags-preserve-source-order ()
+  (let ((entry (jaunder-test--entry
+                (concat "#+TITLE: Legacy\n"
+                        "#+KEYWORDS: atompub, legacy\n"
+                        "#+CATEGORY: Meta\n"
+                        "#+TAGS: anniversary, nattering\n"
+                        "#+KEYWORDS: migration\n"
+                        "#+TAGS: durable\n\nBody\n"))))
+    (should (equal (jaunder-entry-categories entry)
+                   '("atompub" "legacy" "Meta" "anniversary" "nattering"
+                     "migration" "durable")))
+    (should (equal (jaunder-entry-body entry) "Body"))))
+
 (ert-deftest jaunder-org->atom-keywords-absent-is-nil ()
   (should (null (jaunder-entry-categories
                  (jaunder-test--entry "#+TITLE: T\n\nBody\n")))))
@@ -179,6 +192,23 @@
             (jaunder-entry-published
              (jaunder-test--entry source))
             expected)))))))
+
+(ert-deftest jaunder-remove-property-removes-the-complete-header-line ()
+  (with-temp-buffer
+    (insert "#+TITLE: T\n"
+            "#+PROPERTY: JAUNDER_DATE_TZ UTC\n"
+            "#+PROPERTY: JAUNDER_CREATE_KEY key\n"
+            "#+PROPERTY: JAUNDER_CREATE_DIGEST digest\n"
+            "#+PROPERTY: JAUNDER_CREATE_ATTEMPT_AT instant\n"
+            "#+PROPERTY: JAUNDER_ID 1\n\nBody\n")
+    (org-mode)
+    (dolist (key '("JAUNDER_CREATE_KEY" "JAUNDER_CREATE_DIGEST"
+                   "JAUNDER_CREATE_ATTEMPT_AT"))
+      (jaunder--remove-property key))
+    (should (equal (buffer-string)
+                   (concat "#+TITLE: T\n"
+                           "#+PROPERTY: JAUNDER_DATE_TZ UTC\n"
+                           "#+PROPERTY: JAUNDER_ID 1\n\nBody\n")))))
 
 (ert-deftest jaunder-ensure-date-tz-captures-when-unset-and-preserves ()
   (with-temp-buffer

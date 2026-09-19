@@ -468,7 +468,7 @@ When DRAFT is non-nil, create a draft Member."
                  (should (eq (plist-get matched-response :status) 200))
                  (should (equal (jaunder-reconcile-live--member-representation matched-response)
                                 (list :title matched-title :content-type "text/org"
-                                      :body "Body.Local change.\n")))
+                                      :body "Body.\nLocal change.\n")))
                  (should (eq (plist-get unchanged-response :status) 200))
                  (should (equal (jaunder-reconcile-live--member-representation unchanged-response)
                                 unchanged-before)))
@@ -748,7 +748,7 @@ When DRAFT is non-nil, create a draft Member."
                   (should (eq (plist-get response :status) 200))
                   (should (equal (jaunder-reconcile-live--member-representation response)
                                  (list :title (concat "matched-" token) :content-type "text/org"
-                                       :body "Body.Local batch change.\n"))))
+                                       :body "Body.\nLocal batch change.\n"))))
                 (should (eq (jaunder-reconcile-row-state
                              (cl-find matched-id (jaunder-reconcile-report-rows
                                                   jaunder-reconcile-report)

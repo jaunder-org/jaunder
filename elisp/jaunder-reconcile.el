@@ -165,16 +165,26 @@ returned."
                 url (plist-get page :next)))))
     members))
 
+(defun jaunder--reconcile-buffer-property (key)
+  "Return file-level property KEY from the current buffer's leading header."
+  (save-excursion
+    (goto-char (point-min))
+    (let ((case-fold-search t)
+          value)
+      (while (and (not value)
+                  (looking-at-p "^[ \t]*#\\+[[:alnum:]_]+:"))
+        (when (looking-at
+               (format "^[ \t]*#\\+PROPERTY:[ \t]+%s\\(?:[ \t]+\\(.*\\)\\)?$"
+                       (regexp-quote key)))
+          (setq value (or (match-string-no-properties 1) "")))
+        (forward-line 1))
+      value)))
+
 (defun jaunder--read-local-id (path)
-  "Read PATH's `JAUNDER_ID' through the shared Org property reader."
+  "Read PATH's `JAUNDER_ID' without activating Org mode or user hooks."
   (with-temp-buffer
     (insert-file-contents path)
-    ;; Delay mode-specific hooks and suppress the generic hooks which run
-    ;; immediately; this temporary buffer must not execute user configuration.
-    (let ((change-major-mode-hook nil)
-          (after-change-major-mode-hook nil))
-      (delay-mode-hooks (org-mode)))
-    (jaunder--buffer-property "JAUNDER_ID")))
+    (jaunder--reconcile-buffer-property "JAUNDER_ID")))
 
 (defun jaunder--scan-root-locals (root)
   "Return regular root-level .org files under ROOT in deterministic order."
@@ -607,11 +617,9 @@ hide otherwise valid synchronization markers."
          (condition-case nil
              (with-temp-buffer
                (insert-file-contents (jaunder-inventory-local-path local))
-               (let ((change-major-mode-hook nil) (after-change-major-mode-hook nil))
-                 (delay-mode-hooks (org-mode)))
-               (list (jaunder--buffer-property "JAUNDER_SYNCED")
-                     (jaunder--buffer-property "JAUNDER_SYNCED_AT")
-                     (jaunder--buffer-property "JAUNDER_LOCAL_AHEAD")))
+               (list (jaunder--reconcile-buffer-property "JAUNDER_SYNCED")
+                     (jaunder--reconcile-buffer-property "JAUNDER_SYNCED_AT")
+                     (jaunder--reconcile-buffer-property "JAUNDER_LOCAL_AHEAD")))
            (error (list nil nil nil)))))
     (append markers
             (list
@@ -689,10 +697,13 @@ hide otherwise valid synchronization markers."
                    ("HTTP" . ,(jaunder-reconcile-result-http-status result))
                    ("local effect" . ,(jaunder-reconcile-result-local-effect result))))
     (when (cdr field) (insert (format "; %s=%s" (car field) (cdr field)))))
-  (when (jaunder-reconcile-result-reason result)
-    (insert (format "; %s" (jaunder-reconcile-result-reason result)))
+  (if (jaunder-reconcile-result-reason result)
+      (progn
+        (insert (format "; %s" (jaunder-reconcile-result-reason result)))
+        (when (jaunder-reconcile-result-detail result)
+          (insert (format " (%s)" (jaunder-reconcile-result-detail result)))))
     (when (jaunder-reconcile-result-detail result)
-      (insert (format " (%s)" (jaunder-reconcile-result-detail result)))))
+      (insert (format "; %s" (jaunder-reconcile-result-detail result)))))
   (insert "\n"))
 
 (defun jaunder--render-reconcile-report (report &optional target)
@@ -838,6 +849,20 @@ row and returns a result plist; its independent errors become failed results."
               (jaunder--read-local-id (jaunder-inventory-local-path local)))
            (error nil)))))
 
+(defun jaunder--reconcile-call-with-source-buffer (path function)
+  "Call FUNCTION in PATH's buffer and retain only a buffer the user already had.
+A reconcile-owned buffer is discarded even after a failed operation; its
+internal metadata writes are either already checkpointed or deliberately
+uncommitted."
+  (let* ((existing (get-file-buffer path))
+         (buffer (or existing (find-file-noselect path))))
+    (unwind-protect
+        (with-current-buffer buffer (funcall function))
+      (unless existing
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer (set-buffer-modified-p nil))
+          (kill-buffer buffer))))))
+
 (defun jaunder--reconcile-local-mutation-safety-reason (row)
   "Return a stale or modified local safety reason immediately before mutation."
   (let* ((local (jaunder-reconcile-row-local row))
@@ -845,14 +870,16 @@ row and returns a result plist; its independent errors become failed results."
          (expected (if (eq (jaunder-reconcile-row-state row) 'local-draft)
                        nil (jaunder--reconcile-row-post-id row))))
     (when local
-      (with-current-buffer (find-file-noselect path)
-        (cond
-         ((buffer-modified-p) 'local-buffer-modified)
-         ((not (equal (jaunder--canonical-post-id
-                       (jaunder--buffer-property "JAUNDER_ID")) expected))
-          (if expected 'matched-identity-changed 'draft-identity-changed))
-         ((not (equal (jaunder--reconcile-current-local-id row) expected))
-          (if expected 'matched-identity-changed 'draft-identity-changed)))))))
+      (jaunder--reconcile-call-with-source-buffer
+       path
+       (lambda ()
+         (cond
+          ((buffer-modified-p) 'local-buffer-modified)
+          ((not (equal (jaunder--canonical-post-id
+                        (jaunder--buffer-property "JAUNDER_ID")) expected))
+           (if expected 'matched-identity-changed 'draft-identity-changed))
+          ((not (equal (jaunder--reconcile-current-local-id row) expected))
+           (if expected 'matched-identity-changed 'draft-identity-changed))))))))
 
 (defun jaunder--reconcile-push-row (row)
   "Push an eligible ROW through the durable ordinary publish path."
@@ -870,16 +897,22 @@ row and returns a result plist; its independent errors become failed results."
          (jaunder--reconcile-blocked row 'local-file-missing))
         (identity-reason (jaunder--reconcile-blocked row identity-reason))
         (t
-         (with-current-buffer (find-file-noselect path)
-           (let ((published (jaunder-publish)))
-             (list :outcome 'success
-                   :post-id (jaunder--buffer-property "JAUNDER_ID")
-                   :slug (jaunder--buffer-property "JAUNDER_SLUG")
-                   :etag (jaunder--buffer-property "JAUNDER_SYNCED")
-                   :synced-at (jaunder--buffer-property "JAUNDER_SYNCED_AT")
-                   :http-status (plist-get published :http-status)
-                   :local-effect (if (eq (jaunder-reconcile-row-state row) 'local-draft)
-                                     'created 'updated))))))))
+         (jaunder--reconcile-call-with-source-buffer
+          path
+          (lambda ()
+            (let* ((published (jaunder-publish))
+                   (destination (buffer-file-name)))
+              (list :outcome 'success
+                    :post-id (jaunder--buffer-property "JAUNDER_ID")
+                    :slug (jaunder--buffer-property "JAUNDER_SLUG")
+                    :etag (jaunder--buffer-property "JAUNDER_SYNCED")
+                    :synced-at (jaunder--buffer-property "JAUNDER_SYNCED_AT")
+                    :http-status (plist-get published :http-status)
+                    :local-effect
+                    (if (eq (jaunder-reconcile-row-state row) 'local-draft)
+                        'created 'updated)
+                    :detail (when (and destination (not (equal path destination)))
+                              (format "renamed %s -> %s" path destination))))))))))
     (_ (jaunder--reconcile-blocked row 'push-ineligible
                                    (jaunder-reconcile-row-state row)))))
 
