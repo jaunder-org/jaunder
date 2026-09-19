@@ -248,9 +248,9 @@ hide otherwise valid synchronization markers."
          (condition-case nil
              (with-temp-buffer
                (insert-file-contents (jaunder-inventory-local-path local))
-               (list (jaunder--reconcile-buffer-property "JAUNDER_SYNCED")
-                     (jaunder--reconcile-buffer-property "JAUNDER_SYNCED_AT")
-                     (jaunder--reconcile-buffer-property "JAUNDER_LOCAL_AHEAD")))
+               (list (jaunder--inventory-buffer-property "JAUNDER_SYNCED")
+                     (jaunder--inventory-buffer-property "JAUNDER_SYNCED_AT")
+                     (jaunder--inventory-buffer-property "JAUNDER_LOCAL_AHEAD")))
            (error (list nil nil nil)))))
     (append markers
             (list

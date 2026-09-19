@@ -237,17 +237,27 @@ returned."
                 url (plist-get page :next)))))
     members))
 
+(defun jaunder--inventory-buffer-property (key)
+  "Return file-level property KEY from the current buffer's leading header."
+  (save-excursion
+    (goto-char (point-min))
+    (let ((case-fold-search t)
+          value)
+      (while (and (not value)
+                  (looking-at-p "^[ \t]*#\\+[[:alnum:]_]+:"))
+        (when (looking-at
+               (format "^[ \t]*#\\+PROPERTY:[ \t]+%s\\(?:[ \t]+\\(.*\\)\\)?$"
+                       (regexp-quote key)))
+          (setq value (or (match-string-no-properties 1) "")))
+        (forward-line 1))
+      value)))
+
 (defun jaunder--read-local-properties (path)
-  "Read PATH's Post ID and slug through the shared Org property reader."
+  "Read PATH's Post ID and slug without activating Org mode or user hooks."
   (with-temp-buffer
     (insert-file-contents path)
-    ;; Delay mode-specific hooks and suppress the generic hooks which run
-    ;; immediately; this temporary buffer must not execute user configuration.
-    (let ((change-major-mode-hook nil)
-          (after-change-major-mode-hook nil))
-      (delay-mode-hooks (org-mode)))
-    (list (jaunder--buffer-property "JAUNDER_ID")
-          (jaunder--buffer-property "JAUNDER_SLUG"))))
+    (list (jaunder--inventory-buffer-property "JAUNDER_ID")
+          (jaunder--inventory-buffer-property "JAUNDER_SLUG"))))
 
 (defun jaunder--read-local-id (path)
   "Read PATH's Post ID through the shared local property reader."
