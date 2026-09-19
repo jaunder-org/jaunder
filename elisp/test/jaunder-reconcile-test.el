@@ -33,9 +33,19 @@
    :id id :slug slug
    :edit-uri (format "https://example.test/atompub/alice/posts/%s" id)))
 
+(defun jaunder-reconcile-test--member-entry (alternates)
+  "Return one valid Member Entry XML with ALTERNATES as alternate hrefs."
+  (concat "<entry xmlns=\"http://www.w3.org/2005/Atom\" xmlns:j=\"https://jaunder.org/ns/atompub\"><link rel=\"edit\" href=\"https://example.test/atompub/alice/posts/7\"/>"
+          (mapconcat (lambda (href)
+                       (format "<link rel=\"alternate\" href=\"%s\"/>" href))
+                     alternates "")
+          "<j:slug>post</j:slug></entry>"))
+
 (defun jaunder-reconcile-test--local (path &optional id)
-  "Return an inventory local fixture for PATH and optional ID."
-  (jaunder--make-inventory-local :path path :id id))
+  "Return an inventory local fixture for PATH and optional ID.
+The current filename supplies the local slug evidence used by matched-pull tests."
+  (jaunder--make-inventory-local
+   :path path :id id :slug (file-name-base path)))
 
 (defun jaunder-reconcile-test--assert-total-partition (inventory locals members)
   "Assert INVENTORY owns every LOCALS and MEMBERS input exactly once by identity."
@@ -78,6 +88,17 @@
    (jaunder--parse-collection-page
     "<feed><link rel=\"next\" href=\"one\"/><link rel=\"next\" href=\"two\"/></feed>"
     "https://example.test/atompub/alice/posts")))
+
+(ert-deftest jaunder-inventory-page-rejects-root-and-namespace-parse-drift ()
+  "Both parser views must identify one feed and the same Member count."
+  (should-error
+   (jaunder--parse-collection-page
+    "<entry/>" "https://example.test/atompub/alice/posts"))
+  (cl-letf (((symbol-function 'jaunder--parse-collection-xml-namespaced)
+             (lambda (_) '(feed nil (entry nil)))))
+    (should-error
+     (jaunder--parse-collection-page
+      "<feed/>" "https://example.test/atompub/alice/posts"))))
 
 (ert-deftest jaunder-inventory-page-accepts-edit-path-under-base-prefix-only ()
   ;; A base URL path is part of the configured Collection Member grammar.
@@ -334,6 +355,89 @@
     (jaunder-reconcile-test--assert-total-partition
      inventory (list draft invalid match orphan) (list a b c))))
 
+
+(ert-deftest jaunder-inventory-member-retains-alternate-outcomes ()
+  "Alternate failures stay on their Member with stable, typed reasons."
+  (let ((collection "https://example.test/atompub/alice/posts"))
+    (dolist (fixture
+             '((() alternate-missing)
+               (("not a URL") alternate-malformed)
+               (("https://example.test/posts/bad path") alternate-malformed)
+               (("https://example.test/posts/%ZZ") alternate-malformed)
+               (("https://example.test:/posts/post") alternate-malformed)
+               (("https://example.test:abc/posts/post") alternate-malformed)
+               (("https://example.test:70000/posts/post") alternate-malformed)
+               (("https://user@example.test/posts/post") alternate-user-info)
+               (("https://other.test/posts/post") alternate-cross-origin)
+               (("https://[::1]/posts/post") alternate-cross-origin)
+               (("https://example.test/posts/exact?query")
+                alternate-query-or-fragment)
+               (("https://example.test/posts/exact#fragment")
+                alternate-query-or-fragment)
+               (("https://example.test/posts/post" "https://example.test/posts/post")
+                alternate-duplicate)))
+      (let ((member (car (plist-get
+                          (jaunder--parse-collection-page
+                           (jaunder-reconcile-test--page
+                            (list (jaunder-reconcile-test--member-entry (car fixture))))
+                           collection)
+                          :members))))
+        (should (eq (jaunder-inventory-member-alternate-invalid-reason member)
+                    (cadr fixture)))
+        (should-not (jaunder-inventory-member-alternate-href member))))
+    (let ((member (car (plist-get
+                        (jaunder--parse-collection-page
+                         (jaunder-reconcile-test--page
+                          (list (jaunder-reconcile-test--member-entry
+                                 '("https://example.test/posts/exact"))))
+                         collection)
+                        :members))))
+      (should (equal (jaunder-inventory-member-alternate-href member)
+                     "https://example.test/posts/exact"))
+      (should-not (jaunder-inventory-member-alternate-invalid-reason member)))
+    ;; A direct parse falls back to ENTRY when no namespace-preserving peer is supplied.
+    (let* ((entry (jaunder--parse-collection-xml
+                   (jaunder-reconcile-test--member-entry
+                    '("https://example.test/posts/direct"))))
+           (member (jaunder--parse-collection-member entry collection)))
+      (should-not (jaunder-inventory-member-alternate-href member))
+      (should (eq (jaunder-inventory-member-alternate-invalid-reason member)
+                  'alternate-missing)))))
+
+(ert-deftest jaunder-inventory-local-retains-id-slug-and-filename-evidence ()
+  "Local inventory preserves evidence without treating filename as identity."
+  (let* ((root (make-temp-file "jaunder-inventory-" t))
+         (path (expand-file-name "wrong-name.org" root)))
+    (unwind-protect
+        (progn
+          (write-region (concat "#+PROPERTY: JAUNDER_ID 7\n"
+                                "#+PROPERTY: JAUNDER_SLUG expected-name\n\nBody")
+                        nil path nil 'silent)
+          (let* ((local (car (jaunder--scan-root-locals root)))
+                 (member (jaunder-reconcile-test--member "7" "expected-name"))
+                 (expected-path (expand-file-name "expected-name.org" root)))
+            (should (equal (jaunder-inventory-local-id local) "7"))
+            (should (equal (jaunder-inventory-local-slug local) "expected-name"))
+            (should (eq (jaunder--inventory-local-member-evidence-reason local member)
+                        'local-filename-mismatch))
+            (should (eq
+                     (jaunder--inventory-local-member-evidence-reason
+                      (jaunder--make-inventory-local
+                       :path expected-path :id "8" :slug "expected-name")
+                      member)
+                     'local-id-mismatch))
+            (should (eq
+                     (jaunder--inventory-local-member-evidence-reason
+                      (jaunder--make-inventory-local
+                       :path expected-path :id "7" :slug "other")
+                      member)
+                     'local-slug-mismatch))
+            (should-not
+             (jaunder--inventory-local-member-evidence-reason
+              (jaunder--make-inventory-local
+               :path expected-path :id "7" :slug "expected-name")
+              member))))
+      (delete-directory root t))))
 
 (ert-deftest jaunder-reconcile-classifies-all-matched-change-combinations ()
   "ETag and mtime changes form the four matched reconciliation states."
@@ -1390,6 +1494,68 @@
                            '("post:2" "post:1")))
             (should (eq (cadr executed) 'pull))))
       (kill-buffer buffer))))
+
+(ert-deftest jaunder-reconcile-matched-pull-restores-proven-local-post-link ()
+  "The complete matched server-ahead path installs a reversed canonical link."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-pull-link-" t)))
+         (source-path (expand-file-name "source.org" root))
+         (target-path (expand-file-name "target.org" root))
+         (source-bytes (jaunder-reconcile-test--pulled-bytes "7" "source" "\"old\""))
+         (source-local (jaunder-reconcile-test--local source-path "7"))
+         (target-local (jaunder-reconcile-test--local target-path "8"))
+         (source-member (jaunder-reconcile-test--member "7" "source"))
+         (target-member (jaunder--make-inventory-member
+                         :id "8" :slug "target"
+                         :edit-uri "https://example.test/atompub/alice/posts/8"
+                         :alternate-href "https://example.test/@alice/target"))
+         row calls
+         (jaunder--active-blog '(:base-url "https://example.test" :username "alice")))
+    (unwind-protect
+        (progn
+          (with-temp-file source-path (insert source-bytes))
+          (with-temp-file target-path
+            (insert "#+PROPERTY: JAUNDER_ID 8\n#+PROPERTY: JAUNDER_SLUG target\n\nTarget"))
+          (setq row (jaunder--make-reconcile-row
+                     :state 'server-ahead :key "post:7" :local source-local
+                     :member source-member
+                     :local-sha256 (jaunder--reconcile-file-sha256 source-path)
+                     :remote-etag "\"old\""))
+          (let* ((inventory (jaunder--join-inventory
+                             (list source-local target-local)
+                             (list source-member target-member)))
+                 (jaunder-reconcile-report
+                  (jaunder--make-reconcile-report :root root :inventory inventory)))
+            (cl-letf (((symbol-function 'jaunder--http-request)
+                       (lambda (&rest _)
+                         (push 'get calls)
+                         (if (cdr calls)
+                             '(:status 200 :headers (("etag" . "\"old\"")))
+                           (list :status 200
+                                 :headers '(("etag" . "\"old\"")
+                                            ("x-jaunder-instance" .
+                                             "12345678-1234-1234-1234-123456789abc"))
+                                 :body (concat
+                                        "<entry xmlns=\"http://www.w3.org/2005/Atom\""
+                                        " xmlns:app=\"http://www.w3.org/2007/app\""
+                                        " xmlns:j=\"https://jaunder.org/ns/atompub\">"
+                                        "<title>Source</title>"
+                                        "<link rel=\"edit\" href=\"https://example.test/atompub/alice/posts/7\"/>"
+                                        "<j:slug>source</j:slug>"
+                                        "<content type=\"text/org\">[[https://example.test/@alice/target][Target]]</content>"
+                                        "<app:control><app:draft>yes</app:draft></app:control>"
+                                        "</entry>")))))
+                      ((symbol-function 'jaunder--reconcile-pull-unique-match)
+                       (lambda (&rest _) '(:ok t))))
+              (should (eq (plist-get (jaunder--reconcile-pull-server-ahead-row row)
+                                     :outcome)
+                          'success))))
+          (should (= (length calls) 2))
+          (should (string-match-p
+                   (regexp-quote "[[./target.org][Target]]")
+                   (with-temp-buffer
+                     (insert-file-contents source-path)
+                     (buffer-string)))))
+      (delete-directory root t))))
 
 (ert-deftest jaunder-reconcile-pull-stale-etag-blocks-before-local-replacement ()
   "A changed staged ETag leaves the reviewed matched file untouched."

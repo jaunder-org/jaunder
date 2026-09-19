@@ -18,6 +18,10 @@
 (require 'jaunder-config)
 (require 'jaunder-reconcile)
 (require 'jaunder-pull-media)
+(require 'jaunder-post-link)
+
+(defvar jaunder--pull-link-inventory nil
+  "Optional inventory evidence supplied by a reconciliation pull staging run.")
 
 (define-error 'jaunder-pull-stage-identity-changed
               "Member response identity changed since inventory" 'error)
@@ -318,7 +322,9 @@ creation, which is atomic and fails if another directory entry won the race."
 (defun jaunder--pull-stage-member (root member)
   "Fetch, verify, and localize MEMBER, returning staged replacement data.
 Local Media Copies are materialized before this returns; the Post itself is not
-mutated.  The caller owns the final destination safety check and installation."
+mutated.  The caller owns the final destination safety check and installation.
+`jaunder--pull-link-inventory' supplies the shared reconciliation snapshot;
+standalone server-only pulls acquire equivalent complete evidence themselves."
   (unless (jaunder-inventory-member-p member)
     (jaunder--pull-error "pull input must be a D1 inventory Member"))
   (let ((response (jaunder--http-request "GET" (jaunder-inventory-member-edit-uri member))))
@@ -339,9 +345,21 @@ mutated.  The caller owns the final destination safety check and installation."
              (pulled-member
               (jaunder--parse-pulled-member entry-xml etag captured-at
                                             (jaunder--current-zone-name)))
+             (source-body (jaunder-pulled-member-body pulled-member))
+             (inventory (and (equal (jaunder-pulled-member-format pulled-member) "org")
+                             (let ((case-fold-search t))
+                               (string-match-p "\\[\\[https?:" source-body))
+                             (or jaunder--pull-link-inventory
+                                 (jaunder--inventory-for-root root))))
+             (evidence (and inventory
+                            (jaunder--inventory-post-link-evidence inventory)))
+             (members (car evidence))
+             (locals (cadr evidence))
+             (body (if inventory
+                       (jaunder--reverse-pulled-post-links source-body root members locals)
+                     source-body))
              (plan (jaunder--pull-media-plan
-                    (jaunder-pulled-member-format pulled-member)
-                    (jaunder-pulled-member-body pulled-member)
+                    (jaunder-pulled-member-format pulled-member) body
                     (jaunder--active-base-url))))
         ;; Copies are durable safe partial work; the Post remains the final claim.
         (jaunder--pull-media-materialize root instance-id plan)

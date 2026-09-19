@@ -242,6 +242,65 @@
                    (concat (jaunder-pulled-member-org-prefix member)
                            "Local body")))))
 
+(ert-deftest jaunder-pull-paths-reverse-post-links-before-installation ()
+  "Shared matched staging and complete server-only pull both reverse links."
+  (let* ((root (make-temp-file "jaunder-pull-" t))
+         (target (expand-file-name "target.org" root))
+         (local (jaunder--make-inventory-local :path target :id "7" :slug "target"))
+         (target-member (jaunder--make-inventory-member
+                         :id "7" :slug "target"
+                         :edit-uri "https://h/atompub/alice/posts/7"
+                         :alternate-href "HTTPS://h/@alice/target"))
+         (source (jaunder-pull-test--member))
+         (inventory (jaunder--join-inventory (list local) (list target-member source)))
+         (jaunder-blogs (list (cons (file-name-as-directory root)
+                                    '(:base-url "https://h" :username "alice"))))
+         (case-fold-search nil)
+         planned-body inventory-calls)
+    (unwind-protect
+        (progn
+          (write-region "#+PROPERTY: JAUNDER_ID 7\n#+PROPERTY: JAUNDER_SLUG target\n\nBody"
+                        nil target nil 'silent)
+          (cl-letf (((symbol-function 'jaunder--http-request)
+                     (lambda (&rest _)
+                       (list :status 200
+                             :headers '(("etag" . "\"sha256-test\"")
+                                        ("x-jaunder-instance" . "12345678-1234-1234-1234-123456789abc"))
+                             :body (jaunder-pull-test--entry
+                                    "<title></title>"
+                                    "<link rel=\"edit\" href=\"https://h/atompub/alice/posts/42\"/>"
+                                    "<j:slug>untitled-note</j:slug>"
+                                    "<content type=\"text/org\">[[HTTPS://h/@alice/target][Target]]</content>"
+                                    "<app:control><app:draft>yes</app:draft></app:control>"))))
+                    ((symbol-function 'jaunder--inventory-for-root)
+                     (lambda (&rest _) (setq inventory-calls (1+ (or inventory-calls 0)))
+                       inventory))
+                    ((symbol-function 'jaunder--pull-media-plan)
+                     (lambda (_format body &rest _) (setq planned-body body) 'plan))
+                    ((symbol-function 'jaunder--pull-media-materialize) (lambda (&rest _)))
+                    ((symbol-function 'jaunder--pull-media-apply-plan) (lambda (&rest _) planned-body)))
+            (jaunder--call-with-blog
+             root
+             (lambda ()
+               (let ((jaunder--pull-link-inventory inventory))
+                 (jaunder--pull-stage-member root source)
+                 (should (equal planned-body "[[./target.org][Target]]"))
+                 (should-not inventory-calls))
+               (setq planned-body nil)
+               (let ((jaunder--pull-link-inventory nil))
+                 (should (eq (jaunder-pull-result-status
+                              (jaunder--pull-member root source))
+                             'pulled))
+                 (should (equal planned-body "[[./target.org][Target]]"))
+                 (should (= inventory-calls 1))
+                 (should (string-match-p
+                          (regexp-quote "[[./target.org][Target]]")
+                          (with-temp-buffer
+                            (insert-file-contents
+                             (expand-file-name "untitled-note.org" root))
+                            (buffer-string)))))))))
+      (delete-directory root t))))
+
 (ert-deftest jaunder-pull-member-localizes-before-post-install ()
   ;; Planning, acquisition, and rewriting complete before the only Post claim;
   ;; each injected late failure therefore leaves a server-only destination.

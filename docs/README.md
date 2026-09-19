@@ -228,6 +228,7 @@ convention). See the Status column below for each ADR's current status.
 | [0198](adr/0198-active-workflow-incomplete-pr-evidence.md)             | Active-workflow missing PR targets are incomplete evidence                                                   | accepted   |
 | [0199](adr/0199-durable-atompub-create-intent.md)                      | Make AtomPub create intent durable across client restarts                                                    | accepted   |
 | [0200](adr/0200-revalidated-matched-post-pull.md)                      | Permit revalidated replacement when pulling a matched Post                                                   | accepted   |
+| [0201](adr/0201-emacs-local-post-link-round-trip.md)                   | Emacs Local Post Links Round-Trip Through Canonical URLs                                                     | accepted   |
 
 <!-- adr-table:end -->
 

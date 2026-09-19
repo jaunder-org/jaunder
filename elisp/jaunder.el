@@ -35,6 +35,8 @@
 (require 'jaunder-org)
 (require 'jaunder-transport)
 (require 'jaunder-service)
+(require 'jaunder-inventory)
+(require 'jaunder-post-link)
 (require 'jaunder-media)
 (require 'jaunder-publish)
 (require 'jaunder-reconcile)

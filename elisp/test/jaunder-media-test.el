@@ -234,6 +234,63 @@ Lets the warning tests assert on emitted warnings without touching the real
           (should (equal (jaunder--localize-media body) body))
           (should-not called))))))
 
+;;; Local Post Links (#1586) -----------------------------------------------
+
+(ert-deftest jaunder-local-post-links-use-harvested-hrefs-and-never-media ()
+  "Relative `.org' links preserve authored bytes and use Member hrefs only."
+  (let* ((root (file-name-as-directory (make-temp-file "jt-post-link-" t)))
+         (source (expand-file-name "source.org" root))
+         (target (expand-file-name "target.org" root))
+         (jaunder-blogs (list (cons root '(:base-url "https://blog" :username "alice"))))
+         (member (jaunder--make-inventory-member
+                  :id "7" :slug "target" :edit-uri "https://blog/atompub/alice/posts/7"
+                  :alternate-href "https://blog/@alice/target"))
+         uploaded)
+    (unwind-protect
+        (progn
+          (write-region "#+PROPERTY: JAUNDER_ID 7\n#+PROPERTY: JAUNDER_SLUG target\n\nTarget"
+                        nil target nil 'silent)
+          (write-region "#+TITLE: Source\n\n[[./target.org][first]] [[file:target.org][second]]\n"
+                        nil source nil 'silent)
+          (with-current-buffer (find-file-noselect source)
+            (unwind-protect
+                (cl-letf (((symbol-function 'jaunder--fetch-collection-members)
+                           (lambda () (list member)))
+                          ((symbol-function 'jaunder--upload-media)
+                           (lambda (&rest _) (setq uploaded t))))
+                  (let ((body (jaunder-entry-body (jaunder--org->atom)))
+                        (before (buffer-string)))
+                    (should (equal (jaunder--localize-post-links body)
+                                   "[[https://blog/@alice/target][first]] [[https://blog/@alice/target][second]]"))
+                    (should-not (jaunder--collect-media-links))
+                    (should (equal (jaunder--localize-media body) body))
+                    (should-not uploaded)
+                    (should (equal (buffer-string) before))))
+              (kill-buffer (current-buffer)))))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-local-post-link-failure-precedes-media-and-post-mutation ()
+  "An invalid referenced target is not uploaded or sent as a Post."
+  (let* ((root (file-name-as-directory (make-temp-file "jt-post-link-" t)))
+         (source (expand-file-name "source.org" root))
+         (jaunder-blogs (list (cons root '(:base-url "https://blog" :username "alice"))))
+         uploaded requested)
+    (unwind-protect
+        (progn
+          (write-region "#+TITLE: Source\n#+PROPERTY: JAUNDER_STATUS published\n\n[[./missing.org]]\n"
+                        nil source nil 'silent)
+          (with-current-buffer (find-file-noselect source)
+            (unwind-protect
+                (cl-letf (((symbol-function 'jaunder--upload-media)
+                           (lambda (&rest _) (setq uploaded t)))
+                          ((symbol-function 'jaunder--http-request)
+                           (lambda (&rest _) (setq requested t))))
+                  (should-error (jaunder-publish) :type 'error)
+                  (should-not uploaded)
+                  (should-not requested))
+              (kill-buffer (current-buffer)))))
+      (delete-directory root t))))
+
 ;;; #206 — untracked-media warning
 
 (ert-deftest jaunder-warn-untracked-media-one-per-untracked ()
