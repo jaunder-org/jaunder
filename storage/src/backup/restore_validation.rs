@@ -14,7 +14,7 @@ use common::media::{
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
-use common::render::PostFormat;
+use common::render::{PostFormat, RenderedPostTitle};
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::tagged_url::MediaSourceUrl;
@@ -108,9 +108,13 @@ pub(crate) fn validate_restore_row(
         "post_revision_tags" => {
             validate_typed_restore_row::<PostRevisionTagsRestoreRow>(row, report);
         }
-        "post_revisions" => validate_typed_restore_row::<PostRevisionsRestoreRow>(row, report),
+        "post_revisions" => {
+            validate_typed_restore_row::<PostRevisionsRestoreRow>(row, report);
+        }
         "post_tags" => validate_typed_restore_row::<PostTagsRestoreRow>(row, report),
-        "posts" => validate_typed_restore_row::<PostsRestoreRow>(row, report),
+        "posts" => {
+            validate_typed_restore_row::<PostsRestoreRow>(row, report);
+        }
         "sessions" => validate_typed_restore_row::<SessionsRestoreRow>(row, report),
         "site_config" => validate_typed_restore_row::<SiteConfigRestoreRow>(row, report),
         "subscription_statuses" => {
@@ -175,6 +179,32 @@ where
     R: RestoreTableRow,
 {
     R::from_restore(row).validate(report);
+}
+
+/// Rejects source/derivative structural mismatches before restore mutates either
+/// the target database or media. Present, noncanonical derivative bytes remain
+/// ADR-0174 restore-and-report domain diagnostics.
+pub(crate) fn validate_rendered_title_presence_backup(
+    source_path: &std::path::Path,
+    manifest: &BackupManifest,
+) -> Result<(), crate::backup::BackupError> {
+    for table in ["posts", "post_revisions"] {
+        if !manifest.tables.iter().any(|listed| listed == table) {
+            continue;
+        }
+        for row in format::read_table_rows(source_path, table)? {
+            let title_present = row.get("title").is_some_and(|value| !value.is_null());
+            let rendered_title_present = row
+                .get("rendered_title")
+                .is_some_and(|value| !value.is_null());
+            if title_present != rendered_title_present {
+                return Err(crate::backup::BackupError::InvalidBackup(format!(
+                    "{table} title and rendered_title must either both be present or both be absent"
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 struct RestoreColumn<T> {
@@ -327,6 +357,7 @@ typed_restore_row!(PostRevisionsRestoreRow, "post_revisions" {
     slug: Slug => ("slug", "slug"),
     body: PostBody => ("body", "post body"),
     format: PostFormat => ("format", "post format"),
+    rendered_title: RenderedPostTitle => ("rendered_title", "rendered post title"),
     summary: PostSummary => ("summary", "post summary"),
 });
 
@@ -348,6 +379,7 @@ typed_restore_row!(PostsRestoreRow, "posts" {
     slug: Slug => ("slug", "slug"),
     body: PostBody => ("body", "post body"),
     format: PostFormat => ("format", "post format"),
+    rendered_title: RenderedPostTitle => ("rendered_title", "rendered post title"),
     summary: PostSummary => ("summary", "post summary"),
 });
 
@@ -588,10 +620,20 @@ pub(crate) const RESTORE_COLUMN_COVERAGE: &[RestoreColumnCoverage] = &[
         "author_user_id",
         "foreign-key id: schema validation preserves the value",
     ),
+    covered(
+        "post_revisions",
+        "rendered_title",
+        RestoreBadValue::Text("<script>bad</script>"),
+    ),
     primitive(
         "post_revisions",
         "rendered_html",
         "trusted rendered HTML has no restore-time parser",
+    ),
+    covered(
+        "posts",
+        "rendered_title",
+        RestoreBadValue::Text("<script>bad</script>"),
     ),
     primitive(
         "posts",
@@ -666,6 +708,7 @@ const BACKED_UP_DOMAIN_COLUMNS: &[(&str, &str)] = &[
     ("post_revisions", "body"),
     ("post_revisions", "format"),
     ("post_revisions", "rendered_html"),
+    ("post_revisions", "rendered_title"),
     ("post_revisions", "title"),
     ("post_revisions", "summary"),
     ("post_revision_tags", "tag_display"),
@@ -675,6 +718,7 @@ const BACKED_UP_DOMAIN_COLUMNS: &[(&str, &str)] = &[
     ("posts", "body"),
     ("posts", "format"),
     ("posts", "rendered_html"),
+    ("posts", "rendered_title"),
     ("posts", "slug"),
     ("posts", "summary"),
     ("posts", "title"),

@@ -8,7 +8,8 @@ use crate::posts::errors::{CreatePostError, UpdatePostError};
 use crate::posts::media;
 use crate::posts::models::{
     CreatePostInput, PostLifecycle, PostMutation, PostRevisionMetadata, PostRevisionPage,
-    PublishUpdate, RenderedHtml, UpdatePostInput,
+    PublishUpdate, RenderedHtml, RenderedPostTitle, UpdatePostInput,
+    validate_rendered_title_presence,
 };
 use crate::posts::store::PostDialect;
 use crate::posts::tags;
@@ -156,9 +157,9 @@ pub(crate) fn idempotency_advisory_lock_key(
 /// state. Child snapshot writes intentionally remain with Task 2's transaction.
 /// Bind order: `captured_at, post_id`.
 pub(crate) const INSERT_COMPLETE_POST_REVISION: &str = "INSERT INTO post_revisions
-     (post_id, user_id, title, slug, body, format, rendered_html, summary,
+     (post_id, user_id, title, rendered_title, slug, body, format, rendered_html, summary,
       created_at, updated_at, published_at, deleted_at, captured_at)
-     SELECT post_id, user_id, title, slug, body, format, rendered_html, summary,
+     SELECT post_id, user_id, title, rendered_title, slug, body, format, rendered_html, summary,
             created_at, updated_at, published_at, deleted_at, $1
      FROM posts WHERE post_id = $2
      RETURNING revision_id";
@@ -173,8 +174,15 @@ pub(crate) struct PostBookkeepingRow {
     pub body: PostBody,
     pub format: PostFormat,
     pub rendered_html: RenderedHtml,
+    pub rendered_title: Option<RenderedPostTitle>,
     pub summary: Option<PostSummary>,
     pub published_at: Option<UtcInstant>,
+}
+
+impl PostBookkeepingRow {
+    pub(crate) fn validate_rendered_title_presence(&self) -> Result<()> {
+        validate_rendered_title_presence(self.title.as_ref(), self.rendered_title.as_ref())
+    }
 }
 
 /// This is decoded explicitly rather than through a positional `SQLx` tuple so
@@ -188,6 +196,7 @@ pub(crate) struct RevisionDetailRow {
     pub(crate) body: PostBody,
     pub(crate) format: PostFormat,
     pub(crate) rendered_html: RenderedHtml,
+    pub(crate) rendered_title: Option<RenderedPostTitle>,
     pub(crate) summary: Option<PostSummary>,
     pub(crate) created_at: UtcInstant,
     pub(crate) updated_at: UtcInstant,
@@ -224,21 +233,26 @@ where
     for<'r> PostBody: Decode<'r, DB> + Type<DB>,
     for<'r> PostFormat: Decode<'r, DB> + Type<DB>,
     for<'r> RenderedHtml: Decode<'r, DB> + Type<DB>,
+    for<'r> RenderedPostTitle: Decode<'r, DB> + Type<DB>,
     for<'r> Option<PostSummary>: Decode<'r, DB> + Type<DB>,
     for<'r> UtcInstant: Decode<'r, DB> + Type<DB>,
     for<'r> Option<UtcInstant>: Decode<'r, DB> + Type<DB>,
     for<'r> &'r str: sqlx::ColumnIndex<DB::Row>,
 {
     fn decode(row: DB::Row) -> Result<Self> {
+        let title = row.try_get::<Option<PostTitle>, _>("title")?;
+        let rendered_title = row.try_get::<Option<RenderedPostTitle>, _>("rendered_title")?;
+        validate_rendered_title_presence(title.as_ref(), rendered_title.as_ref())?;
         Ok(Self {
             revision_id: row.try_get::<RevisionId, _>("revision_id")?,
             post_id: row.try_get::<PostId, _>("post_id")?,
             user_id: row.try_get::<UserId, _>("user_id")?,
-            title: row.try_get::<Option<PostTitle>, _>("title")?,
+            title,
             slug: row.try_get::<Slug, _>("slug")?,
             body: row.try_get::<PostBody, _>("body")?,
             format: row.try_get::<PostFormat, _>("format")?,
             rendered_html: row.try_get::<RenderedHtml, _>("rendered_html")?,
+            rendered_title,
             summary: row.try_get::<Option<PostSummary>, _>("summary")?,
             created_at: row.try_get::<UtcInstant, _>("created_at")?,
             updated_at: row.try_get::<UtcInstant, _>("updated_at")?,
@@ -406,6 +420,7 @@ pub(crate) fn update_scalar_is_noop(
         && (existing.published_at.is_some() || existing.slug == input.slug)
         && existing.body == *input.rendered.body()
         && existing.format == input.rendered.format()
+        && existing.rendered_title.as_ref() == input.rendered.rendered_title()
         && existing.rendered_html.as_ref() == input.rendered.rendered_html().as_ref()
         && existing.summary == input.summary
         && existing.published_at == published_at
@@ -492,6 +507,7 @@ where
     String: Type<DB>,
     for<'q> String: Encode<'q, DB>,
     for<'q> Option<&'q PostTitle>: Encode<'q, DB> + Type<DB>,
+    for<'q> Option<&'q RenderedPostTitle>: Encode<'q, DB> + Type<DB>,
     // `summary` binds as `Option<&PostSummary>` via the ADR-0071 sqlx bridge on
     // the create paths, mirroring the `Option<&PostTitle>` bound above.
     for<'q> Option<&'q PostSummary>: Encode<'q, DB> + Type<DB>,
@@ -509,14 +525,15 @@ where
     }
 
     let post_id = sqlx::query_scalar::<_, PostId>(
-        "INSERT INTO posts (user_id, title, slug, body, format, rendered_html, created_at, updated_at, published_at, summary)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        "INSERT INTO posts (user_id, title, rendered_title, slug, body, format, rendered_html, created_at, updated_at, published_at, summary)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          RETURNING post_id",
     )
     .bind_storage(input.user_id)
     // `Option::as_ref` → `Option<&PostTitle>` (a typed newtype bind, not an
     // `AsRef<str>` strip); the sqlx bridge encodes `Option<&PostTitle>`.
     .bind_storage(input.rendered.title())
+    .bind_storage(input.rendered.rendered_title())
     .bind_storage(&input.slug)
     .bind_storage(input.rendered.body())
     .bind_storage(input.rendered.format())

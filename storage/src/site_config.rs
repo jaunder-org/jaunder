@@ -699,9 +699,13 @@ impl IdentityReadGate {
 
 /// A physically stored site-config key, including an unknown or orphan key.
 #[derive(Debug, macros::SqlxBridge)]
-struct StoredSiteConfigKey(String);
+pub(crate) struct StoredSiteConfigKey(String);
 
 impl StoredSiteConfigKey {
+    pub(crate) fn raw(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
     fn into_inner(self) -> String {
         self.0
     }

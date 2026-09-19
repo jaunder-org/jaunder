@@ -46,7 +46,13 @@ pub(crate) struct CorpusEntry {
     pub(crate) fixture: String,
     pub(crate) format_version: u32,
     pub(crate) support: SupportState,
+    #[serde(default = "materializable_by_default")]
+    pub(crate) materializable: bool,
     digest: String,
+}
+
+const fn materializable_by_default() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize)]
@@ -74,16 +80,16 @@ impl BackupCorpus {
                 "fixtures must not be empty".to_owned(),
             ));
         }
-        let mut versions = BTreeSet::new();
+        let mut materializable_versions = BTreeSet::new();
         for entry in &index.fixtures {
             if !is_fixture_name_safe(&entry.fixture) {
                 return Err(BackupCorpusError::InvalidIndex(
                     "fixture names must be non-empty relative paths without traversal".to_owned(),
                 ));
             }
-            if !versions.insert(entry.format_version) {
+            if entry.materializable && !materializable_versions.insert(entry.format_version) {
                 return Err(BackupCorpusError::InvalidIndex(format!(
-                    "format version {} appears more than once",
+                    "format version {} has more than one current-schema fixture",
                     entry.format_version
                 )));
             }
@@ -120,6 +126,12 @@ impl BackupCorpus {
         destination: &Path,
         target_schema_version: i64,
     ) -> Result<(), BackupCorpusError> {
+        if !entry.materializable {
+            return Err(BackupCorpusError::InvalidIndex(format!(
+                "historical schema fixture {} cannot be materialized as current schema",
+                entry.fixture
+            )));
+        }
         self.verify(entry)?;
         if destination.exists() {
             return Err(BackupCorpusError::InvalidIndex(format!(
@@ -691,7 +703,11 @@ mod tests {
     #[test]
     fn materialization_leaves_source_immutable_and_changes_only_schema_version() {
         let corpus = BackupCorpus::checked_in().expect("load checked-in corpus");
-        let entry = &corpus.entries()[0];
+        let entry = corpus
+            .entries()
+            .iter()
+            .find(|entry| entry.materializable)
+            .expect("current-schema fixture");
         let source_before = tree_bytes(&corpus.root.join(&entry.fixture));
         let temp = TempDir::new().expect("create materialization root");
         let destination = temp.path().join("fixture");
@@ -973,6 +989,7 @@ mod reader_tests {
     #[derive(Debug, PartialEq, Eq)]
     enum RestoreExpectation {
         Succeeds,
+        SchemaMismatch,
         TypedUnsupportedFormat,
     }
 
@@ -981,6 +998,9 @@ mod reader_tests {
     // retains executable typed-error coverage for the production reader.
 
     fn expected_restore(entry: &CorpusEntry) -> RestoreExpectation {
+        if !entry.materializable {
+            return RestoreExpectation::SchemaMismatch;
+        }
         match entry.support {
             SupportState::Supported => RestoreExpectation::Succeeds,
             SupportState::Retired => RestoreExpectation::TypedUnsupportedFormat,
@@ -1260,7 +1280,11 @@ mod reader_tests {
         ));
     }
 
-    async fn assert_reader_inventory(args: &StorageArgs, format_version: u32) {
+    async fn assert_reader_inventory(
+        args: &StorageArgs,
+        format_version: u32,
+        expects_rendered_titles: bool,
+    ) {
         let factory = compatibility_result(
             open_existing_database(&args.db, &StorageRuntimeConfig::default()).await,
             "open restored database",
@@ -1328,6 +1352,16 @@ mod reader_tests {
         );
 
         assert_restored_reader_roles!(args, user_id, post_id, user, post, revision, media);
+        if expects_rendered_titles {
+            assert_eq!(
+                post.rendered_title.as_ref().map(AsRef::as_ref),
+                Some("Legacy wire roles")
+            );
+            assert_eq!(
+                revision.rendered_title.as_ref().map(AsRef::as_ref),
+                Some("Legacy wire roles")
+            );
+        }
     }
 
     #[apply(backends)]
@@ -1337,19 +1371,25 @@ mod reader_tests {
         for entry in corpus.entries() {
             for input in CorpusIoMode::ALL {
                 let target = InitializedCommandEnv::new(backend).await;
-                let schema_version = current_schema_version(&target).await;
-                let materialized = target.base.path().join("materialized");
-                compatibility_result(
-                    corpus.materialize(entry, &materialized, schema_version),
-                    "materialize verified historical fixture",
-                );
-                assert_fixture_wire_inventory(&materialized);
+                let fixture = if entry.materializable {
+                    let schema_version = current_schema_version(&target).await;
+                    let materialized = target.base.path().join("materialized");
+                    compatibility_result(
+                        corpus.materialize(entry, &materialized, schema_version),
+                        "materialize verified current-schema fixture",
+                    );
+                    assert_fixture_wire_inventory(&materialized);
+                    materialized
+                } else {
+                    compatibility_result(corpus.verify(entry), "verify historical schema fixture");
+                    corpus.root.join(&entry.fixture)
+                };
                 let restore_path = match input {
-                    CorpusIoMode::Directory => materialized,
+                    CorpusIoMode::Directory => fixture,
                     CorpusIoMode::Archive => {
                         let archive = target.base.path().join("fixture.tar.gz");
                         compatibility_result(
-                            BackupCorpus::package_archive(&materialized, &archive),
+                            BackupCorpus::package_archive(&fixture, &archive),
                             "independently package fixture archive",
                         );
                         archive
@@ -1370,7 +1410,30 @@ mod reader_tests {
                                     ))
                                 )
                             });
-                        assert_reader_inventory(&target.args, entry.format_version).await;
+                        assert_reader_inventory(
+                            &target.args,
+                            entry.format_version,
+                            entry.materializable,
+                        )
+                        .await;
+                    }
+                    RestoreExpectation::SchemaMismatch => {
+                        let before =
+                            snapshot_target_state(&target, "before-schema-mismatched-restore")
+                                .await;
+                        let Err(error) = cmd_restore(&target.args, &restore_path).await else {
+                            panic!(
+                                "{}",
+                                super::format_compatibility_diagnostic(
+                                    "historical schema fixture must be rejected"
+                                )
+                            );
+                        };
+                        assert!(matches!(
+                            error.downcast_ref::<BackupError>(),
+                            Some(BackupError::SchemaVersionMismatch { .. })
+                        ));
+                        assert_target_unmodified(&target, &before).await;
                     }
                     RestoreExpectation::TypedUnsupportedFormat => {
                         let before =
@@ -1458,6 +1521,7 @@ mod reader_tests {
             fixture: "retired-format".to_owned(),
             format_version: 3,
             support: SupportState::Retired,
+            materializable: true,
             digest: "0".repeat(64),
         };
         assert_eq!(
@@ -1675,6 +1739,7 @@ mod writer_tests {
             .filter(|entry| {
                 u64::from(entry.format_version) == version
                     && entry.support == SupportState::Supported
+                    && entry.materializable
             })
             .collect::<Vec<_>>();
         assert_eq!(
@@ -1682,7 +1747,7 @@ mod writer_tests {
             1,
             "{}",
             format_compatibility_diagnostic(
-                "writer emitted a format version that does not resolve to exactly one supported fixture and oracle"
+                "writer emitted a format version that does not resolve to exactly one supported current-schema fixture and oracle"
             )
         );
         assert_eq!(
@@ -1996,8 +2061,9 @@ mod writer_tests {
             table_rows(rows, "posts").iter().any(|row| {
                 row_id_is(row, "post_id", &ids.public_post.to_string())
                     && row_id_is(row, "user_id", author)
+                    && row["rendered_title"] == row["title"]
             }),
-            "backup format compatibility: public post must retain its author relationship"
+            "backup format compatibility: public post must retain its author relationship and exact Rendered Title bytes"
         );
         assert!(
             table_rows(rows, "audiences").iter().any(|row| {

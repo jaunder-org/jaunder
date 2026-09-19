@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 //! `test-support` — out-of-process test/e2e helpers that link jaunder's real
 //! crates (see `lib.rs`). Never shipped in the `jaunder` production binary.
 

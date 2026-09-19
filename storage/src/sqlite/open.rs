@@ -8,7 +8,7 @@ use sqlx::{
 
 use crate::backup::CatalogTableName;
 use crate::db::StorageRuntimeConfig;
-use crate::posts::media;
+use crate::posts::{media, title_backfill};
 use crate::sql::Exists;
 use crate::{StorageFactory, instance_identity};
 
@@ -54,6 +54,12 @@ pub(crate) async fn open_sqlite_database_with_pool(
     sqlx::migrate!("./migrations/sqlite").run(&pool).await?;
     let instance_id = instance_identity::ensure(&pool).await?;
     media::backfill_post_media_references(&pool).await?;
+    if title_backfill::rendered_post_title_backfill_is_pending(&pool).await? {
+        title_backfill::backfill_rendered_post_titles(&pool).await?;
+        title_backfill::clear_rendered_post_title_backfill_pending(&pool).await?;
+    } else {
+        title_backfill::validate_rendered_post_title_presence(&pool).await?;
+    }
     Ok((StorageFactory::sqlite(pool.clone()), pool, instance_id))
 }
 

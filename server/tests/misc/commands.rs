@@ -15,6 +15,7 @@ use common::{
     test_support::{parse_email, parse_invite_ttl_hours, parse_session_label},
     time::UtcInstant,
     username::Username,
+    visibility::ViewerIdentity,
 };
 use host::{config_key::SiteConfigKey, feed::FeedEventPhase, password::Password};
 use jaunder::cli::{Cli, Commands, DeadLetterAction, StorageArgs, WebsubAction};
@@ -37,7 +38,7 @@ use crate::misc::backup_fixture::{
     assert_backup_fixture_restored, assert_target_unmodified, populate_backup_fixture,
 };
 use storage::test_support::{
-    Backend, PostgresDbGuard, PostgresTestConfig, SeedUser, backends, confirmed,
+    Backend, PostgresDbGuard, PostgresTestConfig, SeedUser, UpdateRawPost, backends, confirmed,
     nonexistent_postgres_url, raw_media_filename_exists, rewrite_media_filename_in_backup,
     sqlite_url, unique_postgres_url,
 };
@@ -1477,6 +1478,184 @@ async fn cmd_restore_classifies_malformed_format_as_invalid_backup(#[case] backe
         Some(BackupError::InvalidBackup(_))
     ));
     assert_target_unmodified(&target_args).await;
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn cmd_restore_reports_invalid_rendered_title_and_typed_reads_reject_it(
+    #[case] backend: Backend,
+) {
+    let source_env = InitializedCommandEnv::new(backend).await;
+    let source_args = source_env.args;
+    let ids = populate_backup_fixture(&source_args).await;
+    seed_backup_revision(&source_args, ids.public_post, ids.author, "backup-revision").await;
+    let backup_path = source_env.base.path().join("backup");
+    cmd_backup(
+        &source_args,
+        BackupMode::Directory,
+        Some(backup_path.clone()),
+    )
+    .await
+    .expect("backup");
+    let posts_path = backup_path.join("db/posts.ndjson");
+    let public_id = serde_json::to_value(ids.public_post).expect("serialize public post id");
+    let rewritten = std::fs::read_to_string(&posts_path)
+        .expect("read post backup rows")
+        .lines()
+        .map(|line| {
+            let mut row: serde_json::Value =
+                serde_json::from_str(line).expect("parse post backup row");
+            if row["post_id"] == public_id {
+                row["rendered_title"] = serde_json::json!("<script>untrusted</script>");
+            }
+            serde_json::to_string(&row).expect("serialize post backup row")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&posts_path, format!("{rewritten}\n")).expect("write invalid post backup rows");
+    let revisions_path = backup_path.join("db/post_revisions.ndjson");
+    let rewritten = std::fs::read_to_string(&revisions_path)
+        .expect("read revision backup rows")
+        .lines()
+        .map(|line| {
+            let mut row: serde_json::Value =
+                serde_json::from_str(line).expect("parse revision backup row");
+            row["rendered_title"] = serde_json::json!("<script>untrusted</script>");
+            serde_json::to_string(&row).expect("serialize revision backup row")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&revisions_path, format!("{rewritten}\n"))
+        .expect("write invalid revision backup rows");
+
+    let target_env = InitializedCommandEnv::new(backend).await;
+    let target_args = target_env.args;
+    let outcome = cmd_restore(&target_args, &backup_path)
+        .await
+        .expect("ADR-0174 restore reports typed Rendered Title diagnostics");
+    for table in ["posts", "post_revisions"] {
+        assert!(outcome.validation_report.issues().iter().any(|issue| {
+            issue.table == table
+                && issue.column == "rendered_title"
+                && issue.value_class == "rendered post title"
+        }));
+    }
+    let factory =
+        open_existing_database(&target_args.db, &storage::StorageRuntimeConfig::default())
+            .await
+            .expect("open restored database");
+    let error = factory
+        .posts()
+        .get_post_by_id(ids.public_post, &ViewerIdentity::local(ids.author))
+        .await
+        .expect_err("invalid Rendered Title bytes must fail typed current reads");
+    assert!(matches!(
+        error,
+        sqlx::Error::ColumnDecode { .. } | sqlx::Error::Decode(_)
+    ));
+    let revision = factory
+        .posts()
+        .list_post_revision_history(ids.author, ids.public_post, None, PageSize::default())
+        .await
+        .expect("list restored revision metadata")
+        .expect("restored revision history")
+        .revisions
+        .into_iter()
+        .next()
+        .expect("restored revision");
+    let error = factory
+        .posts()
+        .get_post_revision_detail(ids.author, ids.public_post, revision.revision_id)
+        .await
+        .expect_err("invalid Rendered Title bytes must fail typed revision detail reads");
+    assert!(matches!(
+        error,
+        sqlx::Error::ColumnDecode { .. } | sqlx::Error::Decode(_)
+    ));
+}
+
+async fn seed_backup_revision(
+    args: &StorageArgs,
+    post_id: common::ids::PostId,
+    author: common::ids::UserId,
+    slug: &str,
+) {
+    let factory = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
+        .await
+        .expect("open backup fixture database");
+    let posts = factory.posts();
+    let input = UpdateRawPost::new(slug).title(slug).build();
+    confirmed(
+        factory
+            .write_scope()
+            .run(move |transaction| {
+                Box::pin(async move {
+                    posts
+                        .update_post(transaction, post_id, author, &input)
+                        .await
+                })
+            })
+            .await
+            .expect("create backup fixture revision"),
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn cmd_restore_reports_rendered_title_presence_mismatches(#[case] backend: Backend) {
+    for (table, null_column) in [
+        ("posts", "title"),
+        ("posts", "rendered_title"),
+        ("post_revisions", "title"),
+        ("post_revisions", "rendered_title"),
+    ] {
+        let source_env = InitializedCommandEnv::new(backend).await;
+        let source_args = source_env.args;
+        let ids = populate_backup_fixture(&source_args).await;
+        seed_backup_revision(
+            &source_args,
+            ids.public_post,
+            ids.author,
+            "presence-revision",
+        )
+        .await;
+        let backup_path = source_env.base.path().join("backup");
+        cmd_backup(
+            &source_args,
+            BackupMode::Directory,
+            Some(backup_path.clone()),
+        )
+        .await
+        .expect("backup");
+        let path = backup_path.join("db").join(format!("{table}.ndjson"));
+        let rewritten = std::fs::read_to_string(&path)
+            .expect("read backup rows")
+            .lines()
+            .enumerate()
+            .map(|(index, line)| {
+                let mut row: serde_json::Value =
+                    serde_json::from_str(line).expect("parse backup row");
+                if index == 0 {
+                    row[null_column] = serde_json::Value::Null;
+                }
+                serde_json::to_string(&row).expect("serialize backup row")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, format!("{rewritten}\n")).expect("write mismatch backup row");
+
+        let target_env = InitializedCommandEnv::new(backend).await;
+        let target_args = target_env.args;
+        let error = cmd_restore(&target_args, &backup_path)
+            .await
+            .expect_err("presence mismatch must fail structurally before restore");
+        assert!(matches!(
+            error.downcast_ref::<BackupError>(),
+            Some(BackupError::InvalidBackup(message))
+                if message.contains(table) && message.contains("rendered_title")
+        ));
+        assert_target_unmodified(&target_args).await;
+    }
 }
 
 #[apply(backends)]

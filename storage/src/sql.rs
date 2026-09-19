@@ -25,6 +25,7 @@ use crate::posts::{
     tags::TagSlugPrefixPattern,
 };
 use crate::publisher::PublisherGeneration;
+use crate::site_config::StoredSiteConfigKey;
 use crate::subscriptions::SubscriptionStatusName;
 use crate::user_config::StoredUserConfigValue;
 use crate::users::{EmailVerified, OperatorStatus};
@@ -46,7 +47,7 @@ use common::pagination::{PageOffset, PageSize, RowLimit};
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
-use common::render::{PostFormat, RenderedHtml};
+use common::render::{PostFormat, RenderedHtml, RenderedPostTitle};
 use common::root_relative_url::RootRelativeUrl;
 use common::seed::PageCursor;
 use common::session_label::SessionLabel;
@@ -229,6 +230,7 @@ approve_storage_binds!(
     TagId,
     TagLabel,
     RenderedHtml,
+    RenderedPostTitle,
     UtcInstant,
     UserId,
     Username,
@@ -270,6 +272,7 @@ approve_storage_binds!(
     StoredFeedDiagnostic,
     PublisherGeneration,
     StoredSessionLabel,
+    StoredSiteConfigKey,
     StoredSiteConfigValue,
     SerializedPostTags,
     StoredUserConfigValue,

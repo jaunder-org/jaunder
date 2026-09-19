@@ -6,7 +6,7 @@ mod tests {
     use std::borrow::Cow;
 
     use crate::DbConnectOptions;
-    use crate::posts::media;
+    use crate::posts::{media, title_backfill};
     use crate::sql::QueryStorageExt;
     use crate::subscriptions::CorruptSubscriberRef;
     use crate::test_support::{
@@ -39,6 +39,7 @@ mod tests {
 
     struct MigrationDatabase {
         pool: CloseablePool,
+        options: DbConnectOptions,
         _sqlite: Option<TempDir>,
         _postgres: Option<PostgresDbGuard>,
     }
@@ -48,14 +49,17 @@ mod tests {
             match backend {
                 Backend::Sqlite => {
                     let base = TempDir::new().unwrap();
-                    let DbConnectOptions::Sqlite(options) = sqlite_url(&base) else {
+                    let options = sqlite_url(&base);
+                    let DbConnectOptions::Sqlite(sqlite_options) = &options else {
                         unreachable!("sqlite_url always yields SQLite options")
                     };
-                    let pool = SqlitePool::connect_with(options.create_if_missing(true))
-                        .await
-                        .unwrap();
+                    let pool =
+                        SqlitePool::connect_with(sqlite_options.clone().create_if_missing(true))
+                            .await
+                            .unwrap();
                     Self {
                         pool: CloseablePool::Sqlite(pool),
+                        options,
                         _sqlite: Some(base),
                         _postgres: None,
                     }
@@ -63,17 +67,27 @@ mod tests {
                 Backend::Postgres => {
                     let config = PostgresTestConfig::from_env();
                     let (options, guard) = unique_postgres_url(&config).await;
-                    let DbConnectOptions::Postgres { options, .. } = options else {
+                    let DbConnectOptions::Postgres {
+                        options: pg_options,
+                        ..
+                    } = &options
+                    else {
                         unreachable!("unique_postgres_url always yields PostgreSQL options")
                     };
-                    let pool = PgPool::connect_with(options).await.unwrap();
+                    let pool = PgPool::connect_with(pg_options.clone()).await.unwrap();
                     Self {
                         pool: CloseablePool::Postgres(pool),
+                        options,
                         _sqlite: None,
                         _postgres: Some(guard),
                     }
                 }
             }
+        }
+
+        async fn open_current(&self) -> sqlx::Result<crate::StorageFactory> {
+            crate::open_existing_database(&self.options, &crate::StorageRuntimeConfig::default())
+                .await
         }
 
         async fn migrate_to(&self, version: i64) -> Result<(), MigrateError> {
@@ -108,6 +122,75 @@ mod tests {
                         .expect("startup backfill succeeds");
                 }
             }
+        }
+
+        async fn backfill_rendered_titles(
+            &self,
+            control: &mut title_backfill::BackfillTestControl,
+        ) -> sqlx::Result<()> {
+            match &self.pool {
+                CloseablePool::Sqlite(pool) => {
+                    title_backfill::backfill_rendered_post_titles_with_test_control(pool, control)
+                        .await
+                }
+                CloseablePool::Postgres(pool) => {
+                    title_backfill::backfill_rendered_post_titles_with_test_control(pool, control)
+                        .await
+                }
+            }
+        }
+
+        async fn seed_legacy_rendered_titles(&self) {
+            self.pool
+                .execute(
+                    "INSERT INTO users (username, password_hash, created_at) \
+                     VALUES ('rendered-title-author', 'hash', CURRENT_TIMESTAMP)",
+                )
+                .await
+                .unwrap();
+            for number in 0..101 {
+                let title: common::post_title::PostTitle =
+                    format!("legacy title {number}").parse().unwrap();
+                let slug: common::slug::Slug = format!("legacy-title-{number}").parse().unwrap();
+                crate::with_closeable_pool!(&self.pool, pool, {
+                    sqlx::query(
+                        "INSERT INTO posts \
+                         (user_id, title, slug, body, format, rendered_html, created_at, updated_at) \
+                         VALUES ((SELECT user_id FROM users WHERE username = 'rendered-title-author'), \
+                         $1, $2, 'body', 'markdown', '<p>body</p>', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                    )
+                    .bind_storage(title)
+                    .bind_storage(slug)
+                    .execute(pool)
+                    .await
+                    .map(|_| ())
+                })
+                .unwrap();
+            }
+            self.pool
+                .execute(
+                    "INSERT INTO posts \
+                     (user_id, title, slug, body, format, rendered_html, created_at, updated_at) \
+                     VALUES ((SELECT user_id FROM users WHERE username = 'rendered-title-author'), \
+                     '<script>gone</script>', 'legacy-empty-title', 'body', 'html', '<p>body</p>', \
+                     CURRENT_TIMESTAMP, CURRENT_TIMESTAMP), \
+                     ((SELECT user_id FROM users WHERE username = 'rendered-title-author'), \
+                     NULL, 'legacy-titleless', 'body', 'markdown', '<p>body</p>', \
+                     CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                )
+                .await
+                .unwrap();
+            self.pool
+                .execute(
+                    "INSERT INTO post_revisions \
+                     (post_id, user_id, title, slug, body, format, rendered_html, summary, \
+                      created_at, updated_at, published_at, deleted_at) \
+                     SELECT post_id, user_id, title, slug, body, format, rendered_html, NULL, \
+                            created_at, updated_at, NULL, NULL \
+                     FROM posts",
+                )
+                .await
+                .unwrap();
         }
 
         async fn seed_legacy_post_media(&self) {
@@ -289,6 +372,207 @@ mod tests {
             2,
             "absolute and scheme-relative spellings remain distinct exact rows"
         );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn migration_0038_startup_backfill_resumes_committed_title_chunks(
+        #[case] backend: Backend,
+    ) {
+        for target in [
+            title_backfill::BackfillTarget::Posts,
+            title_backfill::BackfillTarget::Revisions,
+        ] {
+            let db = MigrationDatabase::new(backend).await;
+            db.migrate_to(37).await.unwrap();
+            db.seed_legacy_rendered_titles().await;
+            db.migrate_current().await.unwrap();
+            assert_eq!(
+                db.pool
+                    .scalar_i64(
+                        "SELECT COUNT(*) FROM site_config \
+                         WHERE key = 'migration.0038.rendered_title_backfill_pending' AND value = '1'",
+                    )
+                    .await
+                    .unwrap(),
+                1,
+                "migration 0038 records durable pending backfill state",
+            );
+
+            let mut interrupted = title_backfill::BackfillTestControl::interrupt_after(target);
+            let error = db
+                .backfill_rendered_titles(&mut interrupted)
+                .await
+                .expect_err("test seam interrupts only after a committed chunk");
+            assert!(error.to_string().contains("interrupted after"));
+            assert!(
+                interrupted.rendered_chunks() >= 1,
+                "the seam runs after title rendering and before the install transaction"
+            );
+            let post_count = db
+                .pool
+                .scalar_i64("SELECT COUNT(*) FROM posts WHERE rendered_title IS NOT NULL")
+                .await
+                .unwrap();
+            let revision_count = db
+                .pool
+                .scalar_i64("SELECT COUNT(*) FROM post_revisions WHERE rendered_title IS NOT NULL")
+                .await
+                .unwrap();
+            match target {
+                title_backfill::BackfillTarget::Posts => {
+                    assert_eq!(post_count, 100, "the first Posts chunk is durable");
+                    assert_eq!(revision_count, 0, "interruption precedes Revision work");
+                }
+                title_backfill::BackfillTarget::Revisions => {
+                    assert_eq!(post_count, 102, "Posts completed before Revision work");
+                    assert_eq!(revision_count, 100, "the first Revisions chunk is durable");
+                }
+            }
+
+            db.open_current()
+                .await
+                .expect("production opening resumes after interrupted migration backfill");
+            assert_eq!(
+                db.pool
+                    .scalar_i64("SELECT COUNT(*) FROM posts WHERE rendered_title IS NOT NULL")
+                    .await
+                    .unwrap(),
+                102,
+                "more than one Posts chunk converges"
+            );
+            assert_eq!(
+                db.pool
+                    .scalar_i64(
+                        "SELECT COUNT(*) FROM post_revisions WHERE rendered_title IS NOT NULL"
+                    )
+                    .await
+                    .unwrap(),
+                102,
+                "more than one Revisions chunk converges"
+            );
+            assert_eq!(
+                db.pool
+                    .scalar_i64(
+                        "SELECT COUNT(*) FROM posts WHERE title IS NULL AND rendered_title IS NULL",
+                    )
+                    .await
+                    .unwrap(),
+                1
+            );
+            assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM post_revisions WHERE title IS NULL AND rendered_title IS NULL",
+                )
+                .await
+                .unwrap(),
+            1
+        );
+            assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM posts WHERE slug = 'legacy-empty-title' AND rendered_title = ''",
+                )
+                .await
+                .unwrap(),
+            1,
+            "an authored title with no visible text has a present empty fragment"
+        );
+            assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM post_revisions WHERE slug = 'legacy-empty-title' AND rendered_title = ''",
+                )
+                .await
+                .unwrap(),
+            1,
+            "the Revision preserves the present empty fragment"
+        );
+            assert_eq!(
+                db.pool
+                    .scalar_i64(
+                        "SELECT COUNT(*) FROM site_config \
+                         WHERE key = 'migration.0038.rendered_title_backfill_pending'",
+                    )
+                    .await
+                    .unwrap(),
+                0,
+                "successful production opening clears the pending marker",
+            );
+            db.open_current()
+                .await
+                .expect("a later production opening validates completed state without repair");
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn migration_0038_rejects_stale_or_orphaned_title_derivatives(#[case] backend: Backend) {
+        for target in [
+            title_backfill::BackfillTarget::Posts,
+            title_backfill::BackfillTarget::Revisions,
+        ] {
+            let db = MigrationDatabase::new(backend).await;
+            db.migrate_to(37).await.unwrap();
+            db.seed_legacy_rendered_titles().await;
+            db.migrate_current().await.unwrap();
+
+            let mut stale = title_backfill::BackfillTestControl::stale_source(target);
+            let error = db
+                .backfill_rendered_titles(&mut stale)
+                .await
+                .expect_err("a changed source prevents its stale conditional install");
+            assert!(error.to_string().contains("backfill incomplete"));
+            let stale_source_count = match target {
+            title_backfill::BackfillTarget::Posts => db
+                .pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM posts WHERE post_id = (SELECT MIN(post_id) FROM posts) \
+                     AND title = 'changed while rendering' AND rendered_title IS NULL",
+                )
+                .await
+                .unwrap(),
+            title_backfill::BackfillTarget::Revisions => db
+                .pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM post_revisions \
+                     WHERE revision_id = (SELECT MIN(revision_id) FROM post_revisions) \
+                     AND title = 'changed while rendering' AND rendered_title IS NULL",
+                )
+                .await
+                .unwrap(),
+        };
+            assert_eq!(
+                stale_source_count, 1,
+                "conditional install must not apply a rendering of stale title/format input"
+            );
+
+            match target {
+            title_backfill::BackfillTarget::Posts => db
+                .pool
+                .execute(
+                    "UPDATE posts SET title = NULL, rendered_title = '<em>orphan</em>' \
+                     WHERE post_id = (SELECT MAX(post_id) FROM posts)",
+                )
+                .await
+                .unwrap(),
+            title_backfill::BackfillTarget::Revisions => db
+                .pool
+                .execute(
+                    "UPDATE post_revisions SET title = NULL, rendered_title = '<em>orphan</em>' \
+                     WHERE revision_id = (SELECT MAX(revision_id) FROM post_revisions)",
+                )
+                .await
+                .unwrap(),
+        }
+            let mut final_check = title_backfill::BackfillTestControl::complete();
+            let error = db
+                .backfill_rendered_titles(&mut final_check)
+                .await
+                .expect_err("final invariant rejects a derivative without a title");
+            assert!(error.to_string().contains("backfill incomplete"));
+        }
     }
 
     #[apply(backends)]

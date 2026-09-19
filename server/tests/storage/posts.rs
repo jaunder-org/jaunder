@@ -967,6 +967,204 @@ async fn revision_history_keeps_deleted_owner_post_and_hides_foreign_details(
 
 #[apply(backends)]
 #[tokio::test]
+async fn rendered_title_lifecycle_preserves_transitions_no_op_and_prior_snapshot(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let owner = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
+    let post_id = SeedRawPost::new(owner)
+        .draft()
+        .title("**Prior title**")
+        .body(parse_post_body("prior body"))
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
+    let prior = env
+        .posts()
+        .get_post_by_id(post_id, &ViewerIdentity::local(owner))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        prior.rendered_title.as_ref().map(AsRef::as_ref),
+        Some("<strong>Prior title</strong>")
+    );
+
+    let transition = UpdateRawPost::new("title-transition")
+        .title("<em>Current title</em>")
+        .body(parse_post_body("<p>current body</p>"))
+        .format(PostFormat::Html)
+        .unpublish()
+        .request_clock("2026-09-19T12:00:00Z".parse().unwrap())
+        .build();
+    let current = confirmed(
+        update_post!(
+            Arc::clone(&env.posts()),
+            env.write_scope(),
+            post_id,
+            owner,
+            transition.clone()
+        )
+        .unwrap(),
+    );
+    assert_eq!(current.record.format, PostFormat::Html);
+    assert_eq!(
+        current.record.rendered_title.as_ref().map(AsRef::as_ref),
+        Some("<em>Current title</em>")
+    );
+    let revisions = env.count_post_revisions(post_id).await.unwrap();
+    let no_op = confirmed(
+        update_post!(
+            Arc::clone(&env.posts()),
+            env.write_scope(),
+            post_id,
+            owner,
+            transition
+        )
+        .unwrap(),
+    );
+    assert_eq!(no_op.record.updated_at, current.record.updated_at);
+    assert_eq!(env.count_post_revisions(post_id).await.unwrap(), revisions);
+
+    let titleless = confirmed(
+        update_post!(
+            Arc::clone(&env.posts()),
+            env.write_scope(),
+            post_id,
+            owner,
+            UpdateRawPost::new("titleless-transition")
+                .titleless()
+                .body(parse_post_body("titleless body"))
+                .format(PostFormat::Org)
+                .unpublish()
+                .request_clock("2026-09-19T12:00:01Z".parse().unwrap())
+                .build()
+        )
+        .unwrap(),
+    );
+    assert_eq!(titleless.record.title, None);
+    assert_eq!(titleless.record.rendered_title, None);
+    let revision = env
+        .posts()
+        .list_post_revision_history(owner, post_id, None, parse_page_size("10"))
+        .await
+        .unwrap()
+        .unwrap()
+        .revisions
+        .first()
+        .unwrap()
+        .clone();
+    let detail = env
+        .posts()
+        .get_post_revision_detail(owner, post_id, revision.revision_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(detail.revision.title, current.record.title);
+    assert_eq!(
+        detail.revision.rendered_title,
+        current.record.rendered_title
+    );
+    assert_eq!(detail.revision.body, current.record.body);
+    assert_eq!(detail.revision.format, current.record.format);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn persisted_rendered_title_decode_rejects_every_invalid_fragment_class(
+    #[case] backend: Backend,
+) {
+    const INVALID_FRAGMENTS: &[&str] = &[
+        "<a href=\"/\">x</a>",
+        "<strong class=\"x\">x</strong>",
+        "<BR>",
+        "<br/>",
+        "&quot;",
+        "&",
+        "<",
+        ">",
+        "<script>x</script>",
+        "<strong>x",
+        "</strong>",
+        "<b>x</i>",
+        "<b><i>x</b></i>",
+        " leading",
+        "trailing ",
+        "two  spaces",
+        "line\nbreak",
+        "<b attr>x</b>",
+    ];
+
+    for invalid in INVALID_FRAGMENTS {
+        let env = backend.setup().await;
+        let owner = SeedUser::new()
+            .seed(env.users(), env.write_scope())
+            .await
+            .user_id;
+        let post_id = SeedRawPost::new(owner)
+            .draft()
+            .title("valid title")
+            .seed(env.posts(), env.write_scope())
+            .await
+            .post_id;
+        confirmed(
+            update_post!(
+                Arc::clone(&env.posts()),
+                env.write_scope(),
+                post_id,
+                owner,
+                UpdateRawPost::new("invalid-rendered-title-revision")
+                    .body(parse_post_body("capture a revision"))
+                    .build()
+            )
+            .unwrap(),
+        );
+        let revision = env
+            .posts()
+            .list_post_revision_history(owner, post_id, None, parse_page_size("10"))
+            .await
+            .unwrap()
+            .unwrap()
+            .revisions
+            .into_iter()
+            .next()
+            .unwrap();
+        env.inject_invalid_rendered_title(post_id, revision.revision_id, invalid)
+            .await
+            .expect("install deliberately invalid persisted title bytes");
+
+        let error = env
+            .posts()
+            .get_post_by_id(post_id, &ViewerIdentity::local(owner))
+            .await
+            .expect_err("invalid current Rendered Title bytes must fail typed decoding");
+        assert!(
+            matches!(
+                error,
+                sqlx::Error::ColumnDecode { .. } | sqlx::Error::Decode(_)
+            ),
+            "{invalid:?}: {error}"
+        );
+        let error = env
+            .posts()
+            .get_post_revision_detail(owner, post_id, revision.revision_id)
+            .await
+            .expect_err("invalid revision Rendered Title bytes must fail typed decoding");
+        assert!(
+            matches!(
+                error,
+                sqlx::Error::ColumnDecode { .. } | sqlx::Error::Decode(_)
+            ),
+            "{invalid:?}: {error}"
+        );
+    }
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn revision_detail_round_trips_complete_snapshot_and_rejects_invalid_media_form(
     #[case] backend: Backend,
 ) {
@@ -1032,6 +1230,7 @@ async fn revision_detail_round_trips_complete_snapshot_and_rejects_invalid_media
     assert_eq!(detail.revision.post_id, prior.post_id);
     assert_eq!(detail.revision.user_id, prior.user_id);
     assert_eq!(detail.revision.title, prior.title);
+    assert_eq!(detail.revision.rendered_title, prior.rendered_title);
     assert_eq!(detail.revision.slug, prior.slug);
     assert_eq!(detail.revision.body, prior.body);
     assert_eq!(detail.revision.format, prior.format);

@@ -223,6 +223,7 @@ mod tests {
             user_id: UserId::from(1),
             author_username: parse_username("author"),
             title: Some(parse_post_title("My Title")),
+            rendered_title: None,
             slug: parse_slug("hello-world"),
             body: parse_post_body("My body"),
             format: PostFormat::Markdown,

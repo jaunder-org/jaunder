@@ -42,6 +42,7 @@ use common::pagination::{PageSize, RowLimit};
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
 use common::render::PostFormat;
+use common::render::RenderedPostTitle;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::time::UtcInstant;
@@ -815,6 +816,7 @@ where
     for<'q> String: Encode<'q, DB>,
     for<'q> &'q IdempotencyKey: Encode<'q, DB> + Type<DB>,
     for<'q> Option<&'q PostTitle>: Encode<'q, DB> + Type<DB>,
+    for<'q> Option<&'q RenderedPostTitle>: Encode<'q, DB> + Type<DB>,
     // `summary` binds as `Option<&PostSummary>` via the ADR-0071 sqlx bridge on
     // the create paths, mirroring the `Option<&PostTitle>` bound above.
     for<'q> Option<&'q PostSummary>: Encode<'q, DB> + Type<DB>,
@@ -1044,7 +1046,7 @@ where
         revision_id: RevisionId,
     ) -> Result<Option<PostRevisionDetail>> {
         let row = sqlx::query(
-            "SELECT revision_id, post_id, user_id, title, slug, body, format, rendered_html,
+            "SELECT revision_id, post_id, user_id, title, rendered_title, slug, body, format, rendered_html,
                     summary, created_at, updated_at, published_at, deleted_at, captured_at
              FROM post_revisions
              WHERE revision_id = $1 AND post_id = $2 AND user_id = $3",
@@ -1061,6 +1063,7 @@ where
             post_id,
             user_id,
             title,
+            rendered_title,
             slug,
             body,
             format,
@@ -1113,6 +1116,7 @@ where
                 post_id,
                 user_id,
                 title,
+                rendered_title,
                 slug,
                 body,
                 format,
@@ -2639,6 +2643,7 @@ mod tests {
         assert_eq!(revision.post_id, prior.post_id);
         assert_eq!(revision.user_id, prior.user_id);
         assert_eq!(revision.title, prior.title);
+        assert_eq!(revision.rendered_title, prior.rendered_title);
         assert_eq!(revision.slug, prior.slug);
         assert_eq!(revision.body, prior.body);
         assert_eq!(revision.format, prior.format);

@@ -383,6 +383,14 @@ impl RenderedPostTitle {
     }
 }
 
+impl std::str::FromStr for RenderedPostTitle {
+    type Err = InvalidRenderedPostTitle;
+
+    fn from_str(fragment: &str) -> Result<Self, Self::Err> {
+        Self::parse_canonical(fragment)
+    }
+}
+
 impl AsRef<str> for RenderedPostTitle {
     fn as_ref(&self) -> &str {
         self.as_str()

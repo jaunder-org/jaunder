@@ -43,7 +43,7 @@ Out:
     rejection, the bounded recognizer's accepted grammar, the CSR dependency
     closure, and absence of public trusted-markup or aggregate mismatch doors.
 
-- [ ] Task 2: Install, backfill, and enforce persisted title state as one slice
+- [x] Task 2: Install, backfill, and enforce persisted title state as one slice
   - Depends on: Task 1's value and aggregate contracts.
   - Contract: nullable Rendered Title columns are added to `posts` and
     `post_revisions` in both dialects. After SQL migration and before returning
