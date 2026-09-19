@@ -424,7 +424,8 @@ returned."
   (setq-local truncate-lines t)
   (define-key jaunder-reconcile-report-mode-map "m" #'jaunder-reconcile-toggle-mark)
   (define-key jaunder-reconcile-report-mode-map "p" #'jaunder-reconcile-push-selected)
-  (define-key jaunder-reconcile-report-mode-map "g" #'jaunder-reconcile-pull-selected)
+  (define-key jaunder-reconcile-report-mode-map "f" #'jaunder-reconcile-pull-selected)
+  (define-key jaunder-reconcile-report-mode-map "g" #'jaunder-reconcile-refresh)
   (define-key jaunder-reconcile-report-mode-map "D" #'jaunder-reconcile-delete-selected))
 
 (defun jaunder--reconcile-conflict-key (conflict)
@@ -765,15 +766,37 @@ hide otherwise valid synchronization markers."
                  :reason (plist-get value :reason) :detail (plist-get value :detail))))
     result))
 
+(defun jaunder--reconcile-pruned-marks (report marks)
+  "Return MARKS restricted to stable row identities present in REPORT."
+  (let ((present (make-hash-table :test #'equal))
+        (retained (make-hash-table :test #'equal)))
+    (dolist (row (jaunder-reconcile-report-rows report))
+      (puthash (jaunder--reconcile-stable-row-key row) t present))
+    (maphash (lambda (key value)
+               (when (gethash key present)
+                 (puthash key value retained)))
+             marks)
+    retained))
+
 (defun jaunder--reconcile-refresh-batch-buffer (buffer)
-  "Rebuild BUFFER's report from a fresh inventory without discarding its results."
+  "Rebuild BUFFER's report from fresh inventory without discarding its results."
   (with-current-buffer buffer
-    (let ((root (jaunder-reconcile-report-root jaunder-reconcile-report)))
-      (jaunder--call-with-blog
-       root
-       (lambda ()
-         (jaunder--render-reconcile-report
-          (jaunder--reconcile-build-report root (jaunder--inventory-for-root root)) buffer))))))
+    (let* ((root (jaunder-reconcile-report-root jaunder-reconcile-report))
+           ;; Build before changing the report buffer, so a failed inventory leaves its
+           ;; existing reviewable state available to the User.
+           (report (jaunder--call-with-blog
+                    root
+                    (lambda ()
+                      (jaunder--reconcile-build-report
+                       root (jaunder--inventory-for-root root)))))
+           (marks (jaunder--reconcile-pruned-marks report jaunder-reconcile-marks)))
+      (setq-local jaunder-reconcile-marks marks)
+      (jaunder--render-reconcile-report report buffer))))
+
+(defun jaunder-reconcile-refresh ()
+  "Refresh the current reconciliation report from local and remote state."
+  (interactive)
+  (jaunder--reconcile-refresh-batch-buffer (current-buffer)))
 
 (defun jaunder--reconcile-execute-batch (buffer rows action operation &optional cancelled-p)
   "Run OPERATION for ROWS sequentially, retaining every terminal result in BUFFER.

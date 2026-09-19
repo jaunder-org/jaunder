@@ -851,16 +851,122 @@
             (should-not (string-match-p "push one" (buffer-string)))))
       (kill-buffer buffer))))
 
-(ert-deftest jaunder-reconcile-report-mode-binds-explicit-transfer-commands ()
-  "Report mode exposes separate selected push, pull, and remote-delete commands."
+(ert-deftest jaunder-reconcile-report-mode-binds-refresh-and-explicit-transfer-commands ()
+  "Report mode reserves `g' for refresh and `f' for selected fetch."
   (let (bindings)
     (map-keymap (lambda (_event binding) (push binding bindings))
                 jaunder-reconcile-report-mode-map)
+    (should (eq (lookup-key jaunder-reconcile-report-mode-map (kbd "g"))
+                #'jaunder-reconcile-refresh))
+    (should (eq (lookup-key jaunder-reconcile-report-mode-map (kbd "f"))
+                #'jaunder-reconcile-pull-selected))
     (should (memq #'jaunder-reconcile-toggle-mark bindings))
     (should (memq #'jaunder-reconcile-push-selected bindings))
-    (should (memq #'jaunder-reconcile-pull-selected bindings))
     (should (memq #'jaunder-reconcile-delete-selected bindings))
     (should-not (memq #'jaunder--pull-member bindings))))
+
+(ert-deftest jaunder-reconcile-refresh-reclassifies-from-a-fresh-inventory ()
+  "Refresh rebuilds visible classifications rather than repainting stale rows."
+  (let* ((old-row (jaunder--make-reconcile-row :state 'local-draft :key "post:7"))
+         (old-report (jaunder--make-reconcile-report :root "/tmp" :rows (list old-row)))
+         (member (jaunder-reconcile-test--member "7" "fresh"))
+         (inventory (jaunder--make-inventory :server-only (list member)))
+         (buffer (jaunder--render-reconcile-report old-report)))
+    (unwind-protect
+        (with-current-buffer buffer
+          (cl-letf (((symbol-function 'jaunder--call-with-blog) (lambda (_ thunk) (funcall thunk)))
+                    ((symbol-function 'jaunder--inventory-for-root) (lambda (_) inventory)))
+            (call-interactively (key-binding (kbd "g")))
+            (should (eq (jaunder-reconcile-row-state
+                         (car (jaunder-reconcile-report-rows jaunder-reconcile-report)))
+                        'server-only))
+            (should (string-match-p "server-only (1)" (buffer-string)))))
+      (kill-buffer buffer))))
+
+(ert-deftest jaunder-reconcile-refresh-restores-state-or-falls-back-at-buffer-start ()
+  "Refresh clamps point, prunes vanished marks, and preserves surviving state."
+  (let* ((old-row (jaunder--make-reconcile-row :state 'server-only :key "post:7"
+                                               :member (jaunder-reconcile-test--member
+                                                        "7" "a-longer-slug")))
+         (old-report (jaunder--make-reconcile-report :root "/tmp" :rows (list old-row)))
+         (fresh (jaunder--make-inventory
+                 :server-only (list (jaunder-reconcile-test--member "7" "short"))))
+         (missing (jaunder--make-inventory
+                   :server-only (list (jaunder-reconcile-test--member "8" "other"))))
+         (result (jaunder--make-reconcile-result :action 'pull :row-key "post:7"
+                                                 :outcome 'success))
+         (buffer (jaunder--render-reconcile-report old-report)))
+    (unwind-protect
+        (with-current-buffer buffer
+          (puthash "post:7" t jaunder-reconcile-marks)
+          (puthash "post:gone" t jaunder-reconcile-marks)
+          (setq-local jaunder-reconcile-last-batch-results (list result))
+          (goto-char (jaunder--reconcile-row-key-position "post:7"))
+          (end-of-line)
+          (cl-letf (((symbol-function 'jaunder--call-with-blog) (lambda (_ thunk) (funcall thunk)))
+                    ((symbol-function 'jaunder--inventory-for-root) (lambda (_) fresh)))
+            (call-interactively (key-binding (kbd "g")))
+            (should (= (current-column) (save-excursion
+                                          (end-of-line)
+                                          (current-column))))
+            (should (gethash "post:7" jaunder-reconcile-marks))
+            (should-not (gethash "post:gone" jaunder-reconcile-marks))
+            (should (equal jaunder-reconcile-last-batch-results (list result)))
+            (should (string-match-p "Last batch" (buffer-string))))
+          (cl-letf (((symbol-function 'jaunder--call-with-blog) (lambda (_ thunk) (funcall thunk)))
+                    ((symbol-function 'jaunder--inventory-for-root) (lambda (_) missing)))
+            (call-interactively (key-binding (kbd "g")))
+            (should (= (point) (point-min)))))
+      (kill-buffer buffer))))
+
+(ert-deftest jaunder-reconcile-refresh-renders-row-local-member-failure ()
+  "Refresh keeps a Member fetch failure as a visible unclassifiable row."
+  (let* ((local (jaunder-reconcile-test--local "/tmp/matched.org" "7"))
+         (member (jaunder-reconcile-test--member "7" "remote"))
+         (inventory (jaunder--make-inventory
+                     :matched (list (jaunder--make-inventory-match
+                                     :local local :member member))))
+         (buffer (jaunder--render-reconcile-report
+                  (jaunder--make-reconcile-report :root "/tmp" :rows nil))))
+    (unwind-protect
+        (with-current-buffer buffer
+          (cl-letf (((symbol-function 'jaunder--call-with-blog) (lambda (_ thunk) (funcall thunk)))
+                    ((symbol-function 'jaunder--inventory-for-root) (lambda (_) inventory))
+                    ((symbol-function 'jaunder--http-request)
+                     (lambda (&rest _) (list :status 503 :headers nil))))
+            (call-interactively (key-binding (kbd "g")))
+            (should (string-match-p "unclassifiable (1)" (buffer-string)))
+            (should (string-match-p "member-http-error (503)" (buffer-string)))))
+      (kill-buffer buffer))))
+
+(ert-deftest jaunder-reconcile-refresh-failure-preserves-the-existing-report ()
+  "Refresh re-signals inventory failure without replacing usable report state."
+  (let* ((row (jaunder--make-reconcile-row :state 'server-only :key "post:7"))
+         (report (jaunder--make-reconcile-report :root "/tmp" :rows (list row)))
+         (result (jaunder--make-reconcile-result :action 'pull :row-key "post:7"
+                                                 :outcome 'success))
+         (buffer (jaunder--render-reconcile-report report)))
+    (unwind-protect
+        (with-current-buffer buffer
+          (puthash "post:7" t jaunder-reconcile-marks)
+          (setq-local jaunder-reconcile-last-batch-results (list result))
+          (jaunder--render-reconcile-report report buffer)
+          (goto-char (jaunder--reconcile-row-key-position "post:7"))
+          (let ((text (buffer-string)) (point (point)) (marks jaunder-reconcile-marks))
+            (cl-letf (((symbol-function 'jaunder--call-with-blog) (lambda (_ thunk) (funcall thunk)))
+                      ((symbol-function 'jaunder--inventory-for-root)
+                       (lambda (_) (error "offline"))))
+              (let ((error (should-error
+                            (call-interactively (key-binding (kbd "g")))
+                            :type 'error)))
+                (should (equal (error-message-string error) "offline"))))
+            (should (equal (buffer-string) text))
+            (should (eq jaunder-reconcile-report report))
+            (should (= (point) point))
+            (should (eq jaunder-reconcile-marks marks))
+            (should (gethash "post:7" jaunder-reconcile-marks))
+            (should (equal jaunder-reconcile-last-batch-results (list result)))))
+      (kill-buffer buffer))))
 
 (ert-deftest jaunder-reconcile-push-state-matrix-delegates-only-safe-rows ()
   "Push accepts drafts/local-ahead, no-ops unchanged, and blocks every other state."

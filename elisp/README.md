@@ -125,9 +125,12 @@ active contiguous region over report rows; the region takes precedence over
 marks for the next command. The report keeps display order, so every selected
 batch has a predictable order.
 
-Use `p` to push selected local drafts or safely local-ahead Posts, `g` to pull
-selected server-only or safely server-ahead Posts, and `D` to delete selected
-remote Posts. Each command shows its selected count and asks once before its
+Use `g` to refresh the report from current local and remote state, `p` to push
+selected local drafts or safely local-ahead Posts, `f` to fetch selected
+server-only or safely server-ahead Posts, and `D` to delete selected remote
+Posts. Refresh keeps marks for rows that remain, removes marks for rows that do
+not, restores point when its row remains, and retains the ordered **Last batch**
+summary. Each transfer command shows its selected count and asks once before its
 first mutation. Delete has a distinct `SOFT-DELETE` confirmation that shows
 fresh reviewed ETags. It creates Jaunder's retained deletion tombstone rather
 than physically erasing the remote Post; a matched local file is removed only
