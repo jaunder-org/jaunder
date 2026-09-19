@@ -2543,16 +2543,31 @@ response reader — a metadata harvest, not a full Entry parse — returning
 and are never reconstructed client-side, so the server stays authoritative about
 URL layout ([ADR-0045](adr/0045-emacs-media-content-src.md)).
 
-Media candidates are body-only Org `file:` and `attachment:` links. `file:`
-targets resolve against the live authoring buffer's `default-directory`;
-`attachment:` targets resolve through org-attach. Header properties, fuzzy
-links, HTTP(S) links, and other non-local link types are not candidates. After
-resolution, content type is selected case-insensitively from the deterministic
-map `jpg`/`jpeg` → `image/jpeg`, `png` → `image/png`, `gif` → `image/gif`,
-`webp` → `image/webp`, `svg` → `image/svg+xml`, `mp3` → `audio/mpeg`,
-`ogg`/`oga` → `audio/ogg`, `flac` → `audio/flac`, `wav` → `audio/wav`, `mp4` →
-`video/mp4`, `webm` → `video/webm`, and `pdf` → `application/pdf`; unknown and
-extensionless names use `application/octet-stream`.
+A body-level relative Org `file` link whose filesystem path ends in `.org` is a
+**Local Post Link candidate** and is claimed before media. It becomes a **Local
+Post Link** only after its suffix, path, local identity, and Member identity
+validate; an invalid candidate warns and aborts before server mutation rather
+than becoming generic media. The exact target must be a regular file inside the
+same configured root whose Post ID, slug metadata, and `<slug>.org` filename
+agree with one Collection Member. Publish requires exactly one direct-child Atom
+`rel="alternate"` link carrying an absolute HTTP(S) URL on the active origin
+without user information, query, or fragment; duplicate links are invalid. It
+substitutes the exact harvested `href` only in the sent body, without changing
+authored body/link bytes, and never searches for a target, normalizes the URL,
+or constructs a permalink
+([Local Post Link round-trip](adr/drafts/emacs-local-post-link-round-trip.md)).
+
+The remaining media candidates are body-only Org `file:` and `attachment:`
+links. `file:` targets resolve against the live authoring buffer's
+`default-directory`; `attachment:` targets resolve through org-attach. Header
+properties, fuzzy links, HTTP(S) links, and other non-local link types are not
+candidates. After resolution, content type is selected case-insensitively from
+the deterministic map `jpg`/`jpeg` → `image/jpeg`, `png` → `image/png`, `gif` →
+`image/gif`, `webp` → `image/webp`, `svg` → `image/svg+xml`, `mp3` →
+`audio/mpeg`, `ogg`/`oga` → `audio/ogg`, `flac` → `audio/flac`, `wav` →
+`audio/wav`, `mp4` → `video/mp4`, `webm` → `video/webm`, and `pdf` →
+`application/pdf`; unknown and extensionless names use
+`application/octet-stream`.
 
 The client also probes the AtomPub service document for the
 `<j:extension features="…">` capability list that
@@ -2652,6 +2667,16 @@ joins root-level Org files to Members by Post ID; `jaunder-reconcile` reports
 divergence without resolving it automatically and lets the User explicitly
 choose a confirmed batch action. Remote deletion remains an explicit,
 ETag-guarded operation.
+
+For Org source, pull considers only body-level HTTP(S) link destinations and
+reverses one to `./<slug>.org` only when its destination string exactly equals,
+without normalization, one Member's harvested canonical `href` and an existing
+local file in the same root has that Member's exact Post ID, slug metadata, and
+filename. Only the destination span changes; descriptions, surrounding bytes,
+non-link text, code, and metadata remain unchanged. Otherwise the canonical URL
+stays unchanged. This localization never searches for or pulls a missing target
+and remains inside the same staged-install and matched-Post revalidation
+boundaries as the rest of pull.
 
 #### Explicit batch Post transfer
 

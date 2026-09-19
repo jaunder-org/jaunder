@@ -175,6 +175,15 @@ owner-facing, but always confined to the protocol surface. _Avoid_: bare
 "client" for these — unqualified "client" is reserved for software running the
 planned `jaunder-client` runtime (see `docs/hub-architecture.md` §8).
 
+**Local Post Link**: A relative Org file link from one locally managed Post to
+another Post file in the same configured Jaunder root. The path must resolve
+exactly; the Emacs Protocol Client never searches for a matching filename. The
+local source keeps the relative link, while publication uses the target Member's
+server-advertised public URL; pull restores the relative form only when local
+ID, slug, filename, and remote Member identity agree exactly. _Avoid_: deriving
+a permalink from a filename or slug, searching for a target, treating an invalid
+`.org` link as Media.
+
 **Local Media Copy**: A durable media file downloaded by the Emacs Protocol
 Client into a configured root's `local-media/` directory so a pulled Post is
 previewable offline. It is verified against the serving Jaunder instance and

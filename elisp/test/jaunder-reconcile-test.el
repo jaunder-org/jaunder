@@ -33,9 +33,19 @@
    :id id :slug slug
    :edit-uri (format "https://example.test/atompub/alice/posts/%s" id)))
 
+(defun jaunder-reconcile-test--member-entry (alternates)
+  "Return one valid Member Entry XML with ALTERNATES as alternate hrefs."
+  (concat "<entry xmlns=\"http://www.w3.org/2005/Atom\" xmlns:j=\"https://jaunder.org/ns/atompub\"><link rel=\"edit\" href=\"https://example.test/atompub/alice/posts/7\"/>"
+          (mapconcat (lambda (href)
+                       (format "<link rel=\"alternate\" href=\"%s\"/>" href))
+                     alternates "")
+          "<j:slug>post</j:slug></entry>"))
+
 (defun jaunder-reconcile-test--local (path &optional id)
-  "Return an inventory local fixture for PATH and optional ID."
-  (jaunder--make-inventory-local :path path :id id))
+  "Return an inventory local fixture for PATH and optional ID.
+The current filename supplies the local slug evidence used by matched-pull tests."
+  (jaunder--make-inventory-local
+   :path path :id id :slug (file-name-base path)))
 
 (defun jaunder-reconcile-test--assert-total-partition (inventory locals members)
   "Assert INVENTORY owns every LOCALS and MEMBERS input exactly once by identity."
@@ -334,6 +344,75 @@
     (jaunder-reconcile-test--assert-total-partition
      inventory (list draft invalid match orphan) (list a b c))))
 
+
+(ert-deftest jaunder-inventory-member-retains-alternate-outcomes ()
+  "Alternate failures stay on their Member with stable, typed reasons."
+  (let ((collection "https://example.test/atompub/alice/posts"))
+    (dolist (fixture
+             '((() alternate-missing)
+               (("not a URL") alternate-malformed)
+               (("https://user@example.test/posts/post") alternate-user-info)
+               (("https://other.test/posts/post") alternate-cross-origin)
+               (("https://example.test/posts/exact?query")
+                alternate-query-or-fragment)
+               (("https://example.test/posts/exact#fragment")
+                alternate-query-or-fragment)
+               (("https://example.test/posts/post" "https://example.test/posts/post")
+                alternate-duplicate)))
+      (let ((member (car (plist-get
+                          (jaunder--parse-collection-page
+                           (jaunder-reconcile-test--page
+                            (list (jaunder-reconcile-test--member-entry (car fixture))))
+                           collection)
+                          :members))))
+        (should (eq (jaunder-inventory-member-alternate-invalid-reason member)
+                    (cadr fixture)))
+        (should-not (jaunder-inventory-member-alternate-href member))))
+    (let ((member (car (plist-get
+                        (jaunder--parse-collection-page
+                         (jaunder-reconcile-test--page
+                          (list (jaunder-reconcile-test--member-entry
+                                 '("https://example.test/posts/exact"))))
+                         collection)
+                        :members))))
+      (should (equal (jaunder-inventory-member-alternate-href member)
+                     "https://example.test/posts/exact"))
+      (should-not (jaunder-inventory-member-alternate-invalid-reason member)))))
+
+(ert-deftest jaunder-inventory-local-retains-id-slug-and-filename-evidence ()
+  "Local inventory preserves evidence without treating filename as identity."
+  (let* ((root (make-temp-file "jaunder-inventory-" t))
+         (path (expand-file-name "wrong-name.org" root)))
+    (unwind-protect
+        (progn
+          (write-region (concat "#+PROPERTY: JAUNDER_ID 7\n"
+                                "#+PROPERTY: JAUNDER_SLUG expected-name\n\nBody")
+                        nil path nil 'silent)
+          (let* ((local (car (jaunder--scan-root-locals root)))
+                 (member (jaunder-reconcile-test--member "7" "expected-name"))
+                 (expected-path (expand-file-name "expected-name.org" root)))
+            (should (equal (jaunder-inventory-local-id local) "7"))
+            (should (equal (jaunder-inventory-local-slug local) "expected-name"))
+            (should (eq (jaunder--inventory-local-member-evidence-reason local member)
+                        'local-filename-mismatch))
+            (should (eq
+                     (jaunder--inventory-local-member-evidence-reason
+                      (jaunder--make-inventory-local
+                       :path expected-path :id "8" :slug "expected-name")
+                      member)
+                     'local-id-mismatch))
+            (should (eq
+                     (jaunder--inventory-local-member-evidence-reason
+                      (jaunder--make-inventory-local
+                       :path expected-path :id "7" :slug "other")
+                      member)
+                     'local-slug-mismatch))
+            (should-not
+             (jaunder--inventory-local-member-evidence-reason
+              (jaunder--make-inventory-local
+               :path expected-path :id "7" :slug "expected-name")
+              member))))
+      (delete-directory root t))))
 
 (ert-deftest jaunder-reconcile-classifies-all-matched-change-combinations ()
   "ETag and mtime changes form the four matched reconciliation states."

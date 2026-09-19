@@ -12,6 +12,7 @@
 (require 'cl-lib)
 (require 'dom)
 (require 'url-parse)
+(require 'jaunder-atom)
 (require 'jaunder-config)
 (require 'jaunder-org)
 (require 'jaunder-transport)
@@ -33,12 +34,12 @@
 (cl-defstruct (jaunder-inventory-member
                (:constructor jaunder--make-inventory-member))
   "One Post advertised by an AtomPub Collection."
-  id slug edit-uri)
+  id slug edit-uri alternate-href alternate-invalid-reason)
 
 (cl-defstruct (jaunder-inventory-local
                (:constructor jaunder--make-inventory-local))
   "One root-level local Org file."
-  path id)
+  path id slug)
 
 (cl-defstruct (jaunder-inventory-match
                (:constructor jaunder--make-inventory-match))
@@ -71,6 +72,14 @@
         (libxml-parse-xml-region (point-min) (point-max)))
     (error (jaunder--inventory-error "malformed Collection XML"))))
 
+(defun jaunder--parse-collection-xml-namespaced (xml)
+  "Parse Collection XML with namespace declarations retained for alternate links."
+  (condition-case nil
+      (with-temp-buffer
+        (insert xml)
+        (car (xml-parse-region (point-min) (point-max))))
+    (error (jaunder--inventory-error "malformed Collection XML"))))
+
 (defun jaunder--direct-elements (node tag)
   "Return NODE's direct child elements named TAG, in document order."
   (cl-remove-if-not (lambda (child) (and (listp child) (eq (car child) tag)))
@@ -96,42 +105,98 @@
         (let ((id (match-string 1 edit-path)))
           (and (equal id (jaunder--canonical-post-id id)) id))))))
 
-(defun jaunder--parse-collection-member (entry collection-url)
-  "Parse one Collection ENTRY beneath COLLECTION-URL into an inventory Member."
-  (let* ((edit (jaunder--single-element
-                (cl-remove-if-not (lambda (link) (equal (dom-attr link 'rel) "edit"))
-                                  (jaunder--direct-elements entry 'link))
+(defun jaunder--inventory-same-origin-p (candidate origin)
+  "Return non-nil when parsed CANDIDATE has ORIGIN's HTTP(S) origin."
+  (and (member (downcase (or (url-type candidate) "")) '("http" "https"))
+       (equal (downcase (or (url-type candidate) ""))
+              (downcase (or (url-type origin) "")))
+       (equal (downcase (or (url-host candidate) ""))
+              (downcase (or (url-host origin) "")))
+       (= (url-port candidate) (url-port origin))))
+
+(defun jaunder--inventory-alternate-outcome (links collection-url)
+  "Return the authoritative alternate outcome for LINKS at COLLECTION-URL.
+The result is (HREF REASON), where exactly one member is non-nil."
+  (cond
+   ((null links) (list nil 'alternate-missing))
+   ((cdr links) (list nil 'alternate-duplicate))
+   (t
+    (let* ((href (dom-attr (car links) 'href))
+           (candidate (and (stringp href)
+                           (condition-case nil (url-generic-parse-url href) (error nil))))
+           (origin (condition-case nil
+                       (url-generic-parse-url collection-url)
+                     (error nil))))
+      (cond
+       ((not (and candidate (url-type candidate) (url-host candidate)))
+        (list nil 'alternate-malformed))
+       ((or (url-user candidate) (url-password candidate))
+        (list nil 'alternate-user-info))
+       ((or (string-search "?" href) (string-search "#" href))
+        (list nil 'alternate-query-or-fragment))
+       ((not (jaunder--inventory-same-origin-p candidate origin))
+        (list nil 'alternate-cross-origin))
+       (t (list href nil)))))))
+
+(defun jaunder--parse-collection-member
+    (entry collection-url &optional alternate-entry inherited-namespaces)
+  "Parse one Collection ENTRY beneath COLLECTION-URL into an inventory Member.
+ALTERNATE-ENTRY and INHERITED-NAMESPACES retain the Atom namespace context.
+ENTRY itself uses the established libxml direct-child parsing for Member fields."
+  (let* ((alternate-entry (or alternate-entry entry))
+         (entry-namespaces
+          (jaunder--atom-namespace-context alternate-entry inherited-namespaces))
+         (edit (jaunder--single-element
+                (cl-remove-if-not
+                 (lambda (link) (equal (dom-attr link 'rel) "edit"))
+                 (jaunder--direct-elements entry 'link))
                 "Member must have exactly one rel=edit link"))
          (href (dom-attr edit 'href))
          (id (jaunder--collection-edit-id href collection-url))
          (slug-node (jaunder--single-element (jaunder--direct-elements entry 'slug)
                                              "Member must have exactly one j:slug"))
-         (slug (dom-inner-text slug-node)))
+         (slug (dom-inner-text slug-node))
+         (alternate (jaunder--inventory-alternate-outcome
+                     (cl-remove-if-not
+                      (lambda (link) (equal (dom-attr link 'rel) "alternate"))
+                      (jaunder--atom-direct-elements-in-namespace
+                       alternate-entry 'link jaunder--atom-ns entry-namespaces))
+                     collection-url)))
     (unless id
       (jaunder--inventory-error "Member edit URI must name a decimal Post ID"))
     (unless (and (stringp slug) (not (string= slug "")))
       (jaunder--inventory-error "Member j:slug must be non-empty"))
-    (jaunder--make-inventory-member :id id :slug slug :edit-uri href)))
+    (jaunder--make-inventory-member
+     :id id :slug slug :edit-uri href
+     :alternate-href (car alternate) :alternate-invalid-reason (cadr alternate))))
 
 (defun jaunder--parse-collection-page (xml collection-url)
   "Parse Collection XML beneath COLLECTION-URL into (:members MEMBERS :next URI).
 Signals on malformed page-level or Member invariants; no partial page is
 returned."
-  (let ((feed (jaunder--parse-collection-xml xml)))
-    (unless (eq (car feed) 'feed)
+  (let ((feed (jaunder--parse-collection-xml xml))
+        (namespaced-feed (jaunder--parse-collection-xml-namespaced xml)))
+    (unless (and (eq (car feed) 'feed) (eq (car namespaced-feed) 'feed))
       (jaunder--inventory-error "Collection document must have a feed root"))
-    (let ((next-links (cl-remove-if-not
-                       (lambda (link) (equal (dom-attr link 'rel) "next"))
-                       (jaunder--direct-elements feed 'link))))
+    (let* ((feed-namespaces (jaunder--atom-namespace-context namespaced-feed nil))
+           (next-links (cl-remove-if-not
+                        (lambda (link) (equal (dom-attr link 'rel) "next"))
+                        (jaunder--direct-elements feed 'link))))
       (when (> (length next-links) 1)
         (jaunder--inventory-error "Collection page has multiple rel=next links"))
       (let ((next (when next-links (dom-attr (car next-links) 'href))))
         (when (and next (or (not (stringp next)) (string= next "")))
           (jaunder--inventory-error "Collection rel=next URI must be non-empty"))
-        (list :members (mapcar (lambda (entry)
-                                 (jaunder--parse-collection-member entry collection-url))
-                               (jaunder--direct-elements feed 'entry))
-              :next next)))))
+        (let ((entries (jaunder--direct-elements feed 'entry))
+              (alternate-entries (jaunder--direct-elements namespaced-feed 'entry)))
+          (unless (= (length entries) (length alternate-entries))
+            (jaunder--inventory-error "Collection Member namespace parse mismatch"))
+          (list :members (cl-mapcar
+                          (lambda (entry alternate-entry)
+                            (jaunder--parse-collection-member
+                             entry collection-url alternate-entry feed-namespaces))
+                          entries alternate-entries)
+                :next next))))))
 
 
 (defun jaunder--collection-url ()
@@ -180,21 +245,41 @@ returned."
         (forward-line 1))
       value)))
 
-(defun jaunder--read-local-id (path)
-  "Read PATH's `JAUNDER_ID' without activating Org mode or user hooks."
+(defun jaunder--read-local-properties (path)
+  "Read PATH's Post ID and slug without activating Org mode or user hooks."
   (with-temp-buffer
     (insert-file-contents path)
-    (jaunder--reconcile-buffer-property "JAUNDER_ID")))
+    (list (jaunder--reconcile-buffer-property "JAUNDER_ID")
+          (jaunder--reconcile-buffer-property "JAUNDER_SLUG"))))
+
+(defun jaunder--read-local-id (path)
+  "Read PATH's Post ID through the shared local property reader."
+  (car (jaunder--read-local-properties path)))
 
 (defun jaunder--scan-root-locals (root)
   "Return regular root-level .org files under ROOT in deterministic order."
   (mapcar (lambda (path)
-            (let ((raw-id (jaunder--read-local-id path)))
+            (pcase-let ((`(,raw-id ,slug) (jaunder--read-local-properties path)))
               (jaunder--make-inventory-local
                :path path :id (and raw-id (or (jaunder--canonical-post-id raw-id)
-                                              raw-id)))))
+                                              raw-id))
+               :slug slug)))
           (cl-remove-if-not #'file-regular-p
                             (directory-files (expand-file-name root) t "\\.org\\'"))))
+
+(defun jaunder--inventory-local-member-evidence-reason (local member)
+  "Return LOCAL's first failed identity proof against MEMBER, or nil.
+A local filename is evidence only after the Post ID and slug agree."
+  (cond
+   ((not (equal (jaunder-inventory-local-id local)
+                (jaunder-inventory-member-id member)))
+    'local-id-mismatch)
+   ((not (equal (jaunder-inventory-local-slug local)
+                (jaunder-inventory-member-slug member)))
+    'local-slug-mismatch)
+   ((not (equal (file-name-nondirectory (jaunder-inventory-local-path local))
+                (concat (jaunder-inventory-member-slug member) ".org")))
+    'local-filename-mismatch)))
 
 (defun jaunder--inventory-node (kind value)
   "Return a tagged inventory graph node of KIND holding VALUE."

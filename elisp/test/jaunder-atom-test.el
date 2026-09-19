@@ -134,12 +134,12 @@
     (should (equal (mapcar #'car fields)
                    '(content-src content-type slug published
                                  titles categories summaries content-nodes drafts
-                                 published-values edit-uris slugs)))
+                                 published-values edit-uris alternate-uris slugs)))
     (should (equal (cdr (assq 'content-src fields)) "https://h/image.png"))
     (should (equal (cdr (assq 'content-type fields)) "image/png"))
     (should (null (cdr (assq 'slug fields))))
     (should (null (cdr (assq 'published fields))))
-    (dolist (key '(titles categories summaries drafts published-values edit-uris slugs))
+    (dolist (key '(titles categories summaries drafts published-values edit-uris alternate-uris slugs))
       (should (equal (cdr (assq key fields)) nil)))
     (should (= (length (cdr (assq 'content-nodes fields))) 1))))
 
@@ -250,10 +250,27 @@
     (should (equal (cdr (assq 'published-values fields)) '("first-time" "second-time")))
     (should (equal (cdr (assq 'edit-uris fields))
                    '("https://h/posts/1" "https://h/posts/2")))
+    (should (equal (cdr (assq 'alternate-uris fields))
+                   '("https://h/posts/1/view")))
     (should (equal (cdr (assq 'slugs fields)) '("first-slug" "second-slug")))
     (should (equal (cdr (assq 'content-src fields)) "https://h/first"))
     (should (equal (cdr (assq 'content-type fields)) "text/org"))
     (should (equal (cdr (assq 'slug fields)) "first-slug"))
     (should (equal (cdr (assq 'published fields)) "first-time"))))
+
+(ert-deftest jaunder-harvest-response-fields-retains-direct-alternates-only ()
+  "Member alternate selection can retain every direct Atom candidate."
+  (let* ((xml (concat
+               "<entry xmlns=\"http://www.w3.org/2005/Atom\""
+               " xmlns:f=\"https://example.invalid/foreign\">"
+               "<link rel=\"alternate\" href=\"https://example.test/one\"/>"
+               "<link rel=\"alternate\" href=\"https://example.test/two\"/>"
+               "<f:link rel=\"alternate\" href=\"https://example.test/foreign\"/>"
+               "<content type=\"xhtml\"><div xmlns=\"http://www.w3.org/1999/xhtml\">"
+               "<link rel=\"alternate\" href=\"https://example.test/nested\"/>"
+               "</div></content></entry>"))
+         (fields (jaunder--harvest-response-fields xml)))
+    (should (equal (cdr (assq 'alternate-uris fields))
+                   '("https://example.test/one" "https://example.test/two")))))
 
 ;;; jaunder-atom-test.el ends here

@@ -166,6 +166,9 @@ and publish responses remain valid."
          (edit-links (cl-remove-if-not
                       (lambda (link) (equal (dom-attr link 'rel) "edit"))
                       links))
+         (alternate-links (cl-remove-if-not
+                           (lambda (link) (equal (dom-attr link 'rel) "alternate"))
+                           links))
          (content (car content-nodes))
          (slug (car slugs))
          (published (car published-values)))
@@ -182,6 +185,8 @@ and publish responses remain valid."
           (cons 'published-values (mapcar #'dom-inner-text published-values))
           (cons 'edit-uris (mapcar (lambda (link) (dom-attr link 'href))
                                    edit-links))
+          (cons 'alternate-uris (mapcar (lambda (link) (dom-attr link 'href))
+                                        alternate-links))
           (cons 'slugs (mapcar #'dom-inner-text slugs)))))
 
 (provide 'jaunder-atom)
