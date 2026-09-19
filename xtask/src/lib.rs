@@ -9,6 +9,8 @@ pub mod coverage;
 mod digest;
 mod dispatch;
 mod doc_links;
+pub mod e2e_lanes;
+pub mod e2e_ownership;
 pub mod elisp_coverage;
 mod files;
 mod gate;

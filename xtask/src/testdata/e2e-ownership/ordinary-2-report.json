@@ -1,0 +1,19 @@
+{
+  "suites": [
+    {
+      "suites": [],
+      "specs": [
+        {
+          "id": "two",
+          "tests": [
+            {
+              "projectId": "firefox-ordinary",
+              "projectName": "firefox-ordinary",
+              "results": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -73,9 +73,13 @@ pub fn problems(source: &str) -> Option<String> {
 pub fn run(result: &mut CommandResult) {
     let step = match std::fs::read_to_string(CHECKS) {
         Err(e) => StepResult::fail("e2e-scaffold").detail(format!("cannot read {CHECKS}: {e}")),
-        Ok(source) => match problems(&source) {
-            None => StepResult::ok("e2e-scaffold"),
-            Some(detail) => StepResult::fail("e2e-scaffold").detail(detail),
+        Ok(source) => match (problems(&source), crate::e2e_lanes::catalog()) {
+            (None, Ok(_)) => StepResult::ok("e2e-scaffold"),
+            (Some(detail), Ok(_)) => StepResult::fail("e2e-scaffold").detail(detail),
+            (None, Err(error)) => StepResult::fail("e2e-scaffold").detail(error),
+            (Some(detail), Err(error)) => {
+                StepResult::fail("e2e-scaffold").detail(format!("{detail}\n{error}"))
+            }
         },
     };
     result.push(step);
