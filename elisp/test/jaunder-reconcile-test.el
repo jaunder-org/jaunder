@@ -887,29 +887,32 @@
   "Refresh preserves, clamps, or falls back for point while retaining report state."
   (let* ((old-row (jaunder--make-reconcile-row :state 'server-only :key "post:7"
                                                :member (jaunder-reconcile-test--member
-                                                        "7" "a-longer-slug")))
+                                                        "7" "界-longer-slug")))
          (old-report (jaunder--make-reconcile-report :root "/tmp" :rows (list old-row)))
          (same-row (jaunder--make-inventory
                     :server-only
-                    (list (jaunder-reconcile-test--member "7" "a-longer-slug"))))
+                    (list (jaunder-reconcile-test--member "7" "界-longer-slug"))))
          (shorter-row (jaunder--make-inventory
                        :server-only (list (jaunder-reconcile-test--member "7" "short"))))
          (missing (jaunder--make-inventory
                    :server-only (list (jaunder-reconcile-test--member "8" "other"))))
-         (result (jaunder--make-reconcile-result :action 'pull :row-key "post:7"
-                                                 :outcome 'success))
+         (first-result (jaunder--make-reconcile-result :action 'pull :row-key "post:7"
+                                                       :outcome 'success))
+         (second-result (jaunder--make-reconcile-result :action 'delete :row-key "post:8"
+                                                        :outcome 'blocked))
+         (results (list first-result second-result))
          (buffer (jaunder--render-reconcile-report old-report)))
     (unwind-protect
         (with-current-buffer buffer
           (puthash "post:7" t jaunder-reconcile-marks)
           (puthash "post:gone" t jaunder-reconcile-marks)
-          (setq-local jaunder-reconcile-last-batch-results (list result))
+          (setq-local jaunder-reconcile-last-batch-results results)
           (goto-char (jaunder--reconcile-row-key-position "post:7"))
-          (forward-char 2)
+          (forward-char 3)
           (cl-letf (((symbol-function 'jaunder--call-with-blog) (lambda (_ thunk) (funcall thunk)))
                     ((symbol-function 'jaunder--inventory-for-root) (lambda (_) same-row)))
             (call-interactively (key-binding (kbd "g")))
-            (should (= (current-column) 2)))
+            (should (= (current-column) 4)))
           (goto-char (jaunder--reconcile-row-key-position "post:7"))
           (end-of-line)
           (let ((original-column (current-column)))
@@ -922,8 +925,13 @@
                                             (current-column))))
               (should (gethash "post:7" jaunder-reconcile-marks))
               (should-not (gethash "post:gone" jaunder-reconcile-marks))
-              (should (equal jaunder-reconcile-last-batch-results (list result)))
-              (should (string-match-p "Last batch" (buffer-string)))))
+              (should (equal jaunder-reconcile-last-batch-results results))
+              (should (string-match-p "Last batch" (buffer-string)))
+              (let ((first-position (string-match "- pull post:7: success" (buffer-string)))
+                    (second-position (string-match "- delete post:8: blocked" (buffer-string))))
+                (should first-position)
+                (should second-position)
+                (should (< first-position second-position)))))
           (cl-letf (((symbol-function 'jaunder--call-with-blog) (lambda (_ thunk) (funcall thunk)))
                     ((symbol-function 'jaunder--inventory-for-root) (lambda (_) missing)))
             (call-interactively (key-binding (kbd "g")))

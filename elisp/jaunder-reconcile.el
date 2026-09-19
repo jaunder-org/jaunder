@@ -744,11 +744,9 @@ hide otherwise valid synchronization markers."
         (if row-key
             (let ((row-position (jaunder--reconcile-row-key-position row-key)))
               (if row-position
-                  (goto-char
-                   (min (save-excursion
-                          (goto-char row-position)
-                          (line-end-position))
-                        (+ row-position column)))
+                  (progn
+                    (goto-char row-position)
+                    (move-to-column column))
                 (goto-char (point-min))))
           (goto-char (point-min)))))
     buffer))
