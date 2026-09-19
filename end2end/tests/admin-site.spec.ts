@@ -296,6 +296,33 @@ test("site base URL warning banner revalidates in place after relevant settings 
     ]);
     await expect(banner).toBeVisible();
 
+    // Home's document-owned scroll must not stack its sticky publishing chrome
+    // underneath an operational warning. The warning stays visible and the Home
+    // chrome yields to normal flow until the warning is resolved.
+    await navigateInApp(page, () => click(page, '.j-nav a[href="/app"]'), {
+      url: "/app",
+      ready: ".j-home-chrome",
+    });
+    await expect(banner).toBeVisible();
+    expect(
+      await page
+        .locator(".j-home-chrome")
+        .evaluate((element) => getComputedStyle(element).position),
+    ).toBe("static");
+    const warningBox = (await banner.locator("..").boundingBox())!;
+    const homeChromeBox = (await page.locator(".j-home-chrome").boundingBox())!;
+    expect(homeChromeBox.y).toBeGreaterThanOrEqual(
+      warningBox.y + warningBox.height,
+    );
+    await navigateInApp(
+      page,
+      () => click(page, '.j-nav a[href="/admin/site"]'),
+      {
+        url: "/admin/site",
+        ready: 'input[name="base_url"]',
+      },
+    );
+
     let expectedSiteWarnings = siteWarningRequests;
     const expectedBackupWarnings = backupWarningRequests;
     await title.fill("Banner Site");
