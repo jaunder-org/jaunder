@@ -600,7 +600,7 @@
          (buffer (jaunder--render-reconcile-report report))
          progress)
     (unwind-protect
-        (cl-letf (((symbol-function 'jaunder--reconcile-refresh-batch-buffer)
+        (cl-letf (((symbol-function 'jaunder--reconcile-refresh-buffer)
                    (lambda (&rest _) nil))
                   ((symbol-function 'message)
                    (lambda (format-string &rest arguments)
@@ -636,7 +636,7 @@
          (report (jaunder--make-reconcile-report :root "/tmp" :rows (list row)))
          (buffer (jaunder--render-reconcile-report report)))
     (unwind-protect
-        (cl-letf (((symbol-function 'jaunder--reconcile-refresh-batch-buffer)
+        (cl-letf (((symbol-function 'jaunder--reconcile-refresh-buffer)
                    (lambda (target)
                      (jaunder--render-reconcile-report
                       (jaunder--make-reconcile-report :root "/tmp" :rows nil) target))))
@@ -662,7 +662,7 @@
                   (jaunder--make-reconcile-report :root "/tmp" :rows rows)))
          invoked refreshes)
     (unwind-protect
-        (cl-letf (((symbol-function 'jaunder--reconcile-refresh-batch-buffer)
+        (cl-letf (((symbol-function 'jaunder--reconcile-refresh-buffer)
                    (lambda (&rest _) (setq refreshes (1+ (or refreshes 0))))))
           (should (eq (jaunder--reconcile-execute-batch
                        buffer rows 'push
@@ -685,7 +685,7 @@
                   (jaunder--make-reconcile-report :root "/tmp" :rows rows)))
          (in-flight 0) (maximum-in-flight 0) invoked)
     (unwind-protect
-        (cl-letf (((symbol-function 'jaunder--reconcile-refresh-batch-buffer)
+        (cl-letf (((symbol-function 'jaunder--reconcile-refresh-buffer)
                    (lambda (&rest _) nil)))
           (should (eq (jaunder--reconcile-execute-batch
                        buffer rows 'push
@@ -762,7 +762,7 @@
           (should (equal (mapcar #'jaunder-reconcile-row-key
                                  (jaunder--reconcile-resolve-selection report marks '(1 . 2)))
                          '("conflict" "draft")))
-          (cl-letf (((symbol-function 'jaunder--reconcile-refresh-batch-buffer)
+          (cl-letf (((symbol-function 'jaunder--reconcile-refresh-buffer)
                      (lambda (&rest _) nil)))
             (jaunder--reconcile-execute-batch
              buffer rows 'push
@@ -796,7 +796,7 @@
                   (jaunder--make-reconcile-report :root "/tmp" :rows rows)))
          invoked refresh-saw-quit checks)
     (unwind-protect
-        (cl-letf (((symbol-function 'jaunder--reconcile-refresh-batch-buffer)
+        (cl-letf (((symbol-function 'jaunder--reconcile-refresh-buffer)
                    (lambda (&rest _) (setq refresh-saw-quit quit-flag))))
           (should (eq (jaunder--reconcile-execute-batch
                        buffer rows 'push
@@ -828,7 +828,7 @@
          (buffer (jaunder--render-reconcile-report report))
          prior-visible)
     (unwind-protect
-        (cl-letf (((symbol-function 'jaunder--reconcile-refresh-batch-buffer)
+        (cl-letf (((symbol-function 'jaunder--reconcile-refresh-buffer)
                    (lambda (target) (jaunder--render-reconcile-report report target))))
           (jaunder--reconcile-execute-batch
            buffer (list first second) 'push
@@ -884,13 +884,16 @@
       (kill-buffer buffer))))
 
 (ert-deftest jaunder-reconcile-refresh-restores-state-or-falls-back-at-buffer-start ()
-  "Refresh clamps point, prunes vanished marks, and preserves surviving state."
+  "Refresh preserves, clamps, or falls back for point while retaining report state."
   (let* ((old-row (jaunder--make-reconcile-row :state 'server-only :key "post:7"
                                                :member (jaunder-reconcile-test--member
                                                         "7" "a-longer-slug")))
          (old-report (jaunder--make-reconcile-report :root "/tmp" :rows (list old-row)))
-         (fresh (jaunder--make-inventory
-                 :server-only (list (jaunder-reconcile-test--member "7" "short"))))
+         (same-row (jaunder--make-inventory
+                    :server-only
+                    (list (jaunder-reconcile-test--member "7" "a-longer-slug"))))
+         (shorter-row (jaunder--make-inventory
+                       :server-only (list (jaunder-reconcile-test--member "7" "short"))))
          (missing (jaunder--make-inventory
                    :server-only (list (jaunder-reconcile-test--member "8" "other"))))
          (result (jaunder--make-reconcile-result :action 'pull :row-key "post:7"
@@ -902,17 +905,25 @@
           (puthash "post:gone" t jaunder-reconcile-marks)
           (setq-local jaunder-reconcile-last-batch-results (list result))
           (goto-char (jaunder--reconcile-row-key-position "post:7"))
-          (end-of-line)
+          (forward-char 2)
           (cl-letf (((symbol-function 'jaunder--call-with-blog) (lambda (_ thunk) (funcall thunk)))
-                    ((symbol-function 'jaunder--inventory-for-root) (lambda (_) fresh)))
+                    ((symbol-function 'jaunder--inventory-for-root) (lambda (_) same-row)))
             (call-interactively (key-binding (kbd "g")))
-            (should (= (current-column) (save-excursion
-                                          (end-of-line)
-                                          (current-column))))
-            (should (gethash "post:7" jaunder-reconcile-marks))
-            (should-not (gethash "post:gone" jaunder-reconcile-marks))
-            (should (equal jaunder-reconcile-last-batch-results (list result)))
-            (should (string-match-p "Last batch" (buffer-string))))
+            (should (= (current-column) 2)))
+          (goto-char (jaunder--reconcile-row-key-position "post:7"))
+          (end-of-line)
+          (let ((original-column (current-column)))
+            (cl-letf (((symbol-function 'jaunder--call-with-blog) (lambda (_ thunk) (funcall thunk)))
+                      ((symbol-function 'jaunder--inventory-for-root) (lambda (_) shorter-row)))
+              (call-interactively (key-binding (kbd "g")))
+              (should (< (current-column) original-column))
+              (should (= (current-column) (save-excursion
+                                            (end-of-line)
+                                            (current-column))))
+              (should (gethash "post:7" jaunder-reconcile-marks))
+              (should-not (gethash "post:gone" jaunder-reconcile-marks))
+              (should (equal jaunder-reconcile-last-batch-results (list result)))
+              (should (string-match-p "Last batch" (buffer-string)))))
           (cl-letf (((symbol-function 'jaunder--call-with-blog) (lambda (_ thunk) (funcall thunk)))
                     ((symbol-function 'jaunder--inventory-for-root) (lambda (_) missing)))
             (call-interactively (key-binding (kbd "g")))
@@ -966,6 +977,43 @@
             (should (eq jaunder-reconcile-marks marks))
             (should (gethash "post:7" jaunder-reconcile-marks))
             (should (equal jaunder-reconcile-last-batch-results (list result)))))
+      (kill-buffer buffer))))
+
+(ert-deftest jaunder-reconcile-refresh-render-failure-preserves-the-existing-report ()
+  "Refresh rolls back a render-stage failure after it has replaced live content."
+  (let* ((row (jaunder--make-reconcile-row :state 'server-only :key "post:7"))
+         (report (jaunder--make-reconcile-report :root "/tmp" :rows (list row)))
+         (result (jaunder--make-reconcile-result :action 'pull :row-key "post:7"
+                                                 :outcome 'success))
+         (inventory (jaunder--make-inventory
+                     :server-only (list (jaunder-reconcile-test--member "8" "fresh"))))
+         (buffer (jaunder--render-reconcile-report report)))
+    (unwind-protect
+        (with-current-buffer buffer
+          (puthash "post:7" t jaunder-reconcile-marks)
+          (setq-local jaunder-reconcile-last-batch-results (list result))
+          (jaunder--render-reconcile-report report buffer)
+          (goto-char (jaunder--reconcile-row-key-position "post:7"))
+          (let* ((text (buffer-string))
+                 (point (point))
+                 (marks jaunder-reconcile-marks)
+                 (row-property (get-text-property point 'jaunder-reconcile-row)))
+            (cl-letf (((symbol-function 'jaunder--call-with-blog)
+                       (lambda (_ thunk) (funcall thunk)))
+                      ((symbol-function 'jaunder--inventory-for-root) (lambda (_) inventory))
+                      ((symbol-function 'jaunder--reconcile-row-label)
+                       (lambda (_) (error "render offline"))))
+              (let ((error (should-error
+                            (call-interactively (key-binding (kbd "g")))
+                            :type 'error)))
+                (should (equal (error-message-string error) "render offline"))))
+            (should (equal (buffer-string) text))
+            (should (eq jaunder-reconcile-report report))
+            (should (= (point) point))
+            (should (eq jaunder-reconcile-marks marks))
+            (should (gethash "post:7" jaunder-reconcile-marks))
+            (should (equal jaunder-reconcile-last-batch-results (list result)))
+            (should (eq (get-text-property point 'jaunder-reconcile-row) row-property))))
       (kill-buffer buffer))))
 
 (ert-deftest jaunder-reconcile-push-state-matrix-delegates-only-safe-rows ()
@@ -1140,7 +1188,7 @@
                              :state 'unchanged :key "post:7"
                              :local (jaunder-reconcile-test--local delete-path "7")
                              :member (jaunder-reconcile-test--member "7" "matched"))))
-            (cl-letf (((symbol-function 'jaunder--reconcile-refresh-batch-buffer)
+            (cl-letf (((symbol-function 'jaunder--reconcile-refresh-buffer)
                        (lambda (&rest _) nil))
                       ((symbol-function 'jaunder-publish)
                        (lambda () (setq published t)))
@@ -1587,7 +1635,7 @@
          (buffer (jaunder--render-reconcile-report report))
          called)
     (unwind-protect
-        (cl-letf (((symbol-function 'jaunder--reconcile-refresh-batch-buffer)
+        (cl-letf (((symbol-function 'jaunder--reconcile-refresh-buffer)
                    (lambda (&rest _) nil)))
           (jaunder--reconcile-execute-batch buffer (list row) 'push
                                             (lambda (_) (setq called t))
@@ -1764,7 +1812,7 @@
           (cl-letf (((symbol-function 'jaunder--call-with-blog) (lambda (_ thunk) (funcall thunk)))
                     ((symbol-function 'jaunder--reconcile-delete-preflight)
                      (lambda (_) 'local-buffer-modified))
-                    ((symbol-function 'jaunder--reconcile-refresh-batch-buffer)
+                    ((symbol-function 'jaunder--reconcile-refresh-buffer)
                      (lambda (&rest _) nil))
                     ((symbol-function 'jaunder--http-request)
                      (lambda (method &rest _)

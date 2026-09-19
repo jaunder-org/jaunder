@@ -778,7 +778,7 @@ hide otherwise valid synchronization markers."
              marks)
     retained))
 
-(defun jaunder--reconcile-refresh-batch-buffer (buffer)
+(defun jaunder--reconcile-refresh-buffer (buffer)
   "Rebuild BUFFER's report from fresh inventory without discarding its results."
   (with-current-buffer buffer
     (let* ((root (jaunder-reconcile-report-root jaunder-reconcile-report))
@@ -789,14 +789,33 @@ hide otherwise valid synchronization markers."
                     (lambda ()
                       (jaunder--reconcile-build-report
                        root (jaunder--inventory-for-root root)))))
-           (marks (jaunder--reconcile-pruned-marks report jaunder-reconcile-marks)))
-      (setq-local jaunder-reconcile-marks marks)
-      (jaunder--render-reconcile-report report buffer))))
+           (marks (jaunder--reconcile-pruned-marks report jaunder-reconcile-marks))
+           (text (buffer-substring (point-min) (point-max)))
+           (point (point))
+           (previous-report jaunder-reconcile-report)
+           (previous-marks jaunder-reconcile-marks)
+           (previous-results jaunder-reconcile-last-batch-results)
+           (modified (buffer-modified-p)))
+      (condition-case err
+          (progn
+            (setq-local jaunder-reconcile-marks marks)
+            (jaunder--render-reconcile-report report buffer))
+        (error
+         (let ((inhibit-read-only t)
+               (inhibit-modification-hooks t))
+           (erase-buffer)
+           (insert text))
+         (setq-local jaunder-reconcile-report previous-report)
+         (setq-local jaunder-reconcile-marks previous-marks)
+         (setq-local jaunder-reconcile-last-batch-results previous-results)
+         (goto-char point)
+         (set-buffer-modified-p modified)
+         (signal (car err) (cdr err)))))))
 
 (defun jaunder-reconcile-refresh ()
   "Refresh the current reconciliation report from local and remote state."
   (interactive)
-  (jaunder--reconcile-refresh-batch-buffer (current-buffer)))
+  (jaunder--reconcile-refresh-buffer (current-buffer)))
 
 (defun jaunder--reconcile-execute-batch (buffer rows action operation &optional cancelled-p)
   "Run OPERATION for ROWS sequentially, retaining every terminal result in BUFFER.
@@ -832,7 +851,7 @@ row and returns a result plist; its independent errors become failed results."
                       (and cancelled-p (funcall cancelled-p)) quit-flag)
               (setq cancelled t))))))
     (when cancelled (setq quit-flag nil))
-    (jaunder--reconcile-refresh-batch-buffer buffer)
+    (jaunder--reconcile-refresh-buffer buffer)
     (if cancelled 'cancelled 'completed)))
 
 (defun jaunder--reconcile-row-post-id (row)
