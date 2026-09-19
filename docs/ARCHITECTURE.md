@@ -3442,9 +3442,9 @@ invokes it back ([ADR-0034](adr/0034-ci-e2e-matrix-distribution.md)).
 ### What the ladder actually runs
 
 In order, host `static-checks` runs source consistency (`fmt`, `leptosfmt`,
-`prettier-markdown`, `prettier-end2end`, `elisp-fmt`, `tools-fmt`,
-`ast-grep-tests`, `no-full-reload`, `xtask-fmt`), compile/type checks
-(`byte-compile`, `tsc`, `cargo-deny`, `clippy`, `web-server-clippy`,
+`prettier-markdown`, `prettier-end2end`, `prettier-css`, `elisp-fmt`,
+`tools-fmt`, `ast-grep-tests`, `no-full-reload`, `xtask-fmt`), compile/type
+checks (`byte-compile`, `tsc`, `cargo-deny`, `clippy`, `web-server-clippy`,
 `web-no-server-clippy`, `wasm-clippy`, `tools-clippy`, `xtask-clippy`), then the
 `ert` runtime check. Both rungs run the same host steps (`run_host_gate` in
 `xtask/src/lib.rs`):
@@ -3774,11 +3774,11 @@ host-side subcommands are therefore chartered, not drift.
   reason ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)).
 - **`devtool check <name> | --group <docs|code> | --all [--fix] [--sandbox-cargo]`**
   is the single command-definition surface for the migrated static checks
-  (`fmt`, `leptosfmt`, `prettier-markdown`, `prettier-end2end`, `tsc`,
-  `elisp-fmt`, `ert`, `byte-compile`, `cargo-deny`, generic product `clippy`,
-  `web-server-clippy`, isolated host-test `web-no-server-clippy`, wasm-target
-  `wasm-clippy`, `tools-fmt`, tools workspace `tools-clippy`, and ast-grep
-  `ast-grep-tests` plus the `no-full-reload` repository scan —
+  (`fmt`, `leptosfmt`, `prettier-markdown`, `prettier-end2end`, `prettier-css`,
+  `tsc`, `elisp-fmt`, `ert`, `byte-compile`, `cargo-deny`, generic product
+  `clippy`, `web-server-clippy`, isolated host-test `web-no-server-clippy`,
+  wasm-target `wasm-clippy`, `tools-fmt`, tools workspace `tools-clippy`, and
+  ast-grep `ast-grep-tests` plus the `no-full-reload` repository scan —
   `tools/devtool/src/check.rs`). Both gates invoke the same definitions: the
   host verify ladder delegates each through its static-check mechanism,
   preserving host-local Cargo artifacts and sccache for Rust-compiling checks;

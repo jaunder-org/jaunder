@@ -26,6 +26,7 @@ impl CheckGroup {
                 "fmt",
                 "leptosfmt",
                 "prettier-end2end",
+                "prettier-css",
                 "elisp-fmt",
                 "tools-fmt",
                 "ast-grep-tests",
@@ -182,9 +183,10 @@ impl CheckSpec {
     }
 }
 
-/// Pure: the command spec for `name` in the given mode. `fix` makes the six
+/// Pure: the command spec for `name` in the given mode. `fix` makes the seven
 /// formatters (`fmt`, `leptosfmt`, `prettier-markdown`, `prettier-end2end`,
-/// `elisp-fmt`, `tools-fmt`) mutate in place; `ert`/`tsc`/`byte-compile`/
+/// `prettier-css`, `elisp-fmt`, `tools-fmt`) mutate in place;
+/// `ert`/`tsc`/`byte-compile`/
 /// `ast-grep-tests`/`no-full-reload` have no autofix and ignore it.
 fn spec(name: &str, fix: bool) -> Result<CheckSpec> {
     let owned = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
@@ -225,6 +227,14 @@ fn spec(name: &str, fix: bool) -> Result<CheckSpec> {
                 owned(&["-w", "end2end"])
             } else {
                 owned(&["--check", "end2end"])
+            },
+        },
+        "prettier-css" => CheckSpec::External {
+            program: "prettier",
+            args: if fix {
+                owned(&["-w", "**/*.css"])
+            } else {
+                owned(&["--check", "**/*.css"])
             },
         },
         "tsc" => CheckSpec::External {
@@ -598,6 +608,18 @@ mod tests {
         assert_eq!(
             build_host("prettier-end2end", true).args,
             vec!["-w", "end2end"]
+        );
+        assert_eq!(
+            build_host("prettier-css", false),
+            BuiltCommand {
+                program: "prettier",
+                args: vec!["--check".into(), "**/*.css".into()],
+                env: Vec::new(),
+            }
+        );
+        assert_eq!(
+            build_host("prettier-css", true).args,
+            vec!["-w", "**/*.css"]
         );
     }
 
@@ -1002,6 +1024,7 @@ mod tests {
                 "fmt",
                 "leptosfmt",
                 "prettier-end2end",
+                "prettier-css",
                 "elisp-fmt",
                 "tools-fmt",
                 "ast-grep-tests",
@@ -1024,6 +1047,7 @@ mod tests {
                 "leptosfmt",
                 "prettier-markdown",
                 "prettier-end2end",
+                "prettier-css",
                 "elisp-fmt",
                 "tools-fmt",
                 "ast-grep-tests",

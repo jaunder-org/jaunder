@@ -2061,6 +2061,7 @@ static-code =
                 "/.prettierrc.json"
                 "/.prettierignore"
                 "/sgconfig.yml"
+                ".css"
               ]
               || builtins.any (directory: pkgs.lib.hasInfix "/${directory}/" path) [
                 ".cargo"
