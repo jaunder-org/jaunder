@@ -89,6 +89,17 @@ The current filename supplies the local slug evidence used by matched-pull tests
     "<feed><link rel=\"next\" href=\"one\"/><link rel=\"next\" href=\"two\"/></feed>"
     "https://example.test/atompub/alice/posts")))
 
+(ert-deftest jaunder-inventory-page-rejects-root-and-namespace-parse-drift ()
+  "Both parser views must identify one feed and the same Member count."
+  (should-error
+   (jaunder--parse-collection-page
+    "<entry/>" "https://example.test/atompub/alice/posts"))
+  (cl-letf (((symbol-function 'jaunder--parse-collection-xml-namespaced)
+             (lambda (_) '(feed nil (entry nil)))))
+    (should-error
+     (jaunder--parse-collection-page
+      "<feed/>" "https://example.test/atompub/alice/posts"))))
+
 (ert-deftest jaunder-inventory-page-accepts-edit-path-under-base-prefix-only ()
   ;; A base URL path is part of the configured Collection Member grammar.
   (let ((collection "https://example.test/jaunder/api/atompub/alice/posts"))
@@ -358,6 +369,7 @@ The current filename supplies the local slug evidence used by matched-pull tests
                (("https://example.test:70000/posts/post") alternate-malformed)
                (("https://user@example.test/posts/post") alternate-user-info)
                (("https://other.test/posts/post") alternate-cross-origin)
+               (("https://[::1]/posts/post") alternate-cross-origin)
                (("https://example.test/posts/exact?query")
                 alternate-query-or-fragment)
                (("https://example.test/posts/exact#fragment")
@@ -382,7 +394,15 @@ The current filename supplies the local slug evidence used by matched-pull tests
                         :members))))
       (should (equal (jaunder-inventory-member-alternate-href member)
                      "https://example.test/posts/exact"))
-      (should-not (jaunder-inventory-member-alternate-invalid-reason member)))))
+      (should-not (jaunder-inventory-member-alternate-invalid-reason member)))
+    ;; A direct parse falls back to ENTRY when no namespace-preserving peer is supplied.
+    (let* ((entry (jaunder--parse-collection-xml
+                   (jaunder-reconcile-test--member-entry
+                    '("https://example.test/posts/direct"))))
+           (member (jaunder--parse-collection-member entry collection)))
+      (should-not (jaunder-inventory-member-alternate-href member))
+      (should (eq (jaunder-inventory-member-alternate-invalid-reason member)
+                  'alternate-missing)))))
 
 (ert-deftest jaunder-inventory-local-retains-id-slug-and-filename-evidence ()
   "Local inventory preserves evidence without treating filename as identity."

@@ -35,6 +35,13 @@
          (when (get-file-buffer ,source) (kill-buffer (get-file-buffer ,source)))
          (delete-directory ,root t)))))
 
+(ert-deftest jaunder-local-post-link-requires-a-configured-root ()
+  "A Local Post Link cannot resolve outside configured Jaunder roots."
+  (with-temp-buffer
+    (let ((buffer-file-name "/tmp/unconfigured.org")
+          (jaunder-blogs nil))
+      (should-error (jaunder--local-post-link-root)))))
+
 (ert-deftest jaunder-local-post-link-candidates-precede-media-and-reject-escapes ()
   "Unsupported candidate syntax and escaped targets never become media."
   (jaunder-post-link-test--with-root (root source)

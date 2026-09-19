@@ -37,8 +37,7 @@
 (require 'jaunder-transport)
 (require 'jaunder-service)
 (require 'jaunder-media)
-
-(autoload 'jaunder--localize-post-links "jaunder-post-link")
+(require 'jaunder-post-link)
 
 (defun jaunder--validate-publish (entry status date-raw tz)
   "Signal an error if ENTRY is not publishable; return nil otherwise.
