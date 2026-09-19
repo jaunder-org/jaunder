@@ -1,7 +1,6 @@
 import { test, expect, slowBrowserFirstNavigationTimeoutMs } from "./fixtures";
 import {
   BASE_URL,
-  confirmedMutation,
   goto,
   signInAsNewUser,
   signInAsNewUserRecord,
@@ -16,30 +15,7 @@ import { navigateInApp } from "./navigate";
 import type { Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { seedConfigViaTool } from "./seed";
-
-type UploadedMedia = { url: string; filename: string };
-
-/** Uploads `name` and returns the upload response (`url`, canonical `filename`). */
-async function uploadMedia(
-  page: Page,
-  name: string,
-  content: Buffer = Buffer.from("delete guard content"),
-): Promise<UploadedMedia> {
-  const response = await page.request.post(BASE_URL + "/api/media/upload", {
-    multipart: {
-      file: {
-        name,
-        mimeType: "image/jpeg",
-        buffer: content,
-      },
-    },
-  });
-  expect(response.status()).toBe(200);
-  return confirmedMutation(
-    (await response.json()) as MutationOutcome<UploadedMedia>,
-    "media::upload",
-  );
-}
+import { uploadMedia } from "./media-helpers";
 
 function countMediaRequests(page: Page): {
   capabilityRequests: () => number;

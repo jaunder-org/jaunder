@@ -1881,6 +1881,30 @@
   padding: 12px;
 }
 
+.j-theme-media-pool {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.j-theme-media-pool > li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px var(--border-style) var(--line-soft);
+  border-radius: var(--radius-sm);
+}
+
+.j-theme-media-pool > li > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .j-theme-code {
   font-family: var(--font-mono);
   min-height: 10rem;

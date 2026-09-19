@@ -5,16 +5,25 @@ use std::{borrow::Cow, str::FromStr};
 use common::{
     MutationOutcome,
     ids::ThemeId,
+    pagination::PageSize,
     theme::{PublicThemeSelection, Theme, ThemeImageRole},
 };
 use leptos::prelude::*;
 use leptos::task;
 use strum::VariantArray;
 
-use crate::{auth, error::WebError, reactive::Invalidator, topbar::Topbar};
+use crate::{
+    auth, error::WebError, media::Item as MediaItem, reactive::Invalidator, topbar::Topbar,
+};
 
 use super::page_state::{self, Revalidation, ScopeAvailability, ThemePageState};
-use super::{CatalogEntry, OwnershipScope, ThemeBindingInput, ThemePoolInput, api};
+use super::presentation_state::{
+    HeaderMediaDraft, MEDIA_PAGE_SIZE, logo_fallback_option, media_page_offset,
+};
+use super::{
+    CatalogEntry, OwnershipScope, ThemeBindingInput, ThemeMediaInput, ThemePoolInput,
+    ThemePresentation, api,
+};
 
 /// The authenticated Studio route. It deliberately only renders server-provided preview
 /// bytes inside a sandboxed iframe; no draft CSS is ever inserted into Studio's document.
@@ -299,6 +308,8 @@ fn zip_import_card(
 }
 
 type ThemeSelectionResource = Resource<Result<Option<PublicThemeSelection>, WebError>>;
+type ThemePresentationResource = Resource<Result<Option<ThemePresentation>, WebError>>;
+type OwnerMediaResource = Resource<Result<Vec<MediaItem>, WebError>>;
 
 fn owner_resources(
     scope: RwSignal<OwnershipScope>,
@@ -313,6 +324,35 @@ fn owner_resources(
         |(scope, _)| async move { api::get_selection(scope).await },
     );
     (catalog, selection)
+}
+
+fn presentation_resources(
+    scope: RwSignal<OwnershipScope>,
+    selected: RwSignal<Option<ThemeId>>,
+    refresh: Invalidator,
+    media_page: RwSignal<u32>,
+) -> (ThemePresentationResource, OwnerMediaResource) {
+    let presentation = Resource::new(
+        move || (scope.get(), selected.get(), refresh.track()),
+        |(scope, selected, _)| async move {
+            match selected {
+                Some(id) => api::get_presentation(scope, id).await.map(Some),
+                None => Ok(None),
+            }
+        },
+    );
+    let media = Resource::new(
+        move || (refresh.track(), media_page.get()),
+        |(_, page)| async move {
+            crate::media::list_mine(
+                None,
+                Some(PageSize::default()),
+                Some(media_page_offset(page)),
+            )
+            .await
+        },
+    );
+    (presentation, media)
 }
 
 fn import_package_zip(
@@ -551,8 +591,9 @@ fn ThemeEditor(
     rename_name: NodeRef<leptos::html::Input>,
 ) -> impl IntoView {
     let stylesheet = NodeRef::<leptos::html::Textarea>::new();
-    let pool_paths = NodeRef::<leptos::html::Textarea>::new();
     let preview_document = RwSignal::new(None::<String>);
+    let media_page = RwSignal::new(0_u32);
+    let (presentation, owner_media) = presentation_resources(scope, selected, refresh, media_page);
     let rename = move |_| rename_selected(scope, selected, rename_name, refresh, status);
     let save_css = move |_| save_selected_css(scope, selected, stylesheet, refresh, status);
     let preview = move |_| preview_selected(scope, selected, preview_document, status);
@@ -598,7 +639,9 @@ fn ThemeEditor(
                     selected=selected
                     refresh=refresh
                     status=status
-                    pool_paths=pool_paths
+                    presentation=presentation
+                    owner_media=owner_media
+                    media_page=media_page
                 />
                 <DraftPackageEditor scope=scope selected=selected refresh=refresh status=status />
                 <div class="j-theme-actions">
@@ -918,83 +961,385 @@ fn ThemePresentationEditor(
     selected: RwSignal<Option<ThemeId>>,
     refresh: Invalidator,
     status: RwSignal<Option<String>>,
-    pool_paths: NodeRef<leptos::html::Textarea>,
+    presentation: ThemePresentationResource,
+    owner_media: OwnerMediaResource,
+    media_page: RwSignal<u32>,
 ) -> impl IntoView {
-    let pool = move |_| update_pool(scope, selected, refresh, status, pool_paths);
-    let shuffle = move |_| shuffle_presentation(scope, selected, refresh, status);
+    let header_media_draft = RwSignal::new(HeaderMediaDraft::default());
+    Effect::new(move |_| {
+        let current = presentation.get().and_then(Result::ok).flatten();
+        header_media_draft.update(|draft| draft.sync(selected.get(), current.as_ref()));
+    });
     view! {
         <fieldset class="j-theme-presentation">
             <legend>"Presentation media"</legend>
-            <div class="j-theme-actions">
-                <button
-                    type="button"
-                    class="j-btn"
-                    on:click=move |_| replace_role(
-                        scope,
-                        selected,
-                        ThemeImageRole::Logo,
-                        ThemeBindingInput::PackagedDefault,
-                        refresh,
-                        status,
-                    )
-                >
-                    "Use package logo default"
-                </button>
-                <button
-                    type="button"
-                    class="j-btn"
-                    on:click=move |_| replace_role(
-                        scope,
-                        selected,
-                        ThemeImageRole::Logo,
-                        ThemeBindingInput::ExplicitAbsent,
-                        refresh,
-                        status,
-                    )
-                >
-                    "Clear logo"
-                </button>
-                <button
-                    type="button"
-                    class="j-btn"
-                    on:click=move |_| replace_role(
-                        scope,
-                        selected,
-                        ThemeImageRole::Header,
-                        ThemeBindingInput::PackagedDefault,
-                        refresh,
-                        status,
-                    )
-                >
-                    "Use package header default"
-                </button>
-                <button
-                    type="button"
-                    class="j-btn"
-                    on:click=move |_| replace_role(
-                        scope,
-                        selected,
-                        ThemeImageRole::Header,
-                        ThemeBindingInput::ExplicitAbsent,
-                        refresh,
-                        status,
-                    )
-                >
-                    "Clear header"
-                </button>
-            </div>
-            <label class="j-form-field">
-                <span class="j-form-label">"Header pool package asset paths"</span>
-                <textarea class="j-form-input j-theme-code" node_ref=pool_paths></textarea>
-            </label>
-            <button type="button" class="j-btn" on:click=pool>
-                "Save header pool"
-            </button>
-            <button type="button" class="j-btn" on:click=shuffle>
-                "Shuffle assignments"
-            </button>
+            <ThemeLogoEditor
+                scope=scope
+                selected=selected
+                refresh=refresh
+                status=status
+                presentation=presentation
+                owner_media=owner_media
+            />
+            <ThemeMediaPagination owner_media=owner_media media_page=media_page />
+            <ThemeHeaderBindingEditor scope=scope selected=selected refresh=refresh status=status />
+            <ThemeHeaderPoolEditor
+                scope=scope
+                selected=selected
+                refresh=refresh
+                status=status
+                presentation=presentation
+                owner_media=owner_media
+                header_media_draft=header_media_draft
+            />
         </fieldset>
     }
+}
+
+#[component]
+fn ThemeLogoEditor(
+    scope: RwSignal<OwnershipScope>,
+    selected: RwSignal<Option<ThemeId>>,
+    refresh: Invalidator,
+    status: RwSignal<Option<String>>,
+    presentation: ThemePresentationResource,
+    owner_media: OwnerMediaResource,
+) -> impl IntoView {
+    let logo_value = move || logo_value(presentation, owner_media);
+    let logo_change = move |event| {
+        let token = event_target_value(&event);
+        if let Some(input) = logo_input(&token, owner_media) {
+            replace_role(
+                scope,
+                selected,
+                ThemeImageRole::Logo,
+                input,
+                refresh,
+                status,
+            );
+        }
+    };
+    view! {
+        <label class="j-form-field">
+            <span class="j-form-label">"Logo image"</span>
+            <select class="j-form-input" prop:value=logo_value on:change=logo_change>
+                <option value="package-default">"Package default"</option>
+                <option value="none">"No logo"</option>
+                {move || media_options(owner_media, true)}
+                {move || current_unavailable_logo_option(presentation, owner_media)}
+            </select>
+        </label>
+    }
+}
+
+#[component]
+fn ThemeMediaPagination(
+    owner_media: OwnerMediaResource,
+    media_page: RwSignal<u32>,
+) -> impl IntoView {
+    let previous = move |_| media_page.update(|page| *page = page.saturating_sub(1));
+    let next = move |_| media_page.update(|page| *page = page.saturating_add(1));
+    view! {
+        <div class="j-theme-actions" aria-label="Uploaded image pages">
+            <button
+                type="button"
+                class="j-btn"
+                disabled=move || media_page.get() == 0
+                on:click=previous
+            >
+                "Previous images"
+            </button>
+            <span aria-live="polite">{move || format!("Image page {}", media_page.get() + 1)}</span>
+            <button
+                type="button"
+                class="j-btn"
+                disabled=move || {
+                    owner_media
+                        .get()
+                        .and_then(Result::ok)
+                        .is_none_or(|items| items.len() < MEDIA_PAGE_SIZE)
+                }
+                on:click=next
+            >
+                "Next images"
+            </button>
+        </div>
+    }
+}
+
+#[component]
+fn ThemeHeaderBindingEditor(
+    scope: RwSignal<OwnershipScope>,
+    selected: RwSignal<Option<ThemeId>>,
+    refresh: Invalidator,
+    status: RwSignal<Option<String>>,
+) -> impl IntoView {
+    view! {
+        <div class="j-theme-actions">
+            <button
+                type="button"
+                class="j-btn"
+                on:click=move |_| replace_role(
+                    scope,
+                    selected,
+                    ThemeImageRole::Header,
+                    ThemeBindingInput::PackagedDefault,
+                    refresh,
+                    status,
+                )
+            >
+                "Use package header default"
+            </button>
+            <button
+                type="button"
+                class="j-btn"
+                on:click=move |_| replace_role(
+                    scope,
+                    selected,
+                    ThemeImageRole::Header,
+                    ThemeBindingInput::ExplicitAbsent,
+                    refresh,
+                    status,
+                )
+            >
+                "Clear header"
+            </button>
+        </div>
+    }
+}
+
+#[component]
+fn ThemeHeaderPoolEditor(
+    scope: RwSignal<OwnershipScope>,
+    selected: RwSignal<Option<ThemeId>>,
+    refresh: Invalidator,
+    status: RwSignal<Option<String>>,
+    presentation: ThemePresentationResource,
+    owner_media: OwnerMediaResource,
+    header_media_draft: RwSignal<HeaderMediaDraft>,
+) -> impl IntoView {
+    view! {
+        <label class="j-form-field">
+            <span class="j-form-label">"Header pool package asset paths"</span>
+            <textarea
+                class="j-form-input j-theme-code"
+                prop:value=move || header_media_draft.get().package_paths().to_owned()
+                on:input=move |event| {
+                    header_media_draft
+                        .update(|draft| draft.set_package_paths(event_target_value(&event)));
+                }
+            ></textarea>
+        </label>
+        <ThemeHeaderMediaEditor owner_media=owner_media header_media_draft=header_media_draft />
+        {move || presentation_status(presentation, owner_media)}
+        <ThemeHeaderPoolActions
+            scope=scope
+            selected=selected
+            refresh=refresh
+            status=status
+            header_media_draft=header_media_draft
+        />
+    }
+}
+
+#[component]
+fn ThemeHeaderMediaEditor(
+    owner_media: OwnerMediaResource,
+    header_media_draft: RwSignal<HeaderMediaDraft>,
+) -> impl IntoView {
+    let media_picker = NodeRef::<leptos::html::Select>::new();
+    let add_header_media = move |_| {
+        let token = media_picker
+            .get()
+            .map(|select| select.value())
+            .unwrap_or_default();
+        if let Some(media) = selected_media(&token, owner_media) {
+            header_media_draft.update(|draft| draft.add(media));
+        }
+    };
+    view! {
+        <div class="j-form-field">
+            <span class="j-form-label">"Header pool Media"</span>
+            <div class="j-theme-actions">
+                <select class="j-form-input" node_ref=media_picker aria-label="Media to add">
+                    <option value="">"Choose uploaded image"</option>
+                    {move || media_options(owner_media, false)}
+                </select>
+                <button type="button" class="j-btn" on:click=add_header_media>
+                    "Add Media"
+                </button>
+            </div>
+            <ul class="j-theme-media-pool" aria-label="Selected header Media">
+                <For
+                    each=move || header_media_draft.get().entries().to_vec()
+                    key=media_key
+                    children=move |entry| {
+                        let remove = entry.clone();
+                        view! {
+                            <li>
+                                <span>{entry.filename.to_string()}</span>
+                                <button
+                                    type="button"
+                                    class="j-btn"
+                                    aria-label=format!("Remove {} from header pool", entry.filename)
+                                    on:click=move |_| {
+                                        header_media_draft.update(|draft| draft.remove(&remove));
+                                    }
+                                >
+                                    "Remove"
+                                </button>
+                            </li>
+                        }
+                    }
+                />
+            </ul>
+        </div>
+    }
+}
+
+#[component]
+fn ThemeHeaderPoolActions(
+    scope: RwSignal<OwnershipScope>,
+    selected: RwSignal<Option<ThemeId>>,
+    refresh: Invalidator,
+    status: RwSignal<Option<String>>,
+    header_media_draft: RwSignal<HeaderMediaDraft>,
+) -> impl IntoView {
+    let pool = move |_| {
+        let draft = header_media_draft.get_untracked();
+        update_pool(
+            scope,
+            selected,
+            refresh,
+            status,
+            draft.package_paths(),
+            draft.entries().to_vec(),
+        );
+    };
+    let shuffle = move |_| shuffle_presentation(scope, selected, refresh, status);
+    view! {
+        <button type="button" class="j-btn" on:click=pool>
+            "Save header pool"
+        </button>
+        <button type="button" class="j-btn" on:click=shuffle>
+            "Shuffle assignments"
+        </button>
+    }
+}
+
+fn logo_value(presentation: ThemePresentationResource, owner_media: OwnerMediaResource) -> String {
+    let Some(Ok(Some(current))) = presentation.get() else {
+        return String::new();
+    };
+    match current.logo {
+        Some(ThemeBindingInput::PackagedDefault) | None => "package-default".to_owned(),
+        Some(ThemeBindingInput::ExplicitAbsent) => "none".to_owned(),
+        Some(ThemeBindingInput::PackageAsset(path)) => format!("package-asset:{path}"),
+        Some(ThemeBindingInput::Media(media)) => image_media(owner_media)
+            .into_iter()
+            .find(|item| media_matches(item, &media))
+            .map_or_else(
+                || "unavailable-media".to_owned(),
+                |item| item.url.to_string(),
+            ),
+    }
+}
+
+fn logo_input(token: &str, owner_media: OwnerMediaResource) -> Option<ThemeBindingInput> {
+    match token {
+        "package-default" => Some(ThemeBindingInput::PackagedDefault),
+        "none" => Some(ThemeBindingInput::ExplicitAbsent),
+        _ => selected_media(token, owner_media).map(ThemeBindingInput::Media),
+    }
+}
+
+fn selected_media(token: &str, owner_media: OwnerMediaResource) -> Option<ThemeMediaInput> {
+    image_media(owner_media)
+        .into_iter()
+        .find(|item| item.url.as_ref() == token)
+        .map(|item| media_input(&item))
+}
+
+fn media_options(owner_media: OwnerMediaResource, prefix_label: bool) -> Vec<AnyView> {
+    image_media(owner_media)
+        .into_iter()
+        .map(|item| {
+            let value = item.url.to_string();
+            let label = if prefix_label {
+                format!("Media: {}", item.filename)
+            } else {
+                item.filename.to_string()
+            };
+            view! { <option value=value>{label}</option> }.into_any()
+        })
+        .collect()
+}
+
+fn image_media(owner_media: OwnerMediaResource) -> Vec<MediaItem> {
+    owner_media
+        .get()
+        .and_then(Result::ok)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|item| item.content_type.as_ref().starts_with("image/"))
+        .collect()
+}
+
+fn media_input(item: &MediaItem) -> ThemeMediaInput {
+    ThemeMediaInput {
+        source: item.source,
+        sha256: item.sha256.clone(),
+        filename: item.filename.clone(),
+    }
+}
+
+fn media_matches(item: &MediaItem, media: &ThemeMediaInput) -> bool {
+    item.source == media.source && item.sha256 == media.sha256 && item.filename == media.filename
+}
+
+fn media_key(media: &ThemeMediaInput) -> String {
+    format!("{}:{}:{}", media.source, media.sha256, media.filename)
+}
+
+fn current_unavailable_logo_option(
+    presentation: ThemePresentationResource,
+    owner_media: OwnerMediaResource,
+) -> Option<AnyView> {
+    let current = presentation.get().and_then(Result::ok).flatten();
+    let visible = image_media(owner_media)
+        .iter()
+        .map(media_input)
+        .collect::<Vec<_>>();
+    let option = logo_fallback_option(current.as_ref(), &visible)?;
+    Some(
+        view! {
+            <option value=option.value disabled>
+                {option.label}
+            </option>
+        }
+        .into_any(),
+    )
+}
+
+fn presentation_status(
+    presentation: ThemePresentationResource,
+    owner_media: OwnerMediaResource,
+) -> Option<impl IntoView> {
+    if let Some(Err(error)) = presentation.get() {
+        return Some(view! {
+            <p class="error" role="alert">
+                {error.to_string()}
+            </p>
+        });
+    }
+    if let Some(Err(error)) = owner_media.get() {
+        return Some(view! {
+            <p class="error" role="alert">
+                {error.to_string()}
+            </p>
+        });
+    }
+    None
 }
 
 fn update_pool(
@@ -1002,19 +1347,17 @@ fn update_pool(
     selected: RwSignal<Option<ThemeId>>,
     refresh: Invalidator,
     status: RwSignal<Option<String>>,
-    pool_paths: NodeRef<leptos::html::Textarea>,
+    paths: &str,
+    media: Vec<ThemeMediaInput>,
 ) {
     let Some(id) = selected.get_untracked() else {
         return;
     };
-    let paths = pool_paths
-        .get()
-        .map(|input| input.value())
-        .unwrap_or_default();
     let entries = paths
         .lines()
         .filter(|path| !path.trim().is_empty())
         .map(|path| ThemePoolInput::PackageAsset(path.trim().to_owned()))
+        .chain(media.into_iter().map(ThemePoolInput::Media))
         .collect();
     let current_scope = scope.get_untracked();
     let seed = match fresh_seed() {
