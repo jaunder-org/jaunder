@@ -84,6 +84,11 @@ Lets the warning tests assert on emitted warnings without touching the real
                   (with-current-buffer buf2
                     (should (equal (file-name-nondirectory
                                     (jaunder--rename-to-slug "my-post"))
+                                   "my-post-1.org"))
+                    ;; A later update keeps its collision suffix instead of
+                    ;; walking to -2 merely because its own path exists.
+                    (should (equal (file-name-nondirectory
+                                    (jaunder--rename-to-slug "my-post"))
                                    "my-post-1.org")))
                 (kill-buffer buf2)))))
       (delete-directory dir t))))

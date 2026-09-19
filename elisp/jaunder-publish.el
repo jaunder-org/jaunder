@@ -73,14 +73,21 @@ A no-op when already so named; on collision appends `-N'.  Returns the path."
     (if (string= old target)
         old
       (let ((final target) (n 1))
-        (while (file-exists-p final)
+        (while (and (file-exists-p final) (not (equal final old)))
           (setq final (expand-file-name (format "%s-%d.org" slug n) dir)
                 n (1+ n)))
-        (rename-file old final)
-        ;; ALONG-WITH-FILE=t: the file is already moved, so don't re-save it;
-        ;; NO-QUERY=t: never prompt (publish is automated).
-        (set-visited-file-name final t t)
+        (unless (equal final old)
+          (rename-file old final)
+          ;; ALONG-WITH-FILE=t: the file is already moved, so don't re-save it;
+          ;; NO-QUERY=t: never prompt (publish is automated).
+          (set-visited-file-name final t t))
         final))))
+
+(defun jaunder--save-buffer-silently ()
+  "Save the current Post without routine file and backup chatter."
+  (let ((inhibit-message t)
+        (message-log-max nil))
+    (save-buffer)))
 
 (defun jaunder--write-back (response created &optional create-intent-matches conditional-update)
   "Persist server-assigned values from RESPONSE into the current buffer.
@@ -136,12 +143,12 @@ send); absent it, the render falls back to the local zone via
           (jaunder--set-keyword "DATE" (jaunder--utc->org-date utc tz)))))
     ;; This is the create identity checkpoint.  It deliberately precedes the
     ;; intent cleanup below so an interruption retains a conditional baseline.
-    (save-buffer)
+    (jaunder--save-buffer-silently)
     (when (jaunder--buffer-property "JAUNDER_ID")
       (jaunder--remove-property "JAUNDER_CREATE_KEY")
       (jaunder--remove-property "JAUNDER_CREATE_DIGEST")
       (jaunder--remove-property "JAUNDER_CREATE_ATTEMPT_AT")
-      (save-buffer))
+      (jaunder--save-buffer-silently))
     slug))
 
 (defun jaunder--new-post-in (dir now-string)
@@ -160,7 +167,7 @@ point in the body."
       ;; Capture the interpretation zone before editing so a failed first
       ;; publish has no reason to mutate the author's input.
       (jaunder--ensure-date-tz)
-      (save-buffer))
+      (jaunder--save-buffer-silently))
     path))
 
 (defun jaunder--select-new-post-blog ()
@@ -300,7 +307,7 @@ the command before file creation has no filesystem side effect."
     (jaunder--set-property "JAUNDER_STATUS" status)
     (when scheduled-date
       (jaunder--set-keyword "DATE" scheduled-date))
-    (save-buffer)))
+    (jaunder--save-buffer-silently)))
 
 (defvar-keymap jaunder-new-post-mode-map ;; cov:ignore: defvar-keymap expands to synthetic bookkeeping with no instrumentable source form
   :doc "Keymap for a Post being entered by `jaunder-new-post'."
@@ -406,7 +413,7 @@ have committed after a response-less request."
       (jaunder--set-property "JAUNDER_CREATE_DIGEST" (secure-hash 'sha256 xml))
       (jaunder--set-property "JAUNDER_CREATE_ATTEMPT_AT"
                              (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t))
-      (save-buffer))
+      (jaunder--save-buffer-silently))
     (list :key key
           :matches (if (equal (jaunder--buffer-property "JAUNDER_CREATE_DIGEST")
                               (secure-hash 'sha256 xml))
@@ -473,14 +480,19 @@ safe retry."
                 (code (plist-get resp :status)))
            (unless (memq code '(200 201))
              (error "jaunder: publish failed (HTTP %s)" code))
-           (let ((slug (jaunder--write-back resp (null id)
-                                            (plist-get intent :matches)
-                                            (and id synced))))
-             (when slug (jaunder--rename-to-slug slug))
-             (message "jaunder: published %s" (or slug ""))
+           (let* ((source-path (buffer-file-name))
+                  (slug (jaunder--write-back resp (null id)
+                                             (plist-get intent :matches)
+                                             (and id synced)))
+                  (destination (if slug (jaunder--rename-to-slug slug) source-path)))
+             (if (equal source-path destination)
+                 (message "jaunder: published %s" (or slug ""))
+               (message "jaunder: published %s; renamed %s -> %s"
+                        (or slug "") source-path destination))
              ;; Callers that batch ordinary publishing need the actual response
              ;; status; in particular, durable create replay can return 200.
-             (list :response resp :http-status code :slug slug))))))))
+             (list :response resp :http-status code :slug slug
+                   :source-path source-path :path destination))))))))
 
 (defun jaunder-save-draft ()
   "Publish the current buffer as a server-side draft (forces `app:draft')."

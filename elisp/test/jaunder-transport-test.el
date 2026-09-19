@@ -67,20 +67,24 @@
     (should (equal (jaunder--response-header r "X-A") "1"))
     (should (null (jaunder--response-header r "x-missing")))))
 
-(ert-deftest jaunder-http-request-passes-extra-headers ()
+(ert-deftest jaunder-http-request-preserves-body-bytes-and-passes-extra-headers ()
   (let (captured)
     (cl-letf (((symbol-function 'jaunder--auth-secret) (lambda () "tok"))
               ((symbol-function 'jaunder--plz-response->plist) (lambda (r) r))
               ((symbol-function 'plz)
                (lambda (_verb _url &rest args)
-                 (setq captured (plist-get args :headers))
+                 (setq captured args)
                  '(:status 201 :body ""))))
       (let ((jaunder--active-blog '(:base-url "http://x" :username "alice")))
         (jaunder--http-request "POST" "http://x/media" (list 'file "/tmp/a.png")
                                "image/png" (list (cons "Slug" "a.png"))))
-      (should (equal (cdr (assoc "Slug" captured)) "a.png"))
-      (should (equal (cdr (assoc "Content-Type" captured)) "image/png"))
-      (should (assoc "Authorization" captured)))))
+      (let ((headers (plist-get captured :headers)))
+        (should (equal (cdr (assoc "Slug" headers)) "a.png"))
+        (should (equal (cdr (assoc "Content-Type" headers)) "image/png"))
+        (should (assoc "Authorization" headers)))
+      ;; plz's text mode uses curl --data, which removes CR/LF from stdin and
+      ;; files. Atom source and Media both require byte-preserving transport.
+      (should (eq (plist-get captured :body-type) 'binary)))))
 
 (ert-deftest jaunder-curl-header-value-escapes-quotes-and-backslashes ()
   ;; plz 0.9.1 wraps each header value in double quotes inside a curl --config

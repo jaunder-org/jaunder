@@ -54,12 +54,25 @@ explicit empty value, distinct from an absent property."
                 (cdr (assoc "PROPERTY" keywords)))))
 
 (defun jaunder--split-keywords (values)
-  "Split each #+KEYWORDS: string in VALUES on commas and flatten.
+  "Split each category keyword string in VALUES on commas and flatten.
 Whitespace is trimmed and empty terms dropped."
   (let (out)
     (dolist (line values (nreverse out))
       (dolist (term (split-string line "," t "[ \t]+"))
         (unless (string= term "") (push term out))))))
+
+(defun jaunder--category-keyword-values ()
+  "Return CATEGORY, TAGS, and KEYWORDS values in physical source order.
+Only keywords in the leading metadata block participate."
+  (let ((limit (jaunder--body-start))
+        values)
+    (org-element-map (org-element-parse-buffer 'element) 'keyword
+                     (lambda (keyword)
+                       (when (and (< (org-element-property :begin keyword) limit)
+                                  (member (org-element-property :key keyword)
+                                          '("CATEGORY" "TAGS" "KEYWORDS")))
+                         (push (org-element-property :value keyword) values))))
+    (nreverse values)))
 
 (defun jaunder--body-start ()
   "Return the buffer position where content begins, after the metadata header.
@@ -116,7 +129,7 @@ touched."
     (let ((case-fold-search t)
           (limit (jaunder--body-start)))
       (when (re-search-forward
-             (format "^[ \t]*#\\+PROPERTY:[ \t]+%s\\(?:[ \t].*\\)?\\n?"
+             (format "^[ \t]*#\\+PROPERTY:[ \t]+%s\\(?:[ \t].*\\)?\n?"
                      (regexp-quote key))
              limit t)
         (replace-match "")))))
@@ -152,12 +165,13 @@ body-only content with the header block stripped.  Non-mutating.  The
 `jaunder--org-date->utc'); `body' still holds local media links, substituted
 later by the media unit."
   (let* ((kws (org-collect-keywords
-               '("TITLE" "DATE" "KEYWORDS" "DESCRIPTION" "PROPERTY")))
+               '("TITLE" "DATE" "DESCRIPTION" "PROPERTY")))
          (props (jaunder--collect-properties kws))
          (title-values (cdr (assoc "TITLE" kws)))
          (raw-title (and title-values (mapconcat #'identity title-values "\n")))
          (title (and raw-title (not (string= (string-trim raw-title) "")) raw-title))
-         (categories (jaunder--split-keywords (cdr (assoc "KEYWORDS" kws))))
+         (categories
+          (jaunder--split-keywords (jaunder--category-keyword-values)))
          (descriptions (cdr (assoc "DESCRIPTION" kws)))
          (summary (and descriptions (mapconcat #'identity descriptions "\n")))
          (status (cdr (assoc "JAUNDER_STATUS" props)))
