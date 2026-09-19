@@ -1213,7 +1213,7 @@ mod tests {
             post_id: PostId::from(1),
             username: parse_username("alice"),
             display_name: Some(parse_display_name("Ada Lovelace")),
-            title: Some(common::test_support::parse_post_title("T")),
+            rendered_title: Some("T".parse().unwrap()),
             summary: None,
             slug: "hello".parse::<Slug>().unwrap(),
             rendered_html: common::test_support::rendered_html("<p>hi</p>"),
@@ -1417,7 +1417,7 @@ mod tests {
         )
         .expect("published post should summarize");
 
-        assert_eq!(summary.title, None);
+        assert_eq!(summary.rendered_title, None);
         assert_eq!(summary.username, "author");
         assert_eq!(
             summary.permalink.as_deref(),

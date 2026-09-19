@@ -20,8 +20,7 @@ use crate::{avatar, taglist, topbar};
 use common::display_name::DisplayName;
 use common::ids::PostId;
 use common::post_summary::PostSummary;
-use common::post_title::PostTitle;
-use common::render::RenderedHtml;
+use common::render::{RenderedHtml, RenderedPostTitle};
 use common::root_relative_url::RootRelativeUrl;
 use common::seed::{PageSeed, RenderedPost, TagSummary};
 use common::time::UtcInstant;
@@ -157,7 +156,7 @@ pub(crate) fn permalink_article(post: &RenderedPost) -> Markup {
         post_id: post.post_id,
         username: &post.username,
         display_name: post.display_name.as_ref(),
-        title: post.title.as_ref(),
+        rendered_title: post.rendered_title.as_ref(),
         banner: None,
         summary: post.summary.as_ref(),
         rendered_html: &post.rendered_html,
@@ -179,7 +178,7 @@ fn render_posts(posts: &[RenderedPost], tag_ctx: &TagCtx) -> Markup {
                 post_id: post.post_id,
                 username: &post.username,
                 display_name: post.display_name.as_ref(),
-                title: post.title.as_ref(),
+                rendered_title: post.rendered_title.as_ref(),
                 banner: None,
                 summary: post.summary.as_ref(),
                 rendered_html: &post.rendered_html,
@@ -198,7 +197,7 @@ pub(crate) struct PostView<'a> {
     pub post_id: PostId,
     pub username: &'a Username,
     pub display_name: Option<&'a DisplayName>,
-    pub title: Option<&'a PostTitle>,
+    pub rendered_title: Option<&'a RenderedPostTitle>,
     pub banner: Option<&'a str>,
     pub summary: Option<&'a PostSummary>,
     pub rendered_html: &'a RenderedHtml,
@@ -251,15 +250,7 @@ pub(crate) fn post_content(view: &PostView) -> Markup {
             time class="j-post-time" data-jaunder-part="published-time" { (view.time) }
             (post_action_slot(view.post_id))
         }
-        @if let Some(title) = view.title {
-            h2 class="j-post-title" data-jaunder-part="post-title" {
-                @if let Some(permalink) = view.permalink {
-                    a href=(&**permalink) { (title) }
-                } @else {
-                    (title)
-                }
-            }
-        }
+        (post_heading(view.rendered_title, view.permalink))
         @if let Some(banner) = view.banner {
             p class="draft-banner" { (banner) }
         }
@@ -273,6 +264,28 @@ pub(crate) fn post_content(view: &PostView) -> Markup {
         footer class="j-post-foot" data-jaunder-part="post-footer" {
             (taglist::render(view.tags, view.tag_ctx))
             span class="j-spacer" {}
+        }
+    })
+}
+
+/// Paints a persisted inline Rendered Title inside the existing permalink shape.
+/// Empty canonical fragments and titleless Posts deliberately omit the heading.
+#[must_use]
+pub(crate) fn post_heading(
+    rendered_title: Option<&RenderedPostTitle>,
+    permalink: Option<&RootRelativeUrl>,
+) -> Markup {
+    let Some(rendered_title) = rendered_title.filter(|title| !title.as_ref().is_empty()) else {
+        return Markup::empty();
+    };
+    let title = Markup::from_rendered_post_title(rendered_title);
+    Markup::new(html! {
+        h2 class="j-post-title" data-jaunder-part="post-title" {
+            @if let Some(permalink) = permalink {
+                a href=(&**permalink) { (title) }
+            } @else {
+                (title)
+            }
         }
     })
 }
@@ -350,7 +363,7 @@ pub(crate) mod test_fixtures {
                 post_id: PostId::from(7),
                 username: parse_username("alice"),
                 display_name: None,
-                title: Some(common::test_support::parse_post_title("Hello & <World>")),
+                rendered_title: Some("Hello &amp; &lt;World&gt;".parse().unwrap()),
                 summary: None,
                 slug: "hello".parse().unwrap(),
                 rendered_html: common::test_support::rendered_html("<p>Hi <em>there</em></p>"),
@@ -363,6 +376,7 @@ pub(crate) mod test_fixtures {
                     display: "Rust".parse().unwrap(),
                 }],
             },
+            title: Some(common::test_support::parse_post_title("Hello & <World>")),
             body: parse_post_body("raw"),
             format: PostFormat::Markdown,
             permalink_description: None,
@@ -374,7 +388,7 @@ pub(crate) mod test_fixtures {
             post_id: PostId::from(1),
             username: parse_username("bob"),
             display_name: None,
-            title: Some(common::test_support::parse_post_title("First")),
+            rendered_title: Some("First".parse().unwrap()),
             summary: Some(parse_post_summary("An excerpt")),
             slug: "first".parse().unwrap(),
             rendered_html: common::test_support::rendered_html("<p>body</p>"),
@@ -399,8 +413,8 @@ mod tests {
     use super::test_fixtures::{one_post_page, sample_post, sample_summary};
     use super::*;
     use common::test_support::{
-        parse_display_name, parse_post_summary, parse_post_title, parse_root_relative_url,
-        parse_username, parse_utc_instant,
+        parse_display_name, parse_post_summary, parse_root_relative_url, parse_username,
+        parse_utc_instant,
     };
     use common::{seed::Page, site::SiteIdentity};
 
@@ -458,7 +472,7 @@ mod tests {
         // post_inner wraps. post_content is viewer-independent, so the
         // authed re-render cannot diverge from the paint — no localized flash.
         let ctx = TagCtx::ForUser(parse_username("alice"));
-        let title = parse_post_title("T");
+        let title: RenderedPostTitle = "T".parse().unwrap();
         let author = parse_username("alice");
         let display_name = parse_display_name("Ada Lovelace");
         let body = common::test_support::rendered_html("<p>b</p>");
@@ -466,7 +480,7 @@ mod tests {
             post_id: PostId::from(7),
             username: &author,
             display_name: Some(&display_name),
-            title: Some(&title),
+            rendered_title: Some(&title),
             banner: None,
             summary: None,
             rendered_html: &body,
@@ -538,11 +552,11 @@ mod tests {
     }
 
     #[test]
-    fn permalink_body_escapes_title_but_injects_rendered_html_raw() {
+    fn permalink_body_injects_rendered_title_and_html_raw() {
         let html = body(&PageSeed::Permalink(sample_post())).into_string();
         assert!(
             html.contains("Hello &amp; &lt;World&gt;"),
-            "title must be escaped: {html}"
+            "canonical Rendered Title bytes must reach the trusted heading: {html}"
         );
         assert!(
             html.contains("<p>Hi <em>there</em></p>"),
@@ -832,7 +846,7 @@ mod tests {
             post_id: PostId::from(7),
             username: &author,
             display_name: None,
-            title: None,
+            rendered_title: None,
             banner: None,
             summary: None,
             rendered_html: &body,
@@ -849,16 +863,16 @@ mod tests {
     }
 
     #[test]
-    fn post_content_keeps_title_as_text_without_permalink() {
+    fn post_content_renders_persisted_title_without_permalink() {
         let ctx = TagCtx::SiteWide;
         let author = parse_username("bob");
         let body = common::test_support::rendered_html("<p>b</p>");
-        let title = parse_post_title("Draft title");
+        let title: RenderedPostTitle = "Draft title".parse().unwrap();
         let view = PostView {
             post_id: PostId::from(7),
             username: &author,
             display_name: None,
-            title: Some(&title),
+            rendered_title: Some(&title),
             banner: None,
             summary: None,
             rendered_html: &body,
@@ -881,6 +895,36 @@ mod tests {
     }
 
     #[test]
+    fn post_heading_emits_only_canonical_inline_markup_inside_permalink() {
+        let title: RenderedPostTitle =
+            "<strong>Bold</strong> &amp; <em>emphasis</em><br><code>code</code>"
+                .parse()
+                .unwrap();
+        assert_eq!(
+            post_heading(Some(&title), Some(&parse_root_relative_url("/~bob/x"))).into_string(),
+            "<h2 class=\"j-post-title\" data-jaunder-part=\"post-title\"><a href=\"/~bob/x\"><strong>Bold</strong> &amp; <em>emphasis</em><br><code>code</code></a></h2>"
+        );
+    }
+
+    #[test]
+    fn post_heading_omits_empty_and_titleless_fragments() {
+        let empty: RenderedPostTitle = "".parse().unwrap();
+        assert_eq!(post_heading(Some(&empty), None), "");
+        assert_eq!(post_heading(None, None), "");
+    }
+
+    #[test]
+    fn content_free_authored_title_reaches_empty_heading_omission() {
+        let authored: common::post_title::PostTitle = "<br>".parse().unwrap();
+        let rendered = host::render::render_title(&authored, &common::render::PostFormat::Html);
+        assert_eq!(rendered.as_ref(), "");
+        assert_eq!(
+            post_heading(Some(&rendered), Some(&parse_root_relative_url("/~bob/x"))).into_string(),
+            ""
+        );
+    }
+
+    #[test]
     fn post_content_renders_draft_banner_when_present() {
         let ctx = TagCtx::SiteWide;
         let author = parse_username("bob");
@@ -890,7 +934,7 @@ mod tests {
             post_id: PostId::from(7),
             username: &author,
             display_name: None,
-            title: None,
+            rendered_title: None,
             banner: Some("Draft - visible only to you"),
             summary: Some(&summary),
             rendered_html: &body,
@@ -917,12 +961,12 @@ mod tests {
         let ctx = TagCtx::SiteWide;
         let author = parse_username("bob");
         let body = common::test_support::rendered_html("<p>b</p>");
-        let title = parse_post_title("T");
+        let title: RenderedPostTitle = "T".parse().unwrap();
         let view = PostView {
             post_id: PostId::from(7),
             username: &author,
             display_name: None,
-            title: Some(&title),
+            rendered_title: Some(&title),
             banner: None,
             summary: None,
             rendered_html: &body,

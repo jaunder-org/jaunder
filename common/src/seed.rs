@@ -12,7 +12,7 @@ use crate::ids::PostId;
 use crate::post_body::PostBody;
 use crate::post_summary::PostSummary;
 use crate::post_title::PostTitle;
-use crate::render::{self, PostFormat, RenderedHtml};
+use crate::render::{self, PostFormat, RenderedHtml, RenderedPostTitle};
 use crate::root_relative_url::RootRelativeUrl;
 use crate::site::SiteIdentity;
 use crate::slug::Slug;
@@ -51,7 +51,8 @@ pub struct RenderedPost {
     pub post_id: PostId,
     pub username: Username,
     pub display_name: Option<DisplayName>,
-    pub title: Option<PostTitle>,
+    #[serde(deserialize_with = "render::deserialize_optional_rendered_post_title")]
+    pub rendered_title: Option<RenderedPostTitle>,
     pub summary: Option<PostSummary>,
     pub slug: Slug,
     #[serde(deserialize_with = "render::deserialize_rendered_html")]
@@ -158,6 +159,8 @@ pub struct Page<Row, Cursor = PageCursor> {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AuthoredPost {
     pub post: RenderedPost,
+    /// Authored source retained for editor and document-metadata consumers.
+    pub title: Option<PostTitle>,
     pub body: PostBody,
     pub format: PostFormat,
     /// Effective summary for the permalink document metadata. This remains
@@ -232,7 +235,7 @@ mod tests {
             post_id: PostId::from(1),
             username: "alice".parse().unwrap(),
             display_name: None,
-            title: None,
+            rendered_title: None,
             summary: None,
             slug: "hello".parse().unwrap(),
             rendered_html: crate::test_support::rendered_html("<p>hi</p>"),
@@ -267,6 +270,23 @@ mod tests {
 
         let deserialized: RenderedPost = serde_json::from_value(json).unwrap();
         assert!(deserialized.is_draft());
+    }
+
+    #[test]
+    fn rendered_post_wire_rejects_noncanonical_rendered_titles() {
+        let post = rendered_post(Some(instant()));
+        let mut wire = serde_json::to_value(post).unwrap();
+        wire["rendered_title"] = serde_json::json!("<script>unsafe</script>");
+        assert!(serde_json::from_value::<RenderedPost>(wire).is_err());
+    }
+
+    #[test]
+    fn rendered_post_wire_round_trips_canonical_rendered_title() {
+        let mut post = rendered_post(Some(instant()));
+        post.rendered_title = Some("<strong>Bold</strong> &amp; plain".parse().unwrap());
+        let wire = serde_json::to_string(&post).unwrap();
+        assert!(wire.contains(r#""rendered_title":"<strong>Bold</strong> &amp; plain""#));
+        assert_eq!(serde_json::from_str::<RenderedPost>(&wire).unwrap(), post);
     }
 
     fn timeline_page(next_cursor: Option<TimelineCursor>) -> Page<RenderedPost, TimelineCursor> {

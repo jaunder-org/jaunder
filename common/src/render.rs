@@ -298,7 +298,8 @@ fn provider_embed_html(
 /// Canonical, trusted inline HTML projected from a [`PostTitle`].
 ///
 /// Unlike [`RenderedHtml`], this field-specific value admits only the closed title
-/// grammar. Its checked admission seam recognizes canonical bytes; it neither
+/// grammar. Its checked admission seam recognizes canonical bytes and admits a
+/// nonempty fragment only when its visible-text projection is nonempty; it neither
 /// parses authoring formats nor sanitizes untrusted source. Those responsibilities
 /// belong to the host renderer.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -332,6 +333,7 @@ impl RenderedPostTitle {
         let fragment = fragment.as_ref();
         canonical_rendered_post_title(fragment)
             .then(|| Self(fragment.to_owned()))
+            .filter(|title| fragment.is_empty() || !title.visible_text().is_empty())
             .ok_or(InvalidRenderedPostTitle)
     }
 
@@ -482,6 +484,26 @@ where
     use serde::Deserialize;
     let fragment = String::deserialize(deserializer)?;
     RenderedPostTitle::parse_canonical(fragment).map_err(serde::de::Error::custom)
+}
+
+/// Reconstructs an optional server-authored Rendered Title wire field after
+/// canonical validation.
+///
+/// # Errors
+///
+/// Returns the deserializer's error when a present field is not a string or is
+/// not the exact canonical inline grammar.
+pub fn deserialize_optional_rendered_post_title<'de, D>(
+    deserializer: D,
+) -> Result<Option<RenderedPostTitle>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    Option::<String>::deserialize(deserializer)?
+        .map(RenderedPostTitle::parse_canonical)
+        .transpose()
+        .map_err(serde::de::Error::custom)
 }
 
 fn canonical_rendered_post_title(fragment: &str) -> bool {
@@ -1719,6 +1741,9 @@ mod tests {
             "two  spaces",
             "line\nbreak",
             "<b attr>x</b>",
+            "<br>",
+            "<em></em>",
+            "<strong><br></strong>",
         ] {
             assert!(
                 RenderedPostTitle::parse_canonical(rejected).is_err(),
@@ -1757,14 +1782,33 @@ mod tests {
             #[serde(deserialize_with = "deserialize_rendered_post_title")]
             title: RenderedPostTitle,
         }
+        #[derive(serde::Deserialize)]
+        struct OptionalWire {
+            #[serde(deserialize_with = "deserialize_optional_rendered_post_title")]
+            title: Option<RenderedPostTitle>,
+        }
         let valid: Wire = serde_json::from_str(r#"{"title":"<em>ok</em>"}"#).unwrap();
         assert_eq!(valid.title.as_ref(), "<em>ok</em>");
+        let optional: OptionalWire = serde_json::from_str(r#"{"title":"<em>ok</em>"}"#).unwrap();
+        assert_eq!(
+            optional.title.as_ref().map(AsRef::as_ref),
+            Some("<em>ok</em>")
+        );
         assert_eq!(
             serde_json::to_string(&valid.title).unwrap(),
             r#""<em>ok</em>""#
         );
-        for invalid in [r#"{"title":"<script>x</script>"}"#, r#"{"title":" x"}"#] {
+        for invalid in [
+            r#"{"title":"<script>x</script>"}"#,
+            r#"{"title":" x"}"#,
+            r#"{"title":"<br>"}"#,
+            r#"{"title":"<em></em>"}"#,
+        ] {
             assert!(serde_json::from_str::<Wire>(invalid).is_err(), "{invalid}");
+            assert!(
+                serde_json::from_str::<OptionalWire>(invalid).is_err(),
+                "{invalid}"
+            );
         }
     }
 
@@ -1781,10 +1825,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(valid.as_ref(), "<em>ok</em>");
-        let invalid = sqlx::query_scalar::<_, RenderedPostTitle>("SELECT '<script>x</script>'")
-            .fetch_one(&mut connection)
-            .await;
-        assert!(invalid.is_err());
+        for invalid_fragment in ["<script>x</script>", "<br>", "<em></em>"] {
+            let invalid = sqlx::query_scalar::<_, RenderedPostTitle>("SELECT $1")
+                .bind(invalid_fragment)
+                .fetch_one(&mut connection)
+                .await;
+            assert!(invalid.is_err(), "{invalid_fragment}");
+        }
     }
 
     #[test]

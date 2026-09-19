@@ -620,9 +620,9 @@ async fn list_user_posts_returns_published_posts_with_cursor_pagination(#[case] 
     );
     assert!(
         first_page.posts.iter().all(|post| post
-            .title
-            .as_deref()
-            .is_none_or(|title| !title.contains("Draft"))),
+            .rendered_title
+            .as_ref()
+            .is_none_or(|title| !title.as_ref().contains("Draft"))),
         "body: {body}"
     );
 
@@ -842,10 +842,12 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
         "body: {body}"
     );
     assert!(
-        first_page.posts.iter().all(|post| post
-            .title
-            .as_deref()
-            .is_none_or(|title| { !title.contains("Draft") && !title.contains("Deleted") })),
+        first_page
+            .posts
+            .iter()
+            .all(|post| post.rendered_title.as_ref().is_none_or(|title| {
+                !title.as_ref().contains("Draft") && !title.as_ref().contains("Deleted")
+            })),
         "body: {body}"
     );
 
@@ -946,10 +948,12 @@ async fn list_home_timeline_returns_authenticated_users_published_posts_only(
             "body: {body}"
         );
         assert!(
-            first_page.posts.iter().all(|post| post
-                .title
-                .as_deref()
-                .is_none_or(|title| { !title.contains("Other") && !title.contains("Draft") })),
+            first_page
+                .posts
+                .iter()
+                .all(|post| post.rendered_title.as_ref().is_none_or(|title| {
+                    !title.as_ref().contains("Other") && !title.as_ref().contains("Draft")
+                })),
             "body: {body}"
         );
         let first_page_ids: Vec<_> = first_page.posts.iter().map(|post| post.post_id).collect();

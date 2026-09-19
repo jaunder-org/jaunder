@@ -12,7 +12,7 @@
 //! sits on the public request path (the #173 escape, ADR-0040). maud preserves that
 //! property: `html!` is a compile-time macro that builds a string, with no runtime.
 
-use common::render::RenderedHtml;
+use common::render::{RenderedHtml, RenderedPostTitle};
 use leptos::{
     prelude::{AddAnyAttr, InnerHtmlAttribute, IntoView},
     tachys::html::element::InnerHtml,
@@ -69,6 +69,16 @@ impl Markup {
         // real hazard, a `PreEscaped(user_input)` appearing anywhere else in `web`.
         // raw-html-door:allow re-wraps a RenderedHtml whose safety sanitization established (ADR-0079)
         Self(PreEscaped(html.as_ref()).into_string())
+    }
+
+    /// Carry a canonical inline Rendered Title into the markup layer unescaped.
+    ///
+    /// Its closed grammar is validated at its authoring and wire boundaries, so
+    /// it cannot introduce an attribute, active element, or nested link.
+    #[must_use]
+    pub(crate) fn from_rendered_post_title(title: &RenderedPostTitle) -> Self {
+        // raw-html-door:allow re-wraps a canonical RenderedPostTitle whose closed grammar excludes active markup
+        Self(PreEscaped(title.as_ref()).into_string())
     }
 
     /// The rendered markup as a string slice.

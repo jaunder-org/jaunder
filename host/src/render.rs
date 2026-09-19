@@ -1898,6 +1898,35 @@ mod tests {
     }
 
     #[test]
+    fn title_projection_collapses_content_free_fragments_but_keeps_mixed_visible_text() {
+        for (format, source) in [
+            (PostFormat::Markdown, "<br>"),
+            (PostFormat::Org, "@@html:<br>@@"),
+            (PostFormat::Html, "<br>"),
+            (PostFormat::Html, "<em></em>"),
+        ] {
+            let title: PostTitle = source.parse().unwrap();
+            assert_eq!(
+                render_title(&title, &format).as_ref(),
+                "",
+                "{format:?} {source:?}"
+            );
+        }
+        for (format, source, expected) in [
+            (PostFormat::Markdown, "before  \nafter", "before<br> after"),
+            (PostFormat::Org, "@@html:<br>@@shown", "<br>shown"),
+            (PostFormat::Html, "<em>shown</em><br>", "<em>shown</em><br>"),
+        ] {
+            let title: PostTitle = source.parse().unwrap();
+            assert_eq!(
+                render_title(&title, &format).as_ref(),
+                expected,
+                "{format:?}"
+            );
+        }
+    }
+
+    #[test]
     fn title_projection_discards_active_and_embedded_descendants() {
         for (source, expected) in [
             ("<audio>x</audio>kept", "kept"),

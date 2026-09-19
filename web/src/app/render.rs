@@ -114,7 +114,7 @@ pub fn render_theme_hero(masthead: &Markup, header: &Markup) -> Markup {
 pub fn render_head(seed: &PageSeed, early_wasm_fetch_script: Option<&str>) -> Markup {
     let (title, description) = match seed {
         PageSeed::Permalink(authored) => (
-            authored.post.title.clone().map_or_else(
+            authored.title.clone().map_or_else(
                 || format!("Post by {}", authored.post.username),
                 String::from,
             ),
@@ -530,13 +530,23 @@ mod tests {
         );
     }
 
+    #[test]
+    fn permalink_head_uses_authored_title_not_rendered_title() {
+        let mut authored = sample_post();
+        authored.title = Some("*Authored syntax*".parse().unwrap());
+        authored.post.rendered_title = Some("<em>Rendered presentation</em>".parse().unwrap());
+        let head = render_head(&PageSeed::Permalink(authored), None).into_string();
+        assert!(head.contains("<title>*Authored syntax*</title>"), "{head}");
+        assert!(!head.contains("Rendered presentation"), "{head}");
+    }
+
     // A titleless post still needs a `<title>`: this is the SEO payload the public
     // surface stays server-rendered for, so an empty one is a real defect rather than
     // a cosmetic one. The author's name is the fallback.
     #[test]
     fn permalink_head_falls_back_to_the_author_when_a_post_has_no_title() {
         let mut untitled = sample_post();
-        untitled.post.title = None;
+        untitled.title = None;
         let head = render_head(&PageSeed::Permalink(untitled), None).into_string();
         assert!(head.contains("<title>Post by alice</title>"), "{head}");
     }

@@ -67,7 +67,7 @@ Out:
     backup round trips, invalid presence, and every invalid fragment class on
     SQLite and PostgreSQL.
 
-- [ ] Task 3: Paint persisted Rendered Titles on shared web Post surfaces
+- [x] Task 3: Paint persisted Rendered Titles on shared web Post surfaces
   - Depends on: Tasks 1–2.
   - Contract: content-weight DTOs carry rendered bytes for timeline/permalink
     painting while authored title remains only where source and metadata
