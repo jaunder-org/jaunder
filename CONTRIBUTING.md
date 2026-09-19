@@ -657,9 +657,10 @@ and `cargo xtask validate --no-e2e` remains its serial non-e2e form. See
 - `cargo fmt --check` checks Rust formatting.
 - `leptosfmt -x .direnv -x .git -x target --check '**/*.rs'` checks files that
   contain Leptos `view!` macros.
-- `prettier --check end2end '**/*.md'` checks Playwright/frontend test assets
-  and all tracked Markdown (`proseWrap: always`; scoped by `.prettierignore`,
-  which excludes `docs/archive/`).
+- `prettier --check end2end`, `prettier --check '**/*.md'`, and
+  `prettier --check '**/*.css'` check Playwright/frontend test assets, all
+  tracked Markdown, and all tracked CSS respectively (`proseWrap: always`;
+  scoped by `.prettierignore`, which excludes `docs/archive/`).
 - `doc-links` checks that every relative Markdown link in tracked `*.md`
   resolves to tracked repository content: file targets must be tracked, and
   directory targets must contain at least one tracked path. It excludes

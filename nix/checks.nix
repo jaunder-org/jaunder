@@ -2038,18 +2038,18 @@ static-docs =
     '';
 static-code =
   let
-    staticCodeSrc = pkgs.lib.cleanSourceWith {
-      src = craneLib.path ../.;
-      filter =
-        path: type:
-        let
-          isXtask = pkgs.lib.hasSuffix "/xtask" path || pkgs.lib.hasInfix "/xtask/" path;
-        in
-        !isXtask
+    staticCodeSourceFilter =
+      path: type:
+      let
+        isXtask = pkgs.lib.hasSuffix "/xtask" path || pkgs.lib.hasInfix "/xtask/" path;
+      in
+      type == "directory"
+      || (
+        !(pkgs.lib.hasSuffix ".md" path)
         && (
-          type == "directory"
+          pkgs.lib.hasSuffix ".css" path
           || (
-            !(pkgs.lib.hasSuffix ".md" path)
+            !isXtask
             && (
               builtins.any (suffix: pkgs.lib.hasSuffix suffix path) [
                 "/Cargo.toml"
@@ -2081,7 +2081,15 @@ static-code =
               ]
             )
           )
-        );
+        )
+      );
+    staticCodeSrc = pkgs.lib.cleanSourceWith {
+      src = craneLib.path ../.;
+      filter =
+        assert staticCodeSourceFilter "/source/xtask/theme.css" "regular";
+        assert staticCodeSourceFilter "/source/xtask" "directory";
+        assert !(staticCodeSourceFilter "/source/xtask/src/lib.rs" "regular");
+        staticCodeSourceFilter;
     };
   in
   pkgs.runCommand "static-code"
