@@ -2558,7 +2558,7 @@ without user information, query, or fragment; duplicate links are invalid. It
 substitutes the exact harvested `href` only in the sent body, without changing
 authored body/link bytes, and never searches for a target, normalizes the URL,
 or constructs a permalink
-([Local Post Link round-trip](adr/drafts/emacs-local-post-link-round-trip.md)).
+([Local Post Link round-trip](adr/0201-emacs-local-post-link-round-trip.md)).
 
 The remaining media candidates are body-only Org `file:` and `attachment:`
 links. `file:` targets resolve against the live authoring buffer's

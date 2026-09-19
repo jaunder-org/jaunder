@@ -1,6 +1,6 @@
-# ADR-DRAFT: Emacs Local Post Links Round-Trip Through Canonical URLs
+# ADR-0201: Emacs Local Post Links Round-Trip Through Canonical URLs
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-19
 - Issue: [#1586](https://github.com/jaunder-org/jaunder/issues/1586)
 
@@ -20,13 +20,13 @@ with only part of the Collection present locally, so converting every public URL
 back to a guessed filename would make local state and pull order accidental
 identity authorities.
 
-[ADR-0024](../0024-server-side-org-canonicalization.md) requires the authored
-local representation and canonical served representation to differ without
-corrupting each other. [ADR-0045](../0045-emacs-media-content-src.md)
-establishes the related rule that server-assigned URLs are harvested rather than
-rebuilt. [ADR-0047](../0047-emacs-publish-orchestration.md) requires validation
-before server mutation, and [ADR-0200](../0200-revalidated-matched-post-pull.md)
-protects matched pull replacement with snapshot revalidation.
+[ADR-0024](0024-server-side-org-canonicalization.md) requires the authored local
+representation and canonical served representation to differ without corrupting
+each other. [ADR-0045](0045-emacs-media-content-src.md) establishes the related
+rule that server-assigned URLs are harvested rather than rebuilt.
+[ADR-0047](0047-emacs-publish-orchestration.md) requires validation before
+server mutation, and [ADR-0200](0200-revalidated-matched-post-pull.md) protects
+matched pull replacement with snapshot revalidation.
 
 ## Decision
 
