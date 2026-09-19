@@ -1,6 +1,6 @@
-# ADR-DRAFT: Make AtomPub create intent durable across client restarts
+# ADR-0199: Make AtomPub create intent durable across client restarts
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-17
 - Issue: [#1565](https://github.com/jaunder-org/jaunder/issues/1565)
 
@@ -12,8 +12,8 @@ after Jaunder commits but before the client learns that ID. The current client
 retries only within one invocation under one ephemeral `Idempotency-Key`; a
 later invocation generates a new key. The server also gives each key only a
 one-hour semantic replay window under
-[ADR-0167](../0167-bounded-transient-data-retention.md). After either boundary,
-the local draft cannot distinguish the committed Post from an unrelated remote
+[ADR-0167](0167-bounded-transient-data-retention.md). After either boundary, the
+local draft cannot distinguish the committed Post from an unrelated remote
 Member, so retrying can create a duplicate.
 
 Explicit batch push makes this residual window routine rather than exceptional:
@@ -21,7 +21,7 @@ a long selection must remain safely resumable after cancellation, Emacs exit,
 transport loss, or delayed operator recovery. Post ID remains the canonical
 local/remote join key, and a heuristic match by title, body, slug, or timestamp
 would silently attach the wrong Post. The ID-first write-back ordering from
-[ADR-0047](../0047-emacs-publish-orchestration.md) protects failures after a
+[ADR-0047](0047-emacs-publish-orchestration.md) protects failures after a
 response, but it cannot recover an ID from a response that never arrived.
 
 ## Decision
@@ -38,10 +38,9 @@ existing unkeyed-create behavior.
 This durable mapping is Post-create correlation, not transient retry telemetry.
 It is written only when the keyed create commits, so its growth is bounded by
 successful keyed Posts rather than request volume. It follows the retained Post
-identity lifecycle from [ADR-0136](../0136-local-post-lifecycle.md). This
-decision supersedes only ADR-0167's one-hour semantic expiry and cleanup
-eligibility for Post-create idempotency mappings; ADR-0167's other retention
-policies stand.
+identity lifecycle from [ADR-0136](0136-local-post-lifecycle.md). This decision
+supersedes only ADR-0167's one-hour semantic expiry and cleanup eligibility for
+Post-create idempotency mappings; ADR-0167's other retention policies stand.
 
 Before its first create request, the Emacs Protocol Client durably records a
 stable create intent in the local Post: the key, the request-content digest it
