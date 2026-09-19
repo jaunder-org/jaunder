@@ -6,6 +6,8 @@
 #[cfg(all(target_arch = "wasm32", feature = "sqlx"))]
 compile_error!("common's `sqlx` feature must not be enabled for wasm32 targets (#438)");
 
+// CI cold-path measurement marker: issue-1574 colocated-1.
+
 pub mod audience;
 pub mod auth;
 pub mod backup;
