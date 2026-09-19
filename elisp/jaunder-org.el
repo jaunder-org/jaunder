@@ -204,6 +204,18 @@ later machine.  Idempotent: an existing value is preserved verbatim."
 
 ;;; Org link primitives (media-agnostic)
 
+(defun jaunder--local-post-link-candidate-p (link-record)
+  "Return non-nil when LINK-RECORD is a relative `.org' file-link candidate.
+Candidates are claimed before media even when their later identity proof fails.
+The suffix test ignores query and fragment spelling so those candidates receive
+an explicit Local Post Link diagnostic rather than falling through to media."
+  (let* ((path (plist-get link-record :path))
+         (file-part (and (stringp path) (car (split-string path "[?#]")))))
+    (and (equal (plist-get link-record :type) "file")
+         file-part
+         (not (file-name-absolute-p file-part))
+         (string-suffix-p ".org" file-part))))
+
 (defun jaunder--org-link-file (link)
   "Resolve `org-element' LINK's local target to an absolute file path.
 A `file:' path resolves against `default-directory'; an `attachment:' path via
@@ -231,6 +243,7 @@ Fields: :type (\"file\"/\"attachment\"/\"https\"/…), :path (raw target), :raw-
     (list :type type
           :path (org-element-property :path link)
           :raw-link (org-element-property :raw-link link)
+          :search-option (org-element-property :search-option link)
           :file (when (member type '("file" "attachment"))
                   (jaunder--org-link-file link)))))
 

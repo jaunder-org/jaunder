@@ -28,8 +28,13 @@ deployable Jaunder server binary.
 
 ## Layout
 
-- `jaunder.el` — the package: customization group, pure helpers, and the
-  HTTP/auth/mapping seams later units implement.
+- `jaunder.el` — the package entry point and dependency assembly.
+- `jaunder-inventory.el` — Collection and local Post identity inventory shared
+  by reconciliation and Local Post Link mapping.
+- `jaunder-post-link.el` — bidirectional Local Post Link mapping: exact local
+  evidence joins the read-only Collection inventory; publish substitutes
+  server-advertised alternate URLs only in the sent body, and pull restores
+  relative destinations only from unambiguous current proof.
 - `test/` — the ERT suite. Pure-helper tests live in `*-test.el`; server-backed
   live-integration tests live in `*-integration.el` (kept separate so the fast
   pure suite stays serverless).

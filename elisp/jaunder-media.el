@@ -54,11 +54,11 @@ The extension match is case-insensitive.  Unknown or extensionless names use
         "application/octet-stream")))
 
 (defun jaunder--media-link-p (link-record)
-  "Return non-nil when LINK-RECORD identifies a local-path link.
-LINK-RECORD is a `jaunder--org-link->record' plist.  Only `file:' and
-`attachment:' records qualify.  This type-only predicate is shared by collection
-and substitution so their positional one-for-one alignment stays in lockstep."
-  (not (null (member (plist-get link-record :type) '("file" "attachment")))))
+  "Return non-nil when LINK-RECORD identifies a local media-path link.
+Only `file:' and `attachment:' records qualify, except claimed Local Post Link
+candidates, which must never fall through to media upload."
+  (and (member (plist-get link-record :type) '("file" "attachment"))
+       (not (jaunder--local-post-link-candidate-p link-record))))
 
 (defun jaunder--upload-media (path content-type)
   "Upload the file at PATH as CONTENT-TYPE to the media collection; return its URL.
