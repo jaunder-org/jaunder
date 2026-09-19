@@ -242,8 +242,8 @@
                    (concat (jaunder-pulled-member-org-prefix member)
                            "Local body")))))
 
-(ert-deftest jaunder-pull-stage-member-reverses-post-links-from-shared-inventory ()
-  "Both pull paths reverse links before media planning or installation."
+(ert-deftest jaunder-pull-paths-reverse-post-links-before-installation ()
+  "Shared matched staging and complete server-only pull both reverse links."
   (let* ((root (make-temp-file "jaunder-pull-" t))
          (target (expand-file-name "target.org" root))
          (local (jaunder--make-inventory-local :path target :id "7" :slug "target"))
@@ -287,9 +287,17 @@
                  (should-not inventory-calls))
                (setq planned-body nil)
                (let ((jaunder--pull-link-inventory nil))
-                 (jaunder--pull-stage-member root source)
+                 (should (eq (jaunder-pull-result-status
+                              (jaunder--pull-member root source))
+                             'pulled))
                  (should (equal planned-body "[[./target.org][Target]]"))
-                 (should (= inventory-calls 1)))))))
+                 (should (= inventory-calls 1))
+                 (should (string-match-p
+                          (regexp-quote "[[./target.org][Target]]")
+                          (with-temp-buffer
+                            (insert-file-contents
+                             (expand-file-name "untitled-note.org" root))
+                            (buffer-string)))))))))
       (delete-directory root t))))
 
 (ert-deftest jaunder-pull-member-localizes-before-post-install ()

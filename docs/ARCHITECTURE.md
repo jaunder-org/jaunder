@@ -2620,8 +2620,11 @@ implicitly.
 
 Publish performs all network mutation before any destructive local change
 (`elisp/jaunder-publish.el:339`): map → validate (non-empty body; a `scheduled`
-Post needs a future `#+DATE:`) → ensure the buffer has a recorded machine zone →
-media localization → Entry send → write-back → rename to `<slug>.org`. Media
+Post needs a future `#+DATE:`) → preflight and localize Local Post Links from
+one read-only Collection inventory → ensure the buffer has a recorded machine
+zone → media localization → Entry send → write-back → rename to `<slug>.org`.
+Local Post Link localization changes only the sent body and aborts before
+mutation when referenced local or Collection evidence is incomplete. Media
 localization first collects candidates, then aggregates every missing,
 unreadable, or non-regular resolved path into one preflight error before warning
 or uploading; it next emits the untracked-media warning, uploads each equal

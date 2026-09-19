@@ -350,15 +350,10 @@ standalone server-only pulls acquire equivalent complete evidence themselves."
                              (string-match-p "\\[\\[https?:" source-body)
                              (or jaunder--pull-link-inventory
                                  (jaunder--inventory-for-root root))))
-             (members (and inventory
-                           (append (jaunder-inventory-server-only inventory)
-                                   (mapcar #'jaunder-inventory-match-member
-                                           (jaunder-inventory-matched inventory)))))
-             (locals (and inventory
-                          (append (jaunder-inventory-local-drafts inventory)
-                                  (jaunder-inventory-orphans inventory)
-                                  (mapcar #'jaunder-inventory-match-local
-                                          (jaunder-inventory-matched inventory)))))
+             (evidence (and inventory
+                            (jaunder--inventory-post-link-evidence inventory)))
+             (members (car evidence))
+             (locals (cadr evidence))
              (body (if inventory
                        (jaunder--reverse-pulled-post-links source-body root members locals)
                      source-body))

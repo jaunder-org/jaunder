@@ -101,6 +101,25 @@
               (downcase (or (url-host origin) "")))
        (= (url-port candidate) (url-port origin))))
 
+(defun jaunder--inventory-url-syntax-valid-p (href)
+  "Return non-nil when HREF has valid URI characters, authority, and escapes."
+  (when (and (stringp href)
+             (not (string-match-p "[[:space:][:cntrl:]<>\"{}|\\\\^`]" href))
+             (not (string-search
+                   "%" (replace-regexp-in-string
+                        "%[[:xdigit:]][[:xdigit:]]" "" href t t)))
+             (string-match "\\`[[:alpha:]][[:alnum:]+.-]*://\\([^/?#]*\\)" href))
+    (let* ((authority (match-string 1 href))
+           (host-port (if (string-match ".*@" authority)
+                          (substring authority (match-end 0))
+                        authority))
+           (port (and (string-match ":\\([0-9]+\\)\\'" host-port)
+                      (string-to-number (match-string 1 host-port)))))
+      (and (if (string-prefix-p "[" host-port)
+               (string-match-p "\\`\\[[^][]+\\]\\(?::[0-9]+\\)?\\'" host-port)
+             (string-match-p "\\`[^:]+\\(?::[0-9]+\\)?\\'" host-port))
+           (or (null port) (<= port 65535))))))
+
 (defun jaunder--inventory-alternate-outcome (links collection-url)
   "Return the authoritative alternate outcome for LINKS at COLLECTION-URL.
 The result is (HREF REASON), where exactly one member is non-nil."
@@ -115,7 +134,8 @@ The result is (HREF REASON), where exactly one member is non-nil."
                        (url-generic-parse-url collection-url)
                      (error nil))))
       (cond
-       ((not (and candidate (url-type candidate) (url-host candidate)))
+       ((not (and candidate (url-type candidate) (url-host candidate)
+                  (jaunder--inventory-url-syntax-valid-p href)))
         (list nil 'alternate-malformed))
        ((or (url-user candidate) (url-password candidate))
         (list nil 'alternate-user-info))
@@ -458,6 +478,16 @@ A local filename is evidence only after the Post ID and slug agree."
            :members (cl-remove-if-not (lambda (member) (gethash member group-owned))
                                       members))))
       groups))))
+
+(defun jaunder--inventory-post-link-evidence (inventory)
+  "Return unconflicted (MEMBERS LOCALS) from INVENTORY for Post link mapping."
+  (list (append (jaunder-inventory-server-only inventory)
+                (mapcar #'jaunder-inventory-match-member
+                        (jaunder-inventory-matched inventory)))
+        (append (jaunder-inventory-local-drafts inventory)
+                (jaunder-inventory-orphans inventory)
+                (mapcar #'jaunder-inventory-match-local
+                        (jaunder-inventory-matched inventory)))))
 
 (defun jaunder--inventory-for-root (root)
   "Return a side-effect-free inventory of configured ROOT and its Collection."
