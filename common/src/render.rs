@@ -47,15 +47,18 @@ pub enum PostFormat {
 }
 
 /// HTML that is **safe to emit unescaped** — the type's invariant is "contains no
-/// active markup", established by scrubbing against an allowlist (#445). It is a
+/// author-controlled active markup." Sanitization scrubs all author source; the
+/// only active-markup exception is fixed iframe output from a validated
+/// [`TrustedProviderEmbed`] assembled through [`assemble_rendered_html`]. It is a
 /// guarantee, not merely a provenance marker, and it is structural: the unescaped
 /// view sink accepts only `RenderedHtml`, so a raw `String`/body cannot reach it
 /// by accident.
 ///
-/// The feature-gated [`sanitize`] function is the only public production door:
-/// it establishes this invariant by scrubbing outside input. Common-private `SQLx`
-/// decoding and field-specific server DTO deserialization reconstruct persisted
-/// Jaunder-owned representations without re-sanitizing them. Exact fixtures use
+/// The feature-gated [`sanitize`] function and typed assembly are the only public
+/// production doors. They establish this invariant by scrubbing outside input and
+/// accepting only closed provider values. Common-private `SQLx` decoding and
+/// field-specific server DTO deserialization reconstruct persisted Jaunder-owned
+/// representations without re-sanitizing them. Exact fixtures use
 /// [`crate::test_support::rendered_html`] only when that test-only surface is
 /// enabled.
 ///

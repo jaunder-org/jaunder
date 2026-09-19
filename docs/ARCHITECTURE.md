@@ -527,22 +527,33 @@ public-feed events in one `WriteScope`; module-qualified host free functions
 construct ETags, and SQLite/PostgreSQL check final slug/format/time inside the
 write transaction before commit or revision creation.
 
-**`RenderedHtml` guarantees "contains no active markup", through a common-owned,
-host-only sanitization boundary**
-([ADR-0079](adr/0079-rendered-html-sanitization.md)). `common::render::sanitize`
-is the only public production API that establishes the invariant; the optional
-`sanitize` feature keeps `ammonia` out of CSR/wasm builds. Its field is
-crate-private: ordinary application crates have no raw constructor, conversion,
-blanket `Deserialize`, or trusted-string rebuild door. Common-private SQLx
-decode and field-specific seed/revision DTO deserialization reconstruct the
-field directly from Jaunder-owned representations, without re-sanitizing,
-copying, or changing stored/rendered bytes. Exact fixtures are available only
-through `common::test_support` under `cfg(test)` or `test-support`. The
-compiler-backed `rendered-html-compiler-boundary` step uses an isolated
-downstream dependency to prove raw construction and that fixture API remain
-unavailable in production. SQLx decoding's **wrong-column blessing risk is real
-and accepted**: a reviewer must ensure every `RenderedHtml` decode is from the
-rendered-HTML column; no spelling marker enforces that judgement
+**`RenderedHtml` contains no author-controlled active markup, through a
+common-owned host-only sanitization boundary and a closed typed provider-embed
+assembly door** ([ADR-0079](adr/0079-rendered-html-sanitization.md),
+[bounded Post Shortcode embeds](adr/drafts/bounded-post-shortcode-embeds.md)).
+`common::render::sanitize` scrubs every author-controlled parser fragment; the
+optional `sanitize` feature keeps `ammonia` out of CSR/wasm builds. The only
+active markup exception is a `TrustedProviderEmbed` built by a closed,
+provider-specific validator and assembled with sanitized fragments in document
+order. Host-owned Markdown and Org recognition accepts only eligible top-level
+Post Shortcode paragraphs and dispatches validated YouTube/Vimeo values; HTML
+Post source, raw author iframes, malformed forms, and unknown providers remain
+sanitized or literal. Fixed provider players are external presentation
+resources, not Media references. The stored native source and AtomPub Member
+stay unchanged, while the canonical rendered HTML serves web and Syndication
+Feed surfaces.
+
+`RenderedHtml`'s field is crate-private: ordinary application crates have no raw
+constructor, conversion, blanket `Deserialize`, or trusted-string rebuild door.
+Common-private SQLx decode and field-specific seed/revision DTO deserialization
+reconstruct the field directly from Jaunder-owned representations, without
+re-sanitizing, copying, or changing stored/rendered bytes. Exact fixtures are
+available only through `common::test_support` under `cfg(test)` or
+`test-support`. The compiler-backed `rendered-html-compiler-boundary` step uses
+an isolated downstream dependency to prove raw construction and that fixture API
+remain unavailable in production. SQLx decoding's **wrong-column blessing risk
+is real and accepted**: a reviewer must ensure every `RenderedHtml` decode is
+from the rendered-HTML column; no spelling marker enforces that judgement
 ([ADR-0123](adr/0123-rendered-html-storage-decode.md)). `RenderedHtml` stays
 common because dual-target consumers reach it; ammonia stays host-only.
 
@@ -778,23 +789,6 @@ clamped 1..=50 with a default of 50. The offset type `PageOffset` (`:62`) exists
 only for the media listing, where the reader may skip.
 
 ### Committed direction
-
-- **Bounded Post Shortcode embeds**
-  ([decision](adr/drafts/bounded-post-shortcode-embeds.md)): Markdown and Org
-  top-level paragraphs will recognize a fixed complete-line grammar. Host-owned
-  source recognition will dispatch YouTube and Vimeo names to a closed closed
-  `common::render::TrustedProviderEmbed` type with private validated provider
-  state and fixed markup. Untrusted parser output will remain sanitized before a
-  common-owned trusted assembly path substitutes those typed provider frames;
-  raw author iframes will remain stripped. This will extend ADR-0159's narrow
-  host-only `common/sanitize` minting exception for the closed provider values
-  and structured assembly door, leaving source recognition and general rendering
-  machinery in `host`. It will amend `RenderedHtml`'s invariant to no
-  **author-controlled** active markup without admitting a raw-markup or
-  arbitrary-URL constructor. HTML Posts, code/literal/container contexts,
-  unknown providers, and malformed or extended forms will remain literal. The
-  native source will not be rewritten, all rendered surfaces will share the
-  expansion, and provider URLs will not create Media references.
 
 Nothing below is built. **There is no ingestion tier**: all 25 migrations
 (`storage/migrations/{sqlite,postgres}/`) are publishing-side, and no table

@@ -16,7 +16,10 @@ use crate::helpers::{
     atompub_at, atompub_get, atompub_location, atompub_post_xml, atompub_put_xml, body_string,
     create_user_and_session, make_app,
 };
-use storage::test_support::{Backend, backends, backends_matrix};
+use storage::{
+    PostFormat,
+    test_support::{Backend, backends, backends_matrix},
+};
 
 use super::fixtures::{entry_xml, location_post_id};
 
@@ -90,6 +93,159 @@ async fn create_post_returns_201_and_is_retrievable(#[case] backend: Backend) {
     assert!(
         body.contains("type=\"text/markdown\""),
         "a Markdown post round-trips as the text/markdown media type (ADR-0023)"
+    );
+}
+
+#[apply(backends_matrix)]
+#[case::markdown_to_org(
+    "{{< youtube dQw4w9WgXcQ >}}",
+    "text/markdown",
+    PostFormat::Markdown,
+    "{{< vimeo 123456789 >}}",
+    "text/org",
+    PostFormat::Org
+)]
+#[case::org_to_markdown(
+    "{{< vimeo 123456789 >}}",
+    "text/org",
+    PostFormat::Org,
+    "{{< youtube dQw4w9WgXcQ >}}",
+    "text/markdown",
+    PostFormat::Markdown
+)]
+#[tokio::test]
+async fn shortcode_create_and_update_preserve_member_source(
+    backend: Backend,
+    #[case] create_source: &str,
+    #[case] create_content_type: &str,
+    #[case] create_format: PostFormat,
+    #[case] update_source: &str,
+    #[case] update_content_type: &str,
+    #[case] update_format: PostFormat,
+) {
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let canonical_create_source = format!("{create_source}\n");
+    let canonical_update_source = format!("{update_source}\n");
+
+    let created = make_app!(&env, base)
+        .oneshot(atompub_post_xml(
+            &session,
+            "posts",
+            &format!(
+                r#"<?xml version="1.0"?>
+<entry xmlns="http://www.w3.org/2005/Atom" xmlns:app="http://www.w3.org/2007/app">
+  <title>Shortcode</title>
+  <content type="{create_content_type}"><![CDATA[{create_source}]]></content>
+  <app:control><app:draft>no</app:draft></app:control>
+</entry>"#
+            ),
+        ))
+        .await
+        .expect("create shortcode member");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let location = atompub_location(
+        created
+            .headers()
+            .get(header::LOCATION)
+            .expect("created member has location")
+            .to_str()
+            .expect("location is text"),
+    );
+    let post_id = location_post_id(&created);
+    let viewer = common::visibility::ViewerIdentity::local(session.user_id);
+    let stored = env
+        .posts()
+        .get_post_by_id(PostId::from(post_id), &viewer)
+        .await
+        .expect("read created post")
+        .expect("created post exists");
+    assert_eq!(stored.body.as_ref(), canonical_create_source);
+    assert_eq!(stored.format, create_format);
+
+    let member = make_app!(&env, base)
+        .oneshot(
+            atompub_at(&session, Method::GET, &location)
+                .body(Body::empty())
+                .expect("build Member GET"),
+        )
+        .await
+        .expect("read created member");
+    assert_eq!(member.status(), StatusCode::OK);
+    let member = body_string(member).await;
+    assert!(
+        member.contains(&format!("type=\"{create_content_type}\"")),
+        "AtomPub Member has create content type {create_content_type}: {member}"
+    );
+    assert!(
+        !member.contains("<iframe"),
+        "Member must not contain rendered markup: {member}"
+    );
+    let entry = member
+        .parse::<host::atompub::Entry>()
+        .expect("Member is an Atom entry");
+    assert_eq!(
+        entry.content().and_then(|content| content.value()),
+        Some(canonical_create_source.as_str()),
+        "AtomPub Member preserves canonical create source rather than generated markup"
+    );
+
+    let updated = make_app!(&env, base)
+        .oneshot(atompub_put_xml(
+            &session,
+            &format!("posts/{post_id}"),
+            &format!(
+                r#"<?xml version="1.0"?>
+<entry xmlns="http://www.w3.org/2005/Atom" xmlns:app="http://www.w3.org/2007/app">
+  <title>Shortcode</title>
+  <content type="{update_content_type}"><![CDATA[{update_source}]]></content>
+  <app:control><app:draft>no</app:draft></app:control>
+</entry>"#
+            ),
+        ))
+        .await
+        .expect("update shortcode member");
+    assert_eq!(updated.status(), StatusCode::OK);
+    let stored = env
+        .posts()
+        .get_post_by_id(PostId::from(post_id), &viewer)
+        .await
+        .expect("read updated post")
+        .expect("updated post exists");
+    assert_eq!(stored.body.as_ref(), canonical_update_source);
+    assert_eq!(stored.format, update_format);
+
+    let member = make_app!(&env, base)
+        .oneshot(
+            atompub_at(&session, Method::GET, &location)
+                .body(Body::empty())
+                .expect("build Member GET"),
+        )
+        .await
+        .expect("read updated member");
+    assert_eq!(member.status(), StatusCode::OK);
+    let member = body_string(member).await;
+    assert!(
+        member.contains(&format!("type=\"{update_content_type}\"")),
+        "AtomPub Member has update content type {update_content_type}: {member}"
+    );
+    assert!(
+        !member.contains("<iframe"),
+        "Member must not contain rendered markup: {member}"
+    );
+    let entry = member
+        .parse::<host::atompub::Entry>()
+        .expect("Member is an Atom entry");
+    assert_eq!(
+        entry.content().and_then(|content| content.value()),
+        Some(canonical_update_source.as_str()),
+        "AtomPub Member preserves canonical update source rather than generated markup"
     );
 }
 

@@ -87,10 +87,11 @@ fn assemble_with_markers(html: &str, markers: Vec<(String, TrustedProviderEmbed)
     let mut owned_parts = Vec::new();
     let mut remaining = html;
     for (marker, embed) in markers {
-        let Some((before, after)) = remaining.split_once(&marker) else {
+        let placeholder = format!("<!--{marker}-->");
+        let Some((before, after)) = remaining.split_once(&placeholder) else {
             unreachable!("a generated shortcode marker must be emitted exactly once");
         };
-        if after.contains(&marker) {
+        if after.contains(&placeholder) {
             unreachable!("a generated shortcode marker must be emitted exactly once");
         }
         owned_parts.push((before.to_owned(), Some(embed)));
@@ -689,6 +690,8 @@ mod tests {
         let rendered = render(&parse_post_body(source), &PostFormat::Markdown);
         assert!(!rendered.contains("evil.example"), "{rendered}");
         assert!(!rendered.contains("JAUNDER_SHORTCODE_"), "{rendered}");
+        assert!(!rendered.contains("-->"), "{rendered}");
+        assert!(!rendered.contains("--&gt;"), "{rendered}");
         assert!(rendered.contains("youtube-nocookie.com"), "{rendered}");
     }
 

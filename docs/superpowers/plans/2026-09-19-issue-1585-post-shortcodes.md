@@ -57,7 +57,7 @@ Out:
     cross-document behavior, and a fixture provider added without tokenizer or
     assembly-policy changes.
 
-- [ ] Task 3: Prove persistence, protocol, and browser behavior; project built
+- [x] Task 3: Prove persistence, protocol, and browser behavior; project built
       reality
   - Contract: create and update flows continue storing canonical native source;
     AtomPub Member GET returns that source, while Syndication Feeds and web Post

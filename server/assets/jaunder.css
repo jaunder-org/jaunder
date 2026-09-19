@@ -922,6 +922,28 @@
   margin: 0;
 }
 
+.j-provider-embed {
+  margin: 1rem 0;
+  max-width: 100%;
+}
+
+.j-provider-embed-frame {
+  aspect-ratio: 16 / 9;
+  max-width: 100%;
+}
+
+.j-provider-embed-frame iframe {
+  border: 0;
+  display: block;
+  height: 100%;
+  max-width: 100%;
+  width: 100%;
+}
+
+.j-provider-embed figcaption {
+  margin-top: 0.5rem;
+}
+
 .j-post-foot {
   margin-top: 12px;
   display: flex;
