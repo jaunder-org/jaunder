@@ -226,6 +226,7 @@ impl OrgShortcodeExport<'_> {
     fn hidden_shortcode_literal(container: &orgize::export::Container) -> Option<String> {
         let raw = match container {
             orgize::export::Container::Comment(node) => node.raw(),
+            orgize::export::Container::CommentBlock(node) => node.raw(),
             orgize::export::Container::Drawer(node) => node.raw(),
             orgize::export::Container::PropertyDrawer(node) => node.raw(),
             _ => return None,
@@ -239,6 +240,12 @@ impl OrgShortcodeExport<'_> {
             .collect::<Vec<_>>()
             .join("\n");
         (!literal.is_empty()).then_some(literal)
+    }
+
+    fn escape_html_text(text: &str) -> String {
+        text.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
     }
 
     fn container(container: &orgize::export::Container) -> OrgContainer {
@@ -255,10 +262,12 @@ impl orgize::export::Traverser for OrgShortcodeExport<'_> {
         match event {
             orgize::export::Event::Enter(
                 container @ (orgize::export::Container::Comment(_)
+                | orgize::export::Container::CommentBlock(_)
                 | orgize::export::Container::Drawer(_)
                 | orgize::export::Container::PropertyDrawer(_)),
             ) => {
                 if let Some(literal) = Self::hidden_shortcode_literal(&container) {
+                    let literal = Self::escape_html_text(&literal);
                     self.html.push_str(format!("<p>{literal}</p>"));
                     ctx.skip();
                     return;
@@ -731,6 +740,7 @@ mod tests {
             &format!("- list item\n  {valid}"),
             &format!("- outer\n  - inner\n    {valid}"),
             &format!("# {valid}"),
+            &format!("#+begin_comment\n{valid}\n#+end_comment"),
             &format!("* Headline\n{valid}"),
         ] {
             let body = parse_post_body(source);
@@ -753,6 +763,15 @@ mod tests {
         );
         assert!(multiple_hidden.contains("first"), "{multiple_hidden}");
         assert!(multiple_hidden.contains("second"), "{multiple_hidden}");
+
+        let hidden_markup = render(
+            &parse_post_body(
+                "# {{< unknown opaque >}}<img src=\"https://evil.example/active.png\">",
+            ),
+            &PostFormat::Org,
+        );
+        assert!(!hidden_markup.contains("<img"), "{hidden_markup}");
+        assert!(hidden_markup.contains("&lt;img"), "{hidden_markup}");
 
         let html = render(&parse_post_body(valid), &PostFormat::Html);
         assert!(!html.contains("<iframe"), "{html}");

@@ -112,11 +112,13 @@ pub struct RenderedHtml(pub(crate) String);
 /// # use common::render::TrustedProviderEmbed;
 /// let _ = TrustedProviderEmbed { provider: () };
 /// ```
+#[cfg(feature = "sanitize")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TrustedProviderEmbed {
     provider: ProviderEmbed,
 }
 
+#[cfg(feature = "sanitize")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ProviderEmbed {
     Youtube(YoutubeVideoId),
@@ -126,19 +128,22 @@ enum ProviderEmbed {
 }
 
 /// A validated `YouTube` identifier held privately by [`TrustedProviderEmbed`].
+#[cfg(feature = "sanitize")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct YoutubeVideoId(String);
 
 /// A validated Vimeo identifier held privately by [`TrustedProviderEmbed`].
+#[cfg(feature = "sanitize")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct VimeoVideoId(String);
 
 /// A test-only fixed provider identifier used to prove extension dispatch.
-#[cfg(feature = "test-support")]
+#[cfg(all(feature = "sanitize", feature = "test-support"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct FixtureVideoId(String);
 
 /// Rejects an identifier that cannot be used in fixed provider markup.
+#[cfg(feature = "sanitize")]
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum InvalidTrustedProviderEmbed {
     /// A `YouTube` ID did not meet `YouTube`'s bounded identifier grammar.
@@ -151,6 +156,7 @@ pub enum InvalidTrustedProviderEmbed {
     Vimeo,
 }
 
+#[cfg(feature = "sanitize")]
 impl TrustedProviderEmbed {
     /// Validates an exact `YouTube` video identifier.
     ///
@@ -236,6 +242,7 @@ impl TrustedProviderEmbed {
 /// [`assemble_rendered_html`] sanitizes before it can reach `RenderedHtml`.
 /// `Embed` accepts only a [`TrustedProviderEmbed`] constructed through a
 /// provider-specific validator.
+#[cfg(feature = "sanitize")]
 #[derive(Clone, Copy, Debug)]
 pub enum RenderedHtmlPart<'a> {
     /// Parser output originating from Post source and requiring sanitization.
