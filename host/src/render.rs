@@ -54,21 +54,43 @@ fn parse_shortcode(line: &str) -> Option<Shortcode<'_>> {
     })
 }
 
-fn dispatch_shortcode(shortcode: Shortcode<'_>) -> Option<TrustedProviderEmbed> {
-    match shortcode.provider {
-        "youtube" => TrustedProviderEmbed::youtube(shortcode.id).ok(),
-        "vimeo" => TrustedProviderEmbed::vimeo(shortcode.id).ok(),
-        _ => None,
-    }
+type ProviderConstructor = fn(&str) -> Option<TrustedProviderEmbed>;
+
+fn youtube_provider(id: &str) -> Option<TrustedProviderEmbed> {
+    TrustedProviderEmbed::youtube(id).ok()
 }
 
-fn shortcode_line(line: &str) -> Option<TrustedProviderEmbed> {
+fn vimeo_provider(id: &str) -> Option<TrustedProviderEmbed> {
+    TrustedProviderEmbed::vimeo(id).ok()
+}
+
+const POST_SHORTCODE_PROVIDERS: &[(&str, ProviderConstructor)] =
+    &[("youtube", youtube_provider), ("vimeo", vimeo_provider)];
+
+fn dispatch_shortcode_with(
+    shortcode: Shortcode<'_>,
+    providers: &[(&str, ProviderConstructor)],
+) -> Option<TrustedProviderEmbed> {
+    providers
+        .iter()
+        .find(|(name, _)| *name == shortcode.provider)
+        .and_then(|(_, constructor)| constructor(shortcode.id))
+}
+
+fn shortcode_line_with(
+    line: &str,
+    providers: &[(&str, ProviderConstructor)],
+) -> Option<TrustedProviderEmbed> {
     let indentation = line.bytes().take_while(|byte| *byte == b' ').count();
     (indentation <= 3)
         .then(|| line.get(indentation..))
         .flatten()
         .and_then(|line| parse_shortcode(line.trim_end_matches([' ', '\t', '\r', '\n'])))
-        .and_then(dispatch_shortcode)
+        .and_then(|shortcode| dispatch_shortcode_with(shortcode, providers))
+}
+
+fn shortcode_line(line: &str) -> Option<TrustedProviderEmbed> {
+    shortcode_line_with(line, POST_SHORTCODE_PROVIDERS)
 }
 
 fn marker(source: &str, index: usize) -> String {
@@ -131,6 +153,13 @@ pub(super) fn render_markdown(body: &str) -> String {
 }
 
 fn render_markdown_with_shortcodes(body: &str) -> RenderedHtml {
+    render_markdown_with_shortcodes_using(body, POST_SHORTCODE_PROVIDERS)
+}
+
+fn render_markdown_with_shortcodes_using(
+    body: &str,
+    providers: &[(&str, ProviderConstructor)],
+) -> RenderedHtml {
     use pulldown_cmark::{Event, Parser, Tag, TagEnd, html};
     let mut markers = Vec::new();
     let mut events = Vec::new();
@@ -145,7 +174,9 @@ fn render_markdown_with_shortcodes(body: &str) -> RenderedHtml {
         }
         if let Event::Start(Tag::Paragraph) = event
             && depth == 0
-            && let Some(embed) = body.get(range).and_then(shortcode_line)
+            && let Some(embed) = body
+                .get(range)
+                .and_then(|line| shortcode_line_with(line, providers))
         {
             let marker = marker(body, markers.len());
             events.push(Event::Html(format!("<!--{marker}-->").into()));
@@ -188,6 +219,28 @@ struct OrgShortcodeExport<'a> {
 }
 
 impl OrgShortcodeExport<'_> {
+    /// Returns a shortcode-looking line hidden by Org's normal exporter.
+    ///
+    /// Comments and drawers otherwise remain omitted. This limited fallback
+    /// emits only a shortcode-looking source line as sanitized literal text.
+    fn hidden_shortcode_literal(container: &orgize::export::Container) -> Option<String> {
+        let raw = match container {
+            orgize::export::Container::Comment(node) => node.raw(),
+            orgize::export::Container::Drawer(node) => node.raw(),
+            orgize::export::Container::PropertyDrawer(node) => node.raw(),
+            _ => return None,
+        };
+        let literal = raw
+            .lines()
+            .filter_map(|line| {
+                let line = line.strip_prefix("# ").unwrap_or(line);
+                line.find("{{<").and_then(|start| line.get(start..))
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        (!literal.is_empty()).then_some(literal)
+    }
+
     fn container(container: &orgize::export::Container) -> OrgContainer {
         match container {
             orgize::export::Container::Document(_) => OrgContainer::Document,
@@ -200,6 +253,20 @@ impl OrgShortcodeExport<'_> {
 impl orgize::export::Traverser for OrgShortcodeExport<'_> {
     fn event(&mut self, event: orgize::export::Event, ctx: &mut orgize::export::TraversalContext) {
         match event {
+            orgize::export::Event::Enter(
+                container @ (orgize::export::Container::Comment(_)
+                | orgize::export::Container::Drawer(_)
+                | orgize::export::Container::PropertyDrawer(_)),
+            ) => {
+                if let Some(literal) = Self::hidden_shortcode_literal(&container) {
+                    self.html.push_str(format!("<p>{literal}</p>"));
+                    ctx.skip();
+                    return;
+                }
+                self.containers.push(Self::container(&container));
+                self.html
+                    .event(orgize::export::Event::Enter(container), ctx);
+            }
             orgize::export::Event::Enter(orgize::export::Container::Paragraph(paragraph))
                 if self.containers == [OrgContainer::Document, OrgContainer::Section] =>
             {
@@ -575,6 +642,51 @@ mod tests {
     }
 
     #[test]
+    fn post_shortcode_grammar_accepts_only_exact_ascii_token_boundaries() {
+        for (line, accepted) in [
+            ("{{< youtube dQw4w9WgXcQ >}}", true),
+            ("{{<\tyoutube\tdQw4w9WgXcQ\t>}}", true),
+            ("{{<  youtube \t dQw4w9WgXcQ  \t>}}", true),
+            ("{{<youtube dQw4w9WgXcQ >}}", false),
+            ("{{< youtubedQw4w9WgXcQ >}}", false),
+            ("{{< youtube dQw4w9WgXcQ>}}", false),
+            ("{{< youtube dQw4w9WgXcQ > }}", false),
+            ("{{< youtube dQw4w9WgXcQ }}", false),
+            ("{{< youtube dQw4w9WgXcQ >}", false),
+            ("{{< youtube\u{a0}dQw4w9WgXcQ >}}", false),
+            ("{{ youtube dQw4w9WgXcQ >}}", false),
+            ("{{< youtube dQw4w9WgXcQ extra >}}", false),
+        ] {
+            assert_eq!(parse_shortcode(line).is_some(), accepted, "{line}");
+        }
+
+        for indentation in 0..=3 {
+            let line = format!(
+                "{}{{{{< youtube dQw4w9WgXcQ >}}}} \t",
+                " ".repeat(indentation)
+            );
+            assert!(shortcode_line(&line).is_some(), "{line}");
+        }
+        assert!(shortcode_line("    {{< youtube dQw4w9WgXcQ >}}").is_none());
+        for trailing in [" ", "\t"] {
+            assert!(
+                shortcode_line(&["{{< youtube dQw4w9WgXcQ >}}", trailing].concat()).is_some(),
+                "{trailing:?}"
+            );
+        }
+
+        for source in [
+            "{{< YouTube dQw4w9WgXcQ >}}",
+            "{{< unknown dQw4w9WgXcQ >}}",
+            "{{< youtube dQw4w9WgXcQ?start=1 >}}",
+            "{{< youtube dQw4w9WgXc >}}",
+            "{{< vimeo 0 >}}",
+        ] {
+            assert!(shortcode_line(source).is_none(), "{source}");
+        }
+    }
+
+    #[test]
     fn post_shortcode_grammar_and_ineligible_markdown_contexts_remain_literal() {
         let valid = "{{< youtube dQw4w9WgXcQ >}}";
         for source in [
@@ -624,8 +736,24 @@ mod tests {
             let body = parse_post_body(source);
             let rendered = render(&body, &PostFormat::Org);
             assert!(!rendered.contains("<iframe"), "{source:?}: {rendered}");
+            assert!(rendered.contains("dQw4w9WgXcQ"), "{source:?}: {rendered}");
             assert_eq!(body.as_ref(), source);
         }
+        for source in [
+            "# {{< unknown opaque >}}",
+            ":LOGBOOK:\n{{< youtube not-an-id >}}\n:END:",
+        ] {
+            let rendered = render(&parse_post_body(source), &PostFormat::Org);
+            assert!(!rendered.contains("<iframe"), "{source:?}: {rendered}");
+            assert!(rendered.contains("{{&lt;"), "{source:?}: {rendered}");
+        }
+        let multiple_hidden = render(
+            &parse_post_body(":LOGBOOK:\n{{< unknown first >}}\n{{< unknown second >}}\n:END:"),
+            &PostFormat::Org,
+        );
+        assert!(multiple_hidden.contains("first"), "{multiple_hidden}");
+        assert!(multiple_hidden.contains("second"), "{multiple_hidden}");
+
         let html = render(&parse_post_body(valid), &PostFormat::Html);
         assert!(!html.contains("<iframe"), "{html}");
     }
@@ -650,12 +778,48 @@ mod tests {
     }
 
     #[test]
+    fn fixture_provider_adds_an_isolated_dispatch_entry_without_changing_assembly() {
+        fn fixture_provider(id: &str) -> Option<TrustedProviderEmbed> {
+            (id == "fixture-id").then(TrustedProviderEmbed::fixture)
+        }
+
+        let rendered = render_markdown_with_shortcodes_using(
+            "before\n\n{{< fixture fixture-id >}}\n\nafter",
+            &[("fixture", fixture_provider)],
+        );
+        assert!(
+            rendered.contains("https://fixture.invalid/player/fixture-video"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("Watch fixture video"), "{rendered}");
+        assert!(!rendered.contains("youtube-nocookie.com"), "{rendered}");
+        assert!(rendered.find("before").unwrap() < rendered.find("fixture.invalid").unwrap());
+        assert!(rendered.find("fixture.invalid").unwrap() < rendered.find("after").unwrap());
+    }
+
+    #[test]
+    fn org_shortcode_preserves_cross_document_reference_and_footnote_rendering() {
+        let shortcode = "{{< youtube dQw4w9WgXcQ >}}";
+        let source = format!(
+            "before [[https://example.com/path][reference]] and [fn:note]\n\n{shortcode}\n\nafter\n\n[fn:note] retained footnote"
+        );
+        let rendered = render(&parse_post_body(&source), &PostFormat::Org);
+        let ordinary = common::render::sanitize(&render_org(&source));
+
+        for expected in ["reference", "retained footnote"] {
+            assert!(ordinary.contains(expected), "ordinary: {ordinary}");
+            assert!(rendered.contains(expected), "rendered: {rendered}");
+        }
+        assert!(rendered.contains("youtube-nocookie.com/embed/dQw4w9WgXcQ"));
+    }
+
+    #[test]
     fn provider_dispatch_shares_grammar_and_keeps_unknown_names_literal() {
         let future = parse_shortcode("{{< future-provider opaque-id >}}")
             .expect("provider-neutral grammar accepts future provider tokens");
         assert_eq!(future.provider, "future-provider");
         assert_eq!(future.id, "opaque-id");
-        assert!(dispatch_shortcode(future).is_none());
+        assert!(dispatch_shortcode_with(future, POST_SHORTCODE_PROVIDERS).is_none());
 
         for (source, provider_url) in [
             (

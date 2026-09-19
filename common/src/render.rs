@@ -121,6 +121,8 @@ pub struct TrustedProviderEmbed {
 enum ProviderEmbed {
     Youtube(YoutubeVideoId),
     Vimeo(VimeoVideoId),
+    #[cfg(feature = "test-support")]
+    Fixture(FixtureVideoId),
 }
 
 /// A validated `YouTube` identifier held privately by [`TrustedProviderEmbed`].
@@ -130,6 +132,11 @@ struct YoutubeVideoId(String);
 /// A validated Vimeo identifier held privately by [`TrustedProviderEmbed`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct VimeoVideoId(String);
+
+/// A test-only fixed provider identifier used to prove extension dispatch.
+#[cfg(feature = "test-support")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FixtureVideoId(String);
 
 /// Rejects an identifier that cannot be used in fixed provider markup.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -161,6 +168,19 @@ impl TrustedProviderEmbed {
                 provider: ProviderEmbed::Youtube(YoutubeVideoId(id.to_owned())),
             })
             .ok_or(InvalidTrustedProviderEmbed::Youtube)
+    }
+
+    /// Builds a fixed test-only provider embed.
+    ///
+    /// This fixture is available only to test-support consumers. It proves a
+    /// provider mapping can add a distinct closed variant without changing the
+    /// tokenizer or trusted assembly policy; it is not a production provider API.
+    #[cfg(feature = "test-support")]
+    #[must_use]
+    pub fn fixture() -> Self {
+        Self {
+            provider: ProviderEmbed::Fixture(FixtureVideoId("fixture-video".to_owned())),
+        }
     }
 
     /// Validates an exact Vimeo video identifier.
@@ -197,6 +217,14 @@ impl TrustedProviderEmbed {
                 &format!("https://vimeo.com/{}", id.0),
                 "Vimeo video player",
                 "Watch on Vimeo",
+            ),
+            #[cfg(feature = "test-support")]
+            ProviderEmbed::Fixture(id) => provider_embed_html(
+                "j-provider-embed-fixture",
+                &format!("https://fixture.invalid/player/{}", id.0),
+                &format!("https://fixture.invalid/watch/{}", id.0),
+                "Fixture video player",
+                "Watch fixture video",
             ),
         }
     }
@@ -244,7 +272,7 @@ fn provider_embed_html(
 ) -> String {
     format!(
         concat!(
-            "<figure class=\"j-provider-embed {}\" data-jaunder-part=\"post-shortcode\">",
+            "<figure class=\"j-provider-embed {}\">",
             "<div class=\"j-provider-embed-frame\">",
             "<iframe src=\"{}\" loading=\"lazy\" title=\"{}\" allowfullscreen></iframe>",
             "</div><figcaption><a href=\"{}\">{}</a></figcaption></figure>"
@@ -687,11 +715,25 @@ mod tests {
         assert!(html.find("before").unwrap() < html.find("between").unwrap());
         assert!(html.find("between").unwrap() < html.find("after").unwrap());
 
-        for invalid in ["dQw4w9WgXcQ?start=1", "dQw4w9WgXc", "<script>"] {
-            assert!(TrustedProviderEmbed::youtube(invalid).is_err(), "{invalid}");
+        for (id, valid) in [
+            ("dQw4w9WgXcQ", true),
+            ("a_b-cD01234", true),
+            ("dQw4w9WgXc", false),
+            ("dQw4w9WgXcQ0", false),
+            ("dQw4w9WgXc!", false),
+            ("dQw4w9WgXéQ", false),
+        ] {
+            assert_eq!(TrustedProviderEmbed::youtube(id).is_ok(), valid, "{id}");
         }
-        for invalid in ["0", "0123", "12x", "123456789012345678901"] {
-            assert!(TrustedProviderEmbed::vimeo(invalid).is_err(), "{invalid}");
+        for (id, valid) in [
+            ("1", true),
+            ("12345678901234567890", true),
+            ("0", false),
+            ("0123", false),
+            ("12x", false),
+            ("123456789012345678901", false),
+        ] {
+            assert_eq!(TrustedProviderEmbed::vimeo(id).is_ok(), valid, "{id}");
         }
     }
 
@@ -704,7 +746,7 @@ mod tests {
         assert_eq!(
             assemble_rendered_html(&[RenderedHtmlPart::Embed(&youtube)]).as_ref(),
             concat!(
-                "<figure class=\"j-provider-embed j-provider-embed-youtube\" data-jaunder-part=\"post-shortcode\">",
+                "<figure class=\"j-provider-embed j-provider-embed-youtube\">",
                 "<div class=\"j-provider-embed-frame\">",
                 "<iframe src=\"https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ\" loading=\"lazy\" title=\"YouTube video player\" allowfullscreen></iframe>",
                 "</div><figcaption><a href=\"https://www.youtube.com/watch?v=dQw4w9WgXcQ\">Watch on YouTube</a></figcaption></figure>"
@@ -713,7 +755,7 @@ mod tests {
         assert_eq!(
             assemble_rendered_html(&[RenderedHtmlPart::Embed(&vimeo)]).as_ref(),
             concat!(
-                "<figure class=\"j-provider-embed j-provider-embed-vimeo\" data-jaunder-part=\"post-shortcode\">",
+                "<figure class=\"j-provider-embed j-provider-embed-vimeo\">",
                 "<div class=\"j-provider-embed-frame\">",
                 "<iframe src=\"https://player.vimeo.com/video/123456789\" loading=\"lazy\" title=\"Vimeo video player\" allowfullscreen></iframe>",
                 "</div><figcaption><a href=\"https://vimeo.com/123456789\">Watch on Vimeo</a></figcaption></figure>"
