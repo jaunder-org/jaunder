@@ -5,6 +5,7 @@
 
 mod api;
 mod page_state;
+mod presentation_state;
 #[cfg(feature = "server")]
 mod thumbnail;
 
@@ -25,6 +26,9 @@ pub use thumbnail::thumbnail_document;
 
 pub use page_state::{
     Revalidation, ScopeAvailability, ThemePageState, draft_from_editor, revalidation,
+};
+pub use presentation_state::{
+    HeaderMediaDraft, LogoFallbackOption, MEDIA_PAGE_SIZE, logo_fallback_option, media_page_offset,
 };
 
 #[cfg(target_arch = "wasm32")]

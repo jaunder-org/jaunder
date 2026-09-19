@@ -9,33 +9,33 @@
 
 use serde::Serialize;
 
-/// Raw bytes of the manifest-selected WASM identity artifact after Passkey
-/// authentication landed (#1455), still using `wasm-opt -Oz`.
+/// Raw bytes of the manifest-selected WASM identity artifact after Theme Studio
+/// gained paginated owned-Media presentation controls (#1549), still using
+/// `wasm-opt -Oz`.
 ///
 /// `validate` reports observed size as a drift against this. **A drift of a few
 /// bytes is build noise, not erosion**: the artifact is not bit-reproducible
 /// across builds — a docs-only commit was observed to move it by 13 bytes. Read
 /// the drift for its order of magnitude, not its sign; kilobytes mean something
 /// changed.
-pub const WASM_RAW_ACHIEVED_BYTES: u64 = 3_516_938;
+pub const WASM_RAW_ACHIEVED_BYTES: u64 = 3_709_037;
 
 /// The ceiling `cargo xtask validate` enforces.
 ///
 /// Headroom remains **3.1%** over [`WASM_RAW_ACHIEVED_BYTES`]. The achieved
-/// value was deliberately recalibrated when #1455 added explicit browser
-/// `WebAuthn` capability checks, ceremony conversion, and Passkey management to
-/// the CSR artifact:
+/// value was deliberately recalibrated when #1549 added paginated owned-Media
+/// discovery and editable logo/header presentation bindings to Theme Studio:
 ///
 /// | build                      | raw bytes |
 /// | -------------------------- | --------- |
-/// | `-Oz` (achieved)           | 3 516 938 |
-/// | **ceiling**                | **3 626 000** |
+/// | `-Oz` (achieved)           | 3 709 037 |
+/// | **ceiling**                | **3 824 000** |
 ///
-/// The next weaker measured output is `-Os` at 3 672 807 bytes, so losing
+/// The next weaker measured output is `-Os` at 3 875 781 bytes, so losing
 /// `-Oz` remains outside the ceiling rather than hiding inside its headroom.
 ///
 /// Lower it deliberately, in the same commit as the win that earned it.
-pub const WASM_RAW_CEILING_BYTES: u64 = 3_626_000;
+pub const WASM_RAW_CEILING_BYTES: u64 = 3_824_000;
 
 #[derive(Debug, Serialize)]
 pub struct BudgetVerdict {
@@ -105,12 +105,13 @@ mod tests {
     }
 
     /// Raw bytes of the shipped wasm at the weaker `wasm-opt` levels, remeasured
-    /// after Passkey authentication landed. `NO_WASM_OPT_BYTES` retains the
+    /// after #1549 added Theme Studio owned-Media presentation controls.
+    /// `NO_WASM_OPT_BYTES` retains the
     /// pre-#836 historical guard. The next three tests run the real predicate
     /// over them.
     const NO_WASM_OPT_BYTES: u64 = 5_350_591;
-    const O2_LEVEL_BYTES: u64 = 3_724_527;
-    const OS_LEVEL_BYTES: u64 = 3_672_807;
+    const O2_LEVEL_BYTES: u64 = 3_931_151;
+    const OS_LEVEL_BYTES: u64 = 3_875_781;
 
     #[test]
     fn the_achieved_size_passes_its_own_budget() {

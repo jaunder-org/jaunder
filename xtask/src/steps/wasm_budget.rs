@@ -65,7 +65,7 @@ pub(crate) fn run_with(
                         StepResult::fail("wasm-budget")
                             .detail(wasm_budget::failure_message(&verdict))
                     } else {
-                        // Report drift from the size #836 achieved, not just pass/fail. A
+                        // Report drift from the size #1549 achieved, not just pass/fail. A
                         // headroom budget's known weakness is that the win can erode
                         // quietly inside the headroom; naming the drift is what makes that
                         // erosion visible before it reaches the ceiling.
@@ -76,7 +76,7 @@ pub(crate) fn run_with(
                             format!("-{}", achieved - verdict.actual)
                         };
                         StepResult::ok("wasm-budget").detail(format!(
-                            "{} raw bytes (ceiling {}, {drift} vs #836)",
+                            "{} raw bytes (ceiling {}, {drift} vs #1549)",
                             verdict.actual, verdict.ceiling
                         ))
                     }

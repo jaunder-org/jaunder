@@ -7,6 +7,7 @@ import {
   signInAsNewUser,
   stallServerFn,
 } from "./helpers";
+import { uploadMedia } from "./media-helpers";
 
 const ASSET_PATH = "assets/pixel.png";
 const ASSET_BYTES = [
@@ -123,6 +124,32 @@ test("author completes the custom theme lifecycle through Studio", async ({
   tracedContext,
 }) => {
   const username = await signInAsNewUser(page);
+  await uploadMedia(
+    page,
+    "blog-logo.png",
+    Buffer.from(ASSET_BYTES),
+    "image/png",
+  );
+  await uploadMedia(
+    page,
+    "header-one.png",
+    Buffer.from([...ASSET_BYTES.slice(0, -12), 1, ...ASSET_BYTES.slice(-11)]),
+    "image/png",
+  );
+  await uploadMedia(
+    page,
+    "header-two.png",
+    Buffer.from([...ASSET_BYTES.slice(0, -12), 2, ...ASSET_BYTES.slice(-11)]),
+    "image/png",
+  );
+  for (let index = 0; index < 50; index += 1) {
+    await uploadMedia(
+      page,
+      `newer-${index.toString().padStart(2, "0")}.png`,
+      Buffer.from(ASSET_BYTES),
+      "image/png",
+    );
+  }
   await goto(page, "/themes");
   const mutation = (endpoint: ThemeEndpoint) =>
     page.waitForResponse(
@@ -187,15 +214,56 @@ test("author completes the custom theme lifecycle through Studio", async ({
     page.getByRole("button", { name: "Save complete draft package" }).click(),
   ]);
 
+  await expect(page.getByRole("button", { name: "Next images" })).toBeEnabled();
+  await page.getByRole("button", { name: "Next images" }).click();
+  await expect(page.getByText("Image page 2")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Next images" }),
+  ).toBeDisabled();
   await Promise.all([
     mutation("replace_binding"),
-    page.getByRole("button", { name: "Use package logo default" }).click(),
+    page
+      .getByLabel("Logo image")
+      .selectOption({ label: "Media: blog-logo.png" }),
   ]);
-  await page.getByLabel("Header pool package asset paths").fill(ASSET_PATH);
+  await page.getByLabel("Header pool package asset paths").fill("");
+  const mediaToAdd = page.getByLabel("Media to add");
+  for (const filename of ["header-one.png", "header-two.png"]) {
+    await mediaToAdd.selectOption({ label: filename });
+    await page.getByRole("button", { name: "Add Media" }).click();
+  }
+  await expect(
+    page.getByRole("list", { name: "Selected header Media" }),
+  ).toContainText("header-one.png");
+  await expect(
+    page.getByRole("list", { name: "Selected header Media" }),
+  ).toContainText("header-two.png");
+  await Promise.all([
+    mutation("replace_binding"),
+    page.getByLabel("Logo image").selectOption("none"),
+  ]);
+  await expect(
+    page.getByRole("list", { name: "Selected header Media" }),
+  ).toContainText("header-one.png");
+  await expect(
+    page.getByRole("list", { name: "Selected header Media" }),
+  ).toContainText("header-two.png");
+  await Promise.all([
+    mutation("replace_binding"),
+    page
+      .getByLabel("Logo image")
+      .selectOption({ label: "Media: blog-logo.png" }),
+  ]);
+  await expect(page.getByLabel("Header pool package asset paths")).toHaveValue(
+    "",
+  );
   await Promise.all([
     mutation("replace_pool"),
     page.getByRole("button", { name: "Save header pool" }).click(),
   ]);
+  await expect(page.getByLabel("Header pool package asset paths")).toHaveValue(
+    "",
+  );
   await Promise.all([
     mutation("shuffle"),
     page.getByRole("button", { name: "Shuffle assignments" }).click(),
@@ -249,6 +317,20 @@ test("author completes the custom theme lifecycle through Studio", async ({
   await persistedSelection;
   releaseCatalog();
   await expect(freshPage.getByLabel("Public selection")).toHaveValue(themeId!);
+  await freshPage.getByRole("button", { name: /Night round trip/ }).click();
+  await expect(freshPage.getByLabel("Logo image")).toHaveValue(
+    "unavailable-media",
+  );
+  await freshPage.getByRole("button", { name: "Next images" }).click();
+  await expect(freshPage.getByLabel("Logo image")).toHaveValue(
+    /media\/upload\//,
+  );
+  await expect(
+    freshPage.getByRole("list", { name: "Selected header Media" }),
+  ).toContainText("header-one.png");
+  await expect(
+    freshPage.getByRole("list", { name: "Selected header Media" }),
+  ).toContainText("header-two.png");
   await freshContext.close();
 
   const downloadPromise = page.waitForEvent("download");
@@ -278,6 +360,13 @@ test("author completes the custom theme lifecycle through Studio", async ({
   await expect(
     page.getByRole("button", { name: /Restored package/ }),
   ).toBeVisible();
+  await page.getByRole("button", { name: /Restored package/ }).click();
+  await expect(page.getByLabel("Logo image")).toHaveValue("package-default");
+  await expect(
+    page
+      .getByRole("list", { name: "Selected header Media" })
+      .getByRole("listitem"),
+  ).toHaveCount(0);
 });
 
 test("operator manages the site catalog through public selection and fallback", async ({
