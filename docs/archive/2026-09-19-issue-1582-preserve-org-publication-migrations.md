@@ -35,9 +35,10 @@ enough not to look like deletion.
   Atom categories alongside `#+KEYWORDS`, preserving source order and omitting
   blank terms. Those migration headers remain client-side metadata rather than
   body content.
-- Publication-specific root-relative image and obsolete `.html` link corrections
-  are data repair in the source publication, not a generic Jaunder rewrite
-  policy: a leading slash is ambiguous outside that known legacy site.
+- Publication-specific root-relative image corrections are data repair in the
+  source publication, not a generic Jaunder rewrite policy: a leading slash is
+  ambiguous outside that known legacy site. Intra-site URL migration is deferred
+  to #1586 so its format can be decided independently.
 - No server storage, public URL, authentication, or deletion semantics change.
 
 ## Acceptance
@@ -59,12 +60,11 @@ enough not to look like deletion.
   the body.
 - Reconcile reports a canonical rename using both the original and destination
   paths.
-- The repaired `radios-appear` source tree has no accidental content loss and
-  contiguous Jaunder metadata. Its reviewed migration inventory rewrites exactly
-  the 39 root-relative raster-image targets whose sibling files exist to
-  `./<filename>`, and exactly the 16 dated legacy intra-site targets whose slug
-  resolves to a local Org file to `/~operator/YYYY/MM/DD/<slug>` using that
-  target file's `#+DATE`; all other root-relative targets remain unchanged.
+- The repaired `radios-appear` source tree has no accidental content loss. Its
+  reviewed migration inventory rewrites exactly the 39 root-relative
+  raster-image targets whose sibling files exist to `./<filename>`; all other
+  root-relative targets remain unchanged. Intra-site URL changes are outside
+  this issue and tracked by #1586.
 - On `/~operator/2025/02/10/22-years-wtf`, the Post body renders as four
   paragraphs, preserves the `+years+` strike-through and the source's literal
   `~ 2013` text, and exposes `Meta`, `anniversary`, and `nattering` as
