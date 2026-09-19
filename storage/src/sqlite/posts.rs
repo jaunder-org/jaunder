@@ -69,8 +69,8 @@ async fn apply_post_update(
          published_at = CASE WHEN $6 THEN NULL WHEN $7 IS NOT NULL THEN $8 ELSE COALESCE(published_at, $9) END,
          updated_at = $10, summary = $11 WHERE post_id = $12",
     )
-    .bind_storage(input.title.as_ref()).bind_storage(&input.slug).bind_storage(&input.body).bind_storage(input.format)
-    .bind_storage(input.rendered.html()).bind_storage(publication_clear).bind_storage(explicit_published_at)
+    .bind_storage(input.rendered.title()).bind_storage(&input.slug).bind_storage(input.rendered.body()).bind_storage(input.rendered.format())
+    .bind_storage(input.rendered.rendered_html()).bind_storage(publication_clear).bind_storage(explicit_published_at)
     .bind_storage(explicit_published_at).bind_storage(now).bind_storage(now).bind_storage(input.summary.as_ref()).bind_storage(post_id)
     .execute(&mut *conn).await?;
     visibility::replace_post_audiences::<Sqlite>(&mut *conn, post_id, &input.audiences).await?;

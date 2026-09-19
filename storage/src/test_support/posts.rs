@@ -21,7 +21,6 @@ use common::tag::TagLabel;
 use common::test_support::{parse_post_body, parse_post_title, parse_slug, parse_tag_label};
 use common::time::UtcInstant;
 use common::visibility::AudienceTarget;
-use host::render::with_media;
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
@@ -316,13 +315,10 @@ impl SeedRawPost {
             .slug
             .unwrap_or_else(|| parse_slug(&format!("post-{n}")));
         let title = parse_post_title(&format!("Post {n}"));
-        let rendered = with_media(&self.body, &self.format);
+        let rendered = host::render::render_post(Some(title), self.body, self.format);
         CreatePostInput {
             user_id: self.user_id,
-            title: Some(title),
             slug,
-            body: self.body,
-            format: self.format,
             rendered,
             published_at: self.published_at,
             summary: self.summary,
@@ -351,11 +347,12 @@ impl SeedRawPost {
         let input = self.into_input();
         let slug = input.slug.clone();
         let title = input
-            .title
-            .clone()
+            .rendered
+            .title()
+            .cloned()
             .expect("SeedRawPost always autogenerates a title");
         let published_at = input.published_at;
-        let rendered_html = input.rendered.clone().into_html();
+        let rendered_html = input.rendered.clone().into_rendered_html();
         let outcome = write_scope
             .run(move |transaction| {
                 Box::pin(async move {
@@ -507,12 +504,9 @@ impl UpdateRawPost {
     /// Resolve into the [`UpdatePostInput`] to hand `update_post`, rendering `body` here.
     #[must_use]
     pub fn build(self) -> UpdatePostInput {
-        let rendered = with_media(&self.body, &self.format);
+        let rendered = host::render::render_post(self.title, self.body, self.format);
         UpdatePostInput {
-            title: self.title,
             slug: self.slug,
-            body: self.body,
-            format: self.format,
             rendered,
             publish: self.publish,
             summary: self.summary,
@@ -729,7 +723,7 @@ mod tests {
         let author = SeedUser::new().seed(env.users(), env.write_scope()).await;
         let a = SeedRawPost::new(author.user_id).build();
         let b = SeedRawPost::new(author.user_id).build();
-        assert!(a.title.is_some(), "build autogenerates a title");
+        assert!(a.rendered.title().is_some(), "build autogenerates a title");
         assert_ne!(a.slug, b.slug, "each build autogenerates a distinct slug");
         let published = env
             .posts()

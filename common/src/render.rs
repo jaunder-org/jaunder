@@ -295,6 +295,263 @@ fn provider_embed_html(
     )
 }
 
+/// Canonical, trusted inline HTML projected from a [`PostTitle`].
+///
+/// Unlike [`RenderedHtml`], this field-specific value admits only the closed title
+/// grammar. Its checked admission seam recognizes canonical bytes; it neither
+/// parses authoring formats nor sanitizes untrusted source. Those responsibilities
+/// belong to the host renderer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RenderedPostTitle(String);
+
+/// The canonical-title recognizer rejected persisted or wire bytes.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("rendered post title is not a canonical inline fragment")]
+pub struct InvalidRenderedPostTitle;
+
+impl RenderedPostTitle {
+    /// Returns the canonical empty fragment used when authored source has no
+    /// surviving visible title.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self(String::new())
+    }
+
+    /// Reconstructs a Rendered Title only after recognizing the exact canonical
+    /// fragment grammar used by storage and wire fields.
+    ///
+    /// This is deliberately a checked admission seam rather than a raw-string
+    /// constructor. It is available on both native and wasm targets because CSR
+    /// validates server-authored bytes without acquiring host rendering machinery.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidRenderedPostTitle`] when the bytes are not the exact
+    /// canonical inline grammar.
+    pub fn parse_canonical(fragment: impl AsRef<str>) -> Result<Self, InvalidRenderedPostTitle> {
+        let fragment = fragment.as_ref();
+        canonical_rendered_post_title(fragment)
+            .then(|| Self(fragment.to_owned()))
+            .ok_or(InvalidRenderedPostTitle)
+    }
+
+    /// Returns the trusted canonical fragment.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Returns the deterministic plain-text projection used by text-only sinks.
+    #[must_use]
+    pub fn visible_text(&self) -> String {
+        let mut text = String::new();
+        let mut rest = self.0.as_str();
+        while !rest.is_empty() {
+            if let Some(after_tag) = rest.strip_prefix('<') {
+                let Some(end) = after_tag.find('>') else {
+                    return text;
+                };
+                if &after_tag[..end] == "br" && !text.ends_with(' ') {
+                    text.push(' ');
+                }
+                rest = &after_tag[end + 1..];
+            } else {
+                let end = rest.find('<').unwrap_or(rest.len());
+                let value = &rest[..end];
+                let mut value = value;
+                while !value.is_empty() {
+                    if let Some(after) = value.strip_prefix("&amp;") {
+                        text.push('&');
+                        value = after;
+                    } else if let Some(after) = value.strip_prefix("&lt;") {
+                        text.push('<');
+                        value = after;
+                    } else if let Some(after) = value.strip_prefix("&gt;") {
+                        text.push('>');
+                        value = after;
+                    } else if let Some(character) = value.chars().next() {
+                        text.push(character);
+                        value = &value[character.len_utf8()..];
+                    } else {
+                        break;
+                    }
+                }
+                rest = &rest[end..];
+            }
+        }
+        text.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+}
+
+impl AsRef<str> for RenderedPostTitle {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl serde::Serialize for RenderedPostTitle {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+// SQL/wire admission accepts only canonical text and the closed lower-case tag
+// grammar; it never rewrites bytes while establishing the trusted type.
+#[cfg(feature = "sqlx")]
+impl sqlx::Type<sqlx::Postgres> for RenderedPostTitle {
+    fn type_info() -> sqlx::postgres::PgTypeInfo {
+        <String as sqlx::Type<sqlx::Postgres>>::type_info()
+    }
+
+    fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
+        <String as sqlx::Type<sqlx::Postgres>>::compatible(ty)
+    }
+}
+
+#[cfg(feature = "sqlx")]
+impl<'q> sqlx::Encode<'q, sqlx::Postgres> for RenderedPostTitle {
+    fn encode_by_ref(
+        &self,
+        buffer: &mut <sqlx::Postgres as sqlx::Database>::ArgumentBuffer,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+        <&str as sqlx::Encode<'q, sqlx::Postgres>>::encode_by_ref(&self.0.as_str(), buffer)
+    }
+}
+
+#[cfg(feature = "sqlx")]
+impl<'r> sqlx::Decode<'r, sqlx::Postgres> for RenderedPostTitle {
+    fn decode(
+        value: <sqlx::Postgres as sqlx::Database>::ValueRef<'r>,
+    ) -> Result<Self, sqlx::error::BoxDynError> {
+        let value = <String as sqlx::Decode<'r, sqlx::Postgres>>::decode(value)?;
+        Self::parse_canonical(value).map_err(Into::into)
+    }
+}
+
+#[cfg(feature = "sqlx")]
+impl sqlx::Type<sqlx::Sqlite> for RenderedPostTitle {
+    fn type_info() -> sqlx::sqlite::SqliteTypeInfo {
+        <String as sqlx::Type<sqlx::Sqlite>>::type_info()
+    }
+
+    fn compatible(ty: &sqlx::sqlite::SqliteTypeInfo) -> bool {
+        <String as sqlx::Type<sqlx::Sqlite>>::compatible(ty)
+    }
+}
+
+#[cfg(feature = "sqlx")]
+impl<'q> sqlx::Encode<'q, sqlx::Sqlite> for RenderedPostTitle {
+    fn encode_by_ref(
+        &self,
+        buffer: &mut <sqlx::Sqlite as sqlx::Database>::ArgumentBuffer,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+        <&str as sqlx::Encode<'q, sqlx::Sqlite>>::encode_by_ref(&self.0.as_str(), buffer)
+    }
+}
+
+#[cfg(feature = "sqlx")]
+impl<'r> sqlx::Decode<'r, sqlx::Sqlite> for RenderedPostTitle {
+    fn decode(
+        value: <sqlx::Sqlite as sqlx::Database>::ValueRef<'r>,
+    ) -> Result<Self, sqlx::error::BoxDynError> {
+        let value = <String as sqlx::Decode<'r, sqlx::Sqlite>>::decode(value)?;
+        Self::parse_canonical(value).map_err(Into::into)
+    }
+}
+
+/// Reconstructs a server-authored Rendered Title wire field after canonical validation.
+///
+/// # Errors
+///
+/// Returns the deserializer's error when the field is not a string or is not the
+/// exact canonical inline grammar.
+pub fn deserialize_rendered_post_title<'de, D>(
+    deserializer: D,
+) -> Result<RenderedPostTitle, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    let fragment = String::deserialize(deserializer)?;
+    RenderedPostTitle::parse_canonical(fragment).map_err(serde::de::Error::custom)
+}
+
+fn canonical_rendered_post_title(fragment: &str) -> bool {
+    if fragment.starts_with(' ')
+        || fragment.ends_with(' ')
+        || fragment.contains("  ")
+        || fragment
+            .chars()
+            .any(|character| character.is_whitespace() && character != ' ')
+    {
+        return false;
+    }
+
+    let mut rest = fragment;
+    let mut stack = Vec::new();
+    while !rest.is_empty() {
+        if let Some(after_tag) = rest.strip_prefix('<') {
+            let Some(end) = after_tag.find('>') else {
+                return false;
+            };
+            let tag = &after_tag[..end];
+            rest = &after_tag[end + 1..];
+            if tag == "br" {
+                continue;
+            }
+            if let Some(name) = tag.strip_prefix('/') {
+                if !is_rendered_post_title_tag(name) || stack.pop() != Some(name) {
+                    return false;
+                }
+            } else {
+                if !is_rendered_post_title_tag(tag) {
+                    return false;
+                }
+                stack.push(tag);
+            }
+            continue;
+        }
+
+        let next = rest.find('<').unwrap_or(rest.len());
+        let text = &rest[..next];
+        if !canonical_title_text(text) {
+            return false;
+        }
+        rest = &rest[next..];
+    }
+    stack.is_empty()
+}
+
+fn is_rendered_post_title_tag(tag: &str) -> bool {
+    matches!(
+        tag,
+        "b" | "strong" | "i" | "em" | "u" | "s" | "del" | "code" | "sub" | "sup" | "mark" | "small"
+    )
+}
+
+fn canonical_title_text(text: &str) -> bool {
+    let mut rest = text;
+    while let Some(index) = rest.find('&') {
+        let (prefix, after) = rest.split_at(index);
+        if prefix.contains('>')
+            || !after.starts_with("&amp;")
+                && !after.starts_with("&lt;")
+                && !after.starts_with("&gt;")
+        {
+            return false;
+        }
+        rest = if let Some(value) = after.strip_prefix("&amp;") {
+            value
+        } else if let Some(value) = after.strip_prefix("&lt;") {
+            value
+        } else {
+            // The preceding predicate proves this is `&gt;`.
+            &after[4..]
+        };
+    }
+    !rest.contains('>')
+}
+
 /// The single allowlist every [`sanitize`] call scrubs against. It is ammonia's
 /// audited default, widened for fenced-code language markers and the bounded
 /// non-executable media surface recorded by
@@ -1410,6 +1667,116 @@ mod tests {
                 assert_eq!(twice, once, "idempotent for {format:?} {body:?}");
             }
         }
+    }
+
+    #[test]
+    fn rendered_post_title_recognizes_exact_canonical_grammar() {
+        let retained = [
+            "b", "strong", "i", "em", "u", "s", "del", "code", "sub", "sup", "mark", "small",
+        ];
+        for tag in retained {
+            let fragment = format!("<{tag}>text</{tag}>");
+            assert!(
+                RenderedPostTitle::parse_canonical(&fragment).is_ok(),
+                "{fragment}"
+            );
+        }
+        for accepted in [
+            "",
+            "plain &amp; &lt;x&gt;",
+            "<strong>bold</strong><br><em>text</em>",
+            "a <b>b</b> c",
+        ] {
+            assert!(
+                RenderedPostTitle::parse_canonical(accepted).is_ok(),
+                "{accepted}"
+            );
+        }
+        for rejected in [
+            "<a href=\"/\">x</a>",
+            "<strong class=\"x\">x</strong>",
+            "<BR>",
+            "<br/>",
+            "&quot;",
+            "&",
+            "<",
+            ">",
+            "<script>x</script>",
+            "<strong>x",
+            "</strong>",
+            "<b>x</i>",
+            "<b><i>x</b></i>",
+            " leading",
+            "trailing ",
+            "two  spaces",
+            "line\nbreak",
+            "<b attr>x</b>",
+        ] {
+            assert!(
+                RenderedPostTitle::parse_canonical(rejected).is_err(),
+                "{rejected}"
+            );
+        }
+    }
+
+    #[test]
+    fn rendered_post_title_accepts_unbounded_canonical_fragments_and_normalizes_text() {
+        for fragment in [
+            "x".repeat(16 * 1024 + 1),
+            format!("{}x{}", "<b>".repeat(128), "</b>".repeat(128)),
+        ] {
+            assert!(RenderedPostTitle::parse_canonical(fragment).is_ok());
+        }
+        let title = RenderedPostTitle::parse_canonical("a &amp; <b>b</b><br> c &lt;d&gt;").unwrap();
+        assert_eq!(title.visible_text(), "a & b c <d>");
+        for (fragment, expected) in [("&amp;lt;", "&lt;"), ("&amp;amp;", "&amp;")] {
+            assert_eq!(
+                RenderedPostTitle::parse_canonical(fragment)
+                    .unwrap()
+                    .visible_text(),
+                expected
+            );
+        }
+        for whitespace in ['\u{00a0}', '\u{2003}'] {
+            assert!(RenderedPostTitle::parse_canonical(format!("a{whitespace}b")).is_err());
+        }
+    }
+
+    #[test]
+    fn rendered_post_title_wire_reconstruction_rejects_invalid_bytes() {
+        #[derive(serde::Deserialize)]
+        struct Wire {
+            #[serde(deserialize_with = "deserialize_rendered_post_title")]
+            title: RenderedPostTitle,
+        }
+        let valid: Wire = serde_json::from_str(r#"{"title":"<em>ok</em>"}"#).unwrap();
+        assert_eq!(valid.title.as_ref(), "<em>ok</em>");
+        assert_eq!(
+            serde_json::to_string(&valid.title).unwrap(),
+            r#""<em>ok</em>""#
+        );
+        for invalid in [r#"{"title":"<script>x</script>"}"#, r#"{"title":" x"}"#] {
+            assert!(serde_json::from_str::<Wire>(invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[cfg(feature = "sqlx")]
+    #[tokio::test]
+    async fn rendered_post_title_sqlx_reconstruction_rejects_invalid_bytes() {
+        use sqlx::Connection;
+
+        let mut connection = sqlx::SqliteConnection::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let valid = sqlx::query_scalar::<_, RenderedPostTitle>("SELECT '<em>ok</em>'")
+            .fetch_one(&mut connection)
+            .await
+            .unwrap();
+        assert_eq!(valid.as_ref(), "<em>ok</em>");
+        let invalid = sqlx::query_scalar::<_, RenderedPostTitle>("SELECT '<script>x</script>'")
+            .fetch_one(&mut connection)
+            .await;
+        assert!(invalid.is_err());
     }
 
     #[test]

@@ -22,7 +22,7 @@ use common::tag::{Tag, TagLabel};
 use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::AudienceTarget;
-use host::render::RenderOutput;
+use host::render::PostRenderOutput;
 
 /// The `published_at`-clear flag in an update-post statement.
 ///
@@ -342,14 +342,10 @@ pub struct PostMutation {
 #[derive(Clone)]
 pub struct CreatePostInput {
     pub user_id: UserId,
-    pub title: Option<PostTitle>,
     pub slug: Slug,
-    pub body: PostBody,
-    pub format: PostFormat,
-    /// The rendered body together with the media it references — see [`RenderOutput`],
-    /// whose only constructor is rendering, so this input cannot carry a reference set
-    /// that disagrees with its HTML (#711).
-    pub rendered: RenderOutput,
+    /// Authored source and every derivative. Private fields on [`PostRenderOutput`]
+    /// make title/body/format mismatches impossible at the storage boundary.
+    pub rendered: PostRenderOutput,
     /// If Some, the post is created in a published state.
     pub published_at: Option<UtcInstant>,
     /// Optional summary/excerpt of the post.
@@ -393,15 +389,10 @@ impl From<PublicationState> for PublishUpdate {
 /// Input for updating an existing post.
 #[derive(Clone)]
 pub struct UpdatePostInput {
-    pub title: Option<PostTitle>,
     /// The new slug. Note: Slugs are typically immutable once published.
     pub slug: Slug,
-    pub body: PostBody,
-    pub format: PostFormat,
-    /// The rendered body together with the media it references — see [`RenderOutput`].
-    /// An edit can remove a reference, so the set must always be the one this HTML
-    /// implies; deriving it is the only way to build one (#711).
-    pub rendered: RenderOutput,
+    /// Authored source and every derivative, assembled only by host rendering.
+    pub rendered: PostRenderOutput,
     /// What this update does to the Post's publication state.
     pub publish: PublishUpdate,
     /// Optional summary/excerpt of the post.

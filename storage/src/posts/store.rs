@@ -3268,7 +3268,7 @@ mod tests {
             "<img src=\"{}\">",
             media_url_for("revision-prior.jpg")
         ));
-        let mut seed = SeedRawPost::new(owner)
+        let seed = SeedRawPost::new(owner)
             .draft()
             .slug("revision-prior-slug")
             .body(prior_body)
@@ -3277,7 +3277,6 @@ mod tests {
             .audiences(vec![AudienceTarget::Subscribers])
             .tags(["PriorTag", "AnotherTag"])
             .build();
-        seed.title = Some(parse_post_title("Prior title"));
         let post_id = create_post_confirmed(env.posts().clone(), env.write_scope().clone(), seed)
             .await
             .post_id;
@@ -5637,11 +5636,12 @@ mod tests {
             env.write_scope().clone(),
             CreatePostInput {
                 user_id,
-                title: None,
                 slug: parse_slug("no-title"),
-                body: untitled_body.clone(),
-                format: PostFormat::Markdown,
-                rendered: host::render::with_media(&untitled_body, &PostFormat::Markdown),
+                rendered: host::render::render_post(
+                    None,
+                    untitled_body.clone(),
+                    PostFormat::Markdown,
+                ),
                 published_at: None,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],

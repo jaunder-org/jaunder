@@ -1550,7 +1550,7 @@ mod sandbox_profile_tests {
                     sandbox_post_content(post, user.user_id).expect("curated Post input"),
                 )
                 .rendered;
-                assert!(rendered.html().contains(&format!("src=\"{url}\"")));
+                assert!(rendered.rendered_html().contains(&format!("src=\"{url}\"")));
             }
         }
     }

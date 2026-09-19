@@ -1437,7 +1437,7 @@ async fn create_posts_batches_all_rows_in_order(#[case] backend: Backend) {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(rec.title, inputs[i].title);
+        assert_eq!(rec.title.as_ref(), inputs[i].rendered.title());
     }
 }
 

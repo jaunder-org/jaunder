@@ -1,0 +1,138 @@
+# Issue #1590 — Inline-rendered Post titles
+
+## Outcome
+
+Post article headings render safe inline markup authored in Markdown, Org, or
+HTML instead of exposing secondary-markup delimiters. Atom Syndication Feeds
+carry the same rendered title, while RSS and JSON Syndication Feeds expose its
+clean visible text without source markup or HTML tags.
+
+## Load-bearing decisions
+
+- `PostTitle` remains canonical authored source. Its `PostFormat` determines how
+  it is interpreted.
+- Host rendering derives a dedicated **Rendered Title** together with rendered
+  body output whenever a titled Post is created or its content or format
+  changes.
+- A Rendered Title is sanitized, canonical, inline-only HTML. It has a stronger
+  contract than body HTML and a distinct trusted type and decode boundary.
+- The complete retained-element policy is `b`, `strong`, `i`, `em`, `u`, `s`,
+  `del`, `code`, `sub`, `sup`, `mark`, `small`, and `br`, with no attributes.
+  Markdown and Org support every textual inline construct their parsers can
+  project into that policy, rather than only the issue's examples.
+- HTML titles are interpreted as untrusted fragments under the same closed
+  policy, not displayed as literal markup.
+- Links lose their wrapper and destination but retain their rendered label.
+  Images retain escaped alternative text only. Other element wrappers retain
+  safe textual descendants, inserting a boundary space for block elements.
+  Comments disappear. `script`, `style`, `template`, `iframe`, `object`,
+  `embed`, `svg`, `math`, and audio/video/source/track elements disappear with
+  their descendants. No event handler, URL, style, class, or other attribute
+  survives.
+- Canonical serialization is deterministic. The visible-text projection decodes
+  entities, converts `br` and removed block boundaries to one space, collapses
+  every whitespace run to one ASCII space, and trims its result.
+- A source title with no surviving visible text persists an empty Rendered
+  Title. Web presentation omits its heading; RSS and JSON Feed omit their
+  optional title; Atom emits its required empty HTML title construct. Authored
+  source is never substituted back into a presentation protocol.
+- Current Posts and full Post Revisions persist the Rendered Title beside the
+  authored title, format, and rendered body. Those values form one derived write
+  aggregate and are stored atomically.
+- The persisted representation pins parser-version behavior just as rendered
+  body HTML does. Reads do not reparse titles or maintain a permanent
+  render-when-missing compatibility path.
+- Existing titled Posts and Revisions receive Rendered Titles through an
+  idempotent startup backfill before storage is exposed. Startup fails closed if
+  any titled record remains without its derivative; titleless records keep no
+  derivative.
+- Both SQLite and PostgreSQL implement the same schema, migration, mutation,
+  semantic-no-op, revision, backup, restore-validation, and decode invariants.
+- Field-specific storage and wire decoding performs non-rewriting validation of
+  the closed element/attribute policy and canonical serialization before
+  constructing the trusted type. Invalid persisted bytes fail typed reads and
+  can never reach an unescaped sink.
+- Backup restore retains ADR-0174's restore-and-report policy: invalid Rendered
+  Title payloads are restored as source bytes and reported as typed-domain
+  diagnostics, while subsequent typed reads reject them. Structural absence is
+  valid only for a titleless record; every authored title has a persisted
+  derivative, including the empty canonical fragment.
+- Shared web Post article headings consume the persisted Rendered Title. The
+  public projector and CSR client paint the same trusted bytes.
+- Atom Syndication Feed entry titles use the Rendered Title as an HTML text
+  construct.
+- RSS and JSON Syndication Feed item titles use visible text extracted by
+  parsing the persisted Rendered Title. This projection decodes entities and
+  preserves textual labels; it is not regex tag stripping.
+- Feed semantic fingerprints, serializer revisions, and durable cache
+  invalidation account for every title representation that changes feed bytes.
+- Slug derivation, document metadata, AtomPub, editor fields, and
+  source-oriented administration continue to consume the authored title.
+
+## Acceptance
+
+- An Org title containing emphasis and underline syntax renders the
+  corresponding safe inline presentation in timeline cards and on its permalink,
+  without showing the delimiters.
+- Representative Markdown emphasis, strong emphasis, deletion, inline code,
+  entities, and labelled-link titles render correctly; link destinations do not
+  create nested anchors.
+- Equivalent safe HTML title markup renders as inline presentation after
+  sanitization.
+- Malicious or structurally invalid Markdown, Org, and HTML title inputs cannot
+  introduce active markup, block markup, media, nested interactive content, or
+  DOM structure outside the title fragment.
+- Labelled links and image alternative text remain visible text, while
+  content-free or active-only source produces the specified empty presentation
+  without leaking authored markup.
+- Titleless Posts retain their existing rendering and storage behavior.
+- Create and meaningful update operations persist matching authored and rendered
+  titles on SQLite and PostgreSQL. A semantic no-op creates neither a Post
+  Revision nor a timestamp change.
+- A title or format change captures the complete prior Rendered Title in the
+  same Post Revision as the prior source and rendered body.
+- Migration tests prove existing titled Posts and Revisions are backfilled,
+  titleless records remain null, rerunning is harmless, and incomplete backfill
+  prevents startup.
+- Backup and restore tests preserve Rendered Title bytes exactly, diagnose
+  invalid payloads without blessing them as trusted HTML, and reject invalid
+  title/Rendered Title presence combinations on both backends. Typed reads
+  reject blank-noncanonical, active, attributed, interactive, block, malformed,
+  and otherwise noncanonical fragments.
+- Browser Post headings use the persisted fragment without requiring title
+  parsing or sanitization in CSR code.
+- Atom emits a standards-conforming HTML title construct. RSS and JSON Feed emit
+  marker-free, tag-free, entity-decoded visible text for the same Post.
+- AtomPub round-trips the authored title unchanged, and slug and document-title
+  behavior remains based on authored source.
+- Every feed-output-affecting title change alters the corresponding semantic
+  fingerprint, and pre-feature durable feed caches cannot survive as current
+  representations.
+- Focused tests pin exact persisted HTML and RSS/JSON text for each retained
+  element and for representative Markdown, Org, and HTML source, including
+  links, image alt text, block boundaries, `br`, entities, adjacent nodes,
+  whitespace, comments, malformed input, active elements, and empty output.
+- Focused tests also cover storage parity, revisions, backup/restore, wire
+  decode, web rendering, feed rendering, and feed identity.
+- End-to-end assertions exercise Markdown, Org, and HTML titles on the public
+  timeline and permalink. The existing public-timeline Chromium and Firefox
+  visual baselines are updated through the repository's supported snapshot
+  workflow if their pixels intentionally change; no new visual state or mobile
+  baseline is introduced.
+- `cargo xtask check` passes.
+
+## Boundaries
+
+- This change does not alter title authoring controls, title extraction from
+  Post bodies, slug algorithms, metadata syntax, or AtomPub's native-source
+  contract.
+- It does not make embedded title links independently clickable; their labels
+  are presentation text within the Post permalink.
+- It does not admit images, audio, video, iframes, widgets, or other embedded
+  content into Post headings.
+- It does not format titles in revision lists, history administration, editor
+  inputs, browser/document metadata, or other source-oriented surfaces.
+- It does not re-render stored titles merely because a parser dependency is
+  upgraded; any future bulk rewrite requires an explicit migration decision.
+- It does not generalize Rendered Title into an arbitrary trusted-HTML escape
+  hatch or reuse body HTML's broader structural contract.

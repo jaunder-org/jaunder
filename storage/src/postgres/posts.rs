@@ -180,11 +180,11 @@ async fn apply_post_update(
              updated_at = $10, summary = $11
          WHERE post_id = $12",
     )
-    .bind_storage(input.title.as_ref())
+    .bind_storage(input.rendered.title())
     .bind_storage(&input.slug)
-    .bind_storage(&input.body)
-    .bind_storage(input.format)
-    .bind_storage(input.rendered.html())
+    .bind_storage(input.rendered.body())
+    .bind_storage(input.rendered.format())
+    .bind_storage(input.rendered.rendered_html())
     .bind_storage(publication_clear)
     .bind_storage(explicit_published_at)
     .bind_storage(explicit_published_at)

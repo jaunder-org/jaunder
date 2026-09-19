@@ -6,8 +6,10 @@ use common::post_summary::{
     MAX_POST_SUMMARY_CHARS, PostSummary, normalize_summary_whitespace,
     truncate_at_first_sentence_or_word_boundary,
 };
+use common::post_title::PostTitle;
 use common::render::{
-    PostFormat, RenderedHtml, RenderedHtmlPart, TrustedProviderEmbed, assemble_rendered_html,
+    PostFormat, RenderedHtml, RenderedHtmlPart, RenderedPostTitle, TrustedProviderEmbed,
+    assemble_rendered_html,
 };
 /// Renders `body` to HTML based on `format`. Pure, infallible function.
 ///
@@ -173,8 +175,7 @@ fn markdown_options() -> pulldown_cmark::Options {
 }
 
 /// Renders Markdown to HTML using one complete pulldown-cmark event stream.
-#[cfg(test)]
-pub(super) fn render_markdown(body: &str) -> String {
+fn render_markdown(body: &str) -> String {
     use pulldown_cmark::{Parser, html};
     let mut html_output = String::new();
     html::push_html(&mut html_output, Parser::new_ext(body, markdown_options()));
@@ -226,8 +227,7 @@ fn render_markdown_with_shortcodes_using(
 }
 
 /// Renders Org-mode to HTML using orgize.
-#[cfg(test)]
-pub(super) fn render_org(body: &str) -> String {
+fn render_org(body: &str) -> String {
     orgize::Org::parse(body).to_html()
 }
 
@@ -349,6 +349,341 @@ fn render_org_with_shortcodes(body: &str) -> RenderedHtml {
     org.traverse(&mut export);
     let html = export.html.finish();
     assemble_with_markers(&html, export.markers)
+}
+
+/// Renders a Post's title and body projections as one inseparable write aggregate.
+///
+/// The title source, format, and both derived fragments travel together so storage
+/// cannot bind a title from one authoring input with derivatives from another.
+#[must_use]
+pub fn render_post(
+    title: Option<PostTitle>,
+    body: PostBody,
+    format: PostFormat,
+) -> PostRenderOutput {
+    let rendered_html = render(&body, &format);
+    let media = extract_media_refs(rendered_html.as_ref());
+    let rendered_title = title.as_ref().map(|title| render_title(title, &format));
+    PostRenderOutput {
+        title,
+        body,
+        format,
+        rendered_title,
+        rendered_html,
+        media,
+    }
+}
+
+/// Renders an authored title to the title-only canonical HTML grammar.
+///
+/// Authoring formats first use their normal host parsers; this projection then
+/// retains only title-safe inline structure. It is intentionally not exposed from
+/// `common`: common recognizes persisted canonical bytes but never parses source.
+#[must_use]
+pub fn render_title(title: &PostTitle, format: &PostFormat) -> RenderedPostTitle {
+    let source = match format {
+        PostFormat::Markdown => render_markdown(title.as_ref()),
+        PostFormat::Org => render_org(title.as_ref()),
+        PostFormat::Html => title.to_string(),
+    };
+    let canonical = canonical_title_fragment(&source);
+    // The host emitter and common recognizer share one closed grammar. Fail
+    // closed to the valid empty presentation if that internal contract drifts;
+    // authored source must never be substituted into an HTML sink.
+    RenderedPostTitle::parse_canonical(canonical).unwrap_or_else(|_| RenderedPostTitle::empty())
+}
+
+fn canonical_title_fragment(source: &str) -> String {
+    use html5ever::tendril::StrTendril;
+    use html5ever::tokenizer::{BufferQueue, Tokenizer, TokenizerOpts};
+
+    let input = BufferQueue::default();
+    input.push_back(StrTendril::from(source));
+    let tokenizer = Tokenizer::new(TitleSink::default(), TokenizerOpts::default());
+    let _ = tokenizer.feed(&input);
+    tokenizer.end();
+    tokenizer.sink.finish()
+}
+
+#[derive(Default)]
+struct TitleSink {
+    output: std::cell::RefCell<String>,
+    retained: std::cell::RefCell<Vec<String>>,
+    discarded: std::cell::RefCell<Option<(String, usize)>>,
+}
+
+impl TitleSink {
+    fn finish(self) -> String {
+        let mut output = self.output.into_inner();
+        for open in self.retained.into_inner().into_iter().rev() {
+            close_tag(&mut output, &open);
+        }
+        output.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    fn is_discarding(&self) -> bool {
+        self.discarded.borrow().is_some()
+    }
+
+    fn add_space(&self) {
+        let mut output = self.output.borrow_mut();
+        if !output.is_empty() && !output.ends_with(' ') {
+            output.push(' ');
+        }
+    }
+
+    fn add_text(&self, value: &str) {
+        if self.is_discarding() {
+            return;
+        }
+        let mut output = self.output.borrow_mut();
+        for character in value.chars() {
+            match character {
+                '&' => output.push_str("&amp;"),
+                '<' => output.push_str("&lt;"),
+                '>' => output.push_str("&gt;"),
+                _ => output.push(character),
+            }
+        }
+    }
+
+    fn start_tag(&self, tag: &html5ever::tokenizer::Tag) {
+        let name = tag.name.to_string();
+        if self.extend_discard(&name, tag.self_closing) {
+            return;
+        }
+        if starts_discard(&name, tag.self_closing) {
+            *self.discarded.borrow_mut() = Some((name, 1));
+        } else if name == "img" {
+            if let Some(alt) = tag
+                .attrs
+                .iter()
+                .find(|attr| attr.name.local.as_ref() == "alt")
+            {
+                self.add_text(&alt.value);
+            }
+        } else if name == "br" {
+            self.output.borrow_mut().push_str("<br>");
+        } else if is_boundary(&name) {
+            self.add_space();
+        } else if is_retained(&name) {
+            let mut output = self.output.borrow_mut();
+            open_tag(&mut output, &name);
+            if tag.self_closing {
+                close_tag(&mut output, &name);
+            } else {
+                self.retained.borrow_mut().push(name);
+            }
+        }
+    }
+
+    fn extend_discard(&self, name: &str, self_closing: bool) -> bool {
+        let mut discarded = self.discarded.borrow_mut();
+        let Some((outer, depth)) = discarded.as_mut() else {
+            return false;
+        };
+        if outer == name && !self_closing && !is_void(name) {
+            *depth += 1;
+        }
+        true
+    }
+
+    fn end_tag(&self, name: &str) {
+        if self.end_discard(name) {
+            return;
+        }
+        if is_boundary(name) {
+            self.add_space();
+        } else if is_retained(name) {
+            self.close_retained(name);
+        }
+    }
+
+    fn end_discard(&self, name: &str) -> bool {
+        let mut discarded = self.discarded.borrow_mut();
+        let Some((outer, depth)) = discarded.as_mut() else {
+            return false;
+        };
+        if outer == name {
+            *depth -= 1;
+            if *depth == 0 {
+                *discarded = None;
+            }
+        }
+        true
+    }
+
+    fn close_retained(&self, name: &str) {
+        let mut retained = self.retained.borrow_mut();
+        let Some(position) = retained.iter().rposition(|open| open == name) else {
+            return;
+        };
+        let mut output = self.output.borrow_mut();
+        for open in retained.drain(position..).rev() {
+            close_tag(&mut output, &open);
+        }
+    }
+}
+
+impl html5ever::tokenizer::TokenSink for TitleSink {
+    type Handle = ();
+
+    fn process_token(
+        &self,
+        token: html5ever::tokenizer::Token,
+        _line_number: u64,
+    ) -> html5ever::tokenizer::TokenSinkResult<Self::Handle> {
+        use html5ever::tokenizer::{TagKind, Token, TokenSinkResult};
+
+        match token {
+            Token::CharacterTokens(text) => self.add_text(&text),
+            Token::TagToken(tag) => match tag.kind {
+                TagKind::StartTag => self.start_tag(&tag),
+                TagKind::EndTag => self.end_tag(&tag.name),
+            },
+            _ => {}
+        }
+        TokenSinkResult::Continue
+    }
+}
+
+fn open_tag(output: &mut String, name: &str) {
+    output.push('<');
+    output.push_str(name);
+    output.push('>');
+}
+
+fn close_tag(output: &mut String, name: &str) {
+    output.push_str("</");
+    output.push_str(name);
+    output.push('>');
+}
+
+fn is_retained(name: &str) -> bool {
+    matches!(
+        name,
+        "b" | "strong" | "i" | "em" | "u" | "s" | "del" | "code" | "sub" | "sup" | "mark" | "small"
+    )
+}
+
+fn is_boundary(name: &str) -> bool {
+    matches!(
+        name,
+        "address"
+            | "article"
+            | "aside"
+            | "blockquote"
+            | "div"
+            | "dl"
+            | "fieldset"
+            | "figcaption"
+            | "figure"
+            | "footer"
+            | "form"
+            | "h1"
+            | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
+            | "header"
+            | "hr"
+            | "li"
+            | "main"
+            | "nav"
+            | "ol"
+            | "p"
+            | "pre"
+            | "section"
+            | "table"
+            | "tbody"
+            | "td"
+            | "tfoot"
+            | "th"
+            | "thead"
+            | "tr"
+            | "ul"
+    )
+}
+
+fn starts_discard(name: &str, self_closing: bool) -> bool {
+    !self_closing
+        && !is_void(name)
+        && matches!(
+            name,
+            "audio"
+                | "iframe"
+                | "math"
+                | "object"
+                | "script"
+                | "style"
+                | "svg"
+                | "template"
+                | "video"
+        )
+}
+
+fn is_void(name: &str) -> bool {
+    matches!(
+        name,
+        "area"
+            | "base"
+            | "br"
+            | "col"
+            | "embed"
+            | "hr"
+            | "img"
+            | "input"
+            | "link"
+            | "meta"
+            | "param"
+            | "source"
+            | "track"
+            | "wbr"
+    )
+}
+
+/// The complete authored and rendered state for one Post write.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PostRenderOutput {
+    title: Option<PostTitle>,
+    body: PostBody,
+    format: PostFormat,
+    rendered_title: Option<RenderedPostTitle>,
+    rendered_html: RenderedHtml,
+    media: Vec<MediaReference>,
+}
+
+impl PostRenderOutput {
+    #[must_use]
+    pub fn title(&self) -> Option<&PostTitle> {
+        self.title.as_ref()
+    }
+    #[must_use]
+    pub fn body(&self) -> &PostBody {
+        &self.body
+    }
+    #[must_use]
+    pub const fn format(&self) -> PostFormat {
+        self.format
+    }
+    #[must_use]
+    pub fn rendered_title(&self) -> Option<&RenderedPostTitle> {
+        self.rendered_title.as_ref()
+    }
+    #[must_use]
+    pub fn rendered_html(&self) -> &RenderedHtml {
+        &self.rendered_html
+    }
+    #[must_use]
+    pub fn media(&self) -> &[MediaReference] {
+        &self.media
+    }
+    /// Consumes the aggregate when only its rendered body remains needed.
+    #[must_use]
+    pub fn into_rendered_html(self) -> RenderedHtml {
+        self.rendered_html
+    }
 }
 
 /// The `(element, attribute)` pairs whose values name media. When common's
@@ -1534,6 +1869,86 @@ mod tests {
         // Sorted so a failure reads the same on every run.
         unclassified.sort();
         unclassified
+    }
+
+    #[test]
+    fn title_projection_handles_all_authoring_formats_and_title_policy() {
+        let cases = [
+            (
+                PostFormat::Markdown,
+                "**bold** [link](https://example.test) ![alt](x)",
+                "<strong>bold</strong> link alt",
+            ),
+            (
+                PostFormat::Org,
+                "*bold* /italic/ +strike+",
+                "<b>bold</b> <i>italic</i> <s>strike</s>",
+            ),
+            (
+                PostFormat::Html,
+                "<div>one</div><a href=\"/\">two</a><img alt=\"three\"><br><!-- gone --><script>lost</script>",
+                "one twothree<br>",
+            ),
+        ];
+        for (format, source, expected) in cases {
+            let title: PostTitle = source.parse().unwrap();
+            let rendered = render_title(&title, &format);
+            assert_eq!(rendered.as_ref(), expected, "{format:?}");
+        }
+    }
+
+    #[test]
+    fn title_projection_discards_active_and_embedded_descendants() {
+        for (source, expected) in [
+            ("<audio>x</audio>kept", "kept"),
+            ("<video><img alt=x></video>kept", "kept"),
+            ("<audio><audio>x</audio></audio>kept", "kept"),
+            (
+                "<embed>x<iframe>x</iframe><math>x</math><object>x</object><script>x</script><style>x</style><svg>x</svg><template>x</template>kept",
+                "xkept",
+            ),
+            ("<source><track>kept", "kept"),
+            ("<audio><img alt=x></audio>kept", "kept"),
+            ("<b>one<audio></b></audio>two</b>", "<b>onetwo</b>"),
+        ] {
+            let title: PostTitle = source.parse().unwrap();
+            assert_eq!(
+                render_title(&title, &PostFormat::Html).as_ref(),
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn title_projection_is_total_for_long_and_deep_titles() {
+        for source in [
+            "x".repeat(16 * 1024 + 1),
+            format!("{}x{}", "<b>".repeat(128), "</b>".repeat(128)),
+        ] {
+            let title: PostTitle = source.parse().unwrap();
+            let rendered = render_title(&title, &PostFormat::Html);
+            assert!(RenderedPostTitle::parse_canonical(rendered.as_ref()).is_ok());
+        }
+    }
+
+    #[test]
+    fn title_projection_is_total_for_adversarial_html() {
+        for source in [
+            "<b><i>x</b>y</i>",
+            "<strong/>",
+            "<script/>",
+            "<b>x",
+            "<b></i>x",
+            "<br/>",
+        ] {
+            let title: PostTitle = source.parse().unwrap();
+            let rendered = render_title(&title, &PostFormat::Html);
+            assert!(
+                RenderedPostTitle::parse_canonical(rendered.as_ref()).is_ok(),
+                "{source}"
+            );
+        }
     }
 
     /// Fails when common's sanitizer permits an `(element, attribute)` pair that

@@ -385,7 +385,9 @@ pub(crate) fn create_expectations_match(input: &CreatePostInput) -> bool {
         .slug
         .as_ref()
         .is_none_or(|slug| slug == &input.slug)
-        && expected.format.is_none_or(|format| format == input.format)
+        && expected
+            .format
+            .is_none_or(|format| format == input.rendered.format())
         && expected
             .published_at
             .is_none_or(|published_at| published_at == input.published_at)
@@ -400,11 +402,11 @@ pub(crate) fn update_scalar_is_noop(
         PublishUpdate::Publish { at: Some(at) } => Some(at),
         PublishUpdate::Publish { at: None } => existing.published_at.or(Some(input.request_clock)),
     };
-    existing.title == input.title
+    existing.title == input.rendered.title().cloned()
         && (existing.published_at.is_some() || existing.slug == input.slug)
-        && existing.body == input.body
-        && existing.format == input.format
-        && existing.rendered_html.as_ref() == input.rendered.html().as_ref()
+        && existing.body == *input.rendered.body()
+        && existing.format == input.rendered.format()
+        && existing.rendered_html.as_ref() == input.rendered.rendered_html().as_ref()
         && existing.summary == input.summary
         && existing.published_at == published_at
 }
@@ -436,7 +438,9 @@ pub(crate) fn update_expectation_error(
         .slug
         .as_ref()
         .is_some_and(|slug| slug != final_slug)
-        || expected.format.is_some_and(|format| format != input.format)
+        || expected
+            .format
+            .is_some_and(|format| format != input.rendered.format())
         || expected
             .published_at
             .is_some_and(|published_at| published_at != final_published_at)
@@ -512,11 +516,11 @@ where
     .bind_storage(input.user_id)
     // `Option::as_ref` → `Option<&PostTitle>` (a typed newtype bind, not an
     // `AsRef<str>` strip); the sqlx bridge encodes `Option<&PostTitle>`.
-    .bind_storage(input.title.as_ref())
+    .bind_storage(input.rendered.title())
     .bind_storage(&input.slug)
-    .bind_storage(&input.body)
-    .bind_storage(input.format)
-    .bind_storage(input.rendered.html())
+    .bind_storage(input.rendered.body())
+    .bind_storage(input.rendered.format())
+    .bind_storage(input.rendered.rendered_html())
     .bind_storage(now)
     .bind_storage(now)
     .bind_storage(input.published_at)
