@@ -53,7 +53,7 @@ Out:
     external/media behavior, successful metadata write-back and rename, and
     ADR-0047 retry ordering after pre-response and committed-response failures.
 
-- [ ] **Task 3: Reverse exact canonical Post links during both pull paths**
+- [x] **Task 3: Reverse exact canonical Post links during both pull paths**
   - Contract: one syntax-aware Org body-link pass receives the remote and local
     inventory evidence, compares HTTP(S) destination strings byte-for-byte with
     harvested alternates, skips every invalid alternate outcome, and rewrites

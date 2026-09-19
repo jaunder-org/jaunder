@@ -90,6 +90,58 @@
                                                  (should-error (jaunder--localize-post-links body))
                                                  (should-not (jaunder--collect-media-links))))))))))
 
+(ert-deftest jaunder-pulled-post-links-reverse-only-exact-proven-body-destinations ()
+  "Pull reversal preserves everything except exact, uniquely proven Org targets."
+  (jaunder-post-link-test--with-root (root source)
+                                     (let* ((target (expand-file-name "target.org" root))
+                                            (member (jaunder-post-link-test--member
+                                                     "7" "target" "https://blog/@alice/target"))
+                                            (local (jaunder--make-inventory-local
+                                                    :path target :id "7" :slug "target"))
+                                            (body (concat "before [[https://blog/@alice/target][kept description]] after\n"
+                                                          "https://blog/@alice/target\n"
+                                                          "#+DESCRIPTION: [[https://blog/@alice/target]]\n"
+                                                          "#+begin_src text\n[[https://blog/@alice/target]]\n#+end_src\n"
+                                                          "[[https://blog/%40alice/target]] [[https://blog/media/x]]")))
+                                       (jaunder-post-link-test--write-target target "7" "target")
+                                       (should
+                                        (equal (jaunder--reverse-pulled-post-links
+                                                body root (list member) (list local))
+                                               (concat "before [[./target.org][kept description]] after\n"
+                                                       "https://blog/@alice/target\n"
+                                                       "#+DESCRIPTION: [[https://blog/@alice/target]]\n"
+                                                       "#+begin_src text\n[[https://blog/@alice/target]]\n#+end_src\n"
+                                                       "[[https://blog/%40alice/target]] [[https://blog/media/x]]"))))))
+
+(ert-deftest jaunder-pulled-post-links-require-complete-unambiguous-evidence ()
+  "Partial, invalid, or ambiguous inventories retain canonical destinations."
+  (jaunder-post-link-test--with-root (root source)
+                                     (let* ((target (expand-file-name "target.org" root))
+                                            (member (jaunder-post-link-test--member
+                                                     "7" "target" "https://blog/@alice/target"))
+                                            (local (jaunder--make-inventory-local
+                                                    :path target :id "7" :slug "target"))
+                                            (body "[[https://blog/@alice/target]]"))
+                                       (jaunder-post-link-test--write-target target "7" "target")
+                                       (dolist (evidence
+                                                (list (list (list member) nil)
+                                                      (list (list member)
+                                                            (list (jaunder--make-inventory-local
+                                                                   :path target :id "8" :slug "target")))
+                                                      (list (list member
+                                                                  (jaunder-post-link-test--member
+                                                                   "7" "target" "https://blog/@alice/target"))
+                                                            (list local))))
+                                         (should (equal (jaunder--reverse-pulled-post-links
+                                                         body root (nth 0 evidence) (nth 1 evidence))
+                                                        body)))
+                                       ;; Inventory evidence is only a candidate path: pull re-reads
+                                       ;; identity so an edit after reconciliation cannot authorize a rewrite.
+                                       (jaunder-post-link-test--write-target target "8" "target")
+                                       (should (equal (jaunder--reverse-pulled-post-links
+                                                       body root (list member) (list local))
+                                                      body)))))
+
 (ert-deftest jaunder-local-post-link-uses-only-referenced-member-and-distinct-hrefs ()
   "A bad unrelated Member does not block exact distinct target substitutions."
   (jaunder-post-link-test--with-root (root source)

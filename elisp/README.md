@@ -31,9 +31,10 @@ deployable Jaunder server binary.
 - `jaunder.el` — the package entry point and dependency assembly.
 - `jaunder-inventory.el` — Collection and local Post identity inventory shared
   by reconciliation and Local Post Link mapping.
-- `jaunder-post-link.el` — Local Post Link publish preflight: exact local
-  evidence joins the read-only Collection inventory and only sent-body links
-  receive server-advertised alternate URLs.
+- `jaunder-post-link.el` — bidirectional Local Post Link mapping: exact local
+  evidence joins the read-only Collection inventory; publish substitutes
+  server-advertised alternate URLs only in the sent body, and pull restores
+  relative destinations only from unambiguous current proof.
 - `test/` — the ERT suite. Pure-helper tests live in `*-test.el`; server-backed
   live-integration tests live in `*-integration.el` (kept separate so the fast
   pure suite stays serverless).

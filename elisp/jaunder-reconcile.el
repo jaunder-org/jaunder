@@ -32,6 +32,8 @@
 (declare-function jaunder-pull-result-http-status "jaunder-pull")
 (declare-function jaunder-pull-result-local-effect "jaunder-pull")
 
+(defvar jaunder--pull-link-inventory)
+
 (cl-defstruct (jaunder-reconcile-row
                (:constructor jaunder--make-reconcile-row))
   "One immutable classification in a reconciliation report."
@@ -809,7 +811,9 @@ remote strong-ETag revalidation, one local preflight, then replacement."
     (if (not (jaunder--strong-etag-p reviewed-etag))
         (jaunder--reconcile-blocked row 'reviewed-etag-invalid)
       (condition-case err
-          (let* ((staged (jaunder--pull-stage-member
+          (let* ((jaunder--pull-link-inventory
+                  (jaunder-reconcile-report-inventory jaunder-reconcile-report))
+                 (staged (jaunder--pull-stage-member
                           (jaunder-reconcile-report-root jaunder-reconcile-report) member))
                  (inventory (jaunder--reconcile-pull-unique-match row)))
             (if (not (plist-get inventory :ok))

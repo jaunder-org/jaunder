@@ -1,13 +1,14 @@
-;;; jaunder-post-link.el --- Local Post Link publish preflight -*- lexical-binding: t; -*-
+;;; jaunder-post-link.el --- Local Post Link mapping -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Jaunder contributors
 
 ;;; Commentary:
 ;; Local Post Links are relative body-level Org file links between Posts in one
-;; configured Jaunder root.  This module validates their exact local evidence
-;; against the read-only Collection inventory and substitutes only the
-;; server-advertised alternate href in the body sent for publication.  It owns
-;; neither media upload nor publish write-back.
+;; configured Jaunder root.  This module validates exact local and Collection
+;; evidence to map authored relative links to server-advertised alternate hrefs
+;; for publication, and to restore relative destinations during pull only when
+;; the same proof remains current.  It owns neither media transfer nor Post
+;; installation/write-back.
 
 ;;; Code:
 
@@ -74,6 +75,61 @@ Member inventory."
                               (jaunder--local-post-link-member local members)))
                            locals)))
         (jaunder--org-substitute-links body #'jaunder--local-post-link-candidate-p urls)))))
+
+(defun jaunder--pulled-post-link-target-p (local member root)
+  "Return non-nil when LOCAL still proves MEMBER's same-root Org target."
+  (let ((path (jaunder-inventory-local-path local)))
+    (and (file-regular-p path)
+         (file-in-directory-p (file-truename path) (file-truename root))
+         (not (jaunder--inventory-local-member-evidence-reason local member))
+         (pcase-let ((`(,id ,slug) (jaunder--read-local-properties path)))
+           (let ((current (jaunder--make-inventory-local
+                           :path path :id (jaunder--canonical-post-id id) :slug slug)))
+             (not (jaunder--inventory-local-member-evidence-reason current member)))))))
+
+(defun jaunder--pulled-post-link-replacements (root members locals)
+  "Return exact canonical-href to local-link replacements proven by inventories.
+Only one valid Member/local proof may own an href.  Invalid alternate outcomes,
+duplicate href evidence, and incomplete local evidence deliberately produce no
+replacement."
+  (let ((by-href (make-hash-table :test #'equal)))
+    (dolist (member members)
+      (let ((href (jaunder-inventory-member-alternate-href member)))
+        (when (and href (not (jaunder-inventory-member-alternate-invalid-reason member)))
+          (dolist (local locals)
+            (when (jaunder--pulled-post-link-target-p local member root)
+              (puthash href
+                       (cons (format "./%s.org" (jaunder-inventory-member-slug member))
+                             (gethash href by-href))
+                       by-href))))))
+    by-href))
+
+(defun jaunder--reverse-pulled-post-links (body root members locals)
+  "Restore proven Local Post Links in Org BODY without changing other source.
+MEMBERS and LOCALS are inventory evidence.  The Org parser authorizes only real
+body links; replacements edit just their destination spans, right-to-left.
+Canonical hrefs compare as unnormalized, byte-for-byte source strings."
+  (let ((replacements (jaunder--pulled-post-link-replacements root members locals)))
+    (with-temp-buffer
+      (insert body)
+      (org-mode)
+      (let (edits)
+        (org-element-map
+         (org-element-parse-buffer) 'link
+         (lambda (link)
+           (let* ((raw (org-element-property :raw-link link))
+                  (values (and raw (gethash raw replacements))))
+             (when (= (length values) 1)
+               (let ((begin (org-element-property :begin link)))
+                 (when (and (stringp raw)
+                            (string-prefix-p (concat "[[" raw)
+                                             (buffer-substring-no-properties begin (point-max))))
+                   (push (list (+ begin 2) (+ begin 2 (length raw)) (car values)) edits)))))))
+        (dolist (edit edits)
+          (delete-region (nth 0 edit) (nth 1 edit))
+          (goto-char (nth 0 edit))
+          (insert (nth 2 edit)))
+        (buffer-substring-no-properties (point-min) (point-max))))))
 
 (provide 'jaunder-post-link)
 ;;; jaunder-post-link.el ends here
