@@ -2494,8 +2494,9 @@ the format-neutral entry IR (`jaunder-entry.el`, the
 handling (`jaunder-datetime.el`), the wire encoder/response harvester
 (`jaunder-atom.el`), the org document interface (`jaunder-org.el`), HTTP
 (`jaunder-transport.el`), the service-document capability probe
-(`jaunder-service.el`), media (`jaunder-media.el`), and the user commands
-(`jaunder-publish.el`).
+(`jaunder-service.el`), Collection/local identity inventory
+(`jaunder-inventory.el`), Local Post Link mapping (`jaunder-post-link.el`),
+media (`jaunder-media.el`), and the user commands (`jaunder-publish.el`).
 
 ### Transport and auth
 
@@ -2536,12 +2537,14 @@ carries the `text/org` media type and the server canonicalizes
 ([ADR-0023](adr/0023-atompub-jaunder-wire-extensions.md); the Protocols section
 owns it).
 
-`jaunder--harvest-response-fields` (`elisp/jaunder-atom.el:69`) is the one
-response reader — a metadata harvest, not a full Entry parse — returning
-`content-src`, `content-type`, `slug`, and `published` from a response Entry via
-`libxml-parse-xml-region`. Media URLs come from that harvested `<content src>`
-and are never reconstructed client-side, so the server stays authoritative about
-URL layout ([ADR-0045](adr/0045-emacs-media-content-src.md)).
+`jaunder--harvest-response-fields` (`elisp/jaunder-atom.el`) is the one response
+reader — a namespace-aware metadata harvest, not a full Entry parse — returning
+content, structured metadata, edit links, and every direct Atom
+`rel="alternate"` `href` without enforcing Member cardinality. Media URLs come
+from the harvested `<content src>`, while Collection inventory records one
+validated alternate outcome per Member. Neither URL is reconstructed
+client-side, so the server stays authoritative about URL layout
+([ADR-0045](adr/0045-emacs-media-content-src.md)).
 
 A body-level relative Org `file` link whose filesystem path ends in `.org` is a
 **Local Post Link candidate** and is claimed before media. It becomes a **Local

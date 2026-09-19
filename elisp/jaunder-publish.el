@@ -38,6 +38,8 @@
 (require 'jaunder-service)
 (require 'jaunder-media)
 
+(autoload 'jaunder--localize-post-links "jaunder-post-link")
+
 (defun jaunder--validate-publish (entry status date-raw tz)
   "Signal an error if ENTRY is not publishable; return nil otherwise.
 Requires a non-empty body; a `scheduled' STATUS requires a future #+DATE:
@@ -451,6 +453,10 @@ safe retry."
          ;; unconditional PUT.  Its intent remains durable for safe recovery.
          (when (and id (not (jaunder--strong-etag-p synced)))
            (error "jaunder: JAUNDER_ID requires a strong JAUNDER_SYNCED ETag"))
+         ;; Claim and validate Local Post Links before any upload or Post
+         ;; mutation.  Like media localization, this changes only the sent body.
+         (setf (jaunder-entry-body entry)
+               (jaunder--localize-post-links (jaunder-entry-body entry)))
          ;; Record the machine zone (idempotent) so #+DATE: is interpreted in a
          ;; recorded zone on later machines.  A first-publish's org->atom above
          ;; already used the local zone, which equals the captured name.

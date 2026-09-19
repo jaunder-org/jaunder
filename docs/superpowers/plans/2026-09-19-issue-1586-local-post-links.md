@@ -37,7 +37,7 @@ Out:
     duplicates—plus stable invalid reasons and stale, duplicate, or mismatched
     local ID/slug/filename evidence.
 
-- [ ] **Task 2: Localize Local Post Links in the publish preflight**
+- [x] **Task 2: Localize Local Post Links in the publish preflight**
   - Contract: a body-only Org-link pass claims every relative `.org` file-link
     candidate before media, resolves the exact same-root regular target without
     searching, joins its local identity to the Member inventory, and returns a
