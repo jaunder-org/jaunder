@@ -94,8 +94,12 @@ fn shortcode_line(line: &str) -> Option<TrustedProviderEmbed> {
 }
 
 fn marker(source: &str, index: usize) -> String {
+    marker_with_nonce(source, index, rand::random)
+}
+
+fn marker_with_nonce(source: &str, index: usize, mut next_nonce: impl FnMut() -> u128) -> String {
     loop {
-        let marker = format!("JAUNDER_SHORTCODE_{:032x}_{index}", rand::random::<u128>());
+        let marker = format!("JAUNDER_SHORTCODE_{:032x}_{index}", next_nonce());
         if !source.contains(&marker) {
             return marker;
         }
@@ -229,7 +233,7 @@ impl OrgShortcodeExport<'_> {
             orgize::export::Container::CommentBlock(node) => node.raw(),
             orgize::export::Container::Drawer(node) => node.raw(),
             orgize::export::Container::PropertyDrawer(node) => node.raw(),
-            _ => return None,
+            _ => unreachable!("hidden Org shortcode fallback received an unsupported container"),
         };
         let literal = raw
             .lines()
@@ -773,6 +777,19 @@ mod tests {
         assert!(!hidden_markup.contains("<img"), "{hidden_markup}");
         assert!(hidden_markup.contains("&lt;img"), "{hidden_markup}");
 
+        for source in [
+            "# ordinary comment",
+            "#+begin_comment\nordinary comment\n#+end_comment",
+            ":LOGBOOK:\nordinary drawer value\n:END:",
+            ":PROPERTIES:\n:VALUE: ordinary property\n:END:",
+        ] {
+            assert_eq!(
+                render(&parse_post_body(source), &PostFormat::Org),
+                common::render::sanitize(&render_org(source)),
+                "ordinary hidden Org content changed: {source:?}"
+            );
+        }
+
         let html = render(&parse_post_body(valid), &PostFormat::Html);
         assert!(!html.contains("<iframe"), "{html}");
     }
@@ -861,6 +878,20 @@ mod tests {
             let rendered = render(&parse_post_body(source), &PostFormat::Markdown);
             assert!(!rendered.contains("<iframe"), "{source:?}: {rendered}");
         }
+    }
+
+    #[test]
+    fn shortcode_marker_retries_a_source_collision() {
+        let colliding_nonce = 7_u128;
+        let source = format!("JAUNDER_SHORTCODE_{colliding_nonce:032x}_0");
+        let mut nonces = [colliding_nonce, colliding_nonce + 1].into_iter();
+        let generated = marker_with_nonce(&source, 0, || {
+            nonces.next().expect("two marker attempts suffice")
+        });
+        assert_eq!(
+            generated,
+            format!("JAUNDER_SHORTCODE_{:032x}_0", colliding_nonce + 1)
+        );
     }
 
     #[test]

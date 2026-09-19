@@ -107,6 +107,13 @@ pub struct RenderedHtml(pub(crate) String);
 /// `RenderedHtml`'s raw field while still letting host rendering preserve
 /// provider placement.
 ///
+/// Validated construction remains available:
+/// ```
+/// use common::render::TrustedProviderEmbed;
+/// let embed = TrustedProviderEmbed::youtube("dQw4w9WgXcQ");
+/// assert!(embed.is_ok());
+/// ```
+///
 /// No direct construction:
 /// ```compile_fail
 /// # use common::render::TrustedProviderEmbed;
