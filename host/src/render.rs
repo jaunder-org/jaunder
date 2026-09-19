@@ -2,46 +2,247 @@
 
 use common::media::{self, MediaReference};
 use common::post_body::PostBody;
-use common::render::{PostFormat, RenderedHtml};
-/// Renders `body` to HTML based on `format`. Pure, infallible function. The
-/// output is a [`RenderedHtml`], minted through [`common::render::sanitize`] — a post body is
-/// author-supplied, so it is outside input and every format's output is scrubbed.
+use common::render::{
+    PostFormat, RenderedHtml, RenderedHtmlPart, TrustedProviderEmbed, assemble_rendered_html,
+};
+/// Renders `body` to HTML based on `format`. Pure, infallible function.
 ///
-/// All three formats need that scrub, not just [`PostFormat::Html`]: the Markdown and
-/// Org parsers both pass embedded raw HTML through untouched, so `<script>` in a
-/// Markdown body reaches the output just as readily as in an HTML one (#445).
+/// Parser output is author supplied, so every Markdown, Org, and HTML fragment
+/// crosses [`common::render::sanitize`]. Markdown and Org additionally pass
+/// only validated [`TrustedProviderEmbed`] values to the typed common-owned
+/// assembly boundary; no source HTML or arbitrary URL can enter that path.
+///
+/// All three formats need sanitization, not just [`PostFormat::Html`]: the
+/// Markdown and Org parsers both pass embedded raw HTML through untouched, so
+/// `<script>` in a Markdown body reaches the output just as readily as in an
+/// HTML one (#445).
 ///
 /// Host-only: this module is owned by the host crate, so no build exposes a
 /// weaker unsanitized implementation.
 #[must_use]
 pub fn render(body: &PostBody, format: &PostFormat) -> RenderedHtml {
-    let html = match format {
-        PostFormat::Markdown => render_markdown(body),
-        PostFormat::Org => render_org(body),
-        PostFormat::Html => body.to_string(),
-    };
-    common::render::sanitize(&html)
+    match format {
+        PostFormat::Markdown => render_markdown_with_shortcodes(body),
+        PostFormat::Org => render_org_with_shortcodes(body),
+        PostFormat::Html => common::render::sanitize(body),
+    }
 }
 
-/// Renders Markdown to HTML using pulldown-cmark with common extensions.
-pub(super) fn render_markdown(body: &str) -> String {
-    use pulldown_cmark::{Options, Parser, html};
+/// A provider-neutral source token. Provider dispatch remains at this host seam;
+/// common accepts only the resulting closed validated value.
+#[derive(Clone, Copy)]
+struct Shortcode<'a> {
+    provider: &'a str,
+    id: &'a str,
+}
 
+fn parse_shortcode(line: &str) -> Option<Shortcode<'_>> {
+    let line = line.strip_prefix("{{<")?.strip_suffix(">}}")?;
+    let tokens: Vec<_> = line
+        .split([' ', '\t'])
+        .filter(|token| !token.is_empty())
+        .collect();
+    if tokens.len() != 2
+        || !(line.starts_with(' ') || line.starts_with('\t'))
+        || !(line.ends_with(' ') || line.ends_with('\t'))
+    {
+        return None;
+    }
+    Some(Shortcode {
+        provider: tokens[0],
+        id: tokens[1],
+    })
+}
+
+fn dispatch_shortcode(shortcode: Shortcode<'_>) -> Option<TrustedProviderEmbed> {
+    match shortcode.provider {
+        "youtube" => TrustedProviderEmbed::youtube(shortcode.id).ok(),
+        "vimeo" => TrustedProviderEmbed::vimeo(shortcode.id).ok(),
+        _ => None,
+    }
+}
+
+fn shortcode_line(line: &str) -> Option<TrustedProviderEmbed> {
+    let indentation = line.bytes().take_while(|byte| *byte == b' ').count();
+    (indentation <= 3)
+        .then(|| line.get(indentation..))
+        .flatten()
+        .and_then(|line| parse_shortcode(line.trim_end_matches([' ', '\t', '\r', '\n'])))
+        .and_then(dispatch_shortcode)
+}
+
+fn marker(source: &str, index: usize) -> String {
+    loop {
+        let marker = format!("JAUNDER_SHORTCODE_{:032x}_{index}", rand::random::<u128>());
+        if !source.contains(&marker) {
+            return marker;
+        }
+    }
+}
+
+fn assemble_with_markers(html: &str, markers: Vec<(String, TrustedProviderEmbed)>) -> RenderedHtml {
+    if markers.is_empty() {
+        return common::render::sanitize(html);
+    }
+    let mut owned_parts = Vec::new();
+    let mut remaining = html;
+    for (marker, embed) in markers {
+        let Some((before, after)) = remaining.split_once(&marker) else {
+            unreachable!("a generated shortcode marker must be emitted exactly once");
+        };
+        if after.contains(&marker) {
+            unreachable!("a generated shortcode marker must be emitted exactly once");
+        }
+        owned_parts.push((before.to_owned(), Some(embed)));
+        remaining = after;
+    }
+    owned_parts.push((remaining.to_owned(), None));
+    let parts: Vec<_> = owned_parts
+        .iter()
+        .flat_map(|(html, embed)| {
+            let mut parts = vec![RenderedHtmlPart::Untrusted(html)];
+            if let Some(embed) = embed {
+                parts.push(RenderedHtmlPart::Embed(embed));
+            }
+            parts
+        })
+        .collect();
+    assemble_rendered_html(&parts)
+}
+
+fn markdown_options() -> pulldown_cmark::Options {
+    use pulldown_cmark::Options;
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_FOOTNOTES);
     options.insert(Options::ENABLE_TASKLISTS);
+    options
+}
 
-    let parser = Parser::new_ext(body, options);
+/// Renders Markdown to HTML using one complete pulldown-cmark event stream.
+#[cfg(test)]
+pub(super) fn render_markdown(body: &str) -> String {
+    use pulldown_cmark::{Parser, html};
     let mut html_output = String::new();
-    html::push_html(&mut html_output, parser);
+    html::push_html(&mut html_output, Parser::new_ext(body, markdown_options()));
     html_output
 }
 
+fn render_markdown_with_shortcodes(body: &str) -> RenderedHtml {
+    use pulldown_cmark::{Event, Parser, Tag, TagEnd, html};
+    let mut markers = Vec::new();
+    let mut events = Vec::new();
+    let mut depth = 0_usize;
+    let mut skipped = false;
+    for (event, range) in Parser::new_ext(body, markdown_options()).into_offset_iter() {
+        if skipped {
+            if matches!(event, Event::End(TagEnd::Paragraph)) {
+                skipped = false;
+            }
+            continue;
+        }
+        if let Event::Start(Tag::Paragraph) = event
+            && depth == 0
+            && let Some(embed) = body.get(range).and_then(shortcode_line)
+        {
+            let marker = marker(body, markers.len());
+            events.push(Event::Html(format!("<!--{marker}-->").into()));
+            markers.push((marker, embed));
+            skipped = true;
+            continue;
+        }
+        match &event {
+            Event::Start(_) => depth += 1,
+            Event::End(_) => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        events.push(event);
+    }
+    let mut html = String::new();
+    html::push_html(&mut html, events.into_iter());
+    assemble_with_markers(&html, markers)
+}
+
 /// Renders Org-mode to HTML using orgize.
+#[cfg(test)]
 pub(super) fn render_org(body: &str) -> String {
     orgize::Org::parse(body).to_html()
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OrgContainer {
+    Document,
+    Section,
+    Other,
+}
+
+/// Intercepts only direct document-section paragraphs while preserving orgize's
+/// one complete exporter traversal for every other syntax node.
+struct OrgShortcodeExport<'a> {
+    source: &'a str,
+    html: orgize::export::HtmlExport,
+    containers: Vec<OrgContainer>,
+    markers: Vec<(String, TrustedProviderEmbed)>,
+}
+
+impl OrgShortcodeExport<'_> {
+    fn container(container: &orgize::export::Container) -> OrgContainer {
+        match container {
+            orgize::export::Container::Document(_) => OrgContainer::Document,
+            orgize::export::Container::Section(_) => OrgContainer::Section,
+            _ => OrgContainer::Other,
+        }
+    }
+}
+
+impl orgize::export::Traverser for OrgShortcodeExport<'_> {
+    fn event(&mut self, event: orgize::export::Event, ctx: &mut orgize::export::TraversalContext) {
+        match event {
+            orgize::export::Event::Enter(orgize::export::Container::Paragraph(paragraph))
+                if self.containers == [OrgContainer::Document, OrgContainer::Section] =>
+            {
+                if let Some(embed) = shortcode_line(&paragraph.raw()) {
+                    let marker = marker(self.source, self.markers.len());
+                    self.html.push_str(format!("<!--{marker}-->"));
+                    self.markers.push((marker, embed));
+                    ctx.skip();
+                    return;
+                }
+                self.containers.push(OrgContainer::Other);
+                self.html.event(
+                    orgize::export::Event::Enter(orgize::export::Container::Paragraph(paragraph)),
+                    ctx,
+                );
+            }
+            orgize::export::Event::Enter(container) => {
+                self.containers.push(Self::container(&container));
+                self.html
+                    .event(orgize::export::Event::Enter(container), ctx);
+            }
+            orgize::export::Event::Leave(container) => {
+                self.html
+                    .event(orgize::export::Event::Leave(container), ctx);
+                if self.containers.pop().is_none() {
+                    unreachable!("orgize emitted a leave event without an entered container");
+                }
+            }
+            event => self.html.event(event, ctx),
+        }
+    }
+}
+
+fn render_org_with_shortcodes(body: &str) -> RenderedHtml {
+    let org = orgize::Org::parse(body);
+    let mut export = OrgShortcodeExport {
+        source: body,
+        html: orgize::export::HtmlExport::default(),
+        containers: Vec::new(),
+        markers: Vec::new(),
+    };
+    org.traverse(&mut export);
+    let html = export.html.finish();
+    assemble_with_markers(&html, export.markers)
 }
 
 /// The `(element, attribute)` pairs whose values name media. When common's
@@ -335,6 +536,161 @@ mod tests {
     }
 
     // -- Markdown tests --
+
+    #[test]
+    fn post_shortcodes_expand_only_as_eligible_markdown_and_org_paragraphs() {
+        let youtube = "{{< youtube dQw4w9WgXcQ >}}";
+        let vimeo = "   {{<\tvimeo\t123456789\t>}}   ";
+        for (format, body) in [
+            (
+                PostFormat::Markdown,
+                format!("before\n\n{youtube}\n\n{vimeo}\n\nafter"),
+            ),
+            (
+                PostFormat::Org,
+                format!("before\n\n{youtube}\n\n{vimeo}\n\nafter"),
+            ),
+        ] {
+            let body = parse_post_body(&body);
+            let original = body.clone();
+            let rendered = render(&body, &format);
+            assert_eq!(body, original);
+            assert!(
+                rendered.contains("youtube-nocookie.com/embed/dQw4w9WgXcQ"),
+                "{rendered}"
+            );
+            assert!(
+                rendered.contains("player.vimeo.com/video/123456789"),
+                "{rendered}"
+            );
+            assert!(rendered.find("before").unwrap() < rendered.find("youtube-nocookie").unwrap());
+            assert!(
+                rendered.find("youtube-nocookie").unwrap() < rendered.find("player.vimeo").unwrap()
+            );
+            assert!(rendered.find("player.vimeo").unwrap() < rendered.find("after").unwrap());
+            assert!(!rendered.contains("JAUNDER_SHORTCODE_"), "{rendered}");
+            assert!(extract_media_refs(rendered.as_ref()).is_empty());
+        }
+    }
+
+    #[test]
+    fn post_shortcode_grammar_and_ineligible_markdown_contexts_remain_literal() {
+        let valid = "{{< youtube dQw4w9WgXcQ >}}";
+        for source in [
+            "{{< YouTube dQw4w9WgXcQ >}}",
+            "{{< youtube dQw4w9WgXcQ extra >}}",
+            "{{< youtube dQw4w9WgXcQ?start=1 >}}",
+            "{{< unknown dQw4w9WgXcQ >}}",
+            "{{< youtube dQw4w9WgXcQ >}",
+            &format!("`{valid}`"),
+            &format!("```\n{valid}\n```"),
+            &format!("~~~\n{valid}\n~~~"),
+            &format!("    {valid}"),
+            &format!("- {valid}\n  - {valid}"),
+            &format!("> {valid}"),
+            &format!("ordinary {valid}"),
+        ] {
+            let rendered = render(&parse_post_body(source), &PostFormat::Markdown);
+            assert!(!rendered.contains("<iframe"), "{source:?}: {rendered}");
+            assert!(
+                rendered.contains("youtube")
+                    || rendered.contains("YouTube")
+                    || rendered.contains("unknown")
+            );
+        }
+    }
+
+    #[test]
+    fn post_shortcode_org_and_html_suppression_preserve_source() {
+        let valid = "{{< youtube dQw4w9WgXcQ >}}";
+        for source in [
+            &format!("~{valid}~"),
+            &format!("={valid}="),
+            &format!("#+begin_src text\n{valid}\n#+end_src"),
+            &format!("#+begin_example\n{valid}\n#+end_example"),
+            &format!("#+begin_export html\n{valid}\n#+end_export"),
+            &format!("#+begin_quote\n{valid}\n#+end_quote"),
+            &format!("#+begin_verse\n{valid}\n#+end_verse"),
+            &format!(": {valid}"),
+            &format!(":PROPERTIES:\n:VALUE: {valid}\n:END:"),
+            &format!(":LOGBOOK:\n{valid}\n:END:"),
+            &format!("| {valid} |"),
+            &format!("- list item\n  {valid}"),
+            &format!("- outer\n  - inner\n    {valid}"),
+            &format!("# {valid}"),
+            &format!("* Headline\n{valid}"),
+        ] {
+            let body = parse_post_body(source);
+            let rendered = render(&body, &PostFormat::Org);
+            assert!(!rendered.contains("<iframe"), "{source:?}: {rendered}");
+            assert_eq!(body.as_ref(), source);
+        }
+        let html = render(&parse_post_body(valid), &PostFormat::Html);
+        assert!(!html.contains("<iframe"), "{html}");
+    }
+
+    #[test]
+    fn markdown_shortcode_preserves_reference_and_footnote_rendering() {
+        let shortcode = "{{< youtube dQw4w9WgXcQ >}}";
+        let source = format!(
+            "before [reference][site] and a footnote[^note]\n\n{shortcode}\n\nafter\n\n[site]: https://example.com/path\n[^note]: retained footnote"
+        );
+        let rendered = render(&parse_post_body(&source), &PostFormat::Markdown);
+        let ordinary = common::render::sanitize(&render_markdown(&source));
+
+        for expected in [
+            r#"<a href="https://example.com/path" rel="noopener noreferrer">reference</a>"#,
+            "retained footnote",
+        ] {
+            assert!(ordinary.contains(expected), "ordinary: {ordinary}");
+            assert!(rendered.contains(expected), "rendered: {rendered}");
+        }
+        assert!(rendered.contains("youtube-nocookie.com/embed/dQw4w9WgXcQ"));
+    }
+
+    #[test]
+    fn provider_dispatch_shares_grammar_and_keeps_unknown_names_literal() {
+        let future = parse_shortcode("{{< future-provider opaque-id >}}")
+            .expect("provider-neutral grammar accepts future provider tokens");
+        assert_eq!(future.provider, "future-provider");
+        assert_eq!(future.id, "opaque-id");
+        assert!(dispatch_shortcode(future).is_none());
+
+        for (source, provider_url) in [
+            (
+                "{{< youtube dQw4w9WgXcQ >}}",
+                "youtube-nocookie.com/embed/dQw4w9WgXcQ",
+            ),
+            (
+                "{{< vimeo 123456789 >}}",
+                "player.vimeo.com/video/123456789",
+            ),
+        ] {
+            let rendered = render(&parse_post_body(source), &PostFormat::Markdown);
+            assert!(rendered.contains(provider_url), "{source:?}: {rendered}");
+        }
+        for source in [
+            "{{< unknown dQw4w9WgXcQ >}}",
+            "{{< youtube dQw4w9WgXcQ extra >}}",
+            "{{< vimeo 123456789 extra >}}",
+        ] {
+            let rendered = render(&parse_post_body(source), &PostFormat::Markdown);
+            assert!(!rendered.contains("<iframe"), "{source:?}: {rendered}");
+        }
+    }
+
+    #[test]
+    fn shortcode_markers_cannot_be_forged_and_raw_iframes_stay_stripped() {
+        let source = concat!(
+            "<!--JAUNDER_SHORTCODE_00000000000000000000000000000000_0-->",
+            "<iframe src=\"https://evil.example\"></iframe>\n\n",
+            "{{< youtube dQw4w9WgXcQ >}}"
+        );
+        let rendered = render(&parse_post_body(source), &PostFormat::Markdown);
+        assert!(!rendered.contains("evil.example"), "{rendered}");
+        assert!(!rendered.contains("JAUNDER_SHORTCODE_"), "{rendered}");
+        assert!(rendered.contains("youtube-nocookie.com"), "{rendered}");
+    }
 
     #[test]
     fn trusted_provider_frames_are_external_embeds_not_media_references() {

@@ -40,7 +40,7 @@ Out:
     ordering, absence of assembly artifacts, and sanitizer/reference surface
     classification.
 
-- [ ] Task 2: Add format-aware Post Shortcode recognition to canonical rendering
+- [x] Task 2: Add format-aware Post Shortcode recognition to canonical rendering
   - Contract: Markdown and Org adapters recognize only the spec's exact
     top-level-paragraph grammar and produce Task 1's ordered typed embed input;
     they preserve each parser's whole-document semantics and never rewrite the
