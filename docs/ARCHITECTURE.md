@@ -400,7 +400,7 @@ independently.
 
 A successful keyed create permanently consumes its `(User, Idempotency-Key)`
 pair as durable Post-create correlation
-([durable AtomPub create intent](adr/drafts/durable-atompub-create-intent.md)).
+([durable AtomPub create intent](adr/0199-durable-atompub-create-intent.md)).
 The mapping has no semantic expiry, follows the retained Post identity
 lifecycle, and is not a maintenance-cleanup domain. This supersedes only
 ADR-0167's one-hour Post-create mapping rule; that decision's other
@@ -2632,8 +2632,8 @@ Before the first create request, publish durably records the key,
 request-content digest, and attempt time in the local Post; every later
 invocation reuses that create intent until the returned Post ID is safely
 written, then removes it
-([durable AtomPub create intent](adr/drafts/durable-atompub-create-intent.md)).
-If local content changes after an indeterminate create, replay recovers identity
+([durable AtomPub create intent](adr/0199-durable-atompub-create-intent.md)). If
+local content changes after an indeterminate create, replay recovers identity
 but writes an explicit local-ahead marker. Reconciliation consumes that marker
 independently of filesystem timestamp tolerance; only a later successful
 conditional update clears it rather than marking the changed content
@@ -2667,7 +2667,7 @@ and safe to retry.
 
 A selected matched `server-ahead` Post may be pulled only after revalidating its
 report-snapshotted local path/SHA-256 and remote strong ETag
-([revalidated matched-Post pull](adr/drafts/revalidated-matched-post-pull.md)).
+([revalidated matched-Post pull](adr/0200-revalidated-matched-post-pull.md)).
 After staging the complete Member and Media, installation refuses a modified
 visited buffer or occupied canonical destination, atomically replaces the
 current file, and then atomically renames it when the canonical slug changed. A

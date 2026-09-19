@@ -1,13 +1,13 @@
-# ADR-DRAFT: Permit revalidated replacement when pulling a matched Post
+# ADR-0200: Permit revalidated replacement when pulling a matched Post
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-17
 - Issue: [#1565](https://github.com/jaunder-org/jaunder/issues/1565)
 
 ## Context
 
 The Emacs Protocol Client currently pulls only a server-only AtomPub Member.
-[ADR-0160](../0160-emacs-pulled-media-local-copies.md) deliberately requires an
+[ADR-0160](0160-emacs-pulled-media-local-copies.md) deliberately requires an
 unoccupied destination and installs the Post last after every Local Media Copy
 is verified. That rule makes creating a missing local Post safe, but it prevents
 an explicit pull of a matched Post that reconciliation has classified as
