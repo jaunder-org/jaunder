@@ -88,6 +88,58 @@ fn report_identities(raw: &str, lane: &str) -> Result<BTreeSet<Identity>, String
     }
     Ok(identities)
 }
+/// Validate an unsplit control's complete execution evidence before comparing it
+/// with a distributed candidate. The census, manifest, and report must identify
+/// exactly the enabled control lane's selected population.
+pub(crate) fn validate_unsplit_control(
+    backend: &str,
+    browser: &str,
+    lane: &Lane,
+    expected_topology: &str,
+    census_raw: &str,
+    report_raw: &str,
+    manifest_raw: &str,
+) -> Result<(), String> {
+    if !lane.enabled
+        || lane.backend != backend
+        || lane.browser != browser
+        || lane.partition != "unsplit"
+    {
+        return Err("control lane is not the enabled unsplit catalog lane".into());
+    }
+    let census: Census = serde_json::from_str(census_raw)
+        .map_err(|error| format!("malformed control census: {error}"))?;
+    if census.schema_version != 1 || !census.complete || census.topology != expected_topology {
+        return Err("incomplete or mismatched control census".into());
+    }
+    let expected = identities(census.tests, "control census")?;
+    if expected.is_empty() {
+        return Err("empty control census".into());
+    }
+    let manifest: Manifest = serde_json::from_str(manifest_raw)
+        .map_err(|error| format!("malformed control lane manifest: {error}"))?;
+    if manifest.schema_version != 1
+        || !manifest.complete
+        || manifest.lane != lane.identity
+        || manifest.backend != backend
+        || manifest.browser != browser
+        || manifest.partition != lane.partition
+        || manifest.shard_index != lane.shard_index
+        || manifest.shard_count != lane.shard_count
+    {
+        return Err("mismatched control lane manifest".into());
+    }
+    let selected = identities(manifest.tests, "control lane manifest")?;
+    let reported = report_identities(report_raw, &lane.identity)?;
+    if selected != reported {
+        return Err("control lane manifest/report population mismatch".into());
+    }
+    if expected != selected {
+        return Err("control census/manifest population mismatch".into());
+    }
+    Ok(())
+}
+
 /// Evidence is `(lane identity, expected census, report, authenticated manifest)`.
 pub fn reconcile(
     backend: &str,

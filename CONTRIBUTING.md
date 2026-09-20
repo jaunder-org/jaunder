@@ -404,7 +404,14 @@ invoke it.
   lane, lifts every available lane-qualified diagnostic even after a lane fails,
   and fail-closed reconciles the census, report, retries, duration manifest,
   phase sidecar, and trace capture before reporting one backend/browser verdict.
-  It does not enable a CI lane or replace the unsplit measurement control.
+  Distributed measurements instead run `cargo xtask e2e-candidate <lane>` once
+  per isolated runner, then download the lane directories and run
+  `cargo xtask e2e-experimental-reconcile <backend> --diagnostics-root <path> --control-diagnostics-root <path> --control-workers <workers2|workers4>`.
+  The matching unsplit controls are
+  `cargo xtask e2e-control <backend> <workers2|workers4>` (2 workers/2 cores/3
+  GiB or 4 workers/4 cores/6 GiB). These commands are measurement-only: they do
+  not enable a CI lane, alter the four production checks, or replace the
+  retained workers=2 policy.
 - **Duration-pressure gate** — After an otherwise-successful VM combo has
   captured diagnostics, it reconciles the copied
   `playwright-report-<backend>-<browser>-unsplit.json` and

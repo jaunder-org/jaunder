@@ -168,6 +168,38 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             lifecycle::finalize(&mut result, start);
             Ok(result)
         }
+        Command::E2eControl { backend, workers } => {
+            let start = Instant::now();
+            let mut result = CommandResult::new("e2e-control");
+            steps::nix::e2e_control(&mut result, backend.as_str(), workers.count());
+            lifecycle::finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::E2eCandidate { identity } => {
+            let start = Instant::now();
+            let mut result = CommandResult::new("e2e-candidate");
+            steps::nix::e2e_candidate(&mut result, &identity);
+            lifecycle::finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::E2eExperimentalReconcile {
+            backend,
+            diagnostics_root,
+            control_diagnostics_root,
+            control_workers,
+        } => {
+            let start = Instant::now();
+            let mut result = CommandResult::new("e2e-experimental-reconcile");
+            steps::nix::e2e_experimental_reconcile(
+                &mut result,
+                backend.as_str(),
+                &diagnostics_root,
+                control_diagnostics_root.as_deref(),
+                control_workers.map(|workers| workers.count()),
+            );
+            lifecycle::finalize(&mut result, start);
+            Ok(result)
+        }
         Command::E2eExperimental { backend } => {
             let start = Instant::now();
             let mut result = CommandResult::new("e2e-experimental");
