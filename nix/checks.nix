@@ -640,6 +640,7 @@ mkE2eCheck =
               projectArgs
               shardArg
               expectedCensusProjectArgs
+              expectedCensusTopology
               traceId
               traceParent
               extraEnv

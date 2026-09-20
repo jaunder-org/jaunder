@@ -2724,6 +2724,14 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
                 .join("checks.nix"),
         )
         .expect("nix/checks.nix");
+        let run_and_capture_arguments = checks
+            .split_once("${e2eRunAndCapture {")
+            .expect("e2eRunAndCapture invocation")
+            .1
+            .split_once("jaunderDb = backendPolicy.jaunderDb;")
+            .expect("e2eRunAndCapture argument list")
+            .0;
+        assert!(run_and_capture_arguments.contains("expectedCensusTopology"));
         let report_copy =
             "cp /tmp/e2e/test-results/results.json /tmp/playwright-report-${identity}.json";
         let report_grab = r#"_grab("/tmp/playwright-report-${identity}.json")"#;
