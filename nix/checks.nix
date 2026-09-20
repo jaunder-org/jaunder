@@ -317,6 +317,7 @@ e2eRunAndCapture =
     projectArgs,
     shardArg,
     expectedCensusProjectArgs ? "",
+    expectedCensusTopology ? "${backend}-${browser}-experimental",
     traceId,
     traceParent,
     # The same DB the running server uses, exported into the Playwright
@@ -332,13 +333,13 @@ e2eRunAndCapture =
       + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
       + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
       + " JAUNDER_E2E_CENSUS_PREPARE=1"
-      + " JAUNDER_E2E_CENSUS_TOPOLOGY=${backend}-${browser}-experimental"
+      + " JAUNDER_E2E_CENSUS_TOPOLOGY=${expectedCensusTopology}"
       + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
       + " --list --config playwright.config.ts ${expectedCensusProjectArgs}",
       timeout=${toString e2ePlaywrightTimeout},
     )
     print(expected_census_out)
-    assert expected_census_status == 0, "e2e expected census preflight failed for ${backend}-${browser}-experimental"
+    assert expected_census_status == 0, "e2e expected census preflight failed for ${expectedCensusTopology}"
     ''}
     gate_started_at = time.monotonic()
     pw_status, pw_out = machine.execute(
@@ -447,6 +448,7 @@ mkE2eCheck =
     projectArgs,
     shardArg,
     expectedCensusProjectArgs ? "",
+    expectedCensusTopology ? "${backend}-${browser}-experimental",
     traceId,
     traceParent,
     extraEnv ? "",
@@ -689,6 +691,7 @@ mkE2eCombo =
     shardIndex ? null,
     shardCount ? null,
     expectedCensusProjectArgs ? "",
+    expectedCensusTopology ? "${backend}-${browser}-experimental",
     nameSuffix ? "",
     extraEnv ? "",
     vmMemory ? 2048,
@@ -718,6 +721,7 @@ mkE2eCombo =
       projectArgs
       shardArg
       expectedCensusProjectArgs
+      expectedCensusTopology
       traceId
       traceParent
       vmMemory
@@ -764,6 +768,24 @@ e2eExperimentalPackages = pkgs.lib.listToAttrs (
     });
   }) e2eExperimentalLanes
 );
+
+# Measurement-only Firefox controls retain their unsplit catalog identity while
+# varying only the explicitly measured worker and VM resources. They are package
+# outputs, never checks, and therefore cannot change the production topology.
+mkE2eControlPackages = workers: vmMemory: vmCores:
+  pkgs.lib.listToAttrs (
+    map (lane: {
+      name = "e2e-${lane.backend}-firefox-workers-${toString workers}-control";
+      value = mkE2eCombo (lane // {
+        extraEnv = " JAUNDER_E2E_RETRIES=1 JAUNDER_E2E_WORKERS=${toString workers}";
+        expectedCensusProjectArgs = pkgs.lib.concatMapStringsSep " " (project: "--project ${project}") lane.projects;
+        expectedCensusTopology = "${lane.backend}-firefox-workers-${toString workers}-control";
+        inherit vmMemory vmCores;
+      });
+    }) (builtins.filter (lane: lane.enabled && lane.browser == "firefox") e2eCombos)
+  );
+e2eWorkers2ControlPackages = mkE2eControlPackages 2 3072 2;
+e2eWorkers4ControlPackages = mkE2eControlPackages 4 6144 4;
 
 # Single-worker variants: same combos as the gate checks but pinned to
 # workers=1, so per-navigation timings are free of worker contention.
@@ -1739,7 +1761,7 @@ mkWasmCoverageMeasurementProducer =
           value = check.driver;
         }) checks;
     in
-    drivers e2eGateChecks // drivers e2eExperimentalPackages // drivers e2eSingleWorkerPackages;
+    drivers e2eGateChecks // drivers e2eExperimentalPackages // drivers e2eWorkers2ControlPackages // drivers e2eWorkers4ControlPackages // drivers e2eSingleWorkerPackages;
   e2eSupportPackages = {
     # These derivations already sit beneath each NixOS test result and have
     # names caught by the broad Cachix exclusion. They contain test machinery,
@@ -1851,6 +1873,8 @@ mkWasmCoverageMeasurementProducer =
     ++ (map (name: "checks.${system}.${name}") (builtins.attrNames e2eGateChecks))
     ++ [ "checks.${system}.e2e" "packages.${system}.e2e-checks" ]
     ++ (map (name: "packages.${system}.${name}") (builtins.attrNames e2eExperimentalPackages))
+    ++ (map (name: "packages.${system}.${name}") (builtins.attrNames e2eWorkers2ControlPackages))
+    ++ (map (name: "packages.${system}.${name}") (builtins.attrNames e2eWorkers4ControlPackages))
     ++ (map (name: "packages.${system}.${name}") (builtins.attrNames e2eSingleWorkerPackages));
   cacheSafetyDriverAttrs =
     map (name: "packages.${system}.${name}") (builtins.attrNames e2eTestDriverPackages);
@@ -1965,6 +1989,8 @@ wasm-coverage-measure-firefox-instrumented = mkWasmCoverageMeasurementProducer {
 };
     }
     // e2eExperimentalPackages
+    // e2eWorkers2ControlPackages
+    // e2eWorkers4ControlPackages
     // e2eSingleWorkerPackages
   );
 

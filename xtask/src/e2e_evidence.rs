@@ -80,6 +80,112 @@ fn validate_phase_sidecar(
 /// Reconcile all candidate lanes. Ownership runs first; every remaining consumer
 /// then validates its lane-qualified input independently, retaining no merged or
 /// basename-selected evidence.
+#[derive(Deserialize)]
+struct PopulationCensus {
+    schema_version: u8,
+    complete: bool,
+    tests: Vec<PopulationTest>,
+}
+
+#[derive(Deserialize)]
+struct PopulationTest {
+    file: String,
+    line: u64,
+    column: u64,
+    title_path: Vec<String>,
+}
+
+#[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct SourceIdentity {
+    file: String,
+    line: u64,
+    column: u64,
+    title_path: Vec<String>,
+}
+
+fn source_population(raw: &str, kind: &str) -> Result<BTreeSet<SourceIdentity>, String> {
+    let census: PopulationCensus =
+        serde_json::from_str(raw).map_err(|error| format!("parsing {kind}: {error}"))?;
+    if census.schema_version != 1 || !census.complete || census.tests.is_empty() {
+        return Err(format!("{kind} is incomplete or empty"));
+    }
+    let count = census.tests.len();
+    let tests = census
+        .tests
+        .into_iter()
+        .map(|test| {
+            if test.file.is_empty()
+                || test.line == 0
+                || test.column == 0
+                || test.title_path.is_empty()
+            {
+                Err(format!("{kind} has malformed stable test identity"))
+            } else {
+                Ok(SourceIdentity {
+                    file: test.file,
+                    line: test.line,
+                    column: test.column,
+                    title_path: test.title_path,
+                })
+            }
+        })
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    if tests.len() != count {
+        return Err(format!("{kind} has duplicate stable test identity"));
+    }
+    Ok(tests)
+}
+
+/// Compare a reconciled split run with an unsplit control that actually ran.
+/// The census source identity is stable across project topology while each side's
+/// report remains independently validated by its owning reconciliation path.
+pub fn compare_control_population(
+    backend: &str,
+    split: &[LaneEvidence],
+    lanes: &[Lane],
+    control_topology: &str,
+    control_census: &Path,
+    control_report: &Path,
+    control_manifest: &Path,
+) -> Result<String, String> {
+    let mut candidate_censuses = split.iter().map(|lane| {
+        source_population(&read(&lane.census, "candidate census")?, "candidate census")
+    });
+    let Some(candidate_population) = candidate_censuses.next() else {
+        return Err("no candidate census evidence".into());
+    };
+    let candidate_population = candidate_population?;
+    for population in candidate_censuses {
+        if population? != candidate_population {
+            return Err("candidate censuses disagree on stable test population".into());
+        }
+    }
+    let control_lane = lanes
+        .iter()
+        .find(|lane| lane.backend == backend && lane.browser == "firefox" && lane.enabled)
+        .ok_or_else(|| "missing enabled Firefox control lane".to_owned())?;
+    let control_census_raw = read(control_census, "control census")?;
+    let control_report_raw = read(control_report, "control Playwright report")?;
+    let control_manifest_raw = read(control_manifest, "control lane manifest")?;
+    crate::e2e_ownership::validate_unsplit_control(
+        backend,
+        "firefox",
+        control_lane,
+        control_topology,
+        &control_census_raw,
+        &control_report_raw,
+        &control_manifest_raw,
+    )?;
+    let control_population = source_population(&control_census_raw, "control census")?;
+    if candidate_population != control_population {
+        return Err("split/control stable test populations differ".into());
+    }
+    Ok(format!(
+        "split/control population comparison passed for {} tests",
+        candidate_population.len()
+    ))
+}
+
 pub fn reconcile(
     backend: &str,
     browser: &str,
@@ -260,6 +366,97 @@ mod tests {
         reconcile("sqlite", "firefox", &catalog().unwrap().lanes, evidence).unwrap_err()
     }
 
+    fn source_census(topology: &str) -> Value {
+        let mut census: Value = serde_json::from_str(CENSUS).unwrap();
+        census["topology"] = Value::String(topology.to_owned());
+        for (index, test) in census["tests"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .enumerate()
+        {
+            test["file"] = Value::String(format!("tests/source-{index}.spec.ts"));
+            test["line"] = Value::from((index + 1) as u64);
+            test["column"] = Value::from(1_u64);
+            test["title_path"] = Value::Array(vec![Value::String(format!("source {index}"))]);
+        }
+        census
+    }
+
+    fn control_report() -> Value {
+        let mut report = serde_json::json!({ "suites": [] });
+        let suites = report["suites"].as_array_mut().unwrap();
+        for raw in REPORTS {
+            let source: Value = serde_json::from_str(raw).unwrap();
+            suites.extend(source["suites"].as_array().unwrap().iter().cloned());
+        }
+        report
+    }
+
+    fn control_manifest() -> Value {
+        let mut tests = Vec::new();
+        for raw in LANE_MANIFESTS {
+            let source: Value = serde_json::from_str(raw).unwrap();
+            tests.extend(source["tests"].as_array().unwrap().iter().cloned());
+        }
+        serde_json::json!({
+            "schema_version": 1,
+            "complete": true,
+            "lane": "sqlite-firefox-unsplit",
+            "backend": "sqlite",
+            "browser": "firefox",
+            "partition": "unsplit",
+            "shard_index": null,
+            "shard_count": null,
+            "tests": tests,
+        })
+    }
+
+    fn control_comparison_fixture(
+        root: &Path,
+    ) -> (
+        Vec<LaneEvidence>,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        std::path::PathBuf,
+    ) {
+        let evidence = fixture(root);
+        let candidate_census = source_census("sqlite-firefox-experimental");
+        for lane in &evidence {
+            fs::write(&lane.census, serde_json::to_vec(&candidate_census).unwrap()).unwrap();
+        }
+        let control = root.join("control");
+        fs::create_dir_all(&control).unwrap();
+        let census = control.join("census.json");
+        let report = control.join("report.json");
+        let manifest = control.join("manifest.json");
+        fs::write(
+            &census,
+            serde_json::to_vec(&source_census("sqlite-firefox-workers-2-control")).unwrap(),
+        )
+        .unwrap();
+        fs::write(&report, serde_json::to_vec(&control_report()).unwrap()).unwrap();
+        fs::write(&manifest, serde_json::to_vec(&control_manifest()).unwrap()).unwrap();
+        (evidence, census, report, manifest)
+    }
+
+    fn compare(
+        evidence: &[LaneEvidence],
+        census: &Path,
+        report: &Path,
+        manifest: &Path,
+    ) -> Result<String, String> {
+        super::compare_control_population(
+            "sqlite",
+            evidence,
+            &catalog().unwrap().lanes,
+            "sqlite-firefox-workers-2-control",
+            census,
+            report,
+            manifest,
+        )
+    }
+
     #[test]
     fn complete_three_lane_fixture_reconciles() {
         let temp = tempfile::tempdir().unwrap();
@@ -332,6 +529,67 @@ mod tests {
             errors(&evidence)
                 .iter()
                 .any(|error| error.contains("dropped"))
+        );
+    }
+
+    #[test]
+    fn control_population_comparison_rejects_inconsistent_or_unexecuted_evidence() {
+        let temp = tempfile::tempdir().unwrap();
+        let (evidence, census, report, manifest) = control_comparison_fixture(temp.path());
+        assert!(compare(&evidence, &census, &report, &manifest).is_ok());
+
+        let temp = tempfile::tempdir().unwrap();
+        let (evidence, census, report, manifest) = control_comparison_fixture(temp.path());
+        let mut disagree: Value =
+            serde_json::from_str(&fs::read_to_string(&evidence[1].census).unwrap()).unwrap();
+        disagree["tests"][0]["line"] = Value::from(99_u64);
+        fs::write(&evidence[1].census, serde_json::to_vec(&disagree).unwrap()).unwrap();
+        assert!(
+            compare(&evidence, &census, &report, &manifest)
+                .unwrap_err()
+                .contains("candidate censuses disagree")
+        );
+
+        let temp = tempfile::tempdir().unwrap();
+        let (evidence, census, report, manifest) = control_comparison_fixture(temp.path());
+        let mut mismatch: Value =
+            serde_json::from_str(&fs::read_to_string(&census).unwrap()).unwrap();
+        mismatch["tests"][0]["line"] = Value::from(99_u64);
+        fs::write(&census, serde_json::to_vec(&mismatch).unwrap()).unwrap();
+        assert!(
+            compare(&evidence, &census, &report, &manifest)
+                .unwrap_err()
+                .contains("stable test populations differ")
+        );
+
+        let temp = tempfile::tempdir().unwrap();
+        let (evidence, census, report, manifest) = control_comparison_fixture(temp.path());
+        fs::write(&report, "{").unwrap();
+        assert!(
+            compare(&evidence, &census, &report, &manifest)
+                .unwrap_err()
+                .contains("malformed")
+        );
+
+        let temp = tempfile::tempdir().unwrap();
+        let (evidence, census, report, manifest) = control_comparison_fixture(temp.path());
+        fs::write(&report, r#"{"suites":[]}"#).unwrap();
+        assert!(
+            compare(&evidence, &census, &report, &manifest)
+                .unwrap_err()
+                .contains("no specs")
+        );
+
+        let temp = tempfile::tempdir().unwrap();
+        let (evidence, census, report, manifest) = control_comparison_fixture(temp.path());
+        let mut mismatched_manifest: Value =
+            serde_json::from_str(&fs::read_to_string(&manifest).unwrap()).unwrap();
+        mismatched_manifest["tests"].as_array_mut().unwrap().pop();
+        fs::write(&manifest, serde_json::to_vec(&mismatched_manifest).unwrap()).unwrap();
+        assert!(
+            compare(&evidence, &census, &report, &manifest)
+                .unwrap_err()
+                .contains("manifest/report")
         );
     }
 
