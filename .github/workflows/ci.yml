@@ -269,7 +269,7 @@ jobs:
           retention-days: 14
 
   measure-firefox-candidate:
-    name: measure Firefox candidate (${{ matrix.lane }})
+    name: measure Firefox candidate (${{ matrix.backend }}/${{ matrix.lane }})
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
