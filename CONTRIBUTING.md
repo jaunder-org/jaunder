@@ -399,6 +399,12 @@ invoke it.
   `{sqlite,postgres}×{chromium,firefox}` combos. Escalate to these when the
   changed behavior depends on backend/browser parity, release-build behavior, or
   branch-boundary confidence. The VM path is what green means before you push.
+- **Firefox candidate aggregate** — `cargo xtask e2e-experimental <backend>` is
+  a host-only measurement command. It starts every disabled Firefox candidate
+  lane, lifts every available lane-qualified diagnostic even after a lane fails,
+  and fail-closed reconciles the census, report, retries, duration manifest,
+  phase sidecar, and trace capture before reporting one backend/browser verdict.
+  It does not enable a CI lane or replace the unsplit measurement control.
 - **Duration-pressure gate** — After an otherwise-successful VM combo has
   captured diagnostics, it reconciles the copied
   `playwright-report-<backend>-<browser>-unsplit.json` and

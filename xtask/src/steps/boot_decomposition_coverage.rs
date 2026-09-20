@@ -46,7 +46,7 @@ pub(crate) fn validate_lifted_combo(backend: &str, browser: &str, lane: &str) ->
     }
 }
 
-fn validate_files(report_path: &Path, capture_path: &Path) -> Result<String, String> {
+pub(crate) fn validate_files(report_path: &Path, capture_path: &Path) -> Result<String, String> {
     let report = std::fs::read_to_string(report_path).map_err(|error| {
         format!(
             "reading Playwright report {}: {error}",

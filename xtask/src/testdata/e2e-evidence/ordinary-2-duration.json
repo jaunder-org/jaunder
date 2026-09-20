@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "complete": true,
+  "tests": [
+    {
+      "test_id": "two",
+      "project_id": "firefox-ordinary",
+      "project_name": "firefox-ordinary",
+      "title": "ordinary shard two",
+      "file": "tests/ordinary.spec.ts",
+      "line": 2,
+      "attempts": [{ "retry": 0, "effective_timeout_ms": 100 }]
+    }
+  ]
+}

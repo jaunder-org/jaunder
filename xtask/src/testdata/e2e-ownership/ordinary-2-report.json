@@ -5,11 +5,15 @@
       "specs": [
         {
           "id": "two",
+          "title": "ordinary shard two",
+          "file": "tests/ordinary.spec.ts",
+          "line": 2,
           "tests": [
             {
               "projectId": "firefox-ordinary",
               "projectName": "firefox-ordinary",
-              "results": []
+              "status": "expected",
+              "results": [{ "retry": 0, "duration": 12 }]
             }
           ]
         }

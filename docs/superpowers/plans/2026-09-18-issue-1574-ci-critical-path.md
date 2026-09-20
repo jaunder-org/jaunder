@@ -87,7 +87,7 @@ Out:
     dependency isolation, visual single ownership, lane naming, and census
     failure cases before any CI matrix expansion.
 
-- [ ] Task 4: Reconcile distributed e2e verdicts and diagnostics.
+- [x] Task 4: Reconcile distributed e2e verdicts and diagnostics.
   - Contract: extend existing flaky, duration-pressure, zero-panic, and
     boot-decomposition consumers to accept lane-qualified inputs and produce one
     backend/browser aggregate without discarding per-lane attempts or traces.
