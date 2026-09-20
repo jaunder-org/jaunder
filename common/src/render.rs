@@ -507,7 +507,11 @@ where
 }
 
 fn canonical_rendered_post_title(fragment: &str) -> bool {
-    if fragment.starts_with(' ')
+    // html5ever drops NullCharacterToken while emitting title fragments. Persisted
+    // bytes must therefore reject NUL rather than accepting a representation the
+    // sole host author cannot produce.
+    if fragment.contains('\0')
+        || fragment.starts_with(' ')
         || fragment.ends_with(' ')
         || fragment.contains("  ")
         || fragment
@@ -1740,6 +1744,7 @@ mod tests {
             "trailing ",
             "two  spaces",
             "line\nbreak",
+            "nul\0byte",
             "<b attr>x</b>",
             "<br>",
             "<em></em>",
@@ -1803,6 +1808,7 @@ mod tests {
             r#"{"title":" x"}"#,
             r#"{"title":"<br>"}"#,
             r#"{"title":"<em></em>"}"#,
+            r#"{"title":"nul\u0000byte"}"#,
         ] {
             assert!(serde_json::from_str::<Wire>(invalid).is_err(), "{invalid}");
             assert!(
@@ -1825,7 +1831,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(valid.as_ref(), "<em>ok</em>");
-        for invalid_fragment in ["<script>x</script>", "<br>", "<em></em>"] {
+        for invalid_fragment in ["<script>x</script>", "<br>", "<em></em>", "nul\0byte"] {
             let invalid = sqlx::query_scalar::<_, RenderedPostTitle>("SELECT $1")
                 .bind(invalid_fragment)
                 .fetch_one(&mut connection)

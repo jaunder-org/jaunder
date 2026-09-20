@@ -179,9 +179,11 @@ mod tests {
 
     #[test]
     fn renders_formatted_title_as_html() {
+        let title: common::render::RenderedPostTitle =
+            "<strong>A &amp; B</strong><br>C".parse().unwrap();
         let item = FeedItem {
-            rendered_title: Some("<strong>A &amp; B</strong><br>C".parse().unwrap()),
-            visible_title: Some("A & B C".to_owned()),
+            visible_title: Some(title.visible_text()),
+            rendered_title: Some(title),
             ..item()
         };
         let out = render_atom(&meta(None, Some("A site")), &[item]).expect("canonical timestamps");

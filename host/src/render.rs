@@ -482,7 +482,7 @@ impl TitleSink {
         let Some((outer, depth)) = discarded.as_mut() else {
             return false;
         };
-        if outer == name && !self_closing && !is_void(name) {
+        if outer == name && !is_void(name) && !(self_closing && acknowledges_self_closing(name)) {
             *depth += 1;
         }
         true
@@ -567,14 +567,24 @@ fn is_retained(name: &str) -> bool {
 }
 
 fn is_boundary(name: &str) -> bool {
+    // HTML's block containers and table/list/definition-list cells delimit text
+    // when their wrappers are removed. Keeping this set explicit makes the title
+    // projection independent of parser-specific implicit end-tag recovery.
     matches!(
         name,
         "address"
             | "article"
             | "aside"
             | "blockquote"
+            | "caption"
+            | "colgroup"
+            | "dd"
+            | "details"
+            | "dialog"
+            | "dir"
             | "div"
             | "dl"
+            | "dt"
             | "fieldset"
             | "figcaption"
             | "figure"
@@ -587,14 +597,19 @@ fn is_boundary(name: &str) -> bool {
             | "h5"
             | "h6"
             | "header"
+            | "hgroup"
             | "hr"
+            | "legend"
             | "li"
             | "main"
+            | "menu"
             | "nav"
             | "ol"
             | "p"
             | "pre"
+            | "search"
             | "section"
+            | "summary"
             | "table"
             | "tbody"
             | "td"
@@ -607,8 +622,10 @@ fn is_boundary(name: &str) -> bool {
 }
 
 fn starts_discard(name: &str, self_closing: bool) -> bool {
-    !self_closing
-        && !is_void(name)
+    // HTML ignores the self-closing flag on ordinary non-void elements, so
+    // `<script/>text</script>` remains a script element. Foreign SVG/MathML
+    // elements acknowledge it and therefore have no descendants to discard.
+    !(is_void(name) || self_closing && acknowledges_self_closing(name))
         && matches!(
             name,
             "audio"
@@ -621,6 +638,10 @@ fn starts_discard(name: &str, self_closing: bool) -> bool {
                 | "template"
                 | "video"
         )
+}
+
+fn acknowledges_self_closing(name: &str) -> bool {
+    matches!(name, "svg" | "math")
 }
 
 fn is_void(name: &str) -> bool {
@@ -1898,6 +1919,68 @@ mod tests {
     }
 
     #[test]
+    fn title_projection_exact_html_matrix_covers_the_closed_policy() {
+        let cases = [
+            ("<b>b</b>", "<b>b</b>", "b"),
+            (
+                "<strong>strong</strong>",
+                "<strong>strong</strong>",
+                "strong",
+            ),
+            ("<i>i</i>", "<i>i</i>", "i"),
+            ("<em>em</em>", "<em>em</em>", "em"),
+            ("<u>u</u>", "<u>u</u>", "u"),
+            ("<s>s</s>", "<s>s</s>", "s"),
+            ("<del>del</del>", "<del>del</del>", "del"),
+            ("<code>code</code>", "<code>code</code>", "code"),
+            ("<sub>sub</sub>", "<sub>sub</sub>", "sub"),
+            ("<sup>sup</sup>", "<sup>sup</sup>", "sup"),
+            ("<mark>mark</mark>", "<mark>mark</mark>", "mark"),
+            ("<small>small</small>", "<small>small</small>", "small"),
+            ("before<br>after", "before<br>after", "before after"),
+            ("<a href=\"/lost\">label</a>", "label", "label"),
+            (
+                "<img src=\"lost\" alt=\"image alt\">",
+                "image alt",
+                "image alt",
+            ),
+            (
+                "<img alt=\"A &amp; &quot;B&quot; &lt;C&gt;\">",
+                "A &amp; \"B\" &lt;C&gt;",
+                "A & \"B\" <C>",
+            ),
+            (
+                "<strong>A</strong><em>B</em>",
+                "<strong>A</strong><em>B</em>",
+                "AB",
+            ),
+            (
+                "<dl><dt>Term</dt><dd>Definition</dd></dl>",
+                "Term Definition",
+                "Term Definition",
+            ),
+            ("<p class=\"lost\">A &amp; B</p>", "A &amp; B", "A & B"),
+            (
+                "<b>  whitespace\n normalizes </b>",
+                "<b> whitespace normalizes </b>",
+                "whitespace normalizes",
+            ),
+            (
+                "<b><i>malformed</b> recovered</i>",
+                "<b><i>malformed</i></b> recovered",
+                "malformed recovered",
+            ),
+            ("<!-- comment --><script>discarded</script>", "", ""),
+        ];
+        for (source, expected_html, expected_visible_text) in cases {
+            let title: PostTitle = source.parse().unwrap();
+            let rendered = render_title(&title, &PostFormat::Html);
+            assert_eq!(rendered.as_ref(), expected_html, "{source}");
+            assert_eq!(rendered.visible_text(), expected_visible_text, "{source}");
+        }
+    }
+
+    #[test]
     fn title_projection_collapses_content_free_fragments_but_keeps_mixed_visible_text() {
         for (format, source) in [
             (PostFormat::Markdown, "<br>"),
@@ -1932,10 +2015,23 @@ mod tests {
             ("<audio>x</audio>kept", "kept"),
             ("<video><img alt=x></video>kept", "kept"),
             ("<audio><audio>x</audio></audio>kept", "kept"),
-            (
-                "<embed>x<iframe>x</iframe><math>x</math><object>x</object><script>x</script><style>x</style><svg>x</svg><template>x</template>kept",
-                "xkept",
-            ),
+            // Every non-void discard element treats `/` as HTML's ignored
+            // self-closing flag and consumes descendants through its end tag.
+            ("<script/>secret</script>kept", "kept"),
+            ("<script><script/>inner</script>outer</script>kept", "kept"),
+            ("<style/>secret</style>kept", "kept"),
+            ("<iframe/>secret</iframe>kept", "kept"),
+            ("<object/>secret</object>kept", "kept"),
+            ("<svg/>secret</svg>kept", "secretkept"),
+            ("<math/>secret</math>kept", "secretkept"),
+            ("<svg><svg/>inner</svg>outer</svg>kept", "outerkept"),
+            ("<math><math/>inner</math>outer</math>kept", "outerkept"),
+            ("<template/>secret</template>kept", "kept"),
+            ("<audio/>secret</audio>kept", "kept"),
+            ("<video/>secret</video>kept", "kept"),
+            // Void discard elements have no descendants in HTML syntax, but
+            // their own tags disappear without changing adjacent text.
+            ("<embed>kept", "kept"),
             ("<source><track>kept", "kept"),
             ("<audio><img alt=x></audio>kept", "kept"),
             ("<b>one<audio></b></audio>two</b>", "<b>onetwo</b>"),
