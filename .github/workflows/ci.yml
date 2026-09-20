@@ -237,6 +237,129 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  # Disposable issue #1574 measurement jobs. This branch must never merge.
+  measure-firefox-control:
+    name: measure Firefox control (${{ matrix.backend }}/${{ matrix.workers }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [sqlite, postgres]
+        workers: [workers2, workers4]
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: ./.github/actions/setup-ci
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Run census-bearing unsplit control
+        run:
+          nix develop .#ci --accept-flake-config -c cargo xtask e2e-control ${{
+          matrix.backend }} ${{ matrix.workers }}
+      - name: Upload control evidence
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name:
+            measure-firefox-control-${{ matrix.backend }}-${{ matrix.workers }}
+          path: |
+            .xtask/diagnostics/
+            .xtask/last-result.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  measure-firefox-candidate:
+    name: measure Firefox candidate (${{ matrix.lane }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - backend: sqlite
+            lane: sqlite-firefox-ordinary-1-of-2
+          - backend: sqlite
+            lane: sqlite-firefox-ordinary-2-of-2
+          - backend: sqlite
+            lane: sqlite-firefox-serial-special
+          - backend: postgres
+            lane: postgres-firefox-ordinary-1-of-2
+          - backend: postgres
+            lane: postgres-firefox-ordinary-2-of-2
+          - backend: postgres
+            lane: postgres-firefox-serial-special
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: ./.github/actions/setup-ci
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Run one isolated candidate lane
+        run:
+          nix develop .#ci --accept-flake-config -c cargo xtask e2e-candidate
+          ${{ matrix.lane }}
+      - name: Upload candidate evidence
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name:
+            measure-firefox-candidate-${{ matrix.backend }}-${{ matrix.lane }}
+          path: |
+            .xtask/diagnostics/
+            .xtask/last-result.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  measure-firefox-reconcile:
+    name:
+      measure Firefox reconcile (${{ matrix.backend }}/${{
+      matrix.control-workers }})
+    runs-on: ubuntu-24.04
+    needs: [measure-firefox-control, measure-firefox-candidate]
+    if: always()
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [sqlite, postgres]
+        control-workers: [workers2, workers4]
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: ./.github/actions/setup-ci
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Download candidate evidence
+        uses: actions/download-artifact@v8.0.1
+        with:
+          pattern: measure-firefox-candidate-${{ matrix.backend }}-*
+          path: .xtask/measurement/candidates
+          merge-multiple: true
+      - name: Download control evidence
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name:
+            measure-firefox-control-${{ matrix.backend }}-${{
+            matrix.control-workers }}
+          path: .xtask/measurement/control
+      - name: Reconcile candidate and control populations
+        run:
+          nix develop .#ci --accept-flake-config -c cargo xtask
+          e2e-experimental-reconcile ${{ matrix.backend }} --diagnostics-root
+          .xtask/measurement/candidates/diagnostics --control-diagnostics-root
+          .xtask/measurement/control/diagnostics --control-workers ${{
+          matrix.control-workers }}
+      - name: Upload aggregate verdict
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name:
+            measure-firefox-reconcile-${{ matrix.backend }}-${{
+            matrix.control-workers }}
+          path: |
+            .xtask/last-result.json
+            .xtask/measurement/
+          if-no-files-found: ignore
+          retention-days: 14
+
   e2e-gate:
     name: e2e gate
     # Result-only gate: no checkout, nix, or build — four lines of shell over the
