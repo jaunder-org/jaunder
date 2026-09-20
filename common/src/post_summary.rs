@@ -109,6 +109,44 @@ fn non_empty_trimmed_prefix(prefix: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
+/// Truncate derived rendered text at its first lexical sentence terminator, then at a
+/// word boundary, and finally at a Unicode-scalar limit.
+///
+/// This is target-independent because host extraction and the later browser-visible
+/// label projection must apply the same scalar-safe fallback rules. It deliberately
+/// treats abbreviations and decimals as sentence endings: the rule is lexical, not
+/// linguistic.
+#[must_use]
+pub fn truncate_at_first_sentence_or_word_boundary(input: &str, max_scalars: usize) -> String {
+    let hard_cap: String = input.chars().take(max_scalars).collect();
+
+    if let Some((terminator_index, terminator)) = hard_cap
+        .char_indices()
+        .find(|(_, character)| matches!(character, '.' | '!' | '?'))
+    {
+        let terminator_end = terminator_index + terminator.len_utf8();
+        let mut end = terminator_end;
+        for (offset, character) in hard_cap[terminator_end..].char_indices() {
+            if !matches!(character, '\'' | '"' | '’' | '”' | ')' | ']' | '}') {
+                break;
+            }
+            end = terminator_end + offset + character.len_utf8();
+        }
+        return hard_cap[..end].to_owned();
+    }
+
+    if input.chars().nth(max_scalars).is_none() {
+        return input.to_owned();
+    }
+
+    hard_cap
+        .char_indices()
+        .rev()
+        .find_map(|(index, character)| character.is_whitespace().then_some(index))
+        .and_then(|end| non_empty_trimmed_prefix(&hard_cap[..end]))
+        .unwrap_or(hard_cap)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,5 +263,45 @@ mod tests {
     fn first_body_line_strips_a_carriage_return() {
         let body = crate::test_support::parse_post_body("\r\n  hi  \r\nnext\r\n");
         assert_eq!(PostSummary::from_body_line(&body), "hi");
+    }
+
+    #[test]
+    fn rendered_summary_truncation_uses_first_sentence_and_closing_punctuation() {
+        assert_eq!(
+            truncate_at_first_sentence_or_word_boundary("First. Second.", MAX_POST_SUMMARY_CHARS),
+            "First."
+        );
+        assert_eq!(
+            truncate_at_first_sentence_or_word_boundary(
+                "First?\")]} Second.",
+                MAX_POST_SUMMARY_CHARS
+            ),
+            "First?\")]}"
+        );
+        let at_limit = format!("{}.", "a".repeat(MAX_POST_SUMMARY_CHARS - 1));
+        assert_eq!(
+            truncate_at_first_sentence_or_word_boundary(&at_limit, MAX_POST_SUMMARY_CHARS),
+            at_limit
+        );
+    }
+
+    #[test]
+    fn rendered_summary_truncation_keeps_word_or_scalar_boundaries_at_its_limit() {
+        let word_bounded = format!("{}tail", "word ".repeat(100));
+        let summary =
+            truncate_at_first_sentence_or_word_boundary(&word_bounded, MAX_POST_SUMMARY_CHARS);
+        assert!(summary.chars().count() <= MAX_POST_SUMMARY_CHARS);
+        assert!(!summary.ends_with("tail"));
+
+        let scalar_bounded = "界".repeat(MAX_POST_SUMMARY_CHARS + 1);
+        let summary =
+            truncate_at_first_sentence_or_word_boundary(&scalar_bounded, MAX_POST_SUMMARY_CHARS);
+        assert_eq!(summary.chars().count(), MAX_POST_SUMMARY_CHARS);
+        assert!(summary.chars().all(|character| character == '界'));
+
+        let label_bounded = "界".repeat(101);
+        let summary = truncate_at_first_sentence_or_word_boundary(&label_bounded, 100);
+        assert_eq!(summary.chars().count(), 100);
+        assert!(summary.chars().all(|character| character == '界'));
     }
 }

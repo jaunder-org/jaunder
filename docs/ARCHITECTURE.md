@@ -478,12 +478,16 @@ detailed in the Protocols section
 `storage/src/posts/models.rs::PostRecord` carries both plus title, `Slug`,
 summary, tags, and `created_at`/`updated_at`/`published_at`/`deleted_at`.
 
-`PostRecord.summary` is optional authored Post content. In contrast,
-`summary_label` is disposable presentation metadata for a titleless unpublished
-row: it is recomputed from the canonical `PostBody` at read time and is never
-stored. The bounded unpublished-post query already carries the body; persisting
-the label would impose freshness obligations across writes and direct backup
-restore.
+`PostRecord.summary` is optional authored Post content. The separate, disposable
+fallback projection is host-owned:
+`host::render::summarize_rendered_html(&RenderedHtml) -> Option<PostSummary>`
+strips rendered elements with `ammonia::Builder::empty()`, decodes its
+serialized entities, normalizes Unicode whitespace, and applies the lexical
+sentence/word/scalar boundary rule. It is derived only from already-sanitized
+`RenderedHtml`, never stored, and keeps HTML handling out of wasm and storage.
+`summary_label` remains disposable presentation metadata for a titleless
+unpublished row; persisting either derived value would impose freshness
+obligations across writes and direct backup restore.
 
 **A body has at least one non-blank line, and normalization is format-aware**
 ([ADR-0105](adr/0105-post-body-non-blank-invariant.md)). `PostBody::from_str` is
@@ -2818,8 +2822,14 @@ supply one. `PostSummary` applies that shape directly in its derived-summary
 constructors: `from_title` accepts a `PostTitle`, and `from_body_line` accepts a
 `PostBody`; each source already proves non-blankness, so these constructors only
 coerce the length half of the summary invariant. They share one internal
-boundary-aware truncation helper, which prefers sentence then word boundaries
-before a hard Unicode-scalar cap.
+boundary-aware truncation helper. Separately,
+`truncate_at_first_sentence_or_word_boundary` is target-independent support for
+the rendered-body projection: it takes the first lexical `.`, `!`, or `?`, keeps
+immediately following closing punctuation, then falls back to a
+Unicode-whitespace boundary or a Unicode-scalar cap.
+`host::render::summarize_rendered_html` applies that helper only after its
+host-side rendered-HTML extraction, leaving ammonia and HTML handling outside
+the wasm and storage closures.
 
 ### Identity and label are two types, not one
 
