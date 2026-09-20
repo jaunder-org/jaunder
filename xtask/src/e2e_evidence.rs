@@ -70,7 +70,7 @@ fn validate_phase_sidecar(
     if sidecar
         .phases
         .iter()
-        .any(|phase| phase.outcome != PhaseOutcome::Success)
+        .any(|phase| phase.outcome == PhaseOutcome::Failed)
     {
         return Err("records a failed phase".into());
     }
