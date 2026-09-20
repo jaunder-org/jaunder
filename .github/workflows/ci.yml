@@ -252,6 +252,10 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Force a fresh control realization
+        run: >-
+          perl -0pi -e 's/e2eSalt = "";/e2eSalt = "ci-${{ github.run_id }}-${{
+          github.run_attempt }}";/ or die "missing e2eSalt\n"' nix/checks.nix
       - name: Run census-bearing unsplit control
         run:
           nix develop .#ci --accept-flake-config -c cargo xtask e2e-control ${{
@@ -282,6 +286,10 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Force a fresh candidate realization
+        run: >-
+          perl -0pi -e 's/e2eSalt = "";/e2eSalt = "ci-${{ github.run_id }}-${{
+          github.run_attempt }}";/ or die "missing e2eSalt\n"' nix/checks.nix
       - name: Run one isolated candidate lane
         run:
           nix develop .#ci --accept-flake-config -c cargo xtask e2e-candidate
