@@ -3189,7 +3189,7 @@ lane per backend. Firefox has three isolated lanes per backend: two shards of
 the ordinary project and one serial-special lane owning visual,
 global-configuration, and invite projects in dependency order. Unsplit Firefox
 workers=2 and workers=4 remain package-only measurement controls
-([distributed CI lane topology](adr/0203-distribute-ci-validation-and-firefox-e2e-lanes.md)).
+([distributed CI lane topology](adr/drafts/distribute-ci-validation-and-firefox-e2e-lanes.md)).
 
 CI runs two Chromium producers and six lane-qualified Firefox producers with
 `fail-fast: false`. Every Firefox lane runs the same independent unsharded
@@ -3267,7 +3267,7 @@ Firefox global-state specs are additionally isolated from both ordinary shards
 in the serial-special VM; Chromium keeps its serial admin project in the unsplit
 VM. The catalog and Playwright dependency graph require visual ownership exactly
 once and keep each special project's prerequisites in the same lane
-([distributed CI lane topology](adr/0203-distribute-ci-validation-and-firefox-e2e-lanes.md)).
+([distributed CI lane topology](adr/drafts/distribute-ci-validation-and-firefox-e2e-lanes.md)).
 
 The config also carries a `webkit` project, but the gate never runs it: the
 retained catalog enumerates Chromium and Firefox only. Chromium visual coverage
@@ -3447,7 +3447,7 @@ result-only `Validate (no e2e)` job requires all four lanes, preserving the
 stable branch-protection context. Local `validate --no-e2e` selects the same
 catalog serially
 ([split non-e2e validation lanes](adr/0192-split-ci-non-e2e-validation-lanes.md);
-[distributed CI lane topology](adr/0203-distribute-ci-validation-and-firefox-e2e-lanes.md)).
+[distributed CI lane topology](adr/drafts/distribute-ci-validation-and-firefox-e2e-lanes.md)).
 
 Both hook entrypoints select orchestration-owned **fail-fast** execution. At
 every ordered local boundary — individual static checks, host-gate steps, and
