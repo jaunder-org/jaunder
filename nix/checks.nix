@@ -135,14 +135,13 @@ let
 # filename defined by `host::capture`.
 e2ePanicGate = backend: identity: ''
   machine.succeed("journalctl -u jaunder.service --no-pager -o cat > /tmp/jaunder-journal-${identity}.log")
-  # copy_from_machine's 2nd arg is a target *directory*; "" lands the file
-  # flat at $out/jaunder-journal-${backend}.log (the per-backend name comes
-  # from the source).
+  # copy_from_machine's 2nd arg is a target *directory*; "" preserves the
+  # lane-qualified source basename in the output.
   machine.copy_from_machine("/tmp/jaunder-journal-${identity}.log", "")
   panic_status, panic_out = machine.execute(
       "test-support verify-no-panics"
       + " --capture-dir /var/lib/jaunder/capture"
-      + " --server-log /tmp/jaunder-journal-${backend}.log"
+      + " --server-log /tmp/jaunder-journal-${identity}.log"
   )
   print(panic_out)
 '';
