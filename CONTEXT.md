@@ -82,10 +82,11 @@ iframe), Org macro (the behavior is not client-specific).
 HTML projection in the Post's authoring format. Web headings and markup-capable
 Syndication Feed fields use it directly; plain-text feed fields derive readable
 text by stripping that projection with `ammonia` and decoding entities with
-`html-escape`. The authored Post title remains canonical for editing, slugs,
-metadata, and AtomPub. _Avoid_: formatted title (does not name the persisted
-projection), rendered heading (the heading also contains presentation-owned
-structure).
+`html-escape`. CSR trusts server-authored Rendered Title bytes exactly as it
+trusts rendered body HTML. The authored Post title remains canonical for
+editing, slugs, metadata, and AtomPub. _Avoid_: formatted title (does not name
+the persisted projection), rendered heading (the heading also contains
+presentation-owned structure).
 
 **Media Record**: One persistent per-user record for one exact stored media
 identity, representing media its user controls in their library. A qualifying

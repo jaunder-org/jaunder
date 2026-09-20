@@ -14,7 +14,7 @@ use common::media::{
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
-use common::render::{PostFormat, RenderedPostTitle};
+use common::render::{InvalidPersistedRenderedPostTitle, PostFormat};
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::tagged_url::MediaSourceUrl;
@@ -352,12 +352,26 @@ typed_restore_row!(PostMediaRestoreRow, "post_media" {
     reference_form: MediaReferenceForm => ("reference_form", "media reference form"),
 });
 
+/// A restore-only host boundary for persisted Rendered Title bytes.
+///
+/// Backup rows are untrusted, so unlike server-authored DTOs they must still
+/// exactly match the ammonia policy before restore reports them as valid.
+struct PersistedRenderedPostTitle;
+
+impl FromStr for PersistedRenderedPostTitle {
+    type Err = InvalidPersistedRenderedPostTitle;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        common::render::reconstruct_persisted_rendered_post_title(value).map(|_| Self)
+    }
+}
+
 typed_restore_row!(PostRevisionsRestoreRow, "post_revisions" {
     title: PostTitle => ("title", "post title"),
     slug: Slug => ("slug", "slug"),
     body: PostBody => ("body", "post body"),
     format: PostFormat => ("format", "post format"),
-    rendered_title: RenderedPostTitle => ("rendered_title", "rendered post title"),
+    rendered_title: PersistedRenderedPostTitle => ("rendered_title", "rendered post title"),
     summary: PostSummary => ("summary", "post summary"),
 });
 
@@ -379,7 +393,7 @@ typed_restore_row!(PostsRestoreRow, "posts" {
     slug: Slug => ("slug", "slug"),
     body: PostBody => ("body", "post body"),
     format: PostFormat => ("format", "post format"),
-    rendered_title: RenderedPostTitle => ("rendered_title", "rendered post title"),
+    rendered_title: PersistedRenderedPostTitle => ("rendered_title", "rendered post title"),
     summary: PostSummary => ("summary", "post summary"),
 });
 

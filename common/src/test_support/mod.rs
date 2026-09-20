@@ -32,7 +32,7 @@ pub use urls_time::{
 
 mod render;
 
-pub use render::rendered_html;
+pub use render::{rendered_html, rendered_post_title};
 
 mod numbers;
 

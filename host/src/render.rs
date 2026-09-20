@@ -1666,7 +1666,7 @@ mod tests {
         let rendered = render_title(&title, &PostFormat::Html);
         assert_eq!(rendered.as_ref(), "<strong>A &amp; B</strong><br>C");
         assert_eq!(rendered_title_visible_text(&rendered), "A & B C");
-        let encoded: RenderedPostTitle = "&amp;lt;".parse().unwrap();
+        let encoded = common::render::sanitize_post_title("&amp;lt;");
         assert_eq!(rendered_title_visible_text(&encoded), "&lt;");
 
         let title: PostTitle = r#"<img alt="not retained"><div>block</div>"#.parse().unwrap();
@@ -1705,7 +1705,8 @@ mod tests {
             let title: PostTitle = source.parse().unwrap();
             let rendered = render_title(&title, &PostFormat::Html);
             assert!(
-                RenderedPostTitle::parse_canonical(rendered.as_ref()).is_ok(),
+                rendered.as_ref()
+                    == common::render::sanitize_post_title(rendered.as_ref()).as_ref(),
                 "{source}"
             );
         }

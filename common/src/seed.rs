@@ -273,17 +273,23 @@ mod tests {
     }
 
     #[test]
-    fn rendered_post_wire_rejects_noncanonical_rendered_titles() {
+    fn rendered_post_wire_trusts_server_authored_rendered_titles() {
         let post = rendered_post(Some(instant()));
         let mut wire = serde_json::to_value(post).unwrap();
         wire["rendered_title"] = serde_json::json!("<script>unsafe</script>");
-        assert!(serde_json::from_value::<RenderedPost>(wire).is_err());
+        let post: RenderedPost = serde_json::from_value(wire).unwrap();
+        assert_eq!(
+            post.rendered_title.as_ref().map(AsRef::as_ref),
+            Some("<script>unsafe</script>")
+        );
     }
 
     #[test]
-    fn rendered_post_wire_round_trips_canonical_rendered_title() {
+    fn rendered_post_wire_round_trips_trusted_rendered_title() {
         let mut post = rendered_post(Some(instant()));
-        post.rendered_title = Some("<strong>Bold</strong> &amp; plain".parse().unwrap());
+        post.rendered_title = Some(RenderedPostTitle::fixture(
+            "<strong>Bold</strong> &amp; plain",
+        ));
         let wire = serde_json::to_string(&post).unwrap();
         assert!(wire.contains(r#""rendered_title":"<strong>Bold</strong> &amp; plain""#));
         assert_eq!(serde_json::from_str::<RenderedPost>(&wire).unwrap(), post);

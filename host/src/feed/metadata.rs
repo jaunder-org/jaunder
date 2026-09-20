@@ -243,7 +243,7 @@ mod tests {
 
     fn item(id: PostId, ts: UtcInstant) -> FeedItem {
         FeedItem {
-            rendered_title: Some("t".parse().unwrap()),
+            rendered_title: Some(common::render::sanitize_post_title("t")),
             visible_title: Some("t".to_owned()),
             ..feed_item(
                 id,

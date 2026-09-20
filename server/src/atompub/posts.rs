@@ -735,7 +735,7 @@ mod etag_tests {
             user_id: UserId::from(1),
             author_username: "alice".parse().expect("parse username"),
             title: Some(parse_post_title("Title")),
-            rendered_title: Some("Title".parse().unwrap()),
+            rendered_title: Some(common::test_support::rendered_post_title("Title")),
             slug: "my-post".parse().expect("parse slug"),
             body: parse_post_body("Body text."),
             format: PostFormat::Org,

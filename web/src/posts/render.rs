@@ -363,7 +363,9 @@ pub(crate) mod test_fixtures {
                 post_id: PostId::from(7),
                 username: parse_username("alice"),
                 display_name: None,
-                rendered_title: Some("Hello &amp; &lt;World&gt;".parse().unwrap()),
+                rendered_title: Some(common::test_support::rendered_post_title(
+                    "Hello &amp; &lt;World&gt;",
+                )),
                 summary: None,
                 slug: "hello".parse().unwrap(),
                 rendered_html: common::test_support::rendered_html("<p>Hi <em>there</em></p>"),
@@ -388,7 +390,7 @@ pub(crate) mod test_fixtures {
             post_id: PostId::from(1),
             username: parse_username("bob"),
             display_name: None,
-            rendered_title: Some("First".parse().unwrap()),
+            rendered_title: Some(common::test_support::rendered_post_title("First")),
             summary: Some(parse_post_summary("An excerpt")),
             slug: "first".parse().unwrap(),
             rendered_html: common::test_support::rendered_html("<p>body</p>"),
@@ -472,7 +474,7 @@ mod tests {
         // post_inner wraps. post_content is viewer-independent, so the
         // authed re-render cannot diverge from the paint — no localized flash.
         let ctx = TagCtx::ForUser(parse_username("alice"));
-        let title: RenderedPostTitle = "T".parse().unwrap();
+        let title: RenderedPostTitle = common::test_support::rendered_post_title("T");
         let author = parse_username("alice");
         let display_name = parse_display_name("Ada Lovelace");
         let body = common::test_support::rendered_html("<p>b</p>");
@@ -867,7 +869,7 @@ mod tests {
         let ctx = TagCtx::SiteWide;
         let author = parse_username("bob");
         let body = common::test_support::rendered_html("<p>b</p>");
-        let title: RenderedPostTitle = "Draft title".parse().unwrap();
+        let title: RenderedPostTitle = common::test_support::rendered_post_title("Draft title");
         let view = PostView {
             post_id: PostId::from(7),
             username: &author,
@@ -895,11 +897,10 @@ mod tests {
     }
 
     #[test]
-    fn post_heading_emits_only_canonical_inline_markup_inside_permalink() {
-        let title: RenderedPostTitle =
-            "<strong>Bold</strong> &amp; <em>emphasis</em><br><code>code</code>"
-                .parse()
-                .unwrap();
+    fn post_heading_emits_trusted_server_markup_inside_permalink() {
+        let title: RenderedPostTitle = common::test_support::rendered_post_title(
+            "<strong>Bold</strong> &amp; <em>emphasis</em><br><code>code</code>",
+        );
         assert_eq!(
             post_heading(Some(&title), Some(&parse_root_relative_url("/~bob/x"))).into_string(),
             "<h2 class=\"j-post-title\" data-jaunder-part=\"post-title\"><a href=\"/~bob/x\"><strong>Bold</strong> &amp; <em>emphasis</em><br><code>code</code></a></h2>"
@@ -908,7 +909,7 @@ mod tests {
 
     #[test]
     fn post_heading_omits_empty_and_titleless_fragments() {
-        let empty: RenderedPostTitle = "".parse().unwrap();
+        let empty: RenderedPostTitle = common::test_support::rendered_post_title("");
         assert_eq!(post_heading(Some(&empty), None), "");
         assert_eq!(post_heading(None, None), "");
     }
@@ -961,7 +962,7 @@ mod tests {
         let ctx = TagCtx::SiteWide;
         let author = parse_username("bob");
         let body = common::test_support::rendered_html("<p>b</p>");
-        let title: RenderedPostTitle = "T".parse().unwrap();
+        let title: RenderedPostTitle = common::test_support::rendered_post_title("T");
         let view = PostView {
             post_id: PostId::from(7),
             username: &author,

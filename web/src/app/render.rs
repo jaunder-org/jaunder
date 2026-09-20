@@ -534,7 +534,9 @@ mod tests {
     fn permalink_head_uses_authored_title_not_rendered_title() {
         let mut authored = sample_post();
         authored.title = Some("*Authored syntax*".parse().unwrap());
-        authored.post.rendered_title = Some("<em>Rendered presentation</em>".parse().unwrap());
+        authored.post.rendered_title = Some(common::test_support::rendered_post_title(
+            "<em>Rendered presentation</em>",
+        ));
         let head = render_head(&PageSeed::Permalink(authored), None).into_string();
         assert!(head.contains("<title>*Authored syntax*</title>"), "{head}");
         assert!(!head.contains("Rendered presentation"), "{head}");

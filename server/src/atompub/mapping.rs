@@ -748,7 +748,9 @@ mod tests {
             post_id,
             user_id: UserId::from(1),
             author_username: "alice".parse().expect("parse username"),
-            rendered_title: title.as_ref().map(|title| title.as_ref().parse().unwrap()),
+            rendered_title: title
+                .as_ref()
+                .map(|title| common::test_support::rendered_post_title(title.as_ref())),
             title,
             slug,
             body,

@@ -6,7 +6,7 @@
 use anyhow::Context;
 use common::{
     ids::{PostId, ThemeId},
-    render::sanitize,
+    render::{PostFormat, sanitize},
     root_relative_url::RootRelativeUrl,
     seed::{Page, PageSeed, PublicPresentation, RenderedPost, TagSummary, TimelineOrder},
     site::{SiteIdentity, SiteTitle},
@@ -79,11 +79,12 @@ fn fixture_post() -> anyhow::Result<RenderedPost> {
                 .parse()
                 .context("thumbnail fixture display name is valid")?,
         ),
-        rendered_title: Some(
-            "A calm place to read"
+        rendered_title: Some(host::render::render_title(
+            &"A calm place to read"
                 .parse()
                 .context("thumbnail fixture title is valid")?,
-        ),
+            &PostFormat::Html,
+        )),
         summary: Some(
             "A deterministic public Style Contract preview."
                 .parse()

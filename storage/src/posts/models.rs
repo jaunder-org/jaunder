@@ -446,7 +446,7 @@ mod tests {
     #[test]
     fn rendered_title_presence_requires_exact_title_correspondence() {
         let title = Some(parse_post_title("title"));
-        let rendered = Some(common::render::RenderedPostTitle::parse_canonical("title").unwrap());
+        let rendered = Some(common::test_support::rendered_post_title("title"));
 
         assert!(validate_rendered_title_presence(title.as_ref(), rendered.as_ref()).is_ok());
         assert!(validate_rendered_title_presence(None, None).is_ok());

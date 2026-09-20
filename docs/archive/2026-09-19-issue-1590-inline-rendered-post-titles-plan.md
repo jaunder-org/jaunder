@@ -28,20 +28,20 @@ Out:
 
 - [x] Task 1: Establish the Rendered Title domain and render aggregate
   - Contract: `common` owns a trusted `RenderedPostTitle` value with no general
-    raw-string constructor. A small canonical-fragment recognizer in `common`
-    validates the closed grammar on SQL and wire reconstruction and compiles for
-    native and wasm; it is neither an authoring-format parser nor a sanitizer.
-    `host::render` renders source formats and invokes common's host-only,
-    `ammonia`-owned title sanitation and plain-text projection boundaries.
+    raw-string constructor. Host ammonia validates persisted SQL bytes and
+    constructs title values; server-authored DTO bytes are trusted by CSR exactly
+    as rendered body HTML. `host::render` renders source formats and invokes
+    common's host-only ammonia title sanitation and plain-text projection
+    boundaries.
   - Contract: `PostRenderOutput` privately owns authored title, body, format,
     Rendered Title, rendered body, and media references. Storage create/update
     inputs consume that aggregate and receive only read accessors for binding
     and comparison, making source/derivative mismatches unrepresentable.
   - Verification: exhaustive table-driven tests pin retained tags,
     flattening/removal rules, entities, whitespace, malformed source, empty
-    output, and all three formats. Native/wasm-oriented tests prove SQL/wire
-    rejection, the bounded recognizer's accepted grammar, the CSR dependency
-    closure, and absence of public trusted-markup or aggregate mismatch doors.
+    output, and all three formats. Native tests prove SQL rejection through
+    ammonia, CSR trusts server DTO bytes without acquiring sanitizer dependencies,
+    and no public trusted-markup or aggregate mismatch doors exist.
 
 - [x] Task 2: Install and enforce persisted title state as one slice
   - Depends on: Task 1's value and aggregate contracts.
@@ -54,8 +54,8 @@ Out:
     inserts, updates, canonical no-op comparison, prior-state capture, seeders,
     and backend fakes consume `PostRenderOutput`. Backup schema/domain coverage
     includes both columns. Presence violations retain structural failure;
-    noncanonical payloads follow ADR-0174 restore-and-report but fail typed
-    reads before an unescaped sink. Lightweight history metadata remains
+    invalid payloads follow ADR-0174 restore-and-report but fail typed reads
+    through the host ammonia policy before an unescaped sink. Lightweight history metadata remains
     unchanged.
   - Verification: `#[apply(backends)]` tests cover create/update, format and
     title transitions, semantic no-op, complete prior-state snapshots,
@@ -108,9 +108,9 @@ Out:
 - No raw title or restored invalid fragment can enter an unescaped HTML sink.
 - No caller can independently construct or mismatch authored and rendered title
   state.
-- The common validator is a bounded canonical grammar recognizer available to
-  CSR, not a host authoring parser or sanitizer; host/sqlx dependencies remain
-  outside the wasm closure.
+- Host-only ammonia validates persisted Rendered Title bytes; CSR trusts
+  server-authored bytes through the narrow common-owned DTO reconstruction hook,
+  and host/sqlx dependencies remain outside the wasm closure.
 - Migration and persistence land together: no executable intermediate state can
   read, write, or serve a stale/null derivative for a titled Post.
 - New-write persistence keeps authored and rendered title state atomic for

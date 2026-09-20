@@ -243,7 +243,7 @@ mod tests {
     fn item(id: i64) -> FeedItem {
         FeedItem {
             id: PostId::from(id),
-            rendered_title: Some("Title".parse().unwrap()),
+            rendered_title: Some(common::render::sanitize_post_title("Title")),
             visible_title: Some("Title".to_owned()),
             permalink: parse_url(format!("https://example.com/{id}").as_str()),
             summary: Some(parse_post_summary("Summary")),

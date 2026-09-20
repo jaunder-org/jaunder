@@ -74,18 +74,14 @@ plus atomic mutation, semantic no-op, backup, restore-validation, and fixture
 coverage. New writes always persist a derivative for authored titles; an
 intentionally empty fragment remains a present derivative.
 
-The common wire/storage type reconstructs trusted persisted bytes only after a
-field-specific, non-rewriting recognizer confirms the bounded canonical fragment
-grammar. The recognizer is dual-target validation, not an authoring parser or
-sanitizer; production construction remains host-owned, following the
-sanitization boundary in [ADR-0079](../0079-rendered-html-sanitization.md).
-Invalid persisted bytes fail typed reads and therefore cannot reach an unescaped
-sink. Backup restore retains
+Host ammonia validates persisted bytes by requiring their sanitization to be
+byte-for-byte unchanged; invalid database bytes fail typed reads and therefore
+cannot reach an unescaped sink. Backup restore retains
 [ADR-0174](../0174-backup-format-and-schema-compatibility.md)'s
 restore-and-report policy: invalid bytes are restored and diagnosed, but are not
-blessed as a Rendered Title by subsequent reads. The CSR and public projector
-paint identical validated bytes without carrying Markdown, Org, or sanitization
-machinery.
+blessed as a Rendered Title by subsequent reads. Server-authored DTO bytes are
+trusted by CSR exactly like `RenderedHtml`; browser clients do not ship a title
+parser to defend against Jaunder's own server.
 
 This adds storage and migration complexity, but avoids reader-amplified parsing,
 keeps bodies and titles in one parser era, and gives every protocol an explicit

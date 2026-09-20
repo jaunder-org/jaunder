@@ -92,7 +92,7 @@ mod tests {
 
     fn item(title: Option<&str>) -> FeedItem {
         FeedItem {
-            rendered_title: title.map(|value| value.parse().unwrap()),
+            rendered_title: title.map(common::render::sanitize_post_title),
             visible_title: title.map(ToOwned::to_owned),
             ..feed_item(
                 PostId::from(1),
@@ -145,8 +145,7 @@ mod tests {
 
     #[test]
     fn renders_formatted_title_as_visible_text() {
-        let title: common::render::RenderedPostTitle =
-            "<strong>A &amp; B</strong><br>C".parse().unwrap();
+        let title = common::render::sanitize_post_title("<strong>A &amp; B</strong><br>C");
         let item = FeedItem {
             visible_title: Some(crate::render::rendered_title_visible_text(&title)),
             rendered_title: Some(title),

@@ -71,13 +71,13 @@ impl Markup {
         Self(PreEscaped(html.as_ref()).into_string())
     }
 
-    /// Carry a canonical inline Rendered Title into the markup layer unescaped.
+    /// Carry a host-sanitized Rendered Title into the markup layer unescaped.
     ///
-    /// Its closed grammar is validated at its authoring and wire boundaries, so
-    /// it cannot introduce an attribute, active element, or nested link.
+    /// Host ammonia establishes persisted title bytes, while CSR trusts the
+    /// server-authored DTO exactly as it trusts [`RenderedHtml`].
     #[must_use]
     pub(crate) fn from_rendered_post_title(title: &RenderedPostTitle) -> Self {
-        // raw-html-door:allow re-wraps a canonical RenderedPostTitle whose closed grammar excludes active markup
+        // raw-html-door:allow re-wraps a host-sanitized RenderedPostTitle from Jaunder's server
         Self(PreEscaped(title.as_ref()).into_string())
     }
 

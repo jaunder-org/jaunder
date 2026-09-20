@@ -48,10 +48,10 @@ clean visible text without source markup or HTML tags.
   derivative while titleless records keep none.
 - Both SQLite and PostgreSQL implement the same schema, migration, mutation,
   semantic-no-op, revision, backup, restore-validation, and decode invariants.
-- Field-specific storage and wire decoding performs non-rewriting validation of
-  the closed element/attribute policy and canonical serialization before
-  constructing the trusted type. Invalid persisted bytes fail typed reads and
-  can never reach an unescaped sink.
+- Host ammonia validates persisted bytes by requiring exact policy-preserving
+  reconstruction. Invalid persisted bytes fail typed reads and can never reach
+  an unescaped sink; server-authored DTO bytes are trusted by CSR exactly like
+  rendered body HTML.
 - Backup restore retains ADR-0174's restore-and-report policy: invalid Rendered
   Title payloads are restored as source bytes and reported as typed-domain
   diagnostics, while subsequent typed reads reject them. Structural absence is
@@ -97,8 +97,8 @@ clean visible text without source markup or HTML tags.
 - Backup and restore tests preserve Rendered Title bytes exactly, diagnose
   invalid payloads without blessing them as trusted HTML, and reject invalid
   title/Rendered Title presence combinations on both backends. Typed reads
-  reject blank-noncanonical, active, attributed, interactive, block, malformed,
-  and otherwise noncanonical fragments.
+  reject bytes that ammonia would change, including active, attributed,
+  interactive, block, malformed, and content-free fragments.
 - Browser Post headings use the persisted fragment without requiring title
   parsing or sanitization in CSR code.
 - Atom emits a standards-conforming HTML title construct. RSS and JSON Feed emit

@@ -477,13 +477,14 @@ narrow `ammonia` policy retains only its safe inline tags without attributes and
 removes active or embedded content; it does not synthesize image alternatives or
 block-wrapper spacing. A source with no surviving visible text retains an empty
 persisted fragment and presents no web, RSS, or JSON Feed title rather than
-leaking authored markup. A bounded, dual-target canonical-fragment recognizer
-guards trusted storage and wire decode without bringing authoring parsers or
-sanitization into CSR; invalid restored bytes remain diagnostic source data but
-fail typed reads before any unescaped sink. Current Posts and full Post
-Revisions retain these rendered bytes so title and body share parser-version and
-historical-snapshot semantics. Migration 0038 adds nullable columns only; with
-no production instances it does not repair legacy rows.
+leaking authored markup. Host ammonia validates persisted bytes before typed
+database reads; invalid restored bytes remain diagnostic source data but fail
+those reads before any unescaped sink. Server-authored DTO bytes are trusted by
+CSR exactly like `RenderedHtml`, so browser clients do not ship a title parser.
+Current Posts and full Post Revisions retain these rendered bytes so title and
+body share parser-version and historical-snapshot semantics. Migration 0038 adds
+nullable columns only; with no production instances it does not repair legacy
+rows.
 ([persisted Rendered Title decision](adr/drafts/persist-inline-rendered-post-titles.md)).
 The source and rendered forms feed deliberately separate serialization surfaces
 — Syndication Feeds consume presentation projections, while the AtomPub

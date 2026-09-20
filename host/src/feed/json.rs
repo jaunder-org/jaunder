@@ -74,7 +74,7 @@ mod tests {
         summary: Option<PostSummary>,
     ) -> FeedItem {
         FeedItem {
-            rendered_title: title.as_deref().map(|value| value.parse().unwrap()),
+            rendered_title: title.as_deref().map(common::render::sanitize_post_title),
             visible_title: title,
             summary,
             tags: tags.into_iter().map(|t| t.parse().unwrap()).collect(),
@@ -142,8 +142,7 @@ mod tests {
 
     #[test]
     fn renders_formatted_title_as_visible_text() {
-        let title: common::render::RenderedPostTitle =
-            "<strong>A &amp; B</strong><br>C".parse().unwrap();
+        let title = common::render::sanitize_post_title("<strong>A &amp; B</strong><br>C");
         let item = FeedItem {
             visible_title: Some(crate::render::rendered_title_visible_text(&title)),
             rendered_title: Some(title),

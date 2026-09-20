@@ -295,59 +295,39 @@ fn provider_embed_html(
     )
 }
 
-/// Canonical, trusted inline HTML projected from a [`PostTitle`].
+/// Trusted inline HTML projected from a [`PostTitle`].
 ///
-/// Unlike [`RenderedHtml`], this field-specific value admits only the closed title
-/// grammar. Its checked admission seam recognizes canonical bytes and admits a
-/// nonempty fragment only when its visible-text projection is nonempty. Host parsers
-/// produce authoring-format HTML, and the host-only ammonia boundary in this module
-/// sanitizes that untrusted source before constructing this value.
+/// Host-only ammonia sanitization establishes this value from authoring input and
+/// validates persisted bytes before database decoding. Server-authored DTO bytes
+/// are trusted by CSR in the same way as [`RenderedHtml`]: they travel within one
+/// Jaunder deployment and never cross an untrusted browser input boundary.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RenderedPostTitle(String);
 
-/// The canonical-title recognizer rejected persisted or wire bytes.
+/// Persisted Rendered Title bytes differed from ammonia's title policy.
+#[cfg(feature = "sanitize")]
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("rendered post title is not a canonical inline fragment")]
-pub struct InvalidRenderedPostTitle;
+#[error("rendered post title does not match the ammonia title policy")]
+pub struct InvalidPersistedRenderedPostTitle;
 
 impl RenderedPostTitle {
-    /// Returns the canonical empty fragment used when authored source has no
-    /// surviving visible title.
+    /// Returns the empty title fragment used when authored source has no surviving
+    /// visible text.
     #[must_use]
     pub fn empty() -> Self {
         Self(String::new())
     }
 
-    /// Reconstructs a Rendered Title only after recognizing the exact canonical
-    /// fragment grammar used by storage and wire fields.
-    ///
-    /// This is deliberately a checked admission seam rather than a raw-string
-    /// constructor. It is available on both native and wasm targets because CSR
-    /// validates server-authored bytes without acquiring host rendering machinery.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`InvalidRenderedPostTitle`] when the bytes are not the exact
-    /// canonical inline grammar.
-    pub fn parse_canonical(fragment: impl AsRef<str>) -> Result<Self, InvalidRenderedPostTitle> {
-        let fragment = fragment.as_ref();
-        canonical_rendered_post_title(fragment)
-            .then(|| Self(fragment.to_owned()))
-            .ok_or(InvalidRenderedPostTitle)
-    }
-
-    /// Returns the trusted canonical fragment.
+    /// Returns the trusted inline fragment.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
-}
 
-impl std::str::FromStr for RenderedPostTitle {
-    type Err = InvalidRenderedPostTitle;
-
-    fn from_str(fragment: &str) -> Result<Self, Self::Err> {
-        Self::parse_canonical(fragment)
+    /// Build an exact server-authored fixture outside production code.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn fixture(value: impl Into<String>) -> Self {
+        Self(value.into())
     }
 }
 
@@ -363,8 +343,24 @@ impl serde::Serialize for RenderedPostTitle {
     }
 }
 
-// SQL/wire admission accepts only canonical text and the closed lower-case tag
-// grammar; it never rewrites bytes while establishing the trusted type.
+// SQLx reconstruction is a server-side boundary. The `sqlx` feature includes
+// `sanitize`, so stored bytes must exactly match ammonia's title policy.
+///
+/// # Errors
+///
+/// Returns [`InvalidPersistedRenderedPostTitle`] when ammonia would change the
+/// persisted bytes or they contain no visible title text.
+#[cfg(feature = "sanitize")]
+pub fn reconstruct_persisted_rendered_post_title(
+    value: impl Into<String>,
+) -> Result<RenderedPostTitle, InvalidPersistedRenderedPostTitle> {
+    let value = value.into();
+    let sanitized = sanitize_post_title(&value);
+    (sanitized.as_str() == value)
+        .then_some(sanitized)
+        .ok_or(InvalidPersistedRenderedPostTitle)
+}
+
 #[cfg(feature = "sqlx")]
 impl sqlx::Type<sqlx::Postgres> for RenderedPostTitle {
     fn type_info() -> sqlx::postgres::PgTypeInfo {
@@ -392,7 +388,7 @@ impl<'r> sqlx::Decode<'r, sqlx::Postgres> for RenderedPostTitle {
         value: <sqlx::Postgres as sqlx::Database>::ValueRef<'r>,
     ) -> Result<Self, sqlx::error::BoxDynError> {
         let value = <String as sqlx::Decode<'r, sqlx::Postgres>>::decode(value)?;
-        Self::parse_canonical(value).map_err(Into::into)
+        reconstruct_persisted_rendered_post_title(value).map_err(Into::into)
     }
 }
 
@@ -423,128 +419,24 @@ impl<'r> sqlx::Decode<'r, sqlx::Sqlite> for RenderedPostTitle {
         value: <sqlx::Sqlite as sqlx::Database>::ValueRef<'r>,
     ) -> Result<Self, sqlx::error::BoxDynError> {
         let value = <String as sqlx::Decode<'r, sqlx::Sqlite>>::decode(value)?;
-        Self::parse_canonical(value).map_err(Into::into)
+        reconstruct_persisted_rendered_post_title(value).map_err(Into::into)
     }
 }
 
-/// Reconstructs a server-authored Rendered Title wire field after canonical validation.
+/// Rebuilds an optional server-authored Rendered Title field during common-owned
+/// DTO deserialization.
 ///
 /// # Errors
 ///
-/// Returns the deserializer's error when the field is not a string or is not the
-/// exact canonical inline grammar.
-pub fn deserialize_rendered_post_title<'de, D>(
-    deserializer: D,
-) -> Result<RenderedPostTitle, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    use serde::Deserialize;
-    let fragment = String::deserialize(deserializer)?;
-    RenderedPostTitle::parse_canonical(fragment).map_err(serde::de::Error::custom)
-}
-
-/// Reconstructs an optional server-authored Rendered Title wire field after
-/// canonical validation.
-///
-/// # Errors
-///
-/// Returns the deserializer's error when a present field is not a string or is
-/// not the exact canonical inline grammar.
-pub fn deserialize_optional_rendered_post_title<'de, D>(
+/// Returns the deserializer's error when the field is neither null nor a string.
+pub(crate) fn deserialize_optional_rendered_post_title<'de, D>(
     deserializer: D,
 ) -> Result<Option<RenderedPostTitle>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     use serde::Deserialize;
-    Option::<String>::deserialize(deserializer)?
-        .map(RenderedPostTitle::parse_canonical)
-        .transpose()
-        .map_err(serde::de::Error::custom)
-}
-
-fn canonical_rendered_post_title(fragment: &str) -> bool {
-    // html5ever drops NullCharacterToken while emitting title fragments. Persisted
-    // bytes must therefore reject NUL rather than accepting a representation the
-    // sole host author cannot produce.
-    if fragment.contains('\0')
-        || fragment.starts_with(' ')
-        || fragment.ends_with(' ')
-        || fragment.contains("  ")
-        || fragment
-            .chars()
-            .any(|character| character.is_whitespace() && character != ' ')
-    {
-        return false;
-    }
-
-    let mut rest = fragment;
-    let mut stack = Vec::new();
-    let mut has_visible_text = false;
-    while !rest.is_empty() {
-        if let Some(after_tag) = rest.strip_prefix('<') {
-            let Some(end) = after_tag.find('>') else {
-                return false;
-            };
-            let tag = &after_tag[..end];
-            rest = &after_tag[end + 1..];
-            if tag == "br" {
-                continue;
-            }
-            if let Some(name) = tag.strip_prefix('/') {
-                if !is_rendered_post_title_tag(name) || stack.pop() != Some(name) {
-                    return false;
-                }
-            } else {
-                if !is_rendered_post_title_tag(tag) {
-                    return false;
-                }
-                stack.push(tag);
-            }
-            continue;
-        }
-
-        let next = rest.find('<').unwrap_or(rest.len());
-        let text = &rest[..next];
-        let Some(text_is_visible) = canonical_title_text(text) else {
-            return false;
-        };
-        has_visible_text |= text_is_visible;
-        rest = &rest[next..];
-    }
-    stack.is_empty() && (fragment.is_empty() || has_visible_text)
-}
-
-fn is_rendered_post_title_tag(tag: &str) -> bool {
-    matches!(
-        tag,
-        "b" | "strong" | "i" | "em" | "u" | "s" | "del" | "code" | "sub" | "sup" | "mark" | "small"
-    )
-}
-
-fn canonical_title_text(text: &str) -> Option<bool> {
-    let mut rest = text;
-    let mut has_visible_text = false;
-    while let Some(index) = rest.find('&') {
-        let (prefix, after) = rest.split_at(index);
-        if prefix.contains('>') {
-            return None;
-        }
-        let entity = if let Some(value) = after.strip_prefix("&amp;") {
-            rest = value;
-            true
-        } else if let Some(value) = after.strip_prefix("&lt;") {
-            rest = value;
-            true
-        } else {
-            rest = after.strip_prefix("&gt;")?;
-            true
-        };
-        has_visible_text |= entity || prefix.chars().any(|character| !character.is_whitespace());
-    }
-    (!rest.contains('>'))
-        .then_some(has_visible_text || rest.chars().any(|character| !character.is_whitespace()))
+    Option::<String>::deserialize(deserializer).map(|title| title.map(RenderedPostTitle))
 }
 
 /// The single allowlist every [`sanitize`] call scrubs against. It is ammonia's
@@ -610,13 +502,21 @@ static TITLE_TEXT_SANITIZER: std::sync::LazyLock<ammonia::Builder<'static>> =
 #[cfg(feature = "sanitize")]
 #[must_use]
 pub fn sanitize_post_title(raw: &str) -> RenderedPostTitle {
-    let fragment = TITLE_SANITIZER
-        .clean(raw)
-        .to_string()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    RenderedPostTitle::parse_canonical(fragment).unwrap_or_else(|_| RenderedPostTitle::empty())
+    let title = RenderedPostTitle(
+        TITLE_SANITIZER
+            .clean(raw)
+            .to_string()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" "),
+    );
+    // A present derivative without readable content is normalized to the one
+    // canonical empty representation rather than retaining inert markup.
+    if rendered_post_title_visible_text(&title).is_empty() {
+        RenderedPostTitle::empty()
+    } else {
+        title
+    }
 }
 
 /// Returns a readable text projection of a persisted Rendered Title for text-only sinks.
@@ -1719,111 +1619,19 @@ mod tests {
     }
 
     #[test]
-    fn rendered_post_title_recognizes_exact_canonical_grammar() {
-        let retained = [
-            "b", "strong", "i", "em", "u", "s", "del", "code", "sub", "sup", "mark", "small",
-        ];
-        for tag in retained {
-            let fragment = format!("<{tag}>text</{tag}>");
-            assert!(
-                RenderedPostTitle::parse_canonical(&fragment).is_ok(),
-                "{fragment}"
-            );
-        }
-        for accepted in [
-            "",
-            "plain &amp; &lt;x&gt;",
-            "<strong>bold</strong><br><em>text</em>",
-            "a <b>b</b> c",
-        ] {
-            assert!(
-                RenderedPostTitle::parse_canonical(accepted).is_ok(),
-                "{accepted}"
-            );
-        }
-        for rejected in [
-            "<a href=\"/\">x</a>",
-            "<strong class=\"x\">x</strong>",
-            "<BR>",
-            "<br/>",
-            "&quot;",
-            "&",
-            "<",
-            ">",
-            "<script>x</script>",
-            "<strong>x",
-            "</strong>",
-            "<b>x</i>",
-            "<b><i>x</b></i>",
-            " leading",
-            "trailing ",
-            "two  spaces",
-            "line\nbreak",
-            "nul\0byte",
-            "<b attr>x</b>",
-            "<br>",
-            "<em></em>",
-            "<strong><br></strong>",
-        ] {
-            assert!(
-                RenderedPostTitle::parse_canonical(rejected).is_err(),
-                "{rejected}"
-            );
-        }
-    }
-
-    #[test]
-    fn rendered_post_title_accepts_unbounded_canonical_fragments_and_normalizes_text() {
-        for fragment in [
-            "x".repeat(16 * 1024 + 1),
-            format!("{}x{}", "<b>".repeat(128), "</b>".repeat(128)),
-        ] {
-            assert!(RenderedPostTitle::parse_canonical(fragment).is_ok());
-        }
-        assert!(RenderedPostTitle::parse_canonical("a &amp; <b>b</b><br> c &lt;d&gt;").is_ok());
-        assert!(RenderedPostTitle::parse_canonical("&amp;lt;").is_ok());
-        assert!(RenderedPostTitle::parse_canonical("&amp;amp;").is_ok());
-        for whitespace in ['\u{00a0}', '\u{2003}'] {
-            assert!(RenderedPostTitle::parse_canonical(format!("a{whitespace}b")).is_err());
-        }
-    }
-
-    #[test]
-    fn rendered_post_title_wire_reconstruction_rejects_invalid_bytes() {
+    fn rendered_post_title_wire_reconstruction_trusts_server_bytes() {
         #[derive(serde::Deserialize)]
         struct Wire {
-            #[serde(deserialize_with = "deserialize_rendered_post_title")]
-            title: RenderedPostTitle,
-        }
-        #[derive(serde::Deserialize)]
-        struct OptionalWire {
             #[serde(deserialize_with = "deserialize_optional_rendered_post_title")]
             title: Option<RenderedPostTitle>,
         }
-        let valid: Wire = serde_json::from_str(r#"{"title":"<em>ok</em>"}"#).unwrap();
-        assert_eq!(valid.title.as_ref(), "<em>ok</em>");
-        let optional: OptionalWire = serde_json::from_str(r#"{"title":"<em>ok</em>"}"#).unwrap();
+        let wire: Wire = serde_json::from_str(r#"{"title":"<script>x</script>"}"#).unwrap();
+        let title = wire.title.expect("server-authored title");
+        assert_eq!(title.as_ref(), "<script>x</script>");
         assert_eq!(
-            optional.title.as_ref().map(AsRef::as_ref),
-            Some("<em>ok</em>")
+            serde_json::to_string(&title).unwrap(),
+            r#""<script>x</script>""#
         );
-        assert_eq!(
-            serde_json::to_string(&valid.title).unwrap(),
-            r#""<em>ok</em>""#
-        );
-        for invalid in [
-            r#"{"title":"<script>x</script>"}"#,
-            r#"{"title":" x"}"#,
-            r#"{"title":"<br>"}"#,
-            r#"{"title":"<em></em>"}"#,
-            r#"{"title":"nul\u0000byte"}"#,
-        ] {
-            assert!(serde_json::from_str::<Wire>(invalid).is_err(), "{invalid}");
-            assert!(
-                serde_json::from_str::<OptionalWire>(invalid).is_err(),
-                "{invalid}"
-            );
-        }
     }
 
     #[cfg(feature = "sqlx")]

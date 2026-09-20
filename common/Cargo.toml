@@ -32,7 +32,7 @@ unicode-segmentation = "1.13.3"
 [features]
 # Optional, host-only SQLx bridge for `UtcInstant`. Off by default and never
 # enabled for wasm, so SQLx stays out of the CSR/wasm dependency graph.
-sqlx = ["dep:jiff-sqlx", "dep:sqlx"]
+sqlx = ["dep:jiff-sqlx", "dep:sqlx", "sanitize"]
 # Optional host-only sanitizer for inbound rendered HTML. CSR/wasm callers leave
 # this feature off, so `ammonia` stays out of their dependency graph.
 sanitize = ["dep:ammonia", "dep:html-escape"]

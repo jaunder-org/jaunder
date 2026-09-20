@@ -115,7 +115,7 @@ mod tests {
 
     fn item() -> FeedItem {
         FeedItem {
-            rendered_title: Some("Hello".parse().unwrap()),
+            rendered_title: Some(common::render::sanitize_post_title("Hello")),
             visible_title: Some("Hello".to_owned()),
             summary: Some(parse_post_summary("hi")),
             tags: vec!["rust".parse().unwrap()],
@@ -179,8 +179,7 @@ mod tests {
 
     #[test]
     fn renders_formatted_title_as_html() {
-        let title: common::render::RenderedPostTitle =
-            "<strong>A &amp; B</strong><br>C".parse().unwrap();
+        let title = common::render::sanitize_post_title("<strong>A &amp; B</strong><br>C");
         let item = FeedItem {
             visible_title: Some(crate::render::rendered_title_visible_text(&title)),
             rendered_title: Some(title),
