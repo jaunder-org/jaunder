@@ -252,6 +252,11 @@ export default defineConfig({
       name: "firefox-special-visual",
       grep: visualTag,
       retries: 0,
+      // The candidate owns the same visual assertions as `firefox-visual`.
+      // Reuse those reviewed baselines rather than minting topology-qualified
+      // snapshots that could silently diverge.
+      snapshotPathTemplate:
+        "{snapshotDir}/{testFilePath}-snapshots/{arg}-firefox-visual-{platform}{ext}",
       use: {
         ...devices["Desktop Firefox"],
         launchOptions: firefoxLaunchOptions,
