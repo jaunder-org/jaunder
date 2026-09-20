@@ -1476,8 +1476,8 @@ measurement run to force a genuinely fresh build:
 e2eSalt = "run3";   # any distinct string; the value itself is never read
 ```
 
-The salt rides the combo's extra-env string into the VM test script, so it
-changes every e2e derivation hash — all four gate checks and all four
+The salt rides the lane's extra-env string into the VM test script, so it
+changes every E2E derivation hash — all eight retained gate checks and all four
 single-worker packages. It does **not** change `packages.x86_64-linux.jaunder`:
 `nix/checks.nix` sits outside the crane source filter owned by
 `nix/packages.nix`, so a salted run re-runs the VM suite without rebuilding the
@@ -1497,8 +1497,9 @@ warmup A/B".
 If you only need one of the VM-backed checks, you can run it directly:
 
 ```bash
-nix build .#checks.x86_64-linux.e2e-sqlite-chromium
-nix build .#checks.x86_64-linux.e2e-postgres-firefox
+nix build .#checks.x86_64-linux.e2e-sqlite-chromium-unsplit
+nix build .#checks.x86_64-linux.e2e-postgres-firefox-ordinary-1-of-2
+nix build .#checks.x86_64-linux.e2e-postgres-firefox-serial-special
 nix build .#packages.x86_64-linux.e2e-sqlite-firefox-single-worker
 nix build .#packages.x86_64-linux.e2e-postgres-firefox-single-worker
 nix build .#checks.x86_64-linux.elisp-coverage-producer

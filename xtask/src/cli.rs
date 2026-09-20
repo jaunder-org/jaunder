@@ -235,9 +235,9 @@ pub enum Command {
         #[arg(long, requires = "breakdown")]
         wasm: Option<String>,
     },
-    /// Build ONE e2e VM check (a {backend}×{browser} combo) through the same
-    /// diagnostic-preserving wrapper `validate` uses. For CI matrix fan-out;
-    /// not part of `check`/`validate`. Runs on the host only.
+    /// Run one backend/browser E2E verdict through the same diagnostic-preserving
+    /// paths `validate` uses: one unsplit Chromium VM, or all three retained
+    /// Firefox lanes plus reconciliation. Runs on the host only.
     E2e {
         #[arg(value_enum)]
         backend: E2eBackend,

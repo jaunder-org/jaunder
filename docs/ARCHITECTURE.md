@@ -3563,7 +3563,7 @@ realizes outputs nor claims local/remote cache behavior.
 
 The full `cargo xtask validate` is still the aggregate ship gate: its `--no-e2e`
 prefix builds both static groups and the Nix-backed test checks, then adds all
-four `{sqlite,postgres}×{chromium,firefox}` e2e combinations and server-function
+eight retained E2E lanes, both Firefox reconciliations, and server-function
 coverage verification. Reproduce the measured invalidation matrix by running one
 unrecorded `devtool run -- cargo xtask --json validate --no-e2e --allow-dirty`
 warm-up, saving the next warm-baseline stdout JSON, then adding one exact marker

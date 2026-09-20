@@ -15,6 +15,10 @@ use crate::{
     server_fn_coverage, steps, traces, wasm_coverage,
 };
 
+fn e2e_uses_retained_split(browser: &str) -> bool {
+    browser == "firefox"
+}
+
 pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
     // Reject --json for commands with no structured payload (the `traces` reporting
     // commands) before doing any work — a hollow envelope is worse than an error.
@@ -234,19 +238,24 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let start = Instant::now();
             let label = format!("e2e-{}-{}", backend.as_str(), browser.as_str());
             let mut result = CommandResult::new(&label);
-            steps::nix::e2e_combo(&mut result, backend.as_str(), browser.as_str());
-            // Surface retried-but-passed tests from the report `e2e_combo` just
-            // lifted out of the VM (see steps::flaky). Informational — never fails
-            // the combo.
-            steps::flaky::collect(&mut result, backend.as_str(), browser.as_str());
-            // #681: the e2e half of the flow-coverage gate. Only this per-combo path
-            // has an uncollided capture (spec D8), and only the authoritative combo's
-            // traces are used (D6) — `verify_after_combo` enforces both.
-            steps::server_fn_coverage_check::verify_after_combo(
-                &mut result,
-                backend.as_str(),
-                browser.as_str(),
-            );
+            if e2e_uses_retained_split(browser.as_str()) {
+                // Preserve the established command while routing Firefox through
+                // all three retained VMs and their authoritative reconciliation.
+                steps::nix::e2e_experimental(&mut result, backend.as_str());
+            } else {
+                steps::nix::e2e_combo(&mut result, backend.as_str(), browser.as_str());
+                // Surface retried-but-passed tests from the report `e2e_combo` just
+                // lifted out of the VM (see steps::flaky). Informational — never
+                // fails the combo.
+                steps::flaky::collect(&mut result, backend.as_str(), browser.as_str());
+                // #681: only the SQLite/Chromium capture is the empirical
+                // server-function coverage authority.
+                steps::server_fn_coverage_check::verify_after_combo(
+                    &mut result,
+                    backend.as_str(),
+                    browser.as_str(),
+                );
+            }
             lifecycle::finalize(&mut result, start);
             Ok(result)
         }
@@ -768,6 +777,12 @@ mod tests {
             full.into_iter().collect(),
             "lanes must cover every non-E2E full-validation surface"
         );
+    }
+
+    #[test]
+    fn firefox_e2e_command_uses_retained_split() {
+        assert!(e2e_uses_retained_split("firefox"));
+        assert!(!e2e_uses_retained_split("chromium"));
     }
 
     #[test]
