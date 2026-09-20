@@ -974,6 +974,25 @@ async fn imported_package_defaults_present_after_publish_and_site_selection(
         None,
         "ZIP import leaves package-default header binding absent"
     );
+    for role in [ThemeImageRole::Logo, ThemeImageRole::Header] {
+        let (status, body) = post_server_fn(
+            make_app!(&env, &storage),
+            &web::themes::ReplaceBinding {
+                scope: OwnershipScope::Site,
+                theme_id: theme.id,
+                role,
+                input: ThemeBindingInput::ExplicitAbsent,
+            },
+            Some(&operator.cookie()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {body}");
+        confirmed_for(
+            serde_json::from_str::<MutationOutcome<()>>(&body)
+                .expect("explicit-absence binding outcome JSON"),
+            "explicit-absence binding",
+        );
+    }
 
     let (status, body) = post_server_fn(
         make_app!(&env, &storage),
@@ -1011,8 +1030,14 @@ async fn imported_package_defaults_present_after_publish_and_site_selection(
     )
     .await
     .expect("selected package-default public presentation resolves");
-    assert!(presentation.logo_url.is_some());
-    assert!(presentation.header_url.is_some());
+    assert_eq!(
+        presentation.logo_url, None,
+        "persisted explicit absence suppresses the package-default public logo"
+    );
+    assert_eq!(
+        presentation.header_url, None,
+        "persisted explicit absence suppresses the package-default public header"
+    );
 }
 
 #[apply(backends)]

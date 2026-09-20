@@ -1049,22 +1049,26 @@ mod tests {
             None,
             "a persisted pool revision must match its canonical entries"
         );
-        let absent = ThemeRoleBinding::ExplicitAbsent {
-            theme_id: ThemeId::from(9),
-            role: ThemeImageRole::Logo,
-        };
-        assert_eq!(
-            resolve_role(
-                Some(&absent),
-                &assets(),
-                &revision(),
-                &PublicThemeRoute::site(),
+        let defaults = ["images/logo.png".to_owned()];
+        for role in [ThemeImageRole::Logo, ThemeImageRole::Header] {
+            let absent = ThemeRoleBinding::ExplicitAbsent {
+                theme_id: ThemeId::from(9),
+                role,
+            };
+            assert_eq!(
+                resolve_role(
+                    Some(&absent),
+                    &assets(),
+                    &revision(),
+                    &PublicThemeRoute::site(),
+                    None,
+                    Some(&defaults),
+                ),
                 None,
-                None,
-            ),
-            None
-        );
-        assert!(!role_is_invalid(Some(&absent), None));
+                "explicit absence suppresses package defaults for {role:?}"
+            );
+            assert!(!role_is_invalid(Some(&absent), None));
+        }
     }
 
     #[test]
@@ -1134,6 +1138,26 @@ mod tests {
         .expect("complete package defaults resolve for draft preview");
         assert_eq!(logo.unwrap().as_ref(), "/draft/logo");
         assert!(matches!(header.unwrap().as_ref(), "/draft/a" | "/draft/b"));
+
+        let mut absent_themes = crate::MockThemeStorage::new();
+        absent_themes
+            .expect_role_binding()
+            .returning(move |_, _, role| {
+                Ok(Some(ThemeRoleBinding::ExplicitAbsent { theme_id, role }))
+            });
+        let (logo, header) = resolve_draft_theme_images(
+            ThemeOwner::Site,
+            theme_id,
+            br#"{"defaults":{"logo":"images/logo.png","header":["images/header-a.png","images/header-b.png"]}}"#,
+            &urls,
+            &revision,
+            &PublicThemeRoute::site(),
+            &absent_themes,
+        )
+        .await
+        .expect("explicit absence suppresses draft package defaults");
+        assert_eq!(logo, None, "explicit absence suppresses the draft logo");
+        assert_eq!(header, None, "explicit absence suppresses the draft header");
 
         let entry = crate::ThemeHeaderPoolEntry {
             ordinal: 0,
