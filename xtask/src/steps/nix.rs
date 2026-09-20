@@ -2703,6 +2703,19 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
         std::fs::remove_dir_all(&dir).ok();
     }
     #[test]
+    fn e2e_panic_gate_verifies_the_lane_qualified_journal() {
+        let checks = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("nix")
+                .join("checks.nix"),
+        )
+        .expect("nix/checks.nix");
+        assert!(checks.contains("--server-log /tmp/jaunder-journal-${identity}.log"));
+        assert!(!checks.contains("--server-log /tmp/jaunder-journal-${backend}.log"));
+    }
+
+    #[test]
     fn e2e_vm_captures_report_and_manifest_before_asserting_playwright_status() {
         let checks = std::fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR"))
