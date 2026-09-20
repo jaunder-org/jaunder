@@ -61,7 +61,7 @@ it before checking the task.
   - Verification: the workflow reproduces `preview.png`, uploads a deterministic
     ZIP, and a clean rerun produces the same package bytes.
 
-- [ ] Task 4: Prove the pre-release Studio lifecycle
+- [x] Task 4: Prove the pre-release Studio lifecycle
   - Contract: the workflow-built ZIP is the sole input to import, private draft
     preview, publish, and explicit selection in a disposable Jaunder instance.
   - Verification: each lifecycle transition succeeds without bypasses; Studio
@@ -70,8 +70,11 @@ it before checking the task.
 
 - [ ] Task 5: Prove route, state, asset, and visual fidelity
   - Contract: the installed workflow artifact exercises the approved route and
-    optional-state matrix, package font, logo/header default, and every header
-    pool entry. **After** captures reproduce all **Before** conditions.
+    renderer-state matrix: present and absent title, summary, tags, and
+    continuation; the always-present avatar and author handle; and no simulated
+    source attribution because the pinned renderer does not emit it. It also
+    exercises the package font, logo/header default, and every header pool
+    entry. **After** captures reproduce all **Before** conditions.
   - Verification: Local, author, tag, and permalink checks pass; transient pairs
     and pinned upstream references are linked from the Theme PR; human review
     approves the spec's named fidelity characteristics.

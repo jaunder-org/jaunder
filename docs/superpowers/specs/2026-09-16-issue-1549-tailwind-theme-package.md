@@ -29,7 +29,13 @@ missing capabilities exposed by that proof are fixed before the first release.
   navigation, masthead, site title, main, Post list, multiple Posts, and a
   continuation; permalink evidence includes exactly one Post and no Post list.
   Across those routes, fixtures exercise present and absent title, summary,
-  avatar, author handle, tags, attribution, and continuation states.
+  tags, and continuation states. They also exercise the avatar and author handle
+  that the current public Post renderer always emits. The runtime matrix does
+  not simulate absent avatar or author-handle elements, and it does not simulate
+  source attribution: the pinned Jaunder renderer has no supported workflow for
+  either absence state and does not emit source attribution. The Theme may style
+  documented optional hooks defensively, but evidence must use real supported
+  renderer states rather than DOM mutation or storage backdoors.
 - The package includes supported package-local font and raster-image assets so
   the reference repository proves URL rewriting and font, logo, header-default,
   and explicit header-pool presentation rather than only the zero-asset path.
@@ -107,7 +113,7 @@ missing capabilities exposed by that proof are fixed before the first release.
 - The release ZIP imports as a private draft in `/themes`; the draft preview
   renders successfully; publishing succeeds; and explicit selection applies it
   to signed-out public pages.
-- The installed release exercises the route and optional-state matrix defined
+- The installed release exercises the route and renderer-state matrix defined
   above, plus a package logo, package header default, every entry in an explicit
   header pool, and the package-local font.
 - Transient visual-proof artifacts pair Studio **Before** and completed-theme
