@@ -2055,21 +2055,23 @@ occupied is now normally empty, and the flow-coverage orphan bucket
 is unmeasurable by construction: Playwright tears fixtures down in reverse
 order, so the span build and the OTLP POST run before `context.close()`.
 
-In the e2e VMs an otel-collector writes `otel-traces.jsonl` into the capture dir
+In the E2E VMs an otel-collector writes `otel-traces.jsonl` into the capture dir
 ([ADR-0057](adr/0057-e2e-capture-dir-contract.md), #332). Each VM also copies
-out `playwright-report-<backend>.json` (Playwright's `results.json`) and the
-service and system journals alongside the capture tarball, per the
-[ADR-0037](adr/0037-e2e-failure-diagnostics-capture.md) rule that artifacts are
-copied before the Playwright exit is asserted. `cargo xtask traces analyze`
-consumes the trace files offline (see the tooling section).
+out `playwright-report-<lane>.json` (Playwright's `results.json`) and the
+service and system journals alongside the capture tarball, per
+[ADR-0037](adr/0037-e2e-failure-diagnostics-capture.md): artifacts are copied
+before the Playwright exit is asserted. `cargo xtask traces analyze` consumes
+the trace files offline (see the tooling section).
 
 For host-side gates that reconcile Playwright execution with trace evidence, the
 lifted Playwright JSON report defines the executed project population. The
 consumer requires an exact project-set match with the trace-derived evidence, so
 a project-wide capture blackout cannot disappear from the denominator and an
 unexpected project cannot inflate it. Artifacts are still copied before a
-Playwright failure is propagated; reconciliation runs only after the E2E
-combination succeeds, preserving the primary failure
+Playwright failure is propagated. Per-lane trace validation follows a successful
+VM result; distributed Firefox reconciliation runs after all producers even when
+a producer failed, consuming every recoverable artifact while the producer's
+primary failure remains visible
 ([Playwright report population authority](adr/0165-playwright-report-defines-trace-gate-population.md)).
 
 ### Measurement frames are not mixed
@@ -2202,9 +2204,9 @@ layer plus a panic hook appending `kind: "panic"` JSONL records through its own
 `test_support::panic_gate` verifier
 ([ADR-0032](adr/0032-e2e-zero-panic-gate.md)) receives the diagnostic leaf path,
 scans raw bytes from the union of that stream and a required server log, and
-de-duplicates by panic location with the scoped record winning. Per combo the
-e2e harness tars the directory out as `capture-<backend>.tar.gz` — those three
-files plus `otel-traces.jsonl` — into the
+de-duplicates by panic location with the scoped record winning. Per lane the E2E
+harness tars the directory out as `capture-<lane>.tar.gz` — those three files
+plus `otel-traces.jsonl` — into the
 [ADR-0037](adr/0037-e2e-failure-diagnostics-capture.md) artifact set.
 
 ### Committed direction
@@ -3180,31 +3182,44 @@ class at `storage/src/postgres/backup.rs:28`).
 
 ### The e2e suite
 
-Each browser e2e check is a NixOS-test VM running Playwright against a real
-served instance, one derivation per `{backend}×{browser}` combo (`mkE2eCombo`,
-`nix/checks.nix:413-443`). CI runs independent `Validation core` and
-`Validation coverage` full-VM jobs, then joins them under the stable,
-result-only `Validate (no e2e)` context. The core lane owns host/static, Nix
-static, wasm, doctest, and Elisp coverage surfaces; the coverage lane owns Rust
-coverage. CI also runs a `{sqlite,postgres}×{chromium,firefox}` matrix — each
-job `cargo xtask e2e <backend> <browser>` — aggregated by an `e2e-gate` that
-depends only on that browser matrix. Branch protection therefore needs the two
-stable aggregate names
-([distributed e2e](adr/0034-ci-e2e-matrix-distribution.md);
-[split non-e2e validation lanes](adr/0192-split-ci-non-e2e-validation-lanes.md)).
-Local `cargo xtask validate` builds the browser-only `e2e-checks` aggregate
-instead: the same derivations on one machine. It inherits the static lane's
-Emacs verdict and does not rerun live ERT.
+Each browser E2E lane is a NixOS-test VM running Playwright against a real
+served instance. One JSON catalog owns the retained topology, Nix derivations,
+local full gate, CI producers, and host reconciliation. Chromium has one unsplit
+lane per backend. Firefox has three isolated lanes per backend: two shards of
+the ordinary project and one serial-special lane owning visual,
+global-configuration, and invite projects in dependency order. Unsplit Firefox
+workers=2 and workers=4 remain package-only measurement controls
+([distributed CI lane topology](adr/drafts/distribute-ci-validation-and-firefox-e2e-lanes.md)).
+
+CI runs two Chromium producers and six lane-qualified Firefox producers with
+`fail-fast: false`. Every Firefox lane runs the same independent unsharded
+preflight census, then emits its own report, lane and duration manifests, phase
+sidecar, trace capture, journals, and Playwright archive. An `always()` host
+reconciliation job per backend downloads all three producer artifacts, proves
+the exact census/report/manifest union, and independently validates retries,
+duration pressure, panic phases, and boot traces. Missing, duplicated,
+misidentified, malformed, or failed evidence fails reconciliation; failed
+producers are still awaited and their recoverable evidence remains an aggregate
+input. The stable result-only `e2e gate` requires both Chromium jobs, all six
+Firefox producers, and both reconciliations. Local `cargo xtask validate`
+realizes the same eight enabled lanes concurrently and performs the same two
+Firefox reconciliations after every build settles. It inherits the non-e2e Elisp
+verdict and does not rerun live ERT
+([distributed e2e](adr/0034-ci-e2e-matrix-distribution.md)).
 
 `end2end/playwright.config.ts` is the one config, loaded verbatim by both the VM
-and the host loop ([ADR-0051](adr/0051-single-playwright-config.md)). For each
-gated browser its project graph is `*-visual → ordinary → *-admin`: the visual
-project selects the four existing `@visual` behavioral tests, disables retries,
-and runs first against the combo's fresh database; ordinary excludes those
-tests, and admin remains last. Chromium and Firefox each own one Linux baseline
-per state under the owning spec's adjacent `*.spec.ts-snapshots/` directory. The
-filename carries browser identity but not backend, so SQLite and PostgreSQL
-compare the same expected image. WebKit has no visual project or baseline.
+and the host loop ([ADR-0051](adr/0051-single-playwright-config.md)). Chromium's
+unsplit project graph remains `chromium-visual → chromium → chromium-admin`.
+Firefox's retained graph is distributed: `firefox-ordinary` is sharded across
+two VMs, while one serial-special VM selects
+`firefox-special-visual → firefox-special-global-configuration → firefox-special-invite`.
+The visual project selects the existing `@visual` behavioral tests, disables
+retries, and reuses the reviewed `firefox-visual` baseline paths rather than
+minting topology-qualified images. Ordinary excludes visual and global-state
+specs. Chromium and Firefox each own one Linux baseline per state under the
+owning spec's adjacent `*.spec.ts-snapshots/` directory. The filename carries
+browser identity but not backend, so SQLite and PostgreSQL compare the same
+expected image. WebKit has no visual project or baseline.
 
 Exact comparison is a controlled rendering seam: Nix supplies one DejaVu-only
 fontconfig universe to both host and VM browser processes, while
@@ -3243,22 +3258,22 @@ metadata pins the executable generation: a live command must match the server's
 content fingerprint, while mismatch or an unmanaged runtime-lock holder rejects
 before the command opens and potentially migrates the database.
 
-Specs are parallel-safe by construction, via per-test identity fixtures in
-`end2end/tests/provisioning.ts`, composed only by `end2end/tests/fixtures.ts`
+Ordinary specs are parallel-safe by construction, via per-test identity fixtures
+in `end2end/tests/provisioning.ts`, composed only by `end2end/tests/fixtures.ts`
 ([ADR-0039](adr/0039-e2e-parallelism-via-per-test-identity-fixtures.md)): `user`
 provisions a uniquely-named account out of band, `mailbox` is a recipient-scoped
-cursor-tracked mail waiter, `verifiedUser` adds the verification flow. Specs
-that mutate the global site-config singleton are quarantined in per-browser
-serial `*-admin` projects that run after the main projects — today that is
-**two** specs, `admin-site` and `invite`
-(`end2end/playwright.config.ts:72-105`).
+cursor-tracked mail waiter, and `verifiedUser` adds the verification flow.
+Firefox global-state specs are additionally isolated from both ordinary shards
+in the serial-special VM; Chromium keeps its serial admin project in the unsplit
+VM. The catalog and Playwright dependency graph require visual ownership exactly
+once and keep each special project's prerequisites in the same lane
+([distributed CI lane topology](adr/drafts/distribute-ci-validation-and-firefox-e2e-lanes.md)).
 
-The config also carries a `webkit` project, but the gate never runs it: both
-`nix/checks.nix:390-411` and the CI matrix enumerate chromium and firefox only.
-The visual prerequisite runs inside those same four
-`{sqlite,postgres}×{chromium,firefox}` derivations and CI jobs; it adds no
-workflow lane or backend-specific baseline. Timeout budgets are stated for
-Chromium and scaled per browser
+The config also carries a `webkit` project, but the gate never runs it: the
+retained catalog enumerates Chromium and Firefox only. Chromium visual coverage
+runs inside each unsplit Chromium VM; Firefox visual coverage runs exactly once
+per backend in the serial-special lane. Visual coverage adds no backend-specific
+baseline. Timeout budgets are stated for Chromium and scaled per browser
 ([ADR-0012](adr/0012-environment-aware-timeouts.md)) — `slowBrowserTimeoutMs`
 for an individual wait and the ambient whole-test budget,
 `slowBrowserFirstNavigationTimeoutMs` for the coldest navigation.
@@ -3312,7 +3327,7 @@ surface and never hand-written per-backend SQL
 `storage` with only the lightweight `seed-posts` feature; the heavy harness is a
 dev-dependency for its own smoke tests (`test-support/Cargo.toml:16,32`).
 Capture streams write well-known filenames (`mail.jsonl`, `websub.jsonl`,
-`diag.log`) under one `JAUNDER_CAPTURE_DIR`, lifted per combo as a tarball
+`diag.log`) under one `JAUNDER_CAPTURE_DIR`, lifted per lane as a tarball
 ([ADR-0057](adr/0057-e2e-capture-dir-contract.md) — see observability).
 
 Retries are env-driven and default to 0; the CI/`validate` run sets
@@ -3420,14 +3435,19 @@ The ladder has four local entrypoints, all driven by `xtask`
   verdict and — unless `--no-e2e` — adds the browser/backend e2e aggregate; it
   never reruns live ERT.
 
-CI distributes the same non-e2e surface through `cargo xtask ci-validate core`
-and `cargo xtask ci-validate coverage` on independent runners. Both lane
-commands and local `validate --no-e2e` select from one ordered surface catalog:
-core owns every non-e2e surface except Rust coverage, and coverage owns Rust
-coverage plus its gate. A result-only `Validate (no e2e)` job requires both
-lanes, preserving the stable branch-protection context. The lanes exchange no
-artifacts, and local `validate` remains serial
-([split non-e2e validation lanes](adr/0192-split-ci-non-e2e-validation-lanes.md)).
+CI distributes the same non-e2e surface through four independent
+`cargo xtask ci-validate <lane>` runners selected from one ordered surface
+catalog. `host` owns the verify-only host/static gate and auxiliary host tests;
+`hermetic` owns Nix static checks and the wasm budget; `test-checks` owns wasm
+tests, doctests, and Elisp coverage, then runs the source-closure probe under
+`always()` on the same Nix-populated runner; and `coverage` owns Rust coverage
+plus its gate. Producer/consumer pairs never cross jobs. Test-check and probe
+results remain separate inside their combined job, and either fails it. A
+result-only `Validate (no e2e)` job requires all four lanes, preserving the
+stable branch-protection context. Local `validate --no-e2e` selects the same
+catalog serially
+([split non-e2e validation lanes](adr/0192-split-ci-non-e2e-validation-lanes.md);
+[distributed CI lane topology](adr/drafts/distribute-ci-validation-and-firefox-e2e-lanes.md)).
 
 Both hook entrypoints select orchestration-owned **fail-fast** execution. At
 every ordered local boundary — individual static checks, host-gate steps, and
@@ -3543,7 +3563,7 @@ realizes outputs nor claims local/remote cache behavior.
 
 The full `cargo xtask validate` is still the aggregate ship gate: its `--no-e2e`
 prefix builds both static groups and the Nix-backed test checks, then adds all
-four `{sqlite,postgres}×{chromium,firefox}` e2e combinations and server-function
+eight retained E2E lanes, both Firefox reconciliations, and server-function
 coverage verification. Reproduce the measured invalidation matrix by running one
 unrecorded `devtool run -- cargo xtask --json validate --no-e2e --allow-dirty`
 warm-up, saving the next warm-baseline stdout JSON, then adding one exact marker

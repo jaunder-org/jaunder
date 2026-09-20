@@ -1,0 +1,23 @@
+{
+  "suites": [
+    {
+      "suites": [],
+      "specs": [
+        {
+          "id": "visual",
+          "title": "visual contract",
+          "file": "tests/visual.spec.ts",
+          "line": 3,
+          "tests": [
+            {
+              "projectId": "firefox-special-visual",
+              "projectName": "firefox-special-visual",
+              "status": "expected",
+              "results": [{ "retry": 0, "duration": 15 }]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

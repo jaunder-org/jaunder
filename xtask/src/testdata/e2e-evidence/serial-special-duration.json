@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "complete": true,
+  "tests": [
+    {
+      "test_id": "visual",
+      "project_id": "firefox-special-visual",
+      "project_name": "firefox-special-visual",
+      "title": "visual contract",
+      "file": "tests/visual.spec.ts",
+      "line": 3,
+      "attempts": [{ "retry": 0, "effective_timeout_ms": 100 }]
+    }
+  ]
+}

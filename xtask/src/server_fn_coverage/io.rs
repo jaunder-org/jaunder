@@ -19,8 +19,9 @@ use crate::traces::parse::{Filters, parse_spans};
 pub const WEB_SRC: &str = "web/src";
 /// The committed, generated coverage snapshot — the byte-compared artifact.
 pub const SNAPSHOT_PATH: &str = "docs/coverage/server-fns.json";
-/// Where `cargo xtask e2e sqlite chromium` lifts the authoritative capture.
-pub const CAPTURE_PATH: &str = ".xtask/diagnostics/e2e-sqlite-chromium/capture-sqlite.tar.gz";
+/// Where `cargo xtask e2e sqlite chromium` lifts the authoritative lane capture.
+pub const CAPTURE_PATH: &str =
+    ".xtask/diagnostics/e2e-sqlite-chromium-unsplit/capture-sqlite-chromium-unsplit.tar.gz";
 
 /// Every `#[macros::server]` fn under `web/src`, sorted by qualified name. A file
 /// that cannot be enumerated is a hard error: a file we cannot read could hide a fn,

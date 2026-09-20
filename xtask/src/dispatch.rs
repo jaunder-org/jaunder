@@ -15,6 +15,10 @@ use crate::{
     server_fn_coverage, steps, traces, wasm_coverage,
 };
 
+fn e2e_uses_retained_split(browser: &str) -> bool {
+    browser == "firefox"
+}
+
 pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
     // Reject --json for commands with no structured payload (the `traces` reporting
     // commands) before doing any work — a hollow envelope is worse than an error.
@@ -78,10 +82,9 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let mut result = CommandResult::new("validate");
             if run_non_e2e_validation(&sh, policy, allow_dirty, None, &mut result) && !no_e2e {
                 // Each browser/backend combo is realized, lifted, and reconciled
-                // separately; their same-named per-backend inputs cannot safely
-                // survive the aggregate `e2e-checks` symlink join. The coverage
-                // verifier therefore resolves the already-realized authoritative
-                // combo's individual output rather than reading the join.
+                // separately. The flow-coverage verifier resolves the already-realized
+                // authoritative combo's individual output because only that combo owns
+                // the empirical snapshot verdict.
                 let e2e = steps::nix::e2e(&mut result);
                 steps::server_fn_coverage_check::verify_after_validate(
                     &mut result,
@@ -169,23 +172,90 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             lifecycle::finalize(&mut result, start);
             Ok(result)
         }
+        Command::E2eLane { identity } => {
+            let start = Instant::now();
+            let mut result = CommandResult::new("e2e-lane");
+            steps::nix::e2e_lane(&mut result, &identity);
+            lifecycle::finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::E2eControl { backend, workers } => {
+            let start = Instant::now();
+            let mut result = CommandResult::new("e2e-control");
+            steps::nix::e2e_control(&mut result, backend.as_str(), workers.count());
+            lifecycle::finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::E2eCandidate { identity } => {
+            let start = Instant::now();
+            let mut result = CommandResult::new("e2e-candidate");
+            steps::nix::e2e_lane(&mut result, &identity);
+            lifecycle::finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::E2eReconcile {
+            backend,
+            diagnostics_root,
+        } => {
+            let start = Instant::now();
+            let mut result = CommandResult::new("e2e-reconcile");
+            steps::nix::e2e_experimental_reconcile(
+                &mut result,
+                backend.as_str(),
+                &diagnostics_root,
+                None,
+                None,
+            );
+            lifecycle::finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::E2eExperimentalReconcile {
+            backend,
+            diagnostics_root,
+            control_diagnostics_root,
+            control_workers,
+        } => {
+            let start = Instant::now();
+            let mut result = CommandResult::new("e2e-experimental-reconcile");
+            steps::nix::e2e_experimental_reconcile(
+                &mut result,
+                backend.as_str(),
+                &diagnostics_root,
+                control_diagnostics_root.as_deref(),
+                control_workers.map(|workers| workers.count()),
+            );
+            lifecycle::finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::E2eExperimental { backend } => {
+            let start = Instant::now();
+            let mut result = CommandResult::new("e2e-experimental");
+            steps::nix::e2e_experimental(&mut result, backend.as_str());
+            lifecycle::finalize(&mut result, start);
+            Ok(result)
+        }
         Command::E2e { backend, browser } => {
             let start = Instant::now();
             let label = format!("e2e-{}-{}", backend.as_str(), browser.as_str());
             let mut result = CommandResult::new(&label);
-            steps::nix::e2e_combo(&mut result, backend.as_str(), browser.as_str());
-            // Surface retried-but-passed tests from the report `e2e_combo` just
-            // lifted out of the VM (see steps::flaky). Informational — never fails
-            // the combo.
-            steps::flaky::collect(&mut result, backend.as_str(), browser.as_str());
-            // #681: the e2e half of the flow-coverage gate. Only this per-combo path
-            // has an uncollided capture (spec D8), and only the authoritative combo's
-            // traces are used (D6) — `verify_after_combo` enforces both.
-            steps::server_fn_coverage_check::verify_after_combo(
-                &mut result,
-                backend.as_str(),
-                browser.as_str(),
-            );
+            if e2e_uses_retained_split(browser.as_str()) {
+                // Preserve the established command while routing Firefox through
+                // all three retained VMs and their authoritative reconciliation.
+                steps::nix::e2e_experimental(&mut result, backend.as_str());
+            } else {
+                steps::nix::e2e_combo(&mut result, backend.as_str(), browser.as_str());
+                // Surface retried-but-passed tests from the report `e2e_combo` just
+                // lifted out of the VM (see steps::flaky). Informational — never
+                // fails the combo.
+                steps::flaky::collect(&mut result, backend.as_str(), browser.as_str());
+                // #681: only the SQLite/Chromium capture is the empirical
+                // server-function coverage authority.
+                steps::server_fn_coverage_check::verify_after_combo(
+                    &mut result,
+                    backend.as_str(),
+                    browser.as_str(),
+                );
+            }
             lifecycle::finalize(&mut result, start);
             Ok(result)
         }
@@ -547,7 +617,11 @@ const NON_E2E_VALIDATION_SURFACES: [NonE2eValidationSurface; 8] = [
 impl NonE2eValidationSurface {
     const fn belongs_to_lane(self, lane: CiValidateLane) -> bool {
         match lane {
-            CiValidateLane::Core => !matches!(self, Self::RustCoverage),
+            CiValidateLane::Host => matches!(self, Self::HostGateWithoutTests | Self::HostTests),
+            CiValidateLane::Hermetic => matches!(self, Self::NixStaticChecks | Self::WasmBudget),
+            CiValidateLane::TestChecks => {
+                matches!(self, Self::WasmTests | Self::Doctests | Self::ElispCoverage)
+            }
             CiValidateLane::Coverage => matches!(self, Self::RustCoverage),
         }
     }
@@ -675,26 +749,25 @@ mod tests {
             ]
         );
 
-        let core = validation_surface_names(Some(CiValidateLane::Core));
+        let host = validation_surface_names(Some(CiValidateLane::Host));
+        assert_eq!(host, ["host-gate-without-tests", "host-tests"]);
         assert_eq!(
-            core,
-            [
-                "host-gate-without-tests",
-                "nix-static-checks",
-                "wasm-budget",
-                "host-tests",
-                "wasm-tests",
-                "doctests",
-                "elisp-coverage",
-            ]
+            validation_surface_names(Some(CiValidateLane::Hermetic)),
+            ["nix-static-checks", "wasm-budget"]
+        );
+        assert_eq!(
+            validation_surface_names(Some(CiValidateLane::TestChecks)),
+            ["wasm-tests", "doctests", "elisp-coverage"]
         );
         assert_eq!(
             validation_surface_names(Some(CiValidateLane::Coverage)),
             ["rust-coverage"]
         );
 
-        let lane_union = core
+        let lane_union = host
             .iter()
+            .chain(validation_surface_names(Some(CiValidateLane::Hermetic)).iter())
+            .chain(validation_surface_names(Some(CiValidateLane::TestChecks)).iter())
             .chain(validation_surface_names(Some(CiValidateLane::Coverage)).iter())
             .copied()
             .collect::<std::collections::BTreeSet<_>>();
@@ -704,6 +777,12 @@ mod tests {
             full.into_iter().collect(),
             "lanes must cover every non-E2E full-validation surface"
         );
+    }
+
+    #[test]
+    fn firefox_e2e_command_uses_retained_split() {
+        assert!(e2e_uses_retained_split("firefox"));
+        assert!(!e2e_uses_retained_split("chromium"));
     }
 
     #[test]

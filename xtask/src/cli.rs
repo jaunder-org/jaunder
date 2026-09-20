@@ -64,17 +64,37 @@ pub enum E2eBrowser {
     Firefox,
 }
 
+/// The measurement-only Firefox control resource profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum E2eControlWorkers {
+    Workers2,
+    Workers4,
+}
+
+impl E2eControlWorkers {
+    pub(crate) const fn count(self) -> u8 {
+        match self {
+            Self::Workers2 => 2,
+            Self::Workers4 => 4,
+        }
+    }
+}
+
 /// One independently runnable non-E2E CI validation lane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum CiValidateLane {
-    Core,
+    Host,
+    Hermetic,
+    TestChecks,
     Coverage,
 }
 
 impl CiValidateLane {
     pub(crate) const fn command_name(self) -> &'static str {
         match self {
-            Self::Core => "ci-validate-core",
+            Self::Host => "ci-validate-host",
+            Self::Hermetic => "ci-validate-hermetic",
+            Self::TestChecks => "ci-validate-test-checks",
             Self::Coverage => "ci-validate-coverage",
         }
     }
@@ -215,14 +235,61 @@ pub enum Command {
         #[arg(long, requires = "breakdown")]
         wasm: Option<String>,
     },
-    /// Build ONE e2e VM check (a {backend}×{browser} combo) through the same
-    /// diagnostic-preserving wrapper `validate` uses. For CI matrix fan-out;
-    /// not part of `check`/`validate`. Runs on the host only.
+    /// Run one backend/browser E2E verdict through the same diagnostic-preserving
+    /// paths `validate` uses: one unsplit Chromium VM, or all three retained
+    /// Firefox lanes plus reconciliation. Runs on the host only.
     E2e {
         #[arg(value_enum)]
         backend: E2eBackend,
         #[arg(value_enum)]
         browser: E2eBrowser,
+    },
+    /// Build one retained Firefox split lane by catalog identity. CI uses this
+    /// host-only command for each isolated lane producer.
+    E2eLane {
+        #[arg(value_parser = nonempty)]
+        identity: String,
+    },
+    /// Build one workers=2 or workers=4 Firefox unsplit control for measurement
+    /// only. This is a host-only package output and never changes production topology.
+    E2eControl {
+        #[arg(value_enum)]
+        backend: E2eBackend,
+        #[arg(value_enum)]
+        workers: E2eControlWorkers,
+    },
+    /// Compatibility alias for `e2e-lane`; builds one retained Firefox split lane.
+    E2eCandidate {
+        #[arg(value_parser = nonempty)]
+        identity: String,
+    },
+    /// Reconcile one backend's already-lifted retained Firefox lane evidence
+    /// without invoking Nix. `diagnostics_root` contains `e2e-<lane>` directories.
+    E2eReconcile {
+        #[arg(value_enum)]
+        backend: E2eBackend,
+        #[arg(long)]
+        diagnostics_root: PathBuf,
+    },
+    /// Measurement compatibility alias with optional unsplit-control comparison.
+    E2eExperimentalReconcile {
+        #[arg(value_enum)]
+        backend: E2eBackend,
+        #[arg(long)]
+        diagnostics_root: PathBuf,
+        /// Root containing the lifted unsplit control `e2e-<backend>-firefox-unsplit`
+        /// directory for exact population comparison.
+        #[arg(long, requires = "control_workers")]
+        control_diagnostics_root: Option<PathBuf>,
+        /// The explicit control profile that produced `control_diagnostics_root`.
+        #[arg(long, value_enum, requires = "control_diagnostics_root")]
+        control_workers: Option<E2eControlWorkers>,
+    },
+    /// Compatibility command that builds and reconciles one backend's retained
+    /// Firefox split lanes in one host process.
+    E2eExperimental {
+        #[arg(value_enum)]
+        backend: E2eBackend,
     },
     /// Run the host e2e loop, owning each lifecycle: build the CSR bundle +
     /// server, start `jaunder serve` on an ephemeral port with the VM's capture
@@ -564,7 +631,7 @@ pub enum TracesCommand {
     /// totals). A manual tool — not part of `check`/`validate`. Prints human
     /// tables only; `--json` is rejected.
     #[command(after_help = "EXAMPLES:\n  \
-        # trace files extracted from an e2e capture-<backend>.tar.gz bundle (capture/otel-traces.jsonl):\n  \
+        # trace files extracted from a capture-<backend>-<browser>-unsplit.tar.gz bundle (capture/otel-traces.jsonl):\n  \
         cargo xtask traces analyze sqlite-otel-traces.jsonl postgres-otel-traces.jsonl\n  \
         cargo xtask traces analyze --top 40 --project firefox trace-a.jsonl trace-b.jsonl\n  \
         cargo xtask traces analyze --trace 1111...1111 traces.jsonl")]
@@ -580,7 +647,7 @@ pub enum TracesCommand {
         #[arg(long)]
         project: Option<String>,
         /// Playwright `json` reporter output(s), e.g.
-        /// `.xtask/diagnostics/e2e-sqlite-chromium/playwright-report-sqlite.json`.
+        /// `.xtask/diagnostics/e2e-sqlite-chromium-unsplit/playwright-report-sqlite-chromium-unsplit.json`.
         /// Supplies the per-test span-coverage section's denominator — the traces
         /// alone cannot say how long a test took wall-clock. Omit and that one
         /// section is skipped with a note.
@@ -641,6 +708,12 @@ impl Cli {
             Command::Census => "census",
             Command::AuditWasm { .. } => "audit-wasm",
             Command::E2e { .. } => "e2e",
+            Command::E2eLane { .. } => "e2e-lane",
+            Command::E2eControl { .. } => "e2e-control",
+            Command::E2eCandidate { .. } => "e2e-candidate",
+            Command::E2eReconcile { .. } => "e2e-reconcile",
+            Command::E2eExperimentalReconcile { .. } => "e2e-experimental-reconcile",
+            Command::E2eExperimental { .. } => "e2e-experimental",
             Command::E2eLocal { .. } => "e2e-local",
             Command::TestLocal { .. } => "test-local",
             Command::BuildCsr { .. } => "build-csr",
@@ -711,6 +784,16 @@ mod tests {
     use super::*;
     use clap::Parser;
     use std::path::PathBuf;
+
+    #[test]
+    fn e2e_lane_parses_as_a_production_command() {
+        let cli =
+            Cli::try_parse_from(["xtask", "e2e-lane", "sqlite-firefox-ordinary-1-of-2"]).unwrap();
+        assert_eq!(cli.command_name(), "e2e-lane");
+        assert!(
+            matches!(cli.command, Command::E2eLane { identity } if identity == "sqlite-firefox-ordinary-1-of-2")
+        );
+    }
 
     #[test]
     fn precommit_parses_as_first_class_subcommand() {
@@ -906,7 +989,13 @@ mod tests {
     #[test]
     fn ci_validate_parses_the_complete_lane_catalog() {
         for (argument, lane, name) in [
-            ("core", CiValidateLane::Core, "ci-validate-core"),
+            ("host", CiValidateLane::Host, "ci-validate-host"),
+            ("hermetic", CiValidateLane::Hermetic, "ci-validate-hermetic"),
+            (
+                "test-checks",
+                CiValidateLane::TestChecks,
+                "ci-validate-test-checks",
+            ),
             ("coverage", CiValidateLane::Coverage, "ci-validate-coverage"),
         ] {
             let cli = Cli::try_parse_from(["xtask", "ci-validate", argument]).unwrap();
@@ -925,6 +1014,46 @@ mod tests {
             }
             _ => panic!("expected e2e"),
         }
+    }
+
+    #[test]
+    fn measurement_e2e_commands_parse_without_production_routing() {
+        let control = Cli::try_parse_from(["xtask", "e2e-control", "sqlite", "workers4"]).unwrap();
+        assert_eq!(control.command_name(), "e2e-control");
+        assert!(matches!(
+            control.command,
+            Command::E2eControl {
+                backend: E2eBackend::Sqlite,
+                workers: E2eControlWorkers::Workers4,
+            }
+        ));
+
+        let candidate =
+            Cli::try_parse_from(["xtask", "e2e-candidate", "sqlite-firefox-ordinary-1-of-2"])
+                .unwrap();
+        assert_eq!(candidate.command_name(), "e2e-candidate");
+        assert!(matches!(candidate.command, Command::E2eCandidate { .. }));
+
+        let reconcile = Cli::try_parse_from([
+            "xtask",
+            "e2e-experimental-reconcile",
+            "postgres",
+            "--diagnostics-root",
+            "/tmp/candidates",
+            "--control-diagnostics-root",
+            "/tmp/control",
+            "--control-workers",
+            "workers2",
+        ])
+        .unwrap();
+        assert_eq!(reconcile.command_name(), "e2e-experimental-reconcile");
+        assert!(matches!(
+            reconcile.command,
+            Command::E2eExperimentalReconcile {
+                backend: E2eBackend::Postgres,
+                ..
+            }
+        ));
     }
 
     #[test]

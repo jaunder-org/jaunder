@@ -16,8 +16,8 @@ processes, and end-to-end test runner.
   seed steps, and the `test-support` seed binary export to the in-VM collector.
   The collector writes under the capture-dir contract (#332):
   - `/var/lib/jaunder/capture/otel-traces.jsonl` (inside the VM)
-  - lifted per combo inside `capture-<backend>.tar.gz` (the same bundle that
-    carries `diag.log` and the mail/websub JSONL — see below)
+  - lifted per lane inside `capture-<lane>.tar.gz` (the same bundle that carries
+    `diag.log` and the mail/websub JSONL — see below)
 - `cargo xtask e2e-local` supervises the same collector pipeline on the host,
   using per-lifecycle ephemeral OTLP receivers. After Jaunder and Playwright
   finish, it flushes the collector, retains the complete capture at
@@ -346,26 +346,33 @@ A context built with `browser.newContext()` does **not** inherit config-level
 
 ## Per-test timing report
 
-Each e2e VM check also runs Playwright's `json` reporter and copies the result
-out as a flat artifact (alongside the OTEL traces above):
+Each E2E VM check also runs Playwright's `json` reporter and copies the result
+out as a lane-qualified flat artifact alongside the OTEL traces:
 
-- `playwright-report-sqlite.json` / `playwright-report-postgres.json`
+- `playwright-report-<lane>.json`
 
-It records every test's title, project (browser), status, retries, and duration.
-This is the primary source for per-test timing comparisons across browsers (e.g.
-the Firefox-vs-Chromium analysis in #152). On the
-`cargo xtask e2e <backend> <browser>` path it lands per combo at
-`.xtask/diagnostics/e2e-<backend>-<browser>/playwright-report-<backend>.json`
-and is uploaded as the `e2e-diagnostics-<backend>-<browser>` CI artifact.
+It records every test's title, project, status, retries, and duration. This is
+the primary source for per-test timing comparisons across browsers. The report
+lands at `.xtask/diagnostics/e2e-<lane>/playwright-report-<lane>.json`.
+Chromium's unsplit producer uploads `e2e-diagnostics-<backend>-chromium`; each
+retained Firefox producer uploads `e2e-firefox-<backend>-<partition-or-shard>`.
 
-The report is paired per combo with `duration-budget-manifest-sqlite.json` or
-`duration-budget-manifest-postgres.json`; the copied report and manifest are the
-duration-pressure gate's source, not trace spans or suite wall-clock time. For
-an otherwise-successful combo, their selected tests and attempts must reconcile
-exactly; missing, malformed, incomplete, or inconsistent input fails closed
-after diagnostics are captured. The gate evaluates every reported attempt,
-including retries: any attempt at **80% or more** of its effective whole-test
-timeout fails, even if a later retry passes.
+The report is paired with `duration-budget-manifest-<lane>.json`; the copied
+report and manifest are the duration-pressure gate's source, not trace spans or
+suite wall-clock time. For an otherwise-successful lane, their selected tests
+and attempts must reconcile exactly; missing, malformed, incomplete, or
+inconsistent input fails closed after diagnostics are captured. The gate
+evaluates every reported attempt, including retries: any attempt at **80% or
+more** of its effective whole-test timeout fails, even if a later retry passes.
+
+Firefox adds one backend-level host reconciliation after all three lane
+producers settle. It consumes the independent unsharded census plus every
+lane-qualified report, manifest, phase sidecar, and capture; it rejects missing
+or duplicate source identities, swapped shard evidence, failed phases, partial
+traces, and incomplete retry/duration populations. The reconciliation artifact
+contains only `.xtask/last-result.json`: producer artifacts already retain the
+full diagnostics, so operators should inspect the named failed lane rather than
+a duplicated aggregate bundle.
 
 This is a per-combo headroom detector, not a timeout-sizing policy or aggregate
 duration history. Whole-test budgets remain ambient except where a budget is
@@ -450,13 +457,12 @@ lane; fast feedback only in the static one.
 - **E2e** (`cargo xtask e2e sqlite chromium`): regenerates from that run's
   capture and fails on any difference from the committed snapshot.
 
-**Regeneration is per-combo only.** `checks.e2e` is a `symlinkJoin` over every
-`e2e-*` check and both sqlite combos emit a file named `capture-sqlite.tar.gz`,
-so in the joined output the two collide unpredictably. Only
-`cargo xtask e2e sqlite chromium` regenerates or verifies; the local aggregate
-`cargo xtask validate` skips it, and the static lane still runs there. In CI the
-`{backend}×{browser}` matrix (ADR-0034) means the `sqlite`/`chromium` job is the
-one that carries the drift check.
+**Regeneration is per-combo only.** Every output is lane-qualified, so the
+aggregate has no filename collisions. The `sqlite`/`chromium` lane remains the
+single authoritative empirical source: `cargo xtask e2e sqlite chromium`
+verifies it directly, while local `cargo xtask validate` resolves that already
+realized lane after all eight builds. In CI the `sqlite`/`chromium` producer
+carries the drift check ([ADR-0034](adr/0034-ci-e2e-matrix-distribution.md)).
 
 `sqlite × chromium` is authoritative because `chromium`'s `testIgnore` and
 `chromium-admin`'s `testMatch` are exact complements over all spec files and no
@@ -465,7 +471,7 @@ test is browser- or backend-conditional — so one combo drops no coverage.
 To regenerate and verify after adding a flow:
 
 ```bash
-cargo xtask e2e sqlite chromium            # writes .xtask/diagnostics/e2e-sqlite-chromium/capture-sqlite.tar.gz
+cargo xtask e2e sqlite chromium            # writes .xtask/diagnostics/e2e-sqlite-chromium-unsplit/capture-sqlite-chromium-unsplit.tar.gz
 cargo xtask server-fn-coverage regenerate  # rewrites server-fns.json only
 cargo xtask server-fn-coverage verify      # compares the capture-derived snapshot byte-for-byte
 ```
@@ -535,9 +541,9 @@ and panics** — no kernel boot spam, no INFO request lines. It lands per combo
 at:
 
 - `/var/lib/jaunder/capture/diag.log` (inside the VM)
-- `.xtask/diagnostics/e2e-<backend>-<browser>/capture-<backend>.tar.gz` (the
-  capture dir tarred out per combo — it contains `diag.log`; uploaded in the
-  same `e2e-diagnostics-<backend>-<browser>` CI bundle)
+- `.xtask/diagnostics/e2e-<lane>/capture-<lane>.tar.gz` (the capture dir tarred
+  out per lane — it contains `diag.log`; uploaded in that producer's
+  lane-qualified CI artifact)
 
 Each line is one JSON object. Tracing events use the `fmt().json()` shape;
 **panic** records are distinguished by `"kind": "panic"` and carry the literal
@@ -548,11 +554,10 @@ production leaves it unset, so the feature is inert there.
 
 This is the artifact the **zero-panic gate** (ADR-0032) now reads for
 `panicked at`, unioned with the journal and de-duped by panic location. The full
-systemd journal (`jaunder-journal-<backend>.log`,
-`system-journal-<backend>.log`) remains captured as the **last-resort fallback**
-— reach for it only when the scoped log doesn't have what you need (e.g. a panic
-that fired before the app installed its hook). See `docs/adr/` for the
-app-driven scoped-capture decision.
+systemd journal (`jaunder-journal-<lane>.log`, `system-journal-<lane>.log`)
+remains captured as the **last-resort fallback** — reach for it only when the
+scoped log doesn't have what you need (e.g. a panic that fired before the app
+installed its hook). See `docs/adr/` for the app-driven scoped-capture decision.
 
 ## Analysis
 
@@ -563,7 +568,7 @@ Use `cargo xtask traces analyze` on one or more artifact files, for example:
 cargo xtask traces analyze \
   .xtask/e2e-local/<run-id>/chromium/capture/otel-traces.jsonl
 
-# VM captures are extracted from capture-<backend>.tar.gz; traces run does this.
+# VM captures are extracted from capture-<lane>.tar.gz; traces run does this.
 cargo xtask traces analyze \
   sqlite-otel-traces.jsonl \
   postgres-otel-traces.jsonl
@@ -2777,7 +2782,7 @@ omissions explains or removes it while fresh-context isolation is preserved.
 Re-measurement of the #152 Firefox-vs-Chromium tax on the **leptos-CSR** build
 (post-#180; no SSR, no hydration reconciliation). Method: the four warm
 `e2e-{sqlite,postgres}-{chromium,firefox}` checks, per-test durations paired
-from `playwright-report-<backend>.json`, attribution from
+from `playwright-report-<backend>-<browser>-unsplit.json`, attribution from
 `scripts/analyze-otel-traces`.
 
 **The tax barely moved after the CSR cutover.** Median per-test Firefox/Chromium

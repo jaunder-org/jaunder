@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "complete": true,
+  "topology": "sqlite-firefox-split",
+  "tests": [
+    {
+      "project_id": "firefox-ordinary",
+      "project_name": "firefox-ordinary",
+      "test_id": "one"
+    },
+    {
+      "project_id": "firefox-ordinary",
+      "project_name": "firefox-ordinary",
+      "test_id": "two"
+    },
+    {
+      "project_id": "firefox-special-visual",
+      "project_name": "firefox-special-visual",
+      "test_id": "visual"
+    }
+  ]
+}

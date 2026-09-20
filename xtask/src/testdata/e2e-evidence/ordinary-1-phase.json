@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "backend": "sqlite",
+  "browser": "firefox",
+  "lane": "sqlite-firefox-ordinary-1-of-2",
+  "phases": [
+    {
+      "name": "nix-evaluation",
+      "duration_ms": null,
+      "outcome": "unavailable",
+      "detail": "the VM cannot observe Nix evaluation",
+      "nix": { "classification": "unknown", "detail": "unobservable" }
+    },
+    {
+      "name": "gate-execution",
+      "duration_ms": 1,
+      "outcome": "success",
+      "detail": "ok",
+      "nix": null
+    },
+    {
+      "name": "result-lift",
+      "duration_ms": 1,
+      "outcome": "success",
+      "detail": "copied",
+      "nix": null
+    },
+    {
+      "name": "post-gate-checks",
+      "duration_ms": 1,
+      "outcome": "success",
+      "detail": "zero panics",
+      "nix": null
+    }
+  ]
+}

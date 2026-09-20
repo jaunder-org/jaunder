@@ -1,5 +1,24 @@
 import { devices, defineConfig } from "@playwright/test";
+import type { PlaywrightTestConfig } from "@playwright/test";
 import { performanceEnabled } from "./tests/browser-performance";
+
+type E2eLaneCatalog = {
+  experimentalProjectDependencies: Record<string, string[]>;
+};
+const e2eLaneCatalog = require("./e2e-lanes.json") as E2eLaneCatalog;
+const experimentalDependencies = e2eLaneCatalog.experimentalProjectDependencies;
+type Project = NonNullable<PlaywrightTestConfig["projects"]>[number];
+function experimentalProject(project: Project): Project {
+  const name = project.name;
+  if (name === undefined) {
+    throw new Error("Experimental Playwright projects require a name");
+  }
+  const dependencies = experimentalDependencies[name];
+  if (dependencies === undefined) {
+    throw new Error(`No experimental lane dependency contract for ${name}`);
+  }
+  return dependencies.length === 0 ? project : { ...project, dependencies };
+}
 
 const traceParent = process.env.JAUNDER_E2E_TRACEPARENT;
 // Worker count is env-driven (#155), default 2: two browser instances per combo
@@ -37,6 +56,11 @@ const chromiumLaunchOptions = {
   args: ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
 };
 const visualTag = /@visual/;
+const censusPreflight = Boolean(process.env.JAUNDER_E2E_CENSUS_PREPARE);
+const laneRun = Boolean(process.env.JAUNDER_E2E_LANE);
+const censusOutput =
+  process.env.JAUNDER_E2E_CENSUS_OUTPUT ??
+  "test-results/e2e-expected-census.json";
 const diagnosticCoverage = Boolean(process.env.JAUNDER_WASM_COVERAGE_OUT);
 const measurementMode = Boolean(process.env.JAUNDER_WASM_COVERAGE_MODE);
 const performanceMode = performanceEnabled();
@@ -81,6 +105,11 @@ export default defineConfig({
   reporter: [
     ["line"],
     ["json", { outputFile: "test-results/results.json" }],
+    ...(censusPreflight
+      ? [["./e2eCensus.ts", { outputFile: censusOutput }] as const]
+      : laneRun
+        ? [["./e2eLaneManifest.ts"] as const]
+        : []),
     [
       "./durationBudgetManifest.ts",
       { outputFile: "test-results/duration-budget-manifest.json" },
@@ -205,6 +234,56 @@ export default defineConfig({
         launchOptions: firefoxLaunchOptions,
       },
     },
+    // Experimental Firefox lanes select only these projects. They deliberately
+    // have no dependencies outside their lane: Playwright otherwise expands a
+    // selected project with another lane's prerequisites.
+    experimentalProject({
+      name: "firefox-ordinary",
+      testIgnore: ignoreUnavailableSpecializedSpecs(
+        /(admin-site|backup|smtp|theme|invite|media|timeline-cls|production-baseline-flow)\.spec\.ts/,
+      ),
+      grepInvert: visualTag,
+      use: {
+        ...devices["Desktop Firefox"],
+        launchOptions: firefoxLaunchOptions,
+      },
+    }),
+    experimentalProject({
+      name: "firefox-special-visual",
+      grep: visualTag,
+      retries: 0,
+      // The candidate owns the same visual assertions as `firefox-visual`.
+      // Reuse those reviewed baselines rather than minting topology-qualified
+      // snapshots that could silently diverge.
+      snapshotPathTemplate:
+        "{snapshotDir}/{testFilePath}-snapshots/{arg}-firefox-visual-{platform}{ext}",
+      use: {
+        ...devices["Desktop Firefox"],
+        launchOptions: firefoxLaunchOptions,
+      },
+    }),
+    experimentalProject({
+      name: "firefox-special-global-configuration",
+      testMatch:
+        /(admin-site|backup|smtp|theme|media|timeline-cls|production-baseline-flow)\.spec\.ts/,
+      grepInvert: visualTag,
+      fullyParallel: false,
+      workers: 1,
+      use: {
+        ...devices["Desktop Firefox"],
+        launchOptions: firefoxLaunchOptions,
+      },
+    }),
+    experimentalProject({
+      name: "firefox-special-invite",
+      testMatch: /invite\.spec\.ts/,
+      grepInvert: visualTag,
+      fullyParallel: false,
+      use: {
+        ...devices["Desktop Firefox"],
+        launchOptions: firefoxLaunchOptions,
+      },
+    }),
     {
       name: "webkit",
       testIgnore: ignoreUnavailableSpecializedSpecs(

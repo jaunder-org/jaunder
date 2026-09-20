@@ -33,10 +33,10 @@ use crate::traces::{
 ///
 /// The Nix orchestration calls this only after lifting diagnostics and confirming
 /// the VM itself passed, preserving its primary failure if Playwright failed.
-pub(crate) fn validate_lifted_combo(backend: &str, browser: &str) -> StepResult {
-    let diagnostics = Path::new(".xtask/diagnostics").join(format!("e2e-{backend}-{browser}"));
-    let report = diagnostics.join(format!("playwright-report-{backend}.json"));
-    let capture = diagnostics.join(format!("capture-{backend}.tar.gz"));
+pub(crate) fn validate_lifted_combo(backend: &str, browser: &str, lane: &str) -> StepResult {
+    let diagnostics = Path::new(".xtask/diagnostics").join(format!("e2e-{lane}"));
+    let report = diagnostics.join(format!("playwright-report-{lane}.json"));
+    let capture = diagnostics.join(format!("capture-{lane}.tar.gz"));
 
     match validate_files(&report, &capture) {
         Ok(detail) => StepResult::ok("e2e-boot-decomposition-coverage").detail(detail),
@@ -46,7 +46,7 @@ pub(crate) fn validate_lifted_combo(backend: &str, browser: &str) -> StepResult 
     }
 }
 
-fn validate_files(report_path: &Path, capture_path: &Path) -> Result<String, String> {
+pub(crate) fn validate_files(report_path: &Path, capture_path: &Path) -> Result<String, String> {
     let report = std::fs::read_to_string(report_path).map_err(|error| {
         format!(
             "reading Playwright report {}: {error}",

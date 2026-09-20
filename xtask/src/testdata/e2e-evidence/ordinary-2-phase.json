@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "backend": "sqlite",
+  "browser": "firefox",
+  "lane": "sqlite-firefox-ordinary-2-of-2",
+  "phases": [
+    { "name": "gate-execution", "duration_ms": 1, "outcome": "success", "detail": "ok", "nix": null },
+    { "name": "result-lift", "duration_ms": 1, "outcome": "success", "detail": "copied", "nix": null },
+    { "name": "post-gate-checks", "duration_ms": 1, "outcome": "success", "detail": "zero panics", "nix": null }
+  ]
+}
