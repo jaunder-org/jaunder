@@ -116,7 +116,7 @@ Out:
     classification, test and retry counts, peak resource/failure evidence,
     runner-time proxy, artifact volume, and resulting workflow critical path.
 
-- [ ] Task 6: Record the accepted CI architecture.
+- [x] Task 6: Record the accepted CI architecture.
   - Contract: add a numberless ADR draft that supersedes only the affected
     clauses of ADR-0034, ADR-0039, and ADR-0192; preserve ADR-0178's
     documentation/code static boundary and all unaffected local-gate decisions.

@@ -393,47 +393,44 @@ invoke it.
   forward arbitrary Playwright flags; use file or `file:line` targeting instead
   of title `--grep` examples.
 
-- **The authoritative gate** — `cargo xtask e2e <backend> <browser>` runs one
-  combo through the hermetic Nix VM (release build, the same derivation CI
-  runs); `cargo xtask validate` runs all four
-  `{sqlite,postgres}×{chromium,firefox}` combos. Escalate to these when the
-  changed behavior depends on backend/browser parity, release-build behavior, or
-  branch-boundary confidence. The VM path is what green means before you push.
-- **Firefox candidate aggregate** — `cargo xtask e2e-experimental <backend>` is
-  a host-only measurement command. It starts every disabled Firefox candidate
-  lane, lifts every available lane-qualified diagnostic even after a lane fails,
-  and fail-closed reconciles the census, report, retries, duration manifest,
-  phase sidecar, and trace capture before reporting one backend/browser verdict.
-  Distributed measurements instead run `cargo xtask e2e-candidate <lane>` once
-  per isolated runner, then download the lane directories and run
-  `cargo xtask e2e-experimental-reconcile <backend> --diagnostics-root <path> --control-diagnostics-root <path> --control-workers <workers2|workers4>`.
-  The matching unsplit controls are
+- **The authoritative gate** — `cargo xtask e2e <backend> chromium` runs one
+  unsplit Chromium lane through its hermetic Nix VM. Firefox production uses
+  `cargo xtask e2e-lane <backend>-firefox-<ordinary-1-of-2|ordinary-2-of-2|serial-special>`;
+  distributed consumers run
+  `cargo xtask e2e-reconcile <backend> --diagnostics-root <path>` after all
+  three producer artifacts arrive. Full `cargo xtask validate` runs and
+  reconciles all eight retained lanes. Escalate to these when changed behavior
+  depends on backend/browser parity, release-build behavior, or branch-boundary
+  confidence. The VM path is what green means before you push.
+- **Firefox reconciliation and controls** — Each Firefox producer lifts every
+  available lane-qualified diagnostic even after failure. Host reconciliation
+  fail-closed checks the independent census, report union, retries, duration
+  manifests, phase sidecars, and trace captures before reporting one
+  backend/browser verdict. Compatibility commands `e2e-experimental` and
+  `e2e-candidate` route to the retained split; new callers use `e2e-lane` and
+  `e2e-reconcile`. The unsplit measurement controls remain
   `cargo xtask e2e-control <backend> <workers2|workers4>` (2 workers/2 cores/3
-  GiB or 4 workers/4 cores/6 GiB). These commands are measurement-only: they do
-  not enable a CI lane, alter the four production checks, or replace the
-  retained workers=2 policy.
-- **Duration-pressure gate** — After an otherwise-successful VM combo has
-  captured diagnostics, it reconciles the copied
-  `playwright-report-<backend>-<browser>-unsplit.json` and
-  `duration-budget-manifest-<backend>-<browser>-unsplit.json` in
-  `.xtask/diagnostics/e2e-<backend>-<browser>-unsplit/`. Missing, malformed,
-  incomplete, or mismatched inputs fail closed. Every reported attempt is
-  checked, including retries: an attempt using **80% or more** of its effective
-  whole-test timeout fails the combo even when a later retry passes. This
-  detects insufficient headroom; it does not right-size timeout budgets. Keep
-  deriving an exceptional whole-test budget from its polling deadline rather
-  than from observed duration.
+  GiB or 4 workers/4 cores/6 GiB). They do not change production topology;
+  workers=4 remains rejected for production.
+- **Duration-pressure gate** — After an otherwise-successful VM lane has
+  captured diagnostics, it reconciles `playwright-report-<lane>.json` and
+  `duration-budget-manifest-<lane>.json` in `.xtask/diagnostics/e2e-<lane>/`.
+  Missing, malformed, incomplete, or mismatched inputs fail closed. Every
+  reported attempt is checked, including retries: an attempt using **80% or
+  more** of its effective whole-test timeout fails the lane even when a later
+  retry passes. This detects insufficient headroom; it does not right-size
+  timeout budgets. Keep deriving an exceptional whole-test budget from its
+  polling deadline rather than from observed duration.
 
-- **Boot-decomposition coverage gate** — After the same successful VM combo
-  lifts diagnostics, it reconciles the executed browser-project set in
-  `playwright-report-<backend>-<browser>-unsplit.json` with
-  `capture-<backend>-<browser>-unsplit.tar.gz`'s `capture/otel-traces.jsonl`.
-  Each reported project needs non-dropped, mounted, current-schema navigation
-  evidence with complete document-frame boot phases that close within 1 ms;
-  `e2e.test` and secondary `e2e.page` spans both count. Missing, empty,
-  malformed, duplicate, or mismatched evidence fails closed. This certifies
-  trace evidence, not a boot time budget, source coverage, or `#[server]`
-  request-flow coverage.
+- **Boot-decomposition coverage gate** — After the same successful VM lane lifts
+  diagnostics, it reconciles the executed browser-project set in
+  `playwright-report-<lane>.json` with `capture-<lane>.tar.gz`'s
+  `capture/otel-traces.jsonl`. Each reported project needs non-dropped, mounted,
+  current-schema navigation evidence with complete document-frame boot phases
+  that close within 1 ms; `e2e.test` and secondary `e2e.page` spans both count.
+  Missing, empty, malformed, duplicate, or mismatched evidence fails closed.
+  This certifies trace evidence, not a boot time budget, source coverage, or
+  `#[server]` request-flow coverage.
 
 #### Visual snapshot workflow
 
@@ -558,14 +555,14 @@ a hook failure or mutation. Use `cargo xtask check --no-test` or
 hermetic confidence is the question. Focused `test-local` is an accelerator, not
 a certification gate.
 
-| Command                         | Runs                                                                                                                                                                                                                       | Formatting    |
-| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
-| `cargo xtask check --no-test`   | host static checks + clippy + repo-shape/type-safety gates + host tests — the precommit host surface                                                                                                                       | auto-fixes    |
-| `cargo xtask check`             | + `test-local` for root-workspace Rust tests, plus the Nix `wasm-tests` and `doctests`/`doctests-gate` checks                                                                                                              | auto-fixes    |
-| `cargo xtask precommit`         | host surface from `cargo xtask check --no-test`, then safe-staging reconciliation — the `.githooks/pre-commit` hook runs this path                                                                                         | auto-fixes    |
-| `cargo xtask prepush`           | verify-only host/static surface + auxiliary `xtask`/`tools` non-doc tests + `test-local` + `workspace-doctests`, with clean-tree refusal and no Nix — the `.githooks/pre-push` hook runs this path                         | never mutates |
-| `cargo xtask validate --no-e2e` | verify-only host/static surface plus Nix static proof, `wasm-budget`, Nix `wasm-tests`, Rust `coverage`/`coverage-gate`, Nix `doctests`/`doctests-gate`, and authoritative `elisp-coverage-producer` plus host consumer    | never mutates |
-| `cargo xtask validate`          | inherits the authoritative Emacs verdict, then adds all four `{sqlite,postgres}×{chromium,firefox}` browser E2E combinations and authoritative SQLite/Chromium server-function coverage verification — the full local gate | never mutates |
+| Command                         | Runs                                                                                                                                                                                                                                           | Formatting    |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| `cargo xtask check --no-test`   | host static checks + clippy + repo-shape/type-safety gates + host tests — the precommit host surface                                                                                                                                           | auto-fixes    |
+| `cargo xtask check`             | + `test-local` for root-workspace Rust tests, plus the Nix `wasm-tests` and `doctests`/`doctests-gate` checks                                                                                                                                  | auto-fixes    |
+| `cargo xtask precommit`         | host surface from `cargo xtask check --no-test`, then safe-staging reconciliation — the `.githooks/pre-commit` hook runs this path                                                                                                             | auto-fixes    |
+| `cargo xtask prepush`           | verify-only host/static surface + auxiliary `xtask`/`tools` non-doc tests + `test-local` + `workspace-doctests`, with clean-tree refusal and no Nix — the `.githooks/pre-push` hook runs this path                                             | never mutates |
+| `cargo xtask validate --no-e2e` | verify-only host/static surface plus Nix static proof, `wasm-budget`, Nix `wasm-tests`, Rust `coverage`/`coverage-gate`, Nix `doctests`/`doctests-gate`, and authoritative `elisp-coverage-producer` plus host consumer                        | never mutates |
+| `cargo xtask validate`          | inherits the authoritative Emacs verdict, then adds the retained two unsplit Chromium and six split Firefox E2E lanes with host reconciliation, plus authoritative SQLite/Chromium server-function coverage verification — the full local gate | never mutates |
 
 #### Measuring Nix invalidation
 
@@ -613,8 +610,8 @@ retain their baseline identity and reuse. Normalize every Nix row beside the
 pre-change record in
 `docs/superpowers/research/2026-09-04-issue-1289-nix-invalidation-boundaries.md`.
 `cargo xtask validate --no-e2e` remains the full non-e2e aggregate; full
-`cargo xtask validate` additionally runs all four e2e combinations and
-server-function coverage verification.
+`cargo xtask validate` additionally runs the retained eight E2E lanes, performs
+Firefox evidence reconciliation, and runs server-function coverage verification.
 
 #### Prepush parity by failure surface
 
@@ -658,15 +655,23 @@ result to `.xtask/last-result.json` and a `xtask-done:` completion line to
 stderr.
 
 CI does **not** run `cargo xtask validate` as a single job. It distributes the
-non-e2e surface between independent `cargo xtask ci-validate core` and
-`cargo xtask ci-validate coverage` jobs, aggregated by the stable
-`Validate (no e2e)` result-only job. A separate `{backend}×{browser}` e2e matrix
-runs `cargo xtask e2e <backend> <browser>` once per combination and is
-aggregated by `e2e-gate`. Running independent surfaces across runners cuts
-workflow wall-clock; `cargo xtask validate` remains the full local equivalent
-and `cargo xtask validate --no-e2e` remains its serial non-e2e form. See
-[ADR-0034](docs/adr/0034-ci-e2e-matrix-distribution.md) and the
-[non-e2e validation lane decision](docs/adr/0192-split-ci-non-e2e-validation-lanes.md).
+non-e2e surface across
+`cargo xtask ci-validate <host|hermetic|test-checks|coverage>` and joins them
+under the stable `Validate (no e2e)` result-only job. The `test-checks` job runs
+the source-closure probe afterward under `always()`; either independently
+recorded result fails the job.
+
+E2E uses two unsplit Chromium jobs plus six isolated Firefox lane jobs
+(`cargo xtask e2e-lane <identity>`). An `always()` reconciliation job per
+backend downloads all three Firefox evidence sets and runs
+`cargo xtask e2e-reconcile`; stable `e2e gate` requires Chromium, every Firefox
+producer, and both reconciliations. Running independent surfaces across runners
+cuts workflow wall-clock; `cargo xtask validate` remains the full local
+equivalent and `cargo xtask validate --no-e2e` remains its serial non-e2e form.
+See [ADR-0034](docs/adr/0034-ci-e2e-matrix-distribution.md), the
+[non-e2e validation lane decision](docs/adr/0192-split-ci-non-e2e-validation-lanes.md),
+and the
+[retained distributed topology](docs/adr/drafts/distribute-ci-validation-and-firefox-e2e-lanes.md).
 
 - `cargo fmt --check` checks Rust formatting.
 - `leptosfmt -x .direnv -x .git -x target --check '**/*.rs'` checks files that
@@ -887,7 +892,7 @@ baseline.
   cargo xtask traces analyze \
     .xtask/e2e-local/<run-id>/chromium/capture/otel-traces.jsonl
 
-  # VM captures are extracted from capture-<backend>-<browser>-unsplit.tar.gz; traces run does this.
+  # VM captures are extracted from capture-<lane>.tar.gz; traces run does this.
   cargo xtask traces analyze \
     /path/to/sqlite-otel-traces.jsonl \
     /path/to/postgres-otel-traces.jsonl
@@ -903,17 +908,16 @@ baseline.
   - `--trace TRACE_ID`: Analyze a specific trace.
   - `--project NAME`: Filter by browser (e.g., `firefox`, `webkit`).
 
-- **Failure logs — look here first (#144)**: on a red e2e combo, read the scoped
+- **Failure logs — look here first (#144)**: on a red E2E lane, read the scoped
   server-diagnostic log before the journal. It is a small JSONL file of only the
-  server's **WARN+ events and panics** (no kernel/INFO noise), copied per combo
-  to
-  `.xtask/diagnostics/e2e-<backend>-<browser>-unsplit/capture-<backend>-<browser>-unsplit.tar.gz`
-  (which contains `diag.log`; in the VM: `/var/lib/jaunder/capture/diag.log`).
-  Panic records carry `"kind": "panic"`. The zero-panic gate
-  ([ADR-0032](docs/adr/0032-e2e-zero-panic-gate.md)) now sources `panicked at`
-  from this file unioned with the journal; the full journal
-  (`jaunder-journal-<backend>-<browser>-unsplit.log`) stays captured as the
-  last-resort fallback. See `docs/observability.md` for the JSONL shape.
+  server's **WARN+ events and panics** (no kernel/INFO noise), copied to
+  `.xtask/diagnostics/e2e-<lane>/capture-<lane>.tar.gz` (which contains
+  `diag.log`; in the VM: `/var/lib/jaunder/capture/diag.log`). Panic records
+  carry `"kind": "panic"`. The zero-panic gate
+  ([ADR-0032](docs/adr/0032-e2e-zero-panic-gate.md)) sources `panicked at` from
+  this file unioned with the journal; `jaunder-journal-<lane>.log` stays
+  captured as the last-resort fallback. See `docs/observability.md` for the
+  JSONL shape.
 
 - **Failed Nix check — read `failure-excerpt.log` first (#145)**: when a
   `cargo xtask check`/`validate` Nix check fails (`nix-coverage`, an `e2e-*`
@@ -922,9 +926,7 @@ baseline.
   **de-interleaved** last log lines — not the `nix build -L` firehose that
   interleaves every derivation, the VM console, and app output. The full
   `.xtask/diagnostics/<check>/build.log` beside it stays as the fallback. Both
-  are uploaded by the owning CI job's `validate-core-diagnostics`,
-  `validate-coverage-diagnostics`, or `e2e-diagnostics-<backend>-<browser>`
-  artifact.
+  are uploaded by the owning CI job's validation or lane-qualified E2E artifact.
 
 - **WASM Audit**: Use `cargo xtask audit-wasm` to measure the size of the
   frontend WASM and JS bundles from the deterministic Nix build.
@@ -1402,8 +1404,8 @@ rerun that exact command, copy the child JSON to the corresponding named
 `.xtask/measurements/post-{docs-only,web-only,high-stack-rust,low-stack-rust,low-stack-macros}.json`
 sidecar, and remove the marker to restore the source bytes before the next arm.
 `cargo xtask validate` remains the aggregate ship gate: it retains the
-`--no-e2e` surface and adds all four e2e combinations and server-function
-coverage verification.
+`--no-e2e` surface and adds all eight retained E2E lanes, Firefox
+reconciliation, and server-function coverage verification.
 
 ### Nix VM checks
 
@@ -1434,23 +1436,23 @@ coverage verification.
   markers with non-empty trimmed reasons.
 - `checks.x86_64-linux.doctests` and `.doctests-gate` — the root workspace's
   doctests and the fence reconciliation over them
-- `checks.x86_64-linux.e2e-sqlite-chromium` — Playwright end-to-end flow against
-  SQLite on Chromium
-- `checks.x86_64-linux.e2e-sqlite-firefox` — Playwright end-to-end flow against
-  SQLite on Firefox
-- `checks.x86_64-linux.e2e-postgres-chromium` — Playwright end-to-end flow
-  against PostgreSQL on Chromium
-- `checks.x86_64-linux.e2e-postgres-firefox` — Playwright end-to-end flow
-  against PostgreSQL on Firefox
+- `checks.x86_64-linux.e2e-{sqlite,postgres}-chromium-unsplit` — one unsplit
+  Chromium Playwright lane per backend
+- `checks.x86_64-linux.e2e-{sqlite,postgres}-firefox-ordinary-{1,2}-of-2` — two
+  ordinary Firefox shards per backend
+- `checks.x86_64-linux.e2e-{sqlite,postgres}-firefox-serial-special` — one
+  visual/global-configuration/invite Firefox lane per backend
 - `checks.x86_64-linux.e2e` — the browser-only aggregate `cargo xtask validate`
-  builds; it fans out to the four browser/backend checks above
+  builds; it fans out to the eight retained lanes above, after which xtask
+  performs the two Firefox reconciliations
 
 Additional Nix-backed checks available as packages (not run by default):
 
 - `packages.x86_64-linux.e2e-{sqlite,postgres}-{chromium,firefox}-single-worker`
-  — the same four e2e flows pinned to `JAUNDER_E2E_WORKERS=1`, so per-navigation
-  timings carry no worker contention. Built on demand by
-  `cargo xtask traces run --single-worker`; not part of the gate.
+  — the historical unsplit browser/backend diagnostic flows pinned to
+  `JAUNDER_E2E_WORKERS=1`, so per-navigation timings carry no worker contention.
+  Built on demand by `cargo xtask traces run --single-worker`; not part of the
+  gate.
 
 The PostgreSQL-backed integration tests need no VM of their own: they run inside
 the `coverage` derivation alongside the SQLite ones, against an ephemeral
