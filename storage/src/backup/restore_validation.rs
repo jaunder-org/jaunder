@@ -795,6 +795,18 @@ mod tests {
     }
 
     #[test]
+    fn rendered_title_presence_validation_skips_tables_absent_from_the_backup() {
+        let temp = TempDir::new().expect("make backup fixture");
+        let database = temp.path().join("db");
+        std::fs::create_dir(&database).expect("make backup database directory");
+        std::fs::write(database.join("posts.ndjson"), "").expect("write empty posts table");
+        let manifest = identity_manifest(vec!["posts".to_owned()]);
+
+        validate_rendered_title_presence_backup(temp.path(), &manifest)
+            .expect("the absent post_revisions table is skipped");
+    }
+
+    #[test]
     fn restore_identity_validation_rejects_every_malformed_backup_shape() {
         let temp = TempDir::new().expect("make backup fixture");
         let database = temp.path().join("db");

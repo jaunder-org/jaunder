@@ -187,12 +187,12 @@ mod tests {
             ..item()
         };
         let out = render_atom(&meta(None, Some("A site")), &[item]).expect("canonical timestamps");
+        let body = out.body();
         assert!(
-            out.body().contains(
+            body.contains(
                 "<title type=\"html\">&lt;strong&gt;A &amp;amp; B&lt;/strong&gt;&lt;br&gt;C</title>"
             ),
-            "out: {}",
-            out.body()
+            "out: {body}"
         );
     }
 

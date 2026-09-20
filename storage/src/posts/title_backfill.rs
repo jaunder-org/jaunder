@@ -383,7 +383,7 @@ where
     DB::Arguments: sqlx::IntoArguments<DB>,
 {
     let scope = DB::write_scope(pool.clone());
-    match scope
+    write_scope_result(scope
         .run(move |transaction| {
             Box::pin(async move {
                 let connection = DB::write_connection(transaction)?;
@@ -402,8 +402,13 @@ where
                 Ok(())
             })
         })
-        .await
-    {
+        .await)
+}
+
+fn write_scope_result(
+    result: Result<MutationOutcome<()>, WriteScopeError<sqlx::Error>>,
+) -> sqlx::Result<()> {
+    match result {
         Ok(MutationOutcome::Confirmed(()) | MutationOutcome::CommitIndeterminate(())) => Ok(()),
         Err(WriteScopeError::Begin(error) | WriteScopeError::Operation(error)) => Err(error),
     }
@@ -426,7 +431,7 @@ where
     DB::Arguments: sqlx::IntoArguments<DB>,
 {
     let scope = DB::write_scope(pool.clone());
-    match scope
+    write_scope_result(scope
         .run(move |transaction| {
             Box::pin(async move {
                 let connection = DB::write_connection(transaction)?;
@@ -445,9 +450,29 @@ where
                 Ok(())
             })
         })
-        .await
-    {
-        Ok(MutationOutcome::Confirmed(()) | MutationOutcome::CommitIndeterminate(())) => Ok(()),
-        Err(WriteScopeError::Begin(error) | WriteScopeError::Operation(error)) => Err(error),
+        .await)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_scope_result_preserves_every_outcome() {
+        for outcome in [
+            MutationOutcome::Confirmed(()),
+            MutationOutcome::CommitIndeterminate(()),
+        ] {
+            assert!(write_scope_result(Ok(outcome)).is_ok());
+        }
+        for error in [
+            WriteScopeError::Begin(sqlx::Error::RowNotFound),
+            WriteScopeError::Operation(sqlx::Error::RowNotFound),
+        ] {
+            assert!(matches!(
+                write_scope_result(Err(error)),
+                Err(sqlx::Error::RowNotFound)
+            ));
+        }
     }
 }

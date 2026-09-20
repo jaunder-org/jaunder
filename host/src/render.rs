@@ -1864,6 +1864,12 @@ mod tests {
         assert!(out.media().is_empty());
     }
 
+    #[test]
+    fn render_output_into_html_consumes_the_derived_media_pair() {
+        let out = with_media(&parse_post_body("plain text"), &PostFormat::Markdown);
+        assert_eq!(out.into_html().as_ref(), "<p>plain text</p>\n");
+    }
+
     /// Whether `(tag, attr)` is classified: the **pair** is in `MEDIA_URL_ATTRS`, or the
     /// attribute **name** is in `INERT_ATTRS` (which is element-agnostic by
     /// construction — see its docs for the invariant that rests on).

@@ -351,7 +351,7 @@ impl RenderedPostTitle {
         while !rest.is_empty() {
             if let Some(after_tag) = rest.strip_prefix('<') {
                 let Some(end) = after_tag.find('>') else {
-                    return text;
+                    unreachable!("canonical title tags always have a closing bracket");
                 };
                 if &after_tag[..end] == "br" && !text.ends_with(' ') {
                     text.push(' ');
@@ -375,7 +375,7 @@ impl RenderedPostTitle {
                         text.push(character);
                         value = &value[character.len_utf8()..];
                     } else {
-                        break;
+                        unreachable!("a nonempty canonical text segment has a first character");
                     }
                 }
                 rest = &rest[end..];
@@ -1821,7 +1821,7 @@ mod tests {
     #[cfg(feature = "sqlx")]
     #[tokio::test]
     async fn rendered_post_title_sqlx_reconstruction_rejects_invalid_bytes() {
-        use sqlx::Connection;
+        use sqlx::{Connection, TypeInfo};
 
         let mut connection = sqlx::SqliteConnection::connect("sqlite::memory:")
             .await
@@ -1831,6 +1831,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(valid.as_ref(), "<em>ok</em>");
+        assert_eq!(
+            <RenderedPostTitle as sqlx::Type<sqlx::Sqlite>>::type_info().name(),
+            "TEXT"
+        );
         for invalid_fragment in ["<script>x</script>", "<br>", "<em></em>", "nul\0byte"] {
             let invalid = sqlx::query_scalar::<_, RenderedPostTitle>("SELECT $1")
                 .bind(invalid_fragment)
