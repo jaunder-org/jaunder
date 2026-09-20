@@ -1477,8 +1477,9 @@ e2eSalt = "run3";   # any distinct string; the value itself is never read
 ```
 
 The salt rides the lane's extra-env string into the VM test script, so it
-changes every E2E derivation hash — all eight retained gate checks and all four
-single-worker packages. It does **not** change `packages.x86_64-linux.jaunder`:
+changes every E2E derivation hash — eight retained gate checks, four unsplit
+workers=2/workers=4 control packages, and four historical single-worker
+packages. It does **not** change `packages.x86_64-linux.jaunder`:
 `nix/checks.nix` sits outside the crane source filter owned by
 `nix/packages.nix`, so a salted run re-runs the VM suite without rebuilding the
 Rust workspace.
