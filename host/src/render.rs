@@ -2,6 +2,10 @@
 
 use common::media::{self, MediaReference};
 use common::post_body::PostBody;
+use common::post_summary::{
+    MAX_POST_SUMMARY_CHARS, PostSummary, normalize_summary_whitespace,
+    truncate_at_first_sentence_or_word_boundary,
+};
 use common::render::{
     PostFormat, RenderedHtml, RenderedHtmlPart, TrustedProviderEmbed, assemble_rendered_html,
 };
@@ -26,6 +30,27 @@ pub fn render(body: &PostBody, format: &PostFormat) -> RenderedHtml {
         PostFormat::Org => render_org_with_shortcodes(body),
         PostFormat::Html => common::render::sanitize(body),
     }
+}
+
+/// Derives a fallback [`PostSummary`] from already-sanitized rendered HTML.
+///
+/// This remains host-owned so the browser and storage never acquire ammonia or HTML
+/// handling. Ammonia strips elements without inventing separators; `html_escape` then
+/// decodes the sanitizer's serialized text entities before Unicode whitespace is
+/// normalized for the derived presentation value.
+#[must_use]
+pub fn summarize_rendered_html(html: &RenderedHtml) -> Option<PostSummary> {
+    let stripped = ammonia::Builder::empty().clean(html.as_ref()).to_string();
+    let decoded = html_escape::decode_html_entities(&stripped);
+    let normalized = normalize_summary_whitespace(&decoded);
+    if normalized.is_empty() {
+        return None;
+    }
+    let text = truncate_at_first_sentence_or_word_boundary(&normalized, MAX_POST_SUMMARY_CHARS);
+    let Ok(summary) = text.parse() else {
+        unreachable!("normalized and bounded rendered text is a valid PostSummary");
+    };
+    Some(summary)
 }
 
 /// A provider-neutral source token. Provider dispatch remains at this host seam;
@@ -581,7 +606,90 @@ impl RenderOutput {
 mod tests {
     use super::*;
     use common::render::{PostFormat, canonicalize_body};
-    use common::test_support::parse_post_body;
+    use common::test_support::{parse_post_body, rendered_html};
+
+    #[test]
+    fn rendered_body_summary_strips_elements_and_decodes_normalized_text() {
+        let html =
+            rendered_html("<p>  Hello&nbsp;<strong>world</strong> &amp;\u{2003}friends.  </p>");
+
+        assert_eq!(
+            summarize_rendered_html(&html).as_deref(),
+            Some("Hello world & friends.")
+        );
+    }
+
+    #[test]
+    fn rendered_body_summary_is_equivalent_across_authoring_formats() {
+        // TDD: fallback metadata must derive only from rendered text, not source markup.
+        let summaries = [
+            ("A *shared* summary. trailing", PostFormat::Markdown),
+            ("A *shared* summary. trailing", PostFormat::Org),
+            (
+                "A <strong>shared</strong> summary. trailing",
+                PostFormat::Html,
+            ),
+        ]
+        .map(|(source, format)| {
+            let body = parse_post_body(source);
+            summarize_rendered_html(&render(&body, &format))
+        });
+
+        assert_eq!(
+            summaries,
+            [
+                Some("A shared summary.".parse().unwrap()),
+                Some("A shared summary.".parse().unwrap()),
+                Some("A shared summary.".parse().unwrap()),
+            ]
+        );
+    }
+
+    #[test]
+    fn rendered_body_summary_does_not_invent_element_separators_or_text() {
+        assert_eq!(
+            summarize_rendered_html(&rendered_html("<span>first</span><span>second</span>"))
+                .as_deref(),
+            Some("firstsecond")
+        );
+        assert_eq!(
+            summarize_rendered_html(&rendered_html("<img src=\"/image.png\">")),
+            None
+        );
+    }
+
+    #[test]
+    fn rendered_body_summary_uses_lexical_sentence_boundaries() {
+        assert_eq!(
+            summarize_rendered_html(&rendered_html("A sentence.” Then another.")).as_deref(),
+            Some("A sentence.”")
+        );
+        assert_eq!(
+            summarize_rendered_html(&rendered_html("Dr. Example continued.")).as_deref(),
+            Some("Dr.")
+        );
+        assert_eq!(
+            summarize_rendered_html(&rendered_html("Value 3.14 remains.")).as_deref(),
+            Some("Value 3.")
+        );
+    }
+
+    #[test]
+    fn rendered_body_summary_obeys_word_and_scalar_limits() {
+        let word_bounded = format!("{} trailing", "word ".repeat(100));
+        let summary = summarize_rendered_html(&rendered_html(&word_bounded)).unwrap();
+        assert!(summary.chars().count() <= common::post_summary::MAX_POST_SUMMARY_CHARS);
+        assert!(!summary.ends_with("trailing"));
+        assert!(!summary.ends_with(char::is_whitespace));
+
+        let scalar_bounded = "é".repeat(common::post_summary::MAX_POST_SUMMARY_CHARS + 1);
+        let summary = summarize_rendered_html(&rendered_html(&scalar_bounded)).unwrap();
+        assert_eq!(
+            summary.chars().count(),
+            common::post_summary::MAX_POST_SUMMARY_CHARS
+        );
+        assert!(summary.chars().all(|character| character == 'é'));
+    }
 
     // The load-bearing guard for the no-trim half of the whitespace rule (#811).
     // Every test in `post_body.rs` still passes if a "tidy-up" trim is added to the

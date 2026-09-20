@@ -1181,7 +1181,9 @@ async fn current_revision_summary_reports_draft_and_deleted_states(#[case] backe
 
 #[apply(backends)]
 #[tokio::test]
-async fn create_rendered_post_markdown_renders_and_stores(#[case] backend: Backend) {
+async fn create_rendered_post_does_not_persist_derived_summary_or_revision(
+    #[case] backend: Backend,
+) {
     let env = backend.setup().await;
     let user_id = SeedUser::new()
         .seed(env.users(), env.write_scope())
@@ -1229,6 +1231,51 @@ async fn create_rendered_post_markdown_renders_and_stores(#[case] backend: Backe
         "expected rendered HTML, got: {}",
         record.rendered_html
     );
+    // TDD: rendered text can derive read-time metadata, but storage retains only
+    // authored summaries and a revision must not materialize the derived value.
+    assert_eq!(record.summary, None);
+
+    let title = parse_post_title("Rendered Markdown update");
+    confirmed(
+        perform_post_update(
+            &env.write_scope(),
+            &storage::test_support::fixture_media_content_locks(),
+            Arc::clone(&env.posts()),
+            Arc::clone(&env.feed_events()),
+            PostUpdate {
+                post_id,
+                editor_user_id: user_id,
+                title: Some(&title),
+                slug_override: Some(&record.slug),
+                body: parse_post_body("**updated bold**"),
+                format: PostFormat::Markdown,
+                publish: PublishUpdate::Unpublish,
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+                tags: Some(vec![]),
+                request_clock: UtcInstant::now(),
+                expectations: PostBookkeepingExpectation::default(),
+            },
+        )
+        .await
+        .unwrap(),
+    );
+    let revision = env
+        .posts()
+        .list_post_revision_history(user_id, post_id, None, parse_page_size("10"))
+        .await
+        .unwrap()
+        .unwrap()
+        .revisions
+        .pop()
+        .unwrap();
+    let detail = env
+        .posts()
+        .get_post_revision_detail(user_id, post_id, revision.revision_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(detail.revision.summary, None);
 }
 
 #[apply(backends)]

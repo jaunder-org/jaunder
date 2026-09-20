@@ -1003,8 +1003,8 @@ mod tests {
     }
 
     #[test]
-    fn post_to_entry_no_summary() -> Result<(), host::atompub::AtomPubError> {
-        let post = make_post(MakePost {
+    fn post_to_entry_keeps_derived_summary_absent() -> Result<(), host::atompub::AtomPubError> {
+        let mut post = make_post(MakePost {
             post_id: PostId::from(7),
             title: Some(parse_post_title("Title")),
             slug: parse_slug("slug"),
@@ -1014,9 +1014,12 @@ mod tests {
             summary: None,
             tags: vec![],
         });
+        post.rendered_html = common::test_support::rendered_html("<p>Derived body text.</p>");
 
         let entry = post_to_entry(&post, &parse_url("https://example.com/"))?;
 
+        // TDD: AtomPub preserves native authored metadata absence, even when the
+        // rendered body can supply a public Syndication Feed or metadata fallback.
         assert_eq!(entry.summary(), None);
         Ok(())
     }

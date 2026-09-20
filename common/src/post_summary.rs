@@ -41,8 +41,8 @@ impl FromStr for PostSummary {
     }
 }
 
-/// How much of a body line may seed a summary, in Unicode scalar values.
-pub const MAX_BODY_LINE_SEED_CHARS: usize = 100;
+/// Maximum Unicode-scalar length of a compact unpublished-Post list label.
+pub const MAX_COMPACT_SUMMARY_CHARS: usize = 100;
 
 impl PostSummary {
     /// Derive a summary from a non-blank title, capping at a sentence or word boundary
@@ -65,7 +65,7 @@ impl PostSummary {
         let line = rest.split_once('\n').map_or(rest, |(first, _)| first);
         Self(truncate_at_text_boundary(
             line.trim_end(),
-            MAX_BODY_LINE_SEED_CHARS,
+            MAX_COMPACT_SUMMARY_CHARS,
         ))
     }
 }
@@ -107,6 +107,53 @@ pub(crate) fn truncate_at_text_boundary(input: &str, max_scalars: usize) -> Stri
 fn non_empty_trimmed_prefix(prefix: &str) -> Option<String> {
     let trimmed = prefix.trim_end();
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+/// Replaces each maximal Unicode-whitespace run with one ASCII space and trims it.
+///
+/// This target-independent presentation step applies before an effective summary is
+/// truncated, whether its text was authored or extracted from rendered HTML.
+#[must_use]
+pub fn normalize_summary_whitespace(input: &str) -> String {
+    input.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Truncate derived rendered text at its first lexical sentence terminator, then at a
+/// word boundary, and finally at a Unicode-scalar limit.
+///
+/// This is target-independent because host extraction and the later browser-visible
+/// label projection must apply the same scalar-safe fallback rules. It deliberately
+/// treats abbreviations and decimals as sentence endings: the rule is lexical, not
+/// linguistic.
+#[must_use]
+pub fn truncate_at_first_sentence_or_word_boundary(input: &str, max_scalars: usize) -> String {
+    let hard_cap: String = input.chars().take(max_scalars).collect();
+
+    if let Some((terminator_index, terminator)) = hard_cap
+        .char_indices()
+        .find(|(_, character)| matches!(character, '.' | '!' | '?'))
+    {
+        let terminator_end = terminator_index + terminator.len_utf8();
+        let mut end = terminator_end;
+        for (offset, character) in hard_cap[terminator_end..].char_indices() {
+            if !matches!(character, '\'' | '"' | '’' | '”' | ')' | ']' | '}') {
+                break;
+            }
+            end = terminator_end + offset + character.len_utf8();
+        }
+        return hard_cap[..end].to_owned();
+    }
+
+    if input.chars().nth(max_scalars).is_none() {
+        return input.to_owned();
+    }
+
+    hard_cap
+        .char_indices()
+        .rev()
+        .find_map(|(index, character)| character.is_whitespace().then_some(index))
+        .and_then(|end| non_empty_trimmed_prefix(&hard_cap[..end]))
+        .unwrap_or(hard_cap)
 }
 
 #[cfg(test)]
@@ -199,11 +246,11 @@ mod tests {
     fn derived_body_summary_prefers_boundary_within_body_line_cap() {
         let body = crate::test_support::parse_post_body(&format!(
             "{} trailingword\nsecond line",
-            "body word ".repeat(MAX_BODY_LINE_SEED_CHARS / 10)
+            "body word ".repeat(MAX_COMPACT_SUMMARY_CHARS / 10)
         ));
         let summary = PostSummary::from_body_line(&body);
 
-        assert!(summary.chars().count() <= MAX_BODY_LINE_SEED_CHARS);
+        assert!(summary.chars().count() <= MAX_COMPACT_SUMMARY_CHARS);
         assert!(!summary.ends_with("trailingword"));
         assert!(!summary.ends_with(' '));
     }
@@ -216,6 +263,14 @@ mod tests {
     }
 
     #[test]
+    fn summary_whitespace_normalization_collapses_unicode_runs() {
+        assert_eq!(
+            normalize_summary_whitespace("\n  first\u{a0}\t second \n"),
+            "first second"
+        );
+    }
+
+    #[test]
     fn first_body_line_takes_a_body_with_no_trailing_newline() {
         let body = crate::test_support::parse_post_body("only line");
         assert_eq!(PostSummary::from_body_line(&body), "only line");
@@ -225,5 +280,45 @@ mod tests {
     fn first_body_line_strips_a_carriage_return() {
         let body = crate::test_support::parse_post_body("\r\n  hi  \r\nnext\r\n");
         assert_eq!(PostSummary::from_body_line(&body), "hi");
+    }
+
+    #[test]
+    fn rendered_summary_truncation_uses_first_sentence_and_closing_punctuation() {
+        assert_eq!(
+            truncate_at_first_sentence_or_word_boundary("First. Second.", MAX_POST_SUMMARY_CHARS),
+            "First."
+        );
+        assert_eq!(
+            truncate_at_first_sentence_or_word_boundary(
+                "First?\")]} Second.",
+                MAX_POST_SUMMARY_CHARS
+            ),
+            "First?\")]}"
+        );
+        let at_limit = format!("{}.", "a".repeat(MAX_POST_SUMMARY_CHARS - 1));
+        assert_eq!(
+            truncate_at_first_sentence_or_word_boundary(&at_limit, MAX_POST_SUMMARY_CHARS),
+            at_limit
+        );
+    }
+
+    #[test]
+    fn rendered_summary_truncation_keeps_word_or_scalar_boundaries_at_its_limit() {
+        let word_bounded = format!("{}tail", "word ".repeat(100));
+        let summary =
+            truncate_at_first_sentence_or_word_boundary(&word_bounded, MAX_POST_SUMMARY_CHARS);
+        assert!(summary.chars().count() <= MAX_POST_SUMMARY_CHARS);
+        assert!(!summary.ends_with("tail"));
+
+        let scalar_bounded = "界".repeat(MAX_POST_SUMMARY_CHARS + 1);
+        let summary =
+            truncate_at_first_sentence_or_word_boundary(&scalar_bounded, MAX_POST_SUMMARY_CHARS);
+        assert_eq!(summary.chars().count(), MAX_POST_SUMMARY_CHARS);
+        assert!(summary.chars().all(|character| character == '界'));
+
+        let label_bounded = "界".repeat(101);
+        let summary = truncate_at_first_sentence_or_word_boundary(&label_bounded, 100);
+        assert_eq!(summary.chars().count(), 100);
+        assert!(summary.chars().all(|character| character == '界'));
     }
 }

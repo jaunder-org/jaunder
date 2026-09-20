@@ -1013,7 +1013,9 @@ mod tests {
                 permalink: parse_root_relative_url(&format!("/~alice/draft-{post_id}")),
             },
             title: None,
-            summary_label: format!("Draft {post_id}").parse().unwrap(),
+            fallback_label: crate::posts::UnpublishedPostLabel::Summary(
+                format!("Draft {post_id}").parse().unwrap(),
+            ),
             edit_url: parse_root_relative_url(&format!("/posts/{post_id}/edit")),
         }
     }

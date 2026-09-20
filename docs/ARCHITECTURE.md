@@ -478,12 +478,23 @@ detailed in the Protocols section
 `storage/src/posts/models.rs::PostRecord` carries both plus title, `Slug`,
 summary, tags, and `created_at`/`updated_at`/`published_at`/`deleted_at`.
 
-`PostRecord.summary` is optional authored Post content. In contrast,
-`summary_label` is disposable presentation metadata for a titleless unpublished
-row: it is recomputed from the canonical `PostBody` at read time and is never
-stored. The bounded unpublished-post query already carries the body; persisting
-the label would impose freshness obligations across writes and direct backup
-restore.
+`PostRecord.summary` is optional authored Post content. The separate, disposable
+fallback projection is host-owned:
+`host::render::summarize_rendered_html(&RenderedHtml) -> Option<PostSummary>`
+strips rendered elements with `ammonia::Builder::empty()`, decodes its
+serialized entities, normalizes Unicode whitespace, and applies the lexical
+sentence/word/scalar boundary rule. It is derived only from already-sanitized
+`RenderedHtml`, never stored, and keeps HTML handling out of wasm and storage.
+For titleless unpublished rows, web selects the authored summary first or
+otherwise invokes that host projection, then normalizes the effective text's
+Unicode whitespace before applying the approved compact 100-scalar label
+projection; textless rendering falls back to the `Slug` through a distinct label
+variant rather than presenting identity as a `PostSummary`. Permalink
+description/Open Graph metadata carries the same effective projection separately
+from `RenderedPost.summary`, so timeline rows, public summary paragraphs, and
+AtomPub retain authored-summary semantics. `fallback_label` remains disposable
+presentation metadata; persisting either derived value would impose freshness
+obligations across writes and direct backup restore.
 
 **A body has at least one non-blank line, and normalization is format-aware**
 ([ADR-0105](adr/0105-post-body-non-blank-invariant.md)). `PostBody::from_str` is
@@ -842,14 +853,17 @@ roles existed.
 
 Public read-only feeds serve arbitrary feed readers, so every item carries the
 post's `rendered_html` — Atom `type="html"` and the RSS/JSON Feed equivalents
-([ADR-0015](adr/0015-atompub-serialization-surfaces.md)). The CSR-reached
-`common::feed` grammar is exactly `FeedFormat`, `FeedSurface`, and
-`canonicalize`; the remaining Syndication Feed types and qualified rendering
-operations live in `host`. `server/src/feed/handlers.rs` serves the cached
-bytes, and `regenerate::feed` rebuilds them. Scheduled posts reach feeds through
-`FeedWorker::go_live_pass` (`server/src/feed/worker.rs:84`): both the
-steady-state `(last_tick, now]` pass and feed-relative restart catch-up enqueue
-only non-deleted Public Posts after their publication time becomes due
+([ADR-0015](adr/0015-atompub-serialization-surfaces.md)). Atom `<summary>` and
+JSON Feed `summary` carry the authored summary when present, otherwise the
+host-owned rendered-body fallback; RSS descriptions and complete rendered bodies
+remain unchanged. The CSR-reached `common::feed` grammar is exactly
+`FeedFormat`, `FeedSurface`, and `canonicalize`; the remaining Syndication Feed
+types and qualified rendering operations live in `host`.
+`server/src/feed/handlers.rs` serves the cached bytes, and `regenerate::feed`
+rebuilds them. Scheduled posts reach feeds through `FeedWorker::go_live_pass`
+(`server/src/feed/worker.rs:84`): both the steady-state `(last_tick, now]` pass
+and feed-relative restart catch-up enqueue only non-deleted Public Posts after
+their publication time becomes due
 ([ADR-0027](adr/0027-scheduled-publishing-time-gated-visibility.md)).
 
 **Accepted membership.** Cached membership applies anonymous/Public eligibility
@@ -2818,8 +2832,14 @@ supply one. `PostSummary` applies that shape directly in its derived-summary
 constructors: `from_title` accepts a `PostTitle`, and `from_body_line` accepts a
 `PostBody`; each source already proves non-blankness, so these constructors only
 coerce the length half of the summary invariant. They share one internal
-boundary-aware truncation helper, which prefers sentence then word boundaries
-before a hard Unicode-scalar cap.
+boundary-aware truncation helper. Separately,
+`truncate_at_first_sentence_or_word_boundary` is target-independent support for
+the rendered-body projection: it takes the first lexical `.`, `!`, or `?`, keeps
+immediately following closing punctuation, then falls back to a
+Unicode-whitespace boundary or a Unicode-scalar cap.
+`host::render::summarize_rendered_html` applies that helper only after its
+host-side rendered-HTML extraction, leaving ammonia and HTML handling outside
+the wasm and storage closures.
 
 ### Identity and label are two types, not one
 
@@ -4172,7 +4192,7 @@ workspace/gate boundaries
 credential storage
 ([ADR-0143](adr/0143-emacs-auth-source-app-password-storage.md)).
 
-The derived `summary_label` persistence policy is deliberately not ADR-backed:
+The derived `fallback_label` persistence policy is deliberately not ADR-backed:
 [#754](https://github.com/jaunder-org/jaunder/issues/754) retains the existing
 storage boundary rather than establishing a new durable architectural decision.
 

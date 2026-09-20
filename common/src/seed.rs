@@ -160,6 +160,10 @@ pub struct AuthoredPost {
     pub post: RenderedPost,
     pub body: PostBody,
     pub format: PostFormat,
+    /// Effective summary for the permalink document metadata. This remains
+    /// separate from `post.summary`, which carries authored-summary semantics
+    /// on every rendered Post surface.
+    pub permalink_description: Option<PostSummary>,
 }
 
 /// Server-resolved presentation for a public route.

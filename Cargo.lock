@@ -1919,11 +1919,13 @@ dependencies = [
 name = "host"
 version = "0.1.0"
 dependencies = [
+ "ammonia",
  "anyhow",
  "argon2",
  "atom_syndication 0.13.0",
  "base64 0.23.1",
  "common",
+ "html-escape",
  "html5ever",
  "http",
  "image",

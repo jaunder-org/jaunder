@@ -365,6 +365,7 @@ pub(crate) mod test_fixtures {
             },
             body: parse_post_body("raw"),
             format: PostFormat::Markdown,
+            permalink_description: None,
         }
     }
 

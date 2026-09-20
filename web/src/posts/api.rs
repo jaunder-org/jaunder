@@ -37,6 +37,11 @@ use crate::error::WebResult;
 // calls are server-only (inside the macro-supplied boundary), so the import is
 // gated to match.
 #[cfg(feature = "server")]
+use common::post_summary::{
+    MAX_COMPACT_SUMMARY_CHARS, normalize_summary_whitespace,
+    truncate_at_first_sentence_or_word_boundary,
+};
+#[cfg(feature = "server")]
 use common::revision_history::{RevisionHistoryAudience, RevisionHistoryTag};
 #[cfg(feature = "server")]
 use common::visibility::{self, AudienceTarget};
@@ -223,7 +228,23 @@ fn revision_detail(detail: PostRevisionDetail) -> RevisionHistoryDetail {
 }
 #[cfg(feature = "server")]
 fn unpublished_post_from_record(post: PostRecord) -> UnpublishedPost {
-    let summary_label = post.fallback_summary_label();
+    // A titleless management row can use the same effective projection as a
+    // permalink, but textless rendered HTML must fall back to identity, not a
+    // forged `PostSummary` made from the slug.
+    let fallback_label = server::effective_summary(&post).map_or_else(
+        || UnpublishedPostLabel::Slug(post.slug.clone()),
+        |summary| {
+            // Management rows retain their compact 100-scalar label budget even
+            // when the effective permalink description is longer.
+            let normalized = normalize_summary_whitespace(&summary);
+            let text =
+                truncate_at_first_sentence_or_word_boundary(&normalized, MAX_COMPACT_SUMMARY_CHARS);
+            let Ok(summary) = text.parse() else {
+                unreachable!("a bounded effective summary remains a valid PostSummary");
+            };
+            UnpublishedPostLabel::Summary(summary)
+        },
+    );
     let permalink = post.permalink();
     UnpublishedPost {
         post: SavedPost {
@@ -233,7 +254,7 @@ fn unpublished_post_from_record(post: PostRecord) -> UnpublishedPost {
             permalink,
         },
         title: post.title,
-        summary_label,
+        fallback_label,
         edit_url: crate::posts::edit_post_url(post.post_id),
     }
 }
@@ -313,7 +334,7 @@ pub struct AuthoredPostSnapshot {
 /// row needs to paint itself — the label and the edit action's target.
 ///
 /// Nesting rather than collapsing the two types is deliberate: nothing converts
-/// between them, and a flat union would put `title`, `summary_label`, and
+/// between them, and a flat union would put `title`, `fallback_label`, and
 /// `edit_url` on every mutation response, where nothing reads them. See
 /// `docs/adr/0097-post-dto-content-weight-axis.md` (rule 3) before re-filing
 /// the field overlap as duplication.
@@ -321,8 +342,30 @@ pub struct AuthoredPostSnapshot {
 pub struct UnpublishedPost {
     pub post: SavedPost,
     pub title: Option<PostTitle>,
-    pub summary_label: PostSummary,
+    /// Server-resolved fallback label when `title` is absent.
+    pub fallback_label: UnpublishedPostLabel,
     pub edit_url: RootRelativeUrl,
+}
+
+/// The compact fallback label of a titleless unpublished Post.
+///
+/// The two variants preserve whether the server found readable rendered text or
+/// had to use the Post's identity. A slug is not authored or derived prose and
+/// therefore must not be represented as a [`PostSummary`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum UnpublishedPostLabel {
+    Summary(PostSummary),
+    Slug(Slug),
+}
+
+impl From<UnpublishedPostLabel> for String {
+    fn from(label: UnpublishedPostLabel) -> Self {
+        match label {
+            UnpublishedPostLabel::Summary(summary) => summary.to_string(),
+            UnpublishedPostLabel::Slug(slug) => slug.to_string(),
+        }
+    }
 }
 
 /// Opaque immutable-ID cursor for owner revision history. Unlike public-post
@@ -1078,6 +1121,61 @@ mod tests {
     use common::slug::Slug;
     use common::test_support::{parse_post_body, parse_username};
     use storage::candidate_slug;
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn titleless_unpublished_post_uses_rendered_summary_or_slug_fallback_label() {
+        use common::{
+            ids::{PostId, UserId},
+            time::UtcInstant,
+        };
+        use storage::{PostFormat, PostRecord};
+
+        let time: UtcInstant = "2026-04-16T10:11:12Z".parse().unwrap();
+        let record = |rendered_html: &str, slug: &str| PostRecord {
+            author_display_name: None,
+            post_id: PostId::from(1),
+            user_id: UserId::from(2),
+            author_username: parse_username("author"),
+            title: None,
+            slug: slug.parse().unwrap(),
+            body: parse_post_body("source body"),
+            format: PostFormat::Markdown,
+            rendered_html: common::test_support::rendered_html(rendered_html),
+            created_at: time,
+            updated_at: time,
+            published_at: None,
+            deleted_at: None,
+            summary: None,
+            tags: vec![],
+        };
+
+        assert_eq!(
+            super::unpublished_post_from_record(record("<p>Rendered text.</p>", "text"))
+                .fallback_label,
+            super::UnpublishedPostLabel::Summary("Rendered text.".parse().unwrap())
+        );
+        assert_eq!(
+            super::unpublished_post_from_record(record("<img src=\"/image.png\">", "textless"))
+                .fallback_label,
+            super::UnpublishedPostLabel::Slug("textless".parse().unwrap())
+        );
+
+        let mut authored = record("<p>ignored rendered text</p>", "authored");
+        authored.summary = Some("authored\n\nsummary\u{a0}  wins".parse().unwrap());
+        assert_eq!(
+            super::unpublished_post_from_record(authored).fallback_label,
+            super::UnpublishedPostLabel::Summary("authored summary wins".parse().unwrap()),
+            "authored labels normalize newlines, repeated whitespace, and NBSP before truncation"
+        );
+
+        let long = format!("{}trailing", "word ".repeat(25));
+        assert_eq!(
+            super::unpublished_post_from_record(record(&long, "long")).fallback_label,
+            super::UnpublishedPostLabel::Summary("word ".repeat(20).trim_end().parse().unwrap())
+        );
+    }
+
     // A wire DTO's `rendered_html` survives a serde round-trip: `Serialize` writes
     // the raw string, and the `deserialize_with` trusted-rebuild reconstructs a
     // `RenderedHtml` (the type has no blanket `Deserialize`). Covers the sole wire
@@ -1191,8 +1289,8 @@ mod tests {
     // create/update/publish. Round-trip the page to pin that nesting, and the
     // cursor/has-more envelope that lets the surface turn a page at all.
     #[test]
-    fn unpublished_page_wire_nests_the_saved_post() {
-        use super::{SavedPost, UnpublishedPost};
+    fn unpublished_page_wire_nests_the_saved_post_and_fallback_label() {
+        use super::{SavedPost, UnpublishedPost, UnpublishedPostLabel};
         use common::ids::PostId;
         use common::seed::{Page, PageCursor};
         use common::test_support::{
@@ -1208,7 +1306,7 @@ mod tests {
                     permalink: parse_root_relative_url("/~alice/2099/01/01/hello"),
                 },
                 title: None,
-                summary_label: parse_post_summary("fallback label"),
+                fallback_label: UnpublishedPostLabel::Summary(parse_post_summary("fallback label")),
                 edit_url: parse_root_relative_url("/posts/1/edit"),
             }],
             next_cursor: Some(PageCursor {
@@ -1220,7 +1318,7 @@ mod tests {
         let json = serde_json::to_string(&page).unwrap();
         assert_eq!(
             json,
-            r#"{"posts":[{"post":{"post_id":1,"slug":"hello","published_at":"2099-01-01T00:00:00Z","permalink":"/~alice/2099/01/01/hello"},"title":null,"summary_label":"fallback label","edit_url":"/posts/1/edit"}],"next_cursor":{"created_at":"2026-01-01T00:00:00Z","post_id":1},"has_more":true}"#
+            r#"{"posts":[{"post":{"post_id":1,"slug":"hello","published_at":"2099-01-01T00:00:00Z","permalink":"/~alice/2099/01/01/hello"},"title":null,"fallback_label":{"kind":"summary","value":"fallback label"},"edit_url":"/posts/1/edit"}],"next_cursor":{"created_at":"2026-01-01T00:00:00Z","post_id":1},"has_more":true}"#
         );
         assert_eq!(
             serde_json::from_str::<Page<UnpublishedPost>>(&json).unwrap(),
