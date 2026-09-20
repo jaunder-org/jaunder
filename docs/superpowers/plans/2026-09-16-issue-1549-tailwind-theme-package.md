@@ -74,10 +74,15 @@ it before checking the task.
     continuation; the always-present avatar and author handle; and no simulated
     source attribution because the pinned renderer does not emit it. It also
     exercises the package font, logo/header default, and every header pool
-    entry. **After** captures reproduce all **Before** conditions.
-  - Verification: Local, author, tag, and permalink checks pass; transient pairs
-    and pinned upstream references are linked from the Theme PR; human review
-    approves the spec's named fidelity characteristics.
+    entry. **After** captures reproduce all **Before** conditions. Static review
+    confirms that the Theme defensively treats avatar, author-handle, and
+    source-attribution as optional semantic hooks without depending on their
+    presence.
+  - Verification: Local, author, tag, and permalink checks pass; static CSS and
+    layout review covers the unsupported optional-hook combinations without
+    synthetic DOM mutation; transient pairs and pinned upstream references are
+    linked from the Theme PR; human review approves the spec's named fidelity
+    characteristics.
 
 - [ ] Task 6: Prove accessibility and trusted owner controls
   - Contract: run the spec's WCAG scans and manual keyboard, focus, contrast,
