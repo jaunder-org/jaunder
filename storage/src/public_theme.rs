@@ -156,8 +156,11 @@ fn resolve_role_with_package_url(
     pool_entries: Option<&[crate::ThemeHeaderPoolEntry]>,
     packaged_defaults: Option<&[String]>,
 ) -> Option<RootRelativeUrl> {
-    match binding? {
-        ThemeRoleBinding::PackagedDefault { role, .. } => match role {
+    match binding {
+        None => packaged_defaults?
+            .first()
+            .and_then(|path| package_url(path)),
+        Some(ThemeRoleBinding::PackagedDefault { role, .. }) => match role {
             ThemeImageRole::Logo => packaged_defaults?
                 .first()
                 .and_then(|path| package_url(path)),
@@ -165,16 +168,16 @@ fn resolve_role_with_package_url(
                 unreachable!("header defaults resolve before package URL lookup")
             }
         },
-        ThemeRoleBinding::ExplicitAbsent { .. } => None,
-        ThemeRoleBinding::PackageAsset { package_path, .. } => package_url(package_path),
-        ThemeRoleBinding::Media { media, .. } => {
+        Some(ThemeRoleBinding::ExplicitAbsent { .. }) => None,
+        Some(ThemeRoleBinding::PackageAsset { package_path, .. }) => package_url(package_path),
+        Some(ThemeRoleBinding::Media { media, .. }) => {
             Some(media::url(&media.source, &media.sha256, &media.filename))
         }
-        ThemeRoleBinding::HeaderPool {
+        Some(ThemeRoleBinding::HeaderPool {
             pool_revision,
             shuffle_seed,
             ..
-        } => {
+        }) => {
             let entries = pool_entries?;
             let pool =
                 ThemeHeaderPool::new(entries.iter().map(pool_entry).collect::<Option<Vec<_>>>()?)
@@ -250,7 +253,8 @@ fn resolve_role(
 ) -> Option<RootRelativeUrl> {
     let package_url = |path: &str| package_url(assets, path);
     match binding {
-        Some(ThemeRoleBinding::PackagedDefault {
+        None
+        | Some(ThemeRoleBinding::PackagedDefault {
             role: ThemeImageRole::Header,
             ..
         }) => resolve_packaged_header_default(packaged_defaults, &package_url, revision, route),
@@ -318,7 +322,8 @@ pub async fn resolve_draft_theme_images(
         logo_default.map(std::slice::from_ref),
     );
     let header_url = match header.as_ref() {
-        Some(ThemeRoleBinding::PackagedDefault {
+        None
+        | Some(ThemeRoleBinding::PackagedDefault {
             role: ThemeImageRole::Header,
             ..
         }) => resolve_packaged_header_default(header_defaults, &package_url, revision, route),
@@ -867,6 +872,48 @@ mod tests {
         );
     }
     #[test]
+    fn absent_role_bindings_resolve_packaged_defaults() {
+        let logo_defaults = vec!["images/logo.png".to_owned()];
+        let header_defaults = vec![
+            "images/header-a.png".to_owned(),
+            "images/header-b.png".to_owned(),
+        ];
+        let route = PublicThemeRoute::site();
+
+        assert_eq!(
+            resolve_role(
+                None,
+                &assets(),
+                &revision(),
+                &route,
+                None,
+                Some(&logo_defaults),
+            )
+            .unwrap()
+            .as_ref(),
+            format!("/theme/{}", "c".repeat(64))
+        );
+        assert!(
+            [
+                format!("/theme/{}", "d".repeat(64)),
+                format!("/theme/{}", "e".repeat(64)),
+            ]
+            .contains(
+                &resolve_role(
+                    None,
+                    &assets(),
+                    &revision(),
+                    &route,
+                    None,
+                    Some(&header_defaults),
+                )
+                .unwrap()
+                .to_string()
+            )
+        );
+    }
+
+    #[test]
     fn header_default_binding_uses_the_packaged_header_pool_policy() {
         let defaults = vec!["images/header-a.png".to_owned()];
         let binding = ThemeRoleBinding::PackagedDefault {
@@ -1068,22 +1115,16 @@ mod tests {
         let theme_id = ThemeId::from(9);
         let revision = revision();
         let mut themes = crate::MockThemeStorage::new();
-        themes.expect_role_binding().returning(move |_, _, role| {
-            Ok(
-                (role == ThemeImageRole::Header).then_some(ThemeRoleBinding::PackagedDefault {
-                    theme_id,
-                    role: ThemeImageRole::Header,
-                }),
-            )
-        });
+        themes.expect_role_binding().returning(|_, _, _| Ok(None));
         let urls = std::collections::BTreeMap::from([
+            ("images/logo.png".to_owned(), "/draft/logo".to_owned()),
             ("images/header-a.png".to_owned(), "/draft/a".to_owned()),
             ("images/header-b.png".to_owned(), "/draft/b".to_owned()),
         ]);
-        let (_, header) = resolve_draft_theme_images(
+        let (logo, header) = resolve_draft_theme_images(
             ThemeOwner::Site,
             theme_id,
-            br#"{"defaults":{"header":["images/header-a.png","images/header-b.png"]}}"#,
+            br#"{"defaults":{"logo":"images/logo.png","header":["images/header-a.png","images/header-b.png"]}}"#,
             &urls,
             &revision,
             &PublicThemeRoute::site(),
@@ -1091,6 +1132,7 @@ mod tests {
         )
         .await
         .expect("complete package defaults resolve for draft preview");
+        assert_eq!(logo.unwrap().as_ref(), "/draft/logo");
         assert!(matches!(header.unwrap().as_ref(), "/draft/a" | "/draft/b"));
 
         let entry = crate::ThemeHeaderPoolEntry {

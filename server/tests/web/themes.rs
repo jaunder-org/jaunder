@@ -6,7 +6,7 @@ use axum::{
 };
 use common::{
     MutationOutcome,
-    theme::{PublicThemeSelection, Theme, ThemeImageRole},
+    theme::{PublicThemeRoute, PublicThemeSelection, Theme, ThemeImageRole},
 };
 use host::theme_package::{ThemePackageLimits, export_theme_package, validate_theme_package};
 use rstest::*;
@@ -42,16 +42,30 @@ fn archive(css: &str) -> Vec<u8> {
     .expect("no-asset theme package exports")
 }
 
+fn valid_png() -> Vec<u8> {
+    b"\x89\x50\x4e\x47\x0d\x0a\x1a\x0a\x00\x00\x00\x0d\x49\x48\x44\x52\x00\x00\x00\x01\x00\x00\x00\x01\x08\x04\x00\x00\x00\xb5\x1c\x0c\x02\x00\x00\x00\x0b\x49\x44\x41\x54\x78\xda\x63\x64\xf8\x0f\x00\x01\x05\x01\x01\x27\x18\xe3\x66\x00\x00\x00\x00\x49\x45\x4e\x44\xae\x42\x60\x82".to_vec()
+}
+
 fn archive_with_logo(css: &str) -> Vec<u8> {
     export_theme_package(
         br#"{"schema":1,"name":"Bindings","style_contract":1,"assets":{"assets/logo.png":"image/png"},"defaults":{}}"#,
         css.as_bytes(),
-        &BTreeMap::from([(
-            "assets/logo.png".into(),
-            b"\x89\x50\x4e\x47\x0d\x0a\x1a\x0a\x00\x00\x00\x0d\x49\x48\x44\x52\x00\x00\x00\x01\x00\x00\x00\x01\x08\x04\x00\x00\x00\xb5\x1c\x0c\x02\x00\x00\x00\x0b\x49\x44\x41\x54\x78\xda\x63\x64\xf8\x0f\x00\x01\x05\x01\x01\x27\x18\xe3\x66\x00\x00\x00\x00\x49\x45\x4e\x44\xae\x42\x60\x82".to_vec(),
-        )]),
+        &BTreeMap::from([("assets/logo.png".into(), valid_png())]),
     )
     .expect("valid package asset exports")
+}
+
+fn archive_with_package_defaults(css: &str) -> Vec<u8> {
+    export_theme_package(
+        br#"{"schema":1,"name":"Package defaults","style_contract":1,"assets":{"assets/logo.png":"image/png","assets/header-a.png":"image/png","assets/header-b.png":"image/png"},"defaults":{"logo":"assets/logo.png","header":["assets/header-a.png","assets/header-b.png"]}}"#,
+        css.as_bytes(),
+        &BTreeMap::from([
+            ("assets/logo.png".into(), valid_png()),
+            ("assets/header-a.png".into(), valid_png()),
+            ("assets/header-b.png".into(), valid_png()),
+        ]),
+    )
+    .expect("valid package-default asset exports")
 }
 
 async fn create_author_theme(
@@ -912,6 +926,93 @@ async fn theme_binding_inputs_persist_and_project_through_server_functions(
         serde_json::from_str::<Vec<web::themes::CatalogEntry>>(&body).expect("catalog JSON"),
         vec![theme],
     );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn imported_package_defaults_present_after_publish_and_site_selection(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let themes: Arc<dyn storage::ThemeStorage> = Arc::clone(&env.themes());
+    let operator = create_operator_and_session(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let storage = TempDir::new().expect("temporary storage");
+    let response = multipart_response(
+        make_app!(&env, &storage),
+        multipart_body(
+            "site",
+            "Package defaults",
+            &archive_with_package_defaults("body { color: orange; }"),
+        ),
+        &operator.cookie(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let theme: web::themes::CatalogEntry = confirmed_for(
+        serde_json::from_str::<MutationOutcome<_>>(&body_string(response).await)
+            .expect("package-default import outcome JSON"),
+        "package-default theme import",
+    );
+    assert_eq!(
+        themes
+            .role_binding(ThemeOwner::Site, theme.id, ThemeImageRole::Logo)
+            .await
+            .expect("logo binding lookup"),
+        None,
+        "ZIP import leaves package-default logo binding absent"
+    );
+    assert_eq!(
+        themes
+            .role_binding(ThemeOwner::Site, theme.id, ThemeImageRole::Header)
+            .await
+            .expect("header binding lookup"),
+        None,
+        "ZIP import leaves package-default header binding absent"
+    );
+
+    let (status, body) = post_server_fn(
+        make_app!(&env, &storage),
+        &web::themes::Publish {
+            scope: OwnershipScope::Site,
+            theme_id: theme.id,
+        },
+        Some(&operator.cookie()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    confirmed_for(
+        serde_json::from_str::<MutationOutcome<()>>(&body).expect("publish outcome JSON"),
+        "package-default theme publish",
+    );
+    let (status, body) = post_server_fn(
+        make_app!(&env, &storage),
+        &web::themes::Select {
+            scope: OwnershipScope::Site,
+            selection: Some(PublicThemeSelection::Custom(theme.id)),
+        },
+        Some(&operator.cookie()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    confirmed_for(
+        serde_json::from_str::<MutationOutcome<()>>(&body).expect("selection outcome JSON"),
+        "package-default theme selection",
+    );
+
+    let presentation = storage::resolve_public_theme(
+        storage::PublicThemeOwner::Site,
+        &PublicThemeRoute::site(),
+        themes.as_ref(),
+    )
+    .await
+    .expect("selected package-default public presentation resolves");
+    assert!(presentation.logo_url.is_some());
+    assert!(presentation.header_url.is_some());
 }
 
 #[apply(backends)]
