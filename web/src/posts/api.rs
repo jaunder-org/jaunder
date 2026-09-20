@@ -38,7 +38,7 @@ use crate::error::WebResult;
 // gated to match.
 #[cfg(feature = "server")]
 use common::post_summary::{
-    MAX_BODY_LINE_SEED_CHARS, normalize_summary_whitespace,
+    MAX_COMPACT_SUMMARY_CHARS, normalize_summary_whitespace,
     truncate_at_first_sentence_or_word_boundary,
 };
 #[cfg(feature = "server")]
@@ -238,7 +238,7 @@ fn unpublished_post_from_record(post: PostRecord) -> UnpublishedPost {
             // when the effective permalink description is longer.
             let normalized = normalize_summary_whitespace(&summary);
             let text =
-                truncate_at_first_sentence_or_word_boundary(&normalized, MAX_BODY_LINE_SEED_CHARS);
+                truncate_at_first_sentence_or_word_boundary(&normalized, MAX_COMPACT_SUMMARY_CHARS);
             let Ok(summary) = text.parse() else {
                 unreachable!("a bounded effective summary remains a valid PostSummary");
             };

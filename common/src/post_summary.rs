@@ -41,8 +41,8 @@ impl FromStr for PostSummary {
     }
 }
 
-/// How much of a body line may seed a summary, in Unicode scalar values.
-pub const MAX_BODY_LINE_SEED_CHARS: usize = 100;
+/// Maximum Unicode-scalar length of a compact unpublished-Post list label.
+pub const MAX_COMPACT_SUMMARY_CHARS: usize = 100;
 
 impl PostSummary {
     /// Derive a summary from a non-blank title, capping at a sentence or word boundary
@@ -65,7 +65,7 @@ impl PostSummary {
         let line = rest.split_once('\n').map_or(rest, |(first, _)| first);
         Self(truncate_at_text_boundary(
             line.trim_end(),
-            MAX_BODY_LINE_SEED_CHARS,
+            MAX_COMPACT_SUMMARY_CHARS,
         ))
     }
 }
@@ -246,11 +246,11 @@ mod tests {
     fn derived_body_summary_prefers_boundary_within_body_line_cap() {
         let body = crate::test_support::parse_post_body(&format!(
             "{} trailingword\nsecond line",
-            "body word ".repeat(MAX_BODY_LINE_SEED_CHARS / 10)
+            "body word ".repeat(MAX_COMPACT_SUMMARY_CHARS / 10)
         ));
         let summary = PostSummary::from_body_line(&body);
 
-        assert!(summary.chars().count() <= MAX_BODY_LINE_SEED_CHARS);
+        assert!(summary.chars().count() <= MAX_COMPACT_SUMMARY_CHARS);
         assert!(!summary.ends_with("trailingword"));
         assert!(!summary.ends_with(' '));
     }

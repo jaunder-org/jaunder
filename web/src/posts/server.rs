@@ -326,9 +326,9 @@ mod tests {
 
     #[cfg(feature = "server")]
     #[test]
-    fn rendered_post_does_not_request_permalink_metadata() {
+    fn public_rendered_post_keeps_derived_summary_absent() {
         use crate::posts::server::rendered_post;
-        use common::test_support::{parse_post_body, parse_post_summary, parse_username};
+        use common::test_support::{parse_post_body, parse_username};
         use common::{
             ids::{PostId, UserId},
             slug::Slug,
@@ -352,16 +352,15 @@ mod tests {
                 updated_at: time,
                 published_at: Some(time),
                 deleted_at: None,
-                summary: Some(parse_post_summary("authored\nsummary")),
+                summary: None,
                 tags: vec![],
             },
             None,
         )
         .expect("published records build timeline rows");
 
-        assert_eq!(
-            timeline_post.summary,
-            Some(parse_post_summary("authored\nsummary"))
-        );
+        // TDD: public Post summaries retain authored-only semantics; the rendered
+        // text may serve explicit metadata projections but must not become a paragraph.
+        assert_eq!(timeline_post.summary, None);
     }
 }

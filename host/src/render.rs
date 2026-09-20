@@ -620,6 +620,32 @@ mod tests {
     }
 
     #[test]
+    fn rendered_body_summary_is_equivalent_across_authoring_formats() {
+        // TDD: fallback metadata must derive only from rendered text, not source markup.
+        let summaries = [
+            ("A *shared* summary. trailing", PostFormat::Markdown),
+            ("A *shared* summary. trailing", PostFormat::Org),
+            (
+                "A <strong>shared</strong> summary. trailing",
+                PostFormat::Html,
+            ),
+        ]
+        .map(|(source, format)| {
+            let body = parse_post_body(source);
+            summarize_rendered_html(&render(&body, &format))
+        });
+
+        assert_eq!(
+            summaries,
+            [
+                Some("A shared summary.".parse().unwrap()),
+                Some("A shared summary.".parse().unwrap()),
+                Some("A shared summary.".parse().unwrap()),
+            ]
+        );
+    }
+
+    #[test]
     fn rendered_body_summary_does_not_invent_element_separators_or_text() {
         assert_eq!(
             summarize_rendered_html(&rendered_html("<span>first</span><span>second</span>"))
