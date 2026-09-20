@@ -671,7 +671,7 @@ equivalent and `cargo xtask validate --no-e2e` remains its serial non-e2e form.
 See [ADR-0034](docs/adr/0034-ci-e2e-matrix-distribution.md), the
 [non-e2e validation lane decision](docs/adr/0192-split-ci-non-e2e-validation-lanes.md),
 and the
-[retained distributed topology](docs/adr/drafts/distribute-ci-validation-and-firefox-e2e-lanes.md).
+[retained distributed topology](docs/adr/0203-distribute-ci-validation-and-firefox-e2e-lanes.md).
 
 - `cargo fmt --check` checks Rust formatting.
 - `leptosfmt -x .direnv -x .git -x target --check '**/*.rs'` checks files that
