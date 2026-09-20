@@ -836,15 +836,43 @@ fn sandbox_demo_manifest(
 fn sandbox_extension(
     anchor: UtcInstant,
     media: &[SandboxMedia],
-) -> anyhow::Result<[SandboxPost; 5]> {
+) -> anyhow::Result<[SandboxPost; 7]> {
     Ok([
         SandboxPost {
             author: "alice",
-            title: "Alice canonical HTML".to_owned(),
-            slug: "baseline-seeded-html".to_owned(),
+            title: "<em>HTML emphasis</em> <a href=\"https://example.invalid/title-link\">HTML label</a> <img src=\"https://example.invalid/title-image\" alt=\"HTML alt\"> <script>discarded</script>".to_owned(),
+            slug: "formatted-html-title".to_owned(),
             body: "<p>Canonical seeded <strong>HTML</strong> body.</p>".to_owned(),
             format: PostFormat::Html,
             published_at: Some(anchor),
+            visibility: SandboxVisibility::Public,
+        },
+        SandboxPost {
+            author: "alice",
+            title: "Markdown *emphasis* **strong** ~~deleted~~ `code` [link label](https://example.invalid/title-link) ![image alt](https://example.invalid/title-image)".to_owned(),
+            slug: "formatted-markdown-title".to_owned(),
+            body: "# Canonical seeded Markdown\n\nThis Post has a formatted title.".to_owned(),
+            format: PostFormat::Markdown,
+            published_at: Some(UtcInstant::from(
+                anchor
+                    .value()
+                    .saturating_sub(1.hours())
+                    .map_or(Timestamp::MIN, std::convert::identity),
+            )),
+            visibility: SandboxVisibility::Public,
+        },
+        SandboxPost {
+            author: "alice",
+            title: "Org /emphasis/ *strong* _underline_ [[https://example.invalid/title-link][Org label]]".to_owned(),
+            slug: "formatted-org-title".to_owned(),
+            body: "* Canonical seeded Org\n\nThis Post has a formatted title.".to_owned(),
+            format: PostFormat::Org,
+            published_at: Some(UtcInstant::from(
+                anchor
+                    .value()
+                    .saturating_sub(2.hours())
+                    .map_or(Timestamp::MIN, std::convert::identity),
+            )),
             visibility: SandboxVisibility::Public,
         },
         SandboxPost {
@@ -1438,7 +1466,7 @@ mod sandbox_profile_tests {
         .expect("demo profile seeds");
 
         assert_eq!(actual.version, 2);
-        assert_eq!(actual.posts.len(), 73);
+        assert_eq!(actual.posts.len(), 75);
         assert_eq!(actual.media.len(), 5);
         let expected = std::iter::once((
             "alice",

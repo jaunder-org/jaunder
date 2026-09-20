@@ -92,7 +92,7 @@ Out:
     served as current. Existing-surface regression tests prove AtomPub
     create/get/update round-trips authored Markdown, Org, and HTML title syntax.
 
-- [ ] Task 5: Prove integrated browser behavior and close documentation
+- [x] Task 5: Prove integrated browser behavior and close documentation
   - Depends on: Tasks 1–4.
   - Contract: public timeline and permalink fixtures exercise Markdown, Org, and
     HTML title markup without widening visual-snapshot policy. The accepted ADR

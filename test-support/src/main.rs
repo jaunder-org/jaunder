@@ -1416,7 +1416,7 @@ mod tests {
                 .expect("Media listing")
                 .len();
         }
-        assert_eq!(post_count, 73);
+        assert_eq!(post_count, 75);
         assert_eq!(media_count, 5);
     }
 }
