@@ -472,16 +472,17 @@ A post stores its **source**: a `PostBody` in an author-chosen `PostFormat`
 (`Markdown` | `Org` | `Html`, `common/src/render.rs:35`), from which a
 module-qualified `host::render` free function derives the stored
 `rendered_html`. A titled Post also stores a sanitized, inline-only Rendered
-Title derived atomically from its authored `PostTitle` and format. The rendered
-fragment is non-interactive phrasing content: links flatten to visible labels,
-images to alternative text, and active or embedded content disappears. A source
-with no surviving visible text retains an empty persisted fragment and presents
-no web, RSS, or JSON Feed title rather than leaking authored markup. A bounded,
-dual-target canonical-fragment recognizer guards trusted storage and wire decode
-without bringing authoring parsers or sanitization into CSR; invalid restored
-bytes remain diagnostic source data but fail typed reads before any unescaped
-sink. Current Posts and full Post Revisions retain these rendered bytes so title
-and body share parser-version and historical-snapshot semantics
+Title derived atomically from its authored `PostTitle` and format. A dedicated
+narrow `ammonia` policy retains only its safe inline tags without attributes and
+removes active or embedded content; it does not synthesize image alternatives or
+block-wrapper spacing. A source with no surviving visible text retains an empty
+persisted fragment and presents no web, RSS, or JSON Feed title rather than
+leaking authored markup. A bounded, dual-target canonical-fragment recognizer
+guards trusted storage and wire decode without bringing authoring parsers or
+sanitization into CSR; invalid restored bytes remain diagnostic source data but
+fail typed reads before any unescaped sink. Current Posts and full Post
+Revisions retain these rendered bytes so title and body share parser-version and
+historical-snapshot semantics
 ([persisted Rendered Title decision](adr/drafts/persist-inline-rendered-post-titles.md)).
 The source and rendered forms feed deliberately separate serialization surfaces
 — Syndication Feeds consume presentation projections, while the AtomPub
@@ -868,8 +869,8 @@ Public read-only feeds serve arbitrary feed readers, so every item carries the
 post's `rendered_html` — Atom `type="html"` and the RSS/JSON Feed equivalents
 ([ADR-0015](adr/0015-atompub-serialization-surfaces.md)). Titled Atom entries
 use the persisted Rendered Title as an HTML text construct; RSS and JSON Feed
-use its parsed visible-text projection so secondary Markdown, Org, or HTML
-syntax never leaks into their plain-text title fields. AtomPub, slugs, and
+use an `ammonia`-stripped plain-text projection so secondary Markdown, Org, or
+HTML syntax never leaks into their plain-text title fields. AtomPub, slugs, and
 document metadata continue to use the authored title
 ([persisted Rendered Title decision](adr/drafts/persist-inline-rendered-post-titles.md)).
 Atom `<summary>` and JSON Feed `summary` carry the authored summary when present,

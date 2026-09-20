@@ -173,7 +173,7 @@ type FormattedTitleExpectation = {
 const FORMATTED_TITLE_EXPECTATIONS: readonly FormattedTitleExpectation[] = [
   {
     slug: "formatted-markdown-title",
-    visibleText: "Markdown emphasis strong deleted code link label image alt",
+    visibleText: "Markdown emphasis strong deleted code link label",
     tags: ["em", "strong", "del", "code"],
   },
   {
@@ -183,7 +183,7 @@ const FORMATTED_TITLE_EXPECTATIONS: readonly FormattedTitleExpectation[] = [
   },
   {
     slug: "formatted-html-title",
-    visibleText: "HTML emphasis HTML label HTML alt",
+    visibleText: "HTML emphasis HTML label",
     tags: ["em"],
   },
 ];

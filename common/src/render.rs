@@ -299,9 +299,9 @@ fn provider_embed_html(
 ///
 /// Unlike [`RenderedHtml`], this field-specific value admits only the closed title
 /// grammar. Its checked admission seam recognizes canonical bytes and admits a
-/// nonempty fragment only when its visible-text projection is nonempty; it neither
-/// parses authoring formats nor sanitizes untrusted source. Those responsibilities
-/// belong to the host renderer.
+/// nonempty fragment only when its visible-text projection is nonempty. Host parsers
+/// produce authoring-format HTML, and the host-only ammonia boundary in this module
+/// sanitizes that untrusted source before constructing this value.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RenderedPostTitle(String);
 
@@ -333,7 +333,6 @@ impl RenderedPostTitle {
         let fragment = fragment.as_ref();
         canonical_rendered_post_title(fragment)
             .then(|| Self(fragment.to_owned()))
-            .filter(|title| fragment.is_empty() || !title.visible_text().is_empty())
             .ok_or(InvalidRenderedPostTitle)
     }
 
@@ -341,47 +340,6 @@ impl RenderedPostTitle {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
-    }
-
-    /// Returns the deterministic plain-text projection used by text-only sinks.
-    #[must_use]
-    pub fn visible_text(&self) -> String {
-        let mut text = String::new();
-        let mut rest = self.0.as_str();
-        while !rest.is_empty() {
-            if let Some(after_tag) = rest.strip_prefix('<') {
-                let Some(end) = after_tag.find('>') else {
-                    unreachable!("canonical title tags always have a closing bracket");
-                };
-                if &after_tag[..end] == "br" && !text.ends_with(' ') {
-                    text.push(' ');
-                }
-                rest = &after_tag[end + 1..];
-            } else {
-                let end = rest.find('<').unwrap_or(rest.len());
-                let value = &rest[..end];
-                let mut value = value;
-                while !value.is_empty() {
-                    if let Some(after) = value.strip_prefix("&amp;") {
-                        text.push('&');
-                        value = after;
-                    } else if let Some(after) = value.strip_prefix("&lt;") {
-                        text.push('<');
-                        value = after;
-                    } else if let Some(after) = value.strip_prefix("&gt;") {
-                        text.push('>');
-                        value = after;
-                    } else if let Some(character) = value.chars().next() {
-                        text.push(character);
-                        value = &value[character.len_utf8()..];
-                    } else {
-                        unreachable!("a nonempty canonical text segment has a first character");
-                    }
-                }
-                rest = &rest[end..];
-            }
-        }
-        text.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 }
 
@@ -523,6 +481,7 @@ fn canonical_rendered_post_title(fragment: &str) -> bool {
 
     let mut rest = fragment;
     let mut stack = Vec::new();
+    let mut has_visible_text = false;
     while !rest.is_empty() {
         if let Some(after_tag) = rest.strip_prefix('<') {
             let Some(end) = after_tag.find('>') else {
@@ -548,12 +507,13 @@ fn canonical_rendered_post_title(fragment: &str) -> bool {
 
         let next = rest.find('<').unwrap_or(rest.len());
         let text = &rest[..next];
-        if !canonical_title_text(text) {
+        let Some(text_is_visible) = canonical_title_text(text) else {
             return false;
-        }
+        };
+        has_visible_text |= text_is_visible;
         rest = &rest[next..];
     }
-    stack.is_empty()
+    stack.is_empty() && (fragment.is_empty() || has_visible_text)
 }
 
 fn is_rendered_post_title_tag(tag: &str) -> bool {
@@ -563,27 +523,28 @@ fn is_rendered_post_title_tag(tag: &str) -> bool {
     )
 }
 
-fn canonical_title_text(text: &str) -> bool {
+fn canonical_title_text(text: &str) -> Option<bool> {
     let mut rest = text;
+    let mut has_visible_text = false;
     while let Some(index) = rest.find('&') {
         let (prefix, after) = rest.split_at(index);
-        if prefix.contains('>')
-            || !after.starts_with("&amp;")
-                && !after.starts_with("&lt;")
-                && !after.starts_with("&gt;")
-        {
-            return false;
+        if prefix.contains('>') {
+            return None;
         }
-        rest = if let Some(value) = after.strip_prefix("&amp;") {
-            value
+        let entity = if let Some(value) = after.strip_prefix("&amp;") {
+            rest = value;
+            true
         } else if let Some(value) = after.strip_prefix("&lt;") {
-            value
+            rest = value;
+            true
         } else {
-            // The preceding predicate proves this is `&gt;`.
-            &after[4..]
+            rest = after.strip_prefix("&gt;")?;
+            true
         };
+        has_visible_text |= entity || prefix.chars().any(|character| !character.is_whitespace());
     }
-    !rest.contains('>')
+    (!rest.contains('>'))
+        .then_some(has_visible_text || rest.chars().any(|character| !character.is_whitespace()))
 }
 
 /// The single allowlist every [`sanitize`] call scrubs against. It is ammonia's
@@ -619,6 +580,87 @@ static SANITIZER: std::sync::LazyLock<ammonia::Builder<'static>> = std::sync::La
     });
     builder
 });
+
+/// The title-specific subset of ammonia's sanitizer surface.
+#[cfg(feature = "sanitize")]
+static TITLE_SANITIZER: std::sync::LazyLock<ammonia::Builder<'static>> =
+    std::sync::LazyLock::new(|| {
+        let mut builder = ammonia::Builder::empty();
+        builder.generic_attributes(std::collections::HashSet::default());
+        builder.tag_attributes(std::collections::HashMap::default());
+        builder.add_tags([
+            "b", "strong", "i", "em", "u", "s", "del", "code", "sub", "sup", "mark", "small", "br",
+        ]);
+        builder.add_clean_content_tags([
+            "audio", "iframe", "math", "object", "script", "style", "svg", "template", "video",
+        ]);
+        builder
+    });
+
+/// Removes every tag from an already canonical Rendered Title for a text-only sink.
+#[cfg(feature = "sanitize")]
+static TITLE_TEXT_SANITIZER: std::sync::LazyLock<ammonia::Builder<'static>> =
+    std::sync::LazyLock::new(ammonia::Builder::empty);
+
+/// Sanitizes an authored Post title into the closed inline fragment grammar.
+///
+/// This narrower policy shares ammonia's parser and cleaning behavior with body
+/// sanitization while admitting no attributes, links, images, or embedded content.
+/// A source without surviving visible text becomes the canonical empty fragment.
+#[cfg(feature = "sanitize")]
+#[must_use]
+pub fn sanitize_post_title(raw: &str) -> RenderedPostTitle {
+    let fragment = TITLE_SANITIZER
+        .clean(raw)
+        .to_string()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    RenderedPostTitle::parse_canonical(fragment).unwrap_or_else(|_| RenderedPostTitle::empty())
+}
+
+/// Returns a readable text projection of a persisted Rendered Title for text-only sinks.
+///
+/// Ammonia strips the already canonical HTML; decoding then handles only the three
+/// entity spellings that the canonical grammar permits, exactly once.
+#[cfg(feature = "sanitize")]
+#[must_use]
+pub fn rendered_post_title_visible_text(title: &RenderedPostTitle) -> String {
+    // `br` is the sole marker whose readable spacing survives title sanitization.
+    let fragment = title.as_str().replace("<br>", " ");
+    let text = TITLE_TEXT_SANITIZER.clean(&fragment).to_string();
+    decode_canonical_title_entities(&text)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(feature = "sanitize")]
+fn decode_canonical_title_entities(text: &str) -> String {
+    let mut decoded = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(index) = rest.find('&') {
+        let (prefix, after) = rest.split_at(index);
+        decoded.push_str(prefix);
+        if let Some(value) = after.strip_prefix("&amp;") {
+            decoded.push('&');
+            rest = value;
+        } else if let Some(value) = after.strip_prefix("&lt;") {
+            decoded.push('<');
+            rest = value;
+        } else if let Some(value) = after.strip_prefix("&gt;") {
+            decoded.push('>');
+            rest = value;
+        } else {
+            // The title grammar permits only these entity spellings; preserving an
+            // unexpected spelling keeps this projection total for future bad data.
+            decoded.push('&');
+            rest = &after[1..];
+        }
+    }
+    decoded.push_str(rest);
+    decoded
+}
 
 /// Sanitizes untrusted HTML into a [`RenderedHtml`].
 ///
@@ -1765,16 +1807,9 @@ mod tests {
         ] {
             assert!(RenderedPostTitle::parse_canonical(fragment).is_ok());
         }
-        let title = RenderedPostTitle::parse_canonical("a &amp; <b>b</b><br> c &lt;d&gt;").unwrap();
-        assert_eq!(title.visible_text(), "a & b c <d>");
-        for (fragment, expected) in [("&amp;lt;", "&lt;"), ("&amp;amp;", "&amp;")] {
-            assert_eq!(
-                RenderedPostTitle::parse_canonical(fragment)
-                    .unwrap()
-                    .visible_text(),
-                expected
-            );
-        }
+        assert!(RenderedPostTitle::parse_canonical("a &amp; <b>b</b><br> c &lt;d&gt;").is_ok());
+        assert!(RenderedPostTitle::parse_canonical("&amp;lt;").is_ok());
+        assert!(RenderedPostTitle::parse_canonical("&amp;amp;").is_ok());
         for whitespace in ['\u{00a0}', '\u{2003}'] {
             assert!(RenderedPostTitle::parse_canonical(format!("a{whitespace}b")).is_err());
         }

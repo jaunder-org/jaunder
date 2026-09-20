@@ -145,7 +145,7 @@ mod tests {
         let title: common::render::RenderedPostTitle =
             "<strong>A &amp; B</strong><br>C".parse().unwrap();
         let item = FeedItem {
-            visible_title: Some(title.visible_text()),
+            visible_title: Some(crate::render::rendered_title_visible_text(&title)),
             rendered_title: Some(title),
             ..item(None, vec![])
         };

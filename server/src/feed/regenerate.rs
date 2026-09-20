@@ -127,7 +127,7 @@ fn build_feed_items(base: &BaseUrl, records: &[PostRecord]) -> Vec<FeedItem> {
                 visible_title: p
                     .rendered_title
                     .as_ref()
-                    .map(common::render::RenderedPostTitle::visible_text)
+                    .map(host::render::rendered_title_visible_text)
                     .filter(|title| !title.is_empty()),
                 // Compose the root-relative permalink to an absolute per-item feed URL
                 // (atom Entry.id/link, RSS link/guid, JSON item url) — no relative atom:id

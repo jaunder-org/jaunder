@@ -16,7 +16,8 @@ clean visible text without source markup or HTML tags.
   changes.
 - A Rendered Title is sanitized, canonical, inline-only HTML. It has a stronger
   contract than body HTML and a distinct trusted type and decode boundary.
-- The complete retained-element policy is `b`, `strong`, `i`, `em`, `u`, `s`,
+- A dedicated, narrowly configured `ammonia` builder owns title sanitization.
+  Its complete retained-element policy is `b`, `strong`, `i`, `em`, `u`, `s`,
   `del`, `code`, `sub`, `sup`, `mark`, `small`, and `br`, with no attributes.
   Markdown and Org support every textual inline construct their parsers can
   project into that policy, rather than only the issue's examples.
@@ -29,9 +30,9 @@ clean visible text without source markup or HTML tags.
   `embed`, `svg`, `math`, and audio/video/source/track elements disappear with
   their descendants. No event handler, URL, style, class, or other attribute
   survives.
-- Canonical serialization is deterministic. The visible-text projection decodes
-  entities, converts `br` and removed block boundaries to one space, collapses
-  every whitespace run to one ASCII space, and trims its result.
+- Canonical serialization is deterministic. The plain-text feed projection uses
+  `ammonia` to strip all title markup, decodes canonical entities once, converts
+  `br` to one space, collapses every whitespace run to one ASCII space, and trims.
 - A source title with no surviving visible text persists an empty Rendered
   Title. Web presentation omits its heading; RSS and JSON Feed omit their
   optional title; Atom emits its required empty HTML title construct. Authored
@@ -61,9 +62,9 @@ clean visible text without source markup or HTML tags.
   public projector and CSR client paint the same trusted bytes.
 - Atom Syndication Feed entry titles use the Rendered Title as an HTML text
   construct.
-- RSS and JSON Syndication Feed item titles use visible text extracted by
-  parsing the persisted Rendered Title. This projection decodes entities and
-  preserves textual labels; it is not regex tag stripping.
+- RSS and JSON Syndication Feed item titles use readable text produced by
+  stripping the persisted Rendered Title with `ammonia`. This projection decodes
+  canonical entities and is not regex tag stripping.
 - Feed semantic fingerprints, serializer revisions, and durable cache
   invalidation account for every title representation that changes feed bytes.
 - Slug derivation, document metadata, AtomPub, editor fields, and
@@ -82,8 +83,8 @@ clean visible text without source markup or HTML tags.
 - Malicious or structurally invalid Markdown, Org, and HTML title inputs cannot
   introduce active markup, block markup, media, nested interactive content, or
   DOM structure outside the title fragment.
-- Labelled links and image alternative text remain visible text, while
-  content-free or active-only source produces the specified empty presentation
+- Labelled-link text remains visible while image alternative text is not
+  synthesized; content-free or active-only source produces the specified empty presentation
   without leaking authored markup.
 - Titleless Posts retain their existing rendering and storage behavior.
 - Create and meaningful update operations persist matching authored and rendered

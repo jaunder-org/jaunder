@@ -31,8 +31,8 @@ Out:
     raw-string constructor. A small canonical-fragment recognizer in `common`
     validates the closed grammar on SQL and wire reconstruction and compiles for
     native and wasm; it is neither an authoring-format parser nor a sanitizer.
-    `host::render` is the sole production renderer and derives both canonical
-    inline HTML and deterministic visible text from `(PostTitle, PostFormat)`.
+    `host::render` renders source formats and invokes common's host-only,
+    `ammonia`-owned title sanitation and plain-text projection boundaries.
   - Contract: `PostRenderOutput` privately owns authored title, body, format,
     Rendered Title, rendered body, and media references. Storage create/update
     inputs consume that aggregate and receive only read accessors for binding

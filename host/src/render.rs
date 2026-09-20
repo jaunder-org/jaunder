@@ -374,11 +374,10 @@ pub fn render_post(
     }
 }
 
-/// Renders an authored title to the title-only canonical HTML grammar.
+/// Renders an authored title through the common ammonia-owned title policy.
 ///
-/// Authoring formats first use their normal host parsers; this projection then
-/// retains only title-safe inline structure. It is intentionally not exposed from
-/// `common`: common recognizes persisted canonical bytes but never parses source.
+/// Markdown and Org first use their ordinary renderers. The common boundary then
+/// sanitizes every authoring format into the persisted inline fragment grammar.
 #[must_use]
 pub fn render_title(title: &PostTitle, format: &PostFormat) -> RenderedPostTitle {
     let source = match format {
@@ -386,282 +385,13 @@ pub fn render_title(title: &PostTitle, format: &PostFormat) -> RenderedPostTitle
         PostFormat::Org => render_org(title.as_ref()),
         PostFormat::Html => title.to_string(),
     };
-    let canonical = canonical_title_fragment(&source);
-    // The host emitter and common recognizer share one closed grammar. Fail
-    // closed to the valid empty presentation if that internal contract drifts;
-    // authored source must never be substituted into an HTML sink.
-    RenderedPostTitle::parse_canonical(canonical).unwrap_or_else(|_| RenderedPostTitle::empty())
+    common::render::sanitize_post_title(&source)
 }
 
-fn canonical_title_fragment(source: &str) -> String {
-    use html5ever::tendril::StrTendril;
-    use html5ever::tokenizer::{BufferQueue, Tokenizer, TokenizerOpts};
-
-    let input = BufferQueue::default();
-    input.push_back(StrTendril::from(source));
-    let tokenizer = Tokenizer::new(TitleSink::default(), TokenizerOpts::default());
-    let _ = tokenizer.feed(&input);
-    tokenizer.end();
-    tokenizer.sink.finish()
-}
-
-#[derive(Default)]
-struct TitleSink {
-    output: std::cell::RefCell<String>,
-    retained: std::cell::RefCell<Vec<String>>,
-    discarded: std::cell::RefCell<Option<(String, usize)>>,
-}
-
-impl TitleSink {
-    fn finish(self) -> String {
-        let mut output = self.output.into_inner();
-        for open in self.retained.into_inner().into_iter().rev() {
-            close_tag(&mut output, &open);
-        }
-        output.split_whitespace().collect::<Vec<_>>().join(" ")
-    }
-
-    fn is_discarding(&self) -> bool {
-        self.discarded.borrow().is_some()
-    }
-
-    fn add_space(&self) {
-        let mut output = self.output.borrow_mut();
-        if !output.is_empty() && !output.ends_with(' ') {
-            output.push(' ');
-        }
-    }
-
-    fn add_text(&self, value: &str) {
-        if self.is_discarding() {
-            return;
-        }
-        let mut output = self.output.borrow_mut();
-        for character in value.chars() {
-            match character {
-                '&' => output.push_str("&amp;"),
-                '<' => output.push_str("&lt;"),
-                '>' => output.push_str("&gt;"),
-                _ => output.push(character),
-            }
-        }
-    }
-
-    fn start_tag(&self, tag: &html5ever::tokenizer::Tag) {
-        let name = tag.name.to_string();
-        if self.extend_discard(&name, tag.self_closing) {
-            return;
-        }
-        if starts_discard(&name, tag.self_closing) {
-            *self.discarded.borrow_mut() = Some((name, 1));
-        } else if name == "img" {
-            if let Some(alt) = tag
-                .attrs
-                .iter()
-                .find(|attr| attr.name.local.as_ref() == "alt")
-            {
-                self.add_text(&alt.value);
-            }
-        } else if name == "br" {
-            self.output.borrow_mut().push_str("<br>");
-        } else if is_boundary(&name) {
-            self.add_space();
-        } else if is_retained(&name) {
-            let mut output = self.output.borrow_mut();
-            open_tag(&mut output, &name);
-            if tag.self_closing {
-                close_tag(&mut output, &name);
-            } else {
-                self.retained.borrow_mut().push(name);
-            }
-        }
-    }
-
-    fn extend_discard(&self, name: &str, self_closing: bool) -> bool {
-        let mut discarded = self.discarded.borrow_mut();
-        let Some((outer, depth)) = discarded.as_mut() else {
-            return false;
-        };
-        if outer == name && !is_void(name) && !(self_closing && acknowledges_self_closing(name)) {
-            *depth += 1;
-        }
-        true
-    }
-
-    fn end_tag(&self, name: &str) {
-        if self.end_discard(name) {
-            return;
-        }
-        if is_boundary(name) {
-            self.add_space();
-        } else if is_retained(name) {
-            self.close_retained(name);
-        }
-    }
-
-    fn end_discard(&self, name: &str) -> bool {
-        let mut discarded = self.discarded.borrow_mut();
-        let Some((outer, depth)) = discarded.as_mut() else {
-            return false;
-        };
-        if outer == name {
-            *depth -= 1;
-            if *depth == 0 {
-                *discarded = None;
-            }
-        }
-        true
-    }
-
-    fn close_retained(&self, name: &str) {
-        let mut retained = self.retained.borrow_mut();
-        let Some(position) = retained.iter().rposition(|open| open == name) else {
-            return;
-        };
-        let mut output = self.output.borrow_mut();
-        for open in retained.drain(position..).rev() {
-            close_tag(&mut output, &open);
-        }
-    }
-}
-
-impl html5ever::tokenizer::TokenSink for TitleSink {
-    type Handle = ();
-
-    fn process_token(
-        &self,
-        token: html5ever::tokenizer::Token,
-        _line_number: u64,
-    ) -> html5ever::tokenizer::TokenSinkResult<Self::Handle> {
-        use html5ever::tokenizer::{TagKind, Token, TokenSinkResult};
-
-        match token {
-            Token::CharacterTokens(text) => self.add_text(&text),
-            Token::TagToken(tag) => match tag.kind {
-                TagKind::StartTag => self.start_tag(&tag),
-                TagKind::EndTag => self.end_tag(&tag.name),
-            },
-            _ => {}
-        }
-        TokenSinkResult::Continue
-    }
-}
-
-fn open_tag(output: &mut String, name: &str) {
-    output.push('<');
-    output.push_str(name);
-    output.push('>');
-}
-
-fn close_tag(output: &mut String, name: &str) {
-    output.push_str("</");
-    output.push_str(name);
-    output.push('>');
-}
-
-fn is_retained(name: &str) -> bool {
-    matches!(
-        name,
-        "b" | "strong" | "i" | "em" | "u" | "s" | "del" | "code" | "sub" | "sup" | "mark" | "small"
-    )
-}
-
-fn is_boundary(name: &str) -> bool {
-    // HTML's block containers and table/list/definition-list cells delimit text
-    // when their wrappers are removed. Keeping this set explicit makes the title
-    // projection independent of parser-specific implicit end-tag recovery.
-    matches!(
-        name,
-        "address"
-            | "article"
-            | "aside"
-            | "blockquote"
-            | "caption"
-            | "colgroup"
-            | "dd"
-            | "details"
-            | "dialog"
-            | "dir"
-            | "div"
-            | "dl"
-            | "dt"
-            | "fieldset"
-            | "figcaption"
-            | "figure"
-            | "footer"
-            | "form"
-            | "h1"
-            | "h2"
-            | "h3"
-            | "h4"
-            | "h5"
-            | "h6"
-            | "header"
-            | "hgroup"
-            | "hr"
-            | "legend"
-            | "li"
-            | "main"
-            | "menu"
-            | "nav"
-            | "ol"
-            | "p"
-            | "pre"
-            | "search"
-            | "section"
-            | "summary"
-            | "table"
-            | "tbody"
-            | "td"
-            | "tfoot"
-            | "th"
-            | "thead"
-            | "tr"
-            | "ul"
-    )
-}
-
-fn starts_discard(name: &str, self_closing: bool) -> bool {
-    // HTML ignores the self-closing flag on ordinary non-void elements, so
-    // `<script/>text</script>` remains a script element. Foreign SVG/MathML
-    // elements acknowledge it and therefore have no descendants to discard.
-    !(is_void(name) || self_closing && acknowledges_self_closing(name))
-        && matches!(
-            name,
-            "audio"
-                | "iframe"
-                | "math"
-                | "object"
-                | "script"
-                | "style"
-                | "svg"
-                | "template"
-                | "video"
-        )
-}
-
-fn acknowledges_self_closing(name: &str) -> bool {
-    matches!(name, "svg" | "math")
-}
-
-fn is_void(name: &str) -> bool {
-    matches!(
-        name,
-        "area"
-            | "base"
-            | "br"
-            | "col"
-            | "embed"
-            | "hr"
-            | "img"
-            | "input"
-            | "link"
-            | "meta"
-            | "param"
-            | "source"
-            | "track"
-            | "wbr"
-    )
+/// Projects a persisted Rendered Title into readable text for RSS and JSON Feed.
+#[must_use]
+pub fn rendered_title_visible_text(title: &RenderedPostTitle) -> String {
+    common::render::rendered_post_title_visible_text(title)
 }
 
 /// The complete authored and rendered state for one Post write.
@@ -1899,12 +1629,12 @@ mod tests {
     }
 
     #[test]
-    fn title_projection_handles_all_authoring_formats_and_title_policy() {
+    fn title_projection_renders_authoring_formats_through_ammonia() {
         let cases = [
             (
                 PostFormat::Markdown,
                 "**bold** [link](https://example.test) ![alt](x)",
-                "<strong>bold</strong> link alt",
+                "<strong>bold</strong> link",
             ),
             (
                 PostFormat::Org,
@@ -1913,99 +1643,11 @@ mod tests {
             ),
             (
                 PostFormat::Html,
-                "<div>one</div><a href=\"/\">two</a><img alt=\"three\"><br><!-- gone --><script>lost</script>",
-                "one twothree<br>",
+                r#"<div>one</div><a href="/">two</a><img alt="three"><br><!-- gone --><script>lost</script>"#,
+                "onetwo<br>",
             ),
         ];
         for (format, source, expected) in cases {
-            let title: PostTitle = source.parse().unwrap();
-            let rendered = render_title(&title, &format);
-            assert_eq!(rendered.as_ref(), expected, "{format:?}");
-        }
-    }
-
-    #[test]
-    fn title_projection_exact_html_matrix_covers_the_closed_policy() {
-        let cases = [
-            ("<b>b</b>", "<b>b</b>", "b"),
-            (
-                "<strong>strong</strong>",
-                "<strong>strong</strong>",
-                "strong",
-            ),
-            ("<i>i</i>", "<i>i</i>", "i"),
-            ("<em>em</em>", "<em>em</em>", "em"),
-            ("<u>u</u>", "<u>u</u>", "u"),
-            ("<s>s</s>", "<s>s</s>", "s"),
-            ("<del>del</del>", "<del>del</del>", "del"),
-            ("<code>code</code>", "<code>code</code>", "code"),
-            ("<sub>sub</sub>", "<sub>sub</sub>", "sub"),
-            ("<sup>sup</sup>", "<sup>sup</sup>", "sup"),
-            ("<mark>mark</mark>", "<mark>mark</mark>", "mark"),
-            ("<small>small</small>", "<small>small</small>", "small"),
-            ("before<br>after", "before<br>after", "before after"),
-            ("<a href=\"/lost\">label</a>", "label", "label"),
-            (
-                "<img src=\"lost\" alt=\"image alt\">",
-                "image alt",
-                "image alt",
-            ),
-            (
-                "<img alt=\"A &amp; &quot;B&quot; &lt;C&gt;\">",
-                "A &amp; \"B\" &lt;C&gt;",
-                "A & \"B\" <C>",
-            ),
-            (
-                "<strong>A</strong><em>B</em>",
-                "<strong>A</strong><em>B</em>",
-                "AB",
-            ),
-            (
-                "<dl><dt>Term</dt><dd>Definition</dd></dl>",
-                "Term Definition",
-                "Term Definition",
-            ),
-            ("<p class=\"lost\">A &amp; B</p>", "A &amp; B", "A & B"),
-            (
-                "<b>  whitespace\n normalizes </b>",
-                "<b> whitespace normalizes </b>",
-                "whitespace normalizes",
-            ),
-            (
-                "<b><i>malformed</b> recovered</i>",
-                "<b><i>malformed</i></b> recovered",
-                "malformed recovered",
-            ),
-            ("<!-- comment --><script>discarded</script>", "", ""),
-        ];
-        for (source, expected_html, expected_visible_text) in cases {
-            let title: PostTitle = source.parse().unwrap();
-            let rendered = render_title(&title, &PostFormat::Html);
-            assert_eq!(rendered.as_ref(), expected_html, "{source}");
-            assert_eq!(rendered.visible_text(), expected_visible_text, "{source}");
-        }
-    }
-
-    #[test]
-    fn title_projection_collapses_content_free_fragments_but_keeps_mixed_visible_text() {
-        for (format, source) in [
-            (PostFormat::Markdown, "<br>"),
-            (PostFormat::Org, "@@html:<br>@@"),
-            (PostFormat::Html, "<br>"),
-            (PostFormat::Html, "<em></em>"),
-        ] {
-            let title: PostTitle = source.parse().unwrap();
-            assert_eq!(
-                render_title(&title, &format).as_ref(),
-                "",
-                "{format:?} {source:?}"
-            );
-        }
-        for (format, source, expected) in [
-            (PostFormat::Markdown, "before  \nafter", "before<br> after"),
-            (PostFormat::Org, "@@html:<br>@@shown", "<br>shown"),
-            (PostFormat::Html, "<em>shown</em><br>", "<em>shown</em><br>"),
-        ] {
             let title: PostTitle = source.parse().unwrap();
             assert_eq!(
                 render_title(&title, &format).as_ref(),
@@ -2016,62 +1658,49 @@ mod tests {
     }
 
     #[test]
-    fn title_projection_discards_active_and_embedded_descendants() {
-        for (source, expected) in [
-            ("<audio>x</audio>kept", "kept"),
-            ("<video><img alt=x></video>kept", "kept"),
-            ("<audio><audio>x</audio></audio>kept", "kept"),
-            // Every non-void discard element treats `/` as HTML's ignored
-            // self-closing flag and consumes descendants through its end tag.
-            ("<script/>secret</script>kept", "kept"),
-            ("<script><script/>inner</script>outer</script>kept", "kept"),
-            ("<style/>secret</style>kept", "kept"),
-            ("<iframe/>secret</iframe>kept", "kept"),
-            ("<object/>secret</object>kept", "kept"),
-            ("<svg/>secret</svg>kept", "secretkept"),
-            ("<math/>secret</math>kept", "secretkept"),
-            ("<svg><svg/>inner</svg>outer</svg>kept", "outerkept"),
-            ("<math><math/>inner</math>outer</math>kept", "outerkept"),
-            ("<template/>secret</template>kept", "kept"),
-            ("<audio/>secret</audio>kept", "kept"),
-            ("<video/>secret</video>kept", "kept"),
-            // Void discard elements have no descendants in HTML syntax, but
-            // their own tags disappear without changing adjacent text.
-            ("<embed>kept", "kept"),
-            ("<source><track>kept", "kept"),
-            ("<audio><img alt=x></audio>kept", "kept"),
-            ("<b>one<audio></b></audio>two</b>", "<b>onetwo</b>"),
+    fn title_projection_uses_ammonia_for_inline_html_and_text_feeds() {
+        let title: PostTitle =
+            r#"<strong>A &amp; B</strong><br><a href="/">C</a><script>lost</script>"#
+                .parse()
+                .unwrap();
+        let rendered = render_title(&title, &PostFormat::Html);
+        assert_eq!(rendered.as_ref(), "<strong>A &amp; B</strong><br>C");
+        assert_eq!(rendered_title_visible_text(&rendered), "A & B C");
+        let encoded: RenderedPostTitle = "&amp;lt;".parse().unwrap();
+        assert_eq!(rendered_title_visible_text(&encoded), "&lt;");
+
+        let title: PostTitle = r#"<img alt="not retained"><div>block</div>"#.parse().unwrap();
+        let rendered = render_title(&title, &PostFormat::Html);
+        assert_eq!(rendered.as_ref(), "block");
+        assert_eq!(rendered_title_visible_text(&rendered), "block");
+    }
+
+    #[test]
+    fn title_projection_collapses_content_free_fragments() {
+        for (format, source) in [
+            (PostFormat::Markdown, "<br>"),
+            (PostFormat::Org, "@@html:<br>@@"),
+            (PostFormat::Html, "<br>"),
+            (PostFormat::Html, "<em></em>"),
+            (PostFormat::Html, "<script>discarded</script>"),
         ] {
             let title: PostTitle = source.parse().unwrap();
             assert_eq!(
-                render_title(&title, &PostFormat::Html).as_ref(),
-                expected,
-                "{source}"
+                render_title(&title, &format).as_ref(),
+                "",
+                "{format:?} {source:?}"
             );
         }
     }
 
     #[test]
-    fn title_projection_is_total_for_long_and_deep_titles() {
+    fn title_projection_is_total_for_long_and_malformed_titles() {
         for source in [
             "x".repeat(16 * 1024 + 1),
             format!("{}x{}", "<b>".repeat(128), "</b>".repeat(128)),
-        ] {
-            let title: PostTitle = source.parse().unwrap();
-            let rendered = render_title(&title, &PostFormat::Html);
-            assert!(RenderedPostTitle::parse_canonical(rendered.as_ref()).is_ok());
-        }
-    }
-
-    #[test]
-    fn title_projection_is_total_for_adversarial_html() {
-        for source in [
-            "<b><i>x</b>y</i>",
-            "<strong/>",
-            "<script/>",
-            "<b>x",
-            "<b></i>x",
-            "<br/>",
+            "<b><i>x</b>y</i>".to_owned(),
+            "<script/>".to_owned(),
+            "<b>x".to_owned(),
         ] {
             let title: PostTitle = source.parse().unwrap();
             let rendered = render_title(&title, &PostFormat::Html);

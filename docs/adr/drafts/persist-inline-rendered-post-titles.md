@@ -40,22 +40,21 @@ A Rendered Title is canonical, trusted, inline-only HTML with a stricter
 contract than rendered body HTML. Its closed retained-element set is `b`,
 `strong`, `i`, `em`, `u`, `s`, `del`, `code`, `sub`, `sup`, `mark`, `small`, and
 `br`, with no attributes. Markdown and Org use every textual inline construct
-their parsers can project into that policy; HTML titles are untrusted fragments
-under the same policy. Links flatten to visible labels, images to escaped
-alternative text, and block wrappers to textual descendants separated by a
-space. Comments and active or embedded elements disappear. Visible text decodes
-entities, maps `br` and removed block boundaries to spaces, collapses
-whitespace, and trims. A source with no surviving visible text persists an empty
-fragment; web, RSS, and JSON Feed omit its title presentation rather than
-leaking authored markup, while Atom emits its required empty HTML title
-construct.
+their parsers project into that policy; HTML titles are untrusted fragments
+under the same policy. A dedicated, narrowly configured `ammonia` builder owns
+this sanitization, including removal of active and embedded content. It does not
+project image alternatives or insert spaces for removed block wrappers. A source
+with no surviving visible text persists an empty fragment; web, RSS, and JSON
+Feed omit its title presentation rather than leaking authored markup, while Atom
+emits its required empty HTML title construct.
 
 Web Post article headings consume the persisted HTML. Atom Syndication Feed
 entry titles use an HTML text construct. RSS and JSON Syndication Feed titles
-use a plain-text projection obtained by parsing the persisted fragment and
-extracting its visible text, including entity decoding; they never receive
-Markdown, Org, or HTML source syntax. Feed fingerprints and serializer revisions
-cover the chosen projections.
+use a plain-text projection produced by stripping the persisted fragment with an
+empty-tag `ammonia` builder. Its canonical entities decode once, `br` becomes a
+space, and whitespace collapses; they never receive Markdown, Org, or HTML
+source syntax. Feed fingerprints and serializer revisions cover the chosen
+projections.
 
 Slugs, document metadata, AtomPub, editing, and source-oriented administration
 continue to use the authored title. AtomPub therefore remains the native-source
