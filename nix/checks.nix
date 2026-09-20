@@ -339,6 +339,7 @@ e2eRunAndCapture =
     )
     print(expected_census_out)
     assert expected_census_status == 0, "e2e expected census preflight failed for ${expectedCensusTopology}"
+    machine.succeed("test -s /tmp/e2e/test-results/e2e-expected-census.json && cp /tmp/e2e/test-results/e2e-expected-census.json /tmp/e2e-census-${identity}.json")
     ''}
     gate_started_at = time.monotonic()
     pw_status, pw_out = machine.execute(
@@ -392,7 +393,8 @@ e2eRunAndCapture =
     _grab("/tmp/playwright-report-${identity}.json")
     machine.execute("test -s /tmp/e2e/test-results/duration-budget-manifest.json && cp /tmp/e2e/test-results/duration-budget-manifest.json /tmp/duration-budget-manifest-${identity}.json")
     _grab("/tmp/duration-budget-manifest-${identity}.json")
-    machine.execute("test -s /tmp/e2e/test-results/e2e-expected-census.json && cp /tmp/e2e/test-results/e2e-expected-census.json /tmp/e2e-census-${identity}.json")
+    # Playwright clears test-results when the actual gate starts, so lift the
+    # census copy preserved outside that directory immediately after preflight.
     _grab("/tmp/e2e-census-${identity}.json")
     machine.execute("test -s /tmp/e2e/test-results/e2e-lane-manifest.json && cp /tmp/e2e/test-results/e2e-lane-manifest.json /tmp/e2e-lane-manifest-${identity}.json")
     _grab("/tmp/e2e-lane-manifest-${identity}.json")

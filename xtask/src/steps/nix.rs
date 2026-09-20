@@ -2730,18 +2730,29 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
         let manifest_copy = "cp /tmp/e2e/test-results/duration-budget-manifest.json \
                              /tmp/duration-budget-manifest-${identity}.json";
         let manifest_grab = r#"_grab("/tmp/duration-budget-manifest-${identity}.json")"#;
+        let census_copy = "cp /tmp/e2e/test-results/e2e-expected-census.json \
+                           /tmp/e2e-census-${identity}.json";
+        let gate_start = "gate_started_at = time.monotonic()";
+        let census_grab = r#"_grab("/tmp/e2e-census-${identity}.json")"#;
         let assertion = "assert pw_status == 0";
 
         let report_copy_at = checks.find(report_copy).expect("report is copied");
         let report_grab_at = checks.find(report_grab).expect("report is lifted");
         let manifest_copy_at = checks.find(manifest_copy).expect("manifest is copied");
         let manifest_grab_at = checks.find(manifest_grab).expect("manifest is lifted");
+        let census_copy_at = checks
+            .find(census_copy)
+            .expect("preflight census is preserved");
+        let gate_start_at = checks.find(gate_start).expect("Playwright gate starts");
+        let census_grab_at = checks.find(census_grab).expect("census is lifted");
         let assertion_at = checks
             .find(assertion)
             .expect("Playwright status is asserted");
 
         assert!(report_copy_at < report_grab_at && report_grab_at < assertion_at);
         assert!(manifest_copy_at < manifest_grab_at && manifest_grab_at < assertion_at);
+        assert!(census_copy_at < gate_start_at);
+        assert!(gate_start_at < census_grab_at && census_grab_at < assertion_at);
     }
 
     fn generated_seed_trace_helper() -> String {
