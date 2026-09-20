@@ -12,34 +12,66 @@ import {
 } from "./helpers";
 import { createPostViaApi } from "./posts";
 import { navigateInApp } from "./navigate";
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { seedConfigViaTool } from "./seed";
 import { uploadMedia } from "./media-helpers";
 
 function countMediaRequests(page: Page): {
   capabilityRequests: () => number;
+  uploadRequests: () => number;
   deleteRequests: () => number;
   listRequests: () => number;
   usageRequests: () => number;
 } {
   let capabilityRequests = 0;
+  let uploadRequests = 0;
   let deleteRequests = 0;
   let listRequests = 0;
   let usageRequests = 0;
   page.on("request", (request) => {
     if (request.url().includes("/api/media/get_uploads_enabled"))
       capabilityRequests += 1;
+    if (request.url().includes("/api/media/upload")) uploadRequests += 1;
     if (request.url().includes("/api/media/delete")) deleteRequests += 1;
     if (request.url().includes("/api/media/list_mine")) listRequests += 1;
     if (request.url().includes("/api/media/get_usage")) usageRequests += 1;
   });
   return {
     capabilityRequests: () => capabilityRequests,
+    uploadRequests: () => uploadRequests,
     deleteRequests: () => deleteRequests,
     listRequests: () => listRequests,
     usageRequests: () => usageRequests,
   };
+}
+
+async function expectMediaPickerActions(scope: Locator): Promise<void> {
+  await expect(
+    scope.getByRole("button", { name: "Take photo", exact: true }),
+  ).toBeVisible();
+  await expect(
+    scope.getByRole("button", { name: "Choose file", exact: true }),
+  ).toBeVisible();
+
+  const photoInput = scope.locator(
+    "input[type='file'][accept='image/*'][capture='environment']",
+  );
+  await expect(photoInput).toHaveCount(1);
+  const fileInput = scope.locator(
+    "input[type='file']:not([accept]):not([capture])",
+  );
+  await expect(fileInput).toHaveCount(1);
+}
+
+async function expectNoMediaPickerActions(scope: Locator): Promise<void> {
+  await expect(
+    scope.getByRole("button", { name: "Take photo", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    scope.getByRole("button", { name: "Choose file", exact: true }),
+  ).toHaveCount(0);
+  await expect(scope.locator("input[type='file']")).toHaveCount(0);
 }
 
 async function openMediaLibrary(page: Page): Promise<void> {
@@ -201,6 +233,35 @@ test.describe("Media upload and serving", () => {
     await openMediaLibrary(page);
   });
 
+  test("shared upload control exposes photo capture and unrestricted file actions", async ({
+    page,
+  }) => {
+    await signInAsNewUser(page);
+    await goto(page, "/app");
+    await waitForSelector(page, ".j-composer");
+
+    const homeComposer = page.locator(".j-composer");
+    await homeComposer
+      .locator(".j-composer-control-summary")
+      .filter({ hasText: "Media" })
+      .click();
+    await expectMediaPickerActions(homeComposer);
+
+    await navigateInApp(page, () => click(page, "a[href='/posts/new']"), {
+      url: "/posts/new",
+      ready: '.j-topbar h1:has-text("New post")',
+    });
+    const fullComposer = page.locator(".j-compose-grid");
+    await fullComposer
+      .locator(".j-composer-control-summary")
+      .filter({ hasText: "Media" })
+      .click();
+    await expectMediaPickerActions(fullComposer);
+
+    await openMediaLibrary(page);
+    await expectMediaPickerActions(page.locator("main"));
+  });
+
   test("composer Media summary reports upload progress", async ({ page }) => {
     await signInAsNewUser(page);
     await goto(page, "/posts/new");
@@ -209,22 +270,28 @@ test.describe("Media upload and serving", () => {
       .locator(".j-composer-control-summary")
       .filter({ hasText: "Media" });
     await expect(media).toContainText("None");
+    const counts = countMediaRequests(page);
     const release = await stallServerFn(page, "media/upload");
-    await page
-      .locator("input[type='file']")
-      .first()
-      .setInputFiles({
-        name: "progress.png",
-        mimeType: "image/png",
-        buffer: Buffer.from("progress"),
-      });
+    const fileInput = page.locator(
+      "input[type='file']:not([accept]):not([capture])",
+    );
+    const selectedFile = {
+      name: "progress.png",
+      mimeType: "image/png",
+      buffer: Buffer.from("progress"),
+    };
+    await fileInput.setInputFiles(selectedFile);
     await expect(media).toContainText("Uploading…");
+    await expect(fileInput).toHaveValue("");
 
     release();
     await expect(media).toContainText("progress.png");
+    await fileInput.setInputFiles(selectedFile);
+    await expect.poll(counts.uploadRequests).toBe(2);
+    await expect(media).toContainText("2 files");
   });
 
-  test("failed composer upload identifies and reopens Media", async ({
+  test("failed composer upload reopens Media and permits same-photo retry", async ({
     page,
   }) => {
     await signInAsNewUser(page);
@@ -234,19 +301,77 @@ test.describe("Media upload and serving", () => {
     const media = page
       .locator(".j-composer-control-summary")
       .filter({ hasText: "Media" });
+    const counts = countMediaRequests(page);
+    const photoInput = page.locator(
+      "input[type='file'][accept='image/*'][capture='environment']",
+    );
+    const selectedPhoto = {
+      name: "failed.png",
+      mimeType: "image/png",
+      buffer: Buffer.from("failed"),
+    };
     await expect(media).toHaveAttribute("aria-expanded", "false");
-    await page
-      .locator("input[type='file']")
-      .first()
-      .setInputFiles({
-        name: "failed.png",
-        mimeType: "image/png",
-        buffer: Buffer.from("failed"),
-      });
+    await photoInput.setInputFiles(selectedPhoto);
 
     await expect(media).toContainText("Upload failed");
     await expect(media).toHaveAttribute("aria-expanded", "true");
     await expect(page.locator(".j-composer-media > .error")).toBeVisible();
+    await expect(photoInput).toHaveValue("");
+
+    await photoInput.setInputFiles(selectedPhoto);
+    await expect.poll(counts.uploadRequests).toBe(2);
+  });
+
+  test("indeterminate composer upload permits the same-file retry", async ({
+    page,
+  }) => {
+    await signInAsNewUser(page);
+    const seedResponse = await page.request.post(
+      BASE_URL + "/api/media/upload",
+      {
+        multipart: {
+          file: {
+            name: "indeterminate.png",
+            mimeType: "image/png",
+            buffer: Buffer.from("indeterminate"),
+          },
+        },
+      },
+    );
+    expect(seedResponse.status()).toBe(200);
+    const seedOutcome = (await seedResponse.json()) as MutationOutcome<
+      Record<string, unknown>
+    >;
+    if (!("Confirmed" in seedOutcome)) {
+      throw new Error("media seed upload was unexpectedly indeterminate");
+    }
+
+    await page.route("**/api/media/upload", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ CommitIndeterminate: seedOutcome.Confirmed }),
+      }),
+    );
+    await goto(page, "/posts/new");
+
+    const counts = countMediaRequests(page);
+    const fileInput = page.locator(
+      "input[type='file']:not([accept]):not([capture])",
+    );
+    const selectedFile = {
+      name: "indeterminate.png",
+      mimeType: "image/png",
+      buffer: Buffer.from("indeterminate"),
+    };
+    await fileInput.setInputFiles(selectedFile);
+    await expect(page.locator(".j-composer-media > .error")).toContainText(
+      "Upload status is unknown",
+    );
+    await expect(fileInput).toHaveValue("");
+
+    await fileInput.setInputFiles(selectedFile);
+    await expect.poll(counts.uploadRequests).toBe(2);
   });
 
   test("create composer retains multiple uploaded Media rows without URL inputs", async ({
@@ -372,18 +497,12 @@ test.describe("Media upload capability", () => {
     await seedConfigViaTool("media.uploads_enabled", "false");
 
     await goto(page, "/app");
-    await expect(
-      page.locator(".j-composer").getByRole("button", { name: "Attach media" }),
-    ).toHaveCount(0);
+    await expectNoMediaPickerActions(page.locator(".j-composer"));
     await navigateInApp(page, () => click(page, "a[href='/posts/new']"), {
       url: "/posts/new",
       ready: '.j-topbar h1:has-text("New post")',
     });
-    await expect(
-      page
-        .locator(".j-compose-grid")
-        .getByRole("button", { name: "Attach media" }),
-    ).toHaveCount(0);
+    await expectNoMediaPickerActions(page.locator(".j-compose-grid"));
     const counts = countMediaRequests(page);
 
     await navigateInApp(page, () => click(page, "a[href='/media']"), {
@@ -396,10 +515,7 @@ test.describe("Media upload capability", () => {
         exact: true,
       }),
     ).toBeVisible();
-    await expect(
-      page.getByRole("button", { name: "Attach media" }),
-    ).toHaveCount(0);
-    await expect(page.locator("input[type='file']")).toHaveCount(0);
+    await expectNoMediaPickerActions(page.locator("main"));
 
     await expect(
       page.getByRole("link", { name: "read-only-media.jpg" }),
@@ -438,28 +554,52 @@ test.describe("Media upload capability", () => {
 
     const composer = page.locator(".j-composer");
     await expect(composer.locator(".error")).toBeVisible();
-    await expect(
-      composer.getByRole("button", { name: "Attach media" }),
-    ).toHaveCount(0);
+    await expectNoMediaPickerActions(composer);
   });
 
-  test("enabled media page retains its upload control", async ({ page }) => {
+  test("enabled media page cancels silently and keeps general files unrestricted", async ({
+    page,
+  }) => {
     await seedConfigViaTool("media.uploads_enabled", "true");
     await signInAsNewUser(page);
     await goto(page, "/app");
     await openMediaLibrary(page);
 
-    const fileInput = page.locator("input[type='file']");
-    await expect(fileInput).toHaveCount(1);
-    await expect(
-      page.getByRole("button", { name: "Attach media" }),
-    ).toBeVisible();
-    await fileInput.setInputFiles({
-      name: "enabled-media.jpg",
+    const mediaPage = page.locator("main");
+    await expectMediaPickerActions(mediaPage);
+    const counts = countMediaRequests(page);
+    const photoInput = mediaPage.locator(
+      "input[type='file'][accept='image/*'][capture='environment']",
+    );
+    const fileInput = mediaPage.locator(
+      "input[type='file']:not([accept]):not([capture])",
+    );
+    await photoInput.setInputFiles([]);
+    await fileInput.setInputFiles([]);
+    expect(counts.uploadRequests()).toBe(0);
+    await expect(mediaPage.locator("input[readonly]")).toHaveCount(0);
+    await expect(mediaPage.locator(".error")).toHaveCount(0);
+
+    await photoInput.setInputFiles({
+      name: "desktop-photo.jpg",
       mimeType: "image/jpeg",
-      buffer: Buffer.from("enabled uploads still use the existing widget"),
+      buffer: Buffer.from("desktop photo fallback"),
     });
-    await expect(page.locator("input[readonly]")).toBeVisible();
+    await expect.poll(counts.uploadRequests).toBe(1);
+    await expect(
+      mediaPage.getByRole("link", { name: "desktop-photo.jpg" }),
+    ).toBeVisible();
+
+    await fileInput.setInputFiles({
+      name: "enabled-media.mp3",
+      mimeType: "audio/mpeg",
+      buffer: Buffer.from("general uploads remain unrestricted"),
+    });
+    await expect.poll(counts.uploadRequests).toBe(2);
+    await expect(
+      mediaPage.getByRole("link", { name: "enabled-media.mp3" }),
+    ).toBeVisible();
+    await expect(mediaPage.locator("input[readonly]")).toBeVisible();
   });
 });
 

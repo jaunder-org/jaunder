@@ -178,13 +178,18 @@ test("post create surfaces use textual draft and disclosed Media actions", async
     const media = scope.getByRole("button", { name: /Media None/ });
     await media.click();
     await expect(media).toHaveAttribute("aria-expanded", "true");
-    const attach = scope.getByRole("button", { name: "Attach media" });
+    const takePhoto = scope.getByRole("button", { name: "Take photo" });
+    const chooseFile = scope.getByRole("button", { name: "Choose file" });
     const saveDraft = scope.locator(SEL.publishButton("false"));
 
-    await expect(attach).toBeVisible();
-    await expect(attach).toHaveText("Attach media");
-    await expect(attach.locator("svg")).toHaveCount(0);
-    await expect(attach.locator('[role="tooltip"]')).toHaveCount(0);
+    await expect(takePhoto).toBeVisible();
+    await expect(takePhoto).toHaveText("Take photo");
+    await expect(takePhoto.locator("svg")).toHaveCount(0);
+    await expect(takePhoto.locator('[role="tooltip"]')).toHaveCount(0);
+    await expect(chooseFile).toBeVisible();
+    await expect(chooseFile).toHaveText("Choose file");
+    await expect(chooseFile.locator("svg")).toHaveCount(0);
+    await expect(chooseFile.locator('[role="tooltip"]')).toHaveCount(0);
 
     await expect(saveDraft).toHaveText("Save draft");
     await expect(saveDraft.locator("svg")).toHaveCount(0);

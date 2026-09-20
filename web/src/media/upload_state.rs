@@ -135,6 +135,24 @@ impl UploadCallbacks {
     }
 }
 
+/// Which browser picker an upload action opens.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UploadAction {
+    TakePhoto,
+    ChooseFile,
+}
+
+impl UploadAction {
+    const fn label(self, uploading: bool) -> &'static str {
+        match (self, uploading) {
+            (Self::TakePhoto, false) => "Take photo",
+            (Self::ChooseFile, false) => "Choose file",
+            (Self::TakePhoto, true) => "Uploading photo\u{2026}",
+            (Self::ChooseFile, true) => "Uploading file\u{2026}",
+        }
+    }
+}
+
 /// The upload button's complete visual and accessible presentation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UploadButtonPresentation {
@@ -169,12 +187,12 @@ impl UploadButtonPresentation {
 
 /// Classify text and icon upload controls for idle and in-flight states.
 #[must_use]
-pub fn upload_button_presentation(icon_only: bool, uploading: bool) -> UploadButtonPresentation {
-    let label = if uploading {
-        "Uploading\u{2026}"
-    } else {
-        "Attach media"
-    };
+pub fn upload_button_presentation(
+    action: UploadAction,
+    icon_only: bool,
+    uploading: bool,
+) -> UploadButtonPresentation {
+    let label = action.label(uploading);
     if icon_only {
         UploadButtonPresentation::Icon {
             accessible_name: label,
@@ -537,33 +555,33 @@ mod tests {
     }
 
     #[test]
-    fn upload_button_presentation_covers_text_icon_and_busy_states() {
-        let text = upload_button_presentation(false, false);
-        assert_eq!(text, UploadButtonPresentation::Text("Attach media"));
-        assert_eq!(text.class_name(), "j-btn");
-        assert_eq!(text.accessible_name(), None);
+    fn upload_button_presentation_distinguishes_actions_and_busy_states() {
+        let photo = upload_button_presentation(UploadAction::TakePhoto, false, false);
+        assert_eq!(photo, UploadButtonPresentation::Text("Take photo"));
+        assert_eq!(photo.class_name(), "j-btn");
+        assert_eq!(photo.accessible_name(), None);
 
         assert_eq!(
-            upload_button_presentation(false, true),
-            UploadButtonPresentation::Text("Uploading\u{2026}")
+            upload_button_presentation(UploadAction::TakePhoto, false, true),
+            UploadButtonPresentation::Text("Uploading photo\u{2026}")
         );
 
-        let icon = upload_button_presentation(true, false);
+        let file = upload_button_presentation(UploadAction::ChooseFile, true, false);
         assert_eq!(
-            icon,
+            file,
             UploadButtonPresentation::Icon {
-                accessible_name: "Attach media",
-                tooltip: "Attach media",
+                accessible_name: "Choose file",
+                tooltip: "Choose file",
             }
         );
-        assert_eq!(icon.class_name(), "j-btn is-icon");
-        assert_eq!(icon.accessible_name(), Some("Attach media"));
+        assert_eq!(file.class_name(), "j-btn is-icon");
+        assert_eq!(file.accessible_name(), Some("Choose file"));
 
         assert_eq!(
-            upload_button_presentation(true, true),
+            upload_button_presentation(UploadAction::ChooseFile, true, true),
             UploadButtonPresentation::Icon {
-                accessible_name: "Uploading\u{2026}",
-                tooltip: "Uploading\u{2026}",
+                accessible_name: "Uploading file\u{2026}",
+                tooltip: "Uploading file\u{2026}",
             }
         );
     }

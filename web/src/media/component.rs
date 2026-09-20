@@ -12,8 +12,8 @@ use common::pagination::{PageOffset, PageSize};
 use common::root_relative_url::RootRelativeUrl;
 
 use super::{
-    Delete, DeleteMediaRequest, Item, MediaDeletion, UploadButtonPresentation, UploadCallbacks,
-    UploadPresentation, UploadState, UsageData, api, upload_state,
+    Delete, DeleteMediaRequest, Item, MediaDeletion, UploadAction, UploadButtonPresentation,
+    UploadCallbacks, UploadPresentation, UploadState, UsageData, api, upload_state,
 };
 use crate::error::{WebError, WebResult};
 use crate::forms;
@@ -22,9 +22,9 @@ use crate::reactive::Invalidator;
 use crate::topbar::Topbar;
 use client::{reactive, telemetry};
 
-/// A media upload control: a button that opens the file picker and immediately
-/// uploads the chosen file via the [`super::upload`] multipart `#[server]`
-/// fn (no navigation).
+/// A media upload control with separate photo-capture and general-file actions.
+/// Each immediately uploads the chosen file via the [`super::upload`] multipart
+/// `#[server]` fn (no navigation).
 ///
 /// `on_uploaded`, `on_indeterminate`, and `on_error`, when provided, distinguish a
 /// confirmed URL from an uncertain commit and a human-readable error. `on_uploading`
@@ -45,7 +45,7 @@ pub fn MediaUpload(
     /// Called with `true` when an upload starts and `false` after it settles.
     #[prop(into, optional)]
     on_uploading: Option<Callback<bool>>,
-    /// When true, render the uploaded URL and any error inline below the button.
+    /// When true, render the uploaded URL and any error inline below the actions.
     #[prop(optional)]
     show_result: bool,
     /// When true, render the composer-family icon treatment instead of visible text.
@@ -60,45 +60,46 @@ pub fn MediaUpload(
     // stays here is the browser wiring that cannot run on the host — the file picker
     // and `spawn_local`.
     let state = UploadState::new(show_result);
+    let photo_input = NodeRef::<leptos::html::Input>::new();
     let file_input = NodeRef::<leptos::html::Input>::new();
-
-    // The event carries nothing we need — the picked file is read from `file_input`.
-    let on_file_change = move |_: leptos::ev::Event| {
-        use leptos::task::spawn_local;
-
-        // Reading the picker and wrapping multipart data are browser glue. No
-        // selection is expected no-action; browser exceptions are reported once.
-        let outcome = match client::upload::picked_file_multipart(file_input) {
-            Ok(outcome) => outcome,
-            Err(error) => {
-                let source_kind = error.source_kind();
-                telemetry::report_swallowed(
-                    telemetry::error_kind(source_kind),
-                    ClientErrorContext::MediaFormData,
-                    source_kind,
-                );
-                return;
-            }
-        };
-        let Some(form_data) = outcome.into_ready() else {
-            return;
-        };
-        let callbacks = UploadCallbacks {
-            on_uploaded,
-            on_indeterminate,
-            on_error,
-            on_uploading,
-        };
-        state.begin(callbacks);
-
-        spawn_local(async move {
-            state.settle(super::upload(form_data).await, callbacks);
-        });
+    let callbacks = UploadCallbacks {
+        on_uploaded,
+        on_indeterminate,
+        on_error,
+        on_uploading,
     };
 
     view! {
-        <input type="file" node_ref=file_input style="display:none" on:change=on_file_change />
-        <MediaUploadButton state file_input icon_only icon_path />
+        <input
+            type="file"
+            accept="image/*"
+            capture="environment"
+            node_ref=photo_input
+            style="display:none"
+            on:change=upload_file_change_handler(state, photo_input, callbacks)
+        />
+        <input
+            type="file"
+            node_ref=file_input
+            style="display:none"
+            on:change=upload_file_change_handler(state, file_input, callbacks)
+        />
+        <div class="j-media-upload-actions">
+            <MediaUploadButton
+                state
+                file_input=photo_input
+                action=UploadAction::TakePhoto
+                icon_only
+                icon_path
+            />
+            <MediaUploadButton
+                state
+                file_input
+                action=UploadAction::ChooseFile
+                icon_only
+                icon_path
+            />
+        </div>
         {move || show_result.then(|| state.last_media_url.get()).flatten().map(uploaded_url_view)}
         {move || {
             show_result
@@ -115,15 +116,58 @@ pub fn MediaUpload(
     }
 }
 
+/// Build the shared change handler for either browser picker.
+///
+/// Clearing the native input immediately after extracting its `File` lets a later
+/// attempt select the same file regardless of how the upload settles.
+fn upload_file_change_handler(
+    state: UploadState,
+    file_input: NodeRef<leptos::html::Input>,
+    callbacks: UploadCallbacks,
+) -> impl Fn(leptos::ev::Event) {
+    move |_: leptos::ev::Event| {
+        use leptos::task::spawn_local;
+
+        // Reading the picker and wrapping multipart data are browser glue. No
+        // selection is expected no-action; browser exceptions are reported once.
+        let outcome = client::upload::picked_file_multipart(file_input);
+        if let Some(input) = file_input.get() {
+            input.set_value("");
+        }
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let source_kind = error.source_kind();
+                telemetry::report_swallowed(
+                    telemetry::error_kind(source_kind),
+                    ClientErrorContext::MediaFormData,
+                    source_kind,
+                );
+                return;
+            }
+        };
+        let Some(form_data) = outcome.into_ready() else {
+            return;
+        };
+        state.begin(callbacks);
+
+        spawn_local(async move {
+            state.settle(super::upload(form_data).await, callbacks);
+        });
+    }
+}
+
 #[component]
 fn MediaUploadButton(
     state: UploadState,
     file_input: NodeRef<leptos::html::Input>,
+    action: UploadAction,
     icon_only: bool,
     icon_path: Option<&'static str>,
 ) -> impl IntoView {
-    let presentation =
-        Signal::derive(move || super::upload_button_presentation(icon_only, state.uploading.get()));
+    let presentation = Signal::derive(move || {
+        super::upload_button_presentation(action, icon_only, state.uploading.get())
+    });
 
     view! {
         <button
