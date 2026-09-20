@@ -23,7 +23,7 @@
       "identity": "sqlite-firefox-unsplit",
       "traceDigit": "2",
       "projects": ["firefox", "firefox-admin"],
-      "enabled": true
+      "enabled": false
     },
     {
       "backend": "postgres",
@@ -41,7 +41,7 @@
       "identity": "postgres-firefox-unsplit",
       "traceDigit": "4",
       "projects": ["firefox", "firefox-admin"],
-      "enabled": true
+      "enabled": false
     },
     {
       "backend": "sqlite",
@@ -52,7 +52,7 @@
       "identity": "sqlite-firefox-ordinary-1-of-2",
       "traceDigit": "5",
       "projects": ["firefox-ordinary"],
-      "enabled": false
+      "enabled": true
     },
     {
       "backend": "sqlite",
@@ -63,7 +63,7 @@
       "identity": "sqlite-firefox-ordinary-2-of-2",
       "traceDigit": "6",
       "projects": ["firefox-ordinary"],
-      "enabled": false
+      "enabled": true
     },
     {
       "backend": "sqlite",
@@ -76,7 +76,7 @@
         "firefox-special-global-configuration",
         "firefox-special-invite"
       ],
-      "enabled": false
+      "enabled": true
     },
     {
       "backend": "postgres",
@@ -87,7 +87,7 @@
       "identity": "postgres-firefox-ordinary-1-of-2",
       "traceDigit": "8",
       "projects": ["firefox-ordinary"],
-      "enabled": false
+      "enabled": true
     },
     {
       "backend": "postgres",
@@ -98,7 +98,7 @@
       "identity": "postgres-firefox-ordinary-2-of-2",
       "traceDigit": "9",
       "projects": ["firefox-ordinary"],
-      "enabled": false
+      "enabled": true
     },
     {
       "backend": "postgres",
@@ -111,7 +111,7 @@
         "firefox-special-global-configuration",
         "firefox-special-invite"
       ],
-      "enabled": false
+      "enabled": true
     }
   ]
 }

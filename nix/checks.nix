@@ -665,21 +665,20 @@ e2eSalt = "";
 # salt costs every CI e2e job its cache, and the only symptom is "CI got
 # slow" — nothing fails on its own, which is exactly why the guard exists.
 
-# All e2e {backend}×{browser} combos. backend picks the VM builder;
-# browser picks the Playwright --project; traceDigit gives each combo a
-# distinct OTel trace id (the 1/2/3/4 mapping preserves the historical
-# per-combo ids). Add a row here and the gate checks, the single-worker
-# diagnostic packages, and the `e2e-checks` aggregate all extend
-# automatically.
+# All E2E lanes. backend picks the VM builder; projects select the Playwright
+# topology; traceDigit gives every isolated lane a distinct OTel trace id.
+# The catalog independently identifies retained production lanes and disabled
+# unsplit Firefox controls.
 e2eLaneCatalog = (builtins.fromJSON (builtins.readFile ../end2end/e2e-lanes.json)).lanes;
-# The production matrix retains its current four unsplit lanes. The disabled
-# Firefox entries below are still first-class derivations for Task 5, not CI jobs.
+# Production uses two Chromium unsplit lanes and the retained three-lane Firefox
+# split per backend. Disabled Firefox unsplit lanes are measurement controls only.
 e2eCombos = builtins.filter (lane: lane.enabled) e2eLaneCatalog;
-e2eExperimentalLanes = builtins.filter (lane: !lane.enabled) e2eLaneCatalog;
-# The unsharded expected census selects the catalog's full candidate project union.
-e2eExperimentalCensusProjectArgs =
+e2eFirefoxSplitLanes = builtins.filter (lane: lane.enabled && lane.browser == "firefox") e2eLaneCatalog;
+e2eFirefoxControlLanes = builtins.filter (lane: !lane.enabled && lane.browser == "firefox" && lane.partition == "unsplit") e2eLaneCatalog;
+e2eSingleWorkerLanes = builtins.filter (lane: lane.partition == "unsplit") e2eLaneCatalog;
+e2eFirefoxCensusProjectArgs =
   pkgs.lib.concatMapStringsSep " " (project: "--project ${project}")
-    (pkgs.lib.unique (pkgs.lib.concatMap (lane: lane.projects) e2eExperimentalLanes));
+    (pkgs.lib.unique (pkgs.lib.concatMap (lane: lane.projects) e2eFirefoxSplitLanes));
 
 mkE2eCombo =
   {
@@ -740,36 +739,21 @@ mkE2eCombo =
 # arm increased SQLite flakiness. See docs/observability.md #828.
 e2eGateChecks = pkgs.lib.listToAttrs (
   map (c: {
-    # Keep CI's matrix-facing names stable; the derivation and every emitted
-    # artifact carry the catalog identity.
-    name = "e2e-${c.backend}-${c.browser}";
-    value = mkE2eCombo (
-      c
-      // {
-        # RETRIES=1: the gate reports a fail-then-pass as `flaky` (exit 0)
-        # rather than failing the combo check, containing timeout flakiness
-        # (Firefox 5s `expect` races) while results.json records it.
-        extraEnv = " JAUNDER_E2E_RETRIES=1";
-        vmMemory = 3072;
-        vmCores = 2;
-      }
-    );
-  }) e2eCombos
-);
-
-# Disabled catalog lanes remain isolated VM derivations for the retained
-# experiment, but are not exposed through checks or the production CI matrix.
-e2eExperimentalPackages = pkgs.lib.listToAttrs (
-  map (lane: {
-    name = "e2e-${lane.identity}";
-    value = mkE2eCombo (lane // {
+    name = "e2e-${c.identity}";
+    value = mkE2eCombo (c // {
+      # RETRIES=1: the gate reports a fail-then-pass as `flaky` (exit 0)
+      # rather than failing the combo check, containing timeout flakiness
+      # (Firefox 5s `expect` races) while results.json records it.
       extraEnv = " JAUNDER_E2E_RETRIES=1";
-      expectedCensusProjectArgs = e2eExperimentalCensusProjectArgs;
+      expectedCensusProjectArgs = pkgs.lib.optionalString (c.browser == "firefox") e2eFirefoxCensusProjectArgs;
+      expectedCensusTopology = "${c.backend}-${c.browser}-split";
       vmMemory = 3072;
       vmCores = 2;
     });
-  }) e2eExperimentalLanes
+  }) e2eCombos
 );
+
+
 
 # Measurement-only Firefox controls retain their unsplit catalog identity while
 # varying only the explicitly measured worker and VM resources. They are package
@@ -784,7 +768,7 @@ mkE2eControlPackages = workers: vmMemory: vmCores:
         expectedCensusTopology = "${lane.backend}-firefox-workers-${toString workers}-control";
         inherit vmMemory vmCores;
       });
-    }) (builtins.filter (lane: lane.enabled && lane.browser == "firefox") e2eCombos)
+    }) e2eFirefoxControlLanes
   );
 e2eWorkers2ControlPackages = mkE2eControlPackages 2 3072 2;
 e2eWorkers4ControlPackages = mkE2eControlPackages 4 6144 4;
@@ -813,7 +797,7 @@ e2eSingleWorkerPackages = pkgs.lib.listToAttrs (
         extraEnv = " JAUNDER_E2E_WORKERS=1";
       }
     );
-  }) e2eCombos
+  }) e2eSingleWorkerLanes
 );
 # A manual producer selects exactly one storage or browser measurement. It
 # reuses the e2e VM's backend lifecycle while keeping the gate's default branch
@@ -1763,7 +1747,7 @@ mkWasmCoverageMeasurementProducer =
           value = check.driver;
         }) checks;
     in
-    drivers e2eGateChecks // drivers e2eExperimentalPackages // drivers e2eWorkers2ControlPackages // drivers e2eWorkers4ControlPackages // drivers e2eSingleWorkerPackages;
+    drivers e2eGateChecks // drivers e2eWorkers2ControlPackages // drivers e2eWorkers4ControlPackages // drivers e2eSingleWorkerPackages;
   e2eSupportPackages = {
     # These derivations already sit beneath each NixOS test result and have
     # names caught by the broad Cachix exclusion. They contain test machinery,
@@ -1874,7 +1858,6 @@ mkWasmCoverageMeasurementProducer =
     (map (name: "checks.${system}.${name}") (builtins.attrNames coverageFinalCacheChecks))
     ++ (map (name: "checks.${system}.${name}") (builtins.attrNames e2eGateChecks))
     ++ [ "checks.${system}.e2e" "packages.${system}.e2e-checks" ]
-    ++ (map (name: "packages.${system}.${name}") (builtins.attrNames e2eExperimentalPackages))
     ++ (map (name: "packages.${system}.${name}") (builtins.attrNames e2eWorkers2ControlPackages))
     ++ (map (name: "packages.${system}.${name}") (builtins.attrNames e2eWorkers4ControlPackages))
     ++ (map (name: "packages.${system}.${name}") (builtins.attrNames e2eSingleWorkerPackages));
@@ -1990,7 +1973,6 @@ wasm-coverage-measure-firefox-instrumented = mkWasmCoverageMeasurementProducer {
   cacheBuster = measurementCacheBuster;
 };
     }
-    // e2eExperimentalPackages
     // e2eWorkers2ControlPackages
     // e2eWorkers4ControlPackages
     // e2eSingleWorkerPackages

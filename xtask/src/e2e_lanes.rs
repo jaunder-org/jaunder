@@ -130,9 +130,8 @@ pub fn validate(catalog: &Catalog) -> Result<(), String> {
 
     let mut identities = BTreeSet::new();
     let mut trace_digits = BTreeSet::new();
-    let mut enabled_pairs = BTreeSet::<(String, String)>::new();
-    let mut enabled_by_browser = BTreeMap::<String, BTreeSet<String>>::new();
-    let mut candidates = BTreeMap::<(String, String), Vec<&Lane>>::new();
+    let mut enabled_unsplit_pairs = BTreeSet::<(String, String)>::new();
+    let mut split_lanes = BTreeMap::<(String, String), Vec<&Lane>>::new();
     for lane in &catalog.lanes {
         let project_count = lane.projects.iter().collect::<BTreeSet<_>>().len();
         if lane.backend.is_empty()
@@ -156,28 +155,18 @@ pub fn validate(catalog: &Catalog) -> Result<(), String> {
         }
         match lane.partition.as_str() {
             "unsplit" if lane.enabled => {
-                let pair = (lane.backend.clone(), lane.browser.clone());
-                if !enabled_pairs.insert(pair) {
+                if !enabled_unsplit_pairs.insert((lane.backend.clone(), lane.browser.clone())) {
                     return Err(format!(
-                        "duplicate enabled E2E combination {}/{}",
+                        "duplicate enabled unsplit E2E combination {}/{}",
                         lane.backend, lane.browser
                     ));
                 }
-                enabled_by_browser
-                    .entry(lane.browser.clone())
-                    .or_default()
-                    .insert(lane.backend.clone());
             }
-            "ordinary" if !lane.enabled => {
-                let Some(index) = lane.shard_index else {
+            "unsplit" if !lane.enabled && lane.browser == "firefox" => {}
+            "ordinary" if lane.enabled => {
+                let (Some(index), Some(count)) = (lane.shard_index, lane.shard_count) else {
                     return Err(format!(
-                        "ordinary lane `{}` lacks a shard index",
-                        lane.identity
-                    ));
-                };
-                let Some(count) = lane.shard_count else {
-                    return Err(format!(
-                        "ordinary lane `{}` lacks a shard count",
+                        "ordinary lane `{}` lacks shard metadata",
                         lane.identity
                     ));
                 };
@@ -187,44 +176,41 @@ pub fn validate(catalog: &Catalog) -> Result<(), String> {
                         lane.identity
                     ));
                 }
-                candidates
+                split_lanes
                     .entry((lane.backend.clone(), lane.browser.clone()))
                     .or_default()
                     .push(lane);
             }
-            "serial-special" if !lane.enabled => {
-                candidates
+            "serial-special" if lane.enabled => {
+                split_lanes
                     .entry((lane.backend.clone(), lane.browser.clone()))
                     .or_default()
                     .push(lane);
             }
-            _ => return Err(format!("invalid E2E lane `{}`", lane.identity)),
+            _ => return Err(format!("invalid retained E2E lane `{}`", lane.identity)),
         }
     }
-    if enabled_pairs.len() != 4 {
-        return Err("the production catalog must contain exactly four enabled combinations".into());
-    }
-
-    let candidate_browsers = candidates
-        .keys()
-        .map(|(_, browser)| browser.as_str())
-        .collect::<BTreeSet<_>>();
-    if candidate_browsers.len() != 1 {
-        return Err("experimental lanes must target exactly one browser".into());
-    }
-    let candidate_browser = candidate_browsers
-        .first()
-        .expect("candidate browser checked");
-    let candidate_backends = candidates
-        .keys()
+    let chromium_backends = enabled_unsplit_pairs
+        .iter()
+        .filter(|(_, browser)| browser == "chromium")
         .map(|(backend, _)| backend.clone())
         .collect::<BTreeSet<_>>();
-    if enabled_by_browser.get(*candidate_browser) != Some(&candidate_backends) {
-        return Err("experimental lanes must cover every enabled backend for their browser".into());
+    if chromium_backends.len() != 2 || enabled_unsplit_pairs.len() != 2 {
+        return Err(
+            "the production catalog must contain exactly two enabled Chromium unsplit lanes".into(),
+        );
+    }
+    let split_backends = split_lanes
+        .keys()
+        .filter(|(_, browser)| browser == "firefox")
+        .map(|(backend, _)| backend.clone())
+        .collect::<BTreeSet<_>>();
+    if split_backends != chromium_backends || split_lanes.len() != 2 {
+        return Err("retained Firefox split lanes must cover every Chromium backend".into());
     }
 
     let mut owner_maps = Vec::new();
-    for ((backend, browser), lanes) in &candidates {
+    for ((backend, browser), lanes) in &split_lanes {
         owner_maps.push((lanes, validate_candidate_group(backend, browser, lanes)?));
     }
     let declared_projects = catalog
@@ -235,7 +221,7 @@ pub fn validate(catalog: &Catalog) -> Result<(), String> {
     for (_, owners) in &owner_maps {
         if owners.keys().cloned().collect::<BTreeSet<_>>() != declared_projects {
             return Err(
-                "experimental dependency keys must equal the candidate project union".into(),
+                "Firefox split dependency keys must equal the retained project union".into(),
             );
         }
     }

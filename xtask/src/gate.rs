@@ -1048,7 +1048,14 @@ mod tests {
         );
         assert_validation_result_checks(aggregate);
 
-        assert_eq!(workflow.job("e2e-gate").needs, ["e2e"]);
+        assert_eq!(
+            workflow.job("e2e-gate").needs,
+            ["e2e-chromium", "e2e-firefox-lane", "e2e-firefox-reconcile"]
+        );
+        let source = include_str!("../../.github/workflows/ci.yml");
+        assert!(source.contains("e2e-firefox-lane:\n"));
+        assert!(source.contains("needs: [e2e-firefox-lane]\n    if: always()"));
+        assert!(source.contains("firefox_lanes=\"${{ needs.e2e-firefox-lane.result }}\""));
         assert!(!workflow.jobs.contains_key("elisp-integration"));
     }
 

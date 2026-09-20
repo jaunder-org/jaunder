@@ -168,6 +168,13 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             lifecycle::finalize(&mut result, start);
             Ok(result)
         }
+        Command::E2eLane { identity } => {
+            let start = Instant::now();
+            let mut result = CommandResult::new("e2e-lane");
+            steps::nix::e2e_lane(&mut result, &identity);
+            lifecycle::finalize(&mut result, start);
+            Ok(result)
+        }
         Command::E2eControl { backend, workers } => {
             let start = Instant::now();
             let mut result = CommandResult::new("e2e-control");
@@ -178,7 +185,23 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
         Command::E2eCandidate { identity } => {
             let start = Instant::now();
             let mut result = CommandResult::new("e2e-candidate");
-            steps::nix::e2e_candidate(&mut result, &identity);
+            steps::nix::e2e_lane(&mut result, &identity);
+            lifecycle::finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::E2eReconcile {
+            backend,
+            diagnostics_root,
+        } => {
+            let start = Instant::now();
+            let mut result = CommandResult::new("e2e-reconcile");
+            steps::nix::e2e_experimental_reconcile(
+                &mut result,
+                backend.as_str(),
+                &diagnostics_root,
+                None,
+                None,
+            );
             lifecycle::finalize(&mut result, start);
             Ok(result)
         }

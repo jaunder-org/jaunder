@@ -463,16 +463,17 @@ pub fn e2e(result: &mut CommandResult) -> E2eOutcome {
     // catalog CI will consume after Task 5, rather than carrying a second list.
     let enabled = catalog
         .lanes
-        .into_iter()
+        .iter()
         .filter(|lane| lane.enabled)
+        .cloned()
         .collect::<Vec<_>>();
     let builds = build_candidate_lanes(enabled, |lane| {
-        let check = format!("e2e-{}-{}", lane.backend, lane.browser);
+        let check = format!("e2e-{}", lane.identity);
         build_check(&format!("nix-{check}"), &check)
     });
     let mut phase_groups = Vec::new();
     for (lane_spec, build) in builds {
-        let check = format!("e2e-{}-{}", lane_spec.backend, lane_spec.browser);
+        let check = format!("e2e-{}", lane_spec.identity);
         let lane = lane_spec.identity.clone();
         let diagnostics = Path::new(".xtask/diagnostics").join(format!("e2e-{lane}"));
         finish_e2e_combo(
@@ -490,6 +491,33 @@ pub fn e2e(result: &mut CommandResult) -> E2eOutcome {
         }
     }
     result.record_parallel_phases(phase_groups);
+    for backend in ["sqlite", "postgres"] {
+        let lanes = catalog
+            .lanes
+            .iter()
+            .filter(|lane| {
+                lane.backend == backend
+                    && lane.browser == "firefox"
+                    && lane.enabled
+                    && lane.partition != "unsplit"
+            })
+            .collect::<Vec<_>>();
+        let evidence = lanes
+            .iter()
+            .map(|lane| {
+                candidate_lane_evidence(
+                    lane,
+                    &Path::new(".xtask/diagnostics").join(format!("e2e-{}", lane.identity)),
+                )
+            })
+            .collect::<Vec<_>>();
+        match crate::e2e_evidence::reconcile(backend, "firefox", &catalog.lanes, &evidence) {
+            Ok(detail) => result.push(StepResult::ok("e2e-firefox-reconcile").detail(detail)),
+            Err(errors) => {
+                result.push(StepResult::fail("e2e-firefox-reconcile").detail(errors.join("\n")))
+            }
+        }
+    }
     E2eOutcome::from_combo_steps(&result.steps[combo_start..])
 }
 
@@ -582,54 +610,51 @@ pub fn e2e_control(result: &mut CommandResult, backend: &str, workers: u8) {
     crate::steps::flaky::collect(result, backend, "firefox");
 }
 
-fn measurement_candidate_lane<'a>(
+fn production_lane<'a>(
     lanes: &'a [crate::e2e_lanes::Lane],
     identity: &str,
 ) -> Result<&'a crate::e2e_lanes::Lane, &'static str> {
     let lane = lanes
         .iter()
         .find(|lane| lane.identity == identity)
-        .ok_or("unknown candidate lane identity")?;
-    if lane.enabled || lane.browser != "firefox" || lane.backend.is_empty() {
-        return Err("identity is not a disabled Firefox candidate lane");
+        .ok_or("unknown production lane identity")?;
+    if !lane.enabled || lane.backend.is_empty() {
+        return Err("identity is not an enabled production lane");
     }
     Ok(lane)
 }
 
-/// Build exactly one disabled Firefox candidate by catalog identity. The catalog
-/// is deliberately consulted before invoking Nix, so enabled, unknown, malformed,
-/// and non-Firefox identities fail without a realization attempt.
-pub fn e2e_candidate(result: &mut CommandResult, identity: &str) {
+/// Build exactly one retained E2E lane by catalog identity. The catalog is
+/// consulted before invoking Nix, so disabled, unknown, and malformed identities
+/// fail without a realization attempt.
+pub fn e2e_lane(result: &mut CommandResult, identity: &str) {
     let catalog = match crate::e2e_lanes::catalog() {
         Ok(catalog) => catalog,
         Err(error) => {
-            result.push(StepResult::fail("e2e-candidate").detail(error));
+            result.push(StepResult::fail("e2e-lane").detail(error));
             return;
         }
     };
-    let lane = match measurement_candidate_lane(&catalog.lanes, identity) {
+    let lane = match production_lane(&catalog.lanes, identity) {
         Ok(lane) => lane,
         Err(error) => {
-            result.push(StepResult::fail("e2e-candidate").detail(error));
+            result.push(StepResult::fail("e2e-lane").detail(error));
             return;
         }
     };
-    let package = format!("e2e-{}", lane.identity);
+    let check = format!("e2e-{}", lane.identity);
     let diagnostics = Path::new(".xtask/diagnostics").join(format!("e2e-{}", lane.identity));
-    let build = build_package("nix-e2e-candidate", &package);
+    let build = build_check("nix-e2e-lane", &check);
     let succeeded = build.ok;
     result.push(build);
-    lift_e2e_diagnostics(
-        Path::new(&format!(".xtask/gcroots/{package}")),
-        &diagnostics,
-    );
+    lift_e2e_diagnostics(Path::new(&format!(".xtask/gcroots/{check}")), &diagnostics);
     if succeeded {
         for step in validate_lifted_e2e_combo(&lane.backend, &lane.browser, &lane.identity) {
             result.push(step);
         }
     } else {
         for error in recover_candidate_diagnostics(&lane.identity) {
-            result.push(StepResult::fail("e2e-candidate-diagnostics").detail(error));
+            result.push(StepResult::fail("e2e-lane-diagnostics").detail(error));
         }
     }
     crate::steps::flaky::collect_lanes(result, std::slice::from_ref(&lane.identity));
@@ -640,8 +665,8 @@ pub fn e2e_candidate(result: &mut CommandResult, identity: &str) {
     }
 }
 
-/// Reconcile exactly the three already-lifted candidate directories below an
-/// explicit root. This performs no Nix operation, enabling isolated runner
+/// Reconcile exactly the three already-lifted Firefox split directories below
+/// an explicit root. This performs no Nix operation, enabling isolated runner
 /// producers to publish their diagnostics for one authoritative host consumer.
 pub fn e2e_experimental_reconcile(
     result: &mut CommandResult,
@@ -660,12 +685,17 @@ pub fn e2e_experimental_reconcile(
     let lanes = catalog
         .lanes
         .iter()
-        .filter(|lane| lane.backend == backend && lane.browser == "firefox" && !lane.enabled)
+        .filter(|lane| {
+            lane.backend == backend
+                && lane.browser == "firefox"
+                && lane.enabled
+                && lane.partition != "unsplit"
+        })
         .collect::<Vec<_>>();
     if lanes.len() != 3 {
         result.push(
             StepResult::fail("e2e-experimental-reconcile")
-                .detail("catalog does not contain exactly three candidate lanes"),
+                .detail("catalog does not contain exactly three retained Firefox lanes"),
         );
         return;
     }
@@ -709,9 +739,8 @@ pub fn e2e_experimental_reconcile(
     }
 }
 
-/// Build exactly one backend's three disabled Firefox candidate lanes and make
-/// their ownership reconciliation authoritative. This is deliberately separate
-/// from production `e2e`/`validate` until the experiment is retained.
+/// Compatibility command that builds one backend's retained Firefox split lanes
+/// and makes their ownership reconciliation authoritative in one host process.
 pub fn e2e_experimental(result: &mut CommandResult, backend: &str) {
     let catalog = match crate::e2e_lanes::catalog() {
         Ok(catalog) => catalog,
@@ -723,17 +752,22 @@ pub fn e2e_experimental(result: &mut CommandResult, backend: &str) {
     let lanes = catalog
         .lanes
         .iter()
-        .filter(|lane| lane.backend == backend && lane.browser == "firefox" && !lane.enabled)
+        .filter(|lane| {
+            lane.backend == backend
+                && lane.browser == "firefox"
+                && lane.enabled
+                && lane.partition != "unsplit"
+        })
         .collect::<Vec<_>>();
     if lanes.len() != 3 {
         result.push(
             StepResult::fail("e2e-experimental")
-                .detail("catalog does not contain exactly three candidate lanes"),
+                .detail("catalog does not contain exactly three retained Firefox lanes"),
         );
         return;
     }
     let builds = build_candidate_lanes(lanes.into_iter().cloned(), |lane| {
-        let installable = format!(".#e2e-{}", lane.identity);
+        let installable = format!(".#checks.x86_64-linux.e2e-{}", lane.identity);
         match Command::new("nix")
             .args([
                 "build",
@@ -831,10 +865,10 @@ fn build_candidate_lanes<T: Send>(
 }
 
 pub fn e2e_combo(result: &mut CommandResult, backend: &str, browser: &str) {
-    let check = format!("e2e-{backend}-{browser}");
+    let lane = unsplit_lane(backend, browser);
+    let check = format!("e2e-{lane}");
     let step_name = format!("nix-{check}");
     let build = build_check(&step_name, &check);
-    let lane = unsplit_lane(backend, browser);
     let diagnostics = Path::new(".xtask/diagnostics").join(format!("e2e-{lane}"));
     finish_e2e_combo(
         result,
@@ -1614,13 +1648,13 @@ pub(crate) fn eval_source_probe_drvpaths(flake_dir: &Path) -> Result<SourceProbe
 /// On a failed build, best-effort copy diagnostics from retained outputs.
 /// Returns whether any secondary recovery step failed so the build owner can
 /// aggregate one warning without changing the primary failure.
-/// Recover every retained artifact a failed experimental package made available.
-/// Unlike the normal check path, candidate lanes are package outputs, so evaluate
-/// their direct output identity before falling back to Nix's failure excerpts.
+/// Recover every retained artifact a failed Firefox lane check made available.
+/// Evaluate the check output before falling back to emitted diagnostics from the
+/// kept failed build directory.
 fn recover_candidate_diagnostics(identity: &str) -> Vec<String> {
     let mut failures = Vec::new();
     let destination = Path::new(".xtask/diagnostics").join(format!("e2e-{identity}"));
-    match nix_eval_raw(None, &format!(".#e2e-{identity}.outPath")) {
+    match nix_eval_raw(None, &format!(".#checks.{SYSTEM}.e2e-{identity}.outPath")) {
         Ok(output) => {
             let copied = copy_e2e_diagnostics_between(Path::new(&output), &destination);
             failures.extend(
@@ -1708,8 +1742,7 @@ mod tests {
         coverage_status_after_successful_gate, coverage_status_phase_records,
         doctest_sentinel_detail, failed_build_after_diagnostics_with, failed_coverage_status_step,
         failed_status_step, finish_build_with, finish_e2e_combo, lift_elisp_coverage_artifacts,
-        measurement_candidate_lane, prepare_build_dirs_with, report_build_diagnostic_failure,
-        sentinel_detail,
+        prepare_build_dirs_with, production_lane, report_build_diagnostic_failure, sentinel_detail,
     };
     use crate::audit_wasm::{ArtifactMetrics, AuditReport};
     use crate::e2e_lanes::Lane;
@@ -3176,11 +3209,11 @@ else:
     }
 
     #[test]
-    fn measurement_candidate_selection_rejects_production_and_unknown_lanes() {
+    fn production_lane_selection_rejects_controls_and_unknown_lanes() {
         let lanes = crate::e2e_lanes::catalog().unwrap().lanes;
-        assert!(measurement_candidate_lane(&lanes, "sqlite-firefox-ordinary-1-of-2").is_ok());
-        assert!(measurement_candidate_lane(&lanes, "sqlite-firefox-unsplit").is_err());
-        assert!(measurement_candidate_lane(&lanes, "not-a-lane").is_err());
+        assert!(production_lane(&lanes, "sqlite-firefox-ordinary-1-of-2").is_ok());
+        assert!(production_lane(&lanes, "sqlite-firefox-unsplit").is_err());
+        assert!(production_lane(&lanes, "not-a-lane").is_err());
     }
 
     #[test]
@@ -3189,7 +3222,12 @@ else:
             .unwrap()
             .lanes
             .into_iter()
-            .filter(|lane| lane.backend == "sqlite" && !lane.enabled)
+            .filter(|lane| {
+                lane.backend == "sqlite"
+                    && lane.browser == "firefox"
+                    && lane.enabled
+                    && lane.partition != "unsplit"
+            })
             .collect::<Vec<_>>();
         let builds = lanes
             .into_iter()

@@ -101,7 +101,7 @@ Out:
     and explicit rejection of collisions, omissions, duplicate attempts, wrong
     lane identity, partial trace coverage, and a panic in any lane.
 
-- [ ] Task 5: Run the Firefox experiment and choose the retained topology.
+- [x] Task 5: Run the Firefox experiment and choose the retained topology.
   - Contract: compare the existing workers=2 unsplit control, two ordinary
     shards plus one serial-special lane, and a workers=4/larger-VM control for
     both SQLite and PostgreSQL Firefox. Use at least three successful

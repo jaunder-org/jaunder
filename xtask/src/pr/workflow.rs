@@ -684,11 +684,13 @@ mod tests {
             panic!("production CI workflow must remain supported by the workflow parser: {error}")
         });
 
-        assert_eq!(
-            graph.matrix_fail_fast("e2e"),
-            Ok(Some(false)),
-            "the e2e matrix must explicitly retain strategy.fail-fast: false so an early failure preserves sibling diagnostics"
-        );
+        for job in ["e2e-chromium", "e2e-firefox-lane", "e2e-firefox-reconcile"] {
+            assert_eq!(
+                graph.matrix_fail_fast(job),
+                Ok(Some(false)),
+                "{job} must explicitly retain strategy.fail-fast: false so an early failure preserves sibling diagnostics"
+            );
+        }
     }
 
     #[test]

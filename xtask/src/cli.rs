@@ -244,6 +244,12 @@ pub enum Command {
         #[arg(value_enum)]
         browser: E2eBrowser,
     },
+    /// Build one retained Firefox split lane by catalog identity. CI uses this
+    /// host-only command for each isolated lane producer.
+    E2eLane {
+        #[arg(value_parser = nonempty)]
+        identity: String,
+    },
     /// Build one workers=2 or workers=4 Firefox unsplit control for measurement
     /// only. This is a host-only package output and never changes production topology.
     E2eControl {
@@ -252,14 +258,20 @@ pub enum Command {
         #[arg(value_enum)]
         workers: E2eControlWorkers,
     },
-    /// Build exactly one disabled Firefox candidate lane by its catalog identity.
-    /// Host-only measurement work; never a production gate.
+    /// Compatibility alias for `e2e-lane`; builds one retained Firefox split lane.
     E2eCandidate {
         #[arg(value_parser = nonempty)]
         identity: String,
     },
-    /// Reconcile one backend's already-lifted disabled Firefox candidate evidence
+    /// Reconcile one backend's already-lifted retained Firefox lane evidence
     /// without invoking Nix. `diagnostics_root` contains `e2e-<lane>` directories.
+    E2eReconcile {
+        #[arg(value_enum)]
+        backend: E2eBackend,
+        #[arg(long)]
+        diagnostics_root: PathBuf,
+    },
+    /// Measurement compatibility alias with optional unsplit-control comparison.
     E2eExperimentalReconcile {
         #[arg(value_enum)]
         backend: E2eBackend,
@@ -273,8 +285,8 @@ pub enum Command {
         #[arg(long, value_enum, requires = "control_diagnostics_root")]
         control_workers: Option<E2eControlWorkers>,
     },
-    /// Build the three disabled Firefox candidate lanes and reconcile their
-    /// independently lifted ownership evidence. Host-only; never a CI gate.
+    /// Compatibility command that builds and reconciles one backend's retained
+    /// Firefox split lanes in one host process.
     E2eExperimental {
         #[arg(value_enum)]
         backend: E2eBackend,
@@ -696,8 +708,10 @@ impl Cli {
             Command::Census => "census",
             Command::AuditWasm { .. } => "audit-wasm",
             Command::E2e { .. } => "e2e",
+            Command::E2eLane { .. } => "e2e-lane",
             Command::E2eControl { .. } => "e2e-control",
             Command::E2eCandidate { .. } => "e2e-candidate",
+            Command::E2eReconcile { .. } => "e2e-reconcile",
             Command::E2eExperimentalReconcile { .. } => "e2e-experimental-reconcile",
             Command::E2eExperimental { .. } => "e2e-experimental",
             Command::E2eLocal { .. } => "e2e-local",
@@ -770,6 +784,16 @@ mod tests {
     use super::*;
     use clap::Parser;
     use std::path::PathBuf;
+
+    #[test]
+    fn e2e_lane_parses_as_a_production_command() {
+        let cli =
+            Cli::try_parse_from(["xtask", "e2e-lane", "sqlite-firefox-ordinary-1-of-2"]).unwrap();
+        assert_eq!(cli.command_name(), "e2e-lane");
+        assert!(
+            matches!(cli.command, Command::E2eLane { identity } if identity == "sqlite-firefox-ordinary-1-of-2")
+        );
+    }
 
     #[test]
     fn precommit_parses_as_first_class_subcommand() {

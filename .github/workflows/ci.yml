@@ -204,36 +204,95 @@ jobs:
           test "$test_checks" = "success"
           test "$coverage" = "success"
 
-  e2e:
-    name: e2e (${{ matrix.backend }}/${{ matrix.browser }})
+  e2e-chromium:
+    name: e2e (${{ matrix.backend }}/chromium)
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         backend: [sqlite, postgres]
-        browser: [chromium, firefox]
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: ./.github/actions/setup-ci
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      - name: e2e (${{ matrix.backend }}/${{ matrix.browser }}, via xtask)
-        # xtask surfaces retried-but-passed tests itself: it reads the report it
-        # lifts out of the VM, appends a table to $GITHUB_STEP_SUMMARY (inherited
-        # env), records them in the sidecar, and prints a `flaky:` sentinel. See
-        # xtask/src/steps/flaky.rs.
+      - name: e2e (${{ matrix.backend }}/chromium, via xtask)
         run:
           nix develop .#ci --accept-flake-config -c cargo xtask e2e ${{
-          matrix.backend }} ${{ matrix.browser }}
+          matrix.backend }} chromium
       - name: Upload e2e diagnostics
         if: always()
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: e2e-diagnostics-${{ matrix.backend }}-${{ matrix.browser }}
+          name: e2e-diagnostics-${{ matrix.backend }}-chromium
           path: |
             .xtask/diagnostics/
             .xtask/last-result.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  e2e-firefox-lane:
+    name: e2e (${{ matrix.backend }}/firefox-${{ matrix.lane }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [sqlite, postgres]
+        lane: [ordinary-1-of-2, ordinary-2-of-2, serial-special]
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: ./.github/actions/setup-ci
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Run isolated Firefox lane
+        run:
+          nix develop .#ci --accept-flake-config -c cargo xtask e2e-lane ${{
+          matrix.backend }}-firefox-${{ matrix.lane }}
+      - name: Upload lane-qualified e2e evidence
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: e2e-firefox-${{ matrix.backend }}-${{ matrix.lane }}
+          path: |
+            .xtask/diagnostics/
+            .xtask/last-result.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  e2e-firefox-reconcile:
+    name: e2e reconcile (${{ matrix.backend }}/firefox)
+    runs-on: ubuntu-24.04
+    needs: [e2e-firefox-lane]
+    if: always()
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [sqlite, postgres]
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: ./.github/actions/setup-ci
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Download all backend Firefox evidence
+        uses: actions/download-artifact@v8.0.1
+        with:
+          pattern: e2e-firefox-${{ matrix.backend }}-*
+          path: .xtask/e2e-firefox
+          merge-multiple: true
+      - name: Reconcile Firefox evidence
+        run:
+          nix develop .#ci --accept-flake-config -c cargo xtask e2e-reconcile
+          ${{ matrix.backend }} --diagnostics-root
+          .xtask/e2e-firefox/diagnostics
+      - name: Upload Firefox reconciliation diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: e2e-firefox-reconcile-${{ matrix.backend }}
+          path: .xtask/last-result.json
           if-no-files-found: ignore
           retention-days: 14
 
@@ -254,11 +313,15 @@ jobs:
     # tolerable only because the job depends on none of the image's preinstalled
     # software, which is exactly the property the paragraph above protects.
     runs-on: ubuntu-slim
-    needs: [e2e]
+    needs: [e2e-chromium, e2e-firefox-lane, e2e-firefox-reconcile]
     if: always()
     steps:
       - name: Require all e2e matrix jobs to pass
         run: |
-          e2e="${{ needs.e2e.result }}"
-          echo "e2e matrix result: $e2e"
-          test "$e2e" = "success"
+          chromium="${{ needs.e2e-chromium.result }}"
+          firefox_lanes="${{ needs.e2e-firefox-lane.result }}"
+          firefox_reconcile="${{ needs.e2e-firefox-reconcile.result }}"
+          echo "e2e results: chromium=$chromium firefox-lanes=$firefox_lanes firefox-reconcile=$firefox_reconcile"
+          test "$chromium" = "success"
+          test "$firefox_lanes" = "success"
+          test "$firefox_reconcile" = "success"

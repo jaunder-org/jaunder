@@ -162,8 +162,13 @@ pub fn compare_control_population(
     }
     let control_lane = lanes
         .iter()
-        .find(|lane| lane.backend == backend && lane.browser == "firefox" && lane.enabled)
-        .ok_or_else(|| "missing enabled Firefox control lane".to_owned())?;
+        .find(|lane| {
+            lane.backend == backend
+                && lane.browser == "firefox"
+                && !lane.enabled
+                && lane.partition == "unsplit"
+        })
+        .ok_or_else(|| "missing Firefox unsplit measurement control lane".to_owned())?;
     let control_census_raw = read(control_census, "control census")?;
     let control_report_raw = read(control_report, "control Playwright report")?;
     let control_manifest_raw = read(control_manifest, "control lane manifest")?;
@@ -223,7 +228,12 @@ pub fn reconcile(
 
     let expected = lanes
         .iter()
-        .filter(|lane| lane.backend == backend && lane.browser == browser && !lane.enabled)
+        .filter(|lane| {
+            lane.backend == backend
+                && lane.browser == browser
+                && lane.enabled
+                && lane.partition != "unsplit"
+        })
         .map(|lane| lane.identity.as_str())
         .collect::<BTreeSet<_>>();
     if supplied != expected {
@@ -233,7 +243,11 @@ pub fn reconcile(
         let Some(lane) = lanes.iter().find(|lane| lane.identity == item.identity) else {
             continue;
         };
-        if lane.backend != backend || lane.browser != browser || lane.enabled {
+        if lane.backend != backend
+            || lane.browser != browser
+            || !lane.enabled
+            || lane.partition == "unsplit"
+        {
             errors.push(format!("unexpected lane `{}`", item.identity));
             continue;
         }

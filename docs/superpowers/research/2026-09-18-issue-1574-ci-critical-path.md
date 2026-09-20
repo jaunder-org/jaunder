@@ -259,3 +259,120 @@ diagnostics after an earlier test-check failure.
 The retained topology intentionally supersedes ADR-0192's two-lane shape. Task 6
 must record this owner-approved decision and project it into architecture and
 contributor documentation before merge.
+
+## Firefox topology experiment
+
+Task 5 compared the existing workers=2 unsplit Firefox lane, the retained
+candidate of two ordinary shards plus one serial-special lane, and an unsplit
+workers=4 / 4-vCPU / 6144-MiB control. SQLite and PostgreSQL ran in separate,
+fresh NixOS VMs. Production Chromium remained unchanged. Disposable draft PR
+[#1596](https://github.com/jaunder-org/jaunder/pull/1596) carried the
+experiment; none of its workflow-only commits are retained.
+
+### Cohort and cache authentication
+
+The accepted cohort is attempts 3–5 of
+[run 35527421473](https://github.com/jaunder-org/jaunder/actions/runs/35527421473)
+at immutable head `d68854b2f9a4c8cc7030df5202a8b6b35c04eb04`. Each attempt
+injected only an inert, attempt-qualified `e2eSalt` into the measurement
+derivations so Cachix could not substitute a previous VM verdict. Every measured
+job:
+
+- restored the exact primary Actions cache key
+  `xtask-Linux-ea0143eb4115f446814b3805d702290bab87213653d932b3190ad4578a1db6e2`;
+- reported `[nix: realized …drv]` for its salted target VM derivation while
+  common dependencies could still substitute from Cachix; and
+- produced a fresh report, census, lane manifest, duration manifest, phase
+  sidecar, trace capture, journals, and Playwright archive.
+
+All three accepted attempts passed every control, split lane, and reconciliation
+job. Attempts 1 and 2 are excluded from successful-cohort arithmetic because the
+PostgreSQL workers=4 control failed; those failures are retained below as safety
+evidence rather than hidden.
+
+### Job-level observations
+
+Durations are complete GitHub job intervals, including setup and Nix entry. A
+split backend's critical path is its slowest of the three concurrently scheduled
+lane jobs; its runner proxy is their sum.
+
+| Attempt | Backend    | workers=2 control | Split critical path | Split runner proxy | workers=4 control |
+| ------: | ---------- | ----------------: | ------------------: | -----------------: | ----------------: |
+|       3 | SQLite     |             22:33 |               11:37 |              28:53 |             16:35 |
+|       4 | SQLite     |             18:00 |               12:06 |              28:40 |             20:42 |
+|       5 | SQLite     |             21:47 |               10:01 |              26:44 |             21:02 |
+|       3 | PostgreSQL |             21:54 |               12:30 |              30:16 |             17:17 |
+|       4 | PostgreSQL |             22:12 |               12:37 |              31:04 |             21:06 |
+|       5 | PostgreSQL |             22:08 |               11:35 |              30:09 |             18:51 |
+
+| Backend / metric         | workers=2 median | Split median | workers=2 p95 | Split p95 | Split p95 change |
+| ------------------------ | ---------------: | -----------: | ------------: | --------: | ---------------: |
+| SQLite critical path     |            21:47 |        11:37 |         22:28 |     12:03 |       **−46.4%** |
+| PostgreSQL critical path |            22:08 |        12:30 |         22:12 |     12:36 |       **−43.2%** |
+| SQLite runner proxy      |            21:47 |        28:40 |         22:28 |     28:52 |           +28.4% |
+| PostgreSQL runner proxy  |            22:08 |        30:16 |         22:12 |     30:59 |           +39.6% |
+
+The split clears the required 20% p95 improvement on the slower PostgreSQL
+backend by more than twenty percentage points. Aggregate runner time remains
+well below the issue's approximate 2× ceiling. Reconciliation itself took
+2:28–4:36 per backend in the accepted attempts. Composing each split critical
+path with its same-attempt reconciliation duration gives a worst backend path of
+17:06, below the retained validation warm p95 of 20:38. This composition is not
+presented as a production workflow observation: the disposable workflow's
+reconciliation also waited for measurement controls. It establishes that the
+retained workflow should return the required-check critical path to validation;
+the first production runs must confirm that result.
+
+### Executed evidence and phases
+
+Every accepted reconciliation authenticated the same 318-entry independent
+Firefox census on all three lanes, exact lane/shard metadata, and a 316-test
+executed union: 132 tests in ordinary shard 1, 129 in ordinary shard 2, and 55
+in serial-special. Reports contained zero unexpected tests. The split cohort had
+zero retries/flakes, panics, OOMs, or timeouts. Duration-pressure and
+boot-decomposition checks passed for every lane.
+
+Attempt 5's sidecars provide a representative phase decomposition:
+
+| Backend / arm        | Playwright or slowest split Playwright | VM readiness | Result lift | Post-gate checks |
+| -------------------- | -------------------------------------: | -----------: | ----------: | ---------------: |
+| SQLite workers=2     |                                  18:03 |       20.6 s |       2.3 s |            0.4 s |
+| SQLite split         |                                   5:36 |  17.5–22.5 s |   1.1–1.6 s |            0.2 s |
+| PostgreSQL workers=2 |                                  18:39 |       26.4 s |       2.5 s |            0.4 s |
+| PostgreSQL split     |                                   6:46 |  23.1–32.8 s |   1.3–1.6 s |        0.2–0.3 s |
+| SQLite workers=4     |                                  17:32 |       24.9 s |       2.8 s |            0.5 s |
+| PostgreSQL workers=4 |                                  14:03 |       25.9 s |       2.6 s |            0.5 s |
+
+The independent census deliberately exceeds the report total because it records
+all selected source identities before Playwright dependency/shard execution;
+reconciliation compares the exact authenticated identities rather than assuming
+counts imply equality.
+
+### Resource and artifact verdicts
+
+Workers=4 is rejected as a production alternative. In attempts 1 and 2 its
+PostgreSQL arm failed after both retries of `theme-management.spec.ts:122` and
+`theme-management.spec.ts:372`; attempt 4 passed only after a retry of test 122.
+Thus three successful observations were ultimately collected, but two failures
+and one flaky success across five fresh attempts reproduce the state-race
+concern behind the existing workers=2 policy. There was no corresponding
+split-lane failure or retry.
+
+Attempt 5's compressed lane artifacts totalled 4,127,544 bytes for SQLite and
+4,301,434 bytes for PostgreSQL, versus 4,144,706 and 4,225,758 bytes for their
+workers=2 controls: approximately 1.00× and 1.02×. The disposable measurement
+workflow also uploaded an 8.2-MiB reconciliation bundle that duplicated the
+already retained lane evidence. Production does not retain that duplication: its
+reconciliation artifact contains only the aggregate result sidecar, while the
+original lane-qualified evidence remains available for 14 days.
+
+### Retained Firefox decision
+
+**Retain the three-lane Firefox split for both backends.** It clears the p95
+latency threshold, stays below the runner and artifact limits, preserves exact
+backend/browser/test authority, and showed no new resource or mutable-state
+race. The shared catalog now enables six Firefox lanes and two unsplit Chromium
+lanes. Local full `cargo xtask validate` realizes and reconciles that same set;
+CI distributes it behind the unchanged required `e2e gate`. Unsplit Firefox
+workers=2 and workers=4 remain measurement-only controls, and workers=4 remains
+explicitly rejected for production.

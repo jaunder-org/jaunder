@@ -100,7 +100,7 @@ pub(crate) fn validate_unsplit_control(
     report_raw: &str,
     manifest_raw: &str,
 ) -> Result<(), String> {
-    if !lane.enabled
+    if lane.enabled
         || lane.backend != backend
         || lane.browser != browser
         || lane.partition != "unsplit"
@@ -144,12 +144,14 @@ pub(crate) fn validate_unsplit_control(
 pub fn reconcile(
     backend: &str,
     browser: &str,
-    candidates: &[Lane],
+    catalog: &[Lane],
     evidence: &[(String, String, String, String)],
 ) -> Result<String, String> {
-    let lanes = candidates
+    let lanes = catalog
         .iter()
-        .filter(|l| l.backend == backend && l.browser == browser && !l.enabled)
+        .filter(|l| {
+            l.backend == backend && l.browser == browser && l.enabled && l.partition != "unsplit"
+        })
         .collect::<Vec<_>>();
     let expected_lanes = lanes
         .iter()
@@ -160,7 +162,7 @@ pub fn reconcile(
         .map(|e| e.0.as_str())
         .collect::<BTreeSet<_>>();
     if lanes.len() != 3 || expected_lanes != supplied || evidence.len() != supplied.len() {
-        return Err("candidate lane evidence does not exactly match the catalog".into());
+        return Err("split lane evidence does not exactly match the catalog".into());
     }
     let mut census_all = None;
     let mut observed = BTreeSet::new();
@@ -173,7 +175,7 @@ pub fn reconcile(
             .map_err(|e| format!("malformed expected census for `{id}`: {e}"))?;
         if census.schema_version != 1
             || !census.complete
-            || census.topology != format!("{backend}-{browser}-experimental")
+            || census.topology != format!("{backend}-{browser}-split")
         {
             return Err(format!(
                 "incomplete or mismatched expected census for `{id}`"
