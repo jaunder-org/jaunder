@@ -43,7 +43,7 @@ clean visible text without source markup or HTML tags.
 - The persisted representation pins parser-version behavior just as rendered
   body HTML does. Reads do not reparse titles or maintain a permanent
   render-when-missing compatibility path.
-- Migration 0038 adds nullable Rendered Title columns. Because no production
+- Migration 0039 adds nullable Rendered Title columns. Because no production
   instances exist, it does not repair legacy rows; new titled writes persist a
   derivative while titleless records keep none.
 - Both SQLite and PostgreSQL implement the same schema, migration, mutation,

@@ -1138,6 +1138,7 @@ mod tests {
             user_id: UserId::from(2),
             author_username: parse_username("author"),
             title: None,
+            rendered_title: None,
             slug: slug.parse().unwrap(),
             body: parse_post_body("source body"),
             format: PostFormat::Markdown,

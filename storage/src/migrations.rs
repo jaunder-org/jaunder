@@ -264,7 +264,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            39
+            40
         );
         assert_eq!(
             db.pool
@@ -299,11 +299,11 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn migration_0038_adds_nullable_columns_without_repairing_existing_rows(
+    async fn migration_0039_adds_nullable_columns_without_repairing_existing_rows(
         #[case] backend: Backend,
     ) {
         let db = MigrationDatabase::new(backend).await;
-        db.migrate_to(37).await.unwrap();
+        db.migrate_to(38).await.unwrap();
         db.pool
             .execute(
                 "INSERT INTO users (username, password_hash, created_at) \
@@ -333,7 +333,7 @@ mod tests {
             .await
             .unwrap();
 
-        db.migrate_to(38).await.unwrap();
+        db.migrate_to(39).await.unwrap();
 
         let nullable_column_count = match &db.pool {
             CloseablePool::Sqlite(pool) => {
@@ -366,7 +366,7 @@ mod tests {
         };
         assert_eq!(
             nullable_column_count, 2,
-            "migration 0038 adds both Rendered Title columns as nullable"
+            "migration 0039 adds both Rendered Title columns as nullable"
         );
         assert_eq!(
             db.pool
@@ -374,7 +374,7 @@ mod tests {
                 .await
                 .unwrap(),
             1,
-            "migration 0038 does not repair an existing Post"
+            "migration 0039 does not repair an existing Post"
         );
         assert_eq!(
             db.pool
@@ -382,7 +382,7 @@ mod tests {
                 .await
                 .unwrap(),
             1,
-            "migration 0038 does not repair an existing Post Revision"
+            "migration 0039 does not repair an existing Post Revision"
         );
     }
 
@@ -415,11 +415,11 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn migration_0039_invalidates_pre_rendered_title_feed_cache_rows(
+    async fn migration_0040_invalidates_pre_rendered_title_feed_cache_rows(
         #[case] backend: Backend,
     ) {
         let db = MigrationDatabase::new(backend).await;
-        db.migrate_to(38).await.unwrap();
+        db.migrate_to(39).await.unwrap();
         db.pool
             .execute(
                 "INSERT INTO feed_cache \
@@ -523,7 +523,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            39,
+            40,
         );
     }
 
@@ -995,7 +995,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            39
+            40
         );
         assert_eq!(
             db.pool

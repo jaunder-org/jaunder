@@ -482,7 +482,7 @@ database reads; invalid restored bytes remain diagnostic source data but fail
 those reads before any unescaped sink. Server-authored DTO bytes are trusted by
 CSR exactly like `RenderedHtml`, so browser clients do not ship a title parser.
 Current Posts and full Post Revisions retain these rendered bytes so title and
-body share parser-version and historical-snapshot semantics. Migration 0038 adds
+body share parser-version and historical-snapshot semantics. Migration 0039 adds
 nullable columns only; with no production instances it does not repair legacy
 rows.
 ([persisted Rendered Title decision](adr/drafts/persist-inline-rendered-post-titles.md)).
@@ -875,16 +875,16 @@ use an `ammonia`-stripped, `html-escape`-decoded plain-text projection so
 secondary Markdown, Org, or HTML syntax never leaks into their plain-text title
 fields. AtomPub, slugs, and document metadata continue to use the authored title
 ([persisted Rendered Title decision](adr/drafts/persist-inline-rendered-post-titles.md)).
-Atom `<summary>` and JSON Feed `summary` carry the authored summary when present,
-otherwise the host-owned rendered-body fallback; RSS descriptions and complete
-rendered bodies remain unchanged. The CSR-reached `common::feed` grammar is
-exactly `FeedFormat`, `FeedSurface`, and `canonicalize`; the remaining
-Syndication Feed types and qualified rendering operations live in `host`.
-`server/src/feed/handlers.rs` serves the cached bytes, and `regenerate::feed`
-rebuilds them. Scheduled posts reach feeds through `FeedWorker::go_live_pass`
-(`server/src/feed/worker.rs:84`): both the steady-state `(last_tick, now]` pass
-and feed-relative restart catch-up enqueue only non-deleted Public Posts after
-their publication time becomes due
+Atom `<summary>` and JSON Feed `summary` carry the authored summary when
+present, otherwise the host-owned rendered-body fallback; RSS descriptions and
+complete rendered bodies remain unchanged. The CSR-reached `common::feed`
+grammar is exactly `FeedFormat`, `FeedSurface`, and `canonicalize`; the
+remaining Syndication Feed types and qualified rendering operations live in
+`host`. `server/src/feed/handlers.rs` serves the cached bytes, and
+`regenerate::feed` rebuilds them. Scheduled posts reach feeds through
+`FeedWorker::go_live_pass` (`server/src/feed/worker.rs:84`): both the
+steady-state `(last_tick, now]` pass and feed-relative restart catch-up enqueue
+only non-deleted Public Posts after their publication time becomes due
 ([ADR-0027](adr/0027-scheduled-publishing-time-gated-visibility.md)).
 
 **Accepted membership.** Cached membership applies anonymous/Public eligibility
