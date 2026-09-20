@@ -38,7 +38,7 @@ Out:
     and 100/500-scalar limits; documentation formatting and links pass with the
     architecture view describing the new boundary.
 
-- [ ] Task 2: Project effective summaries onto web-owned presentation metadata.
+- [x] Task 2: Project effective summaries onto web-owned presentation metadata.
   - Contract: authored summary wins; otherwise call Task 1's host API. Resolve
     the titleless unpublished-row fallback server-side to a compact summary or
     slug without representing a slug as `PostSummary`. Carry permalink

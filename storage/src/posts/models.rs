@@ -117,21 +117,6 @@ impl PostRecord {
             .into();
         canonical_permalink_path(&self.author_username, date, &self.slug)
     }
-
-    /// Generates a fallback summary from the post's first non-blank body line.
-    ///
-    /// This label is disposable presentation metadata for an unpublished row, not authored Post
-    /// content or historical state; it is derived from the canonical [`PostBody`]. Recomputing it
-    /// at read time is deliberate: the bounded draft query already loads the body, while storing
-    /// it would need freshness maintenance across body writes and direct backup restores.
-    ///
-    /// No title/slug fallbacks: [`PostBody`]'s invariant is *exactly* the condition
-    /// [`PostSummary::from_body_line`] relies on — at least one line non-empty after
-    /// trimming — so the body always answers (#811, #830, #858).
-    #[must_use]
-    pub fn fallback_summary_label(&self) -> PostSummary {
-        PostSummary::from_body_line(&self.body)
-    }
 }
 
 /// Decodes the shared post projection directly into its public storage record.
@@ -444,8 +429,6 @@ mod tests {
         parse_post_body, parse_post_title, parse_slug, parse_username, parse_utc_instant,
         rendered_html,
     };
-    use common::time::UtcInstant;
-
     #[test]
     fn publication_state_projects_publish_update() {
         let at = parse_utc_instant("2026-11-01T05:30:00Z");
@@ -463,38 +446,6 @@ mod tests {
         ] {
             assert_eq!(PublishUpdate::from(state), expected);
         }
-    }
-
-    #[test]
-    fn fallback_summary_label_uses_the_first_non_blank_body_line() {
-        let post = PostRecord {
-            author_display_name: None,
-            post_id: PostId::from(1),
-            user_id: UserId::from(1),
-            author_username: parse_username("author"),
-            title: Some(parse_post_title("My Title")),
-            slug: parse_slug("my-slug"),
-            body: parse_post_body(
-                "\n\n   The first non-empty line of the body is here. \n\n Another line.",
-            ),
-            format: PostFormat::Markdown,
-            rendered_html: rendered_html("<p>The first non-empty line of the body is here.</p>"),
-            created_at: UtcInstant::now(),
-            updated_at: UtcInstant::now(),
-            published_at: None,
-            deleted_at: None,
-            summary: None,
-            tags: vec![],
-        };
-
-        assert_eq!(
-            post.fallback_summary_label(),
-            "The first non-empty line of the body is here."
-        );
-
-        // A `PostBody` always has a non-blank line (#811), so the body rung always
-        // answers and `fallback_summary_label` needs no title/slug fallbacks — they
-        // would be dead compensation.
     }
 
     #[test]

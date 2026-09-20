@@ -1,5 +1,6 @@
 use crate::error::{ErrorClass, ErrorKind, InternalError, WebError};
 use common::ids::UserId;
+use common::post_summary::PostSummary;
 use common::seed::{AuthoredPost, RenderedPost, TagSummary};
 use leptos::context::use_context;
 use leptos_axum::ResponseOptions;
@@ -12,7 +13,46 @@ use storage::{PostRecord, PostTag};
 pub fn rendered_post(post: PostRecord, viewer_user_id: Option<UserId>) -> Option<RenderedPost> {
     post.published_at?;
     let is_author = viewer_user_id == Some(post.user_id);
-    Some(authored_post(post, is_author).post)
+    let permalink = Some(post.permalink());
+    Some(rendered_post_from_record(post, is_author, permalink))
+}
+
+/// Translates one storage record into the shared rendered-post projection.
+///
+/// Timeline rows call this directly and therefore do not request the host-only
+/// effective-summary projection reserved for permalink metadata.
+fn rendered_post_from_record(
+    post: PostRecord,
+    is_author: bool,
+    permalink: Option<common::root_relative_url::RootRelativeUrl>,
+) -> RenderedPost {
+    let PostRecord {
+        post_id,
+        author_username,
+        author_display_name,
+        title,
+        slug,
+        rendered_html,
+        created_at,
+        published_at,
+        summary,
+        tags,
+        ..
+    } = post;
+    RenderedPost {
+        post_id,
+        username: author_username,
+        display_name: author_display_name,
+        title,
+        summary,
+        slug,
+        rendered_html,
+        created_at,
+        published_at,
+        permalink,
+        is_author,
+        tags: post_tags_to_summaries(tags),
+    }
 }
 
 fn post_tags_to_summaries(tags: Vec<PostTag>) -> Vec<TagSummary> {
@@ -22,6 +62,17 @@ fn post_tags_to_summaries(tags: Vec<PostTag>) -> Vec<TagSummary> {
             display: t.tag_display,
         })
         .collect()
+}
+
+/// Selects authored summary before deriving presentation metadata from rendered HTML.
+///
+/// This host-only seam preserves `RenderedPost.summary` as authored content while
+/// making the fallback available only to surfaces that explicitly request it.
+#[must_use]
+pub fn effective_summary(post: &PostRecord) -> Option<PostSummary> {
+    post.summary
+        .clone()
+        .or_else(|| host::render::summarize_rendered_html(&post.rendered_html))
 }
 
 /// Build a permalink post — draft or published — for its author's own surfaces
@@ -34,38 +85,16 @@ fn post_tags_to_summaries(tags: Vec<PostTag>) -> Vec<TagSummary> {
 pub fn authored_post(post: PostRecord, is_author: bool) -> AuthoredPost {
     // Only published posts have a public permalink. For drafts, the permalink is None.
     let permalink = post.published_at.is_some().then(|| post.permalink());
-    let PostRecord {
-        post_id,
-        author_username,
-        author_display_name,
-        title,
-        slug,
-        body,
-        format,
-        rendered_html,
-        created_at,
-        published_at,
-        summary,
-        tags,
-        ..
-    } = post;
+    // Metadata gets the effective projection; the rendered row below deliberately
+    // keeps the authored summary untouched for public and AtomPub parity.
+    let permalink_description = effective_summary(&post);
+    let body = post.body.clone();
+    let format = post.format;
     AuthoredPost {
-        post: RenderedPost {
-            post_id,
-            username: author_username,
-            display_name: author_display_name,
-            title,
-            summary,
-            slug,
-            rendered_html,
-            created_at,
-            published_at,
-            permalink,
-            is_author,
-            tags: post_tags_to_summaries(tags),
-        },
+        post: rendered_post_from_record(post, is_author, permalink),
         body,
         format,
+        permalink_description,
     }
 }
 
@@ -132,7 +161,7 @@ mod tests {
                 updated_at: base_time,
                 published_at: Some(base_time),
                 deleted_at: None,
-                summary: Some(parse_post_summary("the summary")),
+                summary: Some(parse_post_summary("the\n\nsummary\u{a0}  wins")),
                 tags: vec![],
             },
             true,
@@ -141,7 +170,12 @@ mod tests {
         // `AuthoredPost` adds on top of it.
         assert_eq!(
             authored.post.summary,
-            Some(parse_post_summary("the summary"))
+            Some(parse_post_summary("the\n\nsummary\u{a0}  wins"))
+        );
+        assert_eq!(
+            authored.permalink_description,
+            Some(parse_post_summary("the\n\nsummary\u{a0}  wins")),
+            "authored permalink metadata remains unchanged"
         );
         assert_eq!(
             authored.post.display_name,
@@ -149,6 +183,42 @@ mod tests {
         );
         assert_eq!(authored.body, "body");
         assert_eq!(authored.format, PostFormat::Markdown);
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn effective_summary_derives_from_rendered_html_when_authored_summary_is_absent() {
+        use crate::posts::server::effective_summary;
+        use common::test_support::{parse_post_body, parse_username};
+        use common::{
+            ids::{PostId, UserId},
+            slug::Slug,
+            time::UtcInstant,
+        };
+        use storage::{PostFormat, PostRecord};
+
+        let time: UtcInstant = "2026-04-16T10:11:12Z".parse().unwrap();
+        let summary = effective_summary(&PostRecord {
+            author_display_name: None,
+            post_id: PostId::from(1),
+            user_id: UserId::from(2),
+            author_username: parse_username("author"),
+            title: None,
+            slug: "rendered-summary".parse::<Slug>().unwrap(),
+            body: parse_post_body("Legacy *markup* summary."),
+            format: PostFormat::Markdown,
+            rendered_html: common::test_support::rendered_html(
+                "<p>Legacy <em>markup</em> summary.</p>",
+            ),
+            created_at: time,
+            updated_at: time,
+            published_at: None,
+            deleted_at: None,
+            summary: None,
+            tags: vec![],
+        });
+
+        assert_eq!(summary.as_deref(), Some("Legacy markup summary."));
     }
 
     // `authored_post` and `rendered_post` build the same eleven inner fields, and
@@ -251,6 +321,47 @@ mod tests {
         assert!(
             built.is_none(),
             "a draft must never become a public listing row"
+        );
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn rendered_post_does_not_request_permalink_metadata() {
+        use crate::posts::server::rendered_post;
+        use common::test_support::{parse_post_body, parse_post_summary, parse_username};
+        use common::{
+            ids::{PostId, UserId},
+            slug::Slug,
+            time::UtcInstant,
+        };
+        use storage::{PostFormat, PostRecord};
+
+        let time: UtcInstant = "2026-04-16T10:11:12Z".parse().unwrap();
+        let timeline_post = rendered_post(
+            PostRecord {
+                author_display_name: None,
+                post_id: PostId::from(1),
+                user_id: UserId::from(2),
+                author_username: parse_username("author"),
+                title: None,
+                slug: "timeline".parse::<Slug>().unwrap(),
+                body: parse_post_body("source body"),
+                format: PostFormat::Markdown,
+                rendered_html: common::test_support::rendered_html("<p>derived text</p>"),
+                created_at: time,
+                updated_at: time,
+                published_at: Some(time),
+                deleted_at: None,
+                summary: Some(parse_post_summary("authored\nsummary")),
+                tags: vec![],
+            },
+            None,
+        )
+        .expect("published records build timeline rows");
+
+        assert_eq!(
+            timeline_post.summary,
+            Some(parse_post_summary("authored\nsummary"))
         );
     }
 }

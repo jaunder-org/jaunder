@@ -119,8 +119,7 @@ pub fn render_head(seed: &PageSeed, early_wasm_fetch_script: Option<&str>) -> Ma
                 String::from,
             ),
             authored
-                .post
-                .summary
+                .permalink_description
                 .as_deref()
                 .unwrap_or_default()
                 .to_owned(),
@@ -510,13 +509,25 @@ mod tests {
     }
 
     #[test]
-    fn permalink_head_sets_escaped_title_and_og() {
-        let head = render_head(&PageSeed::Permalink(sample_post()), None).into_string();
+    fn permalink_head_sets_escaped_title_and_effective_description() {
+        let mut post = sample_post();
+        post.permalink_description = Some("Rendered & <description>".parse().unwrap());
+        let head = render_head(&PageSeed::Permalink(post), None).into_string();
         assert!(
             head.contains("<title>Hello &amp; &lt;World&gt;</title>"),
             "{head}"
         );
+        assert!(
+            head.contains("name=\"description\" content=\"Rendered &amp; &lt;description&gt;\""),
+            "{head}"
+        );
         assert!(head.contains("<meta property=\"og:title\""), "{head}");
+        assert!(
+            head.contains(
+                "property=\"og:description\" content=\"Rendered &amp; &lt;description&gt;\""
+            ),
+            "{head}"
+        );
     }
 
     // A titleless post still needs a `<title>`: this is the SEO payload the public

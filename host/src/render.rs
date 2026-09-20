@@ -3,7 +3,8 @@
 use common::media::{self, MediaReference};
 use common::post_body::PostBody;
 use common::post_summary::{
-    MAX_POST_SUMMARY_CHARS, PostSummary, truncate_at_first_sentence_or_word_boundary,
+    MAX_POST_SUMMARY_CHARS, PostSummary, normalize_summary_whitespace,
+    truncate_at_first_sentence_or_word_boundary,
 };
 use common::render::{
     PostFormat, RenderedHtml, RenderedHtmlPart, TrustedProviderEmbed, assemble_rendered_html,
@@ -41,7 +42,7 @@ pub fn render(body: &PostBody, format: &PostFormat) -> RenderedHtml {
 pub fn summarize_rendered_html(html: &RenderedHtml) -> Option<PostSummary> {
     let stripped = ammonia::Builder::empty().clean(html.as_ref()).to_string();
     let decoded = html_escape::decode_html_entities(&stripped);
-    let normalized = decoded.split_whitespace().collect::<Vec<_>>().join(" ");
+    let normalized = normalize_summary_whitespace(&decoded);
     if normalized.is_empty() {
         return None;
     }

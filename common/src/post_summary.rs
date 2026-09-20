@@ -109,6 +109,15 @@ fn non_empty_trimmed_prefix(prefix: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
+/// Replaces each maximal Unicode-whitespace run with one ASCII space and trims it.
+///
+/// This target-independent presentation step applies before an effective summary is
+/// truncated, whether its text was authored or extracted from rendered HTML.
+#[must_use]
+pub fn normalize_summary_whitespace(input: &str) -> String {
+    input.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Truncate derived rendered text at its first lexical sentence terminator, then at a
 /// word boundary, and finally at a Unicode-scalar limit.
 ///
@@ -251,6 +260,14 @@ mod tests {
         let over = "a".repeat(MAX_POST_SUMMARY_CHARS + 1);
 
         assert!(over.parse::<PostSummary>().is_err());
+    }
+
+    #[test]
+    fn summary_whitespace_normalization_collapses_unicode_runs() {
+        assert_eq!(
+            normalize_summary_whitespace("\n  first\u{a0}\t second \n"),
+            "first second"
+        );
     }
 
     #[test]

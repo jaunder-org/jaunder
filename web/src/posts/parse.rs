@@ -25,7 +25,7 @@ pub fn parse_permalink_route(
 /// Presentational data for one draft row, computed by [`draft_row_display`] so the
 /// wasm-only component keeps only its `view!` markup.
 pub struct DraftRowDisplay {
-    /// The row's displayed title: the post title if present, else the summary label.
+    /// The row's displayed title: the post title if present, else the server-resolved label.
     pub label: String,
     /// "Scheduled for …" badge text when the post is scheduled (a future
     /// `published_at`); `None` for a true draft.
@@ -39,7 +39,7 @@ pub fn draft_row_display(draft: &UnpublishedPost) -> DraftRowDisplay {
     let label = draft
         .title
         .clone()
-        .map_or_else(|| draft.summary_label.to_string(), String::from);
+        .map_or_else(|| draft.fallback_label.clone().into(), String::from);
     // `list_drafts` only returns true drafts (`published_at` NULL) and scheduled
     // posts (`published_at` in the future), so a `Some` here is necessarily a
     // scheduled time — that is what makes the badge text correct.
@@ -120,7 +120,9 @@ mod tests {
                 permalink: parse_root_relative_url("/~alice/2026/01/01/my-post"),
             },
             title: title.map(parse_post_title),
-            summary_label: parse_post_summary("fallback label"),
+            fallback_label: crate::posts::UnpublishedPostLabel::Summary(parse_post_summary(
+                "fallback label",
+            )),
             edit_url: parse_root_relative_url("/posts/1/edit"),
         }
     }
@@ -133,10 +135,18 @@ mod tests {
     }
 
     #[test]
-    fn draft_row_falls_back_to_summary_label_when_untitled() {
+    fn draft_row_uses_fallback_label_when_untitled() {
         let row = draft_row_display(&draft(None, None));
         assert_eq!(row.label, "fallback label");
         assert_eq!(row.scheduled_badge, None);
+    }
+
+    #[test]
+    fn draft_row_uses_slug_when_rendered_html_was_textless() {
+        let mut untitled = draft(None, None);
+        untitled.fallback_label = crate::posts::UnpublishedPostLabel::Slug(parse_slug("my-post"));
+
+        assert_eq!(draft_row_display(&untitled).label, "my-post");
     }
 
     #[test]

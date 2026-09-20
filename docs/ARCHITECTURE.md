@@ -485,8 +485,15 @@ strips rendered elements with `ammonia::Builder::empty()`, decodes its
 serialized entities, normalizes Unicode whitespace, and applies the lexical
 sentence/word/scalar boundary rule. It is derived only from already-sanitized
 `RenderedHtml`, never stored, and keeps HTML handling out of wasm and storage.
-`summary_label` remains disposable presentation metadata for a titleless
-unpublished row; persisting either derived value would impose freshness
+For titleless unpublished rows, web selects the authored summary first or
+otherwise invokes that host projection, then normalizes the effective text's
+Unicode whitespace before applying the approved compact 100-scalar label
+projection; textless rendering falls back to the `Slug` through a distinct label
+variant rather than presenting identity as a `PostSummary`. Permalink
+description/Open Graph metadata carries the same effective projection separately
+from `RenderedPost.summary`, so timeline rows, public summary paragraphs, and
+AtomPub retain authored-summary semantics. `fallback_label` remains disposable
+presentation metadata; persisting either derived value would impose freshness
 obligations across writes and direct backup restore.
 
 **A body has at least one non-blank line, and normalization is format-aware**
@@ -4182,7 +4189,7 @@ workspace/gate boundaries
 credential storage
 ([ADR-0143](adr/0143-emacs-auth-source-app-password-storage.md)).
 
-The derived `summary_label` persistence policy is deliberately not ADR-backed:
+The derived `fallback_label` persistence policy is deliberately not ADR-backed:
 [#754](https://github.com/jaunder-org/jaunder/issues/754) retains the existing
 storage boundary rather than establishing a new durable architectural decision.
 
