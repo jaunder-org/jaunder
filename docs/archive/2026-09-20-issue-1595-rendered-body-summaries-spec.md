@@ -66,10 +66,9 @@ Post content remains present everywhere it is present today.
 - Cached feeds created before this behavior change cannot continue to be served
   after the deployment migration.
 - Focused tests cover extraction, entity decoding, whitespace and boundary
-  rules, Unicode limits, precedence, textless behavior, metadata/feed
-  projection, and cache invalidation on both storage backends. Regression
-  assertions prove the exclusions below, including absence from Post and
-  revision storage.
+  rules, Unicode limits, precedence, textless behavior, and metadata/feed
+  projection. Regression assertions prove the exclusions below, including
+  absence from Post and revision storage.
 
 ## Boundaries
 

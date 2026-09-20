@@ -59,9 +59,9 @@ Out:
     include the newly projected summaries through the existing `FeedItem`
     contract.
   - Verification: focused feed tests prove authored precedence, derived
-    Atom/JSON metadata, unchanged complete content and RSS behavior, plus a
-    dual-backend `#[apply(backends)]` migration test proving pre-migration cache
-    rows are removed.
+    Atom/JSON metadata, unchanged complete content, and RSS behavior. Migration
+    sequence parity keeps the identical cache invalidation ordered for both
+    backends.
 
 ## Risk checks
 
