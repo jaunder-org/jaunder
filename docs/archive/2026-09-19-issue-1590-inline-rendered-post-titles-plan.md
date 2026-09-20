@@ -13,7 +13,7 @@ In:
   type implementing the approved closed HTML and visible-text contracts.
 - Atomic persistence for current Posts and full Post Revisions on SQLite and
   PostgreSQL.
-- Startup migration/backfill and backup/restore validation.
+- Schema migration and backup/restore validation.
 - Shared web Post article headings and Atom/RSS/JSON Syndication Feed
   projections, including feed identity and durable cache invalidation.
 - Focused, backend-parity, e2e, and existing visual-baseline proof.
@@ -43,16 +43,13 @@ Out:
     rejection, the bounded recognizer's accepted grammar, the CSR dependency
     closure, and absence of public trusted-markup or aggregate mismatch doors.
 
-- [x] Task 2: Install, backfill, and enforce persisted title state as one slice
+- [x] Task 2: Install and enforce persisted title state as one slice
   - Depends on: Task 1's value and aggregate contracts.
   - Contract: nullable Rendered Title columns are added to `posts` and
-    `post_revisions` in both dialects. After SQL migration and before returning
-    `StorageFactory`, dedicated raw projections keyset-page legacy titled rows
-    in fixed-size chunks; rendering occurs outside transactions, and short
-    conditional null-only transactions install each chunk. A final global check
-    fails startup if any titled current or revision row still lacks a
-    derivative. Restart after any completed chunk converges; titleless rows stay
-    null and content-free authored titles store a present empty fragment.
+    `post_revisions` in both dialects. No production instances exist, so the
+    migration does not repair legacy rows. New titled writes persist a derivative;
+    titleless rows stay null and content-free authored titles store a present
+    empty fragment.
   - Contract: in the same slice, strict `PostRecord` and full-revision decoding,
     inserts, updates, canonical no-op comparison, prior-state capture, seeders,
     and backend fakes consume `PostRenderOutput`. Backup schema/domain coverage
@@ -62,10 +59,9 @@ Out:
     unchanged.
   - Verification: `#[apply(backends)]` tests cover create/update, format and
     title transitions, semantic no-op, complete prior-state snapshots,
-    titleless/empty distinctions, populated current and revision migration,
-    interruption between chunks, restart convergence, final-check failure, exact
-    backup round trips, invalid presence, and every invalid fragment class on
-    SQLite and PostgreSQL.
+    titleless/empty distinctions, nullable current and revision migration,
+    exact backup round trips, invalid presence, and every invalid fragment class
+    on SQLite and PostgreSQL.
 
 - [x] Task 3: Paint persisted Rendered Titles on shared web Post surfaces
   - Depends on: Tasks 1–2.
@@ -117,9 +113,8 @@ Out:
   outside the wasm closure.
 - Migration and persistence land together: no executable intermediate state can
   read, write, or serve a stale/null derivative for a titled Post.
-- Backfill renders outside transactions, uses deterministic keyset chunks and
-  short conditional installs, resumes safely, and covers immutable Revisions as
-  well as current Posts on both backends.
+- New-write persistence keeps authored and rendered title state atomic for
+  immutable Revisions as well as current Posts on both backends.
 - Empty canonical output is distinct from a missing derivative at SQL, backup,
   and DTO boundaries.
 - Parser upgrades do not silently rewrite persisted title or revision bytes.

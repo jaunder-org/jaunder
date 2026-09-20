@@ -4,8 +4,6 @@
 //! `seed-e2e` exist today; `pg`-migration of the remaining shell scripts is
 //! tracked separately.
 
-#![recursion_limit = "256"]
-
 use std::path::PathBuf;
 
 use ::coverage::workers::{ExperimentStrategy, WorkerConcurrencyPolicy};

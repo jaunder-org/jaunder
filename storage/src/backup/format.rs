@@ -23,10 +23,6 @@ const fn legacy_backup_format_version() -> u32 {
 
 // Schema bookkeeping, regenerable cache data, and live ceremony state are not
 // portable backup data. Durable Passkey handles and credentials remain included.
-// The raw `migration.0038.rendered_title_backfill_pending` site-config marker is
-// intentionally portable: normal production backups cannot contain it because an
-// opener clears it only after successful backfill; a manually crafted backup that
-// does contain it explicitly requests pending migration recovery on next startup.
 pub(crate) const TABLES_EXCLUDED_FROM_BACKUP: &[&str] = &[
     "_sqlx_migrations",
     "feed_cache",

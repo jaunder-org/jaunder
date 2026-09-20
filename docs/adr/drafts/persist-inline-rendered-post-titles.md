@@ -33,8 +33,9 @@ sanitized Rendered Title together with the rendered body whenever a titled Post
 is created or its title, body, or format changes. Storage writes the authored
 title, format, rendered body, and Rendered Title atomically. Current Posts and
 full Post Revisions persist the Rendered Title; titleless records persist none.
-A one-time startup backfill renders all existing titled Posts and Revisions, and
-reads do not retain a permanent render-on-missing compatibility path.
+The migration only adds nullable columns: because no production instances exist,
+it does not repair legacy rows or install a render-on-missing compatibility
+path.
 
 A Rendered Title is canonical, trusted, inline-only HTML with a stricter
 contract than rendered body HTML. Its closed retained-element set is `b`,
@@ -51,9 +52,9 @@ emits its required empty HTML title construct.
 Web Post article headings consume the persisted HTML. Atom Syndication Feed
 entry titles use an HTML text construct. RSS and JSON Syndication Feed titles
 use a plain-text projection produced by stripping the persisted fragment with an
-empty-tag `ammonia` builder. Its canonical entities decode once, `br` becomes a
-space, and whitespace collapses; they never receive Markdown, Org, or HTML
-source syntax. Feed fingerprints and serializer revisions cover the chosen
+empty-tag `ammonia` builder. `html-escape` decodes its entities once, `br`
+becomes a space, and whitespace collapses; they never receive Markdown, Org, or
+HTML source syntax. Feed fingerprints and serializer revisions cover the chosen
 projections.
 
 Slugs, document metadata, AtomPub, editing, and source-oriented administration
@@ -70,9 +71,8 @@ existing records only through an explicit rewrite or a later content update.
 
 Both storage backends require schema parity for current Posts and Revisions,
 plus atomic mutation, semantic no-op, backup, restore-validation, and fixture
-coverage. The startup backfill must complete before storage is exposed and fail
-closed if a titled row remains without its derivative; an intentionally empty
-fragment remains a present derivative.
+coverage. New writes always persist a derivative for authored titles; an
+intentionally empty fragment remains a present derivative.
 
 The common wire/storage type reconstructs trusted persisted bytes only after a
 field-specific, non-rewriting recognizer confirms the bounded canonical fragment

@@ -779,6 +779,7 @@ dependencies = [
  "base64 0.23.1",
  "croner 4.0.0",
  "email_address",
+ "html-escape",
  "jiff",
  "jiff-sqlx",
  "macros",

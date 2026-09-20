@@ -24,15 +24,15 @@ clean visible text without source markup or HTML tags.
 - HTML titles are interpreted as untrusted fragments under the same closed
   policy, not displayed as literal markup.
 - Links lose their wrapper and destination but retain their rendered label.
-  Images retain escaped alternative text only. Other element wrappers retain
-  safe textual descendants, inserting a boundary space for block elements.
-  Comments disappear. `script`, `style`, `template`, `iframe`, `object`,
+  Images and removed block wrappers do not synthesize replacement text or
+  spacing. Comments disappear. `script`, `style`, `template`, `iframe`, `object`,
   `embed`, `svg`, `math`, and audio/video/source/track elements disappear with
   their descendants. No event handler, URL, style, class, or other attribute
   survives.
 - Canonical serialization is deterministic. The plain-text feed projection uses
-  `ammonia` to strip all title markup, decodes canonical entities once, converts
-  `br` to one space, collapses every whitespace run to one ASCII space, and trims.
+  `ammonia` to strip all title markup, `html-escape` to decode entities once,
+  converts `br` to one space, collapses every whitespace run to one ASCII space,
+  and trims.
 - A source title with no surviving visible text persists an empty Rendered
   Title. Web presentation omits its heading; RSS and JSON Feed omit their
   optional title; Atom emits its required empty HTML title construct. Authored
@@ -43,10 +43,9 @@ clean visible text without source markup or HTML tags.
 - The persisted representation pins parser-version behavior just as rendered
   body HTML does. Reads do not reparse titles or maintain a permanent
   render-when-missing compatibility path.
-- Existing titled Posts and Revisions receive Rendered Titles through an
-  idempotent startup backfill before storage is exposed. Startup fails closed if
-  any titled record remains without its derivative; titleless records keep no
-  derivative.
+- Migration 0038 adds nullable Rendered Title columns. Because no production
+  instances exist, it does not repair legacy rows; new titled writes persist a
+  derivative while titleless records keep none.
 - Both SQLite and PostgreSQL implement the same schema, migration, mutation,
   semantic-no-op, revision, backup, restore-validation, and decode invariants.
 - Field-specific storage and wire decoding performs non-rewriting validation of
@@ -92,9 +91,9 @@ clean visible text without source markup or HTML tags.
   Revision nor a timestamp change.
 - A title or format change captures the complete prior Rendered Title in the
   same Post Revision as the prior source and rendered body.
-- Migration tests prove existing titled Posts and Revisions are backfilled,
-  titleless records remain null, rerunning is harmless, and incomplete backfill
-  prevents startup.
+- Migration tests prove both backend schemas add nullable Rendered Title
+  columns; new titled writes persist derivatives and titleless records remain
+  null.
 - Backup and restore tests preserve Rendered Title bytes exactly, diagnose
   invalid payloads without blessing them as trusted HTML, and reject invalid
   title/Rendered Title presence combinations on both backends. Typed reads
@@ -111,7 +110,7 @@ clean visible text without source markup or HTML tags.
   representations.
 - Focused tests pin exact persisted HTML and RSS/JSON text for each retained
   element and for representative Markdown, Org, and HTML source, including
-  links, image alt text, block boundaries, `br`, entities, adjacent nodes,
+  links, removed images and block wrappers, `br`, entities, adjacent nodes,
   whitespace, comments, malformed input, active elements, and empty output.
 - Focused tests also cover storage parity, revisions, backup/restore, wire
   decode, web rendering, feed rendering, and feed identity.

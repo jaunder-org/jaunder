@@ -8,7 +8,6 @@ pub(crate) mod models;
 pub(crate) mod store;
 pub(crate) mod syndication;
 pub(crate) mod tags;
-pub(crate) mod title_backfill;
 pub(crate) mod visibility;
 
 pub use cursors::{

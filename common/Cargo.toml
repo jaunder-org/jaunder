@@ -13,6 +13,7 @@ jiff-sqlx = { workspace = true, optional = true }
 croner.workspace = true
 macros = { path = "../macros" }
 ammonia = { workspace = true, optional = true }
+html-escape = { workspace = true, optional = true }
 orgize.workspace = true
 percent-encoding.workspace = true
 serde = { workspace = true, features = ["derive"] }
@@ -34,7 +35,7 @@ unicode-segmentation = "1.13.3"
 sqlx = ["dep:jiff-sqlx", "dep:sqlx"]
 # Optional host-only sanitizer for inbound rendered HTML. CSR/wasm callers leave
 # this feature off, so `ammonia` stays out of their dependency graph.
-sanitize = ["dep:ammonia"]
+sanitize = ["dep:ammonia", "dep:html-escape"]
 # Compiles shared test-only helpers such as the capturing mail sender. Password
 # KDF test parameters are host-owned and no longer ride this feature.
 test-utils = []

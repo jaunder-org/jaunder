@@ -621,45 +621,18 @@ pub fn sanitize_post_title(raw: &str) -> RenderedPostTitle {
 
 /// Returns a readable text projection of a persisted Rendered Title for text-only sinks.
 ///
-/// Ammonia strips the already canonical HTML; decoding then handles only the three
-/// entity spellings that the canonical grammar permits, exactly once.
+/// Ammonia strips the already canonical HTML and `html-escape` decodes its entities
+/// exactly once, so text-only sinks receive readable text rather than HTML syntax.
 #[cfg(feature = "sanitize")]
 #[must_use]
 pub fn rendered_post_title_visible_text(title: &RenderedPostTitle) -> String {
     // `br` is the sole marker whose readable spacing survives title sanitization.
     let fragment = title.as_str().replace("<br>", " ");
     let text = TITLE_TEXT_SANITIZER.clean(&fragment).to_string();
-    decode_canonical_title_entities(&text)
+    html_escape::decode_html_entities(&text)
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-#[cfg(feature = "sanitize")]
-fn decode_canonical_title_entities(text: &str) -> String {
-    let mut decoded = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(index) = rest.find('&') {
-        let (prefix, after) = rest.split_at(index);
-        decoded.push_str(prefix);
-        if let Some(value) = after.strip_prefix("&amp;") {
-            decoded.push('&');
-            rest = value;
-        } else if let Some(value) = after.strip_prefix("&lt;") {
-            decoded.push('<');
-            rest = value;
-        } else if let Some(value) = after.strip_prefix("&gt;") {
-            decoded.push('>');
-            rest = value;
-        } else {
-            // The title grammar permits only these entity spellings; preserving an
-            // unexpected spelling keeps this projection total for future bad data.
-            decoded.push('&');
-            rest = &after[1..];
-        }
-    }
-    decoded.push_str(rest);
-    decoded
 }
 
 /// Sanitizes untrusted HTML into a [`RenderedHtml`].
