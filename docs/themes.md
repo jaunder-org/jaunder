@@ -290,7 +290,10 @@ selection.
 Before publication, check at least:
 
 - the site home page, an author timeline, a tag route, and a permalink;
-- Posts with and without titles, summaries, avatars, tags, and attribution;
+- Posts with and without titles, summaries, tags, and applicable continuation;
+- the avatar and author handle that the current renderer always emits;
+- static CSS and layout treatment for optional avatar, author-handle, and
+  source-attribution hooks without fabricating unsupported DOM states;
 - narrow and wide viewports;
 - keyboard navigation, visible focus, contrast, zoom, and reduced-motion
   behavior;
