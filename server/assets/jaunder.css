@@ -629,7 +629,19 @@
   gap: 8px;
 }
 
-.j-composer-media > .j-btn {
+.j-media-upload-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.j-composer-media > .j-media-upload-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 8px;
+}
+
+.j-composer-media > .j-media-upload-actions > .j-btn {
   width: 100%;
 }
 
