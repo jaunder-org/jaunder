@@ -130,7 +130,12 @@ fn build_feed_items(base: &BaseUrl, records: &[PostRecord]) -> Vec<FeedItem> {
                 // A struct-literal field cannot be ascribed, so the role is spelled as a
                 // turbofish on the tag — the alias rule's stated exception.
                 permalink: tagged_url::compose::<Permalink>(base, &p.permalink()),
-                summary: p.summary.clone(),
+                // Preserve authored summary bytes when present; otherwise the host-owned
+                // rendered-body boundary supplies Atom/JSON Feed metadata.
+                summary: p
+                    .summary
+                    .clone()
+                    .or_else(|| host::render::summarize_rendered_html(&p.rendered_html)),
                 // FeedItem carries the post's RenderedHtml unflattened (#470); the value
                 // is already rendered — no from_trusted rebuild, just propagate it.
                 content_html: p.rendered_html.clone(),

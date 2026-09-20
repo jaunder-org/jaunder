@@ -853,14 +853,17 @@ roles existed.
 
 Public read-only feeds serve arbitrary feed readers, so every item carries the
 post's `rendered_html` — Atom `type="html"` and the RSS/JSON Feed equivalents
-([ADR-0015](adr/0015-atompub-serialization-surfaces.md)). The CSR-reached
-`common::feed` grammar is exactly `FeedFormat`, `FeedSurface`, and
-`canonicalize`; the remaining Syndication Feed types and qualified rendering
-operations live in `host`. `server/src/feed/handlers.rs` serves the cached
-bytes, and `regenerate::feed` rebuilds them. Scheduled posts reach feeds through
-`FeedWorker::go_live_pass` (`server/src/feed/worker.rs:84`): both the
-steady-state `(last_tick, now]` pass and feed-relative restart catch-up enqueue
-only non-deleted Public Posts after their publication time becomes due
+([ADR-0015](adr/0015-atompub-serialization-surfaces.md)). Atom `<summary>` and
+JSON Feed `summary` carry the authored summary when present, otherwise the
+host-owned rendered-body fallback; RSS descriptions and complete rendered bodies
+remain unchanged. The CSR-reached `common::feed` grammar is exactly
+`FeedFormat`, `FeedSurface`, and `canonicalize`; the remaining Syndication Feed
+types and qualified rendering operations live in `host`.
+`server/src/feed/handlers.rs` serves the cached bytes, and `regenerate::feed`
+rebuilds them. Scheduled posts reach feeds through `FeedWorker::go_live_pass`
+(`server/src/feed/worker.rs:84`): both the steady-state `(last_tick, now]` pass
+and feed-relative restart catch-up enqueue only non-deleted Public Posts after
+their publication time becomes due
 ([ADR-0027](adr/0027-scheduled-publishing-time-gated-visibility.md)).
 
 **Accepted membership.** Cached membership applies anonymous/Public eligibility

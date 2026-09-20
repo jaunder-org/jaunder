@@ -50,7 +50,7 @@ Out:
     Graph metadata; unchanged permalink title, public summary paragraph,
     AtomPub, Post/revision persistence, and Site Tagline behavior.
 
-- [ ] Task 3: Project effective summaries into Syndication Feeds and expire old
+- [x] Task 3: Project effective summaries into Syndication Feeds and expire old
       cached bytes.
   - Contract: Atom `<summary>` and JSON Feed `summary` use the effective
     summary; RSS description and every format's complete rendered body remain

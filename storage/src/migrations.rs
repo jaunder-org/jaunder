@@ -258,7 +258,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            37
+            38
         );
         assert_eq!(
             db.pool
@@ -315,6 +315,38 @@ mod tests {
                 .unwrap(),
             0,
             "legacy cache rows cannot establish semantic identity"
+        );
+    }
+
+    /// Cache bytes and validators are disposable, so this upgrade must leave no
+    /// pre-effective-summary representation behind on either storage backend.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn migration_0038_invalidates_feed_cache_for_effective_summaries(
+        #[case] backend: Backend,
+    ) {
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(37).await.unwrap();
+        db.pool
+            .execute(
+                "INSERT INTO feed_cache \
+                 (feed_url, body, etag, content_type, representation_modified_at, generated_at, semantic_fingerprint) \
+                 VALUES ('/feed.rss', '<rss/>', '\"legacy\"', 'application/rss+xml; charset=utf-8', \
+                 CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, \
+                 '0123456789012345678901234567890123456789012345678901234567890123')",
+            )
+            .await
+            .unwrap();
+
+        db.migrate_current().await.unwrap();
+
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM feed_cache")
+                .await
+                .unwrap(),
+            0,
+            "effective-summary migration removes only disposable cached representations"
         );
     }
 
@@ -386,7 +418,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            37,
+            38,
         );
     }
 
@@ -858,7 +890,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            37
+            38
         );
         assert_eq!(
             db.pool

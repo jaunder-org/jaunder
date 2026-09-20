@@ -1,6 +1,8 @@
 use common::{
     MutationOutcome,
     ids::{PostId, UserId},
+    post_body::PostBody,
+    post_summary::PostSummary,
     render::PostFormat,
     tagged_url::HubUrl,
     test_support::parse_post_body,
@@ -594,10 +596,86 @@ async fn feed_contains_only_public_posts(#[case] backend: Backend) {
     );
 }
 
+/// Effective summaries are metadata only: Atom and JSON Feed expose the authored
+/// summary or rendered-body fallback, while RSS remains a complete-body surface.
+#[apply(backends)]
+#[tokio::test]
+async fn regenerated_feeds_project_effective_summaries_without_changing_complete_bodies(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let authored_summary: PostSummary = "Authored  summary wins!".parse().expect("valid summary");
+    let authored_body: PostBody = "Authored rendered body remains complete."
+        .parse()
+        .expect("valid body");
+    let derived_body: PostBody = "Derived fallback. The rendered body remains complete."
+        .parse()
+        .expect("valid body");
+
+    for (summary, body, expected_summary) in [
+        (
+            Some(authored_summary.clone()),
+            authored_body.clone(),
+            authored_summary.to_string(),
+        ),
+        (None, derived_body.clone(), "Derived fallback.".to_owned()),
+    ] {
+        let user = SeedUser::new()
+            .seed(Arc::clone(&env.users()), env.write_scope())
+            .await;
+        let mut post = SeedRawPost::new(user.user_id).body(body);
+        if let Some(summary) = summary {
+            post = post.summary(summary);
+        }
+        let post = post.seed(Arc::clone(&env.posts()), env.write_scope()).await;
+
+        for extension in ["rss", "atom", "json"] {
+            let row = render_feed(
+                Arc::clone(&env.publisher()),
+                Arc::clone(&env.posts()),
+                fp(&format!("/~{}/feed.{extension}", user.username)),
+            )
+            .await;
+            let body = row.representation().body();
+            let complete_body = post.rendered_html.as_ref();
+
+            match extension {
+                "atom" => {
+                    assert!(
+                        body.contains(&format!("<summary>{expected_summary}</summary>")),
+                        "Atom projects the effective summary: {body}"
+                    );
+                    assert!(
+                        body.contains(&xml_text(complete_body)),
+                        "Atom retains the complete rendered body: {body}"
+                    );
+                }
+                "json" => {
+                    let value: serde_json::Value =
+                        serde_json::from_str(body).expect("JSON Feed parses");
+                    assert_eq!(value["items"][0]["summary"], expected_summary);
+                    assert_eq!(value["items"][0]["content_html"], complete_body);
+                }
+                "rss" => {
+                    assert!(
+                        body.contains(complete_body),
+                        "RSS description remains the complete rendered body: {body}"
+                    );
+                    assert!(
+                        !body.contains("Authored  summary wins!"),
+                        "RSS does not gain summary metadata: {body}"
+                    );
+                }
+                _ => unreachable!("fixed feed extension"),
+            }
+        }
+    }
+}
+
 /// #772: the feed reads tags off the records `list_published_in_window` already
-/// returned instead of issuing one per-post tag query. This pins the
-/// observable contract that must survive that switch — tags still reach the body,
-/// slug-ordered even when written in the opposite order.
+/// returned instead of issuing one per-post tag query. This pins the observable
+/// contract that must survive that switch — tags still reach the body, slug-ordered
+/// even when written in the opposite order.
 ///
 /// JSON is deliberate. RSS renders no tags at all (`common/src/feed/rss.rs` never
 /// reads `item.tags`), and Atom's `<category term=…>` would force a substring-index
