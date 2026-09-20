@@ -930,7 +930,7 @@ async fn theme_binding_inputs_persist_and_project_through_server_functions(
 
 #[apply(backends)]
 #[tokio::test]
-async fn imported_package_defaults_present_after_publish_and_site_selection(
+async fn imported_package_defaults_resolve_then_explicit_absence_suppresses_them(
     #[case] backend: Backend,
 ) {
     let env = backend.setup().await;
@@ -974,26 +974,6 @@ async fn imported_package_defaults_present_after_publish_and_site_selection(
         None,
         "ZIP import leaves package-default header binding absent"
     );
-    for role in [ThemeImageRole::Logo, ThemeImageRole::Header] {
-        let (status, body) = post_server_fn(
-            make_app!(&env, &storage),
-            &web::themes::ReplaceBinding {
-                scope: OwnershipScope::Site,
-                theme_id: theme.id,
-                role,
-                input: ThemeBindingInput::ExplicitAbsent,
-            },
-            Some(&operator.cookie()),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "body: {body}");
-        confirmed_for(
-            serde_json::from_str::<MutationOutcome<()>>(&body)
-                .expect("explicit-absence binding outcome JSON"),
-            "explicit-absence binding",
-        );
-    }
-
     let (status, body) = post_server_fn(
         make_app!(&env, &storage),
         &web::themes::Publish {
@@ -1030,12 +1010,66 @@ async fn imported_package_defaults_present_after_publish_and_site_selection(
     )
     .await
     .expect("selected package-default public presentation resolves");
+    let logo_url = presentation
+        .logo_url
+        .expect("absent logo binding resolves the package-default logo");
+    assert!(
+        logo_url.as_ref().starts_with("/theme/"),
+        "package-default logo resolves to a public package asset URL"
+    );
+    let header_url = presentation
+        .header_url
+        .expect("absent header binding resolves a package-default header");
+    assert!(
+        header_url.as_ref().starts_with("/theme/"),
+        "package-default header resolves to a public package asset URL"
+    );
+    let repeated_presentation = storage::resolve_public_theme(
+        storage::PublicThemeOwner::Site,
+        &PublicThemeRoute::site(),
+        themes.as_ref(),
+    )
+    .await
+    .expect("selected package-default public presentation resolves repeatedly");
     assert_eq!(
-        presentation.logo_url, None,
+        repeated_presentation.header_url,
+        Some(header_url),
+        "package-default header selection is deterministic for the same route and revision"
+    );
+
+    for role in [ThemeImageRole::Logo, ThemeImageRole::Header] {
+        let (status, body) = post_server_fn(
+            make_app!(&env, &storage),
+            &web::themes::ReplaceBinding {
+                scope: OwnershipScope::Site,
+                theme_id: theme.id,
+                role,
+                input: ThemeBindingInput::ExplicitAbsent,
+            },
+            Some(&operator.cookie()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {body}");
+        confirmed_for(
+            serde_json::from_str::<MutationOutcome<()>>(&body)
+                .expect("explicit-absence binding outcome JSON"),
+            "explicit-absence binding",
+        );
+    }
+
+    let suppressed_presentation = storage::resolve_public_theme(
+        storage::PublicThemeOwner::Site,
+        &PublicThemeRoute::site(),
+        themes.as_ref(),
+    )
+    .await
+    .expect("selected public presentation resolves after explicit absence");
+    assert_eq!(
+        suppressed_presentation.logo_url, None,
         "persisted explicit absence suppresses the package-default public logo"
     );
     assert_eq!(
-        presentation.header_url, None,
+        suppressed_presentation.header_url, None,
         "persisted explicit absence suppresses the package-default public header"
     );
 }
