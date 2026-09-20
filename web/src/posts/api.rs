@@ -1170,13 +1170,10 @@ mod tests {
         );
 
         let long = format!("{}trailing", "word ".repeat(25));
-        let super::UnpublishedPostLabel::Summary(compact) =
-            super::unpublished_post_from_record(record(&long, "long")).fallback_label
-        else {
-            panic!("rendered text must produce a summary label");
-        };
-        assert!(compact.chars().count() <= 100, "{compact}");
-        assert!(!compact.ends_with("trailing"), "{compact}");
+        assert_eq!(
+            super::unpublished_post_from_record(record(&long, "long")).fallback_label,
+            super::UnpublishedPostLabel::Summary("word ".repeat(20).trim_end().parse().unwrap())
+        );
     }
 
     // A wire DTO's `rendered_html` survives a serde round-trip: `Serialize` writes
