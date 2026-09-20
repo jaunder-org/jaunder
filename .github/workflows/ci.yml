@@ -274,19 +274,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - backend: sqlite
-            lane: sqlite-firefox-ordinary-1-of-2
-          - backend: sqlite
-            lane: sqlite-firefox-ordinary-2-of-2
-          - backend: sqlite
-            lane: sqlite-firefox-serial-special
-          - backend: postgres
-            lane: postgres-firefox-ordinary-1-of-2
-          - backend: postgres
-            lane: postgres-firefox-ordinary-2-of-2
-          - backend: postgres
-            lane: postgres-firefox-serial-special
+        backend: [sqlite, postgres]
+        lane: [ordinary-1-of-2, ordinary-2-of-2, serial-special]
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: ./.github/actions/setup-ci
@@ -296,7 +285,7 @@ jobs:
       - name: Run one isolated candidate lane
         run:
           nix develop .#ci --accept-flake-config -c cargo xtask e2e-candidate
-          ${{ matrix.lane }}
+          ${{ matrix.backend }}-firefox-${{ matrix.lane }}
       - name: Upload candidate evidence
         if: always()
         uses: actions/upload-artifact@v7.0.1
