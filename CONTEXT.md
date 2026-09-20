@@ -71,6 +71,13 @@ permalink; a Deleted Post releases that public identity while retaining its
 internal Post ID. _Avoid_: Article, entry (reserve "Entry" for the AtomPub wire
 object), note.
 
+**Post Shortcode**: A bounded, complete-line construct in Markdown or Org Post
+source that asks Jaunder to render one supported provider-owned presentation
+without storing generated markup. Unknown or invalid constructs remain literal,
+and the native source round-trips unchanged. _Avoid_: shortcode engine (there is
+no general template language), embed code (authors do not supply the rendered
+iframe), Org macro (the behavior is not client-specific).
+
 **Media Record**: One persistent per-user record for one exact stored media
 identity, representing media its user controls in their library. A qualifying
 Post reference may materialize its author's independent record from an existing

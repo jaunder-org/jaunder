@@ -128,6 +128,46 @@ test("authenticated user can create a post through the UI", async ({
   );
 });
 
+test("published Markdown shortcodes render responsive provider embeds", async ({
+  registeredPage,
+}) => {
+  const page = await registeredPage("/posts/new");
+  const source = "{{< youtube dQw4w9WgXcQ >}}";
+
+  const summary = await composePost(page, { body: source, publish: true });
+  await expect(summary).toContainText("Post published.");
+  await followPermalink(page, summary);
+
+  const embed = page.locator(".j-provider-embed-youtube");
+  const frame = embed.locator(".j-provider-embed-frame");
+  const player = frame.locator("iframe");
+  await expect(player).toHaveAttribute(
+    "src",
+    "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ",
+  );
+  await expect(
+    embed.getByRole("link", { name: "Watch on YouTube" }),
+  ).toHaveAttribute("href", "https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+
+  for (const viewport of [
+    { width: 1280, height: 900 },
+    { width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport);
+    const geometry = await frame.evaluate((element) => {
+      const frame = element.getBoundingClientRect();
+      const post = element.closest(".j-post-body")!.getBoundingClientRect();
+      return {
+        height: frame.height,
+        postWidth: post.width,
+        width: frame.width,
+      };
+    });
+    expect(geometry.width).toBeLessThanOrEqual(geometry.postWidth);
+    expect(geometry.width / geometry.height).toBeCloseTo(16 / 9, 2);
+  }
+});
+
 test("post create surfaces use textual draft and disclosed Media actions", async ({
   registeredPage,
 }) => {

@@ -1,7 +1,9 @@
 use common::{
     MutationOutcome,
     ids::{PostId, UserId},
+    render::PostFormat,
     tagged_url::HubUrl,
+    test_support::parse_post_body,
     time::UtcInstant,
     visibility::AudienceTarget,
 };
@@ -20,7 +22,7 @@ use tokio::sync::Barrier;
 
 use storage::{
     CacheCommitOutcome, FeedCacheRow, PublisherGeneration, PublisherStorage, WriteScope,
-    test_support::{Backend, SeedRawPost, SeedUser, backends, confirmed_for, fp},
+    test_support::{Backend, SeedRawPost, SeedUser, backends, backends_matrix, confirmed_for, fp},
 };
 
 async fn render_feed(
@@ -239,6 +241,58 @@ async fn render_user_feed_returns_expected_rss_representation(#[case] backend: B
         row.representation().content_type(),
         "application/rss+xml; charset=utf-8",
         "RSS content type"
+    );
+}
+
+#[apply(backends_matrix)]
+#[case::markdown_youtube(
+    PostFormat::Markdown,
+    "{{< youtube dQw4w9WgXcQ >}}",
+    "youtube-nocookie.com/embed/dQw4w9WgXcQ",
+    "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+)]
+#[case::org_vimeo(
+    PostFormat::Org,
+    "{{< vimeo 123456789 >}}",
+    "player.vimeo.com/video/123456789",
+    "https://vimeo.com/123456789"
+)]
+#[tokio::test]
+async fn syndication_feed_renders_canonical_shortcode_html(
+    backend: Backend,
+    #[case] format: PostFormat,
+    #[case] source: &str,
+    #[case] player_url: &str,
+    #[case] fallback_url: &str,
+) {
+    let env = backend.setup().await;
+    let user = SeedUser::new()
+        .seed(Arc::clone(&env.users()), env.write_scope())
+        .await;
+    SeedRawPost::new(user.user_id)
+        .body(parse_post_body(source))
+        .format(format)
+        .seed(Arc::clone(&env.posts()), env.write_scope())
+        .await;
+
+    let row = render_feed(
+        Arc::clone(&env.publisher()),
+        Arc::clone(&env.posts()),
+        fp(&format!("/~{}/feed.rss", user.username)),
+    )
+    .await;
+    let feed = row.representation().body();
+    assert!(
+        feed.contains(player_url),
+        "Syndication Feed renders the canonical provider player: {feed}"
+    );
+    assert!(
+        feed.contains(fallback_url),
+        "Syndication Feed renders the canonical provider fallback link: {feed}"
+    );
+    assert!(
+        !feed.contains(source),
+        "Syndication Feed serializes expanded HTML rather than native source: {feed}"
     );
 }
 
