@@ -5,7 +5,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::pin::Pin;
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{Command, ExitStatus};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::task::Poll;
@@ -36,17 +36,6 @@ const CHECK_SUPPORTING_TEST_CHECKS: [TestCheck; 2] = [TestCheck::Wasm, TestCheck
 const STATIC_CHECKS: [(&str, &str); 2] = [
     ("nix-static-docs", "static-docs"),
     ("nix-static-code", "static-code"),
-];
-
-/// The browser/backend combinations selected by the flake's `e2eCombos` catalog.
-///
-/// `validate` must address these outputs one by one: `e2e`'s aggregate is a
-/// symlink join, which cannot retain two per-backend files with the same name.
-const E2E_COMBOS: [(&str, &str); 4] = [
-    ("sqlite", "chromium"),
-    ("sqlite", "firefox"),
-    ("postgres", "chromium"),
-    ("postgres", "firefox"),
 ];
 
 /// Whether every result appended by the browser/backend E2E combinations passed.
@@ -450,9 +439,9 @@ fn sentinel_detail(status: &coverage::status::CoverageStatus) -> String {
     }
 }
 
-/// Realize every browser/backend E2E combo concurrently. Each build retains its
-/// own GC root, because the aggregate symlink join cannot retain the same-named
-/// per-backend report and manifest files from multiple combos.
+/// Realize every enabled E2E lane concurrently. Each build retains its own GC
+/// root and lane-qualified diagnostics; the shared catalog is the sole retained
+/// topology authority.
 ///
 /// `postgres-integration` is deliberately not dispatched — its tests already run
 /// under the coverage check. The E2E lane owns browser/backend combinations only;
@@ -463,14 +452,28 @@ fn unsplit_lane(backend: &str, browser: &str) -> String {
 
 pub fn e2e(result: &mut CommandResult) -> E2eOutcome {
     let combo_start = result.steps.len();
-    let builds = build_e2e_combos(E2E_COMBOS, |backend, browser| {
-        let check = format!("e2e-{backend}-{browser}");
+    let catalog = match crate::e2e_lanes::catalog() {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            result.push(StepResult::fail("e2e-catalog").detail(error));
+            return E2eOutcome::from_combo_steps(&result.steps[combo_start..]);
+        }
+    };
+    // Local validate intentionally derives its retained lane set from the same
+    // catalog CI will consume after Task 5, rather than carrying a second list.
+    let enabled = catalog
+        .lanes
+        .into_iter()
+        .filter(|lane| lane.enabled)
+        .collect::<Vec<_>>();
+    let builds = build_candidate_lanes(enabled, |lane| {
+        let check = format!("e2e-{}-{}", lane.backend, lane.browser);
         build_check(&format!("nix-{check}"), &check)
     });
     let mut phase_groups = Vec::new();
-    for ((backend, browser), build) in builds {
-        let check = format!("e2e-{backend}-{browser}");
-        let lane = unsplit_lane(backend, browser);
+    for (lane_spec, build) in builds {
+        let check = format!("e2e-{}-{}", lane_spec.backend, lane_spec.browser);
+        let lane = lane_spec.identity.clone();
         let diagnostics = Path::new(".xtask/diagnostics").join(format!("e2e-{lane}"));
         finish_e2e_combo(
             result,
@@ -478,9 +481,11 @@ pub fn e2e(result: &mut CommandResult) -> E2eOutcome {
             || {
                 lift_e2e_diagnostics(Path::new(&format!(".xtask/gcroots/{check}")), &diagnostics);
             },
-            || validate_lifted_e2e_combo(backend, browser, &lane),
+            || validate_lifted_e2e_combo(&lane_spec.backend, &lane_spec.browser, &lane),
         );
-        if let Some(phases) = read_e2e_phase_records(&diagnostics, backend, browser, &lane) {
+        if let Some(phases) =
+            read_e2e_phase_records(&diagnostics, &lane_spec.backend, &lane_spec.browser, &lane)
+        {
             phase_groups.push(phases);
         }
     }
@@ -488,31 +493,72 @@ pub fn e2e(result: &mut CommandResult) -> E2eOutcome {
     E2eOutcome::from_combo_steps(&result.steps[combo_start..])
 }
 
-/// Start all independent E2E realizations before waiting for any of them. The
-/// returned order follows the catalog so command output remains deterministic.
-fn build_e2e_combos(
-    combos: impl IntoIterator<Item = (&'static str, &'static str)>,
-    build_combo: impl Fn(&str, &str) -> StepResult + Sync,
-) -> Vec<((&'static str, &'static str), StepResult)> {
-    std::thread::scope(|scope| {
-        let workers = combos
-            .into_iter()
-            .map(|combo| {
-                let build_combo = &build_combo;
-                scope.spawn(move || (combo, build_combo(combo.0, combo.1)))
-            })
-            .collect::<Vec<_>>();
-        workers
-            .into_iter()
-            .map(|worker| worker.join().expect("E2E build worker must not panic"))
-            .collect()
-    })
+/// Outcome of one candidate realization after every build has been awaited.
+#[derive(Debug)]
+enum CandidateBuild {
+    Realized(std::path::PathBuf),
+    Failed(String),
 }
 
-/// Build a single E2E {backend}×{browser} combo, lift its diagnostics, then
-/// validate its duration and boot-decomposition evidence only when the VM itself
-/// succeeded. Used by both CI's `cargo xtask e2e` matrix path and `cargo xtask
-/// validate`.
+struct CandidateCollection {
+    evidence: Vec<crate::e2e_evidence::LaneEvidence>,
+    failures: Vec<String>,
+}
+
+fn retain_candidate_build_failure(identity: &str, stderr: &[u8]) -> Result<(), String> {
+    let destination = Path::new(".xtask/diagnostics").join(format!("e2e-{identity}"));
+    fs::create_dir_all(&destination)
+        .map_err(|error| format!("creating {}: {error}", destination.display()))?;
+    let log = destination.join("build.log");
+    fs::write(&log, stderr).map_err(|error| format!("writing {}: {error}", log.display()))?;
+    write_failure_excerpt(log.to_string_lossy().as_ref())
+        .map_err(|error| format!("writing candidate failure excerpt: {error}"))?;
+    Ok(())
+}
+
+fn candidate_lane_evidence(
+    lane: &crate::e2e_lanes::Lane,
+    destination: &Path,
+) -> crate::e2e_evidence::LaneEvidence {
+    crate::e2e_evidence::LaneEvidence {
+        identity: lane.identity.clone(),
+        census: destination.join(format!("e2e-census-{}.json", lane.identity)),
+        report: destination.join(format!("playwright-report-{}.json", lane.identity)),
+        lane_manifest: destination.join(format!("e2e-lane-manifest-{}.json", lane.identity)),
+        duration_manifest: destination
+            .join(format!("duration-budget-manifest-{}.json", lane.identity)),
+        capture: destination.join(format!("capture-{}.tar.gz", lane.identity)),
+        phase: destination.join(format!("e2e-phase-{}.json", lane.identity)),
+    }
+}
+
+fn collect_candidate_artifacts(
+    diagnostics_root: &Path,
+    builds: Vec<(crate::e2e_lanes::Lane, CandidateBuild)>,
+    mut lift: impl FnMut(&crate::e2e_lanes::Lane, &Path, &Path) -> Vec<String>,
+    mut recover: impl FnMut(&crate::e2e_lanes::Lane, &Path) -> Vec<String>,
+) -> CandidateCollection {
+    let mut evidence = Vec::new();
+    let mut failures = Vec::new();
+    for (lane, build) in builds {
+        let destination = diagnostics_root.join(format!("e2e-{}", lane.identity));
+        match build {
+            CandidateBuild::Failed(error) => {
+                failures.push(format!("{}: {error}", lane.identity));
+                failures.extend(recover(&lane, &destination));
+            }
+            CandidateBuild::Realized(output) => {
+                failures.extend(lift(&lane, &output, &destination));
+            }
+        }
+        // Failed realizations still emit reports, traces, and phase sidecars.
+        // Keep their expected paths so every aggregate consumer examines all
+        // recovered lane evidence before the primary build failure is reported.
+        evidence.push(candidate_lane_evidence(&lane, &destination));
+    }
+    CandidateCollection { evidence, failures }
+}
+
 /// Build exactly one backend's three disabled Firefox candidate lanes and make
 /// their ownership reconciliation authoritative. This is deliberately separate
 /// from production `e2e`/`validate` until the experiment is retained.
@@ -538,64 +584,72 @@ pub fn e2e_experimental(result: &mut CommandResult, backend: &str) {
     }
     let builds = build_candidate_lanes(lanes.into_iter().cloned(), |lane| {
         let installable = format!(".#e2e-{}", lane.identity);
-        Command::new("nix")
+        match Command::new("nix")
             .args([
                 "build",
+                "-L",
+                "--keep-failed",
                 "--no-link",
                 "--print-out-paths",
                 "--accept-flake-config",
                 &installable,
             ])
             .output()
-    });
-    let mut evidence = Vec::new();
-    for (lane, output) in builds {
-        let installable = format!(".#e2e-{}", lane.identity);
-        let Ok(output) = output else {
-            result.push(
-                StepResult::fail("e2e-experimental")
-                    .detail(format!("spawning nix build {installable}")),
-            );
-            return;
-        };
-        if !output.status.success() {
-            result.push(
-                StepResult::fail("e2e-experimental")
-                    .detail(format!("nix build {installable} failed")),
-            );
-            return;
-        }
-        let path = String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .next()
-            .unwrap_or_default()
-            .to_owned();
-        let destination = Path::new(".xtask/diagnostics").join(format!("e2e-{}", lane.identity));
-        let outcome = copy_e2e_diagnostics_between(Path::new(&path), &destination);
-        if !outcome.failures.is_empty() {
-            result.push(
-                StepResult::fail("e2e-experimental").detail("lifting candidate diagnostics failed"),
-            );
-            return;
-        }
-        let read = |name: &str| fs::read_to_string(destination.join(name));
-        let census = read(&format!("e2e-census-{}.json", lane.identity));
-        let report = read(&format!("playwright-report-{}.json", lane.identity));
-        let manifest = read(&format!("e2e-lane-manifest-{}.json", lane.identity));
-        match (census, report, manifest) {
-            (Ok(c), Ok(r), Ok(m)) => evidence.push((lane.identity.clone(), c, r, m)),
-            _ => {
-                result.push(
-                    StepResult::fail("e2e-experimental")
-                        .detail(format!("missing candidate evidence for {}", lane.identity)),
-                );
-                return;
+        {
+            Err(error) => CandidateBuild::Failed(format!("spawning nix build: {error}")),
+            Ok(output) if !output.status.success() => {
+                let mut detail = format!("nix build {installable} failed");
+                if let Err(error) = retain_candidate_build_failure(&lane.identity, &output.stderr) {
+                    detail.push_str(&format!("; {error}"));
+                }
+                CandidateBuild::Failed(detail)
+            }
+            Ok(output) => {
+                let path = String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned();
+                if path.is_empty() {
+                    CandidateBuild::Failed(format!("nix build {installable} returned no output"))
+                } else {
+                    CandidateBuild::Realized(path.into())
+                }
             }
         }
-    }
-    match crate::e2e_ownership::reconcile(backend, "firefox", &catalog.lanes, &evidence) {
-        Ok(detail) => result.push(StepResult::ok("e2e-experimental").detail(detail)),
-        Err(error) => result.push(StepResult::fail("e2e-experimental").detail(error)),
+    });
+    let CandidateCollection {
+        evidence,
+        mut failures,
+    } = collect_candidate_artifacts(
+        Path::new(".xtask/diagnostics"),
+        builds,
+        |lane, output, destination| {
+            copy_e2e_diagnostics_between(output, destination)
+                .failures
+                .into_iter()
+                .map(|error| format!("{}: {error}", lane.identity))
+                .collect()
+        },
+        |lane, _| recover_candidate_diagnostics(&lane.identity),
+    );
+    let lane_ids = evidence
+        .iter()
+        .map(|item| item.identity.clone())
+        .collect::<Vec<_>>();
+    crate::steps::flaky::collect_lanes(result, &lane_ids);
+    match crate::e2e_evidence::reconcile(backend, "firefox", &catalog.lanes, &evidence) {
+        Ok(detail) => {
+            if failures.is_empty() {
+                result.push(StepResult::ok("e2e-experimental").detail(detail));
+            } else {
+                result.push(StepResult::fail("e2e-experimental").detail(failures.join("\n")));
+            }
+        }
+        Err(errors) => {
+            failures.extend(errors);
+            result.push(StepResult::fail("e2e-experimental").detail(failures.join("\n")));
+        }
     }
 }
 
@@ -659,6 +713,10 @@ fn validate_lifted_e2e_combo(backend: &str, browser: &str, lane: &str) -> [StepR
 /// Preserve ADR-0037's diagnostic-before-failure order. A failed VM has already
 /// explained its own failure, so only a successful VM is fail-closed on its
 /// lifted evidence.
+/// Build a single E2E {backend}×{browser} combo, lift its diagnostics, then
+/// validate its duration and boot-decomposition evidence only when the VM itself
+/// succeeded. Used by both CI's `cargo xtask e2e` matrix path and `cargo xtask
+/// validate`.
 fn finish_e2e_combo(
     result: &mut CommandResult,
     build: StepResult,
@@ -1393,18 +1451,49 @@ pub(crate) fn eval_source_probe_drvpaths(flake_dir: &Path) -> Result<SourceProbe
 /// On a failed build, best-effort copy diagnostics from retained outputs.
 /// Returns whether any secondary recovery step failed so the build owner can
 /// aggregate one warning without changing the primary failure.
+/// Recover every retained artifact a failed experimental package made available.
+/// Unlike the normal check path, candidate lanes are package outputs, so evaluate
+/// their direct output identity before falling back to Nix's failure excerpts.
+fn recover_candidate_diagnostics(identity: &str) -> Vec<String> {
+    let mut failures = Vec::new();
+    let destination = Path::new(".xtask/diagnostics").join(format!("e2e-{identity}"));
+    match nix_eval_raw(None, &format!(".#e2e-{identity}.outPath")) {
+        Ok(output) => {
+            let copied = copy_e2e_diagnostics_between(Path::new(&output), &destination);
+            failures.extend(
+                copied
+                    .failures
+                    .into_iter()
+                    .map(|error| format!("{identity}: {error}")),
+            );
+        }
+        Err(error) => failures.push(format!(
+            "{identity}: evaluating retained candidate output: {error}"
+        )),
+    }
+    if rescue_emitted_diagnostics(&format!("e2e-{identity}"), &destination) {
+        failures.push(format!("{identity}: recovering emitted diagnostics failed"));
+    }
+    failures
+}
+
 fn rescue_diagnostics(check: &str) -> bool {
-    let dest = format!(".xtask/diagnostics/{check}");
-    let mut failed = fs::create_dir_all(&dest).is_err();
+    let destination = Path::new(".xtask/diagnostics").join(check);
+    let mut failed = fs::create_dir_all(&destination).is_err();
     if check.starts_with("e2e") {
         match eval_out_path(check) {
             Ok(out_path) => {
-                let outcome = copy_e2e_diagnostics_between(Path::new(&out_path), Path::new(&dest));
+                let outcome = copy_e2e_diagnostics_between(Path::new(&out_path), &destination);
                 failed |= !outcome.failures.is_empty();
             }
             Err(_) => failed = true,
         }
     }
+    failed | rescue_emitted_diagnostics(check, &destination)
+}
+
+fn rescue_emitted_diagnostics(check: &str, destination: &Path) -> bool {
+    let mut failed = fs::create_dir_all(destination).is_err();
     let prefix = format!("nix-build-jaunder-{check}");
     let entries = match fs::read_dir("/tmp") {
         Ok(entries) => entries,
@@ -1426,16 +1515,9 @@ fn rescue_diagnostics(check: &str) -> bool {
         }
         let src = entry.path().join("emit-out/diagnostics");
         if src.is_dir() {
-            failed |= !matches!(
-                Command::new("cp")
-                    .arg("-r")
-                    .arg(&src)
-                    .arg(&dest)
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status(),
-                Ok(status) if status.success()
-            );
+            failed |= !copy_e2e_diagnostics_between(&src, destination)
+                .failures
+                .is_empty();
         }
     }
     failed
@@ -1457,9 +1539,9 @@ mod tests {
     use tokio::runtime::Builder;
 
     use super::{
-        BuildCaptureOutcome, BuildCompletion, BuildStderrTee, CommandResult, E2E_COMBOS,
+        BuildCaptureOutcome, BuildCompletion, BuildStderrTee, CandidateBuild, CommandResult,
         E2eOutcome, FailedBuildDiagnostics, Process, STATIC_CHECKS, StepResult,
-        build_candidate_lanes, build_e2e_combos, check_supporting_test_check_names,
+        build_candidate_lanes, check_supporting_test_check_names, collect_candidate_artifacts,
         coverage_status_after_successful_gate, coverage_status_phase_records,
         doctest_sentinel_detail, failed_build_after_diagnostics_with, failed_coverage_status_step,
         failed_status_step, finish_build_with, finish_e2e_combo, lift_elisp_coverage_artifacts,
@@ -1475,6 +1557,16 @@ mod tests {
     };
     use doctests::check::{Kind, Violation};
     use doctests::status::DoctestStatus;
+
+    fn enabled_combos() -> Vec<(String, String)> {
+        crate::e2e_lanes::catalog()
+            .unwrap()
+            .lanes
+            .into_iter()
+            .filter(|lane| lane.enabled)
+            .map(|lane| (lane.backend, lane.browser))
+            .collect()
+    }
 
     fn injected_nix_report(realization: NixRealization) -> NixReport {
         NixReport {
@@ -1516,9 +1608,9 @@ mod tests {
     }
 
     #[test]
-    fn e2e_catalog_contains_only_browser_backend_checks() {
+    fn enabled_e2e_catalog_contains_only_browser_backend_checks() {
         assert!(
-            E2E_COMBOS
+            enabled_combos()
                 .iter()
                 .all(|(backend, browser)| !backend.contains("elisp") && !browser.contains("elisp"))
         );
@@ -2888,35 +2980,105 @@ else:
     }
 
     #[test]
-    fn aggregate_e2e_builds_dispatch_every_combo_before_waiting_for_one() {
-        let (started_tx, started_rx) = mpsc::channel();
-        let release = Arc::new(AtomicBool::new(false));
-        let worker_release = Arc::clone(&release);
-        let worker = std::thread::spawn(move || {
-            build_e2e_combos(E2E_COMBOS, move |_, _| {
-                started_tx.send(()).unwrap();
-                while !worker_release.load(Ordering::Acquire) {
-                    std::thread::park_timeout(Duration::from_millis(10));
-                }
-                StepResult::ok("test-e2e")
+    fn failed_candidate_still_lifts_and_recovers_every_other_lane() {
+        let lanes = crate::e2e_lanes::catalog()
+            .unwrap()
+            .lanes
+            .into_iter()
+            .filter(|lane| lane.backend == "sqlite" && !lane.enabled)
+            .collect::<Vec<_>>();
+        let builds = lanes
+            .into_iter()
+            .enumerate()
+            .map(|(index, lane)| {
+                let outcome = if index == 0 {
+                    CandidateBuild::Realized(format!("/nix/store/lane-{index}").into())
+                } else {
+                    CandidateBuild::Failed(format!("injected failure {index}"))
+                };
+                (lane, outcome)
             })
-        });
-
-        let dispatched_concurrently =
-            (0..E2E_COMBOS.len()).all(|_| started_rx.recv_timeout(Duration::from_secs(1)).is_ok());
-        release.store(true, Ordering::Release);
-        let builds = worker.join().expect("E2E dispatch worker must not panic");
-
-        assert!(
-            dispatched_concurrently,
-            "all E2E builds must start before any completed build is awaited"
+            .collect();
+        let diagnostics = tempfile::tempdir().unwrap();
+        let mut lifted = Vec::new();
+        let mut recovered = Vec::new();
+        let collected = collect_candidate_artifacts(
+            diagnostics.path(),
+            builds,
+            |lane, _, _| {
+                lifted.push(lane.identity.clone());
+                Vec::new()
+            },
+            |lane, destination| {
+                recovered.push(lane.identity.clone());
+                std::fs::create_dir_all(destination).unwrap();
+                std::fs::write(
+                    destination.join(format!("playwright-report-{}.json", lane.identity)),
+                    include_str!("../testdata/e2e-ownership/ordinary-1-report.json"),
+                )
+                .unwrap();
+                std::fs::write(
+                    destination.join(format!("capture-{}.tar.gz", lane.identity)),
+                    "recovered trace evidence",
+                )
+                .unwrap();
+                vec![format!("{}: injected recovery warning", lane.identity)]
+            },
         );
+        assert_eq!(lifted.len(), 1, "the successful lane must be lifted");
+        assert_eq!(recovered.len(), 2, "every failed lane must be recovered");
         assert_eq!(
-            builds
-                .into_iter()
-                .map(|(combo, _)| combo)
-                .collect::<Vec<_>>(),
-            E2E_COMBOS.to_vec()
+            collected.evidence.len(),
+            3,
+            "all attempted lanes must reach every evidence consumer"
+        );
+        let recovered_evidence = collected
+            .evidence
+            .iter()
+            .filter(|evidence| recovered.contains(&evidence.identity))
+            .collect::<Vec<_>>();
+        assert!(
+            recovered_evidence
+                .iter()
+                .all(|evidence| evidence.report.is_file() && evidence.capture.is_file()),
+            "recovered reports and traces must remain addressable"
+        );
+        let report_paths = collected
+            .evidence
+            .iter()
+            .map(|evidence| (evidence.identity.clone(), evidence.report.clone()))
+            .collect::<Vec<_>>();
+        let mut result = CommandResult::new("e2e-experimental");
+        crate::steps::flaky::collect_lane_files(&mut result, &report_paths);
+        assert_eq!(result.flaky.len(), 2);
+        let encoded = serde_json::to_string(&result).unwrap();
+        for identity in &recovered {
+            assert!(encoded.contains(identity));
+        }
+        let summary = crate::steps::flaky::render_summary(&result.command, &result.flaky);
+        for identity in &recovered {
+            assert!(summary.contains(identity));
+        }
+        assert_eq!(
+            collected
+                .failures
+                .iter()
+                .filter(|failure| failure.contains("injected failure"))
+                .count(),
+            2,
+            "every lane failure must remain visible"
+        );
+        assert!(
+            collected
+                .failures
+                .iter()
+                .any(|failure| failure.contains("injected failure"))
+        );
+        assert!(
+            collected
+                .failures
+                .iter()
+                .any(|failure| failure.contains("recovery warning"))
         );
     }
 
@@ -2959,7 +3121,7 @@ else:
     fn e2e_outcome_is_ok_when_every_combo_build_and_post_build_check_passes() {
         let mut result = CommandResult::new("validate");
         let combo_start = result.steps.len();
-        for (backend, browser) in E2E_COMBOS {
+        for (backend, browser) in enabled_combos() {
             result.push(StepResult::ok(&format!("nix-e2e-{backend}-{browser}")));
             result.push(StepResult::ok("e2e-duration-budget"));
             result.push(StepResult::ok("e2e-boot-decomposition-coverage"));
@@ -3004,32 +3166,30 @@ else:
     #[test]
     fn e2e_combo_output_follows_catalog_order() {
         let mut result = CommandResult::new("validate");
-        for (backend, browser) in E2E_COMBOS {
+        let combos = enabled_combos();
+        for (backend, browser) in &combos {
             result.push(StepResult::ok(&format!("nix-e2e-{backend}-{browser}")));
             result.push(StepResult::ok("e2e-duration-budget"));
             result.push(StepResult::ok("e2e-boot-decomposition-coverage"));
         }
 
+        let expected = combos
+            .iter()
+            .flat_map(|(backend, browser)| {
+                [
+                    format!("nix-e2e-{backend}-{browser}"),
+                    "e2e-duration-budget".to_owned(),
+                    "e2e-boot-decomposition-coverage".to_owned(),
+                ]
+            })
+            .collect::<Vec<_>>();
         assert_eq!(
             result
                 .steps
                 .iter()
-                .map(|step| step.name.as_str())
+                .map(|step| step.name.clone())
                 .collect::<Vec<_>>(),
-            [
-                "nix-e2e-sqlite-chromium",
-                "e2e-duration-budget",
-                "e2e-boot-decomposition-coverage",
-                "nix-e2e-sqlite-firefox",
-                "e2e-duration-budget",
-                "e2e-boot-decomposition-coverage",
-                "nix-e2e-postgres-chromium",
-                "e2e-duration-budget",
-                "e2e-boot-decomposition-coverage",
-                "nix-e2e-postgres-firefox",
-                "e2e-duration-budget",
-                "e2e-boot-decomposition-coverage",
-            ]
+            expected
         );
     }
 

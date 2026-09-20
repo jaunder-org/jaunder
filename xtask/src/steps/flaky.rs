@@ -38,17 +38,52 @@ pub fn collect(result: &mut CommandResult, backend: &str, browser: &str) {
     let Ok(json) = std::fs::read_to_string(&path) else {
         return;
     };
-    let specs = parse_flaky(&json);
+    record_flakes(result, parse_flaky(&json));
+}
+
+/// Collect flake evidence from every lane without collapsing identical source
+/// locations from independent shard attempts.
+pub fn collect_lanes(result: &mut CommandResult, lanes: &[String]) {
+    let reports = lanes
+        .iter()
+        .map(|lane| {
+            (
+                lane.clone(),
+                std::path::PathBuf::from(format!(
+                    ".xtask/diagnostics/e2e-{lane}/playwright-report-{lane}.json"
+                )),
+            )
+        })
+        .collect::<Vec<_>>();
+    collect_lane_files(result, &reports);
+}
+
+pub(crate) fn collect_lane_files(
+    result: &mut CommandResult,
+    reports: &[(String, std::path::PathBuf)],
+) {
+    let reports = reports
+        .iter()
+        .filter_map(|(lane, path)| {
+            std::fs::read_to_string(path)
+                .ok()
+                .map(|json| (lane.as_str(), json))
+        })
+        .collect::<Vec<_>>();
+    record_flakes(result, lane_flakes(&reports));
+}
+
+fn record_flakes(result: &mut CommandResult, specs: Vec<FlakySpec>) {
     result.push(StepResult::ok("flaky-scan").detail(format!("{} flaky test(s)", specs.len())));
     if specs.is_empty() {
         return;
     }
     // One greppable line, only when there IS a flake — scoped to positive news,
     // unlike the always-on `xtask-done:`.
-    let locations: Vec<String> = specs
+    let locations = specs
         .iter()
-        .map(|s| format!("{}:{}", s.file, s.line))
-        .collect();
+        .map(|spec| format!("{}:{}", spec.file, spec.line))
+        .collect::<Vec<_>>();
     eprintln!(
         "flaky: command={} count={} tests={}",
         result.command,
@@ -57,6 +92,19 @@ pub fn collect(result: &mut CommandResult, backend: &str, browser: &str) {
     );
     append_step_summary(&result.command, &specs);
     result.flaky = specs;
+}
+
+fn lane_flakes(reports: &[(&str, String)]) -> Vec<FlakySpec> {
+    let mut specs = Vec::new();
+    for (lane, report) in reports {
+        specs.extend(parse_flaky(report).into_iter().map(|mut spec| {
+            spec.title = format!("[{lane}] {}", spec.title);
+            spec
+        }));
+    }
+    specs.sort();
+    specs.dedup();
+    specs
 }
 
 /// Append the flaky table to `$GITHUB_STEP_SUMMARY` when running under GitHub
@@ -97,7 +145,7 @@ fn append_step_summary_with(
 }
 
 /// Render the Markdown block for the run summary. Pure, so it is unit-tested.
-pub fn render_summary(command: &str, specs: &[FlakySpec]) -> String {
+pub(crate) fn render_summary(command: &str, specs: &[FlakySpec]) -> String {
     let mut out = format!("### Flaky — {command}: {}\n", specs.len());
     for s in specs {
         out.push_str(&format!("- `{}:{}` \u{203a} {}\n", s.file, s.line, s.title));
@@ -162,6 +210,8 @@ fn as_flaky_spec(map: &serde_json::Map<String, serde_json::Value>) -> Option<Fla
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const CANDIDATE_REPORT: &str = include_str!("../testdata/e2e-ownership/ordinary-1-report.json");
 
     // A report with two flaky specs (one nested in a child suite), one clean
     // spec, and matching `stats` — the shape Playwright's `json` reporter emits.
@@ -232,6 +282,43 @@ mod tests {
         // A spec missing `line` is not a valid spec shape — ignored, not a panic.
         let malformed = r#"{ "specs": [ { "title": "x", "file": "a.ts", "tests": [{ "status": "flaky" }] } ] }"#;
         assert!(parse_flaky(malformed).is_empty());
+    }
+
+    #[test]
+    fn dedicated_candidate_fixture_preserves_lane_retry_visibility() {
+        let reports = [(
+            "sqlite-firefox-ordinary-1-of-2",
+            CANDIDATE_REPORT.to_owned(),
+        )];
+        let specs = super::lane_flakes(&reports);
+        assert_eq!(specs.len(), 1);
+        assert!(specs[0].title.contains("[sqlite-firefox-ordinary-1-of-2]"));
+        let mut result = CommandResult::new("e2e-experimental");
+        result.flaky = specs.clone();
+        assert!(
+            serde_json::to_string(&result)
+                .unwrap()
+                .contains(&specs[0].title)
+        );
+        assert!(render_summary(&result.command, &specs).contains(&specs[0].title));
+    }
+
+    #[test]
+    fn lane_flakes_preserve_identical_retries_from_each_lane() {
+        let reports = [
+            ("sqlite-firefox-ordinary-1-of-2", REPORT.to_owned()),
+            ("sqlite-firefox-ordinary-2-of-2", REPORT.to_owned()),
+        ];
+        let specs = super::lane_flakes(&reports);
+        assert_eq!(specs.len(), 4);
+        let summary = render_summary("e2e-experimental", &specs);
+        assert!(summary.contains("[sqlite-firefox-ordinary-1-of-2]"));
+        assert!(summary.contains("[sqlite-firefox-ordinary-2-of-2]"));
+        let mut result = CommandResult::new("e2e-experimental");
+        result.flaky = specs;
+        let encoded = serde_json::to_string(&result).unwrap();
+        assert!(encoded.contains("sqlite-firefox-ordinary-1-of-2"));
+        assert!(encoded.contains("sqlite-firefox-ordinary-2-of-2"));
     }
 
     #[test]
