@@ -530,7 +530,7 @@ write transaction before commit or revision creation.
 **`RenderedHtml` contains no author-controlled active markup, through a
 common-owned host-only sanitization boundary and a closed typed provider-embed
 assembly door** ([ADR-0079](adr/0079-rendered-html-sanitization.md),
-[bounded Post Shortcode embeds](adr/drafts/bounded-post-shortcode-embeds.md)).
+[bounded Post Shortcode embeds](adr/0202-bounded-post-shortcode-embeds.md)).
 `common::render::sanitize` scrubs every author-controlled parser fragment; the
 optional `sanitize` feature keeps `ammonia` out of CSR/wasm builds. The only
 active markup exception is a `TrustedProviderEmbed` built by a closed,

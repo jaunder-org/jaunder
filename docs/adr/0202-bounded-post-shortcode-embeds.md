@@ -1,6 +1,6 @@
-# ADR-DRAFT: Bounded Post Shortcodes Produce Trusted Provider Embeds
+# ADR-0202: Bounded Post Shortcodes Produce Trusted Provider Embeds
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-19
 - Issue: [#1585](https://github.com/jaunder-org/jaunder/issues/1585)
 
@@ -8,10 +8,10 @@
 
 Jaunder stores a Post's native source and derives one canonical rendered-HTML
 representation for web presentation and Syndication Feeds. Markdown and Org
-source can contain raw HTML, so
-[ADR-0079](../0079-rendered-html-sanitization.md) made
-`common::render::sanitize` the only public production door to `RenderedHtml` and
-gave the type a no-active-markup invariant. Raw iframes are therefore stripped.
+source can contain raw HTML, so [ADR-0079](0079-rendered-html-sanitization.md)
+made `common::render::sanitize` the only public production door to
+`RenderedHtml` and gave the type a no-active-markup invariant. Raw iframes are
+therefore stripped.
 
 Authors migrating or editing publication source also need a small, stable way to
 express provider-hosted video without storing hand-authored iframe markup. The
@@ -57,7 +57,7 @@ validation or choose markup/URL parts, sanitized content and typed embeds retain
 document order, and no internal assembly artifact survives.
 
 Recognition and provider dispatch remain in `host` under
-[ADR-0159](../0159-common-host-target-closure.md). Extend that decision's narrow
+[ADR-0159](0159-common-host-target-closure.md). Extend that decision's narrow
 `common/sanitize` exception only as required by `RenderedHtml`'s private minting
 boundary: the host-feature-gated `TrustedProviderEmbed` validation, fixed
 markup, and structured assembly door live beside `sanitize`, while source
@@ -88,7 +88,7 @@ safety claim is more precise but no longer absolute. Review and tests must prove
 that all such frames originate from typed provider values and that author HTML
 cannot reach the trusted assembly path. This decision amends ADR-0079, the
 bounded non-executable surface in
-[ADR-0179](../0179-rendered-html-media-elements.md), and ADR-0159's host-only
+[ADR-0179](0179-rendered-html-media-elements.md), and ADR-0159's host-only
 `common/sanitize` exception; it does not generally admit iframes to the
 sanitizer or move general host rendering machinery into `common`.
 

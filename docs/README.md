@@ -229,6 +229,7 @@ convention). See the Status column below for each ADR's current status.
 | [0199](adr/0199-durable-atompub-create-intent.md)                      | Make AtomPub create intent durable across client restarts                                                    | accepted   |
 | [0200](adr/0200-revalidated-matched-post-pull.md)                      | Permit revalidated replacement when pulling a matched Post                                                   | accepted   |
 | [0201](adr/0201-emacs-local-post-link-round-trip.md)                   | Emacs Local Post Links Round-Trip Through Canonical URLs                                                     | accepted   |
+| [0202](adr/0202-bounded-post-shortcode-embeds.md)                      | Bounded Post Shortcodes Produce Trusted Provider Embeds                                                      | accepted   |
 
 <!-- adr-table:end -->
 
