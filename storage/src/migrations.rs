@@ -7,7 +7,7 @@ mod tests {
 
     use crate::DbConnectOptions;
     use crate::posts::media;
-    use crate::sql::QueryStorageExt;
+    use crate::sql::{QueryStorageExt, RowCount};
     use crate::subscriptions::CorruptSubscriberRef;
     use crate::test_support::{
         Backend, CloseablePool, PostgresDbGuard, PostgresTestConfig, backends, sqlite_url,
@@ -48,12 +48,14 @@ mod tests {
             match backend {
                 Backend::Sqlite => {
                     let base = TempDir::new().unwrap();
-                    let DbConnectOptions::Sqlite(options) = sqlite_url(&base) else {
+                    let options = sqlite_url(&base);
+                    let DbConnectOptions::Sqlite(sqlite_options) = &options else {
                         unreachable!("sqlite_url always yields SQLite options")
                     };
-                    let pool = SqlitePool::connect_with(options.create_if_missing(true))
-                        .await
-                        .unwrap();
+                    let pool =
+                        SqlitePool::connect_with(sqlite_options.clone().create_if_missing(true))
+                            .await
+                            .unwrap();
                     Self {
                         pool: CloseablePool::Sqlite(pool),
                         _sqlite: Some(base),
@@ -63,10 +65,14 @@ mod tests {
                 Backend::Postgres => {
                     let config = PostgresTestConfig::from_env();
                     let (options, guard) = unique_postgres_url(&config).await;
-                    let DbConnectOptions::Postgres { options, .. } = options else {
+                    let DbConnectOptions::Postgres {
+                        options: pg_options,
+                        ..
+                    } = &options
+                    else {
                         unreachable!("unique_postgres_url always yields PostgreSQL options")
                     };
-                    let pool = PgPool::connect_with(options).await.unwrap();
+                    let pool = PgPool::connect_with(pg_options.clone()).await.unwrap();
                     Self {
                         pool: CloseablePool::Postgres(pool),
                         _sqlite: None,
@@ -258,7 +264,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            38
+            40
         );
         assert_eq!(
             db.pool
@@ -293,6 +299,95 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
+    async fn migration_0039_adds_nullable_columns_without_repairing_existing_rows(
+        #[case] backend: Backend,
+    ) {
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(38).await.unwrap();
+        db.pool
+            .execute(
+                "INSERT INTO users (username, password_hash, created_at) \
+                 VALUES ('rendered-title-author', 'hash', CURRENT_TIMESTAMP)",
+            )
+            .await
+            .unwrap();
+        db.pool
+            .execute(
+                "INSERT INTO posts \
+                 (user_id, title, slug, body, format, rendered_html, created_at, updated_at) \
+                 VALUES ((SELECT user_id FROM users WHERE username = 'rendered-title-author'), \
+                 'legacy title', 'legacy-title', 'body', 'markdown', '<p>body</p>', \
+                 CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            )
+            .await
+            .unwrap();
+        db.pool
+            .execute(
+                "INSERT INTO post_revisions \
+                 (post_id, user_id, title, slug, body, format, rendered_html, summary, \
+                  created_at, updated_at, published_at, deleted_at) \
+                 SELECT post_id, user_id, title, slug, body, format, rendered_html, NULL, \
+                        created_at, updated_at, NULL, NULL \
+                 FROM posts",
+            )
+            .await
+            .unwrap();
+
+        db.migrate_to(39).await.unwrap();
+
+        let nullable_column_count = match &db.pool {
+            CloseablePool::Sqlite(pool) => {
+                sqlx::query_scalar::<_, RowCount>(
+                    "SELECT COUNT(*) FROM pragma_table_info('posts') \
+                     WHERE name = 'rendered_title' AND \"notnull\" = 0",
+                )
+                .fetch_one(pool)
+                .await
+                .unwrap()
+                .into_u64()
+                    + sqlx::query_scalar::<_, RowCount>(
+                        "SELECT COUNT(*) FROM pragma_table_info('post_revisions') \
+                         WHERE name = 'rendered_title' AND \"notnull\" = 0",
+                    )
+                    .fetch_one(pool)
+                    .await
+                    .unwrap()
+                    .into_u64()
+            }
+            CloseablePool::Postgres(pool) => sqlx::query_scalar::<_, RowCount>(
+                "SELECT COUNT(*) FROM information_schema.columns \
+                 WHERE table_name IN ('posts', 'post_revisions') \
+                 AND column_name = 'rendered_title' AND is_nullable = 'YES'",
+            )
+            .fetch_one(pool)
+            .await
+            .unwrap()
+            .into_u64(),
+        };
+        assert_eq!(
+            nullable_column_count, 2,
+            "migration 0039 adds both Rendered Title columns as nullable"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM posts WHERE rendered_title IS NULL")
+                .await
+                .unwrap(),
+            1,
+            "migration 0039 does not repair an existing Post"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM post_revisions WHERE rendered_title IS NULL")
+                .await
+                .unwrap(),
+            1,
+            "migration 0039 does not repair an existing Post Revision"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
     async fn migration_0032_invalidates_pre_fingerprint_feed_cache_rows(#[case] backend: Backend) {
         let db = MigrationDatabase::new(backend).await;
         db.migrate_to(31).await.unwrap();
@@ -315,6 +410,48 @@ mod tests {
                 .unwrap(),
             0,
             "legacy cache rows cannot establish semantic identity"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn migration_0040_invalidates_pre_rendered_title_feed_cache_rows(
+        #[case] backend: Backend,
+    ) {
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(39).await.unwrap();
+        db.pool
+            .execute(
+                "INSERT INTO feed_cache \
+                 (feed_url, body, etag, content_type, representation_modified_at, generated_at, semantic_fingerprint) VALUES \
+                 ('/feed.rss', '<rss/>', '\"legacy\"', 'application/rss+xml; charset=utf-8', \
+                 CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, \
+                 '0000000000000000000000000000000000000000000000000000000000000000')",
+            )
+            .await
+            .unwrap();
+        db.pool
+            .execute("INSERT INTO site_config (key, value) VALUES ('legacy.unrelated', 'retained')")
+            .await
+            .unwrap();
+
+        db.migrate_current().await.unwrap();
+
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM feed_cache")
+                .await
+                .unwrap(),
+            0,
+            "pre-Rendered-Title cache bytes cannot be served"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM site_config WHERE key = 'legacy.unrelated' AND value = 'retained'")
+                .await
+                .unwrap(),
+            1,
+            "cache invalidation must not erase unrelated durable state"
         );
     }
 
@@ -386,7 +523,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            38,
+            40,
         );
     }
 
@@ -858,7 +995,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            38
+            40
         );
         assert_eq!(
             db.pool

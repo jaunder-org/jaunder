@@ -15,14 +15,14 @@ use common::permalink_route::canonical_permalink_path;
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
-pub use common::render::{InvalidPostFormat, PostFormat, RenderedHtml};
+pub use common::render::{InvalidPostFormat, PostFormat, RenderedHtml, RenderedPostTitle};
 use common::root_relative_url::RootRelativeUrl;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::AudienceTarget;
-use host::render::RenderOutput;
+use host::render::PostRenderOutput;
 
 /// The `published_at`-clear flag in an update-post statement.
 ///
@@ -73,6 +73,8 @@ pub struct PostRecord {
     pub author_display_name: Option<DisplayName>,
     /// Optional title.
     pub title: Option<PostTitle>,
+    /// Persisted inline-only HTML derivative of `title`; absent only when title is absent.
+    pub rendered_title: Option<RenderedPostTitle>,
     /// Unique slug (per user, per day).
     pub slug: Slug,
     /// Raw source body (Markdown or Org).
@@ -104,7 +106,22 @@ pub struct PostRecord {
 /// Portable scalar projection shared by dynamic `PostRecord` queries.
 ///
 /// Tags remain dialect-owned because their aggregate subquery differs by backend.
-pub(crate) const POST_RECORD_COLUMNS: &str = "p.post_id, p.user_id, u.username, u.display_name, p.title, p.slug, p.body, p.format, p.rendered_html, p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary";
+pub(crate) const POST_RECORD_COLUMNS: &str = "p.post_id, p.user_id, u.username, u.display_name, p.title, p.rendered_title, p.slug, p.body, p.format, p.rendered_html, p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary";
+
+/// Rejects a title and derivative pair that cannot represent a persisted Rendered Title.
+/// Empty canonical fragments remain present derivatives, distinct from `NULL`.
+pub(crate) fn validate_rendered_title_presence(
+    title: Option<&PostTitle>,
+    rendered_title: Option<&RenderedPostTitle>,
+) -> Result<()> {
+    if title.is_some() == rendered_title.is_some() {
+        Ok(())
+    } else {
+        Err(sqlx::Error::Protocol(
+            "post title and rendered title presence must match".to_owned(),
+        ))
+    }
+}
 
 impl PostRecord {
     /// Returns the canonical permalink for this post as a [`RootRelativeUrl`].
@@ -137,6 +154,7 @@ where
     PostBody: Decode<'r, R::Database> + Type<R::Database>,
     PostFormat: Decode<'r, R::Database> + Type<R::Database>,
     RenderedHtml: Decode<'r, R::Database> + Type<R::Database>,
+    RenderedPostTitle: Decode<'r, R::Database> + Type<R::Database>,
     UtcInstant: Decode<'r, R::Database> + Type<R::Database>,
     PostSummary: Decode<'r, R::Database> + Type<R::Database>,
     SerializedPostTags: Decode<'r, R::Database> + Type<R::Database>,
@@ -147,6 +165,8 @@ where
         let author_username = row.try_get::<Username, _>("username")?;
         let author_display_name = row.try_get::<Option<DisplayName>, _>("display_name")?;
         let title = row.try_get::<Option<PostTitle>, _>("title")?;
+        let rendered_title = row.try_get::<Option<RenderedPostTitle>, _>("rendered_title")?;
+        let () = validate_rendered_title_presence(title.as_ref(), rendered_title.as_ref())?;
         let slug = row.try_get::<Slug, _>("slug")?;
         let body = row.try_get::<PostBody, _>("body")?;
         let format = row.try_get::<PostFormat, _>("format")?;
@@ -165,6 +185,7 @@ where
             author_username,
             author_display_name,
             title,
+            rendered_title,
             slug,
             body,
             format,
@@ -194,6 +215,8 @@ pub struct PostRevisionRecord {
     pub user_id: UserId,
     /// Authored title at capture time.
     pub title: Option<PostTitle>,
+    /// Persisted inline-only HTML derivative at capture time.
+    pub rendered_title: Option<RenderedPostTitle>,
     /// Authored permalink slug at capture time.
     pub slug: Slug,
     /// Authored source at capture time.
@@ -342,14 +365,10 @@ pub struct PostMutation {
 #[derive(Clone)]
 pub struct CreatePostInput {
     pub user_id: UserId,
-    pub title: Option<PostTitle>,
     pub slug: Slug,
-    pub body: PostBody,
-    pub format: PostFormat,
-    /// The rendered body together with the media it references — see [`RenderOutput`],
-    /// whose only constructor is rendering, so this input cannot carry a reference set
-    /// that disagrees with its HTML (#711).
-    pub rendered: RenderOutput,
+    /// Authored source and every derivative. Private fields on [`PostRenderOutput`]
+    /// make title/body/format mismatches impossible at the storage boundary.
+    pub rendered: PostRenderOutput,
     /// If Some, the post is created in a published state.
     pub published_at: Option<UtcInstant>,
     /// Optional summary/excerpt of the post.
@@ -393,15 +412,10 @@ impl From<PublicationState> for PublishUpdate {
 /// Input for updating an existing post.
 #[derive(Clone)]
 pub struct UpdatePostInput {
-    pub title: Option<PostTitle>,
     /// The new slug. Note: Slugs are typically immutable once published.
     pub slug: Slug,
-    pub body: PostBody,
-    pub format: PostFormat,
-    /// The rendered body together with the media it references — see [`RenderOutput`].
-    /// An edit can remove a reference, so the set must always be the one this HTML
-    /// implies; deriving it is the only way to build one (#711).
-    pub rendered: RenderOutput,
+    /// Authored source and every derivative, assembled only by host rendering.
+    pub rendered: PostRenderOutput,
     /// What this update does to the Post's publication state.
     pub publish: PublishUpdate,
     /// Optional summary/excerpt of the post.
@@ -421,7 +435,7 @@ pub struct UpdatePostInput {
 
 #[cfg(test)]
 mod tests {
-    use super::{PostRecord, PublishUpdate};
+    use super::{PostRecord, PublishUpdate, validate_rendered_title_presence};
     use common::ids::{PostId, UserId};
     use common::org::PublicationState;
     use common::render::PostFormat;
@@ -429,6 +443,17 @@ mod tests {
         parse_post_body, parse_post_title, parse_slug, parse_username, parse_utc_instant,
         rendered_html,
     };
+    #[test]
+    fn rendered_title_presence_requires_exact_title_correspondence() {
+        let title = Some(parse_post_title("title"));
+        let rendered = Some(common::test_support::rendered_post_title("title"));
+
+        assert!(validate_rendered_title_presence(title.as_ref(), rendered.as_ref()).is_ok());
+        assert!(validate_rendered_title_presence(None, None).is_ok());
+        assert!(validate_rendered_title_presence(title.as_ref(), None).is_err());
+        assert!(validate_rendered_title_presence(None, rendered.as_ref()).is_err());
+    }
+
     #[test]
     fn publication_state_projects_publish_update() {
         let at = parse_utc_instant("2026-11-01T05:30:00Z");
@@ -456,6 +481,7 @@ mod tests {
             user_id: UserId::from(1),
             author_username: parse_username("author"),
             title: Some(parse_post_title("My Title")),
+            rendered_title: None,
             slug: parse_slug("hello-world"),
             body: parse_post_body("My body"),
             format: PostFormat::Markdown,

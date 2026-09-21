@@ -14,7 +14,7 @@ use common::media::{
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
-use common::render::PostFormat;
+use common::render::{InvalidPersistedRenderedPostTitle, PostFormat};
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::tagged_url::MediaSourceUrl;
@@ -108,9 +108,13 @@ pub(crate) fn validate_restore_row(
         "post_revision_tags" => {
             validate_typed_restore_row::<PostRevisionTagsRestoreRow>(row, report);
         }
-        "post_revisions" => validate_typed_restore_row::<PostRevisionsRestoreRow>(row, report),
+        "post_revisions" => {
+            validate_typed_restore_row::<PostRevisionsRestoreRow>(row, report);
+        }
         "post_tags" => validate_typed_restore_row::<PostTagsRestoreRow>(row, report),
-        "posts" => validate_typed_restore_row::<PostsRestoreRow>(row, report),
+        "posts" => {
+            validate_typed_restore_row::<PostsRestoreRow>(row, report);
+        }
         "sessions" => validate_typed_restore_row::<SessionsRestoreRow>(row, report),
         "site_config" => validate_typed_restore_row::<SiteConfigRestoreRow>(row, report),
         "subscription_statuses" => {
@@ -175,6 +179,32 @@ where
     R: RestoreTableRow,
 {
     R::from_restore(row).validate(report);
+}
+
+/// Rejects source/derivative structural mismatches before restore mutates either
+/// the target database or media. Present, noncanonical derivative bytes remain
+/// ADR-0174 restore-and-report domain diagnostics.
+pub(crate) fn validate_rendered_title_presence_backup(
+    source_path: &std::path::Path,
+    manifest: &BackupManifest,
+) -> Result<(), crate::backup::BackupError> {
+    for table in ["posts", "post_revisions"] {
+        if !manifest.tables.iter().any(|listed| listed == table) {
+            continue;
+        }
+        for row in format::read_table_rows(source_path, table)? {
+            let title_present = row.get("title").is_some_and(|value| !value.is_null());
+            let rendered_title_present = row
+                .get("rendered_title")
+                .is_some_and(|value| !value.is_null());
+            if title_present != rendered_title_present {
+                return Err(crate::backup::BackupError::InvalidBackup(format!(
+                    "{table} title and rendered_title must either both be present or both be absent"
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 struct RestoreColumn<T> {
@@ -322,11 +352,26 @@ typed_restore_row!(PostMediaRestoreRow, "post_media" {
     reference_form: MediaReferenceForm => ("reference_form", "media reference form"),
 });
 
+/// A restore-only host boundary for persisted Rendered Title bytes.
+///
+/// Backup rows are untrusted, so unlike server-authored DTOs they must still
+/// exactly match the ammonia policy before restore reports them as valid.
+struct PersistedRenderedPostTitle;
+
+impl FromStr for PersistedRenderedPostTitle {
+    type Err = InvalidPersistedRenderedPostTitle;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        common::render::reconstruct_persisted_rendered_post_title(value).map(|_| Self)
+    }
+}
+
 typed_restore_row!(PostRevisionsRestoreRow, "post_revisions" {
     title: PostTitle => ("title", "post title"),
     slug: Slug => ("slug", "slug"),
     body: PostBody => ("body", "post body"),
     format: PostFormat => ("format", "post format"),
+    rendered_title: PersistedRenderedPostTitle => ("rendered_title", "rendered post title"),
     summary: PostSummary => ("summary", "post summary"),
 });
 
@@ -348,6 +393,7 @@ typed_restore_row!(PostsRestoreRow, "posts" {
     slug: Slug => ("slug", "slug"),
     body: PostBody => ("body", "post body"),
     format: PostFormat => ("format", "post format"),
+    rendered_title: PersistedRenderedPostTitle => ("rendered_title", "rendered post title"),
     summary: PostSummary => ("summary", "post summary"),
 });
 
@@ -588,10 +634,20 @@ pub(crate) const RESTORE_COLUMN_COVERAGE: &[RestoreColumnCoverage] = &[
         "author_user_id",
         "foreign-key id: schema validation preserves the value",
     ),
+    covered(
+        "post_revisions",
+        "rendered_title",
+        RestoreBadValue::Text("<script>bad</script>"),
+    ),
     primitive(
         "post_revisions",
         "rendered_html",
         "trusted rendered HTML has no restore-time parser",
+    ),
+    covered(
+        "posts",
+        "rendered_title",
+        RestoreBadValue::Text("<script>bad</script>"),
     ),
     primitive(
         "posts",
@@ -666,6 +722,7 @@ const BACKED_UP_DOMAIN_COLUMNS: &[(&str, &str)] = &[
     ("post_revisions", "body"),
     ("post_revisions", "format"),
     ("post_revisions", "rendered_html"),
+    ("post_revisions", "rendered_title"),
     ("post_revisions", "title"),
     ("post_revisions", "summary"),
     ("post_revision_tags", "tag_display"),
@@ -675,6 +732,7 @@ const BACKED_UP_DOMAIN_COLUMNS: &[(&str, &str)] = &[
     ("posts", "body"),
     ("posts", "format"),
     ("posts", "rendered_html"),
+    ("posts", "rendered_title"),
     ("posts", "slug"),
     ("posts", "summary"),
     ("posts", "title"),
@@ -748,6 +806,18 @@ mod tests {
             mode: BackupMode::Directory,
             tables,
         }
+    }
+
+    #[test]
+    fn rendered_title_presence_validation_skips_tables_absent_from_the_backup() {
+        let temp = TempDir::new().expect("make backup fixture");
+        let database = temp.path().join("db");
+        std::fs::create_dir(&database).expect("make backup database directory");
+        std::fs::write(database.join("posts.ndjson"), "").expect("write empty posts table");
+        let manifest = identity_manifest(vec!["posts".to_owned()]);
+
+        validate_rendered_title_presence_backup(temp.path(), &manifest)
+            .expect("the absent post_revisions table is skipped");
     }
 
     #[test]

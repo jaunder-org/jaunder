@@ -671,12 +671,9 @@ async fn apply_post_revisions(
     let mut body = existing.body;
     for revision in 0..target.revisions {
         body = revised_body(body, revision)?;
-        let rendered = host::render::with_media(&body, &existing.format);
+        let rendered = host::render::render_post(existing.title.clone(), body, existing.format);
         let input = storage::UpdatePostInput {
-            title: existing.title.clone(),
             slug: existing.slug.clone(),
-            body,
-            format: existing.format,
             rendered,
             publish,
             summary: existing.summary.clone(),
@@ -688,7 +685,7 @@ async fn apply_post_revisions(
         posts
             .update_post(transaction, target.post_id, target.author, &input)
             .await?;
-        body = input.body;
+        body = input.rendered.body().clone();
     }
     if target.deleted {
         posts

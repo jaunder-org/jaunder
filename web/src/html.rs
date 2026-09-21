@@ -12,7 +12,7 @@
 //! sits on the public request path (the #173 escape, ADR-0040). maud preserves that
 //! property: `html!` is a compile-time macro that builds a string, with no runtime.
 
-use common::render::RenderedHtml;
+use common::render::{RenderedHtml, RenderedPostTitle};
 use leptos::{
     prelude::{AddAnyAttr, InnerHtmlAttribute, IntoView},
     tachys::html::element::InnerHtml,
@@ -69,6 +69,16 @@ impl Markup {
         // real hazard, a `PreEscaped(user_input)` appearing anywhere else in `web`.
         // raw-html-door:allow re-wraps a RenderedHtml whose safety sanitization established (ADR-0079)
         Self(PreEscaped(html.as_ref()).into_string())
+    }
+
+    /// Carry a host-sanitized Rendered Title into the markup layer unescaped.
+    ///
+    /// Host ammonia establishes persisted title bytes, while CSR trusts the
+    /// server-authored DTO exactly as it trusts [`RenderedHtml`].
+    #[must_use]
+    pub(crate) fn from_rendered_post_title(title: &RenderedPostTitle) -> Self {
+        // raw-html-door:allow re-wraps a host-sanitized RenderedPostTitle from Jaunder's server
+        Self(PreEscaped(title.as_ref()).into_string())
     }
 
     /// The rendered markup as a string slice.

@@ -14,8 +14,8 @@ pub fn render_json(meta: &FeedMetadata, items: &[FeedItem]) -> SyndicationFeedRe
                 "date_published": i.published_at.to_string(),
                 "date_modified": i.updated_at.to_string(),
             });
-            if let Some(t) = &i.title {
-                o["title"] = Value::String(t.to_string());
+            if let Some(t) = &i.visible_title {
+                o["title"] = Value::String(t.clone());
             }
             if let Some(s) = &i.summary {
                 // ADR-0063 §5: read the summary out to a plain `String` at the
@@ -53,10 +53,7 @@ mod tests {
     use common::{
         ids::PostId,
         post_summary::PostSummary,
-        post_title::PostTitle,
-        test_support::{
-            parse_post_summary, parse_post_title, parse_url, parse_utc_instant, rendered_html,
-        },
+        test_support::{parse_post_summary, parse_url, parse_utc_instant, rendered_html},
     };
 
     fn meta(hub: Option<&str>, description: Option<&str>) -> FeedMetadata {
@@ -67,17 +64,18 @@ mod tests {
         }
     }
 
-    fn item(title: Option<PostTitle>, tags: Vec<&str>) -> FeedItem {
+    fn item(title: Option<String>, tags: Vec<&str>) -> FeedItem {
         item_with_summary(title, tags, None)
     }
 
     fn item_with_summary(
-        title: Option<PostTitle>,
+        title: Option<String>,
         tags: Vec<&str>,
         summary: Option<PostSummary>,
     ) -> FeedItem {
         FeedItem {
-            title,
+            rendered_title: title.as_deref().map(common::render::sanitize_post_title),
+            visible_title: title,
             summary,
             tags: tags.into_iter().map(|t| t.parse().unwrap()).collect(),
             ..feed_item(
@@ -117,7 +115,7 @@ mod tests {
     fn has_no_feed_timestamp_and_retains_item_modification_time() {
         let mut metadata = meta(None, Some("A site"));
         metadata.representation_modified_at = parse_utc_instant("2026-02-03T04:05:06Z");
-        let item = item(Some(parse_post_title("t")), vec![]);
+        let item = item(Some("t".to_owned()), vec![]);
         let expected_item_time = item.updated_at.to_string();
 
         let rendered = render_json(&metadata, &[item]);
@@ -143,6 +141,19 @@ mod tests {
     }
 
     #[test]
+    fn renders_formatted_title_as_visible_text() {
+        let title = common::render::sanitize_post_title("<strong>A &amp; B</strong><br>C");
+        let item = FeedItem {
+            visible_title: Some(crate::render::rendered_title_visible_text(&title)),
+            rendered_title: Some(title),
+            ..item(None, vec![])
+        };
+        let value: Value =
+            serde_json::from_str(render_json(&meta(None, Some("A site")), &[item]).body()).unwrap();
+        assert_eq!(value["items"][0]["title"], "A & B C");
+    }
+
+    #[test]
     fn omits_title_for_titleless_post() {
         let out = render_json(&meta(None, Some("A site")), &[item(None, vec![])]);
         let v: Value = serde_json::from_str(out.body()).unwrap();
@@ -150,11 +161,29 @@ mod tests {
     }
 
     #[test]
+    fn omits_title_for_present_empty_rendered_title() {
+        let item = FeedItem {
+            rendered_title: Some(common::render::RenderedPostTitle::empty()),
+            visible_title: None,
+            ..item(Some("fallback".to_owned()), vec![])
+        };
+        let value: Value =
+            serde_json::from_str(render_json(&meta(None, Some("A site")), &[item]).body()).unwrap();
+        assert_eq!(
+            value["items"].as_array().unwrap().len(),
+            1,
+            "empty title retains item"
+        );
+        assert!(value["items"][0].get("title").is_none());
+        assert_eq!(value["items"][0]["content_html"], "<p>hi</p>");
+    }
+
+    #[test]
     fn includes_summary_when_present() {
         let out = render_json(
             &meta(None, Some("A site")),
             &[item_with_summary(
-                Some(parse_post_title("t")),
+                Some("t".to_owned()),
                 vec![],
                 Some(parse_post_summary("a summary")),
             )],
@@ -167,13 +196,13 @@ mod tests {
     fn includes_tags_only_when_present() {
         let out = render_json(
             &meta(None, Some("A site")),
-            &[item(Some(parse_post_title("t")), vec!["rust"])],
+            &[item(Some("t".to_owned()), vec!["rust"])],
         );
         let v: Value = serde_json::from_str(out.body()).unwrap();
         assert_eq!(v["items"][0]["tags"][0], "rust");
         let out2 = render_json(
             &meta(None, Some("A site")),
-            &[item(Some(parse_post_title("t")), vec![])],
+            &[item(Some("t".to_owned()), vec![])],
         );
         let v2: Value = serde_json::from_str(out2.body()).unwrap();
         assert!(v2["items"][0].get("tags").is_none());

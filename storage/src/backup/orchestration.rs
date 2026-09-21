@@ -16,7 +16,9 @@ use super::{
     error::BackupError,
     format::{self, BackupManifest},
     media,
-    restore_validation::{BackupRestoreOutcome, RestoreValidationReport},
+    restore_validation::{
+        BackupRestoreOutcome, RestoreValidationReport, validate_rendered_title_presence_backup,
+    },
 };
 
 #[derive(Clone, Copy)]
@@ -96,6 +98,7 @@ pub async fn restore_backup(
         &manifest,
     )
     .await?;
+    validate_rendered_title_presence_backup(source_path, &manifest)?;
     let content_root = media_content_root(options.media_path)?;
     media::restore_media_directory(&source_path.join("themes"), &content_root.join("themes"))?;
     let validation_report = match manifest.mode {

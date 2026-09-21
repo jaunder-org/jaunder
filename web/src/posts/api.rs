@@ -1138,6 +1138,7 @@ mod tests {
             user_id: UserId::from(2),
             author_username: parse_username("author"),
             title: None,
+            rendered_title: None,
             slug: slug.parse().unwrap(),
             body: parse_post_body("source body"),
             format: PostFormat::Markdown,
@@ -1213,7 +1214,7 @@ mod tests {
             post_id: PostId::from(1),
             username: parse_username("alice"),
             display_name: Some(parse_display_name("Ada Lovelace")),
-            title: Some(common::test_support::parse_post_title("T")),
+            rendered_title: Some(common::test_support::rendered_post_title("T")),
             summary: None,
             slug: "hello".parse::<Slug>().unwrap(),
             rendered_html: common::test_support::rendered_html("<p>hi</p>"),
@@ -1401,6 +1402,7 @@ mod tests {
                 user_id: UserId::from(2),
                 author_username: parse_username("author"),
                 title: None,
+                rendered_title: None,
                 slug,
                 body: parse_post_body("Titleless note"),
                 format: PostFormat::Markdown,
@@ -1416,7 +1418,7 @@ mod tests {
         )
         .expect("published post should summarize");
 
-        assert_eq!(summary.title, None);
+        assert_eq!(summary.rendered_title, None);
         assert_eq!(summary.username, "author");
         assert_eq!(
             summary.permalink.as_deref(),
@@ -1445,6 +1447,7 @@ mod tests {
                 user_id: UserId::from(2),
                 author_username: author_username.clone(),
                 title: Some(common::test_support::parse_post_title("Draft")),
+                rendered_title: Some(common::test_support::rendered_post_title("Draft")),
                 slug: slug.clone(),
                 body: parse_post_body("body"),
                 format: PostFormat::Markdown,
@@ -1469,6 +1472,7 @@ mod tests {
                 user_id: UserId::from(2),
                 author_username,
                 title: Some(common::test_support::parse_post_title("Published")),
+                rendered_title: Some(common::test_support::rendered_post_title("Published")),
                 slug,
                 body: parse_post_body("body"),
                 format: PostFormat::Markdown,
@@ -1529,6 +1533,7 @@ mod server_tests {
             user_id,
             author_username: parse_username("alice"),
             title: Some(common::test_support::parse_post_title("t")),
+            rendered_title: Some(common::test_support::rendered_post_title("t")),
             slug: "hello-world".parse::<Slug>().unwrap(),
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
@@ -1683,6 +1688,7 @@ mod server_tests {
                 post_id: PostId::from(7),
                 user_id: UserId::from(1),
                 title: Some(parse_post_title("Snapshot title")),
+                rendered_title: Some(common::test_support::rendered_post_title("Snapshot title")),
                 slug: "snapshot".parse().expect("valid slug"),
                 body: parse_post_body("Snapshot body"),
                 format: PostFormat::Markdown,

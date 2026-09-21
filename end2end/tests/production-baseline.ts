@@ -163,12 +163,54 @@ async function createLegacyPostViaApi(
   return "post" in saved ? saved.post : saved;
 }
 type SeededPost = SandboxSeedManifest["posts"][number];
+
+type FormattedTitleExpectation = {
+  slug: string;
+  visibleText: string;
+  tags: string[];
+};
+
+const FORMATTED_TITLE_EXPECTATIONS: readonly FormattedTitleExpectation[] = [
+  {
+    slug: "formatted-markdown-title",
+    visibleText: "Markdown emphasis strong deleted code link label",
+    tags: ["em", "strong", "del", "code"],
+  },
+  {
+    slug: "formatted-org-title",
+    visibleText: "Org emphasis strong underline Org label",
+    tags: ["i", "b", "u"],
+  },
+  {
+    slug: "formatted-html-title",
+    visibleText: "HTML emphasis HTML label",
+    tags: ["em"],
+  },
+];
+
 function seededPostPath(post: SeededPost): string {
   if (post.publishedAt === null) {
     throw new Error(`seeded Post ${post.slug} has no permalink`);
   }
   const date = post.publishedAt.slice(0, 10).replace(/-/g, "/");
   return `/~${post.author}/${date}/${post.slug}`;
+}
+
+async function expectSafeRenderedTitle(
+  article: import("@playwright/test").Locator,
+  expected: FormattedTitleExpectation,
+): Promise<void> {
+  const title = article.locator(".j-post-title");
+  await expect(title).toHaveText(expected.visibleText);
+  for (const tag of expected.tags) {
+    await expect(title.locator(tag)).toHaveCount(1);
+  }
+  // The title's existing permalink is the only anchor: source links flatten to
+  // their labels and active/embedded source content never reaches the browser.
+  await expect(title.locator("a")).toHaveCount(1);
+  await expect(title.locator("script, img, iframe, object, embed")).toHaveCount(
+    0,
+  );
 }
 
 function escapeXmlText(value: string): string {
@@ -630,6 +672,53 @@ export async function verifyProductionBaseline(
     }
   }
   await verifySeededManifest(state, tracedContext);
+
+  const formattedPosts = FORMATTED_TITLE_EXPECTATIONS.map((expected) => {
+    const post = state.seededManifest.posts.find(
+      (candidate) => candidate.slug === expected.slug,
+    );
+    expect(post, `sandbox manifest contains ${expected.slug}`).toBeDefined();
+    expect(post!.visibility, `${expected.slug} is public`).toBe("public");
+    expect(post!.publishedAt, `${expected.slug} is published`).not.toBeNull();
+    return { expected, post: post! };
+  });
+  const formattedContext = await tracedContext();
+  try {
+    const timeline = await formattedContext.newPage();
+    try {
+      await goto(timeline, "/~alice");
+      for (const { expected, post } of formattedPosts) {
+        const article = timeline
+          .locator("article.j-post")
+          .filter({ hasText: expected.visibleText });
+        await expect(article).toHaveCount(1);
+        await expectSafeRenderedTitle(article, expected);
+        await expect(article.locator(".j-post-title a")).toHaveAttribute(
+          "href",
+          new RegExp(`/${post.slug}$`),
+        );
+      }
+    } finally {
+      await timeline.close();
+    }
+
+    for (const { expected, post } of formattedPosts) {
+      const permalink = await formattedContext.newPage();
+      try {
+        await goto(permalink, seededPostPath(post));
+        expect(new URL(permalink.url()).pathname).toBe(seededPostPath(post));
+        await expectSafeRenderedTitle(
+          permalink.locator("article.j-post"),
+          expected,
+        );
+      } finally {
+        await permalink.close();
+      }
+    }
+  } finally {
+    await formattedContext.close();
+  }
+
   for (const viewer of [
     { session: state.subscriberSession, canView: true },
     { session: state.nonSubscriberSession, canView: false },

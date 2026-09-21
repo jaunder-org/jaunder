@@ -15,9 +15,11 @@ reader or writer contract check reports backup-format incompatibility:
 1. Write a new immutable directory fixture (for example, `format-2/`) by hand;
    do not regenerate, rewrite, or otherwise bless an existing fixture from
    production output.
-2. Add exactly one `index.json` entry for its `format_version`, `support`, and
-   normalized SHA-256 digest. A version may occur only once. The index is
-   external metadata and is not part of a fixture digest.
+2. Add an `index.json` entry for its `format_version`, `support`,
+   `materializable` role, and normalized SHA-256 digest. Each format version has
+   exactly one current-schema materializable fixture; immutable
+   historical-schema fixtures for that version may remain alongside it. The
+   index is external metadata and is not part of a fixture digest.
 3. Add the matching test-owned raw-wire oracle and reader/writer role inventory
    coverage. Cover the exact manifest member set and types, paths/table order,
    NDJSON object-per-line framing and trailing LF, applicable value roles and
@@ -48,11 +50,18 @@ not an instruction to rehash history: preserve the fixture and find the
 unintended mutation. The focused corpus integrity tests verify the checked-in
 index digest and reject unsafe entries.
 
-Restore has a separate, exact live-schema requirement. Tests first verify the
-fixture, copy it to temporary storage, and change **only** the copied
-`manifest.json` `schema_version` to the target's current version. The original
-fixture, its provenance sentinels, and every other byte remain unchanged. This
-is test materialization, not a schema migration or a format conversion.
+Restore has a separate, exact live-schema requirement. A `materializable`
+fixture is current-schema row-shape evidence: tests first verify it, copy it to
+temporary storage, and change **only** the copied `manifest.json`
+`schema_version` to the target's current version. The original fixture, its
+provenance sentinels, and every other byte remain unchanged. This is test
+materialization, not a schema migration or a format conversion.
+
+A historical-schema fixture sets `materializable: false`. It remains immutable
+format evidence, but its original schema version is restored unchanged and must
+fail with the typed schema-mismatch error before mutation. There may be one
+materializable fixture per format version plus any number of historical-schema
+fixtures for that version.
 
 ## Retirement
 

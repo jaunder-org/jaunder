@@ -16,9 +16,7 @@ use crate::{
 
 use common::MutationOutcome;
 use common::backup::BackupConfig;
-#[cfg(test)]
-use common::ids::RevisionId;
-use common::ids::{AudienceId, ChannelId, PostId, SubscriptionId, TagId, UserId};
+use common::ids::{AudienceId, ChannelId, PostId, RevisionId, SubscriptionId, TagId, UserId};
 use common::media::{
     ContentHash, Filename, MaxFileSize, MediaRef, MediaReferenceForm, MediaReferenceKind,
     MediaSource, UserQuota,
@@ -50,6 +48,7 @@ pub(crate) struct RawPostRevision {
     pub(crate) post_id: PostId,
     pub(crate) user_id: UserId,
     pub(crate) title: Option<common::post_title::PostTitle>,
+    pub(crate) rendered_title: Option<common::render::RenderedPostTitle>,
     pub(crate) slug: common::slug::Slug,
     pub(crate) body: common::post_body::PostBody,
     pub(crate) format: common::render::PostFormat,
@@ -728,6 +727,35 @@ impl TestEnv {
         })
         .collect()
     }
+    /// Installs deliberately invalid Rendered Title bytes in both read surfaces.
+    ///
+    /// This test-only physical-write seam proves strict typed reconstruction at
+    /// current-Post and full-Revision reads without involving authoring renderers.
+    ///
+    /// # Errors
+    ///
+    /// Returns the database error if either fixture update fails.
+    pub async fn inject_invalid_rendered_title(
+        &self,
+        post_id: PostId,
+        revision_id: RevisionId,
+        rendered_title: &str,
+    ) -> Result<(), sqlx::Error> {
+        crate::with_closeable_pool!(self.base.pool(), pool, {
+            sqlx::query("UPDATE posts SET rendered_title = $1 WHERE post_id = $2")
+                .bind(rendered_title)
+                .bind(post_id)
+                .execute(pool)
+                .await?;
+            sqlx::query("UPDATE post_revisions SET rendered_title = $1 WHERE revision_id = $2")
+                .bind(rendered_title)
+                .bind(revision_id)
+                .execute(pool)
+                .await?;
+        });
+        Ok(())
+    }
+
     /// Executes deliberately raw fixture SQL against this test-owned database.
     ///
     /// # Panics
@@ -819,6 +847,7 @@ impl TestEnv {
                     post_id: row.try_get("post_id").unwrap(),
                     user_id: row.try_get("user_id").unwrap(),
                     title: row.try_get("title").unwrap(),
+                    rendered_title: row.try_get("rendered_title").unwrap(),
                     slug: row.try_get("slug").unwrap(),
                     body: row.try_get("body").unwrap(),
                     format: row.try_get("format").unwrap(),
@@ -833,7 +862,7 @@ impl TestEnv {
             }};
         }
 
-        let sql = "SELECT revision_id, post_id, user_id, title, slug, body, format, rendered_html, summary,
+        let sql = "SELECT revision_id, post_id, user_id, title, rendered_title, slug, body, format, rendered_html, summary,
                           created_at, updated_at, published_at, deleted_at, captured_at
                    FROM post_revisions WHERE post_id = $1";
         match self.base.pool() {

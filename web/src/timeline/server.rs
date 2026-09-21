@@ -197,6 +197,7 @@ mod tests {
             user_id: UserId::from(1),
             author_username: parse_username("alice"),
             title: None,
+            rendered_title: None,
             slug: parse_slug("hello-world"),
             body: parse_post_body("body"),
             format: PostFormat::Markdown,

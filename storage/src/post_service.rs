@@ -309,13 +309,10 @@ pub fn render_post_input(content: RenderedPostContent) -> CreatePostInput {
         idempotency_key,
         expectations,
     } = content;
-    let rendered = host::render::with_media(&body, &format);
+    let rendered = host::render::render_post(title, body, format);
     CreatePostInput {
         user_id,
-        title,
         slug,
-        body,
-        format,
         rendered,
         published_at,
         summary,
@@ -494,12 +491,9 @@ pub async fn perform_post_update(
         None => derived_slug,
     };
 
-    let rendered = host::render::with_media(&body, &format);
+    let rendered = host::render::render_post(title, body, format);
     let input = UpdatePostInput {
-        title,
         slug,
-        body,
-        format,
         rendered,
         publish,
         summary,
@@ -582,16 +576,13 @@ pub async fn perform_post_update_with_media_ownership(
     let body = common::render::canonicalize_body(&body, &format)
         .map_err(|_| PerformUpdateError::EmptyPost)?;
     let slug = slug_override.cloned().unwrap_or(derived_slug);
-    let rendered = host::render::with_media(&body, &format);
+    let rendered = host::render::render_post(title, body, format);
     let local_media = ownership
         .resolve(rendered.media())
         .await
         .map_err(PerformUpdateError::Storage)?;
     let input = UpdatePostInput {
-        title,
         slug,
-        body,
-        format,
         rendered,
         publish,
         summary,

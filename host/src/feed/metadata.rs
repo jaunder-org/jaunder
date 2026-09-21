@@ -7,8 +7,7 @@ use common::{
     feed::FeedSurface,
     ids::PostId,
     post_summary::PostSummary,
-    post_title::PostTitle,
-    render::RenderedHtml,
+    render::{RenderedHtml, RenderedPostTitle},
     site::{SiteTagline, SiteTitle},
     tag::TagLabel,
     tagged_url::{CanonicalUrl, FeedUrl, HubUrl, PermalinkUrl},
@@ -121,7 +120,10 @@ pub struct FeedMetadata {
 #[derive(Debug, Clone)]
 pub struct FeedItem {
     pub id: PostId,
-    pub title: Option<PostTitle>,
+    /// Persisted inline HTML for Atom's `type="html"` title construct.
+    pub rendered_title: Option<RenderedPostTitle>,
+    /// Entity-decoded marker-free title for RSS and JSON Feed, omitted when empty.
+    pub visible_title: Option<String>,
     pub permalink: PermalinkUrl,
     pub summary: Option<PostSummary>,
     pub content_html: RenderedHtml,
@@ -143,7 +145,7 @@ mod tests {
     use common::feed::FeedSurface;
     use common::{
         site::{SiteTagline, SiteTitle},
-        test_support::{parse_post_title, parse_url, parse_utc_instant, rendered_html},
+        test_support::{parse_url, parse_utc_instant, rendered_html},
         time::UtcInstant,
     };
     #[test]
@@ -241,7 +243,8 @@ mod tests {
 
     fn item(id: PostId, ts: UtcInstant) -> FeedItem {
         FeedItem {
-            title: Some(parse_post_title("t")),
+            rendered_title: Some(common::render::sanitize_post_title("t")),
+            visible_title: Some("t".to_owned()),
             ..feed_item(
                 id,
                 parse_url("https://ex.com/p"),

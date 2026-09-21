@@ -188,7 +188,11 @@ async fn restore_database_transaction(
             .await?;
         }
         backfill_legacy_passkey_user_handles(&mut connection, manifest).await?;
-        repair_sequences(&mut connection).await?;
+        // PostgreSQL's `setval` is not transactional. Preflight intentionally
+        // rolls back its import, so it must not advance target sequences.
+        if commit {
+            repair_sequences(&mut connection).await?;
+        }
         Ok(validation_report)
     }
     .await;
@@ -693,6 +697,61 @@ mod tests {
         .try_get::<RestoreText, _>("value")?;
         assert_eq!(json.as_str(), r#"{"items":[1,true]}"#);
 
+        Ok(())
+    }
+
+    // reason: drives the public dialect preflight and committing restore paths
+    // against the same explicit-ID backup, proving rollback-only preflight does
+    // not leak PostgreSQL's nontransactional `setval` while committed imports do.
+    #[apply(postgres_only)]
+    #[tokio::test]
+    async fn restore_preflight_does_not_advance_sequences_but_commit_does(
+        #[case] backend: Backend,
+    ) -> Result<(), BackupError> {
+        let source = backend.setup().await;
+        let CloseablePool::Postgres(source_pool) = source.base.pool() else {
+            unreachable!("postgres_only yields a Postgres pool")
+        };
+        SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&source.users()),
+                source.write_scope().clone(),
+            )
+            .await;
+        let temp = tempfile::TempDir::new().expect("tempdir");
+        let backup = temp.path().join("backup");
+        std::fs::create_dir_all(backup.join("db"))?;
+        let manifest = export_database(source_pool, &backup, BackupMode::Directory).await?;
+
+        let preflight_target = backend.setup().await;
+        let CloseablePool::Postgres(preflight_pool) = preflight_target.base.pool() else {
+            unreachable!("postgres_only yields a Postgres pool")
+        };
+        preflight_restore_database(preflight_pool, &backup, &manifest).await?;
+        let preflight_next: UserId =
+            sqlx::query_scalar("SELECT nextval(pg_get_serial_sequence('users', 'user_id'))")
+                .fetch_one(preflight_pool)
+                .await?;
+        assert_eq!(
+            preflight_next,
+            UserId::from(1),
+            "preflight must not advance user IDs"
+        );
+
+        let commit_target = backend.setup().await;
+        let CloseablePool::Postgres(commit_pool) = commit_target.base.pool() else {
+            unreachable!("postgres_only yields a Postgres pool")
+        };
+        restore_database(commit_pool, &backup, &manifest).await?;
+        let committed_next: UserId =
+            sqlx::query_scalar("SELECT nextval(pg_get_serial_sequence('users', 'user_id'))")
+                .fetch_one(commit_pool)
+                .await?;
+        assert_eq!(
+            committed_next,
+            UserId::from(2),
+            "committed restore advances user IDs"
+        );
         Ok(())
     }
 

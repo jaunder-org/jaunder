@@ -30,7 +30,7 @@ pub fn PostDisplay<'a>(
         post_id: post.post_id,
         username: &post.username,
         display_name: post.display_name.as_ref(),
-        title: post.title.as_ref(),
+        rendered_title: post.rendered_title.as_ref(),
         banner,
         summary: post.summary.as_ref(),
         rendered_html: &post.rendered_html,

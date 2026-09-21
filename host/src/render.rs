@@ -6,8 +6,10 @@ use common::post_summary::{
     MAX_POST_SUMMARY_CHARS, PostSummary, normalize_summary_whitespace,
     truncate_at_first_sentence_or_word_boundary,
 };
+use common::post_title::PostTitle;
 use common::render::{
-    PostFormat, RenderedHtml, RenderedHtmlPart, TrustedProviderEmbed, assemble_rendered_html,
+    PostFormat, RenderedHtml, RenderedHtmlPart, RenderedPostTitle, TrustedProviderEmbed,
+    assemble_rendered_html,
 };
 /// Renders `body` to HTML based on `format`. Pure, infallible function.
 ///
@@ -173,8 +175,7 @@ fn markdown_options() -> pulldown_cmark::Options {
 }
 
 /// Renders Markdown to HTML using one complete pulldown-cmark event stream.
-#[cfg(test)]
-pub(super) fn render_markdown(body: &str) -> String {
+fn render_markdown(body: &str) -> String {
     use pulldown_cmark::{Parser, html};
     let mut html_output = String::new();
     html::push_html(&mut html_output, Parser::new_ext(body, markdown_options()));
@@ -226,8 +227,7 @@ fn render_markdown_with_shortcodes_using(
 }
 
 /// Renders Org-mode to HTML using orgize.
-#[cfg(test)]
-pub(super) fn render_org(body: &str) -> String {
+fn render_org(body: &str) -> String {
     orgize::Org::parse(body).to_html()
 }
 
@@ -349,6 +349,92 @@ fn render_org_with_shortcodes(body: &str) -> RenderedHtml {
     org.traverse(&mut export);
     let html = export.html.finish();
     assemble_with_markers(&html, export.markers)
+}
+
+/// Renders a Post's title and body projections as one inseparable write aggregate.
+///
+/// The title source, format, and both derived fragments travel together so storage
+/// cannot bind a title from one authoring input with derivatives from another.
+#[must_use]
+pub fn render_post(
+    title: Option<PostTitle>,
+    body: PostBody,
+    format: PostFormat,
+) -> PostRenderOutput {
+    let rendered_html = render(&body, &format);
+    let media = extract_media_refs(rendered_html.as_ref());
+    let rendered_title = title.as_ref().map(|title| render_title(title, &format));
+    PostRenderOutput {
+        title,
+        body,
+        format,
+        rendered_title,
+        rendered_html,
+        media,
+    }
+}
+
+/// Renders an authored title through the common ammonia-owned title policy.
+///
+/// Markdown and Org first use their ordinary renderers. The common boundary then
+/// sanitizes every authoring format into the persisted inline fragment grammar.
+#[must_use]
+pub fn render_title(title: &PostTitle, format: &PostFormat) -> RenderedPostTitle {
+    let source = match format {
+        PostFormat::Markdown => render_markdown(title.as_ref()),
+        PostFormat::Org => render_org(title.as_ref()),
+        PostFormat::Html => title.to_string(),
+    };
+    common::render::sanitize_post_title(&source)
+}
+
+/// Projects a persisted Rendered Title into readable text for RSS and JSON Feed.
+#[must_use]
+pub fn rendered_title_visible_text(title: &RenderedPostTitle) -> String {
+    common::render::rendered_post_title_visible_text(title)
+}
+
+/// The complete authored and rendered state for one Post write.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PostRenderOutput {
+    title: Option<PostTitle>,
+    body: PostBody,
+    format: PostFormat,
+    rendered_title: Option<RenderedPostTitle>,
+    rendered_html: RenderedHtml,
+    media: Vec<MediaReference>,
+}
+
+impl PostRenderOutput {
+    #[must_use]
+    pub fn title(&self) -> Option<&PostTitle> {
+        self.title.as_ref()
+    }
+    #[must_use]
+    pub fn body(&self) -> &PostBody {
+        &self.body
+    }
+    #[must_use]
+    pub const fn format(&self) -> PostFormat {
+        self.format
+    }
+    #[must_use]
+    pub fn rendered_title(&self) -> Option<&RenderedPostTitle> {
+        self.rendered_title.as_ref()
+    }
+    #[must_use]
+    pub fn rendered_html(&self) -> &RenderedHtml {
+        &self.rendered_html
+    }
+    #[must_use]
+    pub fn media(&self) -> &[MediaReference] {
+        &self.media
+    }
+    /// Consumes the aggregate when only its rendered body remains needed.
+    #[must_use]
+    pub fn into_rendered_html(self) -> RenderedHtml {
+        self.rendered_html
+    }
 }
 
 /// The `(element, attribute)` pairs whose values name media. When common's
@@ -1508,6 +1594,12 @@ mod tests {
         assert!(out.media().is_empty());
     }
 
+    #[test]
+    fn render_output_into_html_consumes_the_derived_media_pair() {
+        let out = with_media(&parse_post_body("plain text"), &PostFormat::Markdown);
+        assert_eq!(out.into_html().as_ref(), "<p>plain text</p>\n");
+    }
+
     /// Whether `(tag, attr)` is classified: the **pair** is in `MEDIA_URL_ATTRS`, or the
     /// attribute **name** is in `INERT_ATTRS` (which is element-agnostic by
     /// construction — see its docs for the invariant that rests on).
@@ -1534,6 +1626,90 @@ mod tests {
         // Sorted so a failure reads the same on every run.
         unclassified.sort();
         unclassified
+    }
+
+    #[test]
+    fn title_projection_renders_authoring_formats_through_ammonia() {
+        let cases = [
+            (
+                PostFormat::Markdown,
+                "**bold** [link](https://example.test) ![alt](x)",
+                "<strong>bold</strong> link",
+            ),
+            (
+                PostFormat::Org,
+                "*bold* /italic/ +strike+",
+                "<b>bold</b> <i>italic</i> <s>strike</s>",
+            ),
+            (
+                PostFormat::Html,
+                r#"<div>one</div><a href="/">two</a><img alt="three"><br><!-- gone --><script>lost</script>"#,
+                "onetwo<br>",
+            ),
+        ];
+        for (format, source, expected) in cases {
+            let title: PostTitle = source.parse().unwrap();
+            assert_eq!(
+                render_title(&title, &format).as_ref(),
+                expected,
+                "{format:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn title_projection_uses_ammonia_for_inline_html_and_text_feeds() {
+        let title: PostTitle =
+            r#"<strong>A &amp; B</strong><br><a href="/">C</a><script>lost</script>"#
+                .parse()
+                .unwrap();
+        let rendered = render_title(&title, &PostFormat::Html);
+        assert_eq!(rendered.as_ref(), "<strong>A &amp; B</strong><br>C");
+        assert_eq!(rendered_title_visible_text(&rendered), "A & B C");
+        let encoded = common::render::sanitize_post_title("&amp;lt;");
+        assert_eq!(rendered_title_visible_text(&encoded), "&lt;");
+
+        let title: PostTitle = r#"<img alt="not retained"><div>block</div>"#.parse().unwrap();
+        let rendered = render_title(&title, &PostFormat::Html);
+        assert_eq!(rendered.as_ref(), "block");
+        assert_eq!(rendered_title_visible_text(&rendered), "block");
+    }
+
+    #[test]
+    fn title_projection_collapses_content_free_fragments() {
+        for (format, source) in [
+            (PostFormat::Markdown, "<br>"),
+            (PostFormat::Org, "@@html:<br>@@"),
+            (PostFormat::Html, "<br>"),
+            (PostFormat::Html, "<em></em>"),
+            (PostFormat::Html, "<script>discarded</script>"),
+        ] {
+            let title: PostTitle = source.parse().unwrap();
+            assert_eq!(
+                render_title(&title, &format).as_ref(),
+                "",
+                "{format:?} {source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn title_projection_is_total_for_long_and_malformed_titles() {
+        for source in [
+            "x".repeat(16 * 1024 + 1),
+            format!("{}x{}", "<b>".repeat(128), "</b>".repeat(128)),
+            "<b><i>x</b>y</i>".to_owned(),
+            "<script/>".to_owned(),
+            "<b>x".to_owned(),
+        ] {
+            let title: PostTitle = source.parse().unwrap();
+            let rendered = render_title(&title, &PostFormat::Html);
+            assert!(
+                rendered.as_ref()
+                    == common::render::sanitize_post_title(rendered.as_ref()).as_ref(),
+                "{source}"
+            );
+        }
     }
 
     /// Fails when common's sanitizer permits an `(element, attribute)` pair that

@@ -471,12 +471,28 @@ Details in the testing section.
 A post stores its **source**: a `PostBody` in an author-chosen `PostFormat`
 (`Markdown` | `Org` | `Html`, `common/src/render.rs:35`), from which a
 module-qualified `host::render` free function derives the stored
-`rendered_html`. The two forms feed two deliberately separate serialization
-surfaces — Syndication Feeds emit HTML, the AtomPub Collection native source —
-detailed in the Protocols section
+`rendered_html`. A titled Post also stores a sanitized, inline-only Rendered
+Title derived atomically from its authored `PostTitle` and format. A dedicated
+narrow `ammonia` policy retains only its safe inline tags without attributes and
+removes active or embedded content; it does not synthesize image alternatives or
+block-wrapper spacing. A source with no surviving visible text retains an empty
+persisted fragment and presents no web, RSS, or JSON Feed title rather than
+leaking authored markup. Host ammonia validates persisted bytes before typed
+database reads; invalid restored bytes remain diagnostic source data but fail
+those reads before any unescaped sink. Server-authored DTO bytes are trusted by
+CSR exactly like `RenderedHtml`, so browser clients do not ship a title parser.
+Current Posts and full Post Revisions retain these rendered bytes so title and
+body share parser-version and historical-snapshot semantics. Migration 0039 adds
+nullable columns only; with no production instances it does not repair legacy
+rows.
+([persisted Rendered Title decision](adr/drafts/persist-inline-rendered-post-titles.md)).
+The source and rendered forms feed deliberately separate serialization surfaces
+— Syndication Feeds consume presentation projections, while the AtomPub
+Collection preserves native source — detailed in the Protocols section
 ([ADR-0015](adr/0015-atompub-serialization-surfaces.md)).
-`storage/src/posts/models.rs::PostRecord` carries both plus title, `Slug`,
-summary, tags, and `created_at`/`updated_at`/`published_at`/`deleted_at`.
+`storage/src/posts/models.rs::PostRecord` carries both body forms, both title
+forms, `Slug`, summary, tags, and
+`created_at`/`updated_at`/`published_at`/`deleted_at`.
 
 `PostRecord.summary` is optional authored Post content. The separate, disposable
 fallback projection is host-owned:
@@ -730,19 +746,19 @@ publication, unpublication, and soft-delete mutation as one atomic operation: it
 locks and canonically compares the complete desired state, then captures exactly
 one immutable full prior-state **Post Revision** and its tag, audience, and
 media children before applying the change. Scalar snapshots contain authored
-source and format, rendered HTML, title, slug, summary, immutable creation time,
-prior modification time, and publication/deletion timestamps; child values are
-copied rather than linked to mutable tag or audience lookup rows. A semantic
-no-op writes neither a Revision nor an updated timestamp. Creation is
-revision-free because it has no prior state
-([ADR-0136](adr/0136-local-post-lifecycle.md)). Media referenced by an owner's
-retained current Post or revision participates in the ordinary reference guard,
-including Deleted Posts; web force is the explicit override and may knowingly
-delete the final Media Record, breaking retained history. This does not make
-foreign/unknown/legacy global safety overridable, and qualifying cross-user
-references use independent records rather than pinning the owner's record. A
-Media Record survives removal of its references and Post deletion until explicit
-owner deletion
+source and format, rendered body HTML, authored and rendered title, slug,
+summary, immutable creation time, prior modification time, and
+publication/deletion timestamps; child values are copied rather than linked to
+mutable tag or audience lookup rows. A semantic no-op writes neither a Revision
+nor an updated timestamp. Creation is revision-free because it has no prior
+state ([ADR-0136](adr/0136-local-post-lifecycle.md)). Media referenced by an
+owner's retained current Post or revision participates in the ordinary reference
+guard, including Deleted Posts; web force is the explicit override and may
+knowingly delete the final Media Record, breaking retained history. This does
+not make foreign/unknown/legacy global safety overridable, and qualifying
+cross-user references use independent records rather than pinning the owner's
+record. A Media Record survives removal of its references and Post deletion
+until explicit owner deletion
 ([per-user Media Record policy](adr/0183-per-user-media-records-from-local-post-references.md)).
 
 Revision records have no product mutators: only top-level Post mutation and
@@ -853,17 +869,22 @@ roles existed.
 
 Public read-only feeds serve arbitrary feed readers, so every item carries the
 post's `rendered_html` — Atom `type="html"` and the RSS/JSON Feed equivalents
-([ADR-0015](adr/0015-atompub-serialization-surfaces.md)). Atom `<summary>` and
-JSON Feed `summary` carry the authored summary when present, otherwise the
-host-owned rendered-body fallback; RSS descriptions and complete rendered bodies
-remain unchanged. The CSR-reached `common::feed` grammar is exactly
-`FeedFormat`, `FeedSurface`, and `canonicalize`; the remaining Syndication Feed
-types and qualified rendering operations live in `host`.
-`server/src/feed/handlers.rs` serves the cached bytes, and `regenerate::feed`
-rebuilds them. Scheduled posts reach feeds through `FeedWorker::go_live_pass`
-(`server/src/feed/worker.rs:84`): both the steady-state `(last_tick, now]` pass
-and feed-relative restart catch-up enqueue only non-deleted Public Posts after
-their publication time becomes due
+([ADR-0015](adr/0015-atompub-serialization-surfaces.md)). Titled Atom entries
+use the persisted Rendered Title as an HTML text construct; RSS and JSON Feed
+use an `ammonia`-stripped, `html-escape`-decoded plain-text projection so
+secondary Markdown, Org, or HTML syntax never leaks into their plain-text title
+fields. AtomPub, slugs, and document metadata continue to use the authored title
+([persisted Rendered Title decision](adr/drafts/persist-inline-rendered-post-titles.md)).
+Atom `<summary>` and JSON Feed `summary` carry the authored summary when
+present, otherwise the host-owned rendered-body fallback; RSS descriptions and
+complete rendered bodies remain unchanged. The CSR-reached `common::feed`
+grammar is exactly `FeedFormat`, `FeedSurface`, and `canonicalize`; the
+remaining Syndication Feed types and qualified rendering operations live in
+`host`. `server/src/feed/handlers.rs` serves the cached bytes, and
+`regenerate::feed` rebuilds them. Scheduled posts reach feeds through
+`FeedWorker::go_live_pass` (`server/src/feed/worker.rs:84`): both the
+steady-state `(last_tick, now]` pass and feed-relative restart catch-up enqueue
+only non-deleted Public Posts after their publication time becomes due
 ([ADR-0027](adr/0027-scheduled-publishing-time-gated-visibility.md)).
 
 **Accepted membership.** Cached membership applies anonymous/Public eligibility

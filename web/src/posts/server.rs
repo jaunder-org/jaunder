@@ -30,7 +30,7 @@ fn rendered_post_from_record(
         post_id,
         author_username,
         author_display_name,
-        title,
+        rendered_title,
         slug,
         rendered_html,
         created_at,
@@ -43,7 +43,7 @@ fn rendered_post_from_record(
         post_id,
         username: author_username,
         display_name: author_display_name,
-        title,
+        rendered_title,
         summary,
         slug,
         rendered_html,
@@ -88,10 +88,12 @@ pub fn authored_post(post: PostRecord, is_author: bool) -> AuthoredPost {
     // Metadata gets the effective projection; the rendered row below deliberately
     // keeps the authored summary untouched for public and AtomPub parity.
     let permalink_description = effective_summary(&post);
+    let title = post.title.clone();
     let body = post.body.clone();
     let format = post.format;
     AuthoredPost {
         post: rendered_post_from_record(post, is_author, permalink),
+        title,
         body,
         format,
         permalink_description,
@@ -153,6 +155,7 @@ mod tests {
                 user_id: UserId::from(2),
                 author_username,
                 title: Some(common::test_support::parse_post_title("Title")),
+                rendered_title: Some(common::test_support::rendered_post_title("Title")),
                 slug,
                 body: parse_post_body("body"),
                 format: PostFormat::Markdown,
@@ -204,6 +207,7 @@ mod tests {
             user_id: UserId::from(2),
             author_username: parse_username("author"),
             title: None,
+            rendered_title: None,
             slug: "rendered-summary".parse::<Slug>().unwrap(),
             body: parse_post_body("Legacy *markup* summary."),
             format: PostFormat::Markdown,
@@ -250,6 +254,7 @@ mod tests {
                 user_id: UserId::from(2),
                 author_username,
                 title: Some(common::test_support::parse_post_title("Title")),
+                rendered_title: Some(common::test_support::rendered_post_title("Title")),
                 slug,
                 body: parse_post_body("body"),
                 format: PostFormat::Markdown,
@@ -305,6 +310,7 @@ mod tests {
                 user_id: UserId::from(2),
                 author_username,
                 title: Some(common::test_support::parse_post_title("Title")),
+                rendered_title: Some(common::test_support::rendered_post_title("Title")),
                 slug,
                 body: parse_post_body("body"),
                 format: PostFormat::Markdown,
@@ -344,6 +350,7 @@ mod tests {
                 user_id: UserId::from(2),
                 author_username: parse_username("author"),
                 title: None,
+                rendered_title: None,
                 slug: "timeline".parse::<Slug>().unwrap(),
                 body: parse_post_body("source body"),
                 format: PostFormat::Markdown,

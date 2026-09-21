@@ -17,7 +17,7 @@ pub fn render_rss(meta: &FeedMetadata, items: &[FeedItem]) -> SyndicationFeedRep
         .iter()
         .map(|i| {
             ItemBuilder::default()
-                .title(i.title.clone().map(String::from))
+                .title(i.visible_title.clone())
                 .link(Some(i.permalink.to_string()))
                 .description(Some(i.content_html.to_string()))
                 .pub_date(Some(
@@ -79,7 +79,7 @@ mod tests {
     use crate::feed::test_support::{feed_item, feed_metadata};
     use common::{
         ids::PostId,
-        test_support::{parse_post_title, parse_url, parse_utc_instant, rendered_html},
+        test_support::{parse_url, parse_utc_instant, rendered_html},
     };
 
     fn meta(hub: Option<&str>, description: Option<&str>) -> FeedMetadata {
@@ -92,7 +92,8 @@ mod tests {
 
     fn item(title: Option<&str>) -> FeedItem {
         FeedItem {
-            title: title.map(parse_post_title),
+            rendered_title: title.map(common::render::sanitize_post_title),
+            visible_title: title.map(ToOwned::to_owned),
             ..feed_item(
                 PostId::from(1),
                 parse_url("https://example.com/~alice/posts/1"),
@@ -143,6 +144,19 @@ mod tests {
     }
 
     #[test]
+    fn renders_formatted_title_as_visible_text() {
+        let title = common::render::sanitize_post_title("<strong>A &amp; B</strong><br>C");
+        let item = FeedItem {
+            visible_title: Some(crate::render::rendered_title_visible_text(&title)),
+            rendered_title: Some(title),
+            ..item(Some("fallback"))
+        };
+        let out = render_rss(&meta(None, Some("A site")), &[item]);
+        let channel = rss::Channel::read_from(out.body().as_bytes()).unwrap();
+        assert_eq!(channel.items()[0].title(), Some("A & B C"));
+    }
+
+    #[test]
     fn renders_post_with_title() {
         let out = render_rss(&meta(None, Some("A site")), &[item(Some("Hello"))]);
         assert!(out.body().contains("<title>Hello</title>"));
@@ -159,6 +173,20 @@ mod tests {
         assert_eq!(channel.items().len(), 1);
         assert!(channel.items()[0].title().is_none());
         assert!(channel.items()[0].description().is_some());
+    }
+
+    #[test]
+    fn omits_title_for_present_empty_rendered_title() {
+        let item = FeedItem {
+            rendered_title: Some(common::render::RenderedPostTitle::empty()),
+            visible_title: None,
+            ..item(Some("fallback"))
+        };
+        let out = render_rss(&meta(None, Some("A site")), &[item]);
+        let channel = rss::Channel::read_from(out.body().as_bytes()).unwrap();
+        assert_eq!(channel.items().len(), 1, "empty title must retain its item");
+        assert!(channel.items()[0].title().is_none());
+        assert_eq!(channel.items()[0].description(), Some("<p>hi</p>"));
     }
 
     #[test]

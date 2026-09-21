@@ -19,7 +19,7 @@ test(
   { tag: ["@visual", "@accessibility"] },
   async ({ page }) => {
     const session = await seedUserViaTool("visualauthor", "visualpassword123");
-    await seedPostsViaTool("visualauthor", 2, "Visual Timeline Post");
+    await seedPostsViaTool("visualauthor", 2, "Visual *Timeline* Post");
     await applySeededSession(page.context(), session);
     await goto(page, "/app");
 

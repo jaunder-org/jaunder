@@ -34,7 +34,7 @@ async fn fetch_post(
     post_id: PostId,
 ) -> Result<PostRecord, sqlx::Error> {
     sqlx::query_as::<_, PostRecord>(
-        "SELECT p.post_id, p.user_id, u.username, u.display_name, p.title, p.slug, p.body, p.format,
+        "SELECT p.post_id, p.user_id, u.username, u.display_name, p.title, p.rendered_title, p.slug, p.body, p.format,
                 p.rendered_html, p.created_at, p.updated_at, p.published_at, p.deleted_at,
                 p.summary,
                 COALESCE((
@@ -65,12 +65,12 @@ async fn apply_post_update(
     };
     sqlx::query(
         "UPDATE posts SET title = $1, slug = CASE WHEN published_at IS NULL THEN $2 ELSE slug END,
-         body = $3, format = $4, rendered_html = $5,
-         published_at = CASE WHEN $6 THEN NULL WHEN $7 IS NOT NULL THEN $8 ELSE COALESCE(published_at, $9) END,
-         updated_at = $10, summary = $11 WHERE post_id = $12",
+         body = $4, format = $5, rendered_html = $6, rendered_title = $3,
+         published_at = CASE WHEN $7 THEN NULL WHEN $8 IS NOT NULL THEN $9 ELSE COALESCE(published_at, $10) END,
+         updated_at = $11, summary = $12 WHERE post_id = $13",
     )
-    .bind_storage(input.title.as_ref()).bind_storage(&input.slug).bind_storage(&input.body).bind_storage(input.format)
-    .bind_storage(input.rendered.html()).bind_storage(publication_clear).bind_storage(explicit_published_at)
+    .bind_storage(input.rendered.title()).bind_storage(&input.slug).bind_storage(input.rendered.rendered_title()).bind_storage(input.rendered.body()).bind_storage(input.rendered.format())
+    .bind_storage(input.rendered.rendered_html()).bind_storage(publication_clear).bind_storage(explicit_published_at)
     .bind_storage(explicit_published_at).bind_storage(now).bind_storage(now).bind_storage(input.summary.as_ref()).bind_storage(post_id)
     .execute(&mut *conn).await?;
     visibility::replace_post_audiences::<Sqlite>(&mut *conn, post_id, &input.audiences).await?;
@@ -166,7 +166,7 @@ impl PostDialect for Sqlite {
     ) -> Result<PostMutation, UpdatePostError> {
         let conn = sqlite_connection(transaction)?;
         let existing = sqlx::query_as::<_, PostBookkeepingRow>(
-            "SELECT user_id, deleted_at, title, slug, body, format, rendered_html, summary, published_at
+            "SELECT user_id, deleted_at, title, slug, body, format, rendered_html, rendered_title, summary, published_at
              FROM posts WHERE post_id = $1",
         )
         .bind_storage(post_id)
@@ -181,6 +181,7 @@ impl PostDialect for Sqlite {
             }
             Some(existing) => existing,
         };
+        existing.validate_rendered_title_presence()?;
         let tags = sqlx::query_scalar::<_, TagLabel>(
             "SELECT pt.tag_display FROM post_tags pt
              JOIN tags t ON t.tag_id = pt.tag_id

@@ -43,7 +43,12 @@ pub fn render_atom(
             )
             .parse()?;
             entry.id = i.permalink.to_string();
-            entry.title = Text::plain(i.title.clone().map(String::from).unwrap_or_default());
+            entry.title = Text::html(
+                i.rendered_title
+                    .as_ref()
+                    .map(|title| title.as_str().to_owned())
+                    .unwrap_or_default(),
+            );
             entry.links = vec![Link {
                 href: i.permalink.to_string(),
                 rel: "alternate".to_string(),
@@ -97,9 +102,7 @@ mod tests {
     use crate::feed::test_support::{feed_item, feed_metadata};
     use common::{
         ids::PostId,
-        test_support::{
-            parse_post_summary, parse_post_title, parse_url, parse_utc_instant, rendered_html,
-        },
+        test_support::{parse_post_summary, parse_url, parse_utc_instant, rendered_html},
     };
 
     fn meta(hub: Option<&str>, description: Option<&str>) -> FeedMetadata {
@@ -112,7 +115,8 @@ mod tests {
 
     fn item() -> FeedItem {
         FeedItem {
-            title: Some(parse_post_title("Hello")),
+            rendered_title: Some(common::render::sanitize_post_title("Hello")),
+            visible_title: Some("Hello".to_owned()),
             summary: Some(parse_post_summary("hi")),
             tags: vec!["rust".parse().unwrap()],
             ..feed_item(
@@ -163,22 +167,60 @@ mod tests {
             render_atom(&meta(None, Some("A site")), &[item()]).expect("canonical timestamps");
         let body = out.body();
 
-        assert!(body.contains("<title>Hello</title>"), "out: {body}");
-        assert!(!body.contains("<title></title>"), "out: {body}");
+        assert!(
+            body.contains("<title type=\"html\">Hello</title>"),
+            "out: {body}"
+        );
+        assert!(
+            !body.contains("<title type=\"html\"></title>"),
+            "out: {body}"
+        );
     }
 
     #[test]
-    fn renders_empty_title_for_titleless_post() {
+    fn renders_formatted_title_as_html() {
+        let title = common::render::sanitize_post_title("<strong>A &amp; B</strong><br>C");
         let item = FeedItem {
-            title: None,
+            visible_title: Some(crate::render::rendered_title_visible_text(&title)),
+            rendered_title: Some(title),
+            ..item()
+        };
+        let out = render_atom(&meta(None, Some("A site")), &[item]).expect("canonical timestamps");
+        let body = out.body();
+        assert!(
+            body.contains(
+                "<title type=\"html\">&lt;strong&gt;A &amp;amp; B&lt;/strong&gt;&lt;br&gt;C</title>"
+            ),
+            "out: {body}"
+        );
+    }
+
+    #[test]
+    fn renders_empty_html_title_for_titleless_or_empty_post() {
+        let titleless = FeedItem {
+            rendered_title: None,
+            visible_title: None,
             ..item()
         };
 
-        let out = render_atom(&meta(None, Some("A site")), &[item]).expect("canonical timestamps");
+        let out =
+            render_atom(&meta(None, Some("A site")), &[titleless]).expect("canonical timestamps");
         let body = out.body();
 
-        assert_eq!(body.matches("<title></title>").count(), 1, "out: {body}");
+        assert_eq!(
+            body.matches("<title type=\"html\"></title>").count(),
+            1,
+            "out: {body}"
+        );
         assert!(!body.contains("<title>hi</title>"), "out: {body}");
+
+        let empty = FeedItem {
+            rendered_title: Some(common::render::RenderedPostTitle::empty()),
+            visible_title: None,
+            ..item()
+        };
+        let out = render_atom(&meta(None, Some("A site")), &[empty]).expect("canonical timestamps");
+        assert!(out.body().contains("<title type=\"html\"></title>"));
     }
 
     #[test]

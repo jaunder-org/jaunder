@@ -14,11 +14,11 @@ use thiserror::Error;
 use crate::feed::{FeedItem, FeedMetadata};
 
 /// RSS serializer wire-layout revision. Increment when RSS bytes can change.
-pub const RSS_SERIALIZER_REVISION: u16 = 1;
+pub const RSS_SERIALIZER_REVISION: u16 = 2;
 /// Atom serializer wire-layout revision. Increment when Atom bytes can change.
-pub const ATOM_SERIALIZER_REVISION: u16 = 1;
+pub const ATOM_SERIALIZER_REVISION: u16 = 2;
 /// JSON Feed serializer wire-layout revision. Increment when JSON Feed bytes can change.
-pub const JSON_SERIALIZER_REVISION: u16 = 1;
+pub const JSON_SERIALIZER_REVISION: u16 = 2;
 
 /// A validated, persisted digest of a Syndication Feed's semantic serializer inputs.
 ///
@@ -139,7 +139,8 @@ fn semantic_fingerprint_with_revision(
     write_bytes(&mut hasher, &(items.len() as u64).to_be_bytes());
     for item in items {
         write_bytes(&mut hasher, &i64::from(item.id).to_be_bytes());
-        write_optional_string(&mut hasher, item.title.as_ref().map(AsRef::as_ref));
+        write_optional_string(&mut hasher, item.rendered_title.as_ref().map(AsRef::as_ref));
+        write_optional_string(&mut hasher, item.visible_title.as_deref());
         write_string(&mut hasher, item.permalink.as_ref());
         write_optional_string(&mut hasher, item.summary.as_ref().map(AsRef::as_ref));
         write_string(&mut hasher, item.content_html.as_ref());
@@ -222,9 +223,7 @@ mod tests {
     use crate::feed::{FeedDescription, FeedTitle};
     use common::{
         ids::PostId,
-        test_support::{
-            parse_post_summary, parse_post_title, parse_url, parse_utc_instant, rendered_html,
-        },
+        test_support::{parse_post_summary, parse_url, parse_utc_instant, rendered_html},
         time::UtcInstant,
     };
 
@@ -244,7 +243,8 @@ mod tests {
     fn item(id: i64) -> FeedItem {
         FeedItem {
             id: PostId::from(id),
-            title: Some(parse_post_title("Title")),
+            rendered_title: Some(common::render::sanitize_post_title("Title")),
+            visible_title: Some("Title".to_owned()),
             permalink: parse_url(format!("https://example.com/{id}").as_str()),
             summary: Some(parse_post_summary("Summary")),
             content_html: rendered_html("<p>Content</p>"),
@@ -302,9 +302,10 @@ mod tests {
             |metadata| metadata.self_url = parse_url("https://example.com/other.atom"),
             |metadata| metadata.hub_url = None,
         ];
-        let item_mutations: [fn(&mut FeedItem); 8] = [
+        let item_mutations: [fn(&mut FeedItem); 9] = [
             |item| item.id = PostId::from(9),
-            |item| item.title = None,
+            |item| item.rendered_title = None,
+            |item| item.visible_title = None,
             |item| item.permalink = parse_url("https://example.com/other"),
             |item| item.summary = None,
             |item| item.content_html = rendered_html("<p>Other</p>"),

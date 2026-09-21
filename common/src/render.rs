@@ -295,6 +295,150 @@ fn provider_embed_html(
     )
 }
 
+/// Trusted inline HTML projected from a [`PostTitle`].
+///
+/// Host-only ammonia sanitization establishes this value from authoring input and
+/// validates persisted bytes before database decoding. Server-authored DTO bytes
+/// are trusted by CSR in the same way as [`RenderedHtml`]: they travel within one
+/// Jaunder deployment and never cross an untrusted browser input boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RenderedPostTitle(String);
+
+/// Persisted Rendered Title bytes differed from ammonia's title policy.
+#[cfg(feature = "sanitize")]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("rendered post title does not match the ammonia title policy")]
+pub struct InvalidPersistedRenderedPostTitle;
+
+impl RenderedPostTitle {
+    /// Returns the empty title fragment used when authored source has no surviving
+    /// visible text.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self(String::new())
+    }
+
+    /// Returns the trusted inline fragment.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Build an exact server-authored fixture outside production code.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn fixture(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+}
+
+impl AsRef<str> for RenderedPostTitle {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl serde::Serialize for RenderedPostTitle {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+// SQLx reconstruction is a server-side boundary. The `sqlx` feature includes
+// `sanitize`, so stored bytes must exactly match ammonia's title policy.
+///
+/// # Errors
+///
+/// Returns [`InvalidPersistedRenderedPostTitle`] when ammonia would change the
+/// persisted bytes or they contain no visible title text.
+#[cfg(feature = "sanitize")]
+pub fn reconstruct_persisted_rendered_post_title(
+    value: impl Into<String>,
+) -> Result<RenderedPostTitle, InvalidPersistedRenderedPostTitle> {
+    let value = value.into();
+    let sanitized = sanitize_post_title(&value);
+    (sanitized.as_str() == value)
+        .then_some(sanitized)
+        .ok_or(InvalidPersistedRenderedPostTitle)
+}
+
+#[cfg(feature = "sqlx")]
+impl sqlx::Type<sqlx::Postgres> for RenderedPostTitle {
+    fn type_info() -> sqlx::postgres::PgTypeInfo {
+        <String as sqlx::Type<sqlx::Postgres>>::type_info()
+    }
+
+    fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
+        <String as sqlx::Type<sqlx::Postgres>>::compatible(ty)
+    }
+}
+
+#[cfg(feature = "sqlx")]
+impl<'q> sqlx::Encode<'q, sqlx::Postgres> for RenderedPostTitle {
+    fn encode_by_ref(
+        &self,
+        buffer: &mut <sqlx::Postgres as sqlx::Database>::ArgumentBuffer,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+        <&str as sqlx::Encode<'q, sqlx::Postgres>>::encode_by_ref(&self.0.as_str(), buffer)
+    }
+}
+
+#[cfg(feature = "sqlx")]
+impl<'r> sqlx::Decode<'r, sqlx::Postgres> for RenderedPostTitle {
+    fn decode(
+        value: <sqlx::Postgres as sqlx::Database>::ValueRef<'r>,
+    ) -> Result<Self, sqlx::error::BoxDynError> {
+        let value = <String as sqlx::Decode<'r, sqlx::Postgres>>::decode(value)?;
+        reconstruct_persisted_rendered_post_title(value).map_err(Into::into)
+    }
+}
+
+#[cfg(feature = "sqlx")]
+impl sqlx::Type<sqlx::Sqlite> for RenderedPostTitle {
+    fn type_info() -> sqlx::sqlite::SqliteTypeInfo {
+        <String as sqlx::Type<sqlx::Sqlite>>::type_info()
+    }
+
+    fn compatible(ty: &sqlx::sqlite::SqliteTypeInfo) -> bool {
+        <String as sqlx::Type<sqlx::Sqlite>>::compatible(ty)
+    }
+}
+
+#[cfg(feature = "sqlx")]
+impl<'q> sqlx::Encode<'q, sqlx::Sqlite> for RenderedPostTitle {
+    fn encode_by_ref(
+        &self,
+        buffer: &mut <sqlx::Sqlite as sqlx::Database>::ArgumentBuffer,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+        <&str as sqlx::Encode<'q, sqlx::Sqlite>>::encode_by_ref(&self.0.as_str(), buffer)
+    }
+}
+
+#[cfg(feature = "sqlx")]
+impl<'r> sqlx::Decode<'r, sqlx::Sqlite> for RenderedPostTitle {
+    fn decode(
+        value: <sqlx::Sqlite as sqlx::Database>::ValueRef<'r>,
+    ) -> Result<Self, sqlx::error::BoxDynError> {
+        let value = <String as sqlx::Decode<'r, sqlx::Sqlite>>::decode(value)?;
+        reconstruct_persisted_rendered_post_title(value).map_err(Into::into)
+    }
+}
+
+/// Rebuilds an optional server-authored Rendered Title field during common-owned
+/// DTO deserialization.
+///
+/// # Errors
+///
+/// Returns the deserializer's error when the field is neither null nor a string.
+pub(crate) fn deserialize_optional_rendered_post_title<'de, D>(
+    deserializer: D,
+) -> Result<Option<RenderedPostTitle>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    Option::<String>::deserialize(deserializer).map(|title| title.map(RenderedPostTitle))
+}
+
 /// The single allowlist every [`sanitize`] call scrubs against. It is ammonia's
 /// audited default, widened for fenced-code language markers and the bounded
 /// non-executable media surface recorded by
@@ -328,6 +472,68 @@ static SANITIZER: std::sync::LazyLock<ammonia::Builder<'static>> = std::sync::La
     });
     builder
 });
+
+/// The title-specific subset of ammonia's sanitizer surface.
+#[cfg(feature = "sanitize")]
+static TITLE_SANITIZER: std::sync::LazyLock<ammonia::Builder<'static>> =
+    std::sync::LazyLock::new(|| {
+        let mut builder = ammonia::Builder::empty();
+        builder.generic_attributes(std::collections::HashSet::default());
+        builder.tag_attributes(std::collections::HashMap::default());
+        builder.add_tags([
+            "b", "strong", "i", "em", "u", "s", "del", "code", "sub", "sup", "mark", "small", "br",
+        ]);
+        builder.add_clean_content_tags([
+            "audio", "iframe", "math", "object", "script", "style", "svg", "template", "video",
+        ]);
+        builder
+    });
+
+/// Removes every tag from an already canonical Rendered Title for a text-only sink.
+#[cfg(feature = "sanitize")]
+static TITLE_TEXT_SANITIZER: std::sync::LazyLock<ammonia::Builder<'static>> =
+    std::sync::LazyLock::new(ammonia::Builder::empty);
+
+/// Sanitizes an authored Post title into the closed inline fragment grammar.
+///
+/// This narrower policy shares ammonia's parser and cleaning behavior with body
+/// sanitization while admitting no attributes, links, images, or embedded content.
+/// A source without surviving visible text becomes the canonical empty fragment.
+#[cfg(feature = "sanitize")]
+#[must_use]
+pub fn sanitize_post_title(raw: &str) -> RenderedPostTitle {
+    let title = RenderedPostTitle(
+        TITLE_SANITIZER
+            .clean(raw)
+            .to_string()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" "),
+    );
+    // A present derivative without readable content is normalized to the one
+    // canonical empty representation rather than retaining inert markup.
+    if rendered_post_title_visible_text(&title).is_empty() {
+        RenderedPostTitle::empty()
+    } else {
+        title
+    }
+}
+
+/// Returns a readable text projection of a persisted Rendered Title for text-only sinks.
+///
+/// Ammonia strips the already canonical HTML and `html-escape` decodes its entities
+/// exactly once, so text-only sinks receive readable text rather than HTML syntax.
+#[cfg(feature = "sanitize")]
+#[must_use]
+pub fn rendered_post_title_visible_text(title: &RenderedPostTitle) -> String {
+    // `br` is the sole marker whose readable spacing survives title sanitization.
+    let fragment = title.as_str().replace("<br>", " ");
+    let text = TITLE_TEXT_SANITIZER.clean(&fragment).to_string();
+    html_escape::decode_html_entities(&text)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
 
 /// Sanitizes untrusted HTML into a [`RenderedHtml`].
 ///
@@ -1409,6 +1615,48 @@ mod tests {
                 let twice = canonicalize_body(&once, &format).expect("canonical stays a body");
                 assert_eq!(twice, once, "idempotent for {format:?} {body:?}");
             }
+        }
+    }
+
+    #[test]
+    fn rendered_post_title_wire_reconstruction_trusts_server_bytes() {
+        #[derive(serde::Deserialize)]
+        struct Wire {
+            #[serde(deserialize_with = "deserialize_optional_rendered_post_title")]
+            title: Option<RenderedPostTitle>,
+        }
+        let wire: Wire = serde_json::from_str(r#"{"title":"<script>x</script>"}"#).unwrap();
+        let title = wire.title.expect("server-authored title");
+        assert_eq!(title.as_ref(), "<script>x</script>");
+        assert_eq!(
+            serde_json::to_string(&title).unwrap(),
+            r#""<script>x</script>""#
+        );
+    }
+
+    #[cfg(feature = "sqlx")]
+    #[tokio::test]
+    async fn rendered_post_title_sqlx_reconstruction_rejects_invalid_bytes() {
+        use sqlx::{Connection, TypeInfo};
+
+        let mut connection = sqlx::SqliteConnection::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let valid = sqlx::query_scalar::<_, RenderedPostTitle>("SELECT '<em>ok</em>'")
+            .fetch_one(&mut connection)
+            .await
+            .unwrap();
+        assert_eq!(valid.as_ref(), "<em>ok</em>");
+        assert_eq!(
+            <RenderedPostTitle as sqlx::Type<sqlx::Sqlite>>::type_info().name(),
+            "TEXT"
+        );
+        for invalid_fragment in ["<script>x</script>", "<br>", "<em></em>", "nul\0byte"] {
+            let invalid = sqlx::query_scalar::<_, RenderedPostTitle>("SELECT $1")
+                .bind(invalid_fragment)
+                .fetch_one(&mut connection)
+                .await;
+            assert!(invalid.is_err(), "{invalid_fragment}");
         }
     }
 

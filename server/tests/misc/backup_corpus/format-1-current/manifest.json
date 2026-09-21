@@ -1,0 +1,14 @@
+{
+  "version": "format-1-current-schema-sentinel",
+  "schema_version": 38,
+  "schema_checksum": "format-1-current-schema-checksum-sentinel",
+  "timestamp": "2026-01-02T03:04:05Z",
+  "mode": "directory",
+  "tables": [
+    "instance_identity",
+    "media",
+    "post_revisions",
+    "posts",
+    "users"
+  ]
+}
