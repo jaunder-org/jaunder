@@ -4,7 +4,7 @@
 > when useful. This outline exists because trusted forwarding headers create a
 > public process-configuration and request-security boundary.
 
-Spec: `docs/superpowers/specs/2026-09-21-issue-1609-trusted-reverse-proxies.md`
+Spec: `docs/archive/2026-09-21-issue-1609-trusted-reverse-proxies-spec.md`
 
 ## Scope
 
