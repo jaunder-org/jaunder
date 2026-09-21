@@ -348,6 +348,36 @@
   outline-offset: 2px;
 }
 
+.j-root [data-jaunder-part="continuation"] {
+  appearance: none;
+  display: block;
+  inline-size: 9ch;
+  margin: 16px var(--post-pad-x) 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-weight: 500;
+  text-align: left;
+}
+
+.j-root [data-jaunder-part="continuation"]:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.j-root [data-jaunder-part="continuation"]:focus-visible {
+  border-radius: 2px;
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.j-root [data-jaunder-part="continuation"]:disabled {
+  color: var(--muted);
+  cursor: progress;
+  text-decoration: none;
+}
+
 .j-page {
   padding: 16px 32px;
 }

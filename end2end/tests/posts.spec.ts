@@ -1372,7 +1372,7 @@ test("draft lifecycle: create, view, edit, and publish", async ({
   expect(publishNoReload).toBe(true);
 });
 
-test("per-user timeline lists published posts with pagination", async ({
+test("per-user timeline presents and operates its continuation control", async ({
   page,
   firstNav,
 }, testInfo) => {
@@ -1396,7 +1396,80 @@ test("per-user timeline lists published posts with pagination", async ({
     `Timeline Post ${TIMELINE_PAGE_SIZE}`,
   );
 
+  const continuation = page.locator('button[data-jaunder-part="continuation"]');
+  await expect(continuation).toHaveText("Load more");
+  for (const viewport of [
+    { width: 1440, height: 900 },
+    { width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport);
+    const alignment = await continuation.evaluate((button) => {
+      const post = document.querySelector<HTMLElement>("article.j-post");
+      if (!post) throw new Error("timeline has no Post");
+      return {
+        actual: button.getBoundingClientRect().left,
+        expected:
+          post.getBoundingClientRect().left +
+          Number.parseFloat(getComputedStyle(post).paddingLeft),
+      };
+    });
+    expect(alignment.actual).toBeCloseTo(alignment.expected, 0);
+  }
+
+  const resting = await continuation.evaluate((button) => {
+    const style = getComputedStyle(button);
+    return {
+      background: style.backgroundColor,
+      borderWidth: style.borderTopWidth,
+      color: style.color,
+      inheritedColor: getComputedStyle(button.closest(".j-root")!).color,
+    };
+  });
+  expect(resting.background).toBe("rgba(0, 0, 0, 0)");
+  expect(resting.borderWidth).toBe("0px");
+  expect(resting.color).not.toBe(resting.inheritedColor);
+
+  await continuation.hover();
+  await expect
+    .poll(() =>
+      continuation.evaluate(
+        (button) => getComputedStyle(button).textDecorationLine,
+      ),
+    )
+    .toContain("underline");
+  await continuation.evaluate((button) => {
+    if (!(button instanceof HTMLElement))
+      throw new Error("continuation is not an HTML element");
+    const focusable = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ),
+    );
+    const preceding = focusable[focusable.indexOf(button) - 1];
+    if (!preceding)
+      throw new Error("continuation has no preceding focus target");
+    preceding.focus();
+  });
+  await page.keyboard.press("Tab");
+  await expect(continuation).toBeFocused();
+  await expect
+    .poll(() =>
+      continuation.evaluate((button) => getComputedStyle(button).outlineStyle),
+    )
+    .toBe("solid");
+
+  const restingBox = await continuation.boundingBox();
+  expect(restingBox).not.toBeNull();
+  const release = await stallServerFn(page, "timeline/list_by_user");
   await click(page, 'button:has-text("Load more")');
+  await expect(continuation).toBeDisabled();
+  await expect(continuation).toHaveText("Loading…");
+  const loadingBox = await continuation.boundingBox();
+  expect(loadingBox).not.toBeNull();
+  expect(loadingBox!.width).toBeCloseTo(restingBox!.width, 0);
+  expect(loadingBox!.height).toBeCloseTo(restingBox!.height, 0);
+
+  release();
   perf.mark("load_more_clicked");
   await expect(page.locator("article.j-post")).toHaveCount(
     TIMELINE_PAGE_SIZE + TIMELINE_OVERFLOW_COUNT,
@@ -1404,6 +1477,7 @@ test("per-user timeline lists published posts with pagination", async ({
   await expect(page.locator("article.j-post").last()).toContainText(
     "Timeline Post 0",
   );
+  await expect(continuation).toHaveCount(0);
   perf.mark("assertions_complete");
   await perf.log({ username });
 });
