@@ -1947,8 +1947,13 @@ and exporter-setup failure is non-fatal. `with_http_observability`
 the router, together with a `tower-http` `x-request-id` that it mints when
 absent and propagates onto the response. Inbound W3C `traceparent` headers are
 extracted onto the per-request span, so backend spans parent into the caller's
-trace. Span fields and metric attributes are exported, so they MUST NOT carry
-user PII or secrets — stable identifiers (`user_id`, `error.kind`) only. Branch
+trace. Trusted-proxy resolution may add only a closed outcome such as socket,
+forwarded, malformed, conflict, over-limit, or transport-unavailable; neither
+the Transport Peer, Effective Client IP, nor raw forwarding-header content is
+exported
+([trusted proxy client-IP derivation](adr/drafts/trusted-proxy-client-ip.md)).
+Span fields and metric attributes are exported, so they MUST NOT carry user PII
+or secrets — stable identifiers (`user_id`, `error.kind`) only. Branch
 determinants follow the same rule: record bounded decisions and stable internal
 IDs, never passwords, tokens, raw emails, invite codes, request bodies,
 arbitrary source text, or whole-struct dumps. The
@@ -2248,6 +2253,22 @@ TLS itself — HTTPS is the reverse proxy's job (nginx, Caddy, …), so Jaunder
 binds plain HTTP (`--bind`, default `127.0.0.1:3000`, `server/src/cli.rs:267`)
 and production exposure is a proxy-configuration concern, not an application
 feature.
+
+The direct socket endpoint is retained as the Transport Peer. `jaunder serve`
+trusts no forwarding header by default; operators may declare trusted proxy
+addresses or CIDRs through its CLI/environment process contract. Only then does
+Jaunder derive an IP-only Effective Client IP by walking RFC `Forwarded` or
+`X-Forwarded-For` from the Transport Peer toward the first untrusted hop. Both
+header families must agree when supplied together, and malformed, conflicting,
+over-limit, all-trusted, or unrooted evidence falls back to the Transport Peer
+without rejecting the request. Neither identity is authentication or
+authorization evidence, and raw addresses are not telemetry
+([trusted proxy client-IP derivation](adr/drafts/trusted-proxy-client-ip.md)).
+The minimal NixOS module exposes `services.jaunder.trustedProxies`, an empty-by-
+default string list serialized to `JAUNDER_TRUSTED_PROXIES`. The owned stack
+sets exactly `127.0.0.1/32` for its hard-coded Caddy hop and removes inbound
+`Forwarded`, leaving Caddy to produce the trusted-proxy-aware `X-Forwarded-For`
+chain. CDN ranges remain Caddy configuration rather than Jaunder defaults.
 
 **What is inside the executable.** Two `rust-embed` trees, so **no external file
 is needed to serve the client** ([ADR-0003](adr/0003-asset-management.md)).

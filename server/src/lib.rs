@@ -21,6 +21,7 @@ mod server_fn_response;
 pub mod site;
 mod soft_path;
 pub mod theme_content;
+pub mod trusted_proxy;
 
 pub mod websub;
 
