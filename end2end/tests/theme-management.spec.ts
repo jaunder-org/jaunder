@@ -8,6 +8,7 @@ import {
   stallServerFn,
 } from "./helpers";
 import { uploadMedia } from "./media-helpers";
+import { packageMemberDigests } from "./theme-helpers";
 
 const ASSET_PATH = "assets/pixel.png";
 const ASSET_BYTES = [
@@ -124,7 +125,7 @@ test("author completes the custom theme lifecycle through Studio", async ({
   tracedContext,
 }) => {
   const username = await signInAsNewUser(page);
-  await uploadMedia(
+  const uploadedLogo = await uploadMedia(
     page,
     "blog-logo.png",
     Buffer.from(ASSET_BYTES),
@@ -226,7 +227,7 @@ test("author completes the custom theme lifecycle through Studio", async ({
       .getByLabel("Logo image")
       .selectOption({ label: "Media: blog-logo.png" }),
   ]);
-  await page.getByLabel("Header pool package asset paths").fill("");
+  await page.getByLabel("Header pool package asset paths").fill(ASSET_PATH);
   const mediaToAdd = page.getByLabel("Media to add");
   for (const filename of ["header-one.png", "header-two.png"]) {
     await mediaToAdd.selectOption({ label: filename });
@@ -255,7 +256,7 @@ test("author completes the custom theme lifecycle through Studio", async ({
       .selectOption({ label: "Media: blog-logo.png" }),
   ]);
   await expect(page.getByLabel("Header pool package asset paths")).toHaveValue(
-    "",
+    ASSET_PATH,
   );
   await Promise.all([
     mutation("replace_pool"),
@@ -305,6 +306,24 @@ test("author completes the custom theme lifecycle through Studio", async ({
   ]);
   await expect(publicSelection).toHaveValue(themeId!);
 
+  const publicContext = await tracedContext();
+  try {
+    const publicPage = await publicContext.newPage();
+    await goto(publicPage, `/~${username}`);
+    const logo = publicPage.locator('[data-jaunder-part="logo"]');
+    await expect(logo).toBeVisible();
+    const logoUrl = await logo.getAttribute("src");
+    expect(logoUrl).toBe(uploadedLogo.url);
+    const publicLogo = await publicPage.request.get(logoUrl!);
+    expect(publicLogo.status()).toBe(200);
+    expect(await publicLogo.body()).toEqual(Buffer.from(ASSET_BYTES));
+    await expect(
+      publicPage.locator('[data-jaunder-part="header-image"]'),
+    ).toBeVisible();
+  } finally {
+    await publicContext.close();
+  }
+
   const freshContext = await tracedContext();
   const freshPage = await freshContext.newPage();
   await signInAs(freshPage, username);
@@ -338,6 +357,16 @@ test("author completes the custom theme lifecycle through Studio", async ({
   const exported = await downloadPromise;
   const exportedPath = await exported.path();
   expect(exportedPath).not.toBeNull();
+  const exportedMembers = packageMemberDigests(exportedPath!);
+  expect([...exportedMembers.keys()]).toEqual([
+    ASSET_PATH,
+    "style.css",
+    "theme.json",
+  ]);
+  expect(exportedMembers.get(ASSET_PATH)).toBeTruthy();
+  expect(exportedMembers.has("blog-logo.png")).toBe(false);
+  expect(exportedMembers.has("header-one.png")).toBe(false);
+  expect(exportedMembers.has("header-two.png")).toBe(false);
 
   await Promise.all([
     mutation("remove"),
