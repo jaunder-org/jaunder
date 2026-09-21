@@ -73,8 +73,8 @@ function appendBytes(form: URLSearchParams, prefix: string, bytes: Uint8Array) {
     form.append(`${prefix}[${index}]`, String(byte));
 }
 
-/** Import, publish, and select a complete local package through the live API. */
-export async function publishAndSelectTheme(
+/** Import and publish a complete local package through the live API. */
+export async function publishTheme(
   page: Page,
   themePackage = conformanceThemePackage(),
 ): Promise<number> {
@@ -107,27 +107,49 @@ export async function publishAndSelectTheme(
     "themes::create",
   );
 
-  for (const endpoint of ["publish", "select"] as const) {
-    const mutation = new URLSearchParams({ scope: "author" });
-    if (endpoint === "publish") mutation.set("theme_id", String(theme.id));
-    else {
-      mutation.set("selection[kind]", "custom");
-      mutation.set("selection[value]", String(theme.id));
-    }
-    const response = await page.request.post(
-      `${BASE_URL}${THEME_ENDPOINTS[endpoint]}`,
-      {
-        data: mutation.toString(),
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-      },
-    );
-    expect(response.status()).toBe(200);
-    confirmedMutation(
-      (await response.json()) as MutationOutcome<null>,
-      `themes::${endpoint}`,
-    );
-  }
+  const mutation = new URLSearchParams({
+    scope: "author",
+    theme_id: String(theme.id),
+  });
+  const response = await page.request.post(
+    `${BASE_URL}${THEME_ENDPOINTS.publish}`,
+    {
+      data: mutation.toString(),
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+    },
+  );
+  expect(response.status()).toBe(200);
+  confirmedMutation(
+    (await response.json()) as MutationOutcome<null>,
+    "themes::publish",
+  );
   return theme.id;
+}
+
+/** Import, publish, and select a complete local package through the live API. */
+export async function publishAndSelectTheme(
+  page: Page,
+  themePackage = conformanceThemePackage(),
+): Promise<number> {
+  const themeId = await publishTheme(page, themePackage);
+  const mutation = new URLSearchParams({
+    scope: "author",
+    "selection[kind]": "custom",
+    "selection[value]": String(themeId),
+  });
+  const response = await page.request.post(
+    `${BASE_URL}${THEME_ENDPOINTS.select}`,
+    {
+      data: mutation.toString(),
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+    },
+  );
+  expect(response.status()).toBe(200);
+  confirmedMutation(
+    (await response.json()) as MutationOutcome<null>,
+    "themes::select",
+  );
+  return themeId;
 }
 
 /** Read a ZIP member without extracting it, keeping export checks portable. */

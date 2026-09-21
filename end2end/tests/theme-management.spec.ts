@@ -8,7 +8,11 @@ import {
   stallServerFn,
 } from "./helpers";
 import { uploadMedia } from "./media-helpers";
-import { packageMember, packageMemberDigests } from "./theme-helpers";
+import {
+  packageMember,
+  packageMemberDigests,
+  publishTheme,
+} from "./theme-helpers";
 
 const ASSET_PATH = "assets/pixel.png";
 const ASSET_BYTES = [
@@ -430,6 +434,77 @@ test("author completes the custom theme lifecycle through Studio", async ({
       .getByRole("list", { name: "Selected header Media" })
       .getByRole("listitem"),
   ).toHaveCount(0);
+});
+
+test("cold Studio return retains a custom author selection before built-in recovery", async ({
+  page,
+  tracedContext,
+}) => {
+  await signInAs(page, "testoperator");
+  const themeId = await publishTheme(page);
+  await goto(page, "/themes");
+
+  const selection = page.getByLabel("Public selection");
+  await expect(
+    selection.getByRole("option", { name: "Conformance" }),
+  ).toHaveAttribute("value", String(themeId));
+  await Promise.all([
+    page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === THEME_ENDPOINTS.select &&
+        response.request().method() === "POST",
+    ),
+    selection.selectOption(String(themeId)),
+  ]);
+  await expect(selection).toHaveValue(String(themeId));
+
+  const publicContext = await tracedContext();
+  try {
+    const publicPage = await publicContext.newPage();
+    await goto(publicPage, "/~testoperator");
+    await expect(publicPage.locator(".j-root")).toHaveAttribute(
+      "data-theme",
+      "custom",
+    );
+  } finally {
+    await publicContext.close();
+  }
+
+  const studioContext = await tracedContext();
+  try {
+    const studioPage = await studioContext.newPage();
+    await signInAs(studioPage, "testoperator");
+    await goto(studioPage, "/themes");
+    const coldSelection = studioPage.getByLabel("Public selection");
+    await expect(
+      coldSelection.getByRole("option", { name: "Conformance" }),
+    ).toHaveAttribute("value", String(themeId));
+    await expect(coldSelection).toHaveValue(String(themeId));
+
+    await Promise.all([
+      studioPage.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === THEME_ENDPOINTS.select &&
+          response.request().method() === "POST",
+      ),
+      coldSelection.selectOption("studio"),
+    ]);
+    await expect(coldSelection).toHaveValue("studio");
+  } finally {
+    await studioContext.close();
+  }
+
+  const recoveryContext = await tracedContext();
+  try {
+    const recoveryPage = await recoveryContext.newPage();
+    await goto(recoveryPage, "/~testoperator");
+    await expect(recoveryPage.locator(".j-root")).toHaveAttribute(
+      "data-theme",
+      "studio",
+    );
+  } finally {
+    await recoveryContext.close();
+  }
 });
 
 test("operator manages the site catalog through public selection and fallback", async ({
