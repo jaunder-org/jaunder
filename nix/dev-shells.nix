@@ -58,6 +58,8 @@ let
       pkgs.python3
       pkgs.sqlite
       pkgs.typescript
+      # Theme-package export assertions use this pinned ZIP reader on the host.
+      pkgs.unzip
       # Host xtask steps opt Rust-compiling cargo invocations into
       # `RUSTC_WRAPPER=sccache`; xtask maintains the multi-checkout
       # `SCCACHE_BASEDIRS` registry at runtime.

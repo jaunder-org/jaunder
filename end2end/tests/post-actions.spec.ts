@@ -3,6 +3,7 @@ import { expectAccessible } from "./accessibility";
 import { goto, signInAsNewUser } from "./helpers";
 import { createPostViaApi, openPostActions } from "./posts";
 import { navigateInApp } from "./navigate";
+import { publishAndSelectTheme } from "./theme-helpers";
 
 test("owner Post Actions disclosures use native popover dismissal and focus", async ({
   page,
@@ -12,7 +13,9 @@ test("owner Post Actions disclosures use native popover dismissal and focus", as
   const username = await signInAsNewUser(page);
   await createPostViaApi(page, { body: "# First actions probe\n\nFirst" });
   await createPostViaApi(page, { body: "# Second actions probe\n\nSecond" });
+  await publishAndSelectTheme(page);
   await goto(page, `/~${username}`, { timeout: firstNav });
+  await expect(page.locator(".j-root")).toHaveAttribute("data-theme", "custom");
 
   // `goto` performs a fresh document entry; this must mount the portalled
   // controls before any later in-app route remount.
@@ -67,6 +70,22 @@ test("owner Post Actions disclosures use native popover dismissal and focus", as
   expect(narrowPopover).not.toBeNull();
   expect(narrowPopover!.x).toBeGreaterThanOrEqual(0);
   expect(narrowPopover!.x + narrowPopover!.width).toBeLessThanOrEqual(375);
+
+  // The package remains confined to public presentation; the owner can always
+  // recover through the unthemed Studio surface in the same session.
+  const studioPage = await page.context().newPage();
+  try {
+    await goto(studioPage, "/themes", { timeout: firstNav });
+    await expect(studioPage.locator(".j-root")).toHaveAttribute(
+      "data-theme",
+      "studio",
+    );
+    await expect(
+      studioPage.locator("link[data-jaunder-theme-stylesheet]"),
+    ).toHaveCount(0);
+  } finally {
+    await studioPage.close();
+  }
 
   // Keep accessibility scanning independent from native popover interaction:
   // axe may disturb that state, so no later assertion depends on preserving it.
