@@ -77,7 +77,7 @@ headers. Existing installations continue to trust no forwarding headers.
   trust only its immediate Caddy hop; no vendor range enters application
   defaults.
 - The durable security contract is recorded in
-  `docs/adr/0205-trusted-proxy-client-ip.md` and projected into the current
+  `docs/adr/drafts/trusted-proxy-client-ip.md` and projected into the current
   architecture view.
 
 ## Acceptance

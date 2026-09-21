@@ -232,7 +232,6 @@ convention). See the Status column below for each ADR's current status.
 | [0202](adr/0202-bounded-post-shortcode-embeds.md)                      | Bounded Post Shortcodes Produce Trusted Provider Embeds                                                      | accepted   |
 | [0203](adr/0203-distribute-ci-validation-and-firefox-e2e-lanes.md)     | Distribute CI validation and Firefox E2E through retained lane catalogs                                      | accepted   |
 | [0204](adr/0204-persist-inline-rendered-post-titles.md)                | Persist inline-rendered Post titles                                                                          | accepted   |
-| [0205](adr/0205-trusted-proxy-client-ip.md)                            | Trusted proxy client-IP derivation                                                                           | accepted   |
 
 <!-- adr-table:end -->
 
