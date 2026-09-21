@@ -485,7 +485,7 @@ Current Posts and full Post Revisions retain these rendered bytes so title and
 body share parser-version and historical-snapshot semantics. Migration 0039 adds
 nullable columns only; with no production instances it does not repair legacy
 rows.
-([persisted Rendered Title decision](adr/drafts/persist-inline-rendered-post-titles.md)).
+([persisted Rendered Title decision](adr/0204-persist-inline-rendered-post-titles.md)).
 The source and rendered forms feed deliberately separate serialization surfaces
 — Syndication Feeds consume presentation projections, while the AtomPub
 Collection preserves native source — detailed in the Protocols section
@@ -874,7 +874,7 @@ use the persisted Rendered Title as an HTML text construct; RSS and JSON Feed
 use an `ammonia`-stripped, `html-escape`-decoded plain-text projection so
 secondary Markdown, Org, or HTML syntax never leaks into their plain-text title
 fields. AtomPub, slugs, and document metadata continue to use the authored title
-([persisted Rendered Title decision](adr/drafts/persist-inline-rendered-post-titles.md)).
+([persisted Rendered Title decision](adr/0204-persist-inline-rendered-post-titles.md)).
 Atom `<summary>` and JSON Feed `summary` carry the authored summary when
 present, otherwise the host-owned rendered-body fallback; RSS descriptions and
 complete rendered bodies remain unchanged. The CSR-reached `common::feed`
