@@ -52,7 +52,7 @@ Out:
     availability, simultaneous identity preservation, and absence of raw
     IP/header telemetry.
 
-- [ ] Task 3: Project the operator contract through NixOS and deployment
+- [x] Task 3: Project the operator contract through NixOS and deployment
       documentation.
   - Contract: `services.jaunder.trustedProxies` is `listOf str`, defaults to
     `[]`, omits the environment variable when empty, and otherwise comma-joins

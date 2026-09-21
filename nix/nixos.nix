@@ -53,6 +53,12 @@ let
           type = lib.types.bool;
           default = false;
         };
+
+        trustedProxies = lib.mkOption {
+          type = lib.types.listOf lib.types.str;
+          default = [ ];
+          description = "Proxy addresses or CIDRs trusted to supply forwarding headers.";
+        };
       };
 
       config = lib.mkIf cfg.enable {
@@ -74,6 +80,9 @@ let
           environment = {
             JAUNDER_BIND = cfg.bind;
             JAUNDER_DB = cfg.db;
+          }
+          // lib.optionalAttrs (cfg.trustedProxies != [ ]) {
+            JAUNDER_TRUSTED_PROXIES = lib.concatStringsSep "," cfg.trustedProxies;
           }
           // lib.optionalAttrs cfg.prod {
             JAUNDER_ENV = "prod";
@@ -243,7 +252,11 @@ let
           enable = true;
           virtualHosts = {
             ${applicationHostName}.extraConfig = ''
-              reverse_proxy 127.0.0.1:3000
+              reverse_proxy 127.0.0.1:3000 {
+                # Caddy owns the X-Forwarded-For chain. Do not let callers
+                # supply a competing Forwarded chain to Jaunder.
+                header_up -Forwarded
+              }
             '';
           } // lib.optionalAttrs (dnsHostName cfg.observability.hostName) {
             ${observabilityHostName}.extraConfig = observabilityIngress;
@@ -254,6 +267,7 @@ let
           enable = true;
           bind = "127.0.0.1:3000";
           prod = true;
+          trustedProxies = [ "127.0.0.1/32" ];
           db = if postgresqlDatabase then "postgresql://jaunder@localhost/jaunder?host=/run/postgresql" else "sqlite:/var/lib/jaunder/data/jaunder.db";
         };
         systemd.services.jaunder.environment = {
