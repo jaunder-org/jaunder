@@ -1,6 +1,6 @@
-# ADR-DRAFT: Persist inline-rendered Post titles
+# ADR-0204: Persist inline-rendered Post titles
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-19
 - Issue: [#1590](https://github.com/jaunder-org/jaunder/issues/1590)
 
@@ -59,15 +59,15 @@ projections.
 
 Slugs, document metadata, AtomPub, editing, and source-oriented administration
 continue to use the authored title. AtomPub therefore remains the native-source
-surface established by [ADR-0015](../0015-atompub-serialization-surfaces.md).
+surface established by [ADR-0015](0015-atompub-serialization-surfaces.md).
 
 ## Consequences
 
 Rendered title bytes have the same parser-version and historical-snapshot
 semantics as persisted body HTML under
-[ADR-0123](../0123-rendered-html-storage-decode.md) and full Post Revisions
-under [ADR-0136](../0136-local-post-lifecycle.md). Parser changes affect
-existing records only through an explicit rewrite or a later content update.
+[ADR-0123](0123-rendered-html-storage-decode.md) and full Post Revisions under
+[ADR-0136](0136-local-post-lifecycle.md). Parser changes affect existing records
+only through an explicit rewrite or a later content update.
 
 Both storage backends require schema parity for current Posts and Revisions,
 plus atomic mutation, semantic no-op, backup, restore-validation, and fixture
@@ -77,11 +77,11 @@ intentionally empty fragment remains a present derivative.
 Host ammonia validates persisted bytes by requiring their sanitization to be
 byte-for-byte unchanged; invalid database bytes fail typed reads and therefore
 cannot reach an unescaped sink. Backup restore retains
-[ADR-0174](../0174-backup-format-and-schema-compatibility.md)'s
-restore-and-report policy: invalid bytes are restored and diagnosed, but are not
-blessed as a Rendered Title by subsequent reads. Server-authored DTO bytes are
-trusted by CSR exactly like `RenderedHtml`; browser clients do not ship a title
-parser to defend against Jaunder's own server.
+[ADR-0174](0174-backup-format-and-schema-compatibility.md)'s restore-and-report
+policy: invalid bytes are restored and diagnosed, but are not blessed as a
+Rendered Title by subsequent reads. Server-authored DTO bytes are trusted by CSR
+exactly like `RenderedHtml`; browser clients do not ship a title parser to
+defend against Jaunder's own server.
 
 This adds storage and migration complexity, but avoids reader-amplified parsing,
 keeps bodies and titles in one parser era, and gives every protocol an explicit
