@@ -1,15 +1,15 @@
-# ADR-DRAFT: Trusted proxy client-IP derivation
+# ADR-0205: Trusted proxy client-IP derivation
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-21
 - Issue: [#1609](https://github.com/jaunder-org/jaunder/issues/1609)
 
 ## Context
 
 Jaunder runs as plain HTTP behind an external reverse proxy
-([ADR-0008](../0008-deployment-model.md)). Its supported single-host stack puts
+([ADR-0008](0008-deployment-model.md)). Its supported single-host stack puts
 Caddy on the public network and loopback-bound Jaunder behind it
-([ADR-0196](../0196-single-host-nixos-deployment-stack.md)). The server can
+([ADR-0196](0196-single-host-nixos-deployment-stack.md)). The server can
 therefore observe the proxy's socket address, but it has no supported trust
 boundary for attributing a request to the client address reported by that proxy.
 
@@ -22,13 +22,13 @@ chains.
 
 Client IP addresses are personal, unbounded telemetry values. Existing
 observability policy forbids collecting raw PII merely because it is available
-([ADR-0011](../0011-unified-observability.md)), while process configuration must
-be resolved once at the executable boundary and injected as typed state
-([ADR-0144](../0144-process-configuration-cli-contract.md),
-[ADR-0158](../0158-peripheral-process-configuration.md)). The minimal NixOS
-module is itself an operator compatibility surface whose option names, defaults,
-and process-variable mappings require compatibility review
-([ADR-0142](../0142-declarative-nixos-deployment-package-outputs.md)).
+([ADR-0011](0011-unified-observability.md)), while process configuration must be
+resolved once at the executable boundary and injected as typed state
+([ADR-0144](0144-process-configuration-cli-contract.md),
+[ADR-0158](0158-peripheral-process-configuration.md)). The minimal NixOS module
+is itself an operator compatibility surface whose option names, defaults, and
+process-variable mappings require compatibility review
+([ADR-0142](0142-declarative-nixos-deployment-package-outputs.md)).
 
 ## Decision
 
