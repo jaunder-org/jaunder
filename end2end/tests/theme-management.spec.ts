@@ -8,7 +8,7 @@ import {
   stallServerFn,
 } from "./helpers";
 import { uploadMedia } from "./media-helpers";
-import { packageMemberDigests } from "./theme-helpers";
+import { packageMember, packageMemberDigests } from "./theme-helpers";
 
 const ASSET_PATH = "assets/pixel.png";
 const ASSET_BYTES = [
@@ -131,16 +131,26 @@ test("author completes the custom theme lifecycle through Studio", async ({
     Buffer.from(ASSET_BYTES),
     "image/png",
   );
-  await uploadMedia(
+  const headerOneBytes = Buffer.from([
+    ...ASSET_BYTES.slice(0, -12),
+    1,
+    ...ASSET_BYTES.slice(-11),
+  ]);
+  const headerTwoBytes = Buffer.from([
+    ...ASSET_BYTES.slice(0, -12),
+    2,
+    ...ASSET_BYTES.slice(-11),
+  ]);
+  const headerOne = await uploadMedia(
     page,
     "header-one.png",
-    Buffer.from([...ASSET_BYTES.slice(0, -12), 1, ...ASSET_BYTES.slice(-11)]),
+    headerOneBytes,
     "image/png",
   );
-  await uploadMedia(
+  const headerTwo = await uploadMedia(
     page,
     "header-two.png",
-    Buffer.from([...ASSET_BYTES.slice(0, -12), 2, ...ASSET_BYTES.slice(-11)]),
+    headerTwoBytes,
     "image/png",
   );
   for (let index = 0; index < 50; index += 1) {
@@ -191,18 +201,17 @@ test("author completes the custom theme lifecycle through Studio", async ({
     "Package assets must be valid JSON",
   );
 
-  await page.getByLabel("theme.json").fill(
-    JSON.stringify({
-      schema: 1,
-      name: "Night round trip",
-      style_contract: 1,
-      assets: { [ASSET_PATH]: "image/png" },
-      defaults: { logo: ASSET_PATH, header: [ASSET_PATH] },
-    }),
-  );
-  await page
-    .getByLabel("style.css")
-    .fill("[data-jaunder-theme-surface] { color: rgb(1, 2, 3); }");
+  const packageManifest = {
+    assets: { [ASSET_PATH]: "image/png" },
+    defaults: { header: [ASSET_PATH], logo: ASSET_PATH },
+    name: "Night round trip",
+    schema: 1,
+    style_contract: 1,
+  };
+  const packageStylesheet =
+    "[data-jaunder-theme-surface] { color: rgb(1, 2, 3); }";
+  await page.getByLabel("theme.json").fill(JSON.stringify(packageManifest));
+  await page.getByLabel("style.css").fill(packageStylesheet);
   await page
     .getByLabel("Package assets JSON")
     .fill(
@@ -263,7 +272,7 @@ test("author completes the custom theme lifecycle through Studio", async ({
     page.getByRole("button", { name: "Save header pool" }).click(),
   ]);
   await expect(page.getByLabel("Header pool package asset paths")).toHaveValue(
-    "",
+    ASSET_PATH,
   );
   await Promise.all([
     mutation("shuffle"),
@@ -314,12 +323,29 @@ test("author completes the custom theme lifecycle through Studio", async ({
     await expect(logo).toBeVisible();
     const logoUrl = await logo.getAttribute("src");
     expect(logoUrl).toBe(uploadedLogo.url);
-    const publicLogo = await publicPage.request.get(logoUrl!);
+    const publicLogo = await publicPage.request.get(
+      new URL(logoUrl!, publicPage.url()).toString(),
+    );
     expect(publicLogo.status()).toBe(200);
     expect(await publicLogo.body()).toEqual(Buffer.from(ASSET_BYTES));
-    await expect(
-      publicPage.locator('[data-jaunder-part="header-image"]'),
-    ).toBeVisible();
+    const header = publicPage.locator('[data-jaunder-part="header-image"]');
+    await expect(header).toBeVisible();
+    const headerUrl = await header.getAttribute("src");
+    expect(headerUrl).not.toBeNull();
+    const headerPath = new URL(headerUrl!, publicPage.url()).pathname;
+    const ownedHeaderBytes = new Map([
+      [new URL(headerOne.url, publicPage.url()).pathname, headerOneBytes],
+      [new URL(headerTwo.url, publicPage.url()).pathname, headerTwoBytes],
+    ]);
+    const expectedHeaderBytes = headerPath.startsWith("/theme/")
+      ? Buffer.from(ASSET_BYTES)
+      : ownedHeaderBytes.get(headerPath);
+    expect(expectedHeaderBytes).toBeDefined();
+    const publicHeader = await publicPage.request.get(
+      new URL(headerUrl!, publicPage.url()).toString(),
+    );
+    expect(publicHeader.status()).toBe(200);
+    expect(await publicHeader.body()).toEqual(expectedHeaderBytes);
   } finally {
     await publicContext.close();
   }
@@ -363,7 +389,15 @@ test("author completes the custom theme lifecycle through Studio", async ({
     "style.css",
     "theme.json",
   ]);
-  expect(exportedMembers.get(ASSET_PATH)).toBeTruthy();
+  expect(packageMember(exportedPath!, "theme.json")).toEqual(
+    Buffer.from(JSON.stringify(packageManifest)),
+  );
+  expect(packageMember(exportedPath!, "style.css")).toEqual(
+    Buffer.from(packageStylesheet),
+  );
+  expect(packageMember(exportedPath!, ASSET_PATH)).toEqual(
+    Buffer.from(ASSET_BYTES),
+  );
   expect(exportedMembers.has("blog-logo.png")).toBe(false);
   expect(exportedMembers.has("header-one.png")).toBe(false);
   expect(exportedMembers.has("header-two.png")).toBe(false);

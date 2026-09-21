@@ -39,7 +39,9 @@ test("custom package propagates an opaque contrasting timeline divider in dark p
       }));
 
     await publicPage.emulateMedia({ colorScheme: "dark" });
-    await publicThemePage(publicPage, username);
+    await expect(
+      publicPage.locator('[data-jaunder-part="post"]').first(),
+    ).toHaveCSS("border-block-end-color", "rgb(143, 163, 184)");
     const dark = await publicPage
       .locator('[data-jaunder-part="post"]')
       .first()
@@ -79,7 +81,9 @@ test("custom package font compilation and immutable asset serving retain byte id
       .locator("link[data-jaunder-theme-stylesheet]")
       .getAttribute("href");
     expect(stylesheetHref).toMatch(/^\/theme\/[0-9a-f]{64}$/);
-    const stylesheet = await publicPage.request.get(stylesheetHref!);
+    const stylesheet = await publicPage.request.get(
+      new URL(stylesheetHref!, publicPage.url()).toString(),
+    );
     expect(stylesheet.status()).toBe(200);
     const css = await stylesheet.text();
     expect(css).toMatch(/jaunder-[0-9a-f]+-Conformance Sans/);
@@ -89,7 +93,9 @@ test("custom package font compilation and immutable asset serving retain byte id
       fontUrl,
       "compiled CSS must reference an immutable font asset",
     ).toBeTruthy();
-    const font = await publicPage.request.get(fontUrl!);
+    const font = await publicPage.request.get(
+      new URL(fontUrl!, publicPage.url()).toString(),
+    );
     expect(font.status()).toBe(200);
     expect(await font.body()).toEqual(
       Buffer.from(themePackage.assets[0].bytes),
@@ -99,7 +105,14 @@ test("custom package font compilation and immutable asset serving retain byte id
       .locator('[data-jaunder-part="post-body"]')
       .evaluate(async (body) => {
         const family = getComputedStyle(body).fontFamily;
-        return { family, loaded: document.fonts.check(`16px ${family}`) };
+        const namespacedFamily = family.match(
+          /jaunder-[0-9a-f]+-Conformance Sans/,
+        )?.[0];
+        if (namespacedFamily === undefined) return { family, loaded: false };
+        const descriptor = `16px "${namespacedFamily}"`;
+        await document.fonts.load(descriptor);
+        await document.fonts.ready;
+        return { family, loaded: document.fonts.check(descriptor) };
       });
     expect(fontProbe.family).toMatch(/jaunder-[0-9a-f]+-Conformance Sans/);
     expect(fontProbe.loaded).toBe(true);

@@ -574,6 +574,8 @@ mkE2eCheck =
           pkgs.opentelemetry-collector-contrib
           testSupportBin
           devtoolBin
+          # Theme-package export assertions use this pinned ZIP reader in the VM.
+          pkgs.unzip
           # `jaunder site-config set` seed steps resolve bare `jaunder` here.
           jaunderBin
         ];
