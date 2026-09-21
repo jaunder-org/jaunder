@@ -2012,14 +2012,14 @@ mod tests {
 
     #[tokio::test]
     async fn live_axum_server_preserves_connect_info_for_trusted_proxy_context() {
-        async fn context(request: axum::extract::Request) -> axum::http::StatusCode {
+        async fn context(request: axum::extract::Request) -> String {
             let peer = request
                 .extensions()
                 .get::<axum::extract::ConnectInfo<SocketAddr>>();
             let address = request
                 .extensions()
                 .get::<crate::trusted_proxy::RequestAddress>();
-            if matches!(
+            matches!(
                 (peer, address),
                 (
                     Some(axum::extract::ConnectInfo(peer)),
@@ -2029,11 +2029,8 @@ mod tests {
                     && address.transport_peer == Some(*peer)
                     && address.effective_client_ip == Some("203.0.113.10".parse().expect("IP"))
                     && address.outcome == crate::trusted_proxy::ResolutionOutcome::Forwarded
-            ) {
-                axum::http::StatusCode::OK
-            } else {
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR
-            }
+            )
+            .to_string()
         }
 
         let listener = TcpListener::bind("127.0.0.1:0")
@@ -2066,6 +2063,7 @@ mod tests {
             .await
             .expect("request live server");
         assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert_eq!(response.text().await.expect("context response"), "true");
         shutdown_tx
             .send(())
             .expect("server must still wait for shutdown");

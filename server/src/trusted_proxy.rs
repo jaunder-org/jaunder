@@ -226,7 +226,7 @@ enum HeaderFamily {
     XForwardedFor,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum ChainError {
     Malformed,
     OverLimit,
@@ -550,6 +550,19 @@ mod tests {
     }
 
     #[test]
+    fn resolution_outcome_has_only_the_documented_telemetry_values() {
+        assert_eq!(ResolutionOutcome::Socket.as_str(), "socket");
+        assert_eq!(ResolutionOutcome::Forwarded.as_str(), "forwarded");
+        assert_eq!(ResolutionOutcome::Malformed.as_str(), "malformed");
+        assert_eq!(ResolutionOutcome::Conflict.as_str(), "conflict");
+        assert_eq!(ResolutionOutcome::OverLimit.as_str(), "over-limit");
+        assert_eq!(
+            ResolutionOutcome::TransportUnavailable.as_str(),
+            "transport-unavailable"
+        );
+    }
+
+    #[test]
     fn canonical_node_adapter_accepts_obfuscated_ports() {
         assert!(
             super::parse_node("[2001:db8::1]:_edge.1")
@@ -559,6 +572,34 @@ mod tests {
             super::parse_node("203.0.113.10:_edge-1")
                 .is_ok_and(|ip| ip == "203.0.113.10".parse::<IpAddr>().unwrap())
         );
+    }
+
+    #[test]
+    fn canonical_chain_parser_handles_quoted_delimiters_and_rejects_invalid_syntax() {
+        assert_eq!(
+            super::split_quoted("for=\"203.0.113.10\\\\quoted\";by=proxy", ';')
+                .expect("quoted delimiter"),
+            ["for=\"203.0.113.10\\\\quoted\"", "by=proxy"]
+        );
+        for value in [
+            "",
+            "for=203.0.113.10,",
+            ",for=203.0.113.10",
+            "for=\"unterminated",
+            "for=\"trailing\\",
+        ] {
+            assert!(super::split_quoted(value, ',').is_err(), "{value:?}");
+        }
+        for value in ["\"only-open", "only-close\"", "\"contains\\\\escape\""] {
+            assert!(super::unquote(value).is_err(), "{value:?}");
+        }
+    }
+
+    #[test]
+    fn canonical_node_adapter_rejects_invalid_bracketed_tails() {
+        for value in ["[2001:db8::1]unexpected", "[2001:db8::1]:"] {
+            assert!(super::parse_node(value).is_err(), "{value:?}");
+        }
     }
 
     #[test]
@@ -706,19 +747,15 @@ mod tests {
 
     #[tokio::test]
     async fn middleware_preserves_transport_peer_and_inserts_request_address() {
-        async fn context(request: Request) -> StatusCode {
+        async fn context(request: Request) -> String {
             let peer = request.extensions().get::<ConnectInfo<SocketAddr>>();
             let address = request.extensions().get::<RequestAddress>();
-            if peer.is_some_and(|ConnectInfo(peer)| *peer == "10.0.0.2:443".parse().unwrap())
+            (peer.is_some_and(|ConnectInfo(peer)| *peer == "10.0.0.2:443".parse().unwrap())
                 && address.is_some_and(|address| {
                     address.transport_peer == Some("10.0.0.2:443".parse().unwrap())
                         && address.effective_client_ip == Some("203.0.113.10".parse().unwrap())
-                })
-            {
-                StatusCode::OK
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
+                }))
+            .to_string()
         }
 
         let app = super::with_request_address(
@@ -734,7 +771,14 @@ mod tests {
             .extensions_mut()
             .insert(ConnectInfo(peer("10.0.0.2:443")));
 
-        assert_eq!(app.oneshot(request).await.unwrap().status(), StatusCode::OK);
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("context response"),
+            "true"
+        );
     }
 
     #[test]

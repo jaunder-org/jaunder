@@ -254,17 +254,6 @@ fn parse_trusted_proxy(value: &str) -> Result<TrustedProxyEntry, String> {
 }
 
 impl Cli {
-    /// Parse process arguments and reject a blank explicit trusted-proxy flag.
-    ///
-    /// Clap resolves the declared environment variable at this executable
-    /// boundary. Its value source distinguishes a blank environment setting,
-    /// which means the empty trust set, from a blank command-line argument,
-    /// which is invalid configuration.
-    #[must_use]
-    pub fn parse_inherited() -> Self {
-        Self::try_parse_inherited_from(std::env::args_os()).unwrap_or_else(|error| error.exit())
-    }
-
     /// Parse arguments with the same inherited-environment semantics as the executable.
     ///
     /// # Errors
@@ -682,6 +671,16 @@ mod tests {
             .expect("parse failed")
     }
 
+    fn serve_trusted_proxies(cli: Cli) -> Option<Vec<TrustedProxyEntry>> {
+        let Some(Commands::Serve {
+            trusted_proxies, ..
+        }) = cli.command
+        else {
+            return None;
+        };
+        Some(trusted_proxies)
+    }
+
     const CLI_ENV_NAMES: &[&str] = &[
         "JAUNDER_VERBOSE",
         "JAUNDER_STORAGE_PATH",
@@ -751,6 +750,17 @@ mod tests {
     }
 
     #[test]
+    fn serve_trusted_proxies_distinguishes_other_commands() {
+        assert!(serve_trusted_proxies(parse(&["init"])).is_none());
+        assert_eq!(
+            serve_trusted_proxies(parse(&["serve"]))
+                .expect("serve")
+                .len(),
+            0
+        );
+    }
+
+    #[test]
     fn child_failure_diagnostic_preserves_non_utf8_output() {
         assert_eq!(
             child_failure_diagnostic(b"parser \xff failed"),
@@ -817,12 +827,8 @@ mod tests {
                     "trusted-proxies-blank-flag" => vec!["serve", "--trusted-proxy", ""],
                     _ => vec!["serve"],
                 };
-                let Commands::Serve {
-                    trusted_proxies, ..
-                } = parse(&args).command.expect("subcommand")
-                else {
-                    unreachable!("parse yields Commands::Serve")
-                };
+                let trusted_proxies =
+                    serve_trusted_proxies(parse(&args)).expect("trusted-proxy scenarios serve");
                 let config = crate::commands::resolve_trusted_proxies(trusted_proxies)
                     .expect("trusted proxy configuration");
                 config

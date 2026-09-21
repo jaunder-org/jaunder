@@ -1098,12 +1098,12 @@ async fn persisted_rendered_title_decode_rejects_every_invalid_fragment_class(
         "<b attr>x</b>",
     ];
 
-    for invalid in INVALID_FRAGMENTS {
-        let env = backend.setup().await;
-        let owner = SeedUser::new()
-            .seed(env.users(), env.write_scope())
-            .await
-            .user_id;
+    let env = backend.setup().await;
+    let owner = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
+    for (index, invalid) in INVALID_FRAGMENTS.iter().enumerate() {
         let post_id = SeedRawPost::new(owner)
             .draft()
             .title("valid title")
@@ -1116,7 +1116,7 @@ async fn persisted_rendered_title_decode_rejects_every_invalid_fragment_class(
                 env.write_scope(),
                 post_id,
                 owner,
-                UpdateRawPost::new("invalid-rendered-title-revision")
+                UpdateRawPost::new(format!("invalid-rendered-title-revision-{index}"))
                     .body(parse_post_body("capture a revision"))
                     .build()
             )
