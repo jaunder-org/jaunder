@@ -1,3 +1,4 @@
+use common::content_license::ContentLicense;
 use common::ids::{AudienceId, PostId, SubscriptionId, UserId};
 use common::media::MediaSource;
 use common::post_title::PostTitle;
@@ -525,10 +526,21 @@ async fn seed_side_tables(
 ) {
     let key = UserConfigKey::DefaultPostFormat;
     let value = String::from("org");
+    let content_license = ContentLicense::CcBySa4_0;
     confirmed_for(
         write_scope
             .run(move |transaction| {
-                Box::pin(async move { user_config.set(transaction, author, key, &value).await })
+                Box::pin(async move {
+                    user_config.set(transaction, author, key, &value).await?;
+                    user_config
+                        .set(
+                            transaction,
+                            author,
+                            UserConfigKey::ContentLicense,
+                            content_license.as_ref(),
+                        )
+                        .await
+                })
             })
             .await
             .expect("set user config"),
@@ -699,6 +711,13 @@ async fn assert_restored_side_tables(
             .expect("get user config")
             .as_deref(),
         Some("org")
+    );
+    assert_eq!(
+        user_config
+            .get_content_license(ids.author)
+            .await
+            .expect("get content license"),
+        ContentLicense::CcBySa4_0
     );
     assert!(
         media

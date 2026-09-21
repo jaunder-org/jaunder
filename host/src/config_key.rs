@@ -11,6 +11,7 @@ use crate::feed::{FeedMinDays, FeedMinItems};
 use crate::smtp_password::SmtpPassword;
 use common::{
     backup::{BackupMode, BackupSchedule, DestinationPath, RetentionCount},
+    content_license::ContentLicense,
     media::{MaxFileSize, UserQuota},
     registration::RegistrationPolicy,
     render::PostFormat,
@@ -249,6 +250,7 @@ macro_rules! user_config_keys {
 
 user_config_keys! {
     DefaultPostFormat => "posts.default_format" : PostFormat, bad: "hieroglyphs";
+    ContentLicense => "content.license" : ContentLicense, bad: "MIT";
 }
 
 #[cfg(test)]
@@ -405,7 +407,9 @@ mod tests {
                 .validate("hieroglyphs")
                 .is_err()
         );
-        assert_eq!(UserConfigKey::VARIANTS.len(), 1);
+        assert!(UserConfigKey::ContentLicense.validate("CC-BY-4.0").is_ok());
+        assert!(UserConfigKey::ContentLicense.validate("MIT").is_err());
+        assert_eq!(UserConfigKey::VARIANTS.len(), 2);
         for key in UserConfigKey::VARIANTS {
             let dotted = key.as_ref();
             let bad = key.known_bad_example();

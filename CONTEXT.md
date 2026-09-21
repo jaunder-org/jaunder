@@ -152,6 +152,16 @@ in URLs, lookup, comparison, or protocol credentials. Casing is preserved, and
 changing it changes how all of the User's Posts are presented. _Avoid_: treating
 a Display Name as a second Username or as a per-Post publication snapshot.
 
+**Content License**: A User's current publication-wide rights choice for all of
+their Posts: All Rights Reserved, CC0, or one of the six Creative Commons 4.0
+licenses. It applies retroactively and is not captured or overridden per Post.
+_Avoid_: Post License, custom license text, license snapshot.
+
+**Copyright Declaration**: A public Post's rights attribution, combining its
+immutable creation year, its author's current Display Name (or Username), and
+the author's current Content License. _Avoid_: site copyright (there is no
+site-wide rights holder), publication-year notice.
+
 ### AtomPub (RFC 5023)
 
 **Member** / **Entry**: The AtomPub wire representation of a single resource in

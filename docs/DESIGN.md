@@ -208,6 +208,11 @@ and lets the viewer choose Newest or Oldest publication order through URL state
 - **User-tag timeline** (public): Visible Posts carrying a Tag from one local
   User.
 
+Every Post on these public surfaces and on its permalink carries a Copyright
+Declaration derived from its creation year, its author's current public name,
+and that User's current Content License. Public Syndication Feed items expose
+the same rights metadata without changing Post content.
+
 #### Read State
 
 Jaunder tracks read/unread state per item in each user's content layer (see
@@ -219,7 +224,8 @@ as they are scrolled past.
 Each user manages their own profile and social graph through a dedicated account
 area:
 
-- **Profile**: Display name, bio, and avatar.
+- **Profile**: Display name, bio, avatar, and a publication-wide Content License
+  that defaults to All Rights Reserved and applies retroactively to every Post.
 - **Source management**: Adding/removing feeds, AP actors, and AT accounts.
 - **Lists**: Following, Followers, Blocks, and Mutes.
 - **Sessions**: Individual revocation of device tokens.

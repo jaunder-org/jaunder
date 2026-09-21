@@ -5,6 +5,7 @@ use crate::backend::Backend;
 use crate::posts::models::PostFormat;
 use crate::sql::QueryStorageExt;
 use async_trait::async_trait;
+use common::content_license::ContentLicense;
 use common::ids::UserId;
 use sqlx::{Database, Encode, Executor, Pool, Result, Type};
 
@@ -38,6 +39,20 @@ pub trait UserConfigStorage: Send + Sync {
         key: UserConfigKey,
         value: &str,
     ) -> Result<()>;
+
+    /// Returns a user's publication-wide Content License.
+    ///
+    /// A missing row preserves pre-setting databases and backups as All Rights
+    /// Reserved. An explicit malformed value is rejected rather than defaulted,
+    /// so corrupt stored rights data cannot silently widen publication rights.
+    async fn get_content_license(&self, user_id: UserId) -> Result<ContentLicense> {
+        match self.get(user_id, UserConfigKey::ContentLicense).await? {
+            None => Ok(ContentLicense::default()),
+            Some(value) => value
+                .parse()
+                .map_err(|error| sqlx::Error::Decode(Box::new(error))),
+        }
+    }
 
     /// Deletes a specific configuration key for a user.
     async fn delete(
@@ -222,6 +237,7 @@ mod tests {
     use common::MutationOutcome;
     use rstest::*;
     use rstest_reuse::*;
+    use strum::VariantArray as _;
 
     #[apply(backends)]
     #[tokio::test]
@@ -237,6 +253,90 @@ mod tests {
         let config = &*env.user_config();
         let result = get_default_post_format(config, user_id).await.unwrap();
         assert_eq!(result, PostFormat::Markdown);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn content_license_missing_row_defaults_to_all_rights_reserved(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+
+        assert_eq!(
+            env.user_config()
+                .get_content_license(user_id)
+                .await
+                .unwrap(),
+            ContentLicense::AllRightsReserved
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn content_license_round_trips_every_choice(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        for &license in ContentLicense::VARIANTS {
+            let config = std::sync::Arc::clone(&env.user_config());
+            let config_for_write = std::sync::Arc::clone(&config);
+            let outcome = env
+                .write_scope()
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        config_for_write
+                            .set(
+                                transaction,
+                                user_id,
+                                UserConfigKey::ContentLicense,
+                                license.as_ref(),
+                            )
+                            .await
+                    })
+                })
+                .await
+                .unwrap();
+            assert!(matches!(outcome, MutationOutcome::Confirmed(())));
+            assert_eq!(config.get_content_license(user_id).await.unwrap(), license);
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn content_license_invalid_explicit_value_fails_closed(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let config = std::sync::Arc::clone(&env.user_config());
+        let config_for_write = std::sync::Arc::clone(&config);
+        let outcome = env
+            .write_scope()
+            .run(move |transaction| {
+                Box::pin(async move {
+                    config_for_write
+                        .set(transaction, user_id, UserConfigKey::ContentLicense, "MIT")
+                        .await
+                })
+            })
+            .await
+            .unwrap();
+        assert!(matches!(outcome, MutationOutcome::Confirmed(())));
+        assert!(config.get_content_license(user_id).await.is_err());
     }
 
     #[apply(backends)]
