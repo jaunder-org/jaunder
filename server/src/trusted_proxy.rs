@@ -563,7 +563,11 @@ mod tests {
     }
 
     #[test]
-    fn canonical_node_adapter_accepts_obfuscated_ports() {
+    fn canonical_node_adapter_accepts_bracketed_ipv6_and_obfuscated_ports() {
+        assert!(
+            super::parse_node("[2001:db8::1]")
+                .is_ok_and(|ip| ip == "2001:db8::1".parse::<IpAddr>().unwrap())
+        );
         assert!(
             super::parse_node("[2001:db8::1]:_edge.1")
                 .is_ok_and(|ip| ip == "2001:db8::1".parse::<IpAddr>().unwrap())
@@ -638,6 +642,7 @@ mod tests {
 
     #[rstest]
     #[case("for=unknown", "203.0.113.10")]
+    #[case("for=203.0.113.10;for=192.0.2.1", "203.0.113.10")]
     #[case("for=_hidden", "203.0.113.10")]
     #[case("for=example.test", "203.0.113.10")]
     #[case("for=\"203.0.113.10:_\"", "203.0.113.10")]
