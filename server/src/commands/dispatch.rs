@@ -11,7 +11,7 @@ use storage::{BackupRestoreOutcome, FeedWindowMutation, StorageFactory};
 use crate::{
     cli::{
         Commands, DeadLetterAction, DeadLetterCursor, SiteConfigAction, StorageArgs, ThemeAction,
-        WebsubAction,
+        TrustedProxyEntry, WebsubAction,
     },
     publisher::SiteIdentityMutation,
 };
@@ -26,6 +26,22 @@ pub enum CommandOutput {
     None,
     Backup(PathBuf),
     Restore(BackupRestoreOutcome),
+}
+
+pub(crate) fn resolve_trusted_proxies(
+    entries: Vec<TrustedProxyEntry>,
+) -> anyhow::Result<crate::trusted_proxy::TrustedProxyConfig> {
+    let empty = entries
+        .iter()
+        .any(|entry| matches!(entry, TrustedProxyEntry::Empty));
+    if empty && entries.len() != 1 {
+        anyhow::bail!("trusted proxy addresses and CIDRs must not contain empty members");
+    }
+    let proxies = entries.into_iter().filter_map(|entry| match entry {
+        TrustedProxyEntry::Empty => None,
+        TrustedProxyEntry::Proxy(proxy) => Some(proxy),
+    });
+    crate::trusted_proxy::TrustedProxyConfig::new(proxies).map_err(Into::into)
 }
 
 async fn open_existing_storage(storage: &StorageArgs) -> anyhow::Result<StorageFactory> {
@@ -248,13 +264,15 @@ impl Commands {
                 storage,
                 bind,
                 environment,
-            } => lifecycle::cmd_serve(
+                trusted_proxies,
+            } => lifecycle::cmd_serve_with_trusted_proxies(
                 &storage,
                 bind,
                 environment.is_prod(),
                 telemetry,
                 otel_tracing_enabled,
                 capture.as_ref(),
+                resolve_trusted_proxies(trusted_proxies)?,
             )
             .await
             .map(|()| CommandOutput::None),

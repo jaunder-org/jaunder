@@ -4,7 +4,12 @@ use std::num::NonZeroU64;
 use std::str::FromStr;
 use std::{net::SocketAddr, path::PathBuf};
 
-use clap::{Args, Parser, Subcommand};
+use axum_client_addr::IpCidr;
+use clap::{
+    Args, CommandFactory, FromArgMatches, Parser, Subcommand,
+    error::ErrorKind,
+    parser::{ArgMatches, ValueSource},
+};
 use sqlx::{Error, postgres::PgConnectOptions};
 
 use common::backup::BackupMode;
@@ -228,6 +233,75 @@ impl DeploymentEnv {
     }
 }
 
+/// One trusted-proxy configuration member as Clap received it.
+#[derive(Clone, Debug)]
+pub enum TrustedProxyEntry {
+    /// A trim-empty whole value, which alone means the default empty trust set.
+    Empty,
+    /// One configured proxy address or CIDR.
+    Proxy(IpCidr),
+}
+
+fn parse_trusted_proxy(value: &str) -> Result<TrustedProxyEntry, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(TrustedProxyEntry::Empty);
+    }
+    value
+        .parse()
+        .map(TrustedProxyEntry::Proxy)
+        .map_err(|error| format!("invalid trusted proxy {value:?}: {error}"))
+}
+
+impl Cli {
+    /// Parse process arguments and reject a blank explicit trusted-proxy flag.
+    ///
+    /// Clap resolves the declared environment variable at this executable
+    /// boundary. Its value source distinguishes a blank environment setting,
+    /// which means the empty trust set, from a blank command-line argument,
+    /// which is invalid configuration.
+    #[must_use]
+    pub fn parse_inherited() -> Self {
+        Self::try_parse_inherited_from(std::env::args_os()).unwrap_or_else(|error| error.exit())
+    }
+
+    /// Parse arguments with the same inherited-environment semantics as the executable.
+    ///
+    /// # Errors
+    ///
+    /// Returns Clap's parse error when an argument or inherited environment
+    /// value is invalid, including a blank explicit trusted-proxy flag.
+    pub fn try_parse_inherited_from<I, T>(arguments: I) -> Result<Self, clap::Error>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<std::ffi::OsString> + Clone,
+    {
+        let command = Self::command();
+        let matches = command.try_get_matches_from(arguments)?;
+        reject_blank_trusted_proxy_flag(&matches)?;
+        Self::from_arg_matches(&matches)
+    }
+}
+
+fn reject_blank_trusted_proxy_flag(matches: &ArgMatches) -> Result<(), clap::Error> {
+    let Some(("serve", serve)) = matches.subcommand() else {
+        return Ok(());
+    };
+    if serve.value_source("trusted_proxies") == Some(ValueSource::CommandLine)
+        && serve
+            .get_many::<TrustedProxyEntry>("trusted_proxies")
+            .is_some_and(|mut entries| {
+                entries.any(|entry| matches!(entry, TrustedProxyEntry::Empty))
+            })
+    {
+        return Err(clap::Error::raw(
+            ErrorKind::InvalidValue,
+            "--trusted-proxy must be a nonempty IP address or CIDR",
+        ));
+    }
+    Ok(())
+}
+
 impl fmt::Display for DeploymentEnv {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -278,6 +352,15 @@ pub enum Commands {
         /// Deployment environment.
         #[arg(long, env = "JAUNDER_ENV", default_value_t = DeploymentEnv::Dev)]
         environment: DeploymentEnv,
+
+        /// Proxy address or CIDR trusted to supply client-address forwarding headers.
+        #[arg(
+            long = "trusted-proxy",
+            env = "JAUNDER_TRUSTED_PROXIES",
+            value_delimiter = ',',
+            value_parser = parse_trusted_proxy
+        )]
+        trusted_proxies: Vec<TrustedProxyEntry>,
     },
 
     /// Gracefully shut down the instance owning the selected storage directory.
@@ -590,11 +673,12 @@ impl FromStr for DeadLetterCursor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::{HeaderMap, HeaderName, HeaderValue};
     use common::session_label::MAX_SESSION_LABEL_CHARS;
     use common::test_support::{parse_display_name, parse_email, parse_invite_ttl_hours};
 
     fn parse(args: &[&str]) -> Cli {
-        Cli::try_parse_from(std::iter::once("jaunder").chain(args.iter().copied()))
+        Cli::try_parse_inherited_from(std::iter::once("jaunder").chain(args.iter().copied()))
             .expect("parse failed")
     }
 
@@ -604,6 +688,7 @@ mod tests {
         "JAUNDER_DB",
         "JAUNDER_BIND",
         "JAUNDER_ENV",
+        "JAUNDER_TRUSTED_PROXIES",
     ];
 
     fn child_failure_diagnostic(stderr: &[u8]) -> String {
@@ -639,6 +724,30 @@ mod tests {
         let stderr = child_failure_diagnostic(&output.stderr);
         assert!(output.status.success(), "CLI parser child failed: {stderr}");
         child_projection(output.stdout)
+    }
+
+    fn parse_in_child_failure(scenario: &str, environment: &[(&str, &str)]) -> String {
+        let mut command =
+            std::process::Command::new(std::env::current_exe().expect("test executable"));
+        command.args([
+            "--exact",
+            "cli::tests::clap_environment_child",
+            "--nocapture",
+        ]);
+        command.env("JAUNDER_TEST_CLI_SCENARIO", scenario);
+        for name in CLI_ENV_NAMES {
+            command.env_remove(name);
+        }
+        for (name, value) in environment {
+            command.env(name, value);
+        }
+
+        let output = command.output().expect("spawn CLI parser child");
+        assert!(
+            !output.status.success(),
+            "CLI parser child unexpectedly succeeded"
+        );
+        child_failure_diagnostic(&output.stderr)
     }
 
     #[test]
@@ -701,6 +810,32 @@ mod tests {
                     unreachable!("parse yields Commands::Serve")
                 };
                 format!("environment={environment}")
+            }
+            "trusted-proxies-env" | "trusted-proxies-flag" | "trusted-proxies-blank-flag" => {
+                let args = match scenario.as_str() {
+                    "trusted-proxies-flag" => vec!["serve", "--trusted-proxy", "10.0.0.2"],
+                    "trusted-proxies-blank-flag" => vec!["serve", "--trusted-proxy", ""],
+                    _ => vec!["serve"],
+                };
+                let Commands::Serve {
+                    trusted_proxies, ..
+                } = parse(&args).command.expect("subcommand")
+                else {
+                    unreachable!("parse yields Commands::Serve")
+                };
+                let config = crate::commands::resolve_trusted_proxies(trusted_proxies)
+                    .expect("trusted proxy configuration");
+                config
+                    .resolve(
+                        &HeaderMap::from_iter([(
+                            HeaderName::from_static("x-forwarded-for"),
+                            HeaderValue::from_static("203.0.113.10"),
+                        )]),
+                        Some("10.0.0.2:443".parse().expect("peer")),
+                    )
+                    .outcome
+                    .as_str()
+                    .to_owned()
             }
             "db-flag" => {
                 let Commands::Init { storage, .. } =
@@ -878,6 +1013,139 @@ mod tests {
         assert_eq!(
             parse_in_child("environment-env", &[("JAUNDER_ENV", "prod")]),
             "environment=prod"
+        );
+    }
+
+    #[test]
+    fn trusted_proxies_environment_accepts_trimmed_comma_separated_values() {
+        assert_eq!(
+            parse_in_child(
+                "trusted-proxies-env",
+                &[("JAUNDER_TRUSTED_PROXIES", " 10.0.0.2 , 2001:db8::/32 ")],
+            ),
+            "forwarded"
+        );
+    }
+
+    #[test]
+    fn absent_trusted_proxies_environment_means_empty_trust_set() {
+        assert_eq!(parse_in_child("trusted-proxies-env", &[]), "socket");
+    }
+
+    #[test]
+    fn empty_trusted_proxies_environment_means_empty_trust_set() {
+        assert_eq!(
+            parse_in_child("trusted-proxies-env", &[("JAUNDER_TRUSTED_PROXIES", "")]),
+            "socket"
+        );
+    }
+
+    #[test]
+    fn trusted_proxies_environment_treats_blank_whole_value_as_empty() {
+        assert_eq!(
+            parse_in_child(
+                "trusted-proxies-env",
+                &[("JAUNDER_TRUSTED_PROXIES", "  \t ")]
+            ),
+            "socket"
+        );
+    }
+
+    #[test]
+    fn blank_trusted_proxy_flag_is_invalid_configuration() {
+        let stderr = parse_in_child_failure("trusted-proxies-blank-flag", &[]);
+        assert!(
+            stderr.contains("--trusted-proxy must be a nonempty IP address or CIDR"),
+            "unexpected failure: {stderr}"
+        );
+    }
+
+    #[test]
+    fn trusted_proxy_environment_rejects_empty_members_and_invalid_ranges() {
+        for value in [",10.0.0.2", "10.0.0.2,", "10.0.0.2,,192.0.2.1", "invalid"] {
+            let stderr = parse_in_child_failure(
+                "trusted-proxies-env",
+                &[("JAUNDER_TRUSTED_PROXIES", value)],
+            );
+            assert!(
+                stderr.contains("trusted proxy") || stderr.contains("invalid"),
+                "unexpected failure for {value:?}: {stderr}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn trusted_proxy_environment_rejects_non_unicode_configuration() {
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let mut command =
+            std::process::Command::new(std::env::current_exe().expect("test executable"));
+        command.args([
+            "--exact",
+            "cli::tests::clap_environment_child",
+            "--nocapture",
+        ]);
+        command.env("JAUNDER_TEST_CLI_SCENARIO", "trusted-proxies-env");
+        for name in CLI_ENV_NAMES {
+            command.env_remove(name);
+        }
+        command.env(
+            "JAUNDER_TRUSTED_PROXIES",
+            std::ffi::OsString::from_vec(vec![0xff]),
+        );
+        let output = command.output().expect("spawn CLI parser child");
+        assert!(
+            !output.status.success(),
+            "non-Unicode configuration must fail"
+        );
+        assert!(
+            !child_failure_diagnostic(&output.stderr).is_empty(),
+            "child must diagnose non-Unicode configuration"
+        );
+    }
+
+    #[test]
+    fn trusted_proxy_help_declares_only_the_supported_flag_and_environment() {
+        use clap::CommandFactory as _;
+
+        let help = Cli::command()
+            .find_subcommand_mut("serve")
+            .expect("serve subcommand")
+            .render_long_help()
+            .to_string();
+        assert!(help.contains("--trusted-proxy"));
+        assert!(help.contains("JAUNDER_TRUSTED_PROXIES"));
+        assert!(!help.contains("trusted-proxies-environment"));
+    }
+
+    #[test]
+    fn trusted_proxy_flags_accept_repeated_addresses_and_cidrs() {
+        let Commands::Serve {
+            trusted_proxies, ..
+        } = parse(&[
+            "serve",
+            "--trusted-proxy",
+            "10.0.0.2",
+            "--trusted-proxy",
+            "2001:db8::/32",
+        ])
+        .command
+        .expect("subcommand")
+        else {
+            unreachable!("parse yields Commands::Serve")
+        };
+        assert_eq!(trusted_proxies.len(), 2);
+    }
+
+    #[test]
+    fn trusted_proxy_flags_beat_environment() {
+        assert_eq!(
+            parse_in_child(
+                "trusted-proxies-flag",
+                &[("JAUNDER_TRUSTED_PROXIES", "192.0.2.0/24")],
+            ),
+            "forwarded"
         );
     }
 

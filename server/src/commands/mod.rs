@@ -19,6 +19,8 @@ pub use account::{
 };
 pub use backup::{cmd_backup, cmd_restore};
 pub use dispatch::CommandOutput;
+#[cfg(test)]
+pub(crate) use dispatch::resolve_trusted_proxies;
 pub use lifecycle::{
     PreparedSaturationMetrics, PreparedServer, ServeCapturePaths, cmd_serve, prepare_server,
 };

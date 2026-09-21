@@ -6,7 +6,13 @@
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use axum::http::{HeaderMap, HeaderName};
+use axum::{
+    Router,
+    extract::{ConnectInfo, Request, State},
+    http::{HeaderMap, HeaderName},
+    middleware::Next,
+    response::Response,
+};
 use axum_client_addr::{ChainHeader, ClientIpConfig, ClientIpSource, IpCidr};
 
 const MAX_CHAIN_HOPS: usize = 32;
@@ -21,6 +27,15 @@ pub struct TrustedProxyConfig {
 }
 
 impl TrustedProxyConfig {
+    /// Construct the default configuration that trusts no proxy.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            forwarded_resolver: ClientIpConfig::builder().trust_no_proxy(),
+            x_forwarded_for_resolver: ClientIpConfig::builder().trust_no_proxy(),
+        }
+    }
+
     /// Construct a configuration from the trusted proxy network set.
     ///
     /// An empty set trusts no peer, so forwarding headers remain inert.
@@ -96,6 +111,12 @@ impl TrustedProxyConfig {
     }
 }
 
+impl Default for TrustedProxyConfig {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
 fn resolver_for(
     proxies: &[IpCidr],
     header: HeaderName,
@@ -155,6 +176,48 @@ pub enum ResolutionOutcome {
     OverLimit,
     /// No direct socket endpoint was available to root forwarding trust.
     TransportUnavailable,
+}
+
+impl ResolutionOutcome {
+    /// The closed telemetry value for this resolution outcome.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Socket => "socket",
+            Self::Forwarded => "forwarded",
+            Self::Malformed => "malformed",
+            Self::Conflict => "conflict",
+            Self::OverLimit => "over-limit",
+            Self::TransportUnavailable => "transport-unavailable",
+        }
+    }
+}
+
+/// Resolves and attaches request-local address context without replacing Axum's
+/// Transport Peer extension.
+async fn resolve_request_address(
+    State(config): State<TrustedProxyConfig>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let transport_peer = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ConnectInfo(peer)| *peer);
+    let address = config.resolve(request.headers(), transport_peer);
+    request.extensions_mut().insert(address);
+    next.run(request).await
+}
+
+/// Adds trusted-proxy address context before the HTTP observability layer.
+pub fn with_request_address<S>(router: Router<S>, config: TrustedProxyConfig) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    router.layer(axum::middleware::from_fn_with_state(
+        config,
+        resolve_request_address,
+    ))
 }
 
 #[derive(Clone, Copy)]
@@ -328,9 +391,16 @@ fn canonical_ip(ip: IpAddr) -> IpAddr {
 mod tests {
     use std::net::{IpAddr, SocketAddr};
 
-    use axum::http::HeaderMap;
+    use axum::{
+        Router,
+        body::Body,
+        extract::{ConnectInfo, Request},
+        http::{HeaderMap, StatusCode},
+        routing::get,
+    };
     use axum_client_addr::IpCidr;
     use rstest::rstest;
+    use tower::ServiceExt;
 
     use super::{RequestAddress, ResolutionOutcome, TrustedProxyConfig};
 
@@ -632,6 +702,39 @@ mod tests {
             Some("203.0.113.10".parse().unwrap())
         );
         assert_eq!(resolved.outcome, ResolutionOutcome::Forwarded);
+    }
+
+    #[tokio::test]
+    async fn middleware_preserves_transport_peer_and_inserts_request_address() {
+        async fn context(request: Request) -> StatusCode {
+            let peer = request.extensions().get::<ConnectInfo<SocketAddr>>();
+            let address = request.extensions().get::<RequestAddress>();
+            if peer.is_some_and(|ConnectInfo(peer)| *peer == "10.0.0.2:443".parse().unwrap())
+                && address.is_some_and(|address| {
+                    address.transport_peer == Some("10.0.0.2:443".parse().unwrap())
+                        && address.effective_client_ip == Some("203.0.113.10".parse().unwrap())
+                })
+            {
+                StatusCode::OK
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        }
+
+        let app = super::with_request_address(
+            Router::new().route("/", get(context)),
+            config(&["10.0.0.0/24"]),
+        );
+        let mut request = axum::http::Request::builder()
+            .uri("/")
+            .header("x-forwarded-for", "203.0.113.10")
+            .body(Body::empty())
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(peer("10.0.0.2:443")));
+
+        assert_eq!(app.oneshot(request).await.unwrap().status(), StatusCode::OK);
     }
 
     #[test]

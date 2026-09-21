@@ -39,7 +39,7 @@ Out:
     missing-peer case from the spec; run
     `devtool run -- cargo xtask test-local -- -p jaunder trusted_proxy`.
 
-- [ ] Task 2: Carry the policy through process configuration and the real HTTP
+- [x] Task 2: Carry the policy through process configuration and the real HTTP
       serving path.
   - Contract: `serve` resolves repeatable `--trusted-proxy` or trimmed
     comma-separated `JAUNDER_TRUSTED_PROXIES` once, then injects the typed
