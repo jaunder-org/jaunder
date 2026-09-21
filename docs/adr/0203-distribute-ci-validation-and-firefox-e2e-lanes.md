@@ -1,6 +1,6 @@
-# ADR-DRAFT: Distribute CI validation and Firefox E2E through retained lane catalogs
+# ADR-0203: Distribute CI validation and Firefox E2E through retained lane catalogs
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-20
 - Issue: [#1574](https://github.com/jaunder-org/jaunder/issues/1574)
 
@@ -77,16 +77,16 @@ workers=4 is not a production policy.
 
 This decision narrowly supersedes:
 
-- [ADR-0034](../0034-ci-e2e-matrix-distribution.md) where it specifies a
-  four-job `{backend}×{browser}` matrix and one non-e2e job; its
-  same-derivations, distributed-CI model, local full gate, host-only xtask
-  boundary, and stable aggregate contexts remain current;
-- [ADR-0039](../0039-e2e-parallelism-via-per-test-identity-fixtures.md) where it
+- [ADR-0034](0034-ci-e2e-matrix-distribution.md) where it specifies a four-job
+  `{backend}×{browser}` matrix and one non-e2e job; its same-derivations,
+  distributed-CI model, local full gate, host-only xtask boundary, and stable
+  aggregate contexts remain current;
+- [ADR-0039](0039-e2e-parallelism-via-per-test-identity-fixtures.md) where it
   treats one workers=2 Firefox process graph per backend as the production
   parallelism boundary; workers=2 remains the intra-lane policy, while
   global-state projects are additionally isolated in the serial-special VM; and
-- [ADR-0192](../0192-split-ci-non-e2e-validation-lanes.md) where it specifies
-  two non-e2e jobs and an unchanged four-combination E2E matrix; its per-ref
+- [ADR-0192](0192-split-ci-non-e2e-validation-lanes.md) where it specifies two
+  non-e2e jobs and an unchanged four-combination E2E matrix; its per-ref
   verdict, shared-catalog, producer/consumer, and stable-context constraints
   remain current.
 
