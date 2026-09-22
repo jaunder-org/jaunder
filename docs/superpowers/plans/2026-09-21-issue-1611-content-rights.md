@@ -14,8 +14,8 @@ In:
   affected public feed representation.
 - Project Copyright Declarations into public Post markup and Atom, RSS, and JSON
   Syndication Feed items.
-- Add account controls, exact protocol/backend/integration/e2e coverage, the
-  existing Local snapshot update, and review-only visual proof.
+- Add account controls, exact protocol/backend/integration/e2e coverage, and
+  review-only visual proof; do not invent a committed Local snapshot state.
 - Land the approved glossary, ADR draft, architecture, design, and Style
   Contract projections with the behavior they describe.
 
@@ -82,10 +82,9 @@ Out:
     gains no new compatibility hook.
   - Verification: pure render tests cover name fallback, exact text/linking,
     source order, and escaping; e2e proves setting persistence and retroactive
-    HTML/feed presentation for existing Posts. Update the existing Local
-    baselines only through
-    `devtool run -- cargo xtask e2e-local --update-visual-snapshots`, then prove
-    the focused flows with
+    HTML/feed presentation for existing Posts. Because the visual suite has no
+    committed Local baseline, do not repurpose Home or add a new committed
+    state. Prove the focused flows with
     `devtool run -- cargo xtask e2e-local profile.spec.ts` and retain
     review-only Local/permalink desktop/compact before-and-after pairs through
     `visual-proof`, covering both All Rights Reserved and one linked Creative
@@ -122,7 +121,7 @@ Out:
 - Public projector bytes remain viewer-independent, themeable, and cache-safe;
   declaration markup exposes no new Style Contract hook or
   wrapper/sibling-position guarantee.
-- Existing Local snapshots are reviewed and updated; permalink and compact
+- The absent committed Local baseline remains absent; Local and permalink
   comparisons remain transient visual-proof artifacts, not new snapshot
   baselines.
 - No lint suppression, coverage exemption, protocol expansion, or unrelated

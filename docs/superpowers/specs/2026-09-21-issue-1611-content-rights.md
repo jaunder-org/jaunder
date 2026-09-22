@@ -90,8 +90,8 @@ format without altering authored Post content.
   coverage for authentication, validation, persistence, and mutation outcomes,
   plus end-to-end coverage for choosing a license and observing its retroactive
   public effect.
-- The existing Local visual snapshot is intentionally updated for the new Post
-  metadata. Review-only visual proof—not additional committed snapshot states—
+- The visual suite had no committed Local snapshot when this work began, so no
+  committed snapshot state is added or repurposed. Review-only visual proof
   compares Local and permalink before/after presentation at desktop and compact
   viewports, including All Rights Reserved and a linked Creative Commons choice
   under the built-in theme.

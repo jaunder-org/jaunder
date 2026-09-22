@@ -25,6 +25,18 @@ pub fn rendered_post(
     ))
 }
 
+/// Build one published Home row without public Content Rights presentation.
+#[must_use]
+pub fn rendered_home_post(
+    post: PostRecord,
+    viewer_user_id: Option<UserId>,
+) -> Option<RenderedPost> {
+    post.published_at?;
+    let is_author = viewer_user_id == Some(post.user_id);
+    let permalink = Some(post.permalink());
+    Some(rendered_post_from_record(post, is_author, permalink, None))
+}
+
 /// Translates one storage record into the shared rendered-post projection.
 ///
 /// Timeline rows call this directly and therefore do not request the host-only
