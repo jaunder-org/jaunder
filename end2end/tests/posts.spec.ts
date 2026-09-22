@@ -1656,6 +1656,60 @@ test("Home preserves editing state while its composer is compact", async ({
   ).toBe("static");
 });
 
+test("Home collapse eligibility follows non-body edits and create outcomes", async ({
+  page,
+  firstNav,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const me = await signInAsNewUser(page);
+  await seedPostsViaTool(me, HOME_POST_SELF_COUNT, "Home Eligibility Post");
+  await goto(page, "/app", { timeout: firstNav });
+
+  const body = page.locator(SEL.postBody);
+  const summary = page.locator(SEL.postSummary);
+  const expand = page.getByRole("button", { name: "Expand composer" });
+  const collapse = page.getByRole("button", { name: "Collapse composer" });
+
+  await summary.fill("Unsaved summary");
+  await page.locator(".j-topbar h1").click();
+  await page.evaluate(() => window.scrollTo(0, 96));
+  await expect(collapse).toBeVisible();
+
+  await summary.fill("");
+  await page.locator(".j-topbar h1").click();
+  await page.evaluate(() => window.scrollTo(0, 24));
+  await page.evaluate(() => window.scrollTo(0, 96));
+  await expect(expand).toBeVisible();
+
+  await expand.click();
+  await body.fill("Successful reset");
+  await click(page, SEL.publishButton("false"));
+  await expect(page.locator(".j-composer p.success")).toContainText(
+    "Draft saved!",
+  );
+  await page.locator(".j-topbar h1").click();
+  await page.evaluate(() => window.scrollTo(0, 24));
+  await page.evaluate(() => window.scrollTo(0, 96));
+  await expect(expand).toBeVisible();
+
+  await navigateInApp(page, () => click(page, 'a[href="/drafts"]'), {
+    url: "/drafts",
+    ready: '.j-topbar h1:has-text("Drafts")',
+  });
+  await navigateInApp(page, () => click(page, 'a[href="/app"]'), {
+    url: "/app",
+    ready: ".j-composer",
+  });
+  await failServerFn(page, "posts/create");
+  await body.fill("Failed create remains dirty");
+  await click(page, SEL.publishButton("false"));
+  await expect(page.locator(".j-composer p.error")).toBeVisible();
+  await page.locator(".j-topbar h1").click();
+  await page.evaluate(() => window.scrollTo(0, 24));
+  await page.evaluate(() => window.scrollTo(0, 160));
+  await expect(collapse).toBeVisible();
+});
+
 test("Home uses one responsive page scroll for its composer and Posts", async ({
   page,
   firstNav,

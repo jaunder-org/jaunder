@@ -355,35 +355,6 @@ pub(super) struct CreationSchedule {
     error: RwSignal<Option<String>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct CreationComposerSnapshot {
-    body: String,
-    format: PostFormat,
-    summary: String,
-    publish_at: String,
-    tags: Vec<common::seed::TagSummary>,
-    audience: common::visibility::AudienceSelection,
-    slug: String,
-    schedule_date: String,
-    schedule_time: String,
-}
-
-impl CreationComposerSnapshot {
-    fn capture(state: ComposeState, slug_field: Field<Slug>, schedule: CreationSchedule) -> Self {
-        Self {
-            body: state.body.value(),
-            format: state.format.get(),
-            summary: state.summary_field.value(),
-            publish_at: state.publish_at.get(),
-            tags: state.tags.get(),
-            audience: state.audience.get(),
-            slug: slug_field.value(),
-            schedule_date: schedule.date.get(),
-            schedule_time: schedule.time.get(),
-        }
-    }
-}
-
 impl CreationSchedule {
     pub(super) fn new() -> Self {
         Self {
@@ -439,14 +410,22 @@ pub fn PostCreateForm(
     let state = ComposeState::new();
     let slug_field = Field::<Slug>::optional();
     let schedule = CreationSchedule::new();
-    let baseline = RwSignal::new(CreationComposerSnapshot::capture(
-        state, slug_field, schedule,
+    let baseline = RwSignal::new(posts::CreationComposerSnapshot::capture(
+        state,
+        slug_field,
+        schedule.date.get(),
+        schedule.time.get(),
     ));
 
     if let Some(on_dirty_change) = on_dirty_change {
         Effect::new(move |_| {
             on_dirty_change.run(
-                CreationComposerSnapshot::capture(state, slug_field, schedule) != baseline.get(),
+                posts::CreationComposerSnapshot::capture(
+                    state,
+                    slug_field,
+                    schedule.date.get(),
+                    schedule.time.get(),
+                ) != baseline.get(),
             );
         });
     }
@@ -460,7 +439,7 @@ pub fn PostCreateForm(
         move || default_audience.get(),
         move |default| {
             state.audience.set(default.clone());
-            baseline.update(|initial| initial.audience = default);
+            baseline.set(baseline.get_untracked().with_audience(default));
         },
     );
 
@@ -471,8 +450,11 @@ pub fn PostCreateForm(
         move |outcome| {
             if posts::notify_create_settlement(outcome, on_mutation, on_success) {
                 state.reset();
-                baseline.set(CreationComposerSnapshot::capture(
-                    state, slug_field, schedule,
+                baseline.set(posts::CreationComposerSnapshot::capture(
+                    state,
+                    slug_field,
+                    schedule.date.get(),
+                    schedule.time.get(),
                 ));
             }
         },
@@ -618,31 +600,23 @@ fn HomeComposerToggle(
     on_collapse: Callback<()>,
     on_expand: Callback<()>,
 ) -> impl IntoView {
+    let presentation =
+        Memo::new(move |_| posts::home_composer_toggle_presentation(collapsed.get()));
     view! {
-        <div class="j-home-composer-toggle" hidden=move || collapsed.get()>
+        <div class="j-home-composer-toggle">
             <strong>"New post"</strong>
             <button
-                id="home-composer-collapse"
+                id=move || presentation.get().id
                 class="j-btn"
                 type="button"
-                aria-expanded="true"
+                aria-expanded=move || presentation.get().expanded
                 aria-controls="home-composer-body"
-                on:click=move |_| on_collapse.run(())
+                on:click=move |_| match presentation.get().action {
+                    posts::HomeComposerToggleAction::Collapse => on_collapse.run(()),
+                    posts::HomeComposerToggleAction::Expand => on_expand.run(()),
+                }
             >
-                "Collapse composer"
-            </button>
-        </div>
-        <div class="j-home-composer-toggle" hidden=move || !collapsed.get()>
-            <strong>"New post"</strong>
-            <button
-                id="home-composer-expand"
-                class="j-btn"
-                type="button"
-                aria-expanded="false"
-                aria-controls="home-composer-body"
-                on:click=move |_| on_expand.run(())
-            >
-                "Expand composer"
+                {move || presentation.get().label}
             </button>
         </div>
     }

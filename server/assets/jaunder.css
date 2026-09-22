@@ -560,7 +560,6 @@
   background: var(--surface);
 }
 
-.j-home-composer-toggle[hidden],
 #home-composer-body[hidden] {
   display: none;
 }

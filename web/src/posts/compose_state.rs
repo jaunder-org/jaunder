@@ -69,6 +69,50 @@ pub struct ComposeState {
     pub audience: RwSignal<AudienceSelection>,
 }
 
+/// Comparable values that determine whether a creation composer has unsaved input.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CreationComposerSnapshot {
+    body: String,
+    format: PostFormat,
+    summary: String,
+    publish_at: String,
+    tags: Vec<TagSummary>,
+    audience: AudienceSelection,
+    slug: String,
+    schedule_date: String,
+    schedule_time: String,
+}
+
+impl CreationComposerSnapshot {
+    /// Capture every creation input, including fields owned outside [`ComposeState`].
+    #[must_use]
+    pub fn capture(
+        state: ComposeState,
+        slug_field: Field<Slug>,
+        schedule_date: String,
+        schedule_time: String,
+    ) -> Self {
+        Self {
+            body: state.body.value(),
+            format: state.format.get(),
+            summary: state.summary_field.value(),
+            publish_at: state.publish_at.get(),
+            tags: state.tags.get(),
+            audience: state.audience.get(),
+            slug: slug_field.value(),
+            schedule_date,
+            schedule_time,
+        }
+    }
+
+    /// Adopt an asynchronously resolved initial audience without accepting other edits.
+    #[must_use]
+    pub fn with_audience(mut self, audience: AudienceSelection) -> Self {
+        self.audience = audience;
+        self
+    }
+}
+
 impl ComposeState {
     /// A composer at its initial state.
     ///
@@ -226,13 +270,72 @@ pub fn submit_gate(
 
 #[cfg(test)]
 mod tests {
-    use super::{ComposeState, PublicationIntent, publication_from_local, submit_gate};
+    use super::{
+        ComposeState, CreationComposerSnapshot, PublicationIntent, publication_from_local,
+        submit_gate,
+    };
     use crate::forms::Field;
     use common::post_body::PostBody;
     use common::render::PostFormat;
+    use common::slug::Slug;
     use common::time::UtcInstant;
-    use common::visibility::AudienceBase;
+    use common::visibility::{AudienceBase, AudienceSelection};
     use leptos::prelude::*;
+
+    #[test]
+    fn creation_snapshot_detects_owned_and_provisional_input_changes() {
+        Owner::new().with(|| {
+            let state = ComposeState::new();
+            let slug = Field::<Slug>::optional();
+            let initial =
+                CreationComposerSnapshot::capture(state, slug, String::new(), String::new());
+
+            state.body.set_value("draft");
+            assert_ne!(
+                CreationComposerSnapshot::capture(state, slug, String::new(), String::new()),
+                initial
+            );
+            state.body.reset();
+            slug.set_value("chosen-slug");
+            assert_ne!(
+                CreationComposerSnapshot::capture(state, slug, String::new(), String::new()),
+                initial
+            );
+            slug.reset();
+            assert_ne!(
+                CreationComposerSnapshot::capture(
+                    state,
+                    slug,
+                    "2999-01-02".to_owned(),
+                    "12:30".to_owned(),
+                ),
+                initial
+            );
+        });
+    }
+
+    #[test]
+    fn creation_snapshot_adopts_only_the_resolved_initial_audience() {
+        Owner::new().with(|| {
+            let state = ComposeState::new();
+            let slug = Field::<Slug>::optional();
+            let initial =
+                CreationComposerSnapshot::capture(state, slug, String::new(), String::new());
+            state.body.set_value("draft");
+            let resolved = AudienceSelection {
+                base: AudienceBase::Private,
+                named: Vec::new(),
+            };
+
+            let baseline = initial.with_audience(resolved.clone());
+            state.audience.set(resolved);
+            assert_ne!(
+                CreationComposerSnapshot::capture(state, slug, String::new(), String::new()),
+                baseline,
+                "resolving the audience must not absorb an in-progress body edit"
+            );
+        });
+    }
 
     #[test]
     fn inputs_map_every_publication_intent_to_the_wire_contract() {

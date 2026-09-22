@@ -64,8 +64,13 @@ pub use page_state::{
 
 // Same reason again: the composer and editor state seams are consumed by the
 // wasm-only component.
-pub use compose_state::{ComposeState, PublicationIntent, publication_from_local, submit_gate};
-pub use composer_collapse::{HomeComposerScrollDecision, home_composer_scroll_decision};
+pub use compose_state::{
+    ComposeState, CreationComposerSnapshot, PublicationIntent, publication_from_local, submit_gate,
+};
+pub use composer_collapse::{
+    HomeComposerScrollDecision, HomeComposerToggleAction, HomeComposerTogglePresentation,
+    home_composer_scroll_decision, home_composer_toggle_presentation,
+};
 pub use composer_disclosure::{
     ComposerControl, ComposerDisclosureState, audience_disclosure_value, publish_disclosure_value,
     record_media_upload, slug_disclosure_value,
