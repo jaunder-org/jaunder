@@ -956,6 +956,14 @@
   text-wrap: balance;
 }
 
+.j-post-summary {
+  color: var(--ink-soft);
+  font-size: calc(var(--fs-post) - 1px);
+  line-height: 1.45;
+  margin: 2px 0 12px;
+  text-wrap: pretty;
+}
+
 .j-post-body {
   font-size: var(--fs-post);
   line-height: 1.55;
