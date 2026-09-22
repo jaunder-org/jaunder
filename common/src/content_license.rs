@@ -31,50 +31,97 @@ pub enum ContentLicense {
     CcByNcNd4_0,
 }
 
+/// Static public metadata for a [`ContentLicense`] choice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ContentLicenseDescriptor {
+    /// Exact public label.
+    pub label: &'static str,
+    /// SPDX identifier, absent for a rights statement rather than a license.
+    pub spdx_id: Option<&'static str>,
+    /// Canonical Creative Commons deed URL.
+    pub canonical_url: Option<&'static str>,
+    /// Official Creative Commons 88-by-31 license icon URL.
+    pub icon_url: Option<&'static str>,
+}
+
 impl ContentLicense {
+    /// All static public metadata for this rights choice.
+    #[must_use]
+    pub const fn descriptor(self) -> ContentLicenseDescriptor {
+        match self {
+            Self::AllRightsReserved => ContentLicenseDescriptor {
+                label: "All Rights Reserved",
+                spdx_id: None,
+                canonical_url: None,
+                icon_url: None,
+            },
+            Self::Cc0_1_0 => ContentLicenseDescriptor {
+                label: "CC0 1.0",
+                spdx_id: Some("CC0-1.0"),
+                canonical_url: Some("https://creativecommons.org/publicdomain/zero/1.0/"),
+                icon_url: Some("https://licensebuttons.net/p/zero/1.0/88x31.png"),
+            },
+            Self::CcBy4_0 => ContentLicenseDescriptor {
+                label: "CC BY 4.0",
+                spdx_id: Some("CC-BY-4.0"),
+                canonical_url: Some("https://creativecommons.org/licenses/by/4.0/"),
+                icon_url: Some("https://licensebuttons.net/l/by/4.0/88x31.png"),
+            },
+            Self::CcBySa4_0 => ContentLicenseDescriptor {
+                label: "CC BY-SA 4.0",
+                spdx_id: Some("CC-BY-SA-4.0"),
+                canonical_url: Some("https://creativecommons.org/licenses/by-sa/4.0/"),
+                icon_url: Some("https://licensebuttons.net/l/by-sa/4.0/88x31.png"),
+            },
+            Self::CcByNd4_0 => ContentLicenseDescriptor {
+                label: "CC BY-ND 4.0",
+                spdx_id: Some("CC-BY-ND-4.0"),
+                canonical_url: Some("https://creativecommons.org/licenses/by-nd/4.0/"),
+                icon_url: Some("https://licensebuttons.net/l/by-nd/4.0/88x31.png"),
+            },
+            Self::CcByNc4_0 => ContentLicenseDescriptor {
+                label: "CC BY-NC 4.0",
+                spdx_id: Some("CC-BY-NC-4.0"),
+                canonical_url: Some("https://creativecommons.org/licenses/by-nc/4.0/"),
+                icon_url: Some("https://licensebuttons.net/l/by-nc/4.0/88x31.png"),
+            },
+            Self::CcByNcSa4_0 => ContentLicenseDescriptor {
+                label: "CC BY-NC-SA 4.0",
+                spdx_id: Some("CC-BY-NC-SA-4.0"),
+                canonical_url: Some("https://creativecommons.org/licenses/by-nc-sa/4.0/"),
+                icon_url: Some("https://licensebuttons.net/l/by-nc-sa/4.0/88x31.png"),
+            },
+            Self::CcByNcNd4_0 => ContentLicenseDescriptor {
+                label: "CC BY-NC-ND 4.0",
+                spdx_id: Some("CC-BY-NC-ND-4.0"),
+                canonical_url: Some("https://creativecommons.org/licenses/by-nc-nd/4.0/"),
+                icon_url: Some("https://licensebuttons.net/l/by-nc-nd/4.0/88x31.png"),
+            },
+        }
+    }
+
     /// The exact public label for this rights choice.
     #[must_use]
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::AllRightsReserved => "All Rights Reserved",
-            Self::Cc0_1_0 => "CC0 1.0",
-            Self::CcBy4_0 => "CC BY 4.0",
-            Self::CcBySa4_0 => "CC BY-SA 4.0",
-            Self::CcByNd4_0 => "CC BY-ND 4.0",
-            Self::CcByNc4_0 => "CC BY-NC 4.0",
-            Self::CcByNcSa4_0 => "CC BY-NC-SA 4.0",
-            Self::CcByNcNd4_0 => "CC BY-NC-ND 4.0",
-        }
+    pub const fn label(self) -> &'static str {
+        self.descriptor().label
     }
 
     /// The SPDX identifier, when this choice is a license rather than a rights statement.
     #[must_use]
-    pub fn spdx_id(self) -> Option<&'static str> {
-        match self {
-            Self::AllRightsReserved => None,
-            Self::Cc0_1_0 => Some("CC0-1.0"),
-            Self::CcBy4_0 => Some("CC-BY-4.0"),
-            Self::CcBySa4_0 => Some("CC-BY-SA-4.0"),
-            Self::CcByNd4_0 => Some("CC-BY-ND-4.0"),
-            Self::CcByNc4_0 => Some("CC-BY-NC-4.0"),
-            Self::CcByNcSa4_0 => Some("CC-BY-NC-SA-4.0"),
-            Self::CcByNcNd4_0 => Some("CC-BY-NC-ND-4.0"),
-        }
+    pub const fn spdx_id(self) -> Option<&'static str> {
+        self.descriptor().spdx_id
     }
 
     /// The canonical Creative Commons URL, when this choice has one.
     #[must_use]
-    pub fn canonical_url(self) -> Option<&'static str> {
-        match self {
-            Self::AllRightsReserved => None,
-            Self::Cc0_1_0 => Some("https://creativecommons.org/publicdomain/zero/1.0/"),
-            Self::CcBy4_0 => Some("https://creativecommons.org/licenses/by/4.0/"),
-            Self::CcBySa4_0 => Some("https://creativecommons.org/licenses/by-sa/4.0/"),
-            Self::CcByNd4_0 => Some("https://creativecommons.org/licenses/by-nd/4.0/"),
-            Self::CcByNc4_0 => Some("https://creativecommons.org/licenses/by-nc/4.0/"),
-            Self::CcByNcSa4_0 => Some("https://creativecommons.org/licenses/by-nc-sa/4.0/"),
-            Self::CcByNcNd4_0 => Some("https://creativecommons.org/licenses/by-nc-nd/4.0/"),
-        }
+    pub const fn canonical_url(self) -> Option<&'static str> {
+        self.descriptor().canonical_url
+    }
+
+    /// The official Creative Commons license icon URL, when this choice has one.
+    #[must_use]
+    pub const fn icon_url(self) -> Option<&'static str> {
+        self.descriptor().icon_url
     }
 }
 
@@ -95,6 +142,7 @@ mod tests {
                 "All Rights Reserved",
                 None,
                 None,
+                None,
             ),
             (
                 ContentLicense::Cc0_1_0,
@@ -102,6 +150,7 @@ mod tests {
                 "CC0 1.0",
                 Some("CC0-1.0"),
                 Some("https://creativecommons.org/publicdomain/zero/1.0/"),
+                Some("https://licensebuttons.net/p/zero/1.0/88x31.png"),
             ),
             (
                 ContentLicense::CcBy4_0,
@@ -109,6 +158,7 @@ mod tests {
                 "CC BY 4.0",
                 Some("CC-BY-4.0"),
                 Some("https://creativecommons.org/licenses/by/4.0/"),
+                Some("https://licensebuttons.net/l/by/4.0/88x31.png"),
             ),
             (
                 ContentLicense::CcBySa4_0,
@@ -116,6 +166,7 @@ mod tests {
                 "CC BY-SA 4.0",
                 Some("CC-BY-SA-4.0"),
                 Some("https://creativecommons.org/licenses/by-sa/4.0/"),
+                Some("https://licensebuttons.net/l/by-sa/4.0/88x31.png"),
             ),
             (
                 ContentLicense::CcByNd4_0,
@@ -123,6 +174,7 @@ mod tests {
                 "CC BY-ND 4.0",
                 Some("CC-BY-ND-4.0"),
                 Some("https://creativecommons.org/licenses/by-nd/4.0/"),
+                Some("https://licensebuttons.net/l/by-nd/4.0/88x31.png"),
             ),
             (
                 ContentLicense::CcByNc4_0,
@@ -130,6 +182,7 @@ mod tests {
                 "CC BY-NC 4.0",
                 Some("CC-BY-NC-4.0"),
                 Some("https://creativecommons.org/licenses/by-nc/4.0/"),
+                Some("https://licensebuttons.net/l/by-nc/4.0/88x31.png"),
             ),
             (
                 ContentLicense::CcByNcSa4_0,
@@ -137,6 +190,7 @@ mod tests {
                 "CC BY-NC-SA 4.0",
                 Some("CC-BY-NC-SA-4.0"),
                 Some("https://creativecommons.org/licenses/by-nc-sa/4.0/"),
+                Some("https://licensebuttons.net/l/by-nc-sa/4.0/88x31.png"),
             ),
             (
                 ContentLicense::CcByNcNd4_0,
@@ -144,15 +198,26 @@ mod tests {
                 "CC BY-NC-ND 4.0",
                 Some("CC-BY-NC-ND-4.0"),
                 Some("https://creativecommons.org/licenses/by-nc-nd/4.0/"),
+                Some("https://licensebuttons.net/l/by-nc-nd/4.0/88x31.png"),
             ),
         ];
         assert_eq!(ContentLicense::VARIANTS.len(), cases.len());
-        for (license, token, label, spdx_id, canonical_url) in cases {
+        for (license, token, label, spdx_id, canonical_url, icon_url) in cases {
             assert_eq!(license.as_ref(), token);
             assert_eq!(ContentLicense::from_str(token).ok(), Some(license));
+            assert_eq!(
+                license.descriptor(),
+                ContentLicenseDescriptor {
+                    label,
+                    spdx_id,
+                    canonical_url,
+                    icon_url,
+                }
+            );
             assert_eq!(license.label(), label);
             assert_eq!(license.spdx_id(), spdx_id);
             assert_eq!(license.canonical_url(), canonical_url);
+            assert_eq!(license.icon_url(), icon_url);
         }
     }
 
