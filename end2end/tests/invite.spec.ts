@@ -27,67 +27,71 @@ test.afterAll(async () => {
 // Test A — the main flow: an operator emails an invite, and the invitee follows
 // the link and registers with no manual code entry (the register page reads the
 // code from the URL and submits it as a hidden field).
-test("invite link registration completes end-to-end", async ({
-  page,
-  tracedContext,
-  user,
-  mailbox,
-}) => {
-  // Establish operator-issued invitations and a base URL so invites::create can build the link
-  // (`{base_url}/register?invite_code=<code>`); it errors without a base URL.
-  await seedConfigViaTool("site.registration_policy", "operator_invites");
-  await seedConfigViaTool("site.base_url", "https://example.com");
+for (const policy of ["operator_invites", "member_invites"]) {
+  test(`invite link registration completes end-to-end under ${policy}`, async ({
+    page,
+    tracedContext,
+    user,
+    mailbox,
+  }) => {
+    // Establish invitation-based registration and a base URL so invites::create can build the
+    // link (`{base_url}/register?invite_code=<code>`); it errors without a base URL.
+    await seedConfigViaTool("site.registration_policy", policy);
+    await seedConfigViaTool("site.base_url", "https://example.com");
 
-  // The operator sends an invite to this test's mailbox recipient via the
-  // /invites UI (shows a "Page not found." fallback unless operator_invites, which
-  // we just set).
-  await signInAs(page, "testoperator");
-  await goto(page, "/invites");
-  await expect(page.locator('a[href="/invites"]')).toBeVisible();
-  await page.fill('input[name="recipient_email"]', user.email);
-  await page.fill('input[name="expires_in_hours"]', "37");
-  await click(page, SEL.submit);
-  await waitForSelector(page, 'p:has-text("Invitation emailed to")');
+    // The operator sends an invite to this test's mailbox recipient via the
+    // /invites UI (shows a "Page not found." fallback unless operator_invites, which
+    // we just set).
+    await signInAs(page, "testoperator");
+    await goto(page, "/invites");
+    await expect(page.locator('a[href="/invites"]')).toBeVisible();
+    await page.fill('input[name="recipient_email"]', user.email);
+    await page.fill('input[name="expires_in_hours"]', "37");
+    await click(page, SEL.submit);
+    await waitForSelector(page, 'p:has-text("Invitation emailed to")');
 
-  // Read the invitation email and pull the code out of the link.
-  const email = await mailbox.waitForNewEmail();
-  const code = extractInviteCode(email);
+    // Read the invitation email and pull the code out of the link.
+    const email = await mailbox.waitForNewEmail();
+    const code = extractInviteCode(email);
 
-  // A fresh, logged-out visitor follows the invite link and registers. No code
-  // is typed — the register page carries it from the URL as a hidden field.
-  // Holdout (spec D6): invite-gated registration (#433) through the real UI.
-  const context = await tracedContext();
-  try {
-    const invitee = await context.newPage();
-    const firstNav = slowBrowserFirstNavigationTimeoutMs(test.info(), 15_000);
-    const username = generateUsername("invitee");
-    await goto(invitee, `/register?invite_code=${code}`, { timeout: firstNav });
-    await invitee.fill(SEL.username, username);
-    await invitee.fill(SEL.password, "testpassword123");
-    await click(invitee, SEL.submit);
+    // A fresh, logged-out visitor follows the invite link and registers. No code
+    // is typed — the register page carries it from the URL as a hidden field.
+    // Holdout (spec D6): invite-gated registration (#433) through the real UI.
+    const context = await tracedContext();
+    try {
+      const invitee = await context.newPage();
+      const firstNav = slowBrowserFirstNavigationTimeoutMs(test.info(), 15_000);
+      const username = generateUsername("invitee");
+      await goto(invitee, `/register?invite_code=${code}`, {
+        timeout: firstNav,
+      });
+      await invitee.fill(SEL.username, username);
+      await invitee.fill(SEL.password, "testpassword123");
+      await click(invitee, SEL.submit);
 
-    // Race the success marker against an explicit error so a redemption failure
-    // fails fast with its message rather than burning the whole timeout.
-    const outcome = await Promise.race([
-      invitee
-        .waitForSelector(SEL.logoutLink, { timeout: 10_000 })
-        .then(() => "ok"),
-      invitee
-        .waitForSelector(SEL.error, { timeout: 10_000 })
-        .then(() => "error"),
-    ]);
-    if (outcome === "error") {
-      const errorText = (
-        await invitee.locator(SEL.error).first().textContent()
-      )?.trim();
-      throw new Error(
-        `invite registration failed: ${errorText ?? "unknown error"}`,
-      );
+      // Race the success marker against an explicit error so a redemption failure
+      // fails fast with its message rather than burning the whole timeout.
+      const outcome = await Promise.race([
+        invitee
+          .waitForSelector(SEL.logoutLink, { timeout: 10_000 })
+          .then(() => "ok"),
+        invitee
+          .waitForSelector(SEL.error, { timeout: 10_000 })
+          .then(() => "error"),
+      ]);
+      if (outcome === "error") {
+        const errorText = (
+          await invitee.locator(SEL.error).first().textContent()
+        )?.trim();
+        throw new Error(
+          `invite registration failed: ${errorText ?? "unknown error"}`,
+        );
+      }
+    } finally {
+      await context.close();
     }
-  } finally {
-    await context.close();
-  }
-});
+  });
+}
 
 test("invite creation pending prevents duplicate dispatch", async ({
   page,
@@ -186,6 +190,59 @@ for (const policy of ["operator_invites", "member_invites"]) {
     ).toHaveCount(0);
   });
 }
+
+// The anonymous Local CTA is actionable only for direct Open registration. Invitation
+// recipients enter through their invitation URL instead of a generic dead-end action.
+for (const [policy, expectRegister] of [
+  ["closed", false],
+  ["operator_invites", false],
+  ["member_invites", false],
+  ["open", true],
+] as const) {
+  test(`Local Register CTA reflects ${policy}`, async ({ page }) => {
+    await seedConfigViaTool("site.registration_policy", policy);
+    const firstNav = slowBrowserFirstNavigationTimeoutMs(test.info(), 15_000);
+
+    await goto(page, `/?registration-policy=${policy}`, { timeout: firstNav });
+
+    await expect(page.getByRole("link", { name: "Sign in" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Register" })).toHaveCount(
+      expectRegister ? 1 : 0,
+    );
+  });
+}
+
+test("unseeded Local navigation withholds Register while policy is unresolved", async ({
+  page,
+}) => {
+  await seedConfigViaTool("site.registration_policy", "open");
+  await goto(page, "/login");
+  const release = await stallServerFn(page, "timeline/list_local_timeline");
+  const pending = page.waitForRequest((request) =>
+    request.url().includes("/api/timeline/list_local_timeline"),
+  );
+
+  await click(page, 'a[href="/"]');
+  await pending;
+  await expect(page.getByRole("link", { name: "Register" })).toHaveCount(0);
+
+  release();
+  await expect(page.getByRole("link", { name: "Sign in" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Register" })).toBeVisible();
+});
+
+test("failed unseeded Local navigation never falls back to Register", async ({
+  page,
+}) => {
+  await seedConfigViaTool("site.registration_policy", "open");
+  await goto(page, "/login");
+  await failServerFn(page, "timeline/list_local_timeline");
+
+  await click(page, 'a[href="/"]');
+
+  await expect(page.locator(SEL.error)).toBeVisible();
+  await expect(page.getByRole("link", { name: "Register" })).toHaveCount(0);
+});
 
 // Test C — policy guards: unavailable policies hide the navigation link and render the
 // client-side fallback rather than an SSR 404.

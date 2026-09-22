@@ -38,7 +38,7 @@ from delegation.
     tests.
   - Commit through `jaunder-commit`.
 
-- [ ] **2. Prove browser behavior and retained invitation entry**
+- [x] **2. Prove browser behavior and retained invitation entry**
   - Add a focused Local browser flow proving the four policy outcomes and
     observing the DOM throughout unseeded loading/failure so Register never
     flashes.
