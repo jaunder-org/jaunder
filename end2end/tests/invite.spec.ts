@@ -72,9 +72,8 @@ for (const policy of ["operator_invites", "member_invites"]) {
     await seedConfigViaTool("site.registration_policy", policy);
     await seedConfigViaTool("site.base_url", "https://example.com");
 
-    // The operator sends an invite to this test's mailbox recipient via the
-    // /invites UI (shows a "Page not found." fallback unless operator_invites, which
-    // we just set).
+    // Under either invitation policy, the operator sends an invite to this test's
+    // mailbox recipient through the /invites UI.
     await signInAs(page, "testoperator");
     await goto(page, "/invites");
     await expect(page.locator('a[href="/invites"]')).toBeVisible();
