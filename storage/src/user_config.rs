@@ -114,11 +114,15 @@ pub async fn set_default_post_format(
         .await
 }
 
-/// Generic [`UserConfigStorage`] backed by any [`Backend`] database.
+/// Backend-specific SQL fragments used by [`UserConfigStore`].
+pub(crate) trait UserConfigDialect: Backend {
+    /// Row-lock clause for state observed before mutation.
+    const FOR_UPDATE: &'static str;
+}
+
+/// Generic [`UserConfigStorage`] backed by a [`UserConfigDialect`] database.
 ///
-/// `UserConfigStorage` has no per-backend divergence (the upsert uses the shared
-/// `ON CONFLICT ... DO UPDATE` form), so there is no dialect trait — the
-/// implementation is written once here. See ADR-0019.
+/// Shared SQL remains here; the backend modules own the row-lock divergence.
 pub struct UserConfigStore<DB: Database> {
     pool: Pool<DB>,
 }
@@ -133,7 +137,7 @@ impl<DB: Database> UserConfigStore<DB> {
 #[async_trait]
 impl<DB> UserConfigStorage for UserConfigStore<DB>
 where
-    DB: Backend,
+    DB: UserConfigDialect,
     // Restated from `Backend` (supertrait where-clauses don't propagate; ADR-0019),
     // plus the lossless stored-value row decode for `get` and the query-arguments bound.
     (StoredUserConfigValue,): for<'r> sqlx::FromRow<'r, DB::Row>,

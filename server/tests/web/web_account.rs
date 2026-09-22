@@ -19,7 +19,9 @@ use crate::helpers::{
     create_operator_and_session, create_session_for, create_user_and_session, make_app, post_form,
     post_server_fn, post_server_fn_request_fixture, session_cookie,
 };
-use storage::test_support::{Backend, SeedUser, backends};
+use storage::test_support::{
+    Backend, SeedUser, backends, write_scope_with_commit_acknowledgement_loss,
+};
 
 #[derive(serde::Serialize)]
 struct CreateInviteDecodeFixture<'a> {
@@ -211,6 +213,40 @@ async fn content_license_endpoint_requires_authentication_and_persists(#[case] b
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, "\"CC-BY-4.0\"");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn content_license_commit_acknowledgement_loss_reaches_the_wire(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let write_scope = write_scope_with_commit_acknowledgement_loss(&env.write_scope());
+    let app = make_app!(&env, &env.base; override_write_scope = write_scope);
+
+    let (status, body) = post_form(
+        app,
+        <web::profile::SetContentLicense as ServerFn>::PATH,
+        "license=CC0-1.0",
+        Some(&session.cookie()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        serde_json::from_str::<MutationOutcome<()>>(&body).expect("typed mutation outcome"),
+        MutationOutcome::CommitIndeterminate(())
+    );
+    assert_eq!(
+        env.user_config()
+            .get_content_license(session.user_id)
+            .await
+            .expect("stored license"),
+        ContentLicense::Cc0_1_0
+    );
 }
 
 #[apply(backends)]

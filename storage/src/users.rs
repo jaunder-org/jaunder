@@ -351,10 +351,15 @@ pub trait UserStorage: Send + Sync {
     ) -> Result<()>;
 }
 
-/// Generic [`UserStorage`] backed by any [`Backend`] database.
+/// Backend-specific SQL fragments used by [`UserStore`].
+pub(crate) trait UserDialect: Backend {
+    /// Row-lock clause for state observed before mutation.
+    const FOR_UPDATE: &'static str;
+}
+
+/// Generic [`UserStorage`] backed by a [`UserDialect`] database.
 ///
-/// Zero backend divergence (shared SQL across `SQLite` and Postgres), so it is
-/// implemented once here; see ADR-0019.
+/// Shared SQL remains here; the backend modules own the row-lock divergence.
 pub struct UserStore<DB: Database> {
     pool: Pool<DB>,
 }
@@ -487,7 +492,7 @@ impl<DB: Database> UserStore<DB> {
 #[async_trait]
 impl<DB> UserStorage for UserStore<DB>
 where
-    DB: Backend,
+    DB: UserDialect,
     UserRecord: for<'r> sqlx::FromRow<'r, DB::Row>,
     (
         UserId,

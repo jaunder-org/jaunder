@@ -5,6 +5,7 @@ use std::ops::Deref;
 use sqlx::{AssertSqlSafe, Encode, Executor, Pool, Result, Row, Type};
 
 use crate::posts::models::{POST_RECORD_COLUMNS, PostRecord};
+use crate::posts::public_presentation::CONTENT_LICENSE_COLUMN;
 use crate::posts::store::PostDialect;
 use crate::posts::visibility;
 use crate::sql::QueryStorageExt;
@@ -158,9 +159,7 @@ fn window_sql<DB: PostDialect>(
     resolution: &visibility::ResolutionWhere,
 ) -> AssertSqlSafe<String> {
     let tags = DB::TAGS_SUBQUERY;
-    let columns = format!(
-        "{POST_RECORD_COLUMNS}, COALESCE((SELECT value FROM user_config WHERE user_id = p.user_id AND key = 'content.license'), 'all-rights-reserved') AS content_license"
-    );
+    let columns = format!("{POST_RECORD_COLUMNS}, {CONTENT_LICENSE_COLUMN}");
     AssertSqlSafe(match surface {
         FeedSurface::Site => format!(
             "WITH ranked AS (
