@@ -39,6 +39,15 @@ pub fn home_composer_toggle_presentation(collapsed: bool) -> HomeComposerToggleP
     }
 }
 
+/// Whether expanding at this offset preserves automatic-collapse eligibility.
+///
+/// Returning to the top zone earns the next automatic collapse even when the
+/// composer is still collapsed. Expanding down-page remains stable instead.
+#[must_use]
+pub fn home_composer_armed_after_expansion(scroll_y: f64) -> bool {
+    scroll_y <= REARM_Y
+}
+
 /// State changes produced by one Home document-scroll observation.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HomeComposerScrollDecision {
@@ -94,6 +103,13 @@ mod tests {
                 action: HomeComposerToggleAction::Expand,
             }
         );
+    }
+
+    #[test]
+    fn expansion_preserves_only_top_zone_rearming() {
+        assert!(home_composer_armed_after_expansion(24.0));
+        assert!(!home_composer_armed_after_expansion(24.1));
+        assert!(!home_composer_armed_after_expansion(96.0));
     }
 
     #[test]

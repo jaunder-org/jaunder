@@ -1584,9 +1584,15 @@ test("Home collapses its pristine composer at the scroll threshold", async ({
   await expect(expand).toBeVisible();
   await expect(expand).toBeFocused();
 
+  await page.evaluate(() => window.scrollTo(0, 0));
   await expand.click();
   await expect(collapse).toBeFocused();
-  await page.evaluate(() => window.scrollTo(0, 240));
+  await page.keyboard.press("PageDown");
+  await expect(expand).toBeVisible();
+
+  await expand.click();
+  await expect(collapse).toBeFocused();
+  await page.evaluate(() => window.scrollBy(0, 100));
   await expect(collapse).toBeVisible();
 
   await page.evaluate(() => window.scrollTo(0, 24));

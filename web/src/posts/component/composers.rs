@@ -657,7 +657,9 @@ pub fn InlineComposer(on_publish: Callback<()>) -> impl IntoView {
         focus_home_composer_toggle("home-composer-expand");
     });
     let expand = Callback::new(move |()| {
-        auto_collapse_armed.set(false);
+        auto_collapse_armed.set(posts::home_composer_armed_after_expansion(
+            home_scroll_offset(),
+        ));
         collapsed.set(false);
         focus_home_composer_toggle("home-composer-collapse");
     });
@@ -677,14 +679,14 @@ pub fn InlineComposer(on_publish: Callback<()>) -> impl IntoView {
     });
 
     view! {
-        <section
-            class="j-home-composer"
-            aria-label="New post"
-            on:focusin=move |_| focus_within.set(true)
-            on:focusout=move |_| focus_within.set(false)
-        >
+        <section class="j-home-composer" aria-label="New post">
             <HomeComposerToggle collapsed on_collapse=collapse on_expand=expand />
-            <div id="home-composer-body" hidden=move || collapsed.get()>
+            <div
+                id="home-composer-body"
+                hidden=move || collapsed.get()
+                on:focusin=move |_| focus_within.set(true)
+                on:focusout=move |_| focus_within.set(false)
+            >
                 <div class="j-composer">
                     <PostCreateForm
                         compact=true

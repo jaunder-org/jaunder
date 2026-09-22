@@ -69,7 +69,8 @@ pub use compose_state::{
 };
 pub use composer_collapse::{
     HomeComposerScrollDecision, HomeComposerToggleAction, HomeComposerTogglePresentation,
-    home_composer_scroll_decision, home_composer_toggle_presentation,
+    home_composer_armed_after_expansion, home_composer_scroll_decision,
+    home_composer_toggle_presentation,
 };
 pub use composer_disclosure::{
     ComposerControl, ComposerDisclosureState, audience_disclosure_value, publish_disclosure_value,
