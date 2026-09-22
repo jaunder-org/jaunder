@@ -49,6 +49,19 @@ pub fn scheduled_publication_at(
     }
 }
 
+/// The management surface that owns a Post after a confirmed editor deletion.
+///
+/// The loaded classification remains authoritative even when a Scheduled Post
+/// becomes due while its editor stays open.
+#[must_use]
+pub fn edit_delete_destination(publication: LoadedPublication) -> &'static str {
+    match publication {
+        LoadedPublication::Draft => "/drafts",
+        LoadedPublication::Scheduled(_) => "/scheduled",
+        LoadedPublication::Live(_) => "/app",
+    }
+}
+
 /// A published editor's local display value and exact original UTC instant.
 ///
 /// The original remains authoritative until the author edits the control. This
@@ -281,6 +294,17 @@ mod tests {
             published_at,
             permalink: "/~alice/2026/01/01/post".parse().unwrap(),
         }
+    }
+
+    #[test]
+    fn edit_delete_destination_uses_the_loaded_publication_state() {
+        let at = instant("2026-08-13T12:00:00Z");
+        assert_eq!(edit_delete_destination(LoadedPublication::Draft), "/drafts");
+        assert_eq!(
+            edit_delete_destination(LoadedPublication::Scheduled(at)),
+            "/scheduled"
+        );
+        assert_eq!(edit_delete_destination(LoadedPublication::Live(at)), "/app");
     }
 
     #[test]

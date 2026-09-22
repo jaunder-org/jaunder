@@ -1,4 +1,43 @@
+use client::telemetry;
+use common::{MutationOutcome, client_telemetry::ClientErrorContext};
 use leptos::prelude::*;
+
+use crate::error::WebError;
+
+/// Renders only non-confirmed mutation feedback for Post controls.
+pub(super) fn mutation_feedback<T>(
+    result: Result<MutationOutcome<T>, WebError>,
+    indeterminate_message: &'static str,
+) -> Option<AnyView> {
+    match crate::mutation_feedback::classify(result, indeterminate_message) {
+        crate::mutation_feedback::MutationFeedback::Confirmed(_) => None,
+        crate::mutation_feedback::MutationFeedback::Error(message) => {
+            Some(view! { <p class="error">{message}</p> }.into_any())
+        }
+    }
+}
+
+/// Dispatches a destructive Post action only after browser confirmation.
+///
+/// A dialog transport failure is intentionally reported through the client
+/// telemetry boundary rather than pretending the user canceled.
+pub(super) fn dispatch_after_confirm(
+    message: &str,
+    context: ClientErrorContext,
+    dispatch: impl FnOnce(),
+) {
+    match client::dialog::confirm(message) {
+        Ok(outcome) => {
+            if outcome.should_dispatch() {
+                dispatch();
+            }
+        }
+        Err(error) => {
+            let source_kind = error.source_kind();
+            telemetry::report_swallowed(telemetry::error_kind(source_kind), context, source_kind);
+        }
+    }
+}
 
 /// Register an `Effect` that runs `on_ok` with the resolved value each time `resolved`
 /// settles to a success.

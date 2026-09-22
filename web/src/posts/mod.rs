@@ -75,7 +75,8 @@ pub use composer_presentation::{
 };
 pub use edit_state::{
     EditLifecycleState, EditPublicationState, InvalidSchedule, LoadedPublication,
-    PublicationTimeEditState, edit_submit_gate, loaded_publication, scheduled_publication_at,
+    PublicationTimeEditState, edit_delete_destination, edit_submit_gate, loaded_publication,
+    scheduled_publication_at,
 };
 
 // The typed edit-route constructor is pure and host-tested in `render`, but
