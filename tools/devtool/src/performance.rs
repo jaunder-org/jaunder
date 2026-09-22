@@ -386,7 +386,13 @@ async fn measure(call: Call) -> anyhow::Result<(RawSample, u64)> {
                 }
             };
             let started = Instant::now();
-            let records = call.posts.list_published(page, &viewer, call.now).await?;
+            let records = call
+                .posts
+                .list_published(page, &viewer, call.now)
+                .await?
+                .into_iter()
+                .map(|record| record.post)
+                .collect();
             QueryResult::Timeline(records, elapsed_us(started))
         }
         Workload::OwnerHistory | Workload::PostHistory => {

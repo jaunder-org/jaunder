@@ -54,6 +54,13 @@ pub trait UserConfigStorage: Send + Sync {
         }
     }
 
+    /// Returns the effective Content License while participating in `transaction`.
+    async fn get_content_license_for_update(
+        &self,
+        transaction: &mut WriteTransaction,
+        user_id: UserId,
+    ) -> Result<ContentLicense>;
+
     /// Deletes a specific configuration key for a user.
     async fn delete(
         &self,
@@ -176,6 +183,30 @@ where
             StoredUserConfigValue(value.to_owned()),
         )
         .await
+    }
+
+    async fn get_content_license_for_update(
+        &self,
+        transaction: &mut WriteTransaction,
+        user_id: UserId,
+    ) -> Result<ContentLicense> {
+        let connection = DB::write_connection(transaction)?;
+        let sql = format!(
+            "SELECT value FROM user_config WHERE user_id = $1 AND key = $2{}",
+            DB::FOR_UPDATE
+        );
+        let row = sqlx::query_as::<_, (StoredUserConfigValue,)>(sqlx::AssertSqlSafe(sql))
+            .bind_storage(user_id)
+            .bind_storage(UserConfigKey::ContentLicense)
+            .fetch_optional(&mut *connection)
+            .await?;
+        match row {
+            None => Ok(ContentLicense::default()),
+            Some((value,)) => value
+                .into_inner()
+                .parse()
+                .map_err(|error| sqlx::Error::Decode(Box::new(error))),
+        }
     }
 
     #[tracing::instrument(

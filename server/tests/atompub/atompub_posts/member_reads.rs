@@ -54,6 +54,10 @@ async fn member_returns_native_source_with_etag(#[case] backend: Backend) {
         body.contains("# Markdown body"),
         "body should contain markdown"
     );
+    assert!(
+        !body.contains("<rights") && !body.contains("rel=\"license\""),
+        "AtomPub Member must not gain Syndication Feed rights metadata: {body}"
+    );
 }
 
 // Member responses are the wire contract consumed by pull clients, not merely mapper data.

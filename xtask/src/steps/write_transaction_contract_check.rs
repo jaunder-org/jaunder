@@ -164,6 +164,9 @@ const INTERNAL_CAPABILITY_EXCLUSIONS: &[(&str, &str)] = &[
     ("MediaStorage", "media_entry_is_reclaimable"), // read under the caller's reclaim lock
     ("MediaStorage", "reclaim_guard"), // storage-owned lease held through manager unlink
     ("MediaStorage", "lock_media_reference"), // internal serialization for filesystem reconciliation
+    ("PostStorage", "feed_affecting_post_tags_for_user"), // transaction-consistent public projection read
+    ("UserConfigStorage", "get_content_license_for_update"), // transaction-consistent effective-value read
+    ("UserStorage", "get_user_for_update"),                  // transaction-consistent User row lock
 ];
 
 /// Non-application capability bridges. Dialects execute the audited trait's

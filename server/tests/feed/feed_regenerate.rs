@@ -1,5 +1,7 @@
 use common::{
     MutationOutcome,
+    content_license::ContentLicense,
+    display_name::DisplayName,
     ids::{PostId, UserId},
     post_body::PostBody,
     post_summary::PostSummary,
@@ -23,7 +25,8 @@ use std::sync::Arc;
 use tokio::sync::Barrier;
 
 use storage::{
-    CacheCommitOutcome, FeedCacheRow, PublisherGeneration, PublisherStorage, WriteScope,
+    CacheCommitOutcome, FeedCacheRow, ProfileUpdate, PublisherGeneration, PublisherStorage,
+    WriteScope,
     test_support::{Backend, SeedRawPost, SeedUser, backends, backends_matrix, confirmed_for, fp},
 };
 
@@ -668,6 +671,173 @@ async fn regenerated_feeds_project_effective_summaries_without_changing_complete
                 }
                 _ => unreachable!("fixed feed extension"),
             }
+        }
+    }
+}
+
+/// Feed regeneration resolves the current User-wide rights state without changing
+/// authored title, summary, or rendered body projections.
+#[apply(backends)]
+#[tokio::test]
+async fn regenerated_feeds_use_current_rights_and_preserve_content_projection(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let user = SeedUser::new()
+        .seed(Arc::clone(&env.users()), env.write_scope())
+        .await;
+    let post = SeedRawPost::new(user.user_id)
+        .title("Rights title")
+        .summary("Rights summary".parse().expect("valid summary"))
+        .body(parse_post_body("Rights body remains unchanged."))
+        .seed(Arc::clone(&env.posts()), env.write_scope())
+        .await;
+
+    let paths = ["rss", "atom", "json"];
+    let mut before = Vec::new();
+    for extension in paths {
+        before.push(
+            render_feed(
+                Arc::clone(&env.publisher()),
+                Arc::clone(&env.posts()),
+                fp(&format!("/~{}/feed.{extension}", user.username)),
+            )
+            .await
+            .representation()
+            .body()
+            .to_owned(),
+        );
+    }
+
+    for (extension, body) in paths.iter().zip(&before) {
+        if *extension == "json" {
+            let feed: serde_json::Value = serde_json::from_str(body).expect("baseline JSON");
+            assert_eq!(
+                feed["items"][0]["_jaunder"]["copyright"],
+                format!("© 2026 {}", user.username),
+                "JSON falls back to Username"
+            );
+        } else {
+            assert!(
+                body.contains(&format!("{} · All Rights Reserved", user.username)),
+                "{extension} falls back to Username: {body}"
+            );
+        }
+    }
+
+    let display_name: DisplayName = "Current Author".parse().expect("valid display name");
+    let users = Arc::clone(&env.users());
+    let outcome = env
+        .write_scope()
+        .run(move |transaction| {
+            Box::pin(async move {
+                users
+                    .update_profile(
+                        transaction,
+                        user.user_id,
+                        &ProfileUpdate {
+                            display_name: Some(&display_name),
+                            bio: None,
+                        },
+                    )
+                    .await
+            })
+        })
+        .await
+        .expect("update display name");
+    confirmed_for(outcome, "update display name");
+
+    let config = Arc::clone(&env.user_config());
+    let outcome = env
+        .write_scope()
+        .run(move |transaction| {
+            Box::pin(async move {
+                config
+                    .set(
+                        transaction,
+                        user.user_id,
+                        host::config_key::UserConfigKey::ContentLicense,
+                        ContentLicense::CcBySa4_0.as_ref(),
+                    )
+                    .await
+            })
+        })
+        .await
+        .expect("update content license");
+    confirmed_for(outcome, "update content license");
+
+    for (extension, before) in paths.iter().zip(before) {
+        let after = render_feed(
+            Arc::clone(&env.publisher()),
+            Arc::clone(&env.posts()),
+            fp(&format!("/~{}/feed.{extension}", user.username)),
+        )
+        .await;
+        let body = after.representation().body();
+        if *extension != "json" {
+            assert!(
+                body.contains("Current Author · CC BY-SA 4.0"),
+                "{extension} resolves current declaration: {body}"
+            );
+        }
+        match *extension {
+            "rss" => {
+                assert!(
+                    before.contains(post.title.as_ref()),
+                    "baseline RSS retains title: {before}"
+                );
+                assert!(
+                    body.contains(post.title.as_ref()),
+                    "updated RSS retains title: {body}"
+                );
+                assert!(
+                    before.contains(post.rendered_html.as_ref()),
+                    "baseline RSS retains body: {before}"
+                );
+                assert!(
+                    body.contains(post.rendered_html.as_ref()),
+                    "updated RSS retains body: {body}"
+                );
+                assert!(
+                    !body.contains("Rights summary"),
+                    "RSS remains a complete-body surface rather than gaining summary metadata: {body}"
+                );
+            }
+            "atom" => {
+                assert!(
+                    body.contains(&xml_text(post.rendered_title.as_ref())),
+                    "Atom retains title: {body}"
+                );
+                assert!(
+                    body.contains("<summary>Rights summary</summary>"),
+                    "Atom retains summary: {body}"
+                );
+                assert!(
+                    body.contains(&xml_text(post.rendered_html.as_ref())),
+                    "Atom retains body: {body}"
+                );
+            }
+            "json" => {
+                let before: serde_json::Value =
+                    serde_json::from_str(&before).expect("baseline JSON");
+                let after: serde_json::Value = serde_json::from_str(body).expect("updated JSON");
+                assert_eq!(
+                    after["items"][0]["_jaunder"]["copyright"],
+                    format!("© 2026 Current Author")
+                );
+                assert_eq!(after["items"][0]["_jaunder"]["rights"], "CC BY-SA 4.0");
+                assert_eq!(
+                    after["items"][0]["_jaunder"]["license"]["spdx_id"],
+                    "CC-BY-SA-4.0"
+                );
+                for key in ["title", "summary", "content_html"] {
+                    assert_eq!(
+                        after["items"][0][key], before["items"][0][key],
+                        "JSON {key}"
+                    );
+                }
+            }
+            _ => unreachable!("fixed extensions"),
         }
     }
 }

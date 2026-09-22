@@ -4,17 +4,25 @@ use common::post_summary::PostSummary;
 use common::seed::{AuthoredPost, RenderedPost, TagSummary};
 use leptos::context::use_context;
 use leptos_axum::ResponseOptions;
-use storage::{PostRecord, PostTag};
+use storage::{PostRecord, PostTag, PublicPresentationPostRecord};
 
 /// Build the listing row for a **published** post. `RenderedPost::published_at` is
 /// optional, so the bail below — not the type — is what keeps a draft out of a public
 /// timeline; `listing::page_from_rows` drops the `None` (see the guard test).
 #[must_use]
-pub fn rendered_post(post: PostRecord, viewer_user_id: Option<UserId>) -> Option<RenderedPost> {
+pub fn rendered_post(
+    post: PublicPresentationPostRecord,
+    viewer_user_id: Option<UserId>,
+) -> Option<RenderedPost> {
     post.published_at?;
     let is_author = viewer_user_id == Some(post.user_id);
     let permalink = Some(post.permalink());
-    Some(rendered_post_from_record(post, is_author, permalink))
+    Some(rendered_post_from_record(
+        post.post,
+        is_author,
+        permalink,
+        Some(post.content_license),
+    ))
 }
 
 /// Translates one storage record into the shared rendered-post projection.
@@ -25,6 +33,7 @@ fn rendered_post_from_record(
     post: PostRecord,
     is_author: bool,
     permalink: Option<common::root_relative_url::RootRelativeUrl>,
+    content_license: Option<common::content_license::ContentLicense>,
 ) -> RenderedPost {
     let PostRecord {
         post_id,
@@ -43,6 +52,7 @@ fn rendered_post_from_record(
         post_id,
         username: author_username,
         display_name: author_display_name,
+        content_license,
         rendered_title,
         summary,
         slug,
@@ -83,6 +93,20 @@ pub fn effective_summary(post: &PostRecord) -> Option<PostSummary> {
 /// and the permalink is withheld from a draft, which has no public URL.
 #[must_use]
 pub fn authored_post(post: PostRecord, is_author: bool) -> AuthoredPost {
+    authored_post_from_record(post, is_author, None)
+}
+
+/// Builds a public permalink projection with the author's current Content License.
+#[must_use]
+pub fn public_authored_post(post: PublicPresentationPostRecord, is_author: bool) -> AuthoredPost {
+    authored_post_from_record(post.post, is_author, Some(post.content_license))
+}
+
+fn authored_post_from_record(
+    post: PostRecord,
+    is_author: bool,
+    content_license: Option<common::content_license::ContentLicense>,
+) -> AuthoredPost {
     // Only published posts have a public permalink. For drafts, the permalink is None.
     let permalink = post.published_at.is_some().then(|| post.permalink());
     // Metadata gets the effective projection; the rendered row below deliberately
@@ -92,7 +116,7 @@ pub fn authored_post(post: PostRecord, is_author: bool) -> AuthoredPost {
     let body = post.body.clone();
     let format = post.format;
     AuthoredPost {
-        post: rendered_post_from_record(post, is_author, permalink),
+        post: rendered_post_from_record(post, is_author, permalink, content_license),
         title,
         body,
         format,
@@ -130,6 +154,14 @@ pub fn private_post_not_found_error(error: &InternalError) -> InternalError {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "server")]
+    fn public_post(post: storage::PostRecord) -> storage::PublicPresentationPostRecord {
+        storage::PublicPresentationPostRecord {
+            post,
+            content_license: common::content_license::ContentLicense::AllRightsReserved,
+        }
+    }
+
     #[cfg(feature = "server")]
     #[test]
     fn authored_post_carries_summary_and_source() {
@@ -304,7 +336,7 @@ mod tests {
         let slug = "unpublished".parse::<Slug>().unwrap();
 
         let built = rendered_post(
-            PostRecord {
+            public_post(PostRecord {
                 author_display_name: None,
                 post_id: PostId::from(1),
                 user_id: UserId::from(2),
@@ -321,7 +353,7 @@ mod tests {
                 deleted_at: None,
                 summary: None,
                 tags: vec![],
-            },
+            }),
             Some(UserId::from(2)),
         );
         assert!(
@@ -344,7 +376,7 @@ mod tests {
 
         let time: UtcInstant = "2026-04-16T10:11:12Z".parse().unwrap();
         let timeline_post = rendered_post(
-            PostRecord {
+            public_post(PostRecord {
                 author_display_name: None,
                 post_id: PostId::from(1),
                 user_id: UserId::from(2),
@@ -361,7 +393,7 @@ mod tests {
                 deleted_at: None,
                 summary: None,
                 tags: vec![],
-            },
+            }),
             None,
         )
         .expect("published records build timeline rows");
@@ -369,5 +401,10 @@ mod tests {
         // TDD: public Post summaries retain authored-only semantics; the rendered
         // text may serve explicit metadata projections but must not become a paragraph.
         assert_eq!(timeline_post.summary, None);
+        assert_eq!(
+            timeline_post.content_license,
+            Some(common::content_license::ContentLicense::AllRightsReserved),
+            "public projections carry the wrapper's current Content License"
+        );
     }
 }

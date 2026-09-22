@@ -5,6 +5,7 @@ pub(crate) mod errors;
 pub(crate) mod lifecycle;
 pub(crate) mod media;
 pub(crate) mod models;
+pub(crate) mod public_presentation;
 pub(crate) mod store;
 pub(crate) mod syndication;
 pub(crate) mod tags;
@@ -28,11 +29,12 @@ pub use models::{
     PostRevisionDetail, PostRevisionMetadata, PostRevisionPage, PostRevisionRecord,
     PostRevisionTag, PublishUpdate, RenderedHtml, UpdatePostInput,
 };
+pub use public_presentation::PublicPresentationPostRecord;
 #[cfg(any(test, feature = "test-utils"))]
 pub use store::MockPostStorage;
 pub use store::{
     PostDialect, PostPermalinkAliasMatch, PostStorage, PostStore, fetch_post_record,
     list_by_tag_rows,
 };
-pub use syndication::GoLivePost;
+pub use syndication::{FeedAffectingPostTags, GoLivePost, SyndicationPostRecord};
 pub use tags::{PostTag, TagRecord};

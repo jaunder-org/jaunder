@@ -7,8 +7,8 @@
 
 use crate::error::WebResult;
 use common::{
-    MutationOutcome, bio::Bio, display_name::DisplayName, email::Email, render::PostFormat,
-    username::Username,
+    MutationOutcome, bio::Bio, content_license::ContentLicense, display_name::DisplayName,
+    email::Email, render::PostFormat, username::Username,
 };
 use serde::{Deserialize, Serialize};
 
@@ -16,9 +16,12 @@ use serde::{Deserialize, Serialize};
 use {
     crate::auth,
     crate::error::{InternalError, from_write_scope_error},
+    common::time::UtcInstant,
     leptos::prelude::*,
     std::sync::Arc,
-    storage::{ProfileUpdate, UserConfigStorage, UserStorage, WriteScope},
+    storage::{
+        FeedEventStorage, PostStorage, ProfileUpdate, UserConfigStorage, UserStorage, WriteScope,
+    },
 };
 
 /// Profile data returned by [`get`].
@@ -61,22 +64,28 @@ pub async fn update(
     bio: Option<Bio>,
 ) -> WebResult<MutationOutcome<()>> {
     let auth = auth::require_auth().await?;
-    let write_scope = expect_context::<WriteScope>();
     let users = expect_context::<Arc<dyn UserStorage>>();
+    let write_scope = expect_context::<WriteScope>();
+    let posts = expect_context::<Arc<dyn PostStorage>>();
+    let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
+    let now = UtcInstant::now();
     write_scope
         .run(|transaction| {
             Box::pin(async move {
-                users
-                    .update_profile(
-                        transaction,
-                        auth.user_id,
-                        &ProfileUpdate {
-                            display_name: display_name.as_ref(),
-                            bio: bio.as_ref(),
-                        },
-                    )
-                    .await
-                    .map_err(InternalError::storage)
+                storage::update_profile_with_feed_events(
+                    transaction,
+                    users.as_ref(),
+                    posts.as_ref(),
+                    feed_events.as_ref(),
+                    auth.user_id,
+                    &ProfileUpdate {
+                        display_name: display_name.as_ref(),
+                        bio: bio.as_ref(),
+                    },
+                    now,
+                )
+                .await
+                .map_err(InternalError::storage)
             })
         })
         .await
@@ -90,6 +99,50 @@ pub async fn get_default_post_format() -> WebResult<PostFormat> {
     let config = expect_context::<Arc<dyn UserConfigStorage>>();
     let format = storage::get_default_post_format(config.as_ref(), auth.user_id).await?;
     Ok(format)
+}
+
+/// Retrieves the authenticated User's current Content License.
+#[macros::server]
+pub async fn get_content_license() -> WebResult<ContentLicense> {
+    let auth = auth::require_auth().await?;
+    let config = expect_context::<Arc<dyn UserConfigStorage>>();
+    config
+        .get_content_license(auth.user_id)
+        .await
+        .map_err(InternalError::storage)
+}
+
+/// Sets the authenticated User's publication-wide Content License.
+#[macros::server(skip_all)]
+pub async fn set_content_license(license: ContentLicense) -> WebResult<MutationOutcome<()>> {
+    let auth = auth::require_auth().await?;
+    let config = expect_context::<Arc<dyn UserConfigStorage>>();
+    let users = expect_context::<Arc<dyn UserStorage>>();
+    let write_scope = expect_context::<WriteScope>();
+    let posts = expect_context::<Arc<dyn PostStorage>>();
+    let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
+    let now = UtcInstant::now();
+    write_scope
+        .run(|transaction| {
+            Box::pin(async move {
+                storage::update_content_license_with_feed_events(
+                    transaction,
+                    users.as_ref(),
+                    config.as_ref(),
+                    posts.as_ref(),
+                    feed_events.as_ref(),
+                    storage::ContentLicenseUpdate {
+                        user_id: auth.user_id,
+                        license,
+                    },
+                    now,
+                )
+                .await
+                .map_err(InternalError::storage)
+            })
+        })
+        .await
+        .map_err(from_write_scope_error)
 }
 
 /// Sets the authenticated user's default post format preference.
@@ -112,13 +165,17 @@ pub async fn set_default_post_format(format: PostFormat) -> WebResult<MutationOu
 
 #[cfg(test)]
 mod tests {
-    use super::SetDefaultPostFormat;
-    use common::render::PostFormat;
+    use super::{SetContentLicense, SetDefaultPostFormat};
+    use common::{content_license::ContentLicense, render::PostFormat};
 
     #[test]
-    fn set_default_post_format_wire_rejects_unknown_token() {
-        let ok: SetDefaultPostFormat = serde_qs::from_str("format=markdown").unwrap();
-        assert_eq!(ok.format, PostFormat::Markdown);
+    fn profile_setting_wires_reject_unknown_tokens() {
+        let format: SetDefaultPostFormat = serde_qs::from_str("format=markdown").unwrap();
+        assert_eq!(format.format, PostFormat::Markdown);
         assert!(serde_qs::from_str::<SetDefaultPostFormat>("format=bogus").is_err());
+
+        let license: SetContentLicense = serde_qs::from_str("license=CC-BY-4.0").unwrap();
+        assert_eq!(license.license, ContentLicense::CcBy4_0);
+        assert!(serde_qs::from_str::<SetContentLicense>("license=MIT").is_err());
     }
 }

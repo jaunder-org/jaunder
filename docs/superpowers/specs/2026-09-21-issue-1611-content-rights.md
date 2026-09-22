@@ -37,8 +37,9 @@ format without altering authored Post content.
   not aggregate years or rights holders into a page-level declaration.
 - Public Syndication Feed items carry equivalent rights metadata separately from
   their authored and rendered content. The exact wire contract is:
-  - Atom entries contain `<rights type="text">DECLARATION</rights>`. A Creative
-    Commons choice also adds
+  - Atom entries contain the native text construct
+    `<rights>DECLARATION</rights>`; RFC 4287 defines an omitted `type` as text.
+    A Creative Commons choice also adds
     `<link rel="license" type="text/html" href="CANONICAL_URL"/>`; All Rights
     Reserved adds no license link.
   - RSS items contain `<dc:rights>DECLARATION</dc:rights>` under

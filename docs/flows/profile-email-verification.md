@@ -14,6 +14,8 @@ Matrix: `matrix:docs/coverage/csr-e2e-matrix.md#profile-and-email-verification`
 - `endpoint:/api/profile/update`
 - `endpoint:/api/profile/get_default_post_format`
 - `endpoint:/api/profile/set_default_post_format`
+- `endpoint:/api/profile/get_content_license`
+- `endpoint:/api/profile/set_content_license`
 - `endpoint:/api/email/request_verification`
 - `endpoint:/api/email/verify`
 
@@ -22,11 +24,14 @@ display-name and bio fields from that payload, and dispatches updates through
 typed optional values so omission clears a field instead of sending a special
 sentinel. The same page also owns the persisted default post-format preference:
 it loads the saved format once, lets the user choose a new one from the
-supported editor formats, and saves only a real parsed token. The profile also
-exposes the persisted public-presentation settings. Every authenticated author
-selects `Your pages theme`, with `Site default` deleting their optional
-override; operators additionally select the site-wide `Site theme`. Each button
-writes immediately, then re-reads the persisted typed value.
+supported editor formats, and saves only a real parsed token. It also loads and
+persists the author's typed publication-wide Content License; changing that
+setting atomically schedules regeneration of every affected public Syndication
+Feed representation. The profile also exposes the persisted public-presentation
+settings. Every authenticated author selects `Your pages theme`, with
+`Site default` deleting their optional override; operators additionally select
+the site-wide `Site theme`. Each button writes immediately, then re-reads the
+persisted typed value.
 
 `/profile/email` is a direct-entry settings page. It reuses the profile payload
 to show the current email and verification status, then submits a new address

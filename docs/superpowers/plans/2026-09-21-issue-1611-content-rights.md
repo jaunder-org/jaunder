@@ -39,7 +39,7 @@ Out:
     expanded closed registry. Focused proof:
     `devtool run -- cargo xtask test-local -- -p storage user_config`.
 
-- [ ] Task 2: Make feed-visible User mutations transactional
+- [x] Task 2: Make feed-visible User mutations transactional
   - Contract: one storage-owned operation updates the Display Name or Content
     License and, only when its feed-visible value changes, derives all Site,
     User, Site Tag, and User Tag URLs from the User's currently active,
@@ -55,7 +55,7 @@ Out:
     Focused proof:
     `devtool run -- cargo xtask test-local -- -p jaunder -E 'test(/^web::profile/)'`.
 
-- [ ] Task 3: Emit the exact Syndication Feed rights contract
+- [x] Task 3: Emit the exact Syndication Feed rights contract
   - Contract: the format-neutral feed item carries immutable creation year,
     current author name with Username fallback, and typed Content License; feed
     regeneration resolves those values without changing title, summary, or
@@ -72,7 +72,7 @@ Out:
     remains authoritative. Focused proof:
     `devtool run -- cargo xtask test-local -- -p host -E 'test(/^feed::/)'`.
 
-- [ ] Task 4: Present and manage Content Rights on the web
+- [x] Task 4: Present and manage Content Rights on the web
   - Contract: `/profile` exposes the typed selector, canonical license links,
     and retroactivity warning. Every public Post renderer emits
     `© YEAR NAME · LABEL` inside the existing `post-footer` Style Contract

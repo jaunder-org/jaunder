@@ -106,6 +106,9 @@ async fn anon_user_by_tag(
         )
         .await
         .expect("list_user_posts_by_tag failed")
+        .into_iter()
+        .map(|record| record.post)
+        .collect()
 }
 
 async fn anon_published_by_user(
@@ -125,6 +128,9 @@ async fn anon_published_by_user(
         )
         .await
         .expect("list_published_by_user failed")
+        .into_iter()
+        .map(|record| record.post)
+        .collect()
 }
 
 async fn drafts_of(posts: Arc<dyn PostStorage>, user_id: UserId, limit: &str) -> Vec<PostRecord> {

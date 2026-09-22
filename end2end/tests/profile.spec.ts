@@ -1,7 +1,16 @@
 import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
-import { failServerFn, goto, signInAsNewUser } from "./helpers";
+import {
+  BASE_URL,
+  failServerFn,
+  goto,
+  signInAsNewUser,
+  waitForMount,
+} from "./helpers";
 import { navigateInApp } from "./navigate";
+import { allowSecondBoot } from "./bootBudget";
+import { fetchFeedContaining } from "./feeds";
+import { createPostViaApi } from "./posts";
 import { applySeededSession, seedUserViaTool } from "./seed";
 import { SEL } from "./selectors";
 
@@ -11,6 +20,8 @@ import { SEL } from "./selectors";
 const UPDATE_BUTTON = 'button:has-text("Update Profile")';
 const DISPLAY_NAME = 'input[name="display_name"]';
 const BIO = 'textarea[name="bio"]';
+const CONTENT_LICENSE = "select#content-license";
+const CONTENT_LICENSE_SAVE = 'button:has-text("Save Content License")';
 
 // #21: Settings is the authenticated user's in-app route to the profile page.
 // The link assertion catches a disabled or misdirected sidebar item; the router
@@ -209,6 +220,108 @@ test("failed default post format load shows an error and gates Save", async ({
 // wire arg an empty value is *omitted* (dispatched as None), not sent as an empty
 // string that would fail to decode — so emptying the field and submitting must
 // persist as cleared, and submit stays enabled (empty is a valid optional value).
+// #1611: Content License is a current, publication-wide setting. This drives
+// both server functions through the real selector, proves reload persistence,
+// and observes its retroactive public HTML and Atom Syndication Feed effect on
+// a Post that existed before the setting changed.
+test("Content License persists and updates existing public Post declarations", async ({
+  page,
+}) => {
+  const username = await signInAsNewUser(page);
+  const post = await createPostViaApi(page, {
+    body: "# Existing Content Rights Post\n\nThe authored body stays unchanged.",
+  });
+  const year = new Date().getUTCFullYear();
+  const declaration = `© ${year} Ada Current`;
+
+  await goto(page, "/profile");
+  await expect(page.locator(CONTENT_LICENSE)).toHaveValue(
+    "all-rights-reserved",
+  );
+  await expect(
+    page.getByText("This choice applies retroactively to all of your Posts."),
+  ).toBeVisible();
+
+  // A current Display Name is part of every Copyright Declaration. Profile
+  // field persistence itself has focused coverage above; this makes its public
+  // projection observable without duplicating that lower-level round trip.
+  await page.fill(DISPLAY_NAME, "Ada Current");
+  const profileUpdated = page.waitForResponse((response) =>
+    response.url().includes("profile/update"),
+  );
+  await page.click(UPDATE_BUTTON);
+  expect((await profileUpdated).ok()).toBe(true);
+
+  const defaultHtml = await page.request.get(`${BASE_URL}${post.permalink}`);
+  expect(defaultHtml.ok(), "default public permalink").toBeTruthy();
+  const defaultBody = await defaultHtml.text();
+  expect(defaultBody).toContain(`${declaration} · All Rights Reserved`);
+  expect(defaultBody).not.toContain('rel="license"');
+
+  const defaultFeed = await fetchFeedContaining(
+    page.request,
+    `${BASE_URL}/~${username}/feed.atom`,
+    `<rights>${declaration} · All Rights Reserved</rights>`,
+  );
+  expect(defaultFeed.body).toContain(
+    `<rights>${declaration} · All Rights Reserved</rights>`,
+  );
+  expect(defaultFeed.body).not.toContain('rel="license"');
+
+  await page.selectOption(CONTENT_LICENSE, "CC-BY-4.0");
+  const licenseSaved = page.waitForResponse((response) =>
+    response.url().includes("profile/set_content_license"),
+  );
+  await page.click(CONTENT_LICENSE_SAVE);
+  expect((await licenseSaved).ok()).toBe(true);
+
+  // A real document reload makes get_content_license read storage again rather
+  // than retaining the selector's client signal.
+  allowSecondBoot(
+    page,
+    "the Content License setting must survive a document reload, not merely retain its in-memory selector value",
+  );
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await waitForMount(page);
+  await expect(page.locator(CONTENT_LICENSE)).toHaveValue("CC-BY-4.0");
+
+  const ccHtml = await page.request.get(`${BASE_URL}${post.permalink}`);
+  expect(ccHtml.ok(), "Creative Commons public permalink").toBeTruthy();
+  expect(await ccHtml.text()).toContain(
+    `${declaration} · <a href="https://creativecommons.org/licenses/by/4.0/" rel="license">CC BY 4.0</a>`,
+  );
+
+  const ccFeed = await fetchFeedContaining(
+    page.request,
+    `${BASE_URL}/~${username}/feed.atom`,
+    "CC BY 4.0",
+  );
+  expect(ccFeed.body).toContain(`<rights>${declaration} · CC BY 4.0</rights>`);
+  expect(ccFeed.body).toContain(
+    '<link href="https://creativecommons.org/licenses/by/4.0/" rel="license" type="text/html"',
+  );
+});
+
+// #1611: direct-bind mutations must surface their failed acknowledgement just
+// like the adjacent profile controls rather than silently leaving the selector
+// in a misleading client-only state.
+test("failed Content License save shows mutation feedback", async ({
+  page,
+}) => {
+  await signInAsNewUser(page);
+  await goto(page, "/profile");
+  await expect(page.locator(CONTENT_LICENSE)).toHaveValue(
+    "all-rights-reserved",
+  );
+  await failServerFn(page, "profile/set_content_license");
+
+  await page.selectOption(CONTENT_LICENSE, "CC-BY-4.0");
+  await page.click(CONTENT_LICENSE_SAVE);
+  await expect(
+    page.locator(".j-card", { hasText: "Content License" }).locator("p.error"),
+  ).toBeVisible();
+});
+
 test("clearing the bio persists as empty", async ({ registeredPage }) => {
   const page = await registeredPage("/profile");
 

@@ -91,6 +91,10 @@ async fn collection_lists_user_posts(#[case] backend: Backend) {
         body.contains("rel=\"edit\""),
         "body should contain rel=edit link"
     );
+    assert!(
+        !body.contains("<rights") && !body.contains("rel=\"license\""),
+        "AtomPub Collection must not gain Syndication Feed rights metadata: {body}"
+    );
 }
 
 #[apply(backends)]

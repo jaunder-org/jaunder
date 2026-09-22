@@ -101,7 +101,7 @@ pub use api::{
 // summary builder. `authored_post` is a wire-type builder that stays in `web`;
 // the projector imports the effectful `fetch_post_record` straight from `storage`.
 #[cfg(feature = "server")]
-pub use server::{authored_post, rendered_post};
+pub use server::{authored_post, public_authored_post, rendered_post};
 
 // The wasm-only reactive UI (ADR-0070): the post widgets and the routed page
 // components (#323). Re-exported so the `pages/` router keeps

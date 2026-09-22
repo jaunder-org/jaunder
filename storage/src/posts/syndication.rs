@@ -1,11 +1,14 @@
 //! Syndication-window reads and feed catch-up projections for posts.
 
+use std::ops::Deref;
+
 use sqlx::{AssertSqlSafe, Encode, Executor, Pool, Result, Row, Type};
 
 use crate::posts::models::{POST_RECORD_COLUMNS, PostRecord};
 use crate::posts::store::PostDialect;
 use crate::posts::visibility;
 use crate::sql::QueryStorageExt;
+use common::content_license::ContentLicense;
 use common::feed::FeedSurface;
 use common::ids::{ChannelId, UserId};
 use common::tag::Tag;
@@ -30,7 +33,30 @@ pub struct GoLivePost {
     pub tag_slugs: Vec<Tag>,
 }
 
-/// Runs the hybrid-window query for `surface`, returning [`PostRecord`]s.
+/// The complete distinct tag union for a User's currently feed-visible Posts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FeedAffectingPostTags(pub Vec<Tag>);
+
+/// A Syndication Feed-specific Post projection with current User-wide rights.
+///
+/// This keeps Content License out of [`PostRecord`], whose source-oriented
+/// `AtomPub` consumers must not expose publication-rights projection data.
+#[derive(Clone, Debug, sqlx::FromRow)]
+pub struct SyndicationPostRecord {
+    #[sqlx(flatten)]
+    pub post: PostRecord,
+    pub content_license: ContentLicense,
+}
+
+impl Deref for SyndicationPostRecord {
+    type Target = PostRecord;
+
+    fn deref(&self) -> &Self::Target {
+        &self.post
+    }
+}
+
+/// Runs the hybrid-window query for `surface`, returning Syndication Feed projections.
 ///
 /// Shared across backends: the four `FeedSurface` variants differ only in the
 /// ranked-CTE source/predicate and bind list, and the JSON tag aggregation is
@@ -42,10 +68,10 @@ pub(crate) async fn list_published_in_window_rows<DB>(
     cutoff: Option<UtcInstant>,
     min_items: FeedMinItems,
     viewer: &common::visibility::ViewerIdentity,
-) -> Result<Vec<PostRecord>>
+) -> Result<Vec<SyndicationPostRecord>>
 where
     DB: PostDialect,
-    PostRecord: for<'r> sqlx::FromRow<'r, DB::Row>,
+    SyndicationPostRecord: for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> FeedMinItems: Encode<'q, DB> + Type<DB>,
     for<'q> i64: Encode<'q, DB> + Type<DB>,
     for<'q> &'q str: Encode<'q, DB> + Type<DB>,
@@ -71,7 +97,7 @@ where
             // uses the last placeholders, so the returned `next` is discarded.
             let (resolution, binds, _) = visibility::resolution_where(viewer, 4);
             let sql = window_sql::<DB>(surface, &resolution);
-            let query = sqlx::query_as::<_, PostRecord>(sql)
+            let query = sqlx::query_as::<_, SyndicationPostRecord>(sql)
                 .bind_storage(now)
                 .bind_storage(min_items)
                 .bind_storage(cutoff);
@@ -82,7 +108,7 @@ where
             // then the variant-sized ranked-CTE resolution fragment from $5.
             let (resolution, binds, _) = visibility::resolution_where(viewer, 5);
             let sql = window_sql::<DB>(surface, &resolution);
-            let query = sqlx::query_as::<_, PostRecord>(sql)
+            let query = sqlx::query_as::<_, SyndicationPostRecord>(sql)
                 .bind_storage(now)
                 .bind_storage(username)
                 .bind_storage(min_items)
@@ -94,7 +120,7 @@ where
             // the variant-sized ranked-CTE resolution fragment from $5.
             let (resolution, binds, _) = visibility::resolution_where(viewer, 5);
             let sql = window_sql::<DB>(surface, &resolution);
-            let query = sqlx::query_as::<_, PostRecord>(sql)
+            let query = sqlx::query_as::<_, SyndicationPostRecord>(sql)
                 .bind_storage(now)
                 .bind_storage(tag)
                 .bind_storage(min_items)
@@ -107,7 +133,7 @@ where
             // from $6.
             let (resolution, binds, _) = visibility::resolution_where(viewer, 6);
             let sql = window_sql::<DB>(surface, &resolution);
-            let query = sqlx::query_as::<_, PostRecord>(sql)
+            let query = sqlx::query_as::<_, SyndicationPostRecord>(sql)
                 .bind_storage(now)
                 .bind_storage(username)
                 .bind_storage(tag)
@@ -132,7 +158,9 @@ fn window_sql<DB: PostDialect>(
     resolution: &visibility::ResolutionWhere,
 ) -> AssertSqlSafe<String> {
     let tags = DB::TAGS_SUBQUERY;
-    let columns = POST_RECORD_COLUMNS;
+    let columns = format!(
+        "{POST_RECORD_COLUMNS}, COALESCE((SELECT value FROM user_config WHERE user_id = p.user_id AND key = 'content.license'), 'all-rights-reserved') AS content_license"
+    );
     AssertSqlSafe(match surface {
         FeedSurface::Site => format!(
             "WITH ranked AS (
@@ -213,6 +241,51 @@ fn window_sql<DB: PostDialect>(
  ORDER BY p.published_at DESC, p.post_id DESC",
         ),
     })
+}
+
+/// Returns the complete distinct tag union for currently public Posts by `user_id`.
+pub(crate) async fn feed_affecting_post_tags_for_user<DB>(
+    transaction: &mut crate::WriteTransaction,
+    user_id: UserId,
+    now: UtcInstant,
+) -> Result<Option<FeedAffectingPostTags>>
+where
+    DB: PostDialect,
+    for<'r> Option<Tag>: sqlx::Decode<'r, DB> + Type<DB>,
+    usize: sqlx::ColumnIndex<DB::Row>,
+    for<'q> UserId: Encode<'q, DB> + Type<DB>,
+    for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
+{
+    let connection = DB::write_connection(transaction)?;
+    let rows = sqlx::query_scalar::<_, Option<Tag>>(
+        "SELECT DISTINCT t.tag_slug
+         FROM posts p
+         LEFT JOIN post_tags pt ON pt.post_id = p.post_id
+         LEFT JOIN tags t ON t.tag_id = pt.tag_id
+         WHERE p.user_id = $1
+           AND p.published_at IS NOT NULL
+           AND p.published_at <= $2
+           AND p.deleted_at IS NULL
+           AND EXISTS (
+               SELECT 1 FROM post_audiences pa
+               JOIN target_kinds tk ON tk.kind_id = pa.target_kind_id
+               WHERE pa.post_id = p.post_id AND tk.name = 'public'
+           )
+         ORDER BY t.tag_slug",
+    )
+    .bind_storage(user_id)
+    .bind_storage(now)
+    .fetch_all(&mut *connection)
+    .await?;
+    if rows.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(FeedAffectingPostTags(
+            rows.into_iter().flatten().collect(),
+        )))
+    }
 }
 
 /// Returns the projections needed by the steady-state go-live pass.

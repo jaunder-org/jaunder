@@ -303,6 +303,13 @@ pub trait UserStorage: Send + Sync {
     /// Fetches a user record by its internal ID.
     async fn get_user(&self, user_id: UserId) -> Result<Option<UserRecord>>;
 
+    /// Fetches and locks a user record for a compound write mutation.
+    async fn get_user_for_update(
+        &self,
+        transaction: &mut WriteTransaction,
+        user_id: UserId,
+    ) -> Result<Option<UserRecord>>;
+
     /// Fetches a user record by their username.
     async fn get_user_by_username(&self, username: &Username) -> Result<Option<UserRecord>>;
 
@@ -613,6 +620,23 @@ where
         .bind_storage(user_id)
         .fetch_optional(&self.pool)
         .await
+    }
+
+    async fn get_user_for_update(
+        &self,
+        transaction: &mut WriteTransaction,
+        user_id: UserId,
+    ) -> Result<Option<UserRecord>> {
+        let connection = DB::write_connection(transaction)?;
+        let sql = format!(
+            "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at,\
+             email, email_verified, is_operator FROM users WHERE user_id = $1{}",
+            DB::FOR_UPDATE
+        );
+        sqlx::query_as::<_, UserRecord>(sqlx::AssertSqlSafe(sql))
+            .bind_storage(user_id)
+            .fetch_optional(&mut *connection)
+            .await
     }
 
     async fn get_user_by_username(&self, username: &Username) -> Result<Option<UserRecord>> {

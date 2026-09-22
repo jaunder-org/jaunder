@@ -5,6 +5,7 @@
 //! types of the media/post/tag `#[server]` fns. Pure `Serialize`/`Deserialize` data —
 //! every field is a `common` type, so this module has no `leptos`/`web_sys`/`storage` coupling.
 
+use crate::content_license::ContentLicense;
 use crate::display_name::DisplayName;
 use serde::{Deserialize, Serialize};
 
@@ -51,6 +52,9 @@ pub struct RenderedPost {
     pub post_id: PostId,
     pub username: Username,
     pub display_name: Option<DisplayName>,
+    /// Current publication-wide rights for this public presentation; absent on
+    /// author-only draft presentations.
+    pub content_license: Option<ContentLicense>,
     #[serde(deserialize_with = "render::deserialize_optional_rendered_post_title")]
     pub rendered_title: Option<RenderedPostTitle>,
     pub summary: Option<PostSummary>,
@@ -235,6 +239,7 @@ mod tests {
             post_id: PostId::from(1),
             username: "alice".parse().unwrap(),
             display_name: None,
+            content_license: None,
             rendered_title: None,
             summary: None,
             slug: "hello".parse().unwrap(),

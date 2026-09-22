@@ -25,6 +25,14 @@ pub fn render_json(meta: &FeedMetadata, items: &[FeedItem]) -> SyndicationFeedRe
             if !i.tags.is_empty() {
                 o["tags"] = json!(i.tags);
             }
+            o["_jaunder"] = json!({
+                "copyright": format!("© {} {}", i.creation_year, i.author_name),
+                "rights": i.content_license.label(),
+                "license": i.content_license.spdx_id().map_or(Value::Null, |spdx_id| json!({
+                    "spdx_id": spdx_id,
+                    "url": i.content_license.canonical_url(),
+                })),
+            });
             o
         })
         .collect();
@@ -176,6 +184,36 @@ mod tests {
         );
         assert!(value["items"][0].get("title").is_none());
         assert_eq!(value["items"][0]["content_html"], "<p>hi</p>");
+    }
+
+    #[test]
+    fn serializes_exact_jaunder_rights_extension_for_every_license() {
+        use common::content_license::ContentLicense;
+        use strum::VariantArray as _;
+
+        for &license in ContentLicense::VARIANTS {
+            let item = FeedItem {
+                creation_year: 2024,
+                author_name: "Alice Example".to_owned(),
+                content_license: license,
+                ..item(None, vec![])
+            };
+            let value: Value =
+                serde_json::from_str(render_json(&meta(None, Some("A site")), &[item]).body())
+                    .expect("JSON Feed parses");
+            assert_eq!(
+                value["items"][0]["_jaunder"],
+                json!({
+                    "copyright": "© 2024 Alice Example",
+                    "rights": license.label(),
+                    "license": license.spdx_id().map(|spdx_id| json!({
+                        "spdx_id": spdx_id,
+                        "url": license.canonical_url(),
+                    })),
+                }),
+                "rights extension for {license}"
+            );
+        }
     }
 
     #[test]

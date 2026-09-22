@@ -20,6 +20,9 @@ pub trait Backend: sqlx::Database {
     /// Value of the `db.system` span field (`"sqlite"` | `"postgres"`).
     const DB_SYSTEM: &'static str;
 
+    /// Backend-specific row-lock clause for state observed before mutation.
+    const FOR_UPDATE: &'static str;
+
     /// Borrows this backend's concrete connection from a sealed write capability.
     ///
     /// # Errors
@@ -42,6 +45,7 @@ pub(crate) trait WriteScopeFactoryBackend: Backend {
 
 impl Backend for sqlx::Sqlite {
     const DB_SYSTEM: &'static str = "sqlite";
+    const FOR_UPDATE: &'static str = "";
 
     fn write_connection(
         transaction: &mut crate::WriteTransaction,
@@ -58,6 +62,7 @@ impl WriteScopeFactoryBackend for sqlx::Sqlite {
 
 impl Backend for sqlx::Postgres {
     const DB_SYSTEM: &'static str = "postgres";
+    const FOR_UPDATE: &'static str = " FOR UPDATE";
 
     fn write_connection(
         transaction: &mut crate::WriteTransaction,

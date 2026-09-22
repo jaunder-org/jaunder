@@ -39,6 +39,9 @@ pub(super) async fn anon_by_tag(
         )
         .await
         .expect("list_posts_by_tag failed")
+        .into_iter()
+        .map(|record| record.post)
+        .collect()
 }
 
 pub(super) async fn anon_published(
@@ -56,6 +59,9 @@ pub(super) async fn anon_published(
         )
         .await
         .expect("list_published failed")
+        .into_iter()
+        .map(|record| record.post)
+        .collect()
 }
 
 pub(super) async fn open_pool(base: &TempDir) -> SqlitePool {

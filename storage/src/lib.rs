@@ -59,6 +59,7 @@ pub mod seed_theme_fixture;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 
+pub use account_mutations::*;
 pub use audiences::*;
 pub use backend::*;
 pub use backup::{

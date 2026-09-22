@@ -17,7 +17,9 @@ use common::tag::Tag;
 use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::{self, ViewerIdentity};
-use storage::{self, PostCursor, PostRecord, PostStorage, PublishedPageRequest, UserStorage};
+use storage::{
+    self, PostCursor, PostStorage, PublicPresentationPostRecord, PublishedPageRequest, UserStorage,
+};
 
 use crate::error::{InternalError, InternalResult};
 use crate::posts;
@@ -27,7 +29,7 @@ use crate::posts;
 /// The cursor is derived only after truncation and preserves the requested
 /// direction, making an opposite-order continuation unrepresentable downstream.
 pub(super) fn page_from_rows(
-    mut rows: Vec<PostRecord>,
+    mut rows: Vec<PublicPresentationPostRecord>,
     page_size: PageSize,
     viewer_user_id: Option<UserId>,
     order: TimelineOrder,
@@ -35,7 +37,9 @@ pub(super) fn page_from_rows(
     let has_more = page_size.has_more(rows.len());
     rows.truncate(page_size.page_len());
     let next_cursor = match has_more.then(|| rows.last()).flatten() {
-        Some(post) => Some(storage::wire_cursor(&storage::to_post_cursor(post, order)?)),
+        Some(post) => Some(storage::wire_cursor(&storage::to_post_cursor(
+            &post.post, order,
+        )?)),
         None => None,
     };
     let posts = rows
@@ -186,12 +190,12 @@ mod tests {
     };
     use storage::{
         EmailVerified, ListByTagError, MockPostStorage, MockUserStorage, OperatorStatus,
-        PostCursor, PostFormat, PostRecord, UserRecord,
+        PostCursor, PostFormat, PostRecord, PublicPresentationPostRecord, UserRecord,
     };
 
-    fn post(post_id: i64) -> PostRecord {
+    fn post(post_id: i64) -> PublicPresentationPostRecord {
         let now = UtcInstant::now();
-        PostRecord {
+        let post = PostRecord {
             author_display_name: None,
             post_id: PostId::from(post_id),
             user_id: UserId::from(1),
@@ -208,6 +212,10 @@ mod tests {
             deleted_at: None,
             summary: None,
             tags: vec![],
+        };
+        PublicPresentationPostRecord {
+            post,
+            content_license: common::content_license::ContentLicense::AllRightsReserved,
         }
     }
 

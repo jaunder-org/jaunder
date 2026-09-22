@@ -1,5 +1,11 @@
+use std::collections::BTreeMap;
+
+use rss::extension::Extension;
 use rss::extension::atom::{AtomExtension, Link};
+use rss::extension::dublincore::DublinCoreExtension;
 use rss::{ChannelBuilder, GuidBuilder, ItemBuilder};
+
+const CREATIVE_COMMONS_NAMESPACE: &str = "http://backend.userland.com/creativeCommonsRssModule";
 
 use crate::feed::{FeedItem, FeedMetadata, SyndicationFeedRepresentation};
 
@@ -16,7 +22,7 @@ pub fn render_rss(meta: &FeedMetadata, items: &[FeedItem]) -> SyndicationFeedRep
     let rss_items: Vec<rss::Item> = items
         .iter()
         .map(|i| {
-            ItemBuilder::default()
+            let mut item = ItemBuilder::default()
                 .title(i.visible_title.clone())
                 .link(Some(i.permalink.to_string()))
                 .description(Some(i.content_html.to_string()))
@@ -32,7 +38,32 @@ pub fn render_rss(meta: &FeedMetadata, items: &[FeedItem]) -> SyndicationFeedRep
                         .permalink(true)
                         .build(),
                 ))
-                .build()
+                .dublin_core_ext(Some(DublinCoreExtension {
+                    rights: vec![format!(
+                        "© {} {} · {}",
+                        i.creation_year,
+                        i.author_name,
+                        i.content_license.label()
+                    )],
+                    ..Default::default()
+                }))
+                .build();
+            if let Some(url) = i.content_license.canonical_url() {
+                let mut extensions = BTreeMap::new();
+                extensions.insert(
+                    CREATIVE_COMMONS_NAMESPACE.to_owned(),
+                    BTreeMap::from([(
+                        "license".to_owned(),
+                        vec![Extension {
+                            name: "creativeCommons:license".to_owned(),
+                            value: Some(url.to_owned()),
+                            ..Default::default()
+                        }],
+                    )]),
+                );
+                item.set_extensions(extensions);
+            }
+            item
         })
         .collect();
 
@@ -69,7 +100,17 @@ pub fn render_rss(meta: &FeedMetadata, items: &[FeedItem]) -> SyndicationFeedRep
         .atom_ext(Some(AtomExtension { links: atom_links }))
         .items(rss_items);
 
-    SyndicationFeedRepresentation::from_rss(builder.build().to_string())
+    let mut channel = builder.build();
+    if items
+        .iter()
+        .any(|item| item.content_license.canonical_url().is_some())
+    {
+        channel.set_namespaces(BTreeMap::from([(
+            "creativeCommons".to_owned(),
+            CREATIVE_COMMONS_NAMESPACE.to_owned(),
+        )]));
+    }
+    SyndicationFeedRepresentation::from_rss(channel.to_string())
 }
 
 #[cfg(test)]
@@ -187,6 +228,58 @@ mod tests {
         assert_eq!(channel.items().len(), 1, "empty title must retain its item");
         assert!(channel.items()[0].title().is_none());
         assert_eq!(channel.items()[0].description(), Some("<p>hi</p>"));
+    }
+
+    #[test]
+    fn serializes_rights_and_cc_license_elements_for_every_license() {
+        use common::content_license::ContentLicense;
+        use strum::VariantArray as _;
+
+        for &license in ContentLicense::VARIANTS {
+            let item = FeedItem {
+                creation_year: 2024,
+                author_name: "Alice Example".to_owned(),
+                content_license: license,
+                ..item(Some("Hello"))
+            };
+            let body = render_rss(&meta(None, Some("A site")), &[item])
+                .body()
+                .to_owned();
+            assert!(
+                body.contains("xmlns:dc=\"http://purl.org/dc/elements/1.1/\""),
+                "Dublin Core namespace for {license}: {body}"
+            );
+            assert!(
+                body.contains(&format!(
+                    "<dc:rights>© 2024 Alice Example · {}</dc:rights>",
+                    license.label()
+                )),
+                "rights for {license}: {body}"
+            );
+            if let Some(url) = license.canonical_url() {
+                assert!(
+                    body.contains(
+                        "xmlns:creativeCommons=\"http://backend.userland.com/creativeCommonsRssModule\""
+                    ),
+                    "Creative Commons namespace for {license}: {body}"
+                );
+                assert!(
+                    body.contains(&format!(
+                        "<creativeCommons:license>{url}</creativeCommons:license>"
+                    )),
+                    "license element for {license}: {body}"
+                );
+            } else {
+                assert!(
+                    !body.contains("xmlns:creativeCommons="),
+                    "ARR has no Creative Commons namespace: {body}"
+                );
+                assert!(
+                    !body.contains("creativeCommons:license"),
+                    "ARR has no license element: {body}"
+                );
+            }
+        }
     }
 
     #[test]

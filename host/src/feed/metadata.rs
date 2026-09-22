@@ -4,6 +4,7 @@ use macros::StrNewtype;
 use thiserror::Error;
 
 use common::{
+    content_license::ContentLicense,
     feed::FeedSurface,
     ids::PostId,
     post_summary::PostSummary,
@@ -120,6 +121,12 @@ pub struct FeedMetadata {
 #[derive(Debug, Clone)]
 pub struct FeedItem {
     pub id: PostId,
+    /// Immutable UTC calendar year in which the Post was created.
+    pub creation_year: i16,
+    /// The author's current Display Name, with Username fallback applied.
+    pub author_name: String,
+    /// The author's current publication-wide rights choice.
+    pub content_license: ContentLicense,
     /// Persisted inline HTML for Atom's `type="html"` title construct.
     pub rendered_title: Option<RenderedPostTitle>,
     /// Entity-decoded marker-free title for RSS and JSON Feed, omitted when empty.

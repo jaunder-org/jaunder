@@ -173,7 +173,7 @@ impl PublicProjector {
         };
         Ok(PublicPresentation {
             theme,
-            page: PageSeed::Permalink(posts::authored_post(record, false)),
+            page: PageSeed::Permalink(posts::public_authored_post(record, false)),
         })
     }
 

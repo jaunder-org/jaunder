@@ -130,6 +130,10 @@ async fn service_document_returns_200_with_app_password(#[case] backend: Backend
         body.contains("features=\"format-media-type slug\""),
         "extension features missing: {body}"
     );
+    assert!(
+        !body.contains("rights") && !body.contains("license"),
+        "Service Document must not gain Syndication Feed rights metadata: {body}"
+    );
 }
 
 #[apply(backends)]
