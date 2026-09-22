@@ -972,11 +972,26 @@ representation. In particular, explicit Atom metadata wins over a header and the
 header can supply only its absence. The authoritative invariant is
 [server-side Org metadata block canonicalization](adr/0155-server-side-org-metadata-block.md).
 
-Two Jaunder wire extensions ride the namespace `https://jaunder.org/ns/atompub`
-([ADR-0023](adr/0023-atompub-jaunder-wire-extensions.md)): a read-only `j:slug`
-on every entry — drafts and scheduled included, incoming values ignored — and
-`<j:extension version="1" features="format-media-type slug"/>` in the Service
-Document, so clients feature-detect once and degrade gracefully.
+Jaunder wire extensions ride the namespace `https://jaunder.org/ns/atompub`.
+Every Entry currently carries the read-only `j:slug` — drafts and scheduled
+included, incoming values ignored — and the Service Document advertises
+`<j:extension version="1" features="format-media-type slug"/>`
+([ADR-0023](adr/0023-atompub-jaunder-wire-extensions.md)).
+
+**Committed direction — AtomPub Post audience round-trip.** Repeated text-valued
+`j:audience` elements will carry the complete target set as canonical `public`,
+`subscribers`, `private`, or `named:<id>` tokens. Public, Subscribers, and Named
+targets compose by union and remain represented even when Public dominates
+effective visibility; Private represents the empty set and stands alone.
+Incoming Atom audience will be structured presence and win as one complete set
+over Org-header audience; omission will retain Default Audience on create and
+preserve current audience on update when no Org header supplies it. Responses
+will order Public, then Subscribers, then Named IDs ascending, and the same
+projection will enter the strong Member ETag. The Service Document will add
+feature token `audience` under version `1`; only the Jaunder namespace,
+supported version, and feature token together advertise support, and an
+explicit-audience client must refuse mutation without them
+([AtomPub Post audience round-trip](adr/drafts/atompub-post-audience-round-trip.md)).
 
 `CollectionDecl::accept` models Service Document discovery ranges with the
 closed `CollectionAccept` type, separately from concrete uploaded-media
@@ -2640,6 +2655,13 @@ validated alternate outcome per Member. Neither URL is reconstructed
 client-side, so the server stays authoritative about URL layout
 ([ADR-0045](adr/0045-emacs-media-content-src.md)).
 
+**Committed direction — audience mapping.** The response reader will also
+harvest the complete repeated `j:audience` set. The Org mapper will carry
+repeated local `JAUNDER_AUDIENCE` properties into the Entry IR; pull will
+synthesize them in canonical order, and reconciliation will treat audience as
+mutable Post state
+([AtomPub Post audience round-trip](adr/drafts/atompub-post-audience-round-trip.md)).
+
 A body-level relative Org `file` link whose filesystem path ends in `.org` is a
 **Local Post Link candidate** and is claimed before media. It becomes a **Local
 Post Link** only after its suffix, path, local identity, and Member identity
@@ -2671,7 +2693,12 @@ The client also probes the AtomPub service document for the
 [ADR-0023](adr/0023-atompub-jaunder-wire-extensions.md) defines; the probe is
 cached per base URL and, when `format-media-type` is absent, emits one
 suppressible warning per session per blog rather than blocking the publish
-(`elisp/jaunder-service.el:32`, `:69`).
+(`elisp/jaunder-service.el:32`, `:69`). **Committed direction:** an explicit
+local audience will be stricter: a foreign-namespace extension, unsupported or
+missing version, or missing `audience` feature will fail before any Post or
+Media mutation because an older Atom processor may ignore the foreign element
+and publish with unintended visibility
+([AtomPub Post audience round-trip](adr/drafts/atompub-post-audience-round-trip.md)).
 
 ### Publish orchestration
 

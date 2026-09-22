@@ -869,6 +869,25 @@ Body";
     }
 
     #[test]
+    fn structured_audience_replaces_the_complete_org_header_set() {
+        let structured = vec![
+            AudienceTarget::Subscribers,
+            AudienceTarget::Named(AudienceId::from(9)),
+        ];
+        let normalized = normalize_org(
+            "#+PROPERTY: JAUNDER_AUDIENCE public\n#+PROPERTY: JAUNDER_AUDIENCE named:42\nBody",
+            OrgStructuredMetadata {
+                audiences: Presence::Present(structured.clone()),
+                ..OrgStructuredMetadata::default()
+            },
+            OrgOperation::Create,
+            clock(),
+        )
+        .expect("both audience sources are valid");
+        assert_eq!(normalized.metadata.audiences, Presence::Present(structured));
+    }
+
+    #[test]
     fn validates_bookkeeping_grammar_duplicates_and_operation_identity() {
         let normalized = normalize(
             "#+PROPERTY: JAUNDER_FORMAT org\n#+PROPERTY: JAUNDER_SLUG example\n#+PROPERTY: JAUNDER_DATE_UTC 2026-08-26T12:00:00+00:00\nBody",

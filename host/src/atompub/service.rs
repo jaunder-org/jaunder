@@ -87,7 +87,7 @@ pub fn render_service_document(doc: &ServiceDocument) -> String {
     // server understands so clients can detect support before relying on them.
     let mut ext = BytesStart::new("j:extension");
     ext.push_attribute(("version", "1"));
-    ext.push_attribute(("features", "format-media-type slug"));
+    ext.push_attribute(("features", "format-media-type slug audience"));
     let _ = writer.write_event(Event::Empty(ext));
 
     write_collection(&mut writer, &doc.posts_collection);
@@ -220,7 +220,7 @@ mod tests {
             "out: {out}"
         );
         assert!(
-            out.contains(r#"<j:extension version="1" features="format-media-type slug""#),
+            out.contains(r#"<j:extension version="1" features="format-media-type slug audience""#),
             "out: {out}"
         );
     }
