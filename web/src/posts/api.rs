@@ -687,24 +687,54 @@ pub async fn create(post: PostInputs) -> WebResult<MutationOutcome<ClassifiedSav
 
 #[cfg(feature = "server")]
 async fn public_post_presentation(
-    post: PostRecord,
+    post: storage::PublicPresentationPostRecord,
     is_author: bool,
+    route: &common::theme::PublicThemeRoute,
+    fetched_at: UtcInstant,
+) -> crate::error::InternalResult<PublicPresentation<AuthoredPostSnapshot>> {
+    let user_id = post.user_id;
+    post_presentation(
+        server::public_authored_post(post, is_author),
+        user_id,
+        route,
+        fetched_at,
+    )
+    .await
+}
+
+#[cfg(feature = "server")]
+async fn author_post_presentation(
+    post: PostRecord,
+    route: &common::theme::PublicThemeRoute,
+    fetched_at: UtcInstant,
+) -> crate::error::InternalResult<PublicPresentation<AuthoredPostSnapshot>> {
+    let user_id = post.user_id;
+    post_presentation(
+        server::authored_post(post, true),
+        user_id,
+        route,
+        fetched_at,
+    )
+    .await
+}
+
+#[cfg(feature = "server")]
+async fn post_presentation(
+    post: AuthoredPost,
+    user_id: common::ids::UserId,
     route: &common::theme::PublicThemeRoute,
     fetched_at: UtcInstant,
 ) -> crate::error::InternalResult<PublicPresentation<AuthoredPostSnapshot>> {
     let themes = expect_context::<Arc<dyn ThemeStorage>>();
     let theme = storage::resolve_public_theme(
-        storage::PublicThemeOwner::Author(post.user_id),
+        storage::PublicThemeOwner::Author(user_id),
         route,
         themes.as_ref(),
     )
     .await?;
     Ok(PublicPresentation {
         theme,
-        page: AuthoredPostSnapshot {
-            post: server::authored_post(post, is_author),
-            fetched_at,
-        },
+        page: AuthoredPostSnapshot { post, fetched_at },
     })
 }
 
@@ -751,7 +781,7 @@ pub async fn get(
         .await?
         .ok_or_else(server::not_found_error)?;
 
-    public_post_presentation(post, true, &theme_route, now).await
+    author_post_presentation(post, &theme_route, now).await
 }
 
 /// Retrieves a Post and a same-response time snapshot for its authenticated
@@ -1214,6 +1244,7 @@ mod tests {
             post_id: PostId::from(1),
             username: parse_username("alice"),
             display_name: Some(parse_display_name("Ada Lovelace")),
+            content_license: Some(common::content_license::ContentLicense::CcBy4_0),
             rendered_title: Some(common::test_support::rendered_post_title("T")),
             summary: None,
             slug: "hello".parse::<Slug>().unwrap(),
@@ -1230,6 +1261,10 @@ mod tests {
         assert_eq!(
             round_tripped.display_name,
             Some(parse_display_name("Ada Lovelace"))
+        );
+        assert!(
+            json.contains("\"content_license\":\"CC-BY-4.0\""),
+            "RenderedPost must carry public rights data over the wire: {json}"
         );
         assert!(
             !json.contains("\"is_draft\""),
@@ -1396,23 +1431,26 @@ mod tests {
         let slug = "titleless-note".parse::<Slug>().unwrap();
 
         let summary = rendered_post(
-            PostRecord {
-                author_display_name: None,
-                post_id: PostId::from(1),
-                user_id: UserId::from(2),
-                author_username: parse_username("author"),
-                title: None,
-                rendered_title: None,
-                slug,
-                body: parse_post_body("Titleless note"),
-                format: PostFormat::Markdown,
-                rendered_html: common::test_support::rendered_html("<p>Titleless note</p>"),
-                created_at: base_time,
-                updated_at: base_time,
-                published_at: Some(base_time),
-                deleted_at: None,
-                summary: None,
-                tags: vec![],
+            storage::PublicPresentationPostRecord {
+                post: PostRecord {
+                    author_display_name: None,
+                    post_id: PostId::from(1),
+                    user_id: UserId::from(2),
+                    author_username: parse_username("author"),
+                    title: None,
+                    rendered_title: None,
+                    slug,
+                    body: parse_post_body("Titleless note"),
+                    format: PostFormat::Markdown,
+                    rendered_html: common::test_support::rendered_html("<p>Titleless note</p>"),
+                    created_at: base_time,
+                    updated_at: base_time,
+                    published_at: Some(base_time),
+                    deleted_at: None,
+                    summary: None,
+                    tags: vec![],
+                },
+                content_license: common::content_license::ContentLicense::AllRightsReserved,
             },
             None,
         )

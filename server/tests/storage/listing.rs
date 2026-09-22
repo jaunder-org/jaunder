@@ -92,7 +92,7 @@ async fn anon_user_by_tag(
     user_id: UserId,
     tag: &Tag,
     limit: &str,
-) -> Vec<PostRecord> {
+) -> Vec<storage::PublicPresentationPostRecord> {
     posts
         .list_user_posts_by_tag(
             user_id,
@@ -112,7 +112,7 @@ async fn anon_published_by_user(
     posts: Arc<dyn PostStorage>,
     username: &Username,
     limit: &str,
-) -> Vec<PostRecord> {
+) -> Vec<storage::PublicPresentationPostRecord> {
     posts
         .list_published_by_user(
             username,

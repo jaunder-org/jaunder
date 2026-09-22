@@ -14,11 +14,11 @@ use thiserror::Error;
 use crate::feed::{FeedItem, FeedMetadata};
 
 /// RSS serializer wire-layout revision. Increment when RSS bytes can change.
-pub const RSS_SERIALIZER_REVISION: u16 = 2;
+pub const RSS_SERIALIZER_REVISION: u16 = 3;
 /// Atom serializer wire-layout revision. Increment when Atom bytes can change.
-pub const ATOM_SERIALIZER_REVISION: u16 = 2;
+pub const ATOM_SERIALIZER_REVISION: u16 = 3;
 /// JSON Feed serializer wire-layout revision. Increment when JSON Feed bytes can change.
-pub const JSON_SERIALIZER_REVISION: u16 = 2;
+pub const JSON_SERIALIZER_REVISION: u16 = 3;
 
 /// A validated, persisted digest of a Syndication Feed's semantic serializer inputs.
 ///
@@ -139,6 +139,9 @@ fn semantic_fingerprint_with_revision(
     write_bytes(&mut hasher, &(items.len() as u64).to_be_bytes());
     for item in items {
         write_bytes(&mut hasher, &i64::from(item.id).to_be_bytes());
+        write_bytes(&mut hasher, &item.creation_year.to_be_bytes());
+        write_string(&mut hasher, &item.author_name);
+        write_string(&mut hasher, item.content_license.as_ref());
         write_optional_string(&mut hasher, item.rendered_title.as_ref().map(AsRef::as_ref));
         write_optional_string(&mut hasher, item.visible_title.as_deref());
         write_string(&mut hasher, item.permalink.as_ref());
@@ -243,6 +246,9 @@ mod tests {
     fn item(id: i64) -> FeedItem {
         FeedItem {
             id: PostId::from(id),
+            creation_year: 2026,
+            author_name: "Alice".to_owned(),
+            content_license: common::content_license::ContentLicense::default(),
             rendered_title: Some(common::render::sanitize_post_title("Title")),
             visible_title: Some("Title".to_owned()),
             permalink: parse_url(format!("https://example.com/{id}").as_str()),
@@ -302,8 +308,11 @@ mod tests {
             |metadata| metadata.self_url = parse_url("https://example.com/other.atom"),
             |metadata| metadata.hub_url = None,
         ];
-        let item_mutations: [fn(&mut FeedItem); 9] = [
+        let item_mutations: [fn(&mut FeedItem); 12] = [
             |item| item.id = PostId::from(9),
+            |item| item.creation_year = 2025,
+            |item| item.author_name = "Bob".to_owned(),
+            |item| item.content_license = common::content_license::ContentLicense::CcBy4_0,
             |item| item.rendered_title = None,
             |item| item.visible_title = None,
             |item| item.permalink = parse_url("https://example.com/other"),

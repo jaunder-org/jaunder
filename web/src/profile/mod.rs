@@ -14,7 +14,8 @@ mod component;
 mod page_state;
 
 pub use api::{
-    Data, Get, GetDefaultPostFormat, SetDefaultPostFormat, Update, get, get_default_post_format,
+    Data, Get, GetContentLicense, GetDefaultPostFormat, SetContentLicense, SetDefaultPostFormat,
+    Update, get, get_content_license, get_default_post_format, set_content_license,
     set_default_post_format, update,
 };
 #[cfg(target_arch = "wasm32")]

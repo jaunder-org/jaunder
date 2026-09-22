@@ -79,6 +79,7 @@ fn fixture_post() -> anyhow::Result<RenderedPost> {
                 .parse()
                 .context("thumbnail fixture display name is valid")?,
         ),
+        content_license: None,
         rendered_title: Some(host::render::render_title(
             &"A calm place to read"
                 .parse()

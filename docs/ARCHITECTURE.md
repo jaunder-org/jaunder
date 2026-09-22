@@ -490,6 +490,16 @@ The source and rendered forms feed deliberately separate serialization surfaces
 — Syndication Feeds consume presentation projections, while the AtomPub
 Collection preserves native source — detailed in the Protocols section
 ([ADR-0015](adr/0015-atompub-serialization-surfaces.md)).
+
+**Content rights follow the User's current publication-wide setting.** Every
+User has one closed Content License: All Rights Reserved by default, CC0, or one
+of the six Creative Commons 4.0 licenses identified by its official SPDX
+identifier and canonical URL. The setting applies retroactively to every Post;
+there is no per-Post override or snapshot. A public Post's Copyright Declaration
+combines its immutable creation year with the author's current Display Name (or
+Username fallback) and current Content License
+([user-wide current Content Rights decision](adr/drafts/user-wide-current-content-rights.md)).
+
 `storage/src/posts/models.rs::PostRecord` carries both body forms, both title
 forms, `Slug`, summary, tags, and
 `created_at`/`updated_at`/`published_at`/`deleted_at`.
@@ -869,11 +879,20 @@ roles existed.
 
 Public read-only feeds serve arbitrary feed readers, so every item carries the
 post's `rendered_html` — Atom `type="html"` and the RSS/JSON Feed equivalents
-([ADR-0015](adr/0015-atompub-serialization-surfaces.md)). Titled Atom entries
-use the persisted Rendered Title as an HTML text construct; RSS and JSON Feed
-use an `ammonia`-stripped, `html-escape`-decoded plain-text projection so
-secondary Markdown, Org, or HTML syntax never leaks into their plain-text title
-fields. AtomPub, slugs, and document metadata continue to use the authored title
+([ADR-0015](adr/0015-atompub-serialization-surfaces.md)). Each item also carries
+its Copyright Declaration independently of authored and rendered Post content:
+Atom uses native rights and license fields, RSS uses namespaced item fields, and
+JSON Feed uses a `_jaunder` item extension. AtomPub remains unchanged. A User
+Content License or Display Name mutation atomically enqueues every affected
+Site, Site Tag, User, and User Tag feed event; enqueue failure fails the same
+mutation, and the existing publisher generation gate regenerates those
+representations before duplicate-safe, at-least-once WebSub publication
+([user-wide current Content Rights decision](adr/drafts/user-wide-current-content-rights.md)).
+Titled Atom entries use the persisted Rendered Title as an HTML text construct;
+RSS and JSON Feed use an `ammonia`-stripped, `html-escape`-decoded plain-text
+projection so secondary Markdown, Org, or HTML syntax never leaks into their
+plain-text title fields. AtomPub, slugs, and document metadata continue to use
+the authored title
 ([persisted Rendered Title decision](adr/0204-persist-inline-rendered-post-titles.md)).
 Atom `<summary>` and JSON Feed `summary` carry the authored summary when
 present, otherwise the host-owned rendered-body fallback; RSS descriptions and

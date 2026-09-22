@@ -6,6 +6,7 @@ use axum::{
 };
 use clap::Parser;
 use common::{
+    content_license::ContentLicense,
     display_name::DisplayName,
     email::Email,
     invite::InviteTtlHours,
@@ -17,7 +18,11 @@ use common::{
     username::Username,
     visibility::ViewerIdentity,
 };
-use host::{config_key::SiteConfigKey, feed::FeedEventPhase, password::Password};
+use host::{
+    config_key::{SiteConfigKey, UserConfigKey},
+    feed::FeedEventPhase,
+    password::Password,
+};
 use jaunder::cli::{Cli, Commands, DeadLetterAction, StorageArgs, WebsubAction};
 use jaunder::commands::{
     CommandOutput, ServeCapturePaths, app_password_create, cmd_backup, cmd_init, cmd_restore,
@@ -150,6 +155,54 @@ impl InitializedCommandEnv {
             _postgres: postgres,
         }
     }
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn content_license_persists_after_closing_and_reopening(#[case] backend: Backend) {
+    let env = InitializedCommandEnv::new(backend).await;
+    let args = env.args;
+    let user_id = {
+        let factory = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
+            .await
+            .expect("open database");
+        let user_id = SeedUser::new()
+            .seed(factory.users(), factory.write_scope())
+            .await
+            .user_id;
+        let user_config = factory.user_config();
+        confirmed(
+            factory
+                .write_scope()
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        user_config
+                            .set(
+                                transaction,
+                                user_id,
+                                UserConfigKey::ContentLicense,
+                                ContentLicense::CcByNcSa4_0.as_ref(),
+                            )
+                            .await
+                    })
+                })
+                .await
+                .expect("store content license"),
+        );
+        user_id
+    };
+
+    let reopened = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
+        .await
+        .expect("reopen database");
+    assert_eq!(
+        reopened
+            .user_config()
+            .get_content_license(user_id)
+            .await
+            .expect("read reopened content license"),
+        ContentLicense::CcByNcSa4_0
+    );
 }
 
 fn uninitialized_storage_args(backend: Backend, base: &TempDir) -> StorageArgs {
@@ -1478,6 +1531,63 @@ async fn cmd_restore_classifies_malformed_format_as_invalid_backup(#[case] backe
         Some(BackupError::InvalidBackup(_))
     ));
     assert_target_unmodified(&target_args).await;
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn cmd_restore_reports_invalid_content_license_and_typed_reads_fail_closed(
+    #[case] backend: Backend,
+) {
+    let source_env = InitializedCommandEnv::new(backend).await;
+    let source_args = source_env.args;
+    let ids = populate_backup_fixture(&source_args).await;
+    let backup_path = source_env.base.path().join("backup");
+    cmd_backup(
+        &source_args,
+        BackupMode::Directory,
+        Some(backup_path.clone()),
+    )
+    .await
+    .expect("backup");
+
+    let user_config_path = backup_path.join("db/user_config.ndjson");
+    let rewritten = std::fs::read_to_string(&user_config_path)
+        .expect("read user config backup rows")
+        .lines()
+        .map(|line| {
+            let mut row: serde_json::Value =
+                serde_json::from_str(line).expect("parse user config backup row");
+            if row["key"] == "content.license" {
+                row["value"] = serde_json::json!("MIT");
+            }
+            serde_json::to_string(&row).expect("serialize user config backup row")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&user_config_path, format!("{rewritten}\n"))
+        .expect("write invalid content license backup row");
+
+    let target_env = InitializedCommandEnv::new(backend).await;
+    let target_args = target_env.args;
+    let outcome = cmd_restore(&target_args, &backup_path)
+        .await
+        .expect("restore validates malformed content license");
+    assert!(outcome.validation_report.issues().iter().any(|issue| {
+        issue.table == "user_config"
+            && issue.column == "value"
+            && issue.value_class == "user config value"
+    }));
+    let factory =
+        open_existing_database(&target_args.db, &storage::StorageRuntimeConfig::default())
+            .await
+            .expect("open restored database");
+    assert!(
+        factory
+            .user_config()
+            .get_content_license(ids.author)
+            .await
+            .is_err()
+    );
 }
 
 #[apply(backends)]

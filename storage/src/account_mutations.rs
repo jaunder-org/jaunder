@@ -7,25 +7,140 @@
 //! each flow so the composition root does not leak into application code.
 
 use common::{
+    content_license::ContentLicense,
     display_name::DisplayName,
     ids::UserId,
     session_label::SessionLabel,
     token::{RawToken, TokenHash},
     username::Username,
 };
-use host::{invite::InviteCode, passkey::Credential, password::Password};
+use host::{
+    config_key::UserConfigKey, feed, invite::InviteCode, passkey::Credential, password::Password,
+};
 use thiserror::Error;
 
 use crate::users;
 use crate::{
-    CreateUserError, InviteStorage, OperatorStatus, PasskeyCredentialId, PasskeyStorage,
-    PasswordResetStorage, SessionStorage, UserStorage, WriteTransaction,
+    CreateUserError, FeedEventError, FeedEventStorage, InviteStorage, OperatorStatus,
+    PasskeyCredentialId, PasskeyStorage, PasswordResetStorage, PostStorage, ProfileUpdate,
+    SessionStorage, UserConfigStorage, UserStorage, WriteTransaction,
 };
 
 /// Errors returned by the cross-store Passkey mutation primitives.
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct PasskeyMutationError(#[from] pub sqlx::Error);
+
+/// Enqueues every feed affected by a changed User-level public projection.
+async fn enqueue_user_feed_events(
+    transaction: &mut WriteTransaction,
+    posts: &dyn PostStorage,
+    feed_events: &dyn FeedEventStorage,
+    user_id: UserId,
+    username: &Username,
+    now: common::time::UtcInstant,
+) -> Result<(), sqlx::Error> {
+    let Some(tags) = posts
+        .feed_affecting_post_tags_for_user(transaction, user_id, now)
+        .await?
+    else {
+        return Ok(());
+    };
+    let paths = feed::affected_feed_urls(username, tags.0.iter());
+    feed_events
+        .enqueue_many(transaction, &paths)
+        .await
+        .map_err(|error| match error {
+            FeedEventError::Db(error) => error,
+        })
+}
+
+/// Updates a profile and atomically enqueues events when its Display Name changes.
+///
+/// # Errors
+///
+/// Returns an error if the locked User read, profile update, affected-Post read,
+/// or feed-event enqueue fails. The caller's write scope then rolls back the mutation.
+pub async fn update_profile_with_feed_events(
+    transaction: &mut WriteTransaction,
+    users: &dyn UserStorage,
+    posts: &dyn PostStorage,
+    feed_events: &dyn FeedEventStorage,
+    user_id: UserId,
+    update: &ProfileUpdate<'_>,
+    now: common::time::UtcInstant,
+) -> Result<(), sqlx::Error> {
+    let user = users
+        .get_user_for_update(transaction, user_id)
+        .await?
+        .ok_or(sqlx::Error::RowNotFound)?;
+    let changed = user.display_name != update.display_name.cloned();
+    users.update_profile(transaction, user_id, update).await?;
+    if changed {
+        enqueue_user_feed_events(
+            transaction,
+            posts,
+            feed_events,
+            user_id,
+            &user.username,
+            now,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// One requested User-wide Content License mutation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ContentLicenseUpdate {
+    pub user_id: UserId,
+    pub license: ContentLicense,
+}
+
+/// Updates Content License and atomically enqueues events when it semantically changes.
+///
+/// # Errors
+///
+/// Returns an error if the locked User/configuration read, configuration update,
+/// affected-Post read, or feed-event enqueue fails. The caller's write scope then
+/// rolls back the mutation.
+pub async fn update_content_license_with_feed_events(
+    transaction: &mut WriteTransaction,
+    users: &dyn UserStorage,
+    user_config: &dyn UserConfigStorage,
+    posts: &dyn PostStorage,
+    feed_events: &dyn FeedEventStorage,
+    update: ContentLicenseUpdate,
+    now: common::time::UtcInstant,
+) -> Result<(), sqlx::Error> {
+    let user = users
+        .get_user_for_update(transaction, update.user_id)
+        .await?
+        .ok_or(sqlx::Error::RowNotFound)?;
+    let current = user_config
+        .get_content_license_for_update(transaction, update.user_id)
+        .await?;
+    user_config
+        .set(
+            transaction,
+            update.user_id,
+            UserConfigKey::ContentLicense,
+            update.license.as_ref(),
+        )
+        .await?;
+    if current != update.license {
+        enqueue_user_feed_events(
+            transaction,
+            posts,
+            feed_events,
+            update.user_id,
+            &user.username,
+            now,
+        )
+        .await?;
+    }
+    Ok(())
+}
 
 /// Applies a verified Passkey assertion, records credential use, and creates its
 /// ordinary `Session` in the same caller-owned transaction.

@@ -26,7 +26,7 @@ pub(super) async fn anon_by_tag(
     posts: Arc<dyn storage::PostStorage>,
     tag: &Tag,
     limit: &str,
-) -> Vec<storage::PostRecord> {
+) -> Vec<storage::PublicPresentationPostRecord> {
     posts
         .list_posts_by_tag(
             tag,
@@ -44,7 +44,7 @@ pub(super) async fn anon_by_tag(
 pub(super) async fn anon_published(
     posts: Arc<dyn storage::PostStorage>,
     limit: &str,
-) -> Vec<storage::PostRecord> {
+) -> Vec<storage::PublicPresentationPostRecord> {
     posts
         .list_published(
             storage::PublishedPageRequest::first(

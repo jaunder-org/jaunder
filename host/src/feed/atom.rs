@@ -54,6 +54,20 @@ pub fn render_atom(
                 rel: "alternate".to_string(),
                 ..Default::default()
             }];
+            if let Some(url) = i.content_license.canonical_url() {
+                entry.links.push(Link {
+                    href: url.to_owned(),
+                    rel: "license".to_owned(),
+                    mime_type: Some("text/html".to_owned()),
+                    ..Default::default()
+                });
+            }
+            entry.rights = Some(Text::plain(format!(
+                "© {} {} · {}",
+                i.creation_year,
+                i.author_name,
+                i.content_license.label()
+            )));
             entry.content = Some(Content {
                 content_type: Some("html".to_string()),
                 value: Some(i.content_html.to_string()),
@@ -256,6 +270,44 @@ mod tests {
         let out =
             render_atom(&meta(None, Some("A site")), &[item()]).expect("canonical timestamps");
         assert!(out.body().contains("term=\"rust\""));
+    }
+
+    #[test]
+    fn serializes_rights_and_cc_license_links_for_every_license() {
+        use common::content_license::ContentLicense;
+        use strum::VariantArray as _;
+
+        for &license in ContentLicense::VARIANTS {
+            let item = FeedItem {
+                creation_year: 2024,
+                author_name: "Alice Example".to_owned(),
+                content_license: license,
+                ..item()
+            };
+            let body = render_atom(&meta(None, Some("A site")), &[item])
+                .expect("canonical timestamps")
+                .body()
+                .to_owned();
+            assert!(
+                body.contains(&format!(
+                    "<rights>© 2024 Alice Example · {}</rights>",
+                    license.label()
+                )),
+                "rights for {license}: {body}"
+            );
+            match license.canonical_url() {
+                Some(url) => assert!(
+                    body.contains(&format!(
+                        "<link href=\"{url}\" rel=\"license\" type=\"text/html\"/>"
+                    )),
+                    "license link for {license}: {body}"
+                ),
+                None => assert!(
+                    !body.contains("rel=\"license\""),
+                    "ARR has no license link: {body}"
+                ),
+            }
+        }
     }
 
     #[test]

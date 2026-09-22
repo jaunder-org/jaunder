@@ -156,6 +156,8 @@ pub(crate) fn permalink_article(post: &RenderedPost) -> Markup {
         post_id: post.post_id,
         username: &post.username,
         display_name: post.display_name.as_ref(),
+        content_license: post.content_license,
+        created_at: post.created_at,
         rendered_title: post.rendered_title.as_ref(),
         banner: None,
         summary: post.summary.as_ref(),
@@ -178,6 +180,8 @@ fn render_posts(posts: &[RenderedPost], tag_ctx: &TagCtx) -> Markup {
                 post_id: post.post_id,
                 username: &post.username,
                 display_name: post.display_name.as_ref(),
+                content_license: post.content_license,
+                created_at: post.created_at,
                 rendered_title: post.rendered_title.as_ref(),
                 banner: None,
                 summary: post.summary.as_ref(),
@@ -197,6 +201,8 @@ pub(crate) struct PostView<'a> {
     pub post_id: PostId,
     pub username: &'a Username,
     pub display_name: Option<&'a DisplayName>,
+    pub content_license: Option<common::content_license::ContentLicense>,
+    pub created_at: common::time::UtcInstant,
     pub rendered_title: Option<&'a RenderedPostTitle>,
     pub banner: Option<&'a str>,
     pub summary: Option<&'a PostSummary>,
@@ -263,7 +269,30 @@ pub(crate) fn post_content(view: &PostView) -> Markup {
         div class="j-post-body" data-jaunder-part="post-body" { (Markup::from_rendered_html(view.rendered_html)) }
         footer class="j-post-foot" data-jaunder-part="post-footer" {
             (taglist::render(view.tags, view.tag_ctx))
+            @if let Some(license) = view.content_license {
+                (copyright_declaration(view.created_at, view.display_name, view.username, license))
+            }
             span class="j-spacer" {}
+        }
+    })
+}
+
+fn copyright_declaration(
+    created_at: common::time::UtcInstant,
+    display_name: Option<&DisplayName>,
+    username: &Username,
+    license: common::content_license::ContentLicense,
+) -> Markup {
+    let year = jiff::tz::Offset::UTC.to_datetime(created_at.value()).year();
+    let name = display_name.map_or(username.as_ref(), AsRef::as_ref);
+    Markup::new(html! {
+        span {
+            "© " (year) " " (name) " · "
+            @if let Some(url) = license.canonical_url() {
+                a href=(url) rel="license" { (license.label()) }
+            } @else {
+                (license.label())
+            }
         }
     })
 }
@@ -363,6 +392,7 @@ pub(crate) mod test_fixtures {
                 post_id: PostId::from(7),
                 username: parse_username("alice"),
                 display_name: None,
+                content_license: None,
                 rendered_title: Some(common::test_support::rendered_post_title(
                     "Hello &amp; &lt;World&gt;",
                 )),
@@ -390,6 +420,7 @@ pub(crate) mod test_fixtures {
             post_id: PostId::from(1),
             username: parse_username("bob"),
             display_name: None,
+            content_license: None,
             rendered_title: Some(common::test_support::rendered_post_title("First")),
             summary: Some(parse_post_summary("An excerpt")),
             slug: "first".parse().unwrap(),
@@ -482,6 +513,8 @@ mod tests {
             post_id: PostId::from(7),
             username: &author,
             display_name: Some(&display_name),
+            content_license: None,
+            created_at: parse_utc_instant("2026-01-01T00:00:00Z"),
             rendered_title: Some(&title),
             banner: None,
             summary: None,
@@ -837,6 +870,79 @@ mod tests {
     }
 
     #[test]
+    fn public_post_footer_renders_exact_escaped_declaration_and_links_only_cc_label() {
+        let mut post = sample_post();
+        post.post.display_name = Some(parse_display_name("Ada <&>"));
+        post.post.content_license = Some(common::content_license::ContentLicense::CcBy4_0);
+        let html = permalink_article(&post.post).into_string();
+
+        assert!(
+            html.contains("© 2026 Ada &lt;&amp;&gt; · <a href=\"https://creativecommons.org/licenses/by/4.0/\" rel=\"license\">CC BY 4.0</a>"),
+            "{html}"
+        );
+        let tags = html
+            .find("data-jaunder-part=\"tag-list\"")
+            .expect("tag list");
+        let declaration = html.find("© 2026 Ada").expect("declaration");
+        assert!(
+            tags < declaration,
+            "tags must retain footer source order: {html}"
+        );
+        assert_eq!(html.matches("rel=\"license\"").count(), 1, "{html}");
+    }
+
+    #[test]
+    fn public_post_footer_falls_back_to_username_and_does_not_link_rights_statement() {
+        let mut post = sample_post();
+        post.post.content_license =
+            Some(common::content_license::ContentLicense::AllRightsReserved);
+        let html = permalink_article(&post.post).into_string();
+
+        assert!(
+            html.contains("© 2026 alice · All Rights Reserved"),
+            "{html}"
+        );
+        assert!(!html.contains("rel=\"license\""), "{html}");
+    }
+
+    #[test]
+    fn author_only_draft_omits_the_public_declaration() {
+        let mut post = sample_post();
+        post.post.published_at = None;
+        post.post.permalink = None;
+        assert!(post.post.content_license.is_none());
+        let html = permalink_article(&post.post).into_string();
+        assert!(!html.contains("© "), "{html}");
+    }
+
+    #[test]
+    fn public_declaration_coincides_between_projector_and_reactive_content() {
+        let mut post = sample_post();
+        post.post.content_license = Some(common::content_license::ContentLicense::CcBySa4_0);
+        let ctx = TagCtx::ForUser(post.post.username.clone());
+        let view = PostView {
+            post_id: post.post.post_id,
+            username: &post.post.username,
+            display_name: post.post.display_name.as_ref(),
+            content_license: post.post.content_license,
+            created_at: post.post.created_at,
+            rendered_title: post.post.rendered_title.as_ref(),
+            banner: None,
+            summary: post.post.summary.as_ref(),
+            rendered_html: &post.post.rendered_html,
+            time: "2026-01-02 03:04",
+            permalink: post.post.permalink.as_ref(),
+            tags: &post.post.tags,
+            tag_ctx: &ctx,
+        };
+        let content = post_content(&view).into_string();
+        assert!(
+            post_inner(&view).as_str().contains(&content),
+            "projector and reactive content must share declaration markup: {content}"
+        );
+    }
+
+    #[test]
     fn post_content_always_shows_the_header_time() {
         // Viewer-independent (#181, ADR-0044 D4): the timestamp stays in the header
         // for every viewer, so the owner's own Post content coincides with the
@@ -848,6 +954,8 @@ mod tests {
             post_id: PostId::from(7),
             username: &author,
             display_name: None,
+            content_license: None,
+            created_at: parse_utc_instant("2026-01-01T00:00:00Z"),
             rendered_title: None,
             banner: None,
             summary: None,
@@ -874,6 +982,8 @@ mod tests {
             post_id: PostId::from(7),
             username: &author,
             display_name: None,
+            content_license: None,
+            created_at: parse_utc_instant("2026-01-01T00:00:00Z"),
             rendered_title: Some(&title),
             banner: None,
             summary: None,
@@ -935,6 +1045,8 @@ mod tests {
             post_id: PostId::from(7),
             username: &author,
             display_name: None,
+            content_license: None,
+            created_at: parse_utc_instant("2026-01-01T00:00:00Z"),
             rendered_title: None,
             banner: Some("Draft - visible only to you"),
             summary: Some(&summary),
@@ -967,6 +1079,8 @@ mod tests {
             post_id: PostId::from(7),
             username: &author,
             display_name: None,
+            content_license: None,
+            created_at: parse_utc_instant("2026-01-01T00:00:00Z"),
             rendered_title: Some(&title),
             banner: None,
             summary: None,

@@ -5,6 +5,7 @@ use crate::backend::Backend;
 use crate::posts::models::PostFormat;
 use crate::sql::QueryStorageExt;
 use async_trait::async_trait;
+use common::content_license::ContentLicense;
 use common::ids::UserId;
 use sqlx::{Database, Encode, Executor, Pool, Result, Type};
 
@@ -38,6 +39,27 @@ pub trait UserConfigStorage: Send + Sync {
         key: UserConfigKey,
         value: &str,
     ) -> Result<()>;
+
+    /// Returns a user's publication-wide Content License.
+    ///
+    /// A missing row preserves pre-setting databases and backups as All Rights
+    /// Reserved. An explicit malformed value is rejected rather than defaulted,
+    /// so corrupt stored rights data cannot silently widen publication rights.
+    async fn get_content_license(&self, user_id: UserId) -> Result<ContentLicense> {
+        match self.get(user_id, UserConfigKey::ContentLicense).await? {
+            None => Ok(ContentLicense::default()),
+            Some(value) => value
+                .parse()
+                .map_err(|error| sqlx::Error::Decode(Box::new(error))),
+        }
+    }
+
+    /// Returns the effective Content License while participating in `transaction`.
+    async fn get_content_license_for_update(
+        &self,
+        transaction: &mut WriteTransaction,
+        user_id: UserId,
+    ) -> Result<ContentLicense>;
 
     /// Deletes a specific configuration key for a user.
     async fn delete(
@@ -92,11 +114,15 @@ pub async fn set_default_post_format(
         .await
 }
 
-/// Generic [`UserConfigStorage`] backed by any [`Backend`] database.
+/// Backend-specific SQL fragments used by [`UserConfigStore`].
+pub(crate) trait UserConfigDialect: Backend {
+    /// Row-lock clause for state observed before mutation.
+    const FOR_UPDATE: &'static str;
+}
+
+/// Generic [`UserConfigStorage`] backed by a [`UserConfigDialect`] database.
 ///
-/// `UserConfigStorage` has no per-backend divergence (the upsert uses the shared
-/// `ON CONFLICT ... DO UPDATE` form), so there is no dialect trait — the
-/// implementation is written once here. See ADR-0019.
+/// Shared SQL remains here; the backend modules own the row-lock divergence.
 pub struct UserConfigStore<DB: Database> {
     pool: Pool<DB>,
 }
@@ -111,7 +137,7 @@ impl<DB: Database> UserConfigStore<DB> {
 #[async_trait]
 impl<DB> UserConfigStorage for UserConfigStore<DB>
 where
-    DB: Backend,
+    DB: UserConfigDialect,
     // Restated from `Backend` (supertrait where-clauses don't propagate; ADR-0019),
     // plus the lossless stored-value row decode for `get` and the query-arguments bound.
     (StoredUserConfigValue,): for<'r> sqlx::FromRow<'r, DB::Row>,
@@ -161,6 +187,30 @@ where
             StoredUserConfigValue(value.to_owned()),
         )
         .await
+    }
+
+    async fn get_content_license_for_update(
+        &self,
+        transaction: &mut WriteTransaction,
+        user_id: UserId,
+    ) -> Result<ContentLicense> {
+        let connection = DB::write_connection(transaction)?;
+        let sql = format!(
+            "SELECT value FROM user_config WHERE user_id = $1 AND key = $2{}",
+            DB::FOR_UPDATE
+        );
+        let row = sqlx::query_as::<_, (StoredUserConfigValue,)>(sqlx::AssertSqlSafe(sql))
+            .bind_storage(user_id)
+            .bind_storage(UserConfigKey::ContentLicense)
+            .fetch_optional(&mut *connection)
+            .await?;
+        match row {
+            None => Ok(ContentLicense::default()),
+            Some((value,)) => value
+                .into_inner()
+                .parse()
+                .map_err(|error| sqlx::Error::Decode(Box::new(error))),
+        }
     }
 
     #[tracing::instrument(
@@ -222,6 +272,7 @@ mod tests {
     use common::MutationOutcome;
     use rstest::*;
     use rstest_reuse::*;
+    use strum::VariantArray as _;
 
     #[apply(backends)]
     #[tokio::test]
@@ -237,6 +288,108 @@ mod tests {
         let config = &*env.user_config();
         let result = get_default_post_format(config, user_id).await.unwrap();
         assert_eq!(result, PostFormat::Markdown);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn content_license_missing_row_defaults_to_all_rights_reserved(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+
+        assert_eq!(
+            env.user_config()
+                .get_content_license(user_id)
+                .await
+                .unwrap(),
+            ContentLicense::AllRightsReserved
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn content_license_round_trips_every_choice(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        for &license in ContentLicense::VARIANTS {
+            let config = std::sync::Arc::clone(&env.user_config());
+            let config_for_write = std::sync::Arc::clone(&config);
+            let outcome = env
+                .write_scope()
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        config_for_write
+                            .set(
+                                transaction,
+                                user_id,
+                                UserConfigKey::ContentLicense,
+                                license.as_ref(),
+                            )
+                            .await
+                    })
+                })
+                .await
+                .unwrap();
+            assert!(matches!(outcome, MutationOutcome::Confirmed(())));
+            assert_eq!(config.get_content_license(user_id).await.unwrap(), license);
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn content_license_invalid_explicit_value_fails_closed(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let config = std::sync::Arc::clone(&env.user_config());
+        let config_for_write = std::sync::Arc::clone(&config);
+        let outcome = env
+            .write_scope()
+            .run(move |transaction| {
+                Box::pin(async move {
+                    config_for_write
+                        .set(transaction, user_id, UserConfigKey::ContentLicense, "MIT")
+                        .await
+                })
+            })
+            .await
+            .unwrap();
+        assert!(matches!(outcome, MutationOutcome::Confirmed(())));
+        assert!(config.get_content_license(user_id).await.is_err());
+
+        let config_for_read = std::sync::Arc::clone(&config);
+        let outcome = env
+            .write_scope()
+            .run(move |transaction| {
+                Box::pin(async move {
+                    assert!(
+                        config_for_read
+                            .get_content_license_for_update(transaction, user_id)
+                            .await
+                            .is_err()
+                    );
+                    Ok::<(), sqlx::Error>(())
+                })
+            })
+            .await
+            .unwrap();
+        assert!(matches!(outcome, MutationOutcome::Confirmed(())));
     }
 
     #[apply(backends)]

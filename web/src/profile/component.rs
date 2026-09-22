@@ -1,7 +1,10 @@
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput, ValidatedTextarea};
 use crate::topbar::Topbar;
-use common::{MutationOutcome, bio::Bio, display_name::DisplayName, render::PostFormat};
+use common::{
+    MutationOutcome, bio::Bio, content_license::ContentLicense, display_name::DisplayName,
+    render::PostFormat,
+};
 use leptos::prelude::*;
 
 use super::DefaultPostFormatState;
@@ -84,6 +87,7 @@ pub fn ProfilePage() -> impl IntoView {
                                         </div>
                                     </div>
                                     <DefaultPostFormatControl />
+                                    <ContentLicenseControl />
                                 }
                                     .into_any()
                             }
@@ -109,6 +113,122 @@ pub fn ProfilePage() -> impl IntoView {
                 }}
             </div>
         </div>
+    }
+}
+
+/// Control for setting the User's current publication-wide Content License.
+#[component]
+fn ContentLicenseControl() -> impl IntoView {
+    use strum::VariantArray;
+
+    let action = ServerAction::<api::SetContentLicense>::new();
+    let initial = Resource::new(|| (), |()| api::get_content_license());
+    let license = RwSignal::new(None::<ContentLicense>);
+    let save = move |_| {
+        if let Some(license) = license.get() {
+            action.dispatch(api::SetContentLicense { license });
+        }
+    };
+
+    view! {
+        <Suspense fallback=|| {
+            view! { <p class="j-loading">"Loading\u{2026}"</p> }
+        }>
+            {move || Suspend::new(async move {
+                match initial.await {
+                    Ok(current) => {
+                        license.set(Some(current));
+                        view! {
+                            <div class="j-card">
+                                <div class="j-card-head">
+                                    <div>
+                                        <h2>"Content License"</h2>
+                                        <div class="j-sub">
+                                            "This choice applies retroactively to all of your Posts."
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="j-form-body">
+                                    <label class="j-form-field">
+                                        <span class="j-form-label">"Content license"</span>
+                                        <select
+                                            id="content-license"
+                                            class="j-form-input"
+                                            prop:value=move || {
+                                                license
+                                                    .get()
+                                                    .map_or_else(String::new, |choice| choice.to_string())
+                                            }
+                                            on:change=move |ev| {
+                                                license.set(event_target_value(&ev).parse().ok());
+                                            }
+                                        >
+                                            <For
+                                                each=move || ContentLicense::VARIANTS.iter().copied()
+                                                key=|license| *license
+                                                children=move |choice| {
+                                                    view! {
+                                                        <option value=choice.to_string()>{choice.label()}</option>
+                                                    }
+                                                }
+                                            />
+                                        </select>
+                                    </label>
+                                    <p class="j-sub">
+                                        {move || {
+                                            license
+                                                .get()
+                                                .and_then(|choice| {
+                                                    choice.canonical_url().map(|url| (choice, url))
+                                                })
+                                                .map(|(choice, url)| {
+                                                    view! {
+                                                        <a href=url rel="license">
+                                                            {choice.label()}
+                                                        </a>
+                                                    }
+                                                })
+                                        }}
+                                    </p>
+                                </div>
+                                {move || {
+                                    action
+                                        .value()
+                                        .get()
+                                        .and_then(|result: Result<MutationOutcome<()>, WebError>| {
+                                            match crate::mutation_feedback::classify(
+                                                result,
+                                                "Save acknowledgement was lost; reload to verify the content license.",
+                                            ) {
+                                                crate::mutation_feedback::MutationFeedback::Confirmed(
+                                                    (),
+                                                ) => None,
+                                                crate::mutation_feedback::MutationFeedback::Error(
+                                                    message,
+                                                ) => {
+                                                    Some(view! { <p class="error">{message}</p> }.into_any())
+                                                }
+                                            }
+                                        })
+                                }}
+                                <div class="j-form-actions">
+                                    <button
+                                        type="button"
+                                        class="j-btn is-primary"
+                                        prop:disabled=move || license.get().is_none()
+                                        on:click=save
+                                    >
+                                        "Save Content License"
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                            .into_any()
+                    }
+                    Err(error) => view! { <p class="error">{error.to_string()}</p> }.into_any(),
+                }
+            })}
+        </Suspense>
     }
 }
 

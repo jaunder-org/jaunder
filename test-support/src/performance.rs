@@ -955,7 +955,7 @@ async fn collect_timeline(
             rows.last().context("nonempty page")?,
             TimelineOrder::Newest,
         )?); // cov:ignore: persisted timeline records always contain cursor-compatible timestamps and ids
-        out.extend(rows);
+        out.extend(rows.into_iter().map(|row| row.post));
     }
     Ok(out)
 }
@@ -984,7 +984,7 @@ async fn collect_app_timeline(
             .last()
             .map(|record| storage::to_post_cursor(record, TimelineOrder::Newest))
             .transpose()?;
-        out.extend(rows);
+        out.extend(rows.into_iter().map(|row| row.post));
     }
     Ok(out)
 }

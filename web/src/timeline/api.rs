@@ -131,7 +131,13 @@ pub async fn list_home_timeline(
     let rows = posts
         .list_published_by_user(&auth.username, page, &viewer, UtcInstant::now())
         .await?;
-    server::page_from_rows(rows, page_size, Some(auth.user_id), request.order)
+    server::page_from_rows(
+        rows,
+        page_size,
+        Some(auth.user_id),
+        request.order,
+        server::ContentRightsProjection::Withheld,
+    )
 }
 
 /// Lists published, non-deleted posts site-wide carrying `tag`.

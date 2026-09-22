@@ -27,7 +27,8 @@ use crate::posts::models::{
     PermalinkDateText, PostMutation, PostRecord, PostRevisionDetail, PostRevisionPage,
     PostRevisionRecord, PostRevisionTag, UpdatePostInput,
 };
-use crate::posts::syndication::{self, GoLivePost};
+use crate::posts::public_presentation::{CONTENT_LICENSE_COLUMN, PublicPresentationPostRecord};
+use crate::posts::syndication::{self, FeedAffectingPostTags, GoLivePost};
 use crate::posts::tags;
 use crate::posts::tags::{PostTag, TagRecord};
 use crate::posts::visibility;
@@ -85,7 +86,7 @@ pub async fn fetch_post_record(
     date: PermalinkDate,
     slug: &Slug,
     now: UtcInstant,
-) -> InternalResult<Option<PostRecord>> {
+) -> InternalResult<Option<PublicPresentationPostRecord>> {
     posts
         .get_post_by_permalink(username, date, slug, viewer, now)
         .await
@@ -101,8 +102,8 @@ pub async fn fetch_post_record(
 /// Returns a storage error if the underlying listing failed for any reason
 /// other than a missing tag.
 pub fn list_by_tag_rows(
-    result: Result<Vec<PostRecord>, ListByTagError>,
-) -> InternalResult<Vec<PostRecord>> {
+    result: Result<Vec<PublicPresentationPostRecord>, ListByTagError>,
+) -> InternalResult<Vec<PublicPresentationPostRecord>> {
     match result {
         Ok(rows) => Ok(rows),
         Err(ListByTagError::TagNotFound) => Ok(Vec::new()),
@@ -229,7 +230,7 @@ pub trait PostStorage: Send + Sync {
         slug: &Slug,
         viewer: &ViewerIdentity,
         now: UtcInstant,
-    ) -> Result<Option<PostRecord>>;
+    ) -> Result<Option<PublicPresentationPostRecord>>;
 
     /// Resolves a User-omitting public permalink alias across all Users.
     ///
@@ -345,7 +346,7 @@ pub trait PostStorage: Send + Sync {
         page: PublishedPageRequest<'a>,
         viewer: &ViewerIdentity,
         now: UtcInstant,
-    ) -> Result<Vec<PostRecord>>;
+    ) -> Result<Vec<PublicPresentationPostRecord>>;
 
     /// Lists all published posts across the entire site in the requested
     /// publication chronology, applying the viewer-resolution filter.
@@ -354,7 +355,7 @@ pub trait PostStorage: Send + Sync {
         page: PublishedPageRequest<'a>,
         viewer: &ViewerIdentity,
         now: UtcInstant,
-    ) -> Result<Vec<PostRecord>>;
+    ) -> Result<Vec<PublicPresentationPostRecord>>;
 
     /// Lists draft posts for a specific user.
     ///
@@ -434,7 +435,7 @@ pub trait PostStorage: Send + Sync {
         page: PublishedPageRequest<'a>,
         viewer: &ViewerIdentity,
         now: UtcInstant,
-    ) -> Result<Vec<PostRecord>, ListByTagError>;
+    ) -> Result<Vec<PublicPresentationPostRecord>, ListByTagError>;
 
     /// Lists published posts for a user carrying a tag in the requested
     /// publication chronology.
@@ -445,7 +446,7 @@ pub trait PostStorage: Send + Sync {
         page: PublishedPageRequest<'a>,
         viewer: &ViewerIdentity,
         now: UtcInstant,
-    ) -> Result<Vec<PostRecord>, ListByTagError>;
+    ) -> Result<Vec<PublicPresentationPostRecord>, ListByTagError>;
 
     /// Returns tag records whose slug begins with `prefix` (case-insensitive
     /// on the slug). An empty / `None` prefix returns all tags, alphabetically,
@@ -470,7 +471,15 @@ pub trait PostStorage: Send + Sync {
         window: &host::feed::HybridWindow,
         now: UtcInstant,
         viewer: &ViewerIdentity,
-    ) -> Result<Vec<PostRecord>>;
+    ) -> Result<Vec<syndication::SyndicationPostRecord>>;
+
+    /// Returns the complete tag union for all currently feed-visible Posts by one User.
+    async fn feed_affecting_post_tags_for_user(
+        &self,
+        transaction: &mut WriteTransaction,
+        user_id: UserId,
+        now: UtcInstant,
+    ) -> Result<Option<FeedAffectingPostTags>>;
 
     /// Lists posts that crossed into "live" within the window `(after, upto]`
     /// (exclusive lower, inclusive upper): `published_at > after AND
@@ -801,7 +810,7 @@ where
     // makes every id newtype bind on a generic backend.
     for<'q> i64: Decode<'q, DB> + Encode<'q, DB> + Type<DB>,
     for<'q> RowCount: Decode<'q, DB> + Type<DB>,
-    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
+    for<'q> &'q str: Decode<'q, DB> + Encode<'q, DB> + Type<DB>,
     for<'q> Option<&'q str>: Encode<'q, DB> + Type<DB>,
     for<'q> Option<String>: Encode<'q, DB> + Type<DB>,
     // The viewer-resolution binds are NULL-able (`ResolutionBinds::bind_onto`).
@@ -829,6 +838,7 @@ where
     for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
     DB::Arguments: sqlx::IntoArguments<DB>,
+    usize: sqlx::ColumnIndex<DB::Row>,
 {
     #[tracing::instrument(
         name = "storage.posts.create",
@@ -1274,12 +1284,12 @@ where
         slug: &Slug,
         viewer: &ViewerIdentity,
         now: UtcInstant,
-    ) -> Result<Option<PostRecord>> {
+    ) -> Result<Option<PublicPresentationPostRecord>> {
         let date_text = PermalinkDateText::from(date);
         let (resolution, binds, _) = visibility::resolution_where(viewer, 5);
         // `published_at <= $4` hides scheduled (future-dated) posts until due.
         let sql = format!(
-            "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
+            "SELECT {POST_RECORD_COLUMNS}, {CONTENT_LICENSE_COLUMN}, {tags} AS tags
              FROM posts p
              JOIN users u ON p.user_id = u.user_id
              WHERE u.username = $1
@@ -1292,7 +1302,7 @@ where
             tags = DB::TAGS_SUBQUERY,
             date_clause = DB::PERMALINK_DATE_CLAUSE,
         );
-        let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
+        let query = sqlx::query_as::<_, PublicPresentationPostRecord>(AssertSqlSafe(sql))
             .bind_storage(username)
             .bind_storage(slug)
             .bind_storage(date_text)
@@ -1511,7 +1521,7 @@ where
         page: PublishedPageRequest<'a>,
         viewer: &ViewerIdentity,
         now: UtcInstant,
-    ) -> Result<Vec<PostRecord>> {
+    ) -> Result<Vec<PublicPresentationPostRecord>> {
         let (cursor, order, limit) = page.into_parts();
         let tags = DB::TAGS_SUBQUERY;
         let (cursor_clause, order_by) = match order {
@@ -1531,7 +1541,7 @@ where
             let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 6);
             // `published_at <= $5` hides scheduled (future-dated) posts.
             let sql = format!(
-                "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
+                "SELECT {POST_RECORD_COLUMNS}, {CONTENT_LICENSE_COLUMN}, {tags} AS tags
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  WHERE u.username = $1
@@ -1543,7 +1553,7 @@ where
                  ORDER BY {order_by}
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
+            let query = sqlx::query_as::<_, PublicPresentationPostRecord>(AssertSqlSafe(sql))
                 .bind_storage(username)
                 .bind_storage(cursor.published_at)
                 .bind_storage(cursor.published_at)
@@ -1560,7 +1570,7 @@ where
             let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 3);
             // `published_at <= $2` hides scheduled (future-dated) posts.
             let sql = format!(
-                "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
+                "SELECT {POST_RECORD_COLUMNS}, {CONTENT_LICENSE_COLUMN}, {tags} AS tags
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  WHERE u.username = $1
@@ -1571,7 +1581,7 @@ where
                  ORDER BY {order_by}
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
+            let query = sqlx::query_as::<_, PublicPresentationPostRecord>(AssertSqlSafe(sql))
                 .bind_storage(username)
                 .bind_storage(now);
             binds
@@ -1593,7 +1603,7 @@ where
         page: PublishedPageRequest<'a>,
         viewer: &ViewerIdentity,
         now: UtcInstant,
-    ) -> Result<Vec<PostRecord>> {
+    ) -> Result<Vec<PublicPresentationPostRecord>> {
         let (cursor, order, limit) = page.into_parts();
         let tags = DB::TAGS_SUBQUERY;
         let (cursor_clause, order_by) = match order {
@@ -1612,7 +1622,7 @@ where
             let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 5);
             // `published_at <= $4` hides scheduled (future-dated) posts.
             let sql = format!(
-                "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
+                "SELECT {POST_RECORD_COLUMNS}, {CONTENT_LICENSE_COLUMN}, {tags} AS tags
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  WHERE p.published_at IS NOT NULL
@@ -1623,7 +1633,7 @@ where
                  ORDER BY {order_by}
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
+            let query = sqlx::query_as::<_, PublicPresentationPostRecord>(AssertSqlSafe(sql))
                 .bind_storage(cursor.published_at)
                 .bind_storage(cursor.published_at)
                 .bind_storage(cursor.post_id)
@@ -1639,7 +1649,7 @@ where
             let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 2);
             // `published_at <= $1` hides scheduled (future-dated) posts.
             let sql = format!(
-                "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
+                "SELECT {POST_RECORD_COLUMNS}, {CONTENT_LICENSE_COLUMN}, {tags} AS tags
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  WHERE p.published_at IS NOT NULL
@@ -1649,7 +1659,8 @@ where
                  ORDER BY {order_by}
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql)).bind_storage(now);
+            let query = sqlx::query_as::<_, PublicPresentationPostRecord>(AssertSqlSafe(sql))
+                .bind_storage(now);
             binds
                 .bind_onto(query)
                 .bind_storage(limit)
@@ -1846,7 +1857,7 @@ where
         page: PublishedPageRequest<'a>,
         viewer: &ViewerIdentity,
         now: UtcInstant,
-    ) -> Result<Vec<PostRecord>, ListByTagError> {
+    ) -> Result<Vec<PublicPresentationPostRecord>, ListByTagError> {
         let (cursor, order, limit) = page.into_parts();
         let tag_exists = sqlx::query_scalar::<_, Exists>(tags::TAG_EXISTS_SQL)
             .bind_storage(tag_slug)
@@ -1870,7 +1881,7 @@ where
         let rows = if let Some(cursor) = cursor {
             let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 6);
             let sql = format!(
-                "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
+                "SELECT {POST_RECORD_COLUMNS}, {CONTENT_LICENSE_COLUMN}, {tags} AS tags
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  JOIN post_tags pt ON p.post_id = pt.post_id
@@ -1884,7 +1895,7 @@ where
                  ORDER BY {order_by}
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
+            let query = sqlx::query_as::<_, PublicPresentationPostRecord>(AssertSqlSafe(sql))
                 .bind_storage(tag_slug)
                 .bind_storage(cursor.published_at)
                 .bind_storage(cursor.published_at)
@@ -1898,7 +1909,7 @@ where
         } else {
             let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 3);
             let sql = format!(
-                "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
+                "SELECT {POST_RECORD_COLUMNS}, {CONTENT_LICENSE_COLUMN}, {tags} AS tags
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  JOIN post_tags pt ON p.post_id = pt.post_id
@@ -1911,7 +1922,7 @@ where
                  ORDER BY {order_by}
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
+            let query = sqlx::query_as::<_, PublicPresentationPostRecord>(AssertSqlSafe(sql))
                 .bind_storage(tag_slug)
                 .bind_storage(now);
             binds
@@ -1931,7 +1942,7 @@ where
         page: PublishedPageRequest<'a>,
         viewer: &ViewerIdentity,
         now: UtcInstant,
-    ) -> Result<Vec<PostRecord>, ListByTagError> {
+    ) -> Result<Vec<PublicPresentationPostRecord>, ListByTagError> {
         let (cursor, order, limit) = page.into_parts();
         let tag_exists = sqlx::query_scalar::<_, Exists>(tags::TAG_EXISTS_SQL)
             .bind_storage(tag_slug)
@@ -1955,7 +1966,7 @@ where
         let rows = if let Some(cursor) = cursor {
             let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 7);
             let sql = format!(
-                "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
+                "SELECT {POST_RECORD_COLUMNS}, {CONTENT_LICENSE_COLUMN}, {tags} AS tags
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  JOIN post_tags pt ON p.post_id = pt.post_id
@@ -1970,7 +1981,7 @@ where
                  ORDER BY {order_by}
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
+            let query = sqlx::query_as::<_, PublicPresentationPostRecord>(AssertSqlSafe(sql))
                 .bind_storage(user_id)
                 .bind_storage(tag_slug)
                 .bind_storage(cursor.published_at)
@@ -1985,7 +1996,7 @@ where
         } else {
             let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 4);
             let sql = format!(
-                "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
+                "SELECT {POST_RECORD_COLUMNS}, {CONTENT_LICENSE_COLUMN}, {tags} AS tags
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  JOIN post_tags pt ON p.post_id = pt.post_id
@@ -1999,7 +2010,7 @@ where
                  ORDER BY {order_by}
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
+            let query = sqlx::query_as::<_, PublicPresentationPostRecord>(AssertSqlSafe(sql))
                 .bind_storage(user_id)
                 .bind_storage(tag_slug)
                 .bind_storage(now);
@@ -2069,7 +2080,7 @@ where
         window: &host::feed::HybridWindow,
         now: UtcInstant,
         viewer: &ViewerIdentity,
-    ) -> Result<Vec<PostRecord>> {
+    ) -> Result<Vec<syndication::SyndicationPostRecord>> {
         let cutoff = window.cutoff_date(now);
         syndication::list_published_in_window_rows::<DB>(
             &self.pool,
@@ -2080,6 +2091,15 @@ where
             viewer,
         )
         .await
+    }
+
+    async fn feed_affecting_post_tags_for_user(
+        &self,
+        transaction: &mut WriteTransaction,
+        user_id: UserId,
+        now: UtcInstant,
+    ) -> Result<Option<FeedAffectingPostTags>> {
+        syndication::feed_affecting_post_tags_for_user::<DB>(transaction, user_id, now).await
     }
 
     #[tracing::instrument(
@@ -5393,6 +5413,152 @@ mod tests {
         .await
         .unwrap();
         assert!(missing.is_none());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn public_post_projections_include_current_content_license_and_reject_invalid_values(
+        #[case] backend: Backend,
+    ) {
+        use common::content_license::ContentLicense;
+
+        use host::config_key::UserConfigKey;
+
+        let env = backend.setup().await;
+        let user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
+        let record = SeedRawPost::new(user.user_id)
+            .tags(["rights"])
+            .seed(env.posts().clone(), env.write_scope().clone())
+            .await;
+        let posts = &*env.posts();
+        let now = UtcInstant::now();
+        let page = || {
+            PublishedPageRequest::first(common::seed::TimelineOrder::Newest, parse_row_limit("10"))
+        };
+        assert_eq!(
+            posts
+                .list_published(page(), &ViewerIdentity::Anonymous, now)
+                .await
+                .unwrap()[0]
+                .content_license,
+            ContentLicense::AllRightsReserved,
+            "an absent content license row defaults in the public projection"
+        );
+
+        let license = ContentLicense::CcBySa4_0;
+        let config = env.user_config().clone();
+        let config_for_write = config.clone();
+        crate::test_support::confirmed_for(
+            env.write_scope()
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        config_for_write
+                            .set(
+                                transaction,
+                                user.user_id,
+                                UserConfigKey::ContentLicense,
+                                license.as_ref(),
+                            )
+                            .await
+                    })
+                })
+                .await
+                .expect("content license update succeeds"),
+            "content license update fixture",
+        );
+
+        let tag = "rights".parse().expect("valid tag");
+        let date = PermalinkDate::from(
+            jiff::tz::Offset::UTC
+                .to_datetime(record.published_at.expect("seed is published").value())
+                .date(),
+        );
+
+        assert_eq!(
+            fetch_post_record(
+                posts,
+                &ViewerIdentity::Anonymous,
+                &user.username,
+                date,
+                &record.slug,
+                now,
+            )
+            .await
+            .unwrap()
+            .expect("permalink record")
+            .content_license,
+            license
+        );
+        assert_eq!(
+            posts
+                .list_published_by_user(&user.username, page(), &ViewerIdentity::Anonymous, now)
+                .await
+                .unwrap()[0]
+                .content_license,
+            license
+        );
+        assert_eq!(
+            posts
+                .list_published(page(), &ViewerIdentity::Anonymous, now)
+                .await
+                .unwrap()[0]
+                .content_license,
+            license
+        );
+        assert_eq!(
+            posts
+                .list_posts_by_tag(&tag, page(), &ViewerIdentity::Anonymous, now)
+                .await
+                .unwrap()[0]
+                .content_license,
+            license
+        );
+        assert_eq!(
+            posts
+                .list_user_posts_by_tag(
+                    user.user_id,
+                    &tag,
+                    page(),
+                    &ViewerIdentity::Anonymous,
+                    now,
+                )
+                .await
+                .unwrap()[0]
+                .content_license,
+            license
+        );
+
+        let config_for_invalid_write = config.clone();
+        crate::test_support::confirmed_for(
+            env.write_scope()
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        config_for_invalid_write
+                            .set(
+                                transaction,
+                                user.user_id,
+                                UserConfigKey::ContentLicense,
+                                "invalid-license",
+                            )
+                            .await
+                    })
+                })
+                .await
+                .expect("invalid content license fixture update succeeds"),
+            "invalid content license fixture",
+        );
+        assert!(
+            posts
+                .list_published(page(), &ViewerIdentity::Anonymous, now)
+                .await
+                .is_err(),
+            "an explicit invalid license must fail public projection decode"
+        );
     }
 
     #[apply(backends)]

@@ -8,7 +8,7 @@ use host::etag;
 use host::feed::{
     self, FeedDescription, FeedItem, FeedMetadata, FeedPath, FeedTitle, HybridWindow,
 };
-use storage::{FeedCacheRow, PostRecord, PostStorage, PublisherSnapshot};
+use storage::{FeedCacheRow, PostStorage, PublisherSnapshot, SyndicationPostRecord};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -111,7 +111,7 @@ fn storage_err<E: std::error::Error + Send + Sync + 'static>(e: E) -> Regenerate
 /// this performs **no** storage access at all. That is why it takes no
 /// `PostStorage`, is not `async`, and cannot fail: a per-post tag read cannot be
 /// reintroduced here without changing the signature.
-fn build_feed_items(base: &BaseUrl, records: &[PostRecord]) -> Vec<FeedItem> {
+fn build_feed_items(base: &BaseUrl, records: &[SyndicationPostRecord]) -> Vec<FeedItem> {
     records
         .iter()
         .map(|p| {
@@ -121,6 +121,15 @@ fn build_feed_items(base: &BaseUrl, records: &[PostRecord]) -> Vec<FeedItem> {
             let published_at = p.published_at.unwrap_or(p.created_at);
             FeedItem {
                 id: p.post_id,
+                creation_year: jiff::tz::TimeZone::UTC
+                    .to_datetime(p.created_at.value())
+                    .date()
+                    .year(),
+                author_name: p
+                    .author_display_name
+                    .as_ref()
+                    .map_or_else(|| p.author_username.to_string(), ToString::to_string),
+                content_license: p.content_license,
                 // Feed readers consume persisted Rendered Title projections only; they
                 // never parse authored Markdown, Org, or HTML source.
                 rendered_title: p.rendered_title.clone(),
@@ -165,7 +174,7 @@ mod tests {
                 parse_post_body, parse_slug, parse_username, parse_utc_instant, rendered_html,
             },
         };
-        use storage::{PostFormat, PostRecord};
+        use storage::{PostFormat, PostRecord, SyndicationPostRecord};
 
         let at = parse_utc_instant("2026-09-19T12:00:00Z");
         let record = PostRecord {
@@ -187,7 +196,13 @@ mod tests {
             tags: vec![],
         };
         let base: BaseUrl = "https://example.com/".parse().unwrap();
-        let items = build_feed_items(&base, &[record]);
+        let items = build_feed_items(
+            &base,
+            &[SyndicationPostRecord {
+                post: record,
+                content_license: common::content_license::ContentLicense::default(),
+            }],
+        );
         assert_eq!(items.len(), 1);
         assert_eq!(
             items[0].rendered_title,

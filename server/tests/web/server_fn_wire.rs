@@ -92,6 +92,8 @@ wire_contract! {
     web::profile::Get => "profile" / "get",
     web::profile::GetDefaultPostFormat => "profile" / "get_default_post_format",
     web::profile::SetDefaultPostFormat => "profile" / "set_default_post_format",
+    web::profile::GetContentLicense => "profile" / "get_content_license",
+    web::profile::SetContentLicense => "profile" / "set_content_license",
     web::profile::Update => "profile" / "update",
     web::registration::GetPolicy => "registration" / "get_policy",
     web::registration::Register => "registration" / "register",

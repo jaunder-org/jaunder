@@ -17,30 +17,47 @@ use common::tag::Tag;
 use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::{self, ViewerIdentity};
-use storage::{self, PostCursor, PostRecord, PostStorage, PublishedPageRequest, UserStorage};
+use storage::{
+    self, PostCursor, PostStorage, PublicPresentationPostRecord, PublishedPageRequest, UserStorage,
+};
 
 use crate::error::{InternalError, InternalResult};
 use crate::posts;
+
+/// Whether a timeline is one of the public Content Rights presentation surfaces.
+#[derive(Clone, Copy)]
+pub(super) enum ContentRightsProjection {
+    Public,
+    Withheld,
+}
 
 /// Assemble a web timeline page from an over-fetched row set.
 ///
 /// The cursor is derived only after truncation and preserves the requested
 /// direction, making an opposite-order continuation unrepresentable downstream.
 pub(super) fn page_from_rows(
-    mut rows: Vec<PostRecord>,
+    mut rows: Vec<PublicPresentationPostRecord>,
     page_size: PageSize,
     viewer_user_id: Option<UserId>,
     order: TimelineOrder,
+    rights: ContentRightsProjection,
 ) -> InternalResult<Page<RenderedPost, TimelineCursor>> {
     let has_more = page_size.has_more(rows.len());
     rows.truncate(page_size.page_len());
     let next_cursor = match has_more.then(|| rows.last()).flatten() {
-        Some(post) => Some(storage::wire_cursor(&storage::to_post_cursor(post, order)?)),
+        Some(post) => Some(storage::wire_cursor(&storage::to_post_cursor(
+            &post.post, order,
+        )?)),
         None => None,
     };
     let posts = rows
         .into_iter()
-        .filter_map(|post| posts::rendered_post(post, viewer_user_id))
+        .filter_map(|post| match rights {
+            ContentRightsProjection::Public => posts::rendered_post(post, viewer_user_id),
+            ContentRightsProjection::Withheld => {
+                posts::rendered_home_post(post.post, viewer_user_id)
+            }
+        })
         .collect();
     Ok(Page {
         posts,
@@ -86,7 +103,13 @@ pub async fn fetch_user_posts(
     let rows = posts
         .list_published_by_user(username, page, viewer, UtcInstant::now())
         .await?;
-    page_from_rows(rows, page_size, visibility::viewer_user_id(viewer), order)
+    page_from_rows(
+        rows,
+        page_size,
+        visibility::viewer_user_id(viewer),
+        order,
+        ContentRightsProjection::Public,
+    )
 }
 
 /// The shared public Local query, used by both the `list_local_timeline` server
@@ -108,7 +131,13 @@ pub async fn fetch_local_timeline(
     let rows = posts
         .list_published(page, &viewer, UtcInstant::now())
         .await?;
-    page_from_rows(rows, page_size, None, order)
+    page_from_rows(
+        rows,
+        page_size,
+        None,
+        order,
+        ContentRightsProjection::Public,
+    )
 }
 
 /// The shared "posts site-wide carrying a tag" query, used by both the
@@ -132,7 +161,13 @@ pub async fn fetch_posts_by_tag(
             .list_posts_by_tag(tag, page, viewer, UtcInstant::now())
             .await,
     )?;
-    page_from_rows(rows, page_size, visibility::viewer_user_id(viewer), order)
+    page_from_rows(
+        rows,
+        page_size,
+        visibility::viewer_user_id(viewer),
+        order,
+        ContentRightsProjection::Public,
+    )
 }
 
 /// The shared "posts by a user carrying a tag" query, used by both the
@@ -166,14 +201,15 @@ pub async fn fetch_user_posts_by_tag(
         page_size,
         visibility::viewer_user_id(viewer),
         request.order,
+        ContentRightsProjection::Public,
     )
 }
 
 #[cfg(all(test, feature = "server"))]
 mod tests {
     use super::{
-        fetch_local_timeline, fetch_posts_by_tag, fetch_user_posts, fetch_user_posts_by_tag,
-        published_page_request,
+        ContentRightsProjection, fetch_local_timeline, fetch_posts_by_tag, fetch_user_posts,
+        fetch_user_posts_by_tag, page_from_rows, published_page_request,
     };
     use common::ids::{PostId, UserId};
     use common::pagination::PageSize;
@@ -186,12 +222,12 @@ mod tests {
     };
     use storage::{
         EmailVerified, ListByTagError, MockPostStorage, MockUserStorage, OperatorStatus,
-        PostCursor, PostFormat, PostRecord, UserRecord,
+        PostCursor, PostFormat, PostRecord, PublicPresentationPostRecord, UserRecord,
     };
 
-    fn post(post_id: i64) -> PostRecord {
+    fn post(post_id: i64) -> PublicPresentationPostRecord {
         let now = UtcInstant::now();
-        PostRecord {
+        let post = PostRecord {
             author_display_name: None,
             post_id: PostId::from(post_id),
             user_id: UserId::from(1),
@@ -208,6 +244,10 @@ mod tests {
             deleted_at: None,
             summary: None,
             tags: vec![],
+        };
+        PublicPresentationPostRecord {
+            post,
+            content_license: common::content_license::ContentLicense::AllRightsReserved,
         }
     }
 
@@ -224,6 +264,24 @@ mod tests {
             is_operator: OperatorStatus::STANDARD,
         }
     }
+    #[test]
+    fn over_fetched_page_rejects_cursor_row_without_publication_time() {
+        let page_size = PageSize::clamped(5);
+        let mut rows = (1..=6).map(post).collect::<Vec<_>>();
+        rows[page_size.page_len() - 1].post.published_at = None;
+
+        assert!(
+            page_from_rows(
+                rows,
+                page_size,
+                None,
+                TimelineOrder::Newest,
+                ContentRightsProjection::Public,
+            )
+            .is_err()
+        );
+    }
+
     #[test]
     fn timeline_cursor_must_match_the_requested_order() {
         let cursor = PostCursor {

@@ -1,3 +1,4 @@
+mod account_mutations;
 mod audiences;
 mod database;
 mod email_verification;

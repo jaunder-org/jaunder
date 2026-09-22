@@ -442,13 +442,13 @@ fn elapsed_us(started: Instant) -> u64 {
 }
 
 enum QueryResult {
-    Timeline(Vec<storage::PostRecord>, u64),
+    Timeline(Vec<storage::PublicPresentationPostRecord>, u64),
     History(Vec<storage::PostRevisionMetadata>, u64),
     Detail(Box<storage::PostRevisionDetail>, u64),
 }
 
 fn assert_timeline(
-    records: &[storage::PostRecord],
+    records: &[storage::PublicPresentationPostRecord],
     position: MeasurementPosition,
     cursor: Option<&performance::Cursor>,
 ) -> anyhow::Result<()> {

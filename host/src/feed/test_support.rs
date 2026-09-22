@@ -38,6 +38,9 @@ pub fn feed_item(
 ) -> FeedItem {
     FeedItem {
         id,
+        creation_year: 2026,
+        author_name: "alice".to_owned(),
+        content_license: common::content_license::ContentLicense::default(),
         rendered_title: None,
         visible_title: None,
         permalink,
