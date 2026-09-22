@@ -60,7 +60,7 @@ format without altering authored Post content.
 - AtomPub Collections remain source-oriented editing representations and do not
   expose Copyright Declarations or Content Licenses.
 - The durable architecture decision is recorded in
-  `docs/adr/drafts/user-wide-current-content-rights.md`.
+  `docs/adr/0206-user-wide-current-content-rights.md`.
 
 ## Acceptance
 

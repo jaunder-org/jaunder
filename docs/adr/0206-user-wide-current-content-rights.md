@@ -1,6 +1,6 @@
-# ADR-DRAFT: User-wide current Content Rights
+# ADR-0206: User-wide current Content Rights
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-21
 - Issue: [#1611](https://github.com/jaunder-org/jaunder/issues/1611)
 

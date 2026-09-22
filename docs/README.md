@@ -233,6 +233,7 @@ convention). See the Status column below for each ADR's current status.
 | [0203](adr/0203-distribute-ci-validation-and-firefox-e2e-lanes.md)     | Distribute CI validation and Firefox E2E through retained lane catalogs                                      | accepted   |
 | [0204](adr/0204-persist-inline-rendered-post-titles.md)                | Persist inline-rendered Post titles                                                                          | accepted   |
 | [0205](adr/0205-trusted-proxy-client-ip.md)                            | Trusted proxy client-IP derivation                                                                           | accepted   |
+| [0206](adr/0206-user-wide-current-content-rights.md)                   | User-wide current Content Rights                                                                             | accepted   |
 
 <!-- adr-table:end -->
 
