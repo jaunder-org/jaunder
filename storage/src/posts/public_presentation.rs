@@ -8,8 +8,12 @@ use crate::posts::models::PostRecord;
 
 /// A public-presentation Post projection with the author's current Content License.
 ///
-/// This keeps current publication rights out of [`PostRecord`], preserving the
-/// source-oriented `AtomPub` Collection and Member representations.
+/// Content License is current User configuration, not persisted Post state: changing it
+/// retroactively changes every public Post. Keeping it in this projection means only
+/// public-presentation queries pay for and depend on the `user_config` lookup; owner,
+/// draft, revision, backup, and `AtomPub` reads retain the narrower [`PostRecord`] contract.
+/// `AtomPub` Collection and Member representations consequently cannot acquire current
+/// rights metadata merely because their storage record gained a field.
 #[derive(Clone, Debug, sqlx::FromRow)]
 pub struct PublicPresentationPostRecord {
     #[sqlx(flatten)]
