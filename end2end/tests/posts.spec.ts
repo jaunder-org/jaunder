@@ -1596,6 +1596,12 @@ test("Home collapses its pristine composer at the scroll threshold", async ({
   await expect(collapse).toBeVisible();
 
   await page.evaluate(() => window.scrollTo(0, 24));
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
   await page.evaluate(() => window.scrollTo(0, 96));
   await expect(expand).toBeVisible();
 });
@@ -1737,6 +1743,7 @@ test("Home uses one responsive page scroll for its composer and Posts", async ({
     SEL.postBody,
     "Keep the composer expanded while checking page scroll",
   );
+  await page.locator(".j-topbar h1").click();
 
   const expectDocumentOwnsScroll = async () => {
     const overflow = await page.evaluate(() => {
