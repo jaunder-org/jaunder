@@ -8,7 +8,6 @@ use crate::error::WebError;
 use crate::posts;
 use crate::posts::{Delete, Publish, SavedPost, Unpublish};
 use crate::taglist::TagCtx;
-use client::telemetry;
 use common::MutationOutcome;
 use common::root_relative_url::RootRelativeUrl;
 use common::seed::RenderedPost;
@@ -65,20 +64,6 @@ fn marker_matches(author: &Username) -> bool {
         .map(|user| &user.username)
         == Some(author)
 }
-fn dispatch_after_confirm(message: &str, context: ClientErrorContext, dispatch: impl FnOnce()) {
-    match client::dialog::confirm(message) {
-        Ok(outcome) => {
-            if outcome.should_dispatch() {
-                dispatch();
-            }
-        }
-        Err(error) => {
-            let source_kind = error.source_kind();
-            telemetry::report_swallowed(telemetry::error_kind(source_kind), context, source_kind);
-        }
-    }
-}
-
 fn call_element_method(element: &leptos::web_sys::Element, method: &str) {
     use wasm_bindgen::{JsCast, JsValue};
 
@@ -140,7 +125,7 @@ fn primary_post_action(
                 type="button"
                 class="j-btn"
                 on:click=move |_| {
-                    dispatch_after_confirm(
+                    support::dispatch_after_confirm(
                         "Publish this draft?",
                         ClientErrorContext::PublishConfirm,
                         || {
@@ -169,18 +154,6 @@ fn primary_post_action(
     }
 }
 
-fn mutation_feedback<T>(
-    result: Result<MutationOutcome<T>, WebError>,
-    indeterminate_message: &'static str,
-) -> Option<AnyView> {
-    match crate::mutation_feedback::classify(result, indeterminate_message) {
-        crate::mutation_feedback::MutationFeedback::Confirmed(_) => None,
-        crate::mutation_feedback::MutationFeedback::Error(message) => {
-            Some(view! { <p class="error">{message}</p> }.into_any())
-        }
-    }
-}
-
 fn post_action_column(
     edit_url: &RootRelativeUrl,
     history_url: String,
@@ -201,7 +174,7 @@ fn post_action_column(
                 type="button"
                 class="j-btn is-danger"
                 on:click=move |_| {
-                    dispatch_after_confirm(
+                    support::dispatch_after_confirm(
                         "Delete this post?",
                         ClientErrorContext::DeleteConfirm,
                         || {
@@ -410,7 +383,7 @@ pub fn PostCard<'a>(
                 .value()
                 .get()
                 .and_then(|result| {
-                    mutation_feedback(
+                    support::mutation_feedback(
                         result,
                         "The post may have been deleted, but its status could not be confirmed. Refresh to check.",
                     )
@@ -421,7 +394,7 @@ pub fn PostCard<'a>(
                 .value()
                 .get()
                 .and_then(|result| {
-                    mutation_feedback(
+                    support::mutation_feedback(
                         result,
                         "The post may have been published, but its status could not be confirmed. Refresh to check.",
                     )
@@ -432,7 +405,7 @@ pub fn PostCard<'a>(
                 .value()
                 .get()
                 .and_then(|result| {
-                    mutation_feedback(
+                    support::mutation_feedback(
                         result,
                         "The post may have been unpublished, but its status could not be confirmed. Refresh to check.",
                     )

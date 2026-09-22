@@ -16,7 +16,9 @@ use common::root_relative_url::RootRelativeUrl;
 use common::seed::{AuthoredPost, PageSeed};
 use common::slug::Slug;
 use common::time::{self, UtcInstant};
-use common::{MutationOutcome, permalink_route::PermalinkRoute};
+use common::{
+    MutationOutcome, client_telemetry::ClientErrorContext, permalink_route::PermalinkRoute,
+};
 
 use super::audience;
 use super::composers::{ComposerActions, ComposerControlRail, ComposerCore, CreationSchedule};
@@ -222,6 +224,7 @@ pub fn PostPage() -> impl IntoView {
 pub fn EditPostPage() -> impl IntoView {
     let params = use_params_map();
     let update_post_action = ServerAction::<posts::Update>::new();
+    let delete_post_action = ServerAction::<posts::Delete>::new();
     // The editor edits the same seven fields the composer does and dispatches the
     // same `PostInputs` payload, so it reuses that bundle (#301). The slug field is
     // page-level here — unlike the composer, where only the full shape has one.
@@ -280,11 +283,12 @@ pub fn EditPostPage() -> impl IntoView {
                     Ok(fetched) => {
                         state.seed_from(&fetched.post);
                         slug_field.set_value(fetched.post.post.slug.as_ref());
+                        let loaded_publication = posts::loaded_publication(
+                            fetched.post.post.published_at,
+                            fetched.fetched_at,
+                        );
                         let publication = EditPublicationState::from_loaded(
-                            posts::loaded_publication(
-                                fetched.post.post.published_at,
-                                fetched.fetched_at,
-                            ),
+                            loaded_publication,
                             state.publish_at,
                         );
                         if let Ok(selection) = current_audience.await {
@@ -305,7 +309,9 @@ pub fn EditPostPage() -> impl IntoView {
                                         slug_field=slug_field
                                         post_id=post_id
                                         publication=current_publication
+                                        delete_publication=loaded_publication
                                         action=update_post_action
+                                        delete_action=delete_post_action
                                         named=named
                                     />
                                 }
@@ -332,9 +338,12 @@ fn EditPostForm(
     post_id: PostId,
     /// Publication branch and branch-specific signals fixed when the response loaded.
     publication: EditPublicationState,
+    /// The immutable server-snapshot classification that owns delete navigation.
+    delete_publication: posts::LoadedPublication,
     /// The named-audience load shared by the picker and the action gate.
     named: RwSignal<NamedAudienceState>,
     action: ServerAction<posts::Update>,
+    delete_action: ServerAction<posts::Delete>,
 ) -> impl IntoView {
     let creation_schedule = CreationSchedule::new();
     creation_schedule.restore_committed(&state.publish_at.get());
@@ -342,7 +351,8 @@ fn EditPostForm(
     // the pure guard in the callback prevents a direct invocation from
     // dispatching while Loading or Failed.
     let also_blocked = Signal::derive(move || {
-        !slug_field.is_valid()
+        delete_action.pending().get()
+            || !slug_field.is_valid()
             || !state.summary_field.is_valid()
             || creation_schedule.is_editing()
             || state.audience.with(|selection| {
@@ -394,7 +404,70 @@ fn EditPostForm(
                     creation_schedule=Some(creation_schedule)
                     named=named
                 />
+                <EditDeleteControl
+                    post_id
+                    publication=delete_publication
+                    delete_action
+                    save_action=action
+                />
             </aside>
+        </div>
+    }
+}
+
+/// The editor's destructive action and its non-confirmed feedback.
+#[component]
+fn EditDeleteControl(
+    post_id: PostId,
+    publication: posts::LoadedPublication,
+    delete_action: ServerAction<posts::Delete>,
+    save_action: ServerAction<posts::Update>,
+) -> impl IntoView {
+    let navigate = use_navigate();
+    support::on_settled(
+        move || delete_action.value().get(),
+        move |settled: Result<MutationOutcome<()>, WebError>| {
+            if matches!(settled, Ok(MutationOutcome::Confirmed(()))) {
+                navigate(
+                    posts::edit_delete_destination(publication),
+                    NavigateOptions::default(),
+                );
+            }
+        },
+    );
+    let disabled =
+        Signal::derive(move || delete_action.pending().get() || save_action.pending().get());
+
+    view! {
+        <div class="j-edit-delete">
+            <button
+                type="button"
+                class="j-btn is-danger"
+                data-test="edit-delete"
+                disabled=disabled
+                on:click=move |_| {
+                    support::dispatch_after_confirm(
+                        "Delete this post?",
+                        ClientErrorContext::DeleteConfirm,
+                        || {
+                            delete_action.dispatch(posts::Delete { post_id });
+                        },
+                    );
+                }
+            >
+                "Delete"
+            </button>
+            {move || {
+                delete_action
+                    .value()
+                    .get()
+                    .and_then(|result: Result<MutationOutcome<()>, WebError>| {
+                        support::mutation_feedback(
+                            result,
+                            "The post may have been deleted, but its status could not be confirmed. Refresh to check.",
+                        )
+                    })
+            }}
         </div>
     }
 }

@@ -1725,6 +1725,148 @@ test("authenticated user can delete a published post", async ({
   await expect(page.locator("body")).not.toContainText("Post To Delete");
 });
 
+test("published Post can be deleted from its edit form", async ({
+  page,
+  registeredPage,
+}) => {
+  const body =
+    "# Delete From Editor\n\nkeep these unsaved edits until confirmed";
+  const { post_id } = await createPostViaApi(page, { body });
+  await registeredPage(`/posts/${post_id}/edit`);
+
+  await page.fill(SEL.postBody, `${body}\n\nunsaved`);
+  const deleteButton = page.locator('[data-test="edit-delete"]');
+  await expect(deleteButton).toBeVisible();
+
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await deleteButton.click();
+  await expect(page).toHaveURL(new RegExp(`/posts/${post_id}/edit$`));
+  await expect(page.locator(SEL.postBody)).toHaveValue(`${body}\n\nunsaved`);
+
+  await page.evaluate(() => {
+    (window as Window & { __jaunderNoReload?: boolean }).__jaunderNoReload =
+      true;
+  });
+  page.once("dialog", (dialog) => dialog.accept());
+  await deleteButton.click();
+  await page.waitForURL(`${BASE_URL}/app`);
+  await expect(page.locator(SEL.topbarHeading)).toHaveText("Home");
+  expect(
+    await page.evaluate(
+      () =>
+        (window as Window & { __jaunderNoReload?: boolean })
+          .__jaunderNoReload === true,
+    ),
+  ).toBe(true);
+  await expect(page.getByText("Delete From Editor")).toHaveCount(0);
+});
+
+test("draft and scheduled Posts return to their management routes after editor deletion", async ({
+  page,
+  registeredPage,
+}) => {
+  const draft = await createPostViaApi(page, {
+    body: "# Draft Delete From Editor",
+    publish: false,
+  });
+  await createPostViaApi(page, {
+    body: "# Scheduled Delete From Editor",
+    publishAt: "2999-01-01T09:00:00Z",
+  });
+  await registeredPage(`/posts/${draft.post_id}/edit`);
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.locator('[data-test="edit-delete"]').click();
+  await page.waitForURL(`${BASE_URL}/drafts`);
+  await expect(page.locator(SEL.topbarHeading)).toHaveText("Drafts");
+
+  const scheduledRow = page.locator("li", {
+    hasText: "Scheduled Delete From Editor",
+  });
+  await expect(scheduledRow).toBeVisible();
+  const editLink = scheduledRow.getByRole("link", { name: "Edit" });
+  const editHref = await editLink.getAttribute("href");
+  expect(editHref).toBeTruthy();
+  await navigateInApp(page, () => editLink.click(), {
+    url: editHref!,
+    ready: SEL.postBody,
+  });
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.locator('[data-test="edit-delete"]').click();
+  await page.waitForURL(`${BASE_URL}/scheduled`);
+  await expect(page.locator(SEL.topbarHeading)).toHaveText("Scheduled");
+});
+
+test("editor deletion blocks competing mutations while pending", async ({
+  page,
+  registeredPage,
+}) => {
+  const { post_id } = await createPostViaApi(page, {
+    body: "# Pending Editor Delete",
+  });
+  const release = await stallServerFn(page, "posts/delete");
+  let deleteRequests = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/api/posts/delete") {
+      deleteRequests += 1;
+    }
+  });
+  await registeredPage(`/posts/${post_id}/edit`);
+
+  const deleteButton = page.locator('[data-test="edit-delete"]');
+  const saveButton = page.locator(SEL.publishButton("true"));
+  page.once("dialog", (dialog) => dialog.accept());
+  await deleteButton.click();
+  await expect.poll(() => deleteRequests).toBe(1);
+  await expect(deleteButton).toBeDisabled();
+  await expect(saveButton).toBeDisabled();
+
+  await deleteButton.evaluate((button: HTMLButtonElement) => button.click());
+  await expect.poll(() => deleteRequests).toBe(1);
+  release();
+  await page.waitForURL(`${BASE_URL}/app`);
+});
+
+test("editor deletion preserves form state and controls after uncertain outcomes", async ({
+  page,
+  registeredPage,
+}) => {
+  const body = "# Recover Editor Delete";
+  const { post_id } = await createPostViaApi(page, { body });
+  await failServerFn(page, "posts/delete");
+  await registeredPage(`/posts/${post_id}/edit`);
+
+  const editedBody = `${body}\n\nunsaved`;
+  const deleteButton = page.locator('[data-test="edit-delete"]');
+  const saveButton = page.locator(SEL.publishButton("true"));
+  await page.fill(SEL.postBody, editedBody);
+  page.once("dialog", (dialog) => dialog.accept());
+  await deleteButton.click();
+  await expect(page.locator(".j-edit-delete .error")).toBeVisible();
+  await expect(page.locator(SEL.postBody)).toHaveValue(editedBody);
+  await expect(deleteButton).toBeEnabled();
+  await expect(saveButton).toBeEnabled();
+
+  await page.unroute("**/api/posts/delete");
+  await page.route("**/api/posts/delete", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ CommitIndeterminate: null }),
+    }),
+  );
+  page.once("dialog", (dialog) => dialog.accept());
+  await deleteButton.click();
+  await expect(page.locator(".j-edit-delete .error")).toContainText(
+    "The post may have been deleted, but its status could not be confirmed. Refresh to check.",
+  );
+  await expect(page).toHaveURL(new RegExp(`/posts/${post_id}/edit$`));
+  await expect(page.locator(SEL.postBody)).toHaveValue(editedBody);
+  await expect(deleteButton).toBeEnabled();
+  await expect(saveButton).toBeEnabled();
+});
+
 test("unpublishing follows the moved draft permalink and replaces history", async ({
   registeredPage,
 }) => {
