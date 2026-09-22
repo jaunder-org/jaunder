@@ -1,3 +1,4 @@
+import type { Page } from "@playwright/test";
 import { test, expect, slowBrowserFirstNavigationTimeoutMs } from "./fixtures";
 import {
   generateUsername,
@@ -11,6 +12,38 @@ import {
 import { SEL } from "./selectors";
 import { extractInviteCode } from "./mail";
 import { seedConfigViaTool } from "./seed";
+
+const registerCtaObservedKey = "__jaunderRegisterCtaObserved";
+
+async function observeRegisterCtaAdditions(page: Page): Promise<void> {
+  await page.evaluate((key) => {
+    Reflect.set(window, key, false);
+    const observer = new MutationObserver((records) => {
+      const registerWasAdded = records.some((record) =>
+        [...record.addedNodes].some(
+          (node) =>
+            node instanceof Element &&
+            (node.matches('a[href="/register"]') ||
+              node.querySelector('a[href="/register"]') !== null),
+        ),
+      );
+      if (registerWasAdded) {
+        Reflect.set(window, key, true);
+      }
+    });
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+    });
+  }, registerCtaObservedKey);
+}
+
+async function registerCtaWasObserved(page: Page): Promise<boolean> {
+  return page.evaluate(
+    (key) => Reflect.get(window, key) === true,
+    registerCtaObservedKey,
+  );
+}
 
 // #433: the invitation round trip and policy projection. These tests flip
 // `site.registration_policy` — a global site-config singleton — so this spec runs in the
@@ -217,6 +250,7 @@ test("unseeded Local navigation withholds Register while policy is unresolved", 
 }) => {
   await seedConfigViaTool("site.registration_policy", "open");
   await goto(page, "/login");
+  await observeRegisterCtaAdditions(page);
   const release = await stallServerFn(page, "timeline/list_local_timeline");
   const pending = page.waitForRequest((request) =>
     request.url().includes("/api/timeline/list_local_timeline"),
@@ -225,6 +259,7 @@ test("unseeded Local navigation withholds Register while policy is unresolved", 
   await click(page, 'a[href="/"]');
   await pending;
   await expect(page.getByRole("link", { name: "Register" })).toHaveCount(0);
+  expect(await registerCtaWasObserved(page)).toBe(false);
 
   release();
   await expect(page.getByRole("link", { name: "Sign in" })).toBeVisible();
@@ -236,12 +271,14 @@ test("failed unseeded Local navigation never falls back to Register", async ({
 }) => {
   await seedConfigViaTool("site.registration_policy", "open");
   await goto(page, "/login");
+  await observeRegisterCtaAdditions(page);
   await failServerFn(page, "timeline/list_local_timeline");
 
   await click(page, 'a[href="/"]');
 
   await expect(page.locator(SEL.error)).toBeVisible();
   await expect(page.getByRole("link", { name: "Register" })).toHaveCount(0);
+  expect(await registerCtaWasObserved(page)).toBe(false);
 });
 
 // Test C — policy guards: unavailable policies hide the navigation link and render the
