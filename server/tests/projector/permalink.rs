@@ -10,8 +10,11 @@ use rstest_reuse::*;
 
 use crate::helpers::body_string;
 
+use common::permalink_route::canonical_permalink_path;
+use common::test_support::{parse_slug, parse_utc_instant, permalink_date};
 use common::time::UtcInstant;
-use storage::test_support::{Backend, SeedRawPost, SeedUser, backends};
+use storage::sql::QueryStorageExt;
+use storage::test_support::{Backend, CloseablePool, SeedRawPost, SeedUser, backends};
 
 use super::fixtures::{
     assert_sanitized_internal_server_error, assert_shell_miss, failing_author_theme_selection,
@@ -60,6 +63,82 @@ async fn permalink_projects_cacheable_crawlable_html(#[case] backend: Backend) {
     .await
     .unwrap();
     assert_eq!(html.as_bytes(), body2.as_ref(), "identical bytes per URL");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn historical_permalink_alias_redirects_to_current_canonical_route(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let user = SeedUser::new().seed(env.users(), env.write_scope()).await;
+    let published_at = parse_utc_instant("2026-08-01T12:00:00Z");
+    let target = SeedRawPost::new(user.user_id)
+        .slug("current-界")
+        .published_at(published_at)
+        .seed(env.posts(), env.write_scope())
+        .await;
+    let source_slug = parse_slug("historical-source");
+    match env.base.pool() {
+        CloseablePool::Sqlite(pool) => {
+            sqlx::query(
+                "INSERT INTO post_permalink_aliases
+                 (post_id, user_id, permalink_date, slug)
+                 VALUES ($1, $2, '2025-07-03', $3)",
+            )
+            .bind_storage(target.post_id)
+            .bind_storage(user.user_id)
+            .bind_storage(&source_slug)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+        CloseablePool::Postgres(pool) => {
+            sqlx::query(
+                "INSERT INTO post_permalink_aliases
+                 (post_id, user_id, permalink_date, slug)
+                 VALUES ($1, $2, '2025-07-03', $3)",
+            )
+            .bind_storage(target.post_id)
+            .bind_storage(user.user_id)
+            .bind_storage(&source_slug)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+    }
+    let uri = format!("/~{}/2025/07/03/{}?utm=a%2Fb", user.username, source_slug);
+
+    let response = projector_app(env.posts(), env.users(), env.themes())
+        .oneshot(get(&uri))
+        .await
+        .expect("request");
+
+    assert_eq!(response.status(), StatusCode::FOUND);
+    let target_path =
+        canonical_permalink_path(&user.username, permalink_date(2026, 8, 1), &target.slug);
+    let encoded_target = target_path.as_ref().replace('界', "%E7%95%8C");
+    assert_eq!(
+        response.headers().get(header::LOCATION).unwrap(),
+        format!("{encoded_target}?utm=a%2Fb").as_str()
+    );
+    assert_eq!(
+        response.headers().get(header::CACHE_CONTROL).unwrap(),
+        "no-store"
+    );
+
+    SeedRawPost::new(user.user_id)
+        .slug(&source_slug)
+        .published_at(parse_utc_instant("2025-07-03T12:00:00Z"))
+        .seed(env.posts(), env.write_scope())
+        .await;
+    let canonical_response = projector_app(env.posts(), env.users(), env.themes())
+        .oneshot(get(&uri))
+        .await
+        .expect("canonical request");
+    assert_eq!(
+        canonical_response.status(),
+        StatusCode::OK,
+        "a current canonical Post shadows the historical alias"
+    );
 }
 
 #[apply(backends)]

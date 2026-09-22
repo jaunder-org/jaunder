@@ -257,6 +257,10 @@ impl PostDialect for Postgres {
     const PERMALINK_ALIAS_DATE_CLAUSE: &'static str =
         "date(COALESCE(p.published_at, p.created_at) AT TIME ZONE 'UTC') = $2::date";
 
+    const HISTORICAL_PERMALINK_DATE_CLAUSE: &'static str = "alias.permalink_date = $3::date";
+
+    const HISTORICAL_ALIAS_SHADOW_DATE_CLAUSE: &'static str = "date(COALESCE(shadow.published_at, shadow.created_at) AT TIME ZONE 'UTC') = alias.permalink_date";
+
     const DELETE_POST_AUDIENCES: &'static str = "DELETE FROM post_audiences WHERE post_id = $1";
 
     // Bind order: post_id, audience_id, kind_name (matches `replace_post_audiences`).

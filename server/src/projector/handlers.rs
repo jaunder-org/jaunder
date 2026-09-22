@@ -116,6 +116,7 @@ async fn permalink_alias(
 async fn permalink(
     Extension(projector): Extension<PublicProjector>,
     headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
     Path(PermalinkPath(route)): Path<PermalinkPath>,
 ) -> Response {
     let Some(route) = route else {
@@ -124,7 +125,7 @@ async fn permalink(
         return projector.shell_response();
     };
     projector
-        .project(PublicProjection::Permalink(route), &headers)
+        .project_permalink(route, &headers, uri.query())
         .await
 }
 

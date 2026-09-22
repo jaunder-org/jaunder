@@ -53,7 +53,7 @@ Out:
     loser state and stable Post IDs. Existing published/scheduled freeze tests
     remain green.
 
-- [ ] Task 3: Preserve repaired public paths through historical aliases
+- [x] Task 3: Preserve repaired public paths through historical aliases
   - Contract: `PostStorage` gains one anonymous historical User-qualified
     permalink resolver returning the target Post's current canonical route.
     `PublicProjector::permalink` invokes it only after canonical lookup misses,

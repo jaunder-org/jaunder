@@ -30,7 +30,6 @@ use super::{Shell, document};
 /// Route handlers decode their soft path segments before selecting an operation,
 /// preserving their SPA-shell behavior for malformed paths.
 pub(crate) enum PublicProjection {
-    Permalink(PermalinkRoute),
     SiteTimeline(TimelineOrder),
     Profile(Username, TimelineOrder),
     SiteTag(Tag, TimelineOrder),
@@ -81,7 +80,6 @@ impl PublicProjector {
 
     async fn execute(&self, operation: PublicProjection) -> ProjectionResult {
         match operation {
-            PublicProjection::Permalink(route) => self.permalink(route).await,
             PublicProjection::SiteTimeline(order) => self.site_timeline(order).await,
             PublicProjection::Profile(username, order) => self.profile(username, order).await,
             PublicProjection::SiteTag(tag, order) => self.site_tag(tag, order).await,
@@ -115,6 +113,36 @@ impl PublicProjector {
 
     pub(crate) fn shell_response(&self) -> Response {
         document::shell_response(&self.shell)
+    }
+
+    /// Projects a canonical User-qualified permalink, falling back to one
+    /// Historical Post Permalink Alias only after the canonical lookup misses.
+    pub(crate) async fn project_permalink(
+        &self,
+        route: PermalinkRoute,
+        headers: &HeaderMap,
+        query: Option<&str>,
+    ) -> Response {
+        let outcome = self.permalink(route.clone()).await;
+        if !matches!(&outcome, Err(ProjectionFailure::ShellFallback)) {
+            return self.response_for(&outcome, headers);
+        }
+        match self
+            .posts
+            .resolve_historical_post_permalink_alias(
+                &route.username,
+                route.date,
+                &route.slug,
+                UtcInstant::now(),
+            )
+            .await
+        {
+            Ok(Some(target)) => document::permalink_alias_redirect(&target, query),
+            Ok(None) => self.response_for(&outcome, headers),
+            Err(error) => {
+                Self::boundary_response(error.into(), "server.projector.historical_permalink_alias")
+            }
+        }
     }
 
     /// Resolves the inbound User-omitting alias without turning it into a second
