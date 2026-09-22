@@ -377,6 +377,7 @@ fn restore_type(column: &ColumnInfo) -> &'static str {
     match column.type_name.as_str() {
         "bytea" => "BYTEA",
         "bool" => "BOOLEAN",
+        "date" => "DATE",
         "int2" => "SMALLINT",
         "int4" => "INTEGER",
         "int8" => "BIGINT",
@@ -803,6 +804,16 @@ mod tests {
 
         assert!(sql.contains("to_jsonb(export_row)::text"));
         assert!(sql.contains("ORDER BY \"post_id\", \"tag_id\""));
+    }
+
+    #[test]
+    fn date_columns_restore_through_their_catalog_type() {
+        let column = ColumnInfo {
+            name: "permalink_date".to_owned(),
+            type_name: "date".to_owned(),
+        };
+
+        assert_eq!(restore_type(&column), "DATE");
     }
 
     #[test]
