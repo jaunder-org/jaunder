@@ -498,7 +498,7 @@ identifier and canonical URL. The setting applies retroactively to every Post;
 there is no per-Post override or snapshot. A public Post's Copyright Declaration
 combines its immutable creation year with the author's current Display Name (or
 Username fallback) and current Content License
-([user-wide current Content Rights decision](adr/drafts/user-wide-current-content-rights.md)).
+([user-wide current Content Rights decision](adr/0206-user-wide-current-content-rights.md)).
 
 `storage/src/posts/models.rs::PostRecord` carries both body forms, both title
 forms, `Slug`, summary, tags, and
@@ -887,7 +887,7 @@ Content License or Display Name mutation atomically enqueues every affected
 Site, Site Tag, User, and User Tag feed event; enqueue failure fails the same
 mutation, and the existing publisher generation gate regenerates those
 representations before duplicate-safe, at-least-once WebSub publication
-([user-wide current Content Rights decision](adr/drafts/user-wide-current-content-rights.md)).
+([user-wide current Content Rights decision](adr/0206-user-wide-current-content-rights.md)).
 Titled Atom entries use the persisted Rendered Title as an HTML text construct;
 RSS and JSON Feed use an `ammonia`-stripped, `html-escape`-decoded plain-text
 projection so secondary Markdown, Org, or HTML syntax never leaks into their
