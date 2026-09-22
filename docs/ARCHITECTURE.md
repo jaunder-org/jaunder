@@ -722,6 +722,24 @@ slug editable on a later update, and scheduling or publishing freezes it again
 [scheduled publishing](adr/0027-scheduled-publishing-time-gated-visibility.md),
 [current-state slug freeze](adr/0130-current-publication-state-slug-freeze.md)).
 
+**Active Post slugs are unique per User.** Both schemas enforce
+`(user_id, slug)` only while `deleted_at IS NULL`; a Deleted Post releases the
+active slug, and another User has an independent namespace. Creation keeps an
+existing owner stable and allocates the first available numeric suffix beginning
+at `-1`, with the database constraint arbitrating concurrent attempts. Legacy
+duplicate groups are repaired once: the newest Post keeps the base slug to match
+the existing Emacs filename layout, while older Posts receive deterministic,
+unoccupied suffixes. Before remediation changes a slug, storage records a
+Historical Post Permalink Alias from the old User-qualified date-and-slug path
+to the Post ID. Each repaired Post follows the ordinary lifecycle-mutation
+contract: one complete prior-state Revision and a strictly advanced
+`updated_at`, with derived feed/cache state invalidated. Slug is part of the
+canonical AtomPub strong-ETag input, so changing the canonical slug invalidates
+the prior Member validator. A current canonical route always wins; a canonical
+miss may redirect an anonymously visible alias to the Post's current permalink
+without making the alias an AtomPub or Emacs identity
+([active Post slug uniqueness and historical aliases](adr/drafts/active-post-slug-uniqueness.md)).
+
 **Visibility starts with active/not-deleted eligibility, then applies two
 orthogonal predicates on the same reads.** _Time_: an active Post is draft
 (`published_at` NULL), scheduled (future), or live (past); every public read

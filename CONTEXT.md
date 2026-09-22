@@ -85,6 +85,13 @@ permalink; a Deleted Post releases that public identity while retaining its
 internal Post ID. _Avoid_: Article, entry (reserve "Entry" for the AtomPub wire
 object), note.
 
+**Historical Post Permalink Alias**: A durable redirect source recorded when
+remediation changes a Post's formerly canonical User-qualified date-and-slug
+path. It points by Post ID so its destination follows the Post's current
+canonical permalink, but it grants no visibility and is not an AtomPub Member
+identity. _Avoid_: alternate slug (the alias is a historical path, not a second
+editable Post name), redirect URL (the destination is derived, not stored).
+
 **Post Shortcode**: A bounded, complete-line construct in Markdown or Org Post
 source that asks Jaunder to render one supported provider-owned presentation
 without storing generated markup. Unknown or invalid constructs remain literal,
