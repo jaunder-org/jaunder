@@ -547,7 +547,9 @@ pub async fn collection_post(
             format,
             slug_override: None,
             published_at,
-            max_attempts: 100,
+            // Active slugs are finite database rows, so creation must keep
+            // searching until it reaches the first free suffix.
+            max_attempts: usize::MAX,
             summary,
             audiences,
             tags: categories.clone(),

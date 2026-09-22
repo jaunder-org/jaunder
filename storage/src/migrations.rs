@@ -540,6 +540,60 @@ mod tests {
             }
         };
         db.pool.execute(insert_long_slugs).await.unwrap();
+        let insert_edge_groups = match &db.pool {
+            CloseablePool::Sqlite(_) => {
+                "INSERT INTO posts
+                 (post_id, user_id, title, rendered_title, slug, body, format, rendered_html,
+                  created_at, updated_at, published_at) VALUES
+                 (6123, 6102, 'Colliding Long Old', 'Colliding Long Old',
+                  replace(hex(zeroblob(78)), '00', '界') || '甲乙', 'old', 'html', '<p>old</p>',
+                  '2026-02-03T00:00:00Z', '2026-02-03T00:00:00Z', '2026-02-03T00:00:00Z'),
+                 (6124, 6102, 'Colliding Long New', 'Colliding Long New',
+                  replace(hex(zeroblob(78)), '00', '界') || '甲乙', 'new', 'html', '<p>new</p>',
+                  '2026-02-04T00:00:00Z', '2026-02-04T00:00:00Z', '2026-02-04T00:00:00Z'),
+                 (6140, 6101, 'Quad One', 'Quad One', 'quad', 'one', 'html', '<p>one</p>',
+                  '2026-03-01T00:00:00Z', '2026-03-01T00:00:00Z', '2026-03-01T00:00:00Z'),
+                 (6141, 6101, 'Quad Two', 'Quad Two', 'quad', 'two', 'html', '<p>two</p>',
+                  '2026-03-02T00:00:00Z', '2026-03-02T00:00:00Z', '2026-03-02T00:00:00Z'),
+                 (6142, 6101, 'Quad Three', 'Quad Three', 'quad', 'three', 'html', '<p>three</p>',
+                  '2026-03-03T00:00:00Z', '2026-03-03T00:00:00Z', '2026-03-03T00:00:00Z'),
+                 (6143, 6101, 'Quad Four', 'Quad Four', 'quad', 'four', 'html', '<p>four</p>',
+                  '2026-03-04T00:00:00Z', '2026-03-04T00:00:00Z', '2026-03-04T00:00:00Z'),
+                 (6150, 6102, 'Cutoff Old', 'Cutoff Old',
+                  replace(hex(zeroblob(77)), '00', 'a') || '-bb', 'old', 'html', '<p>old</p>',
+                  '2026-04-01T00:00:00Z', '2026-04-01T00:00:00Z', '2026-04-01T00:00:00Z'),
+                 (6151, 6102, 'Cutoff New', 'Cutoff New',
+                  replace(hex(zeroblob(77)), '00', 'a') || '-bb', 'new', 'html', '<p>new</p>',
+                  '2026-04-02T00:00:00Z', '2026-04-02T00:00:00Z', '2026-04-02T00:00:00Z')"
+            }
+            CloseablePool::Postgres(_) => {
+                "INSERT INTO posts
+                 (post_id, user_id, title, rendered_title, slug, body, format, rendered_html,
+                  created_at, updated_at, published_at)
+                 OVERRIDING SYSTEM VALUE VALUES
+                 (6123, 6102, 'Colliding Long Old', 'Colliding Long Old',
+                  repeat('界', 78) || '甲乙', 'old', 'html', '<p>old</p>',
+                  '2026-02-03T00:00:00Z', '2026-02-03T00:00:00Z', '2026-02-03T00:00:00Z'),
+                 (6124, 6102, 'Colliding Long New', 'Colliding Long New',
+                  repeat('界', 78) || '甲乙', 'new', 'html', '<p>new</p>',
+                  '2026-02-04T00:00:00Z', '2026-02-04T00:00:00Z', '2026-02-04T00:00:00Z'),
+                 (6140, 6101, 'Quad One', 'Quad One', 'quad', 'one', 'html', '<p>one</p>',
+                  '2026-03-01T00:00:00Z', '2026-03-01T00:00:00Z', '2026-03-01T00:00:00Z'),
+                 (6141, 6101, 'Quad Two', 'Quad Two', 'quad', 'two', 'html', '<p>two</p>',
+                  '2026-03-02T00:00:00Z', '2026-03-02T00:00:00Z', '2026-03-02T00:00:00Z'),
+                 (6142, 6101, 'Quad Three', 'Quad Three', 'quad', 'three', 'html', '<p>three</p>',
+                  '2026-03-03T00:00:00Z', '2026-03-03T00:00:00Z', '2026-03-03T00:00:00Z'),
+                 (6143, 6101, 'Quad Four', 'Quad Four', 'quad', 'four', 'html', '<p>four</p>',
+                  '2026-03-04T00:00:00Z', '2026-03-04T00:00:00Z', '2026-03-04T00:00:00Z'),
+                 (6150, 6102, 'Cutoff Old', 'Cutoff Old', repeat('a', 77) || '-bb',
+                  'old', 'html', '<p>old</p>', '2026-04-01T00:00:00Z',
+                  '2026-04-01T00:00:00Z', '2026-04-01T00:00:00Z'),
+                 (6151, 6102, 'Cutoff New', 'Cutoff New', repeat('a', 77) || '-bb',
+                  'new', 'html', '<p>new</p>', '2026-04-02T00:00:00Z',
+                  '2026-04-02T00:00:00Z', '2026-04-02T00:00:00Z')"
+            }
+        };
+        db.pool.execute(insert_edge_groups).await.unwrap();
         db.pool
             .execute("INSERT INTO tags (tag_id, tag_slug) VALUES (6130, 'migration-tag')")
             .await
@@ -622,6 +676,43 @@ mod tests {
                 .unwrap(),
             1,
             "suffix allocation preserves the Unicode scalar length boundary"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM posts
+                     WHERE post_id = 6123 AND length(slug) = 80 AND slug LIKE '%-2'",
+                )
+                .await
+                .unwrap(),
+            1,
+            "backend-neutral queue order resolves colliding truncated candidates"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM posts
+                     WHERE post_id = 6150 AND length(slug) = 79
+                       AND slug LIKE '%-1' AND slug NOT LIKE '%--1'",
+                )
+                .await
+                .unwrap(),
+            1,
+            "migration suffixes trim a hyphen exposed at the truncation boundary"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM posts WHERE
+                     (post_id = 6140 AND slug = 'quad-1') OR
+                     (post_id = 6141 AND slug = 'quad-2') OR
+                     (post_id = 6142 AND slug = 'quad-3') OR
+                     (post_id = 6143 AND slug = 'quad')",
+                )
+                .await
+                .unwrap(),
+            4,
+            "four-Post groups keep the newest base and suffix oldest-first"
         );
         assert_eq!(
             db.pool

@@ -2739,7 +2739,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(confirmed(r1).slug, "hello-world");
-        assert_eq!(confirmed(r2).slug, "hello-world-2");
+        assert_eq!(confirmed(r2).slug, "hello-world-1");
 
         let err = perform_post_creation_at(
             &env.write_scope(),

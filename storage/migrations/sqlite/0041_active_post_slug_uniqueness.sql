@@ -36,7 +36,7 @@ WITH ranked AS (
 )
 SELECT
     ROW_NUMBER() OVER (
-        ORDER BY user_id, old_slug, created_at, post_id
+        ORDER BY user_id, created_at, post_id
     ) AS repair_sequence,
     post_id,
     user_id,
@@ -56,9 +56,12 @@ CREATE TEMP TABLE _slug_repairs (
 );
 
 WITH RECURSIVE allocation(
+    phase,
     repair_sequence,
     attempt,
     assigned,
+    candidate,
+    candidate_available,
     accepted_post_id,
     accepted_user_id,
     accepted_old_slug,
@@ -66,166 +69,97 @@ WITH RECURSIVE allocation(
     accepted_new_slug,
     accepted_old_updated_at
 ) AS (
-    SELECT 1, 1, '|', NULL, NULL, NULL, NULL, NULL, NULL
-    UNION ALL
     SELECT
-        CASE WHEN
-            NOT EXISTS (
-                SELECT 1 FROM posts existing
-                WHERE existing.deleted_at IS NULL
-                  AND existing.user_id = queued.user_id
-                  AND existing.slug =
-                      substr(queued.old_slug, 1, 80 - length(CAST(allocation.attempt AS TEXT)) - 1)
-                      || '-' || CAST(allocation.attempt AS TEXT)
-            )
-            AND instr(
-                allocation.assigned,
-                '|' || CAST(queued.user_id AS TEXT) || ':' ||
-                substr(queued.old_slug, 1, 80 - length(CAST(allocation.attempt AS TEXT)) - 1)
-                || '-' || CAST(allocation.attempt AS TEXT) || '|'
-            ) = 0
-            THEN allocation.repair_sequence + 1
-            ELSE allocation.repair_sequence
-        END,
-        CASE WHEN
-            NOT EXISTS (
-                SELECT 1 FROM posts existing
-                WHERE existing.deleted_at IS NULL
-                  AND existing.user_id = queued.user_id
-                  AND existing.slug =
-                      substr(queued.old_slug, 1, 80 - length(CAST(allocation.attempt AS TEXT)) - 1)
-                      || '-' || CAST(allocation.attempt AS TEXT)
-            )
-            AND instr(
-                allocation.assigned,
-                '|' || CAST(queued.user_id AS TEXT) || ':' ||
-                substr(queued.old_slug, 1, 80 - length(CAST(allocation.attempt AS TEXT)) - 1)
-                || '-' || CAST(allocation.attempt AS TEXT) || '|'
-            ) = 0
-            THEN 1
-            ELSE allocation.attempt + 1
-        END,
-        CASE WHEN
-            NOT EXISTS (
-                SELECT 1 FROM posts existing
-                WHERE existing.deleted_at IS NULL
-                  AND existing.user_id = queued.user_id
-                  AND existing.slug =
-                      substr(queued.old_slug, 1, 80 - length(CAST(allocation.attempt AS TEXT)) - 1)
-                      || '-' || CAST(allocation.attempt AS TEXT)
-            )
-            AND instr(
-                allocation.assigned,
-                '|' || CAST(queued.user_id AS TEXT) || ':' ||
-                substr(queued.old_slug, 1, 80 - length(CAST(allocation.attempt AS TEXT)) - 1)
-                || '-' || CAST(allocation.attempt AS TEXT) || '|'
-            ) = 0
-            THEN allocation.assigned || CAST(queued.user_id AS TEXT) || ':' ||
-                 substr(queued.old_slug, 1, 80 - length(CAST(allocation.attempt AS TEXT)) - 1)
-                 || '-' || CAST(allocation.attempt AS TEXT) || '|'
-            ELSE allocation.assigned
-        END,
-        CASE WHEN
-            NOT EXISTS (
-                SELECT 1 FROM posts existing
-                WHERE existing.deleted_at IS NULL
-                  AND existing.user_id = queued.user_id
-                  AND existing.slug =
-                      substr(queued.old_slug, 1, 80 - length(CAST(allocation.attempt AS TEXT)) - 1)
-                      || '-' || CAST(allocation.attempt AS TEXT)
-            )
-            AND instr(
-                allocation.assigned,
-                '|' || CAST(queued.user_id AS TEXT) || ':' ||
-                substr(queued.old_slug, 1, 80 - length(CAST(allocation.attempt AS TEXT)) - 1)
-                || '-' || CAST(allocation.attempt AS TEXT) || '|'
-            ) = 0
-            THEN queued.post_id ELSE NULL END,
-        CASE WHEN
-            NOT EXISTS (
-                SELECT 1 FROM posts existing
-                WHERE existing.deleted_at IS NULL
-                  AND existing.user_id = queued.user_id
-                  AND existing.slug =
-                      substr(queued.old_slug, 1, 80 - length(CAST(allocation.attempt AS TEXT)) - 1)
-                      || '-' || CAST(allocation.attempt AS TEXT)
-            )
-            AND instr(
-                allocation.assigned,
-                '|' || CAST(queued.user_id AS TEXT) || ':' ||
-                substr(queued.old_slug, 1, 80 - length(CAST(allocation.attempt AS TEXT)) - 1)
-                || '-' || CAST(allocation.attempt AS TEXT) || '|'
-            ) = 0
-            THEN queued.user_id ELSE NULL END,
-        CASE WHEN
-            NOT EXISTS (
-                SELECT 1 FROM posts existing
-                WHERE existing.deleted_at IS NULL
-                  AND existing.user_id = queued.user_id
-                  AND existing.slug =
-                      substr(queued.old_slug, 1, 80 - length(CAST(allocation.attempt AS TEXT)) - 1)
-                      || '-' || CAST(allocation.attempt AS TEXT)
-            )
-            AND instr(
-                allocation.assigned,
-                '|' || CAST(queued.user_id AS TEXT) || ':' ||
-                substr(queued.old_slug, 1, 80 - length(CAST(allocation.attempt AS TEXT)) - 1)
-                || '-' || CAST(allocation.attempt AS TEXT) || '|'
-            ) = 0
-            THEN queued.old_slug ELSE NULL END,
-        CASE WHEN
-            NOT EXISTS (
-                SELECT 1 FROM posts existing
-                WHERE existing.deleted_at IS NULL
-                  AND existing.user_id = queued.user_id
-                  AND existing.slug =
-                      substr(queued.old_slug, 1, 80 - length(CAST(allocation.attempt AS TEXT)) - 1)
-                      || '-' || CAST(allocation.attempt AS TEXT)
-            )
-            AND instr(
-                allocation.assigned,
-                '|' || CAST(queued.user_id AS TEXT) || ':' ||
-                substr(queued.old_slug, 1, 80 - length(CAST(allocation.attempt AS TEXT)) - 1)
-                || '-' || CAST(allocation.attempt AS TEXT) || '|'
-            ) = 0
-            THEN queued.old_permalink_date ELSE NULL END,
-        CASE WHEN
-            NOT EXISTS (
-                SELECT 1 FROM posts existing
-                WHERE existing.deleted_at IS NULL
-                  AND existing.user_id = queued.user_id
-                  AND existing.slug =
-                      substr(queued.old_slug, 1, 80 - length(CAST(allocation.attempt AS TEXT)) - 1)
-                      || '-' || CAST(allocation.attempt AS TEXT)
-            )
-            AND instr(
-                allocation.assigned,
-                '|' || CAST(queued.user_id AS TEXT) || ':' ||
-                substr(queued.old_slug, 1, 80 - length(CAST(allocation.attempt AS TEXT)) - 1)
-                || '-' || CAST(allocation.attempt AS TEXT) || '|'
-            ) = 0
-            THEN substr(queued.old_slug, 1, 80 - length(CAST(allocation.attempt AS TEXT)) - 1)
-                 || '-' || CAST(allocation.attempt AS TEXT)
-            ELSE NULL END,
-        CASE WHEN
-            NOT EXISTS (
-                SELECT 1 FROM posts existing
-                WHERE existing.deleted_at IS NULL
-                  AND existing.user_id = queued.user_id
-                  AND existing.slug =
-                      substr(queued.old_slug, 1, 80 - length(CAST(allocation.attempt AS TEXT)) - 1)
-                      || '-' || CAST(allocation.attempt AS TEXT)
-            )
-            AND instr(
-                allocation.assigned,
-                '|' || CAST(queued.user_id AS TEXT) || ':' ||
-                substr(queued.old_slug, 1, 80 - length(CAST(allocation.attempt AS TEXT)) - 1)
-                || '-' || CAST(allocation.attempt AS TEXT) || '|'
-            ) = 0
-            THEN queued.old_updated_at ELSE NULL END
+        0,
+        queued.repair_sequence,
+        1,
+        '|',
+        rtrim(substr(queued.old_slug, 1, 78), '-') || '-1',
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL
+    FROM _slug_repair_queue queued
+    WHERE queued.repair_sequence = 1
+
+    UNION ALL
+
+    -- Candidate rows become decision rows. The candidate expression and its
+    -- availability test each have one owner rather than being repeated across
+    -- every accepted-field projection.
+    SELECT
+        1,
+        allocation.repair_sequence,
+        allocation.attempt,
+        allocation.assigned,
+        allocation.candidate,
+        NOT EXISTS (
+            SELECT 1 FROM posts existing
+            WHERE existing.deleted_at IS NULL
+              AND existing.user_id = queued.user_id
+              AND existing.slug = allocation.candidate
+        ) AND instr(
+            allocation.assigned,
+            '|' || CAST(queued.user_id AS TEXT) || ':' || allocation.candidate || '|'
+        ) = 0,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL
     FROM allocation
     JOIN _slug_repair_queue queued
       ON queued.repair_sequence = allocation.repair_sequence
+    WHERE allocation.phase = 0
+
+    UNION ALL
+
+    -- Decision rows either accept and advance to the next queued repair, or
+    -- retain the row and try its next suffix. Accepted data rides on the next
+    -- candidate row so the final repair remains observable when no queue row follows.
+    SELECT
+        0,
+        CASE WHEN allocation.candidate_available
+             THEN allocation.repair_sequence + 1
+             ELSE allocation.repair_sequence END,
+        CASE WHEN allocation.candidate_available
+             THEN 1
+             ELSE allocation.attempt + 1 END,
+        CASE WHEN allocation.candidate_available
+             THEN allocation.assigned || CAST(queued.user_id AS TEXT) || ':' ||
+                  allocation.candidate || '|'
+             ELSE allocation.assigned END,
+        CASE
+            WHEN allocation.candidate_available AND next_queued.post_id IS NOT NULL
+            THEN rtrim(substr(next_queued.old_slug, 1, 78), '-') || '-1'
+            WHEN NOT allocation.candidate_available
+            THEN rtrim(
+                     substr(
+                         queued.old_slug,
+                         1,
+                         80 - length(CAST(allocation.attempt + 1 AS TEXT)) - 1
+                     ),
+                     '-'
+                 ) || '-' || CAST(allocation.attempt + 1 AS TEXT)
+            ELSE NULL
+        END,
+        NULL,
+        CASE WHEN allocation.candidate_available THEN queued.post_id ELSE NULL END,
+        CASE WHEN allocation.candidate_available THEN queued.user_id ELSE NULL END,
+        CASE WHEN allocation.candidate_available THEN queued.old_slug ELSE NULL END,
+        CASE WHEN allocation.candidate_available THEN queued.old_permalink_date ELSE NULL END,
+        CASE WHEN allocation.candidate_available THEN allocation.candidate ELSE NULL END,
+        CASE WHEN allocation.candidate_available THEN queued.old_updated_at ELSE NULL END
+    FROM allocation
+    JOIN _slug_repair_queue queued
+      ON queued.repair_sequence = allocation.repair_sequence
+    LEFT JOIN _slug_repair_queue next_queued
+      ON next_queued.repair_sequence = allocation.repair_sequence + 1
+    WHERE allocation.phase = 1
 )
 INSERT INTO _slug_repairs (
     post_id, user_id, old_slug, old_permalink_date, new_slug, new_updated_at

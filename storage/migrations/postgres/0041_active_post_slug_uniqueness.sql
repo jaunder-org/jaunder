@@ -30,7 +30,7 @@ WITH ranked AS (
 )
 SELECT
     ROW_NUMBER() OVER (
-        ORDER BY user_id, old_slug, created_at, post_id
+        ORDER BY user_id, created_at, post_id
     ) AS repair_sequence,
     post_id,
     user_id,
@@ -61,9 +61,9 @@ BEGIN
     LOOP
         attempt := 1;
         LOOP
-            candidate := left(
-                queued.old_slug,
-                80 - char_length('-' || attempt::text)
+            candidate := rtrim(
+                left(queued.old_slug, 80 - char_length('-' || attempt::text)),
+                '-'
             ) || '-' || attempt::text;
             EXIT WHEN NOT EXISTS (
                 SELECT 1 FROM posts existing

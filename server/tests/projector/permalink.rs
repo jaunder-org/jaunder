@@ -12,7 +12,7 @@ use crate::helpers::body_string;
 
 use common::permalink_route::canonical_permalink_path;
 use common::test_support::{parse_slug, parse_utc_instant, permalink_date};
-use common::time::UtcInstant;
+use common::{time::UtcInstant, visibility::AudienceTarget};
 use storage::sql::QueryStorageExt;
 use storage::test_support::{Backend, CloseablePool, SeedRawPost, SeedUser, backends};
 
@@ -139,6 +139,101 @@ async fn historical_permalink_alias_redirects_to_current_canonical_route(#[case]
         StatusCode::OK,
         "a current canonical Post shadows the historical alias"
     );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn historical_permalink_alias_hidden_targets_serve_shell(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let user = SeedUser::new().seed(env.users(), env.write_scope()).await;
+    let public_time = parse_utc_instant("2026-08-01T12:00:00Z");
+    let private = SeedRawPost::new(user.user_id)
+        .slug("private-alias-target")
+        .published_at(public_time)
+        .audiences(vec![AudienceTarget::Private])
+        .seed(env.posts(), env.write_scope())
+        .await;
+    let future = SeedRawPost::new(user.user_id)
+        .slug("future-alias-target")
+        .published_at(parse_utc_instant("2099-08-01T12:00:00Z"))
+        .seed(env.posts(), env.write_scope())
+        .await;
+    let deleted = SeedRawPost::new(user.user_id)
+        .slug("deleted-alias-target")
+        .published_at(public_time)
+        .seed(env.posts(), env.write_scope())
+        .await;
+    let private_source = parse_slug("private-alias-source");
+    let future_source = parse_slug("future-alias-source");
+    let deleted_source = parse_slug("deleted-alias-source");
+    match env.base.pool() {
+        CloseablePool::Sqlite(pool) => {
+            sqlx::query(
+                "INSERT INTO post_permalink_aliases
+                 (post_id, user_id, permalink_date, slug) VALUES
+                 ($1, $2, '2025-07-01', $3),
+                 ($4, $5, '2025-07-02', $6),
+                 ($7, $8, '2025-07-03', $9)",
+            )
+            .bind_storage(private.post_id)
+            .bind_storage(user.user_id)
+            .bind_storage(&private_source)
+            .bind_storage(future.post_id)
+            .bind_storage(user.user_id)
+            .bind_storage(&future_source)
+            .bind_storage(deleted.post_id)
+            .bind_storage(user.user_id)
+            .bind_storage(&deleted_source)
+            .execute(pool)
+            .await
+            .unwrap();
+            sqlx::query("UPDATE posts SET deleted_at = $1 WHERE post_id = $2")
+                .bind_storage(public_time)
+                .bind_storage(deleted.post_id)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+        CloseablePool::Postgres(pool) => {
+            sqlx::query(
+                "INSERT INTO post_permalink_aliases
+                 (post_id, user_id, permalink_date, slug) VALUES
+                 ($1, $2, '2025-07-01', $3),
+                 ($4, $5, '2025-07-02', $6),
+                 ($7, $8, '2025-07-03', $9)",
+            )
+            .bind_storage(private.post_id)
+            .bind_storage(user.user_id)
+            .bind_storage(&private_source)
+            .bind_storage(future.post_id)
+            .bind_storage(user.user_id)
+            .bind_storage(&future_source)
+            .bind_storage(deleted.post_id)
+            .bind_storage(user.user_id)
+            .bind_storage(&deleted_source)
+            .execute(pool)
+            .await
+            .unwrap();
+            sqlx::query("UPDATE posts SET deleted_at = $1 WHERE post_id = $2")
+                .bind_storage(public_time)
+                .bind_storage(deleted.post_id)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+    }
+
+    for uri in [
+        format!("/~{}/2025/07/01/{private_source}", user.username),
+        format!("/~{}/2025/07/02/{future_source}", user.username),
+        format!("/~{}/2025/07/03/{deleted_source}", user.username),
+    ] {
+        let response = projector_app(env.posts(), env.users(), env.themes())
+            .oneshot(get(&uri))
+            .await
+            .expect("historical alias request");
+        assert_shell_miss(response).await;
+    }
 }
 
 #[apply(backends)]
