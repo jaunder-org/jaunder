@@ -119,16 +119,16 @@ impl PostServices {
     }
 }
 
-/// A strong, content-hash `ETag` for a post's mutable representation. The
-/// transport-neutral projection is owned by `common`; this storage adapter only
-/// projects ordered post-tag labels into it.
-pub(crate) fn etag_for(post: &PostRecord) -> ETag {
+/// A strong, content-hash `ETag` for a post's mutable representation, including
+/// its complete stored audience target set.
+pub(crate) fn etag_for(post: &PostRecord, audiences: &[AudienceTarget]) -> ETag {
     etag::post_content_etag(
         post.title.as_ref(),
         &post.body,
         &post.format,
         post.summary.as_ref(),
         post.tags.iter().map(|tag| &tag.tag_display),
+        audiences,
         post.published_at.is_none(),
     )
 }
@@ -199,6 +199,7 @@ struct NormalizedAtomInput {
 /// common storage fields before the create/update handler applies its fallback policy.
 async fn normalize_atom_input(
     fields: PostFields,
+    atom_audiences: Presence<Vec<AudienceTarget>>,
     operation: OrgOperation,
     request_clock: UtcInstant,
     audiences: &dyn AudienceStorage,
@@ -209,13 +210,14 @@ async fn normalize_atom_input(
             Presence::Present(tags) => tags,
             Presence::Absent => Vec::new(),
         };
+        let audiences = authorize_audiences(audiences, author_user_id, atom_audiences).await?;
         return Ok(NormalizedAtomInput {
             body: fields.body,
             title: fields.title,
             summary: fields.summary,
             categories,
             lifecycle: fields.lifecycle,
-            audiences: Presence::Absent,
+            audiences,
             expectations: storage::PostBookkeepingExpectation::default(),
         });
     }
@@ -226,7 +228,7 @@ async fn normalize_atom_input(
             title: scalar_presence(fields.title.as_ref()),
             summary: scalar_presence(fields.summary.as_ref()),
             tags: validated_categories(fields.categories)?,
-            audiences: Presence::Absent,
+            audiences: atom_audiences,
             lifecycle: fields.lifecycle,
         },
         operation,
@@ -343,10 +345,13 @@ pub async fn collection_get(
         None
     };
 
-    let entries: Vec<_> = records
-        .iter()
-        .map(|post| mapping::post_to_entry(post, &base))
-        .collect::<Result<_, _>>()?;
+    let mut entries = Vec::with_capacity(records.len());
+    for post in &records {
+        let audiences = posts.get_post_audiences(post.post_id).await?;
+        entries.push(mapping::post_to_entry_with_audiences(
+            post, &audiences, &base,
+        )?);
+    }
 
     let updated = records
         .first()
@@ -418,12 +423,13 @@ pub async fn member_get(
     let site_config = services.site_config();
     let post = owned_post(posts.as_ref(), &auth_user, &username, post_id).await?;
     let base = super::required_base_url(site_config).await?;
-    let entry = mapping::post_to_entry(&post, &base)?;
+    let audiences = posts.get_post_audiences(post.post_id).await?;
+    let entry = mapping::post_to_entry_with_audiences(&post, &audiences, &base)?;
     let xml = atompub::entry_to_xml(&entry)?;
     Ok((
         [
             (header::CONTENT_TYPE, ENTRY_CONTENT_TYPE.to_string()),
-            (header::ETAG, etag_for(&post).to_string()),
+            (header::ETAG, etag_for(&post, &audiences).to_string()),
         ],
         xml,
     )
@@ -449,9 +455,10 @@ pub async fn member_delete(
 ) -> Result<Response, HandlerError> {
     let posts = services.posts();
     let post = owned_post(posts.as_ref(), &auth_user, &username, post_id).await?;
+    let audiences = posts.get_post_audiences(post.post_id).await?;
 
     // Conditional delete: honour `If-Match` against the content ETag, as `member_put` does.
-    if !if_match_satisfied(&headers, &etag_for(&post)) {
+    if !if_match_satisfied(&headers, &etag_for(&post, &audiences)) {
         return Err(HandlerError::PreconditionFailed);
     }
     let outcome = storage::soft_delete_post(
@@ -493,6 +500,9 @@ pub async fn collection_post(
     let site_config = services.site_config();
     super::require_user_match(&auth_user, &username)?;
     let entry: Entry = body.parse()?;
+    let atom_audience_input = atompub::j_audiences(&entry)
+        .map_err(|_| HandlerError::BadRequest)?
+        .map_or(Presence::Absent, Presence::Present);
     let request_clock = UtcInstant::now();
     let default_format = storage::get_default_post_format(user_config, auth_user.user_id).await?;
     let fields = mapping::entry_to_post_fields(&entry, default_format, request_clock)?;
@@ -508,6 +518,7 @@ pub async fn collection_post(
         expectations,
     } = normalize_atom_input(
         fields,
+        atom_audience_input,
         OrgOperation::Create,
         request_clock,
         audiences,
@@ -562,7 +573,8 @@ pub async fn collection_post(
         }
         let base = super::required_base_url(site_config).await?;
         metrics::idempotency(IdempotencyEvent::Replayed);
-        return post_entry_response(StatusCode::OK, &post, &base, &username);
+        let audiences = posts.get_post_audiences(post.post_id).await?;
+        return post_entry_response(StatusCode::OK, &post, &audiences, &base, &username);
     }
 
     // Fresh create: a non-conflict error propagates via `?`; an unavailable commit
@@ -579,7 +591,8 @@ pub async fn collection_post(
         .get_post_by_id(created.post_id, &viewer)
         .await?
         .ok_or(HandlerError::Invariant)?;
-    post_entry_response(StatusCode::CREATED, &post, &base, &username)
+    let audiences = posts.get_post_audiences(post.post_id).await?;
+    post_entry_response(StatusCode::CREATED, &post, &audiences, &base, &username)
 }
 
 /// Builds a member-entry response (used by create `201` and the idempotent-replay
@@ -587,18 +600,21 @@ pub async fn collection_post(
 fn post_entry_response(
     status: StatusCode,
     post: &PostRecord,
+    audiences: &[AudienceTarget],
     base: &BaseUrl,
     username: &Username,
 ) -> Result<Response, HandlerError> {
     let location_path = format!("/atompub/{username}/posts/{}", post.post_id);
     let location: EditUriUrl = tagged_url::compose(base, &location_path);
-    let xml = atompub::entry_to_xml(&mapping::post_to_entry(post, base)?)?;
+    let xml = atompub::entry_to_xml(&mapping::post_to_entry_with_audiences(
+        post, audiences, base,
+    )?)?;
     Ok((
         status,
         [
             (header::CONTENT_TYPE, ENTRY_CONTENT_TYPE.to_string()),
             (header::LOCATION, location.to_string()),
-            (header::ETAG, etag_for(post).to_string()),
+            (header::ETAG, etag_for(post, audiences).to_string()),
         ],
         xml,
     )
@@ -633,12 +649,16 @@ pub async fn member_put(
     let user_config = services.user_config();
     let site_config = services.site_config();
     let current = owned_post(posts.as_ref(), &auth_user, &username, post_id).await?;
+    let current_audiences = posts.get_post_audiences(post_id).await?;
 
-    if !if_match_satisfied(&headers, &etag_for(&current)) {
+    if !if_match_satisfied(&headers, &etag_for(&current, &current_audiences)) {
         return Err(HandlerError::PreconditionFailed);
     }
 
     let entry: Entry = body.parse()?;
+    let atom_audience_input = atompub::j_audiences(&entry)
+        .map_err(|_| HandlerError::BadRequest)?
+        .map_or(Presence::Absent, Presence::Present);
     let request_clock = UtcInstant::now();
     let default_format = storage::get_default_post_format(user_config, auth_user.user_id).await?;
     let fields = mapping::entry_to_post_fields(&entry, default_format, request_clock)?;
@@ -654,6 +674,7 @@ pub async fn member_put(
         expectations,
     } = normalize_atom_input(
         fields,
+        atom_audience_input,
         OrgOperation::Update { post_id },
         request_clock,
         audiences,
@@ -696,12 +717,15 @@ pub async fn member_put(
         .await?
         .ok_or(HandlerError::Invariant)?;
     let base = super::required_base_url(site_config).await?;
-    let xml = atompub::entry_to_xml(&mapping::post_to_entry(&post, &base)?)?;
+    let audiences = posts.get_post_audiences(post_id).await?;
+    let xml = atompub::entry_to_xml(&mapping::post_to_entry_with_audiences(
+        &post, &audiences, &base,
+    )?)?;
     Ok((
         StatusCode::OK,
         [
             (header::CONTENT_TYPE, ENTRY_CONTENT_TYPE.to_string()),
-            (header::ETAG, etag_for(&post).to_string()),
+            (header::ETAG, etag_for(&post, &audiences).to_string()),
         ],
         xml,
     )
@@ -711,7 +735,7 @@ pub async fn member_put(
 #[cfg(test)]
 mod etag_tests {
     use super::*;
-    use common::ids::{TagId, UserId};
+    use common::ids::{AudienceId, TagId, UserId};
     use common::tag::{Tag, TagLabel};
     use common::test_support::{
         parse_post_body, parse_post_summary, parse_post_title, parse_utc_instant,
@@ -764,7 +788,7 @@ mod etag_tests {
 
     #[test]
     fn etag_for_is_quoted_sha256() {
-        let e = etag_for(&base_post());
+        let e = etag_for(&base_post(), &[]);
         let hex = e
             .strip_prefix("\"sha256-")
             .and_then(|s| s.strip_suffix('"'))
@@ -778,14 +802,33 @@ mod etag_tests {
 
     #[test]
     fn etag_for_is_deterministic() {
-        assert_eq!(etag_for(&base_post()), etag_for(&base_post()));
+        assert_eq!(etag_for(&base_post(), &[]), etag_for(&base_post(), &[]));
+    }
+
+    #[test]
+    fn etag_for_changes_with_audience_but_not_audience_order() {
+        let post = base_post();
+        let public = vec![AudienceTarget::Public];
+        let union = vec![
+            AudienceTarget::Subscribers,
+            AudienceTarget::Named(AudienceId::from(7)),
+            AudienceTarget::Public,
+        ];
+        let reordered = vec![
+            AudienceTarget::Public,
+            AudienceTarget::Subscribers,
+            AudienceTarget::Named(AudienceId::from(7)),
+        ];
+
+        assert_ne!(etag_for(&post, &[]), etag_for(&post, &public));
+        assert_eq!(etag_for(&post, &union), etag_for(&post, &reordered));
     }
 
     #[test]
     fn etag_for_ignores_identity_and_timestamps() {
         // AC2/AC5: nothing outside the content fields moves the ETag — including a
         // published_at whose *value* advances while staying Some (non-draft).
-        let e = etag_for(&base_post());
+        let e = etag_for(&base_post(), &[]);
         let later = parse_utc_instant("1970-04-15T04:00:00Z");
         let mut p = base_post();
         p.post_id = PostId::from(999);
@@ -809,16 +852,16 @@ mod etag_tests {
                 "Emacs".parse().unwrap(),
             ),
         ];
-        assert_eq!(etag_for(&p), e);
+        assert_eq!(etag_for(&p, &[]), e);
     }
 
     #[test]
     fn etag_for_changes_on_each_content_field() {
-        let e = etag_for(&base_post());
+        let e = etag_for(&base_post(), &[]);
         let flip = |f: &dyn Fn(&mut PostRecord)| {
             let mut p = base_post();
             f(&mut p);
-            etag_for(&p)
+            etag_for(&p, &[])
         };
         assert_ne!(flip(&|p| p.title = Some(parse_post_title("Other"))), e); // title value
         assert_ne!(flip(&|p| p.title = None), e); // title present->absent
@@ -861,6 +904,7 @@ mod etag_tests {
     async fn org_normalization_keeps_an_absent_title_absent() {
         let normalized = normalize_atom_input(
             org_fields("Body"),
+            Presence::Absent,
             OrgOperation::Create,
             parse_utc_instant("2026-08-26T12:00:00Z"),
             &MockAudienceStorage::new(),
@@ -881,6 +925,7 @@ mod etag_tests {
 
         let result = normalize_atom_input(
             org_fields("#+PROPERTY: JAUNDER_AUDIENCE named:42\nBody"),
+            Presence::Absent,
             OrgOperation::Create,
             parse_utc_instant("2026-08-26T12:00:00Z"),
             &audiences,

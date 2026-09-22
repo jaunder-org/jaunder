@@ -1362,12 +1362,18 @@ async fn update_org_current_sync_succeeds_and_stale_sync_preserves_post(#[case] 
         .await
         .unwrap()
         .expect("created post exists");
+    let before_audiences = env
+        .posts()
+        .get_post_audiences(before.post_id)
+        .await
+        .expect("read current audiences");
     let current_etag = host::etag::post_content_etag(
         before.title.as_ref(),
         &before.body,
         &before.format,
         before.summary.as_ref(),
         before.tags.iter().map(|tag| &tag.tag_display),
+        &before_audiences,
         before.published_at.is_none(),
     );
     let (status, body) = update_post_json(app.clone(), created.post_id,

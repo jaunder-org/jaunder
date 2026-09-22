@@ -21,8 +21,9 @@ pub use title::{CollectionFeedTitle, CollectionTitle, WorkspaceTitle};
 
 pub mod entry;
 pub use entry::{
-    FeedMeta, MediaLinkEntry, draft_marker, entry_to_xml, is_draft, j_slug, render_feed,
-    render_media_link_entry, set_draft, set_j_slug,
+    FeedMeta, InvalidAtomAudience, MediaLinkEntry, draft_marker, entry_to_xml, is_draft,
+    j_audiences, j_slug, render_feed, render_media_link_entry, set_draft, set_j_audiences,
+    set_j_slug,
 };
 
 pub mod service;
@@ -37,7 +38,7 @@ pub use rsd::render_rsd_document;
 /// Reading a document is `Entry::from_str` / `Feed::read_from` directly — there is
 /// no wrapper. [`Error`] comes along so a consumer can map a parse failure onto
 /// its own error type (the server turns it into a `400`).
-pub use atom_syndication::{Category, Content, Entry, Error, Link, Text};
+pub use atom_syndication::{Category, Content, Entry, Error, Feed, Link, Text};
 
 mod ns;
 pub use ns::{APP_NS, ATOM_NS, J_NS};

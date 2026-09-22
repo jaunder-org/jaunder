@@ -42,7 +42,7 @@ Out:
     Atom-presence-over-Org-header precedence. Pure Service Document tests prove
     the exact Jaunder namespace, version `1`, and `audience` advertisement.
 
-- [ ] **Task 2: Apply the wire contract and ETag at every server boundary**
+- [x] **Task 2: Apply the wire contract and ETag at every server boundary**
   - Contract: incoming `j:audience` becomes structured audience presence before
     Org normalization, wins completely over Org-header audience, and continues
     through existing author authorization. Absence keeps header/default/create

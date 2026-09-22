@@ -18,6 +18,9 @@ pub enum AtomPubError {
     /// The writer returned bytes that were not UTF-8.
     #[error("AtomPub writer returned invalid UTF-8: {0}")]
     Utf8(#[source] std::string::FromUtf8Error),
+    /// A typed audience set could not be projected canonically.
+    #[error("invalid AtomPub audience projection: {0}")]
+    InvalidAudience(#[source] crate::atompub::entry::InvalidAtomAudience),
 }
 
 #[cfg(test)]

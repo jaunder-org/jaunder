@@ -430,6 +430,7 @@ pub(crate) fn update_expectation_error(
     post_id: PostId,
     existing: &PostBookkeepingRow,
     tags: &[TagLabel],
+    audiences: &[common::visibility::AudienceTarget],
     input: &UpdatePostInput,
 ) -> Option<UpdatePostError> {
     let expected = &input.expectations;
@@ -469,6 +470,7 @@ pub(crate) fn update_expectation_error(
         &existing.format,
         existing.summary.as_ref(),
         tags.iter(),
+        audiences,
         existing.published_at.is_none(),
     );
     expected

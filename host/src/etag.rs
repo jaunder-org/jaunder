@@ -197,6 +197,7 @@ pub fn post_content_etag<'a>(
     format: &'a PostFormat,
     summary: Option<&'a PostSummary>,
     tags: impl IntoIterator<Item = &'a TagLabel>,
+    audiences: impl IntoIterator<Item = &'a common::visibility::AudienceTarget>,
     draft: bool,
 ) -> ETag {
     #[derive(Serialize)]
@@ -206,14 +207,40 @@ pub fn post_content_etag<'a>(
         format: String,
         summary: Option<&'a PostSummary>,
         tags: Vec<&'a TagLabel>,
+        audiences: Vec<String>,
         draft: bool,
     }
+    let mut audiences = audiences
+        .into_iter()
+        .map(|target| match target {
+            common::visibility::AudienceTarget::Public => "public".to_owned(),
+            common::visibility::AudienceTarget::Subscribers => "subscribers".to_owned(),
+            common::visibility::AudienceTarget::Private => "private".to_owned(),
+            common::visibility::AudienceTarget::Named(id) => format!("named:{id}"),
+        })
+        .collect::<Vec<_>>();
+    audiences.sort_by(|left, right| {
+        let key = |value: &str| match value {
+            "public" => (0, 0),
+            "subscribers" => (1, 0),
+            "private" => (2, 0),
+            named => (
+                3,
+                named
+                    .strip_prefix("named:")
+                    .and_then(|id| id.parse::<i64>().ok())
+                    .unwrap_or(0),
+            ),
+        };
+        key(left).cmp(&key(right))
+    });
     let content = Content {
         title,
         body,
         format: format.to_string(),
         summary,
         tags: tags.into_iter().collect(),
+        audiences,
         draft,
     };
     let bytes = serde_json::to_vec(&content).unwrap_or_else(|_| Vec::new());

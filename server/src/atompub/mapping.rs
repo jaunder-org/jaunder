@@ -12,6 +12,7 @@ use common::post_title::PostTitle;
 use common::tag::TagLabel;
 use common::tagged_url::{self, BaseUrl, EditUriUrl, Permalink};
 use common::time::UtcInstant;
+use common::visibility::AudienceTarget;
 use host::atompub::{self, Category, Content, Entry, Link, Text};
 use std::str::FromStr;
 use storage::{PostFormat, PostRecord};
@@ -182,8 +183,24 @@ pub fn entry_to_post_fields(
 ///
 /// Returns [`host::atompub::AtomPubError`] when the emitted Jiff timestamps cannot
 /// be represented by Atom's Chrono-backed entry model.
-pub fn post_to_entry(
+#[cfg(test)]
+fn post_to_entry(
     post: &PostRecord,
+    base_url: &BaseUrl,
+) -> Result<Entry, host::atompub::AtomPubError> {
+    post_to_entry_with_audiences(post, &[], base_url)
+}
+
+/// Builds an `AtomPub` member `Entry` with the Post's complete stored audience.
+///
+/// # Errors
+///
+/// Returns [`host::atompub::AtomPubError`] when the emitted Jiff timestamps cannot
+/// be represented by Atom's Chrono-backed entry model, or when storage supplied
+/// an audience set that violates the canonical Atom projection.
+pub fn post_to_entry_with_audiences(
+    post: &PostRecord,
+    audiences: &[AudienceTarget],
     base_url: &BaseUrl,
 ) -> Result<Entry, host::atompub::AtomPubError> {
     let username = &*post.author_username;
@@ -252,6 +269,8 @@ pub fn post_to_entry(
     // (a serialization boundary, like the JSON serde bridge), not a slug-value
     // carrier; the typed `Slug` is derefed to its text here.
     atompub::set_j_slug(&mut entry, post.slug.as_ref());
+    atompub::set_j_audiences(&mut entry, audiences)
+        .map_err(host::atompub::AtomPubError::InvalidAudience)?;
     Ok(entry)
 }
 

@@ -40,8 +40,25 @@ async fn locked_update_expectation_error(
     .bind_storage(post_id)
     .fetch_all(&mut *connection)
     .await?;
+    let audiences = sqlx::query_as::<
+        _,
+        (
+            common::visibility::TargetKind,
+            Option<common::ids::AudienceId>,
+        ),
+    >(
+        "SELECT tk.name, pa.audience_id FROM post_audiences pa \
+         JOIN target_kinds tk ON tk.kind_id = pa.target_kind_id \
+         WHERE pa.post_id = $1",
+    )
+    .bind_storage(post_id)
+    .fetch_all(&mut *connection)
+    .await?
+    .into_iter()
+    .filter_map(|(kind, audience_id)| visibility::audience_target_from_row(kind, audience_id))
+    .collect::<Vec<_>>();
     Ok(lifecycle::update_expectation_error(
-        post_id, existing, &tags, input,
+        post_id, existing, &tags, &audiences, input,
     ))
 }
 
