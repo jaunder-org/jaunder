@@ -3,6 +3,7 @@ use sqlx::{Pool, Postgres, QueryBuilder};
 
 use crate::helpers;
 use crate::posts::{
+    errors::is_active_post_slug_conflict,
     lifecycle::{self, PostBookkeepingRow},
     media::{self, MediaReferenceEvidence, PostMediaReferenceBackfill},
     models::PostPublicationClear,
@@ -211,7 +212,13 @@ async fn apply_post_update(
     .bind_storage(input.summary.as_ref())
     .bind_storage(post_id)
     .execute(&mut *tx)
-    .await?;
+    .await
+    .map_err(|error| match error {
+        sqlx::Error::Database(database) if is_active_post_slug_conflict(database.as_ref()) => {
+            UpdatePostError::SlugConflict
+        }
+        error => UpdatePostError::Internal(error),
+    })?;
     visibility::replace_post_audiences::<Postgres>(tx, post_id, &input.audiences).await?;
     for label in tag_diff.to_add {
         let tag_id = sqlx::query_scalar::<_, TagId>(tags::UPSERT_TAG_RETURNING_ID)

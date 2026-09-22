@@ -2430,6 +2430,180 @@ mod tests {
         assert_eq!(draft.deleted_at, None);
     }
 
+    #[apply(backends)]
+    #[tokio::test]
+    async fn draft_update_rejects_another_active_posts_slug_without_partial_state(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let [user] = seed_users::<1>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
+        let owner = SeedRawPost::new(user)
+            .slug("occupied-update-slug")
+            .draft()
+            .seed(env.posts(), env.write_scope())
+            .await;
+        let edited = SeedRawPost::new(user)
+            .slug("unchanged-update-slug")
+            .draft()
+            .seed(env.posts(), env.write_scope())
+            .await;
+
+        let result = update_post_scoped(
+            env.posts(),
+            env.write_scope(),
+            edited.post_id,
+            user,
+            UpdateRawPost::new(owner.slug.as_ref())
+                .unpublish()
+                .body(parse_post_body("must roll back"))
+                .build(),
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(crate::WriteScopeError::Operation(
+                UpdatePostError::SlugConflict
+            ))
+        ));
+        let retained = env
+            .posts()
+            .get_post_by_id(edited.post_id, &ViewerIdentity::Local { user_id: user })
+            .await
+            .unwrap()
+            .expect("the losing draft remains readable");
+        assert_eq!(retained.slug, edited.slug);
+        assert_ne!(retained.body, parse_post_body("must roll back"));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn concurrent_draft_updates_arbitrate_one_free_slug_atomically(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let [user] = seed_users::<1>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
+        let first = SeedRawPost::new(user)
+            .slug("first-racing-draft")
+            .draft()
+            .seed(env.posts(), env.write_scope())
+            .await;
+        let second = SeedRawPost::new(user)
+            .slug("second-racing-draft")
+            .draft()
+            .seed(env.posts(), env.write_scope())
+            .await;
+        let viewer = ViewerIdentity::Local { user_id: user };
+        let first_before = env
+            .posts()
+            .get_post_by_id(first.post_id, &viewer)
+            .await
+            .unwrap()
+            .unwrap();
+        let second_before = env
+            .posts()
+            .get_post_by_id(second.post_id, &viewer)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let barrier = Arc::new(Barrier::new(3));
+        let first_update = tokio::spawn({
+            let posts = env.posts();
+            let write_scope = env.write_scope();
+            let barrier = Arc::clone(&barrier);
+            async move {
+                barrier.wait().await;
+                update_post_scoped(
+                    posts,
+                    write_scope,
+                    first.post_id,
+                    user,
+                    UpdateRawPost::new("racing-draft-slug")
+                        .unpublish()
+                        .body(parse_post_body("first race winner"))
+                        .build(),
+                )
+                .await
+            }
+        });
+        let second_update = tokio::spawn({
+            let posts = env.posts();
+            let write_scope = env.write_scope();
+            let barrier = Arc::clone(&barrier);
+            async move {
+                barrier.wait().await;
+                update_post_scoped(
+                    posts,
+                    write_scope,
+                    second.post_id,
+                    user,
+                    UpdateRawPost::new("racing-draft-slug")
+                        .unpublish()
+                        .body(parse_post_body("second race winner"))
+                        .build(),
+                )
+                .await
+            }
+        });
+        barrier.wait().await;
+        let first_result = first_update
+            .await
+            .expect("first update task does not panic");
+        let second_result = second_update
+            .await
+            .expect("second update task does not panic");
+        let results = [&first_result, &second_result];
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| matches!(
+                    result,
+                    Err(crate::WriteScopeError::Operation(
+                        UpdatePostError::SlugConflict
+                    ))
+                ))
+                .count(),
+            1
+        );
+
+        let first_after = env
+            .posts()
+            .get_post_by_id(first_before.post_id, &viewer)
+            .await
+            .unwrap()
+            .unwrap();
+        let second_after = env
+            .posts()
+            .get_post_by_id(second_before.post_id, &viewer)
+            .await
+            .unwrap()
+            .unwrap();
+        let (loser_before, loser_after) = if first_result.is_err() {
+            (&first_before, &first_after)
+        } else {
+            (&second_before, &second_after)
+        };
+        assert_eq!(loser_after.post_id, loser_before.post_id);
+        assert_eq!(loser_after.slug, loser_before.slug);
+        assert_eq!(loser_after.body, loser_before.body);
+        assert_eq!(loser_after.updated_at, loser_before.updated_at);
+        assert_eq!(
+            [first_after, second_after]
+                .iter()
+                .filter(|record| record.slug == "racing-draft-slug")
+                .count(),
+            1
+        );
+    }
+
     /// Two independent edits whose old/new media sets are reversed must complete:
     /// `PostgreSQL` acquires their common advisory keys in one order, while `SQLite`
     /// serializes both writers through its immediate transaction.

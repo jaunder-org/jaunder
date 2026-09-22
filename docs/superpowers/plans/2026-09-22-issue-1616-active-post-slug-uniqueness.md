@@ -41,7 +41,7 @@ Out:
     applied migration; schema tests prove rejection, cross-User independence,
     and soft-delete reuse.
 
-- [ ] Task 2: Make runtime creation and updates obey the invariant
+- [x] Task 2: Make runtime creation and updates obey the invariant
   - Contract: the shared candidate allocator tries base, `-1`, `-2`, … within
     the existing slug-length rules. Create retries only the new Post candidate;
     update maps the new unique-index violation to a bounded slug-conflict result

@@ -4,11 +4,21 @@ use thiserror::Error;
 
 use common::ids::PostId;
 
+const ACTIVE_POST_SLUG_INDEX: &str = "posts_user_slug";
+const SQLITE_ACTIVE_POST_SLUG_COLUMNS: &str = "posts.user_id, posts.slug";
+
+/// Whether a database failure names the active per-User slug invariant.
+pub(crate) fn is_active_post_slug_conflict(error: &dyn sqlx::error::DatabaseError) -> bool {
+    error.is_unique_violation()
+        && (error.constraint() == Some(ACTIVE_POST_SLUG_INDEX)
+            || error.message().contains(SQLITE_ACTIVE_POST_SLUG_COLUMNS))
+}
+
 /// Errors that can occur when creating a post.
 #[derive(Debug, Error)]
 pub enum CreatePostError {
-    /// A post with the same slug already exists for this user on this day.
-    #[error("slug already taken for this user on this date")]
+    /// An active Post with the same slug already exists for this User.
+    #[error("slug already taken for this user")]
     SlugConflict,
     /// A non-authoritative bookkeeping property disagreed with the final row.
     #[error("post bookkeeping does not match the stored post")]
@@ -31,6 +41,9 @@ pub enum UpdatePostError {
     /// The user is not authorized to edit this post.
     #[error("not authorized")]
     Unauthorized,
+    /// Another active Post already owns the requested slug for this User.
+    #[error("slug already taken for this user")]
+    SlugConflict,
     /// A non-authoritative target/final-state property disagreed with the locked row.
     #[error("post bookkeeping does not match the stored post")]
     BookkeepingMismatch,
@@ -52,7 +65,9 @@ impl From<UpdatePostError> for host::error::InternalError {
             UpdatePostError::NotFound | UpdatePostError::Unauthorized => {
                 InternalError::not_found("Post")
             }
-            UpdatePostError::BookkeepingMismatch | UpdatePostError::StaleContent => {
+            UpdatePostError::SlugConflict
+            | UpdatePostError::BookkeepingMismatch
+            | UpdatePostError::StaleContent => {
                 InternalError::validation_source(error.to_string(), error)
             }
             UpdatePostError::Internal(e) => InternalError::storage(e),
@@ -148,6 +163,7 @@ mod tests {
         assert_eq!(internal.public_message(), "storage operation failed");
 
         for error in [
+            UpdatePostError::SlugConflict,
             UpdatePostError::BookkeepingMismatch,
             UpdatePostError::StaleContent,
         ] {

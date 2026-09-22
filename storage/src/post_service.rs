@@ -372,6 +372,8 @@ pub enum PerformUpdateError {
     NotFound,
     #[error("not authorized")]
     Unauthorized,
+    #[error("slug already taken for this user")]
+    SlugConflict,
     #[error("post bookkeeping does not match the stored post")]
     BookkeepingMismatch,
     #[error("post content has changed")]
@@ -385,6 +387,7 @@ impl From<UpdatePostError> for PerformUpdateError {
         match e {
             UpdatePostError::NotFound => Self::NotFound,
             UpdatePostError::Unauthorized => Self::Unauthorized,
+            UpdatePostError::SlugConflict => Self::SlugConflict,
             UpdatePostError::BookkeepingMismatch => Self::BookkeepingMismatch,
             UpdatePostError::StaleContent => Self::StaleContent,
             UpdatePostError::Internal(e) => Self::Storage(e),
@@ -402,6 +405,7 @@ impl From<PerformUpdateError> for host::error::InternalError {
         use host::error::InternalError;
         match error {
             PerformUpdateError::EmptyPost
+            | PerformUpdateError::SlugConflict
             | PerformUpdateError::BookkeepingMismatch
             | PerformUpdateError::StaleContent => {
                 InternalError::validation_source(error.to_string(), error)
@@ -805,7 +809,7 @@ pub fn candidate_slug(slug_seed: &Slug, attempt: usize) -> Result<Slug, InvalidS
     }
     // Keep the suffixed candidate within the slug length cap: a seed already at
     // the cap plus "-{n}" would otherwise exceed it and be rejected by from_str.
-    let suffix = format!("-{}", attempt + 1);
+    let suffix = format!("-{attempt}");
     let max_base = common::slug::MAX_SLUG_CHARS.saturating_sub(suffix.chars().count());
     let base: String = slug_seed.chars().take(max_base).collect();
     // Single validity chokepoint: funnel the suffixed candidate through from_str.
@@ -1968,7 +1972,7 @@ mod tests {
     #[test]
     fn candidate_slug_keeps_suffix_within_cap() {
         use common::slug::{MAX_SLUG_CHARS, Slug};
-        // A seed already at the cap: the naive "{seed}-2" would be 82 chars and
+        // A seed already at the cap: the naive "{seed}-1" would be 82 chars and
         // be rejected by from_str; candidate_slug truncates the base to fit. The
         // seed is a valid Slug, so it is by construction ≤ MAX_SLUG_CHARS.
         let seed: Slug = parse_slug(&"a".repeat(MAX_SLUG_CHARS));
@@ -1976,10 +1980,10 @@ mod tests {
         // so a candidate exceeding the cap would fail here.
         let c = candidate_slug(&seed, 1).unwrap();
         assert!(c.chars().count() <= MAX_SLUG_CHARS);
-        assert!(c.ends_with("-2"));
+        assert!(c.ends_with("-1"));
 
         // Truncation that would land on a '-' trims it so no "--" boundary forms:
-        // an at-cap seed whose 78th char (the base cutoff for a "-2" suffix) is '-'.
+        // an at-cap seed whose 78th char (the base cutoff for a "-1" suffix) is '-'.
         let seed2: Slug = parse_slug(&format!("{}-{}", "a".repeat(77), "b".repeat(2)));
         let c2 = candidate_slug(&seed2, 1).unwrap();
         assert!(c2.chars().count() <= MAX_SLUG_CHARS);
@@ -2074,8 +2078,105 @@ mod tests {
         .unwrap();
 
         assert_eq!(confirmed(r1).slug, "hello-world");
-        assert_eq!(confirmed(r2).slug, "hello-world-2");
-        assert_eq!(confirmed(r3).slug, "hello-world-3");
+        assert_eq!(confirmed(r2).slug, "hello-world-1");
+        assert_eq!(confirmed(r3).slug, "hello-world-2");
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn concurrent_creates_suffix_new_posts_without_moving_the_base_owner(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let storage = env.posts();
+        let create_input = move || PostCreation {
+            user_id,
+            body: parse_post_body("Concurrent slug"),
+            title: None,
+            format: PostFormat::Markdown,
+            slug_override: None,
+            published_at: None,
+            max_attempts: 100,
+            summary: None,
+            audiences: vec![AudienceTarget::Public],
+            tags: Vec::new(),
+            idempotency_key: None,
+            expectations: PostBookkeepingExpectation::default(),
+        };
+        let base = confirmed(
+            perform_post_creation(
+                &env.write_scope(),
+                &env.media_content_locks(),
+                Arc::clone(&storage),
+                env.feed_events(),
+                create_input(),
+            )
+            .await
+            .unwrap(),
+        );
+        let base_id = base.post_id;
+
+        let barrier = Arc::new(tokio::sync::Barrier::new(3));
+        let first = tokio::spawn({
+            let write_scope = env.write_scope();
+            let content_locks = env.media_content_locks();
+            let storage = Arc::clone(&storage);
+            let feed_events = env.feed_events();
+            let barrier = Arc::clone(&barrier);
+            async move {
+                barrier.wait().await;
+                perform_post_creation(
+                    &write_scope,
+                    &content_locks,
+                    storage,
+                    feed_events,
+                    create_input(),
+                )
+                .await
+            }
+        });
+        let second = tokio::spawn({
+            let write_scope = env.write_scope();
+            let content_locks = env.media_content_locks();
+            let storage = Arc::clone(&storage);
+            let feed_events = env.feed_events();
+            let barrier = Arc::clone(&barrier);
+            async move {
+                barrier.wait().await;
+                perform_post_creation(
+                    &write_scope,
+                    &content_locks,
+                    storage,
+                    feed_events,
+                    create_input(),
+                )
+                .await
+            }
+        });
+        barrier.wait().await;
+        let mut newcomers = [
+            confirmed(first.await.unwrap().unwrap()),
+            confirmed(second.await.unwrap().unwrap()),
+        ];
+        newcomers.sort_by(|left, right| left.slug.cmp(&right.slug));
+        assert_eq!(newcomers[0].slug, "concurrent-slug-1");
+        assert_eq!(newcomers[1].slug, "concurrent-slug-2");
+        let retained = storage
+            .get_post_by_id(
+                base_id,
+                &common::visibility::ViewerIdentity::Local { user_id },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(retained.slug, "concurrent-slug");
     }
 
     #[apply(backends)]
@@ -2086,7 +2187,7 @@ mod tests {
         let env = backend.setup().await;
         let storage = Arc::clone(&env.posts());
         let expected = parse_slug("expected");
-        let expected_second = parse_slug("expected-2");
+        let expected_second = parse_slug("expected-1");
 
         let create = |user_id, expectations| PostCreation {
             user_id,
@@ -3685,6 +3786,13 @@ mod tests {
     }
 
     #[test]
+    fn perform_update_error_from_slug_conflict() {
+        use crate::UpdatePostError;
+        let err: PerformUpdateError = UpdatePostError::SlugConflict.into();
+        assert!(matches!(err, PerformUpdateError::SlugConflict));
+    }
+
+    #[test]
     fn perform_update_error_debug() {
         let err = PerformUpdateError::EmptyPost;
         let debug = format!("{err:?}");
@@ -3717,6 +3825,13 @@ mod tests {
         let unauthorized: InternalError = PerformUpdateError::Unauthorized.into();
         assert_eq!(unauthorized.kind(), ErrorKind::NotFound);
         assert_eq!(unauthorized.public_message(), "Post not found");
+
+        let slug_conflict: InternalError = PerformUpdateError::SlugConflict.into();
+        assert_eq!(slug_conflict.kind(), ErrorKind::Validation);
+        assert_eq!(
+            slug_conflict.public_message(),
+            "slug already taken for this user"
+        );
 
         let storage: InternalError = PerformUpdateError::Storage(sqlx::Error::PoolClosed).into();
         assert_eq!(storage.kind(), ErrorKind::Storage);

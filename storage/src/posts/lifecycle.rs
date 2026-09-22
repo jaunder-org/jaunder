@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use sqlx::{AssertSqlSafe, Database, Decode, Encode, Executor, Pool, Result, Row, Type};
 
 use crate::posts::cursors::PostRevisionCursor;
-use crate::posts::errors::{CreatePostError, UpdatePostError};
+use crate::posts::errors::{CreatePostError, UpdatePostError, is_active_post_slug_conflict};
 use crate::posts::media;
 use crate::posts::models::{
     CreatePostInput, PostLifecycle, PostMutation, PostRevisionMetadata, PostRevisionPage,
@@ -549,9 +549,11 @@ where
     .bind_storage(input.summary.as_ref())
     .fetch_one(&mut *conn)
     .await
-    .map_err(|e| match e {
-        sqlx::Error::Database(db) if db.is_unique_violation() => CreatePostError::SlugConflict,
-        e => CreatePostError::Internal(e),
+    .map_err(|error| match error {
+        sqlx::Error::Database(database) if is_active_post_slug_conflict(database.as_ref()) => {
+            CreatePostError::SlugConflict
+        }
+        error => CreatePostError::Internal(error),
     })?;
 
     if !create_expectations_match(input) {
