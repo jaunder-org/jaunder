@@ -29,6 +29,19 @@
     (should (string-match-p "<content type=\"text/org\">Body text</content>" xml))
     (should (string-match-p "<published>2026-07-01T13:00:00Z</published>" xml))))
 
+(ert-deftest jaunder-atom-entry->xml-audiences-use-jaunder-namespace-and-canonical-order ()
+  (let ((xml (jaunder--atom-entry->xml
+              (jaunder--make-entry
+               :audiences '("named:17" "subscribers" "public")
+               :content-type "text/org" :body "b"))))
+    (should (string-match-p
+             "xmlns:j=\"https://jaunder.org/ns/atompub\"" xml))
+    (should (string-match-p
+             (concat "<j:audience>public</j:audience>"
+                     "<j:audience>subscribers</j:audience>"
+                     "<j:audience>named:17</j:audience>")
+             xml))))
+
 (ert-deftest jaunder-atom-entry->xml-draft-marker ()
   (let ((xml (jaunder--atom-entry->xml
               (jaunder--make-entry :draft t :content-type "text/org" :body "b"))))
@@ -134,14 +147,27 @@
     (should (equal (mapcar #'car fields)
                    '(content-src content-type slug published
                                  titles categories summaries content-nodes drafts
-                                 published-values edit-uris alternate-uris slugs)))
+                                 published-values edit-uris alternate-uris slugs
+                                 audiences)))
     (should (equal (cdr (assq 'content-src fields)) "https://h/image.png"))
     (should (equal (cdr (assq 'content-type fields)) "image/png"))
     (should (null (cdr (assq 'slug fields))))
     (should (null (cdr (assq 'published fields))))
-    (dolist (key '(titles categories summaries drafts published-values edit-uris alternate-uris slugs))
+    (dolist (key '(titles categories summaries drafts published-values edit-uris alternate-uris slugs audiences))
       (should (equal (cdr (assq key fields)) nil)))
     (should (= (length (cdr (assq 'content-nodes fields))) 1))))
+
+(ert-deftest jaunder-harvest-response-fields-audiences-require-exact-namespace ()
+  (let* ((xml (concat
+               "<entry xmlns=\"http://www.w3.org/2005/Atom\""
+               " xmlns:x=\"https://jaunder.org/ns/atompub\""
+               " xmlns:f=\"https://example.invalid/foreign\">"
+               "<x:audience>public</x:audience>"
+               "<f:audience>private</f:audience>"
+               "<x:audience>named:7</x:audience>"
+               "<content type=\"text/org\">Body</content></entry>"))
+         (fields (jaunder--harvest-response-fields xml)))
+    (should (equal (cdr (assq 'audiences fields)) '("public" "named:7")))))
 
 (ert-deftest jaunder-harvest-response-fields-uses-only-direct-entry-metadata ()
   ;; XHTML body markup is content, not Atom metadata: a nested title/category

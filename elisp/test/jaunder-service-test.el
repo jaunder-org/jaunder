@@ -43,6 +43,26 @@ Lets the warning tests assert on emitted warnings without touching the real
                   jaunder-test--service-doc-with-feature)
                  '("format-media-type" "slug"))))
 
+(ert-deftest jaunder-service-advertises-audience-only-for-exact-extension ()
+  (let ((valid (jaunder--parse-service-document
+                (concat "<app:service xmlns:app=\"http://www.w3.org/2007/app\""
+                        " xmlns:x=\"https://jaunder.org/ns/atompub\">"
+                        "<app:workspace><x:extension version=\"1\""
+                        " features=\"slug audience\"/></app:workspace></app:service>"))))
+    (should (jaunder--service-advertises-audience-p valid)))
+  (dolist (extension
+           '("<f:extension version=\"1\" features=\"audience\"/>"
+             "<j:extension version=\"2\" features=\"audience\"/>"
+             "<j:extension features=\"audience\"/>"
+             "<j:extension version=\"1\" features=\"slug\"/>"))
+    (let ((dom (jaunder--parse-service-document
+                (concat "<app:service xmlns:app=\"http://www.w3.org/2007/app\""
+                        " xmlns:j=\"https://jaunder.org/ns/atompub\""
+                        " xmlns:f=\"https://example.invalid/foreign\">"
+                        "<app:workspace>" extension
+                        "</app:workspace></app:service>"))))
+      (should-not (jaunder--service-advertises-audience-p dom)))))
+
 (ert-deftest jaunder-parse-service-features-absent-is-empty ()
   ;; Parses fine but advertises nothing → empty list, not `unknown'.
   (should (equal (jaunder--parse-service-features

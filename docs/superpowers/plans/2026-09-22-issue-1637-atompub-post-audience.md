@@ -61,7 +61,7 @@ Out:
     `devtool run -- cargo xtask test-local -- -p jaunder -E 'test(/^atompub::/)'`
     while iterating.
 
-- [ ] **Task 3: Carry audience through the Emacs Protocol Client's pure seams**
+- [x] **Task 3: Carry audience through the Emacs Protocol Client's pure seams**
   - Contract: `jaunder-entry` carries the complete target set;
     `jaunder--org->atom` maps repeated local `JAUNDER_AUDIENCE`; the Atom
     serializer/harvester maps repeated `j:audience`; pull writes deterministic

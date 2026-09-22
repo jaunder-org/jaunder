@@ -186,6 +186,10 @@ as `jaunder--atom->org'.  This function performs no network or filesystem I/O."
          (edit-uri (jaunder--pull-exactly-one fields 'edit-uris "edit URI"))
          (slug (jaunder--pull-exactly-one fields 'slugs "j:slug"))
          (summary (jaunder--pull-at-most-one fields 'summaries "summary"))
+         (audiences
+          (condition-case err
+              (jaunder--canonical-audiences (cdr (assq 'audiences fields)))
+            (error (jaunder--pull-error (error-message-string err)))))
          (draft-value (jaunder--pull-at-most-one fields 'drafts "app:draft"))
          (published (jaunder--pull-at-most-one fields 'published-values "published"))
          (id (jaunder--pull-edit-id edit-uri))
@@ -224,6 +228,9 @@ as `jaunder--atom->org'.  This function performs no network or filesystem I/O."
                                     (mapconcat #'identity categories ", ")))))
                   (and summary (jaunder--pull-header-lines "DESCRIPTION" summary))
                   (list (format "#+PROPERTY: JAUNDER_STATUS %s" status))
+                  (mapcar (lambda (audience)
+                            (format "#+PROPERTY: JAUNDER_AUDIENCE %s" audience))
+                          audiences)
                   (when date-tz
                     (list (format "#+PROPERTY: JAUNDER_DATE_TZ %s" date-tz)
                           (format "#+PROPERTY: JAUNDER_DATE_UTC %s" date-utc)))

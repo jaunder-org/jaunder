@@ -61,6 +61,35 @@
   (should (null (jaunder-entry-categories
                  (jaunder-test--entry "#+TITLE: T\n\nBody\n")))))
 
+(ert-deftest jaunder-org->atom-audiences-are-repeated-and-canonical ()
+  (should
+   (equal
+    (jaunder-entry-audiences
+     (jaunder-test--entry
+      (concat "#+PROPERTY: JAUNDER_AUDIENCE named:17\n"
+              "#+PROPERTY: JAUNDER_AUDIENCE subscribers\n"
+              "#+PROPERTY: JAUNDER_AUDIENCE public\n\nBody\n")))
+    '("public" "subscribers" "named:17"))))
+
+(ert-deftest jaunder-org->atom-audience-omission-remains-nil ()
+  (should-not
+   (jaunder-entry-audiences (jaunder-test--entry "#+TITLE: T\n\nBody\n"))))
+
+(ert-deftest jaunder-org->atom-rejects-malformed-audience-sets ()
+  (dolist (properties
+           '(("public" "public")
+             ("private" "subscribers")
+             ("named:01")
+             ("named:0")
+             ("named:9223372036854775808")))
+    (should-error
+     (jaunder-test--entry
+      (concat
+       (mapconcat (lambda (value)
+                    (format "#+PROPERTY: JAUNDER_AUDIENCE %s" value))
+                  properties "\n")
+       "\n\nBody\n")))))
+
 (ert-deftest jaunder-org->atom-description-joined-with-newline ()
   (should (equal (jaunder-entry-summary
                   (jaunder-test--entry

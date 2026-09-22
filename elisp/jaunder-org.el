@@ -174,6 +174,13 @@ later by the media unit."
           (jaunder--split-keywords (jaunder--category-keyword-values)))
          (descriptions (cdr (assoc "DESCRIPTION" kws)))
          (summary (and descriptions (mapconcat #'identity descriptions "\n")))
+         (audiences
+          (jaunder--canonical-audiences
+           (mapcar #'cdr
+                   (cl-remove-if-not
+                    (lambda (property)
+                      (equal (car property) "JAUNDER_AUDIENCE"))
+                    props))))
          (status (cdr (assoc "JAUNDER_STATUS" props)))
          (draft (and status (string= (downcase status) "draft") t))
          (date-raw (cadr (assoc "DATE" kws)))
@@ -186,6 +193,7 @@ later by the media unit."
      :title title
      :categories categories
      :summary summary
+     :audiences audiences
      :draft draft
      :content-type jaunder--org-media-type
      :body (string-trim-right

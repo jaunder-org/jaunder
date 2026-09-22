@@ -452,6 +452,11 @@ safe retry."
          ;; unconditional PUT.  Its intent remains durable for safe recovery.
          (when (and id (not (jaunder--strong-etag-p synced)))
            (error "jaunder: JAUNDER_ID requires a strong JAUNDER_SYNCED ETag"))
+         ;; Explicit audience metadata relies on the round-trip protocol.  Prove
+         ;; capability before Local Post Link localization, Media upload, or any
+         ;; Post mutation.
+         (jaunder--require-audience-capability
+          (jaunder--active-base-url) (jaunder-entry-audiences entry))
          ;; Claim and validate Local Post Links before any upload or Post
          ;; mutation.  Like media localization, this changes only the sent body.
          (setf (jaunder-entry-body entry)

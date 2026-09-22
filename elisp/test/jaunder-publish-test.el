@@ -41,6 +41,36 @@ Lets the warning tests assert on emitted warnings without touching the real
     ;; A far-future date passes.
     (should-not (jaunder--validate-publish e "scheduled" "[2999-01-01 Tue 00:00]" nil))))
 
+(ert-deftest jaunder-publish-requires-audience-capability-before-mutation ()
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-audience-cap-" t)))
+         (path (expand-file-name "post.org" root))
+         (jaunder-blogs (list (cons root '(:base-url "https://blog" :username "alice"))))
+         (jaunder--audience-capability-cache nil)
+         (jaunder-warn-zone-mismatch nil)
+         (jaunder-warn-untracked-media nil)
+         (jaunder-warn-missing-format-media-type nil)
+         (mutations 0))
+    (unwind-protect
+        (with-temp-buffer
+          (org-mode)
+          (insert (concat "#+TITLE: T\n"
+                          "#+PROPERTY: JAUNDER_AUDIENCE public\n\nBody\n"))
+          (set-visited-file-name path nil t)
+          (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                     (lambda (_base)
+                       (jaunder--parse-service-document
+                        (concat "<app:service xmlns:app=\"http://www.w3.org/2007/app\">"
+                                "<app:workspace/></app:service>"))))
+                    ((symbol-function 'jaunder--localize-post-links)
+                     (lambda (body) (cl-incf mutations) body))
+                    ((symbol-function 'jaunder--localize-media)
+                     (lambda (body) (cl-incf mutations) body))
+                    ((symbol-function 'jaunder--http-request)
+                     (lambda (&rest _) (cl-incf mutations) '(:status 201))))
+            (should-error (jaunder-publish))
+            (should (= mutations 0))))
+      (delete-directory root t))))
+
 (ert-deftest jaunder-location->id-extracts-numeric-tail ()
   (should (equal (jaunder--location->id "https://x/atompub/alice/posts/42") "42"))
   (should (equal (jaunder--location->id "https://x/atompub/alice/posts/42/") "42"))
