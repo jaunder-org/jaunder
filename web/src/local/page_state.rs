@@ -6,6 +6,7 @@
 use leptos::prelude::{RwSignal, Set};
 
 use common::{
+    registration::RegistrationPolicy,
     root_relative_url::RootRelativeUrl,
     seed::{
         LocalTimelinePresentation, Page, PageSeed, PublicPresentation, RenderedPost,
@@ -20,6 +21,7 @@ use common::{
 pub struct LocalDestination {
     pub theme: PublishedThemePresentation,
     pub identity: SiteIdentity,
+    pub registration_policy: RegistrationPolicy,
     pub page: Page<RenderedPost, TimelineCursor>,
 }
 
@@ -32,6 +34,7 @@ pub fn site_destination(
     LocalDestination {
         theme: presentation.theme,
         identity: presentation.page.identity,
+        registration_policy: presentation.page.registration_policy,
         page: presentation.page.page,
     }
 }
@@ -44,9 +47,11 @@ pub fn site_destination(
 pub fn commit_destination(
     state: crate::timeline::TimelineState,
     identity: RwSignal<Option<SiteIdentity>>,
+    registration_policy: RwSignal<Option<RegistrationPolicy>>,
     destination: LocalDestination,
 ) {
     identity.set(Some(destination.identity));
+    registration_policy.set(Some(destination.registration_policy));
     state.adopt(destination.page);
 }
 
@@ -60,25 +65,39 @@ pub fn site_timeline_base_url() -> RootRelativeUrl {
     url
 }
 
-/// Selects the matching projector page and its order for public Local.
+/// Adoptable Local presentation extracted from the projector seed.
+#[derive(Debug, PartialEq, Eq)]
+pub struct LocalSeedState {
+    pub order: TimelineOrder,
+    pub identity: Option<SiteIdentity>,
+    pub registration_policy: Option<RegistrationPolicy>,
+    pub page: Option<Page<RenderedPost, TimelineCursor>>,
+}
+
+/// Selects the matching projector presentation and its order for public Local.
 ///
 /// A seed from any other route is not adoptable; without a matching projector seed,
 /// CSR starts in the default newest-first order.
 #[must_use]
-pub fn site_timeline_seed(
-    seed: Option<PageSeed>,
-) -> (
-    TimelineOrder,
-    Option<SiteIdentity>,
-    Option<Page<RenderedPost, TimelineCursor>>,
-) {
+pub fn site_timeline_seed(seed: Option<PageSeed>) -> LocalSeedState {
     match seed {
         Some(PageSeed::SiteTimeline {
             identity,
+            registration_policy,
             order,
             page,
-        }) => (order, Some(identity), Some(page)),
-        _ => (TimelineOrder::default(), None, None),
+        }) => LocalSeedState {
+            order,
+            identity: Some(identity),
+            registration_policy: Some(registration_policy),
+            page: Some(page),
+        },
+        _ => LocalSeedState {
+            order: TimelineOrder::default(),
+            identity: None,
+            registration_policy: None,
+            page: None,
+        },
     }
 }
 
@@ -87,6 +106,7 @@ mod tests {
     use super::{commit_destination, site_destination, site_timeline_base_url, site_timeline_seed};
     use crate::timeline::TimelineState;
     use common::{
+        registration::RegistrationPolicy,
         seed::{LocalTimelinePresentation, Page, PageSeed, PublicPresentation, TimelineOrder},
         site::SiteIdentity,
         theme::{PublishedThemePresentation, Theme},
@@ -114,6 +134,7 @@ mod tests {
             theme: PublishedThemePresentation::built_in(Theme::Reader),
             page: LocalTimelinePresentation {
                 identity: identity(),
+                registration_policy: RegistrationPolicy::Open,
                 page: Page {
                     posts: vec![],
                     next_cursor: None,
@@ -129,22 +150,36 @@ mod tests {
         Owner::new().with(|| {
             let state = TimelineState::default();
             let resolved_identity = RwSignal::new(None);
-            commit_destination(state, resolved_identity, destination);
+            let resolved_registration_policy = RwSignal::new(None);
+            commit_destination(
+                state,
+                resolved_identity,
+                resolved_registration_policy,
+                destination,
+            );
             assert_eq!(resolved_identity.get(), Some(identity()));
+            assert_eq!(
+                resolved_registration_policy.get(),
+                Some(RegistrationPolicy::Open)
+            );
             assert!(state.rows.get().is_empty());
         });
     }
 
     #[test]
     fn local_identity_is_absent_without_a_matching_projector_seed() {
-        let (_, identity, _) = site_timeline_seed(None);
-        assert_eq!(identity, None);
+        let seed = site_timeline_seed(None);
+        assert_eq!(seed.order, TimelineOrder::Newest);
+        assert_eq!(seed.identity, None);
+        assert_eq!(seed.registration_policy, None);
+        assert_eq!(seed.page, None);
     }
 
     #[test]
     fn site_timeline_seed_preserves_identity_oldest_order_and_rejects_other_routes() {
-        let (order, returned_identity, page) = site_timeline_seed(Some(PageSeed::SiteTimeline {
+        let seed = site_timeline_seed(Some(PageSeed::SiteTimeline {
             identity: identity(),
+            registration_policy: RegistrationPolicy::MemberInvites,
             order: TimelineOrder::Oldest,
             page: Page {
                 posts: vec![],
@@ -152,11 +187,15 @@ mod tests {
                 has_more: false,
             },
         }));
-        assert_eq!(order, TimelineOrder::Oldest);
-        assert_eq!(returned_identity, Some(identity()));
-        assert!(page.is_some());
+        assert_eq!(seed.order, TimelineOrder::Oldest);
+        assert_eq!(seed.identity, Some(identity()));
+        assert_eq!(
+            seed.registration_policy,
+            Some(RegistrationPolicy::MemberInvites)
+        );
+        assert!(seed.page.expect("matching Local seed").posts.is_empty());
 
-        let (order, returned_identity, page) = site_timeline_seed(Some(PageSeed::Profile {
+        let seed = site_timeline_seed(Some(PageSeed::Profile {
             username: "alice".parse().expect("valid username"),
             order: TimelineOrder::Oldest,
             page: Page {
@@ -165,8 +204,9 @@ mod tests {
                 has_more: false,
             },
         }));
-        assert_eq!(order, TimelineOrder::Newest);
-        assert!(returned_identity.is_none());
-        assert!(page.is_none());
+        assert_eq!(seed.order, TimelineOrder::Newest);
+        assert!(seed.identity.is_none());
+        assert!(seed.registration_policy.is_none());
+        assert!(seed.page.is_none());
     }
 }

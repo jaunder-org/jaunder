@@ -13,6 +13,7 @@ use crate::ids::PostId;
 use crate::post_body::PostBody;
 use crate::post_summary::PostSummary;
 use crate::post_title::PostTitle;
+use crate::registration::RegistrationPolicy;
 use crate::render::{self, PostFormat, RenderedHtml, RenderedPostTitle};
 use crate::root_relative_url::RootRelativeUrl;
 use crate::site::SiteIdentity;
@@ -186,11 +187,12 @@ pub struct PublicPresentation<Page> {
 
 /// Server-resolved Local destination for client-side navigation.
 ///
-/// Local's identity travels with its page and theme so the client never performs
-/// an independent identity read for the same paint.
+/// Local's identity and Registration Policy travel with its page and theme so the
+/// client never performs independent presentation reads for the same paint.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalTimelinePresentation {
     pub identity: SiteIdentity,
+    pub registration_policy: RegistrationPolicy,
     pub page: Page<RenderedPost, TimelineCursor>,
 }
 
@@ -204,6 +206,7 @@ pub struct LocalTimelinePresentation {
 pub enum PageSeed {
     SiteTimeline {
         identity: SiteIdentity,
+        registration_policy: RegistrationPolicy,
         order: TimelineOrder,
         page: Page<RenderedPost, TimelineCursor>,
     },
@@ -350,6 +353,7 @@ mod tests {
                 tagline: Some("Thoughtful <publishing>.".parse().unwrap()),
                 base_url: None,
             },
+            registration_policy: RegistrationPolicy::MemberInvites,
             page: Page {
                 posts: vec![],
                 next_cursor: None,
@@ -372,6 +376,7 @@ mod tests {
                     tagline: None,
                     base_url: None,
                 },
+                registration_policy: RegistrationPolicy::Open,
                 order: TimelineOrder::Newest,
                 page: Page {
                     posts: vec![],
@@ -383,7 +388,7 @@ mod tests {
 
         assert_eq!(
             serde_json::to_string(&presentation).unwrap(),
-            r#"{"theme":{"identity":{"kind":"built_in","value":"reader"},"revision":null,"stylesheet_url":"/style/jaunder-themes.css","logo_url":null,"header_url":null},"page":{"SiteTimeline":{"identity":{"title":"Jaunder","base_url":null},"order":"newest","page":{"posts":[],"next_cursor":null,"has_more":false}}}}"#
+            r#"{"theme":{"identity":{"kind":"built_in","value":"reader"},"revision":null,"stylesheet_url":"/style/jaunder-themes.css","logo_url":null,"header_url":null},"page":{"SiteTimeline":{"identity":{"title":"Jaunder","base_url":null},"registration_policy":"open","order":"newest","page":{"posts":[],"next_cursor":null,"has_more":false}}}}"#
         );
     }
 }

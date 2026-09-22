@@ -182,6 +182,15 @@ impl PublicProjector {
             Ok(identity) => identity,
             Err(error) => return Err(Self::boundary(error, "server.projector.timeline_identity")),
         };
+        let registration_policy = match self.site_config.get_registration_policy().await {
+            Ok(policy) => policy,
+            Err(error) => {
+                return Err(Self::boundary(
+                    error,
+                    "server.projector.timeline_registration_policy",
+                ));
+            }
+        };
         let page = match timeline::fetch_local_timeline(
             self.posts.as_ref(),
             None,
@@ -207,6 +216,7 @@ impl PublicProjector {
             theme,
             page: PageSeed::SiteTimeline {
                 identity,
+                registration_policy,
                 order,
                 page,
             },

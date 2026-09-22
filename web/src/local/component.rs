@@ -22,6 +22,7 @@ use crate::timeline::{self, TimelineGate, TimelineState};
 fn wire_local_destination(
     state: TimelineState,
     identity: RwSignal<Option<common::site::SiteIdentity>>,
+    registration_policy: RwSignal<Option<common::registration::RegistrationPolicy>>,
     destination: Resource<crate::error::WebResult<super::LocalDestination>>,
     presentation: crate::app::ThemePresentationCoordinator,
 ) {
@@ -30,7 +31,12 @@ fn wire_local_destination(
             spawn_local(async move {
                 match presentation.adopt(destination.theme.clone()).await {
                     Ok(crate::app::ThemeAdoption::Applied) => {
-                        super::commit_destination(state, identity, destination);
+                        super::commit_destination(
+                            state,
+                            identity,
+                            registration_policy,
+                            destination,
+                        );
                     }
                     Ok(crate::app::ThemeAdoption::Superseded) => {}
                     Err(error) => state.fail(error),
@@ -79,15 +85,16 @@ pub fn LocalPage() -> impl IntoView {
     // paint; a live session that lacks its marker may reach this recovery path once.
     // The projector still paints anonymous-only bytes, and Home remains the distinct
     // authenticated cockpit.
-    let (seed_order, seed_identity, seed) = super::site_timeline_seed(
+    let seed = super::site_timeline_seed(
         leptos::prelude::use_context::<Option<common::seed::PageSeed>>().flatten(),
     );
     // An unseeded Local route has no identity until its full destination is ready.
     // In particular, do not manufacture the historical "Jaunder" default while a
     // client-side navigation is still awaiting its theme.
-    let identity = RwSignal::new(seed_identity);
-    if seed_order == order.get_untracked() {
-        state.adopt_seed(seed);
+    let identity = RwSignal::new(seed.identity);
+    let registration_policy = RwSignal::new(seed.registration_policy);
+    if seed.order == order.get_untracked() {
+        state.adopt_seed(seed.page);
     }
 
     let invalidator = Invalidator::new();
@@ -115,7 +122,13 @@ pub fn LocalPage() -> impl IntoView {
             .map(super::site_destination)
         },
     );
-    wire_local_destination(state, identity, initial_page, presentation);
+    wire_local_destination(
+        state,
+        identity,
+        registration_policy,
+        initial_page,
+        presentation,
+    );
 
     let on_load_more = Callback::new(move |()| {
         let order = order.get_untracked();
@@ -139,8 +152,8 @@ pub fn LocalPage() -> impl IntoView {
         );
     });
 
-    // The masthead (topbar + anonymous Sign-in/Register links) is the shared
-    // pure fn the projector renders too, so both sides coincide by construction
+    // The policy-aware masthead is the shared pure fn the projector renders too,
+    // so both sides coincide by construction
     // (ADR-0041 §2) — no `view!` twin to drift. The anonymous CTA lives inside it and
     // is hidden by `j-anon-only` + `html.authed` when the advisory marker is present.
     // Local remains anonymous projection; any owner affordance is a client-side
@@ -168,6 +181,7 @@ pub fn LocalPage() -> impl IntoView {
                         crate::app::render_theme_hero(
                                 &super::render::masthead(
                                     &identity,
+                                    registration_policy.get(),
                                     &crate::app::render_theme_logo(&theme.get()),
                                 ),
                                 &crate::app::render_theme_header(&theme.get()),

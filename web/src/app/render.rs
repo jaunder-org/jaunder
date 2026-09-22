@@ -323,6 +323,7 @@ mod tests {
             theme: custom_theme(),
             page: PageSeed::SiteTimeline {
                 identity: site_identity(),
+                registration_policy: common::registration::RegistrationPolicy::Open,
                 order: common::seed::TimelineOrder::Newest,
                 page: one_post_page(),
             },
@@ -351,6 +352,7 @@ mod tests {
         // on the marker, so every projector discovery <link> must carry it).
         let site = render_discovery(&PageSeed::SiteTimeline {
             identity: site_identity(),
+            registration_policy: common::registration::RegistrationPolicy::Open,
             order: common::seed::TimelineOrder::Newest,
             page: one_post_page(),
         })
@@ -398,6 +400,7 @@ mod tests {
                     tagline: Some("Thoughtful & <publications>.".parse().unwrap()),
                     base_url: None,
                 },
+                registration_policy: common::registration::RegistrationPolicy::Open,
                 order: common::seed::TimelineOrder::Newest,
                 page: one_post_page(),
             },
@@ -496,6 +499,7 @@ mod tests {
         let head = render_head(
             &PageSeed::SiteTimeline {
                 identity: site_identity(),
+                registration_policy: common::registration::RegistrationPolicy::Open,
                 order: common::seed::TimelineOrder::Newest,
                 page: one_post_page(),
             },
@@ -559,6 +563,7 @@ mod tests {
             (
                 PageSeed::SiteTimeline {
                     identity: site_identity(),
+                    registration_policy: common::registration::RegistrationPolicy::Open,
                     order: common::seed::TimelineOrder::Newest,
                     page: one_post_page(),
                 },
@@ -604,6 +609,7 @@ mod tests {
             ),
             page: PageSeed::SiteTimeline {
                 identity: site_identity(),
+                registration_policy: common::registration::RegistrationPolicy::Open,
                 order: common::seed::TimelineOrder::Newest,
                 page: one_post_page(),
             },
@@ -667,6 +673,7 @@ mod tests {
             ),
             page: PageSeed::SiteTimeline {
                 identity: site_identity(),
+                registration_policy: common::registration::RegistrationPolicy::Open,
                 order: common::seed::TimelineOrder::Newest,
                 page: one_post_page(),
             },

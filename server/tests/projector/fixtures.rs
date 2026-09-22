@@ -7,7 +7,7 @@ use axum::{
     response::Response,
 };
 use common::theme::{PublicThemeSelection, Theme};
-use common::{post_title::PostTitle, site::SiteIdentity};
+use common::{post_title::PostTitle, registration::RegistrationPolicy, site::SiteIdentity};
 use jiff::tz::Offset;
 use storage::test_support::{SeedRawPost, SeedUser};
 use storage::{
@@ -72,6 +72,9 @@ fn default_site_config() -> Arc<dyn SiteConfigStorage> {
             base_url: None,
         })
     });
+    site_config
+        .expect_get_registration_policy()
+        .returning(|| Ok(RegistrationPolicy::Open));
     Arc::new(site_config)
 }
 

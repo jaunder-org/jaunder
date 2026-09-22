@@ -1241,6 +1241,7 @@ mod tests {
                         tagline: None,
                         base_url: None,
                     },
+                    registration_policy: common::registration::RegistrationPolicy::Open,
                     order: TimelineOrder::Newest,
                     page: page(true),
                 }))

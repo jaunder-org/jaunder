@@ -106,11 +106,13 @@ pub async fn list_local_timeline(
     )
     .await?;
     let identity = site_config.get_identity().await?;
+    let registration_policy = site_config.get_registration_policy().await?;
     let presentation = site_presentation(common::theme::PublicThemeRoute::site(), page).await?;
     Ok(PublicPresentation {
         theme: presentation.theme,
         page: LocalTimelinePresentation {
             identity,
+            registration_policy,
             page: presentation.page,
         },
     })

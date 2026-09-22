@@ -35,7 +35,7 @@ mod tests {
 
     #[test]
     fn valid_presentation_retains_the_server_resolved_destination_theme() {
-        let json = r#"{"theme":{"identity":{"kind":"built_in","value":"reader"},"revision":null,"stylesheet_url":"/style/jaunder-themes.css","logo_url":null,"header_url":null},"page":{"SiteTimeline":{"identity":{"title":"Jaunder","base_url":null},"order":"newest","page":{"posts":[],"next_cursor":null,"has_more":false}}}}"#;
+        let json = r#"{"theme":{"identity":{"kind":"built_in","value":"reader"},"revision":null,"stylesheet_url":"/style/jaunder-themes.css","logo_url":null,"header_url":null},"page":{"SiteTimeline":{"identity":{"title":"Jaunder","base_url":null},"registration_policy":"open","order":"newest","page":{"posts":[],"next_cursor":null,"has_more":false}}}}"#;
 
         let decoded = decode_projector_seed(Some(json)).expect("valid presentation");
         assert!(matches!(

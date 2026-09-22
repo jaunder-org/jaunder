@@ -813,10 +813,14 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
 
     let (status, body) = list_local_timeline(app.clone(), None, 50, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let first_page = serde_json::from_str::<PublicPresentation<LocalTimelinePresentation>>(&body)
-        .unwrap()
-        .page
-        .page;
+    let first_presentation =
+        serde_json::from_str::<PublicPresentation<LocalTimelinePresentation>>(&body).unwrap();
+    assert_eq!(
+        first_presentation.page.registration_policy,
+        common::registration::RegistrationPolicy::Open,
+        "Local navigation carries the current Registration Policy: {body}"
+    );
+    let first_page = first_presentation.page.page;
     assert_eq!(first_page.posts.len(), 50, "body: {body}");
     assert!(first_page.has_more, "body: {body}");
     assert!(first_page.next_cursor.is_some(), "body: {body}");

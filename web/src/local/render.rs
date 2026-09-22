@@ -2,21 +2,29 @@
 //! beside `component`): non-reactive markup only, so it stays host-tested and
 //! coverage-measured while the reactive `LocalPage` injects the very same bytes.
 
-use common::site::SiteIdentity;
+use common::{registration::RegistrationPolicy, site::SiteIdentity};
 use maud::html;
 
 use crate::html::Markup;
 
-/// The Local page masthead — the topbar with the anonymous Sign-in / Register links.
+/// The Local page masthead — the topbar with its anonymous Sign-in action and the
+/// Register action available only under Open Registration Policy.
+///
 /// The single source both the projector (`crate::posts::render::body`) and reactive
 /// `local::LocalPage` render, so coincidence holds by construction (ADR-0041 §2) — no
-/// `view!` twin to drift. The links carry `j-anon-only`; an anonymous viewer still
-/// sees them.
+/// `view!` twin to drift. The actions carry `j-anon-only`; authenticated viewers hide
+/// them independently of Registration Policy.
 #[must_use]
-pub(crate) fn masthead(identity: &SiteIdentity, logo: &Markup) -> Markup {
+pub(crate) fn masthead(
+    identity: &SiteIdentity,
+    registration_policy: Option<RegistrationPolicy>,
+    logo: &Markup,
+) -> Markup {
     let cta = Markup::new(html! {
         a href="/login" class="j-btn j-anon-only" { "Sign in" }
-        a href="/register" class="j-btn is-primary j-anon-only" { "Register" }
+        @if registration_policy == Some(RegistrationPolicy::Open) {
+            a href="/register" class="j-btn is-primary j-anon-only" { "Register" }
+        }
     });
     Markup::new(html! {
         (crate::topbar::render(
@@ -33,7 +41,7 @@ pub(crate) fn masthead(identity: &SiteIdentity, logo: &Markup) -> Markup {
 mod tests {
     use super::masthead;
     use crate::html::Markup;
-    use common::site::SiteIdentity;
+    use common::{registration::RegistrationPolicy, site::SiteIdentity};
 
     fn identity(tagline: Option<&str>) -> SiteIdentity {
         SiteIdentity {
@@ -47,6 +55,7 @@ mod tests {
     fn local_masthead_uses_identity_and_has_anon_only_cta_without_hero() {
         let markup = masthead(
             &identity(Some("Thoughtful <publishing>.")),
+            Some(RegistrationPolicy::Open),
             &Markup::empty(),
         );
         let html = markup.as_str();
@@ -86,6 +95,28 @@ mod tests {
     }
 
     #[test]
+    fn local_masthead_projects_registration_policy_without_hiding_sign_in() {
+        for (policy, expect_register) in [
+            (RegistrationPolicy::Closed, false),
+            (RegistrationPolicy::OperatorInvites, false),
+            (RegistrationPolicy::MemberInvites, false),
+            (RegistrationPolicy::Open, true),
+        ] {
+            let html = masthead(&identity(None), Some(policy), &Markup::empty()).into_string();
+            assert!(html.contains(">Sign in</a>"), "{policy:?}: {html}");
+            assert_eq!(
+                html.contains(">Register</a>"),
+                expect_register,
+                "{policy:?}: {html}"
+            );
+        }
+
+        let unresolved = masthead(&identity(None), None, &Markup::empty()).into_string();
+        assert!(unresolved.contains(">Sign in</a>"), "{unresolved}");
+        assert!(!unresolved.contains(">Register</a>"), "{unresolved}");
+    }
+
+    #[test]
     fn local_masthead_renders_valid_tagline_matrix_representatives_as_text() {
         // Parser tests own rejection/normalization. This host-rendering boundary keeps
         // one valid scalar limit, interior-whitespace, and Unicode representative
@@ -95,7 +126,12 @@ mod tests {
             "Interior  whitespace".to_owned(),
             "Привет 🌍".to_owned(),
         ] {
-            let html = masthead(&identity(Some(&tagline)), &Markup::empty()).into_string();
+            let html = masthead(
+                &identity(Some(&tagline)),
+                Some(RegistrationPolicy::Open),
+                &Markup::empty(),
+            )
+            .into_string();
             assert!(
                 html.contains(&format!(r#"<div class="j-sub">{tagline}</div>"#)),
                 "valid tagline remains text in Local masthead: {html}"
@@ -105,7 +141,12 @@ mod tests {
 
     #[test]
     fn local_masthead_omits_absent_tagline() {
-        let html = masthead(&identity(None), &Markup::empty()).into_string();
+        let html = masthead(
+            &identity(None),
+            Some(RegistrationPolicy::Open),
+            &Markup::empty(),
+        )
+        .into_string();
         assert!(!html.contains("j-sub"), "{html}");
     }
 }
