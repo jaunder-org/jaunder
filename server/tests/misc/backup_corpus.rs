@@ -859,7 +859,7 @@ impl CorpusIoMode {
 }
 
 #[cfg(test)]
-const FORMAT_BUMP_DIAGNOSTIC: &str = "add a new immutable fixture, oracle, and corpus-index entry instead of changing format-1 history";
+const FORMAT_BUMP_DIAGNOSTIC: &str = "add a new immutable fixture, oracle, and corpus-index entry instead of changing existing format history";
 
 #[cfg(test)]
 fn format_compatibility_diagnostic(detail: impl std::fmt::Display) -> String {
@@ -1587,7 +1587,7 @@ mod writer_tests {
         };
     }
 
-    const V2_TABLES: &[&str] = &[
+    const V3_TABLES: &[&str] = &[
         "audience_members",
         "audiences",
         "channels",
@@ -1602,6 +1602,7 @@ mod writer_tests {
         "password_resets",
         "post_audiences",
         "post_media",
+        "post_permalink_aliases",
         "post_revision_audiences",
         "post_revision_tags",
         "post_revisions",
@@ -1667,6 +1668,10 @@ mod writer_tests {
             seeded_source: "PasskeyStorage inserts and uses a durable credential with counter and backup state",
         },
         WriterRole {
+            name: "Historical Post Permalink Alias",
+            seeded_source: "post_permalink_aliases preserves a prior User-qualified identity",
+        },
+        WriterRole {
             name: "media bytes",
             seeded_source: "storage/media/avatar.txt = media",
         },
@@ -1688,7 +1693,7 @@ mod writer_tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn current_writer_satisfies_independent_v2_raw_wire_oracle(#[case] backend: Backend) {
+    async fn current_writer_satisfies_independent_v3_raw_wire_oracle(#[case] backend: Backend) {
         for output in CorpusIoMode::ALL {
             let source = InitializedCommandEnv::new(backend).await;
             let ids = populate_backup_fixture(&source.args).await;
@@ -1719,7 +1724,7 @@ mod writer_tests {
             };
 
             assert_writer_version_is_uniquely_supported(&extracted);
-            assert_v2_raw_wire_oracle(&extracted, output, &ids);
+            assert_v3_raw_wire_oracle(&extracted, output, &ids);
         }
     }
 
@@ -1752,12 +1757,12 @@ mod writer_tests {
         );
         assert_eq!(
             version,
-            2,
+            3,
             "{}",
-            format_compatibility_diagnostic("format-2 is the sole current writer oracle")
+            format_compatibility_diagnostic("format-3 is the sole current writer oracle")
         );
     }
-    fn assert_v2_raw_wire_oracle(export: &Path, output: CorpusIoMode, ids: &BackupFixtureIds) {
+    fn assert_v3_raw_wire_oracle(export: &Path, output: CorpusIoMode, ids: &BackupFixtureIds) {
         assert_inventory_is_complete();
         let manifest = read_manifest(export);
         let members = compatibility_option(manifest.as_object(), "manifest must be an object");
@@ -1778,7 +1783,7 @@ mod writer_tests {
         );
         assert_eq!(
             manifest["format_version"],
-            Value::from(2),
+            Value::from(3),
             "{}",
             format_compatibility_diagnostic("writer format_version changed")
         );
@@ -1820,7 +1825,7 @@ mod writer_tests {
         );
         assert_eq!(
             tables,
-            &V2_TABLES
+            &V3_TABLES
                 .iter()
                 .map(|table| Value::from(*table))
                 .collect::<Vec<_>>(),
@@ -1830,7 +1835,7 @@ mod writer_tests {
 
         let paths = regular_file_bytes(export);
         let expected_paths = std::iter::once("manifest.json".to_owned())
-            .chain(V2_TABLES.iter().map(|table| format!("db/{table}.ndjson")))
+            .chain(V3_TABLES.iter().map(|table| format!("db/{table}.ndjson")))
             .chain(std::iter::once("media/avatar.txt".to_owned()))
             .collect::<BTreeSet<_>>();
         assert_eq!(
@@ -1910,7 +1915,7 @@ mod writer_tests {
     }
 
     fn parse_ndjson_tables(files: &BTreeMap<String, Vec<u8>>) -> BTreeMap<String, Vec<Value>> {
-        V2_TABLES
+        V3_TABLES
             .iter()
             .map(|table| {
                 let path = format!("db/{table}.ndjson");
@@ -2095,6 +2100,20 @@ mod writer_tests {
                 "named post must retain its exact post and audience IDs"
             )
         );
+        assert!(
+            table_rows(rows, "post_permalink_aliases")
+                .iter()
+                .any(|row| {
+                    row_id_is(row, "post_id", &ids.public_post.to_string())
+                        && row_id_is(row, "user_id", author)
+                        && row["permalink_date"] == "2025-01-02"
+                        && row["slug"] == "historical-backup-alias"
+                }),
+            "{}",
+            format_compatibility_diagnostic(
+                "Historical Post Permalink Alias must retain its Post and prior identity"
+            )
+        );
     }
 
     fn assert_writer_roles(rows: &BTreeMap<String, Vec<Value>>, ids: &BackupFixtureIds) {
@@ -2116,6 +2135,7 @@ mod writer_tests {
                 .map(|role| role.name)
                 .collect::<BTreeSet<_>>(),
             BTreeSet::from([
+                "Historical Post Permalink Alias",
                 "boolean",
                 "integer",
                 "media bytes",

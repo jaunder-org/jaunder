@@ -63,6 +63,10 @@ existing Post when later content is created.
 - AtomPub and Emacs continue to use Post ID as resource identity. AtomPub emits
   only the repaired current slug; the Emacs duplicate-slug check remains as a
   fail-closed corruption detector.
+- Historical Post Permalink Aliases are durable whole-store backup data. Adding
+  their table advances the current backup writer to format 3; restore retains
+  support for formats 1 and 2, and the immutable format corpus records the new
+  table and relationship without rewriting prior fixtures.
 
 ## Consequences
 
@@ -75,7 +79,8 @@ existing Post when later content is created.
   and invalidates derived feed/cache content.
 - Historical links remain usable, but storage gains a durable alias table and
   the public projector gains one canonical-miss lookup. Aliases are not a second
-  editable identity and do not broaden anonymous visibility.
+  editable identity and do not broaden anonymous visibility. Backup format 3
+  preserves those aliases across whole-store export and restore.
 - The migration needs backend-specific SQL with identical deterministic
   allocation behavior, including occupied suffixes and maximum-length Unicode
   slugs. Failure aborts the migration rather than partially repairing data.

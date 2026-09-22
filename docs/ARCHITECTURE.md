@@ -325,14 +325,17 @@ reproducible manifest — so a migration that adds a table needs no backup code
 change; server contract tests pin the exact set. Consequently the complete
 `post_revisions` scalar rows, their immutable
 `post_revision_tags`/`post_revision_audiences` children, and revision-qualified
-`post_media` rows travel with every whole-store backup, without a
-revision-specific export path; typed restore validation covers their domain
-fields ([ADR-0136](adr/0136-local-post-lifecycle.md),
+`post_media` rows and durable `post_permalink_aliases` travel with every
+whole-store backup, without revision- or alias-specific export paths; typed
+restore validation covers their domain fields
+([ADR-0136](adr/0136-local-post-lifecycle.md),
 [ADR-0064](adr/0064-backup-target-auto-derivation.md)).
 
 **Compatibility is explicit and independent of package chronology.** The
-manifest format version governs wire readability: exports identify format 1, and
-legacy manifests with no format-version member are format 1. The
+manifest format version governs wire readability: current exports identify
+format 3, readers retain formats 1 and 2, and legacy manifests with no
+format-version member are format 1. Format 3 adds durable Historical Post
+Permalink Aliases to the exact table inventory. The
 [test-owned corpus](../server/tests/misc/backup_corpus/README.md) is
 [ADR-0174](adr/0174-backup-format-and-schema-compatibility.md)'s independent
 reader/writer enforcement mechanism: immutable historical inputs exercise public
