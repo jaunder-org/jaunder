@@ -50,7 +50,7 @@ from delegation.
   - Focused proof: the narrow Local CTA and invitation Playwright cases.
   - Commit through `jaunder-commit`.
 
-- [ ] **3. Capture and verify presentation evidence**
+- [x] **3. Capture and verify presentation evidence**
   - Capture transient before/after Closed Local screenshots with Studio, signed
     out, fixed Site Identity/Post, `1440×900` and `390×844`, after the specified
     readiness barriers.
