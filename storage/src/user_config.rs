@@ -372,6 +372,24 @@ mod tests {
             .unwrap();
         assert!(matches!(outcome, MutationOutcome::Confirmed(())));
         assert!(config.get_content_license(user_id).await.is_err());
+
+        let config_for_read = std::sync::Arc::clone(&config);
+        let outcome = env
+            .write_scope()
+            .run(move |transaction| {
+                Box::pin(async move {
+                    assert!(
+                        config_for_read
+                            .get_content_license_for_update(transaction, user_id)
+                            .await
+                            .is_err()
+                    );
+                    Ok::<(), sqlx::Error>(())
+                })
+            })
+            .await
+            .unwrap();
+        assert!(matches!(outcome, MutationOutcome::Confirmed(())));
     }
 
     #[apply(backends)]

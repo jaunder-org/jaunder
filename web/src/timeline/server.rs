@@ -208,8 +208,8 @@ pub async fn fetch_user_posts_by_tag(
 #[cfg(all(test, feature = "server"))]
 mod tests {
     use super::{
-        fetch_local_timeline, fetch_posts_by_tag, fetch_user_posts, fetch_user_posts_by_tag,
-        published_page_request,
+        ContentRightsProjection, fetch_local_timeline, fetch_posts_by_tag, fetch_user_posts,
+        fetch_user_posts_by_tag, page_from_rows, published_page_request,
     };
     use common::ids::{PostId, UserId};
     use common::pagination::PageSize;
@@ -264,6 +264,24 @@ mod tests {
             is_operator: OperatorStatus::STANDARD,
         }
     }
+    #[test]
+    fn over_fetched_page_rejects_cursor_row_without_publication_time() {
+        let page_size = PageSize::clamped(5);
+        let mut rows = (1..=6).map(post).collect::<Vec<_>>();
+        rows[page_size.page_len() - 1].post.published_at = None;
+
+        assert!(
+            page_from_rows(
+                rows,
+                page_size,
+                None,
+                TimelineOrder::Newest,
+                ContentRightsProjection::Public,
+            )
+            .is_err()
+        );
+    }
+
     #[test]
     fn timeline_cursor_must_match_the_requested_order() {
         let cursor = PostCursor {
