@@ -1296,10 +1296,49 @@ mkWasmCoverageMeasurementProducer =
       ({ ... }: { system.stateVersion = "26.05"; })
     ];
   };
+  minimalEnabledModule = nixpkgs.lib.nixosSystem {
+    inherit system;
+    modules = [
+      self.nixosModules.jaunder
+      ({ ... }: {
+        system.stateVersion = "26.05";
+        services.jaunder.enable = true;
+      })
+    ];
+  };
+  minimalTrustedProxyModule = nixpkgs.lib.nixosSystem {
+    inherit system;
+    modules = [
+      self.nixosModules.jaunder
+      ({ ... }: {
+        system.stateVersion = "26.05";
+        services.jaunder = {
+          enable = true;
+          trustedProxies = [ "192.0.2.10" "2001:db8::/32" ];
+        };
+      })
+    ];
+  };
+  minimalTrustedProxyTypeFails = !(builtins.tryEval (nixpkgs.lib.nixosSystem {
+    inherit system;
+    modules = [
+      self.nixosModules.jaunder
+      ({ ... }: {
+        system.stateVersion = "26.05";
+        services.jaunder.trustedProxies = [ 1 ];
+      })
+    ];
+  }).config.system.build.toplevel.drvPath).success;
   jaunderStackModuleCheck =
     assert sqliteStack.config.services.jaunder.bind == "127.0.0.1:3000";
     assert sqliteStack.config.services.jaunder.prod;
     assert sqliteStack.config.services.jaunder.db == "sqlite:/var/lib/jaunder/data/jaunder.db";
+    assert minimalModule.config.services.jaunder.trustedProxies == [ ];
+    assert !(minimalEnabledModule.config.systemd.services.jaunder.environment ? JAUNDER_TRUSTED_PROXIES);
+    assert minimalTrustedProxyModule.config.systemd.services.jaunder.environment.JAUNDER_TRUSTED_PROXIES == "192.0.2.10,2001:db8::/32";
+    assert minimalTrustedProxyTypeFails;
+    assert sqliteStack.config.services.jaunder.trustedProxies == [ "127.0.0.1/32" ];
+    assert sqliteStack.config.systemd.services.jaunder.environment.JAUNDER_TRUSTED_PROXIES == "127.0.0.1/32";
     assert postgresStack.config.services.jaunder.db == "postgresql://jaunder@localhost/jaunder?host=/run/postgresql";
     assert postgresStack.config.services.postgresql.enable;
     assert postgresStack.config.services.postgresql.ensureDatabases == [ "jaunder" ];
@@ -1331,6 +1370,7 @@ mkWasmCoverageMeasurementProducer =
     assert builtins.hasAttr "jaunder.example.test" bcryptStack.config.services.caddy.virtualHosts;
     assert builtins.hasAttr "observe.example.test" bcryptStack.config.services.caddy.virtualHosts;
     assert pkgs.lib.hasInfix "reverse_proxy 127.0.0.1:3000" bcryptStack.config.services.caddy.virtualHosts."jaunder.example.test".extraConfig;
+    assert pkgs.lib.hasInfix "header_up -Forwarded" bcryptStack.config.services.caddy.virtualHosts."jaunder.example.test".extraConfig;
     assert pkgs.lib.hasInfix "operator $2b$12$abcdefghijklmnopqrstuuV4qg5bR1uRgYBzO8pu0h1rlaL8fQ2gQ" bcryptStack.config.services.caddy.virtualHosts."observe.example.test".extraConfig;
     assert builtins.any (v: pkgs.lib.hasInfix "basic_auth bcrypt" v.extraConfig) (builtins.attrValues bcryptStack.config.services.caddy.virtualHosts);
     assert builtins.any (v: pkgs.lib.hasInfix "basic_auth argon2id" v.extraConfig) (builtins.attrValues argon2idStack.config.services.caddy.virtualHosts);

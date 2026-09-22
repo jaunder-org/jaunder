@@ -36,7 +36,8 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(1);
     } // cov:ignore: process::exit(1) diverges before this compiler-inserted closing edge.
     // cov:ignore-start: Host test binaries exit at the cheap-KDF guard before CLI parsing can run.
-    let cli = Cli::parse();
+    let cli =
+        Cli::try_parse_inherited_from(std::env::args_os()).unwrap_or_else(|error| error.exit());
     run(cli).await
     // cov:ignore-stop
 }
@@ -319,6 +320,7 @@ mod tests {
                     storage,
                     bind: "127.0.0.1:0".parse().expect("bind"),
                     environment: jaunder::cli::DeploymentEnv::Prod,
+                    trusted_proxies: vec![],
                 })));
             match scenario.to_string_lossy().as_ref() {
                 "absent" | "valid" => assert!(
@@ -434,6 +436,7 @@ mod tests {
             storage,
             bind,
             environment: jaunder::cli::DeploymentEnv::Dev,
+            trusted_proxies: vec![],
         });
 
         // Spawn-and-abort: this pins the dispatch arm, not the serve loop.
@@ -507,6 +510,7 @@ mod tests {
             storage,
             bind: "127.0.0.1:0".parse().unwrap(),
             environment: jaunder::cli::DeploymentEnv::Prod,
+            trusted_proxies: vec![],
         });
         let err = run(cli).await.unwrap_err();
         assert!(err.to_string().contains("run `jaunder init` first"));
@@ -537,6 +541,7 @@ mod tests {
             storage,
             bind,
             environment: jaunder::cli::DeploymentEnv::Dev,
+            trusted_proxies: vec![],
         });
 
         let task = tokio::spawn(run(cli));

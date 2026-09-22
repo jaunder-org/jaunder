@@ -35,18 +35,73 @@ For a supported single-host production composition, import
 ```
 
 The stack makes Caddy the only public listener on ports 80 and 443, with
-automatic HTTPS for the application host. Each application or optional
-observability host name must be a DNS hostname of at most 253 ASCII characters:
-dot-separated, nonempty labels of at most 63 ASCII letters, digits, or hyphens,
-each beginning and ending with a letter or digit. The optional observability
-host must differ from the application host after lowercasing, because same-host
-Caddy definitions collide and could authenticate or replace the application
-route. It runs production-mode Jaunder, the OpenTelemetry Collector,
-VictoriaMetrics, VictoriaLogs, and VictoriaTraces. The collector and all
-Victoria services, including their built-in UIs, remain loopback-only. The
-collector sends metrics, logs, and traces directly to the native `/metrics`,
-`/logs`, and `/traces` ingestion prefixes over loopback; this traffic never
-traverses Caddy.
+automatic HTTPS for the application host. It trusts only its immediate loopback
+Caddy hop (`127.0.0.1/32`) for client-address forwarding, removes inbound
+`Forwarded` before proxying, and lets Caddy construct the `X-Forwarded-For`
+chain. Each application or optional observability host name must be a DNS
+hostname of at most 253 ASCII characters: dot-separated, nonempty labels of at
+most 63 ASCII letters, digits, or hyphens, each beginning and ending with a
+letter or digit. The optional observability host must differ from the
+application host after lowercasing, because same-host Caddy definitions collide
+and could authenticate or replace the application route. It runs production-mode
+Jaunder, the OpenTelemetry Collector, VictoriaMetrics, VictoriaLogs, and
+VictoriaTraces. The collector and all Victoria services, including their
+built-in UIs, remain loopback-only. The collector sends metrics, logs, and
+traces directly to the native `/metrics`, `/logs`, and `/traces` ingestion
+prefixes over loopback; this traffic never traverses Caddy.
+
+### Trusted reverse proxies
+
+Jaunder trusts no forwarding header by default. For a custom NixOS deployment,
+set only the addresses or CIDRs that can directly connect to Jaunder:
+
+```nix
+services.jaunder = {
+  enable = true;
+  prod = true;
+  bind = "127.0.0.1:3000";
+  trustedProxies = [ "127.0.0.1/32" ];
+};
+```
+
+This projects the comma-separated process setting `JAUNDER_TRUSTED_PROXIES`. An
+empty list (the default) omits it entirely, so a direct request cannot select an
+Effective Client IP with `Forwarded` or `X-Forwarded-For`.
+
+The directly connected proxy is responsible for sanitizing forwarding evidence.
+A custom Caddy route must remove `Forwarded` and let Caddy append the immediate
+peer to `X-Forwarded-For`:
+
+```caddyfile
+jaunder.example.com {
+  reverse_proxy 127.0.0.1:3000 {
+    header_up -Forwarded
+  }
+}
+```
+
+When a CDN precedes Caddy, configure Caddy—not Jaunder—with the CDN's exact
+trusted ranges and strict right-to-left forwarding trust:
+
+```caddyfile
+{
+  servers {
+    trusted_proxies static 203.0.113.0/24 2001:db8::/32
+    trusted_proxies_strict
+  }
+}
+```
+
+Replace the example ranges with the CDN's current published ranges. Normalize an
+accepted provider-specific client header at Caddy into the standard forwarding
+chain only after that trust check. Jaunder does not interpret `CF-Connecting-IP`
+or other vendor-specific headers, and CDN ranges must not be added to
+`trustedProxies`: Jaunder still trusts only its immediate Caddy Transport Peer.
+
+To roll back forwarding attribution, clear `services.jaunder.trustedProxies`,
+rebuild the host, and restart the service. Jaunder then ignores every forwarding
+header and uses the Transport Peer again. This setting is diagnostic context,
+not authentication or authorization evidence.
 
 The default loopback UIs are:
 

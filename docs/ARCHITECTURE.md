@@ -1947,8 +1947,13 @@ and exporter-setup failure is non-fatal. `with_http_observability`
 the router, together with a `tower-http` `x-request-id` that it mints when
 absent and propagates onto the response. Inbound W3C `traceparent` headers are
 extracted onto the per-request span, so backend spans parent into the caller's
-trace. Span fields and metric attributes are exported, so they MUST NOT carry
-user PII or secrets — stable identifiers (`user_id`, `error.kind`) only. Branch
+trace. Trusted-proxy resolution may add only a closed outcome such as socket,
+forwarded, malformed, conflict, over-limit, or transport-unavailable; neither
+the Transport Peer, Effective Client IP, nor raw forwarding-header content is
+exported
+([trusted proxy client-IP derivation](adr/drafts/trusted-proxy-client-ip.md)).
+Span fields and metric attributes are exported, so they MUST NOT carry user PII
+or secrets — stable identifiers (`user_id`, `error.kind`) only. Branch
 determinants follow the same rule: record bounded decisions and stable internal
 IDs, never passwords, tokens, raw emails, invite codes, request bodies,
 arbitrary source text, or whole-struct dumps. The
@@ -2249,6 +2254,22 @@ binds plain HTTP (`--bind`, default `127.0.0.1:3000`, `server/src/cli.rs:267`)
 and production exposure is a proxy-configuration concern, not an application
 feature.
 
+The direct socket endpoint is retained as the Transport Peer. `jaunder serve`
+trusts no forwarding header by default; operators may declare trusted proxy
+addresses or CIDRs through its CLI/environment process contract. Only then does
+Jaunder derive an IP-only Effective Client IP by walking RFC `Forwarded` or
+`X-Forwarded-For` from the Transport Peer toward the first untrusted hop. Both
+header families must agree when supplied together, and malformed, conflicting,
+over-limit, all-trusted, or unrooted evidence falls back to the Transport Peer
+without rejecting the request. Neither identity is authentication or
+authorization evidence, and raw addresses are not telemetry
+([trusted proxy client-IP derivation](adr/drafts/trusted-proxy-client-ip.md)).
+The minimal NixOS module exposes `services.jaunder.trustedProxies`, an empty-by-
+default string list serialized to `JAUNDER_TRUSTED_PROXIES`. The owned stack
+sets exactly `127.0.0.1/32` for its hard-coded Caddy hop and removes inbound
+`Forwarded`, leaving Caddy to produce the trusted-proxy-aware `X-Forwarded-For`
+chain. CDN ranges remain Caddy configuration rather than Jaunder defaults.
+
 **What is inside the executable.** Two `rust-embed` trees, so **no external file
 is needed to serve the client** ([ADR-0003](adr/0003-asset-management.md)).
 Request handling still touches disk for user data — media blobs are opened per
@@ -2425,18 +2446,20 @@ is **no longer a deployment artifact** — the binary embeds the bundle — and 
 retained only so `cargo xtask audit-wasm` can build `.#site` and inspect the
 bundle for size analysis (`nix/packages.nix:296-305`,
 [declarative NixOS deployment and package outputs](adr/0142-declarative-nixos-deployment-package-outputs.md)).
-The `services.jaunder` module (`nix/nixos.nix:21-97`) has only ADR-0142's
-operator options: `enable`, `bind`, `db`, and `prod`. It creates a dedicated
-`jaunder` user/group, runs under systemd from `StateDirectory=jaunder` with
-`WorkingDirectory=%S/jaunder`, passes `bind` and `db` through unconditionally
-and `JAUNDER_ENV=prod` only when `prod` is set (`nix/nixos.nix:70-80`), runs
-`jaunder init --db "$JAUNDER_DB" --skip-if-exists` in `preStart`
-(`nix/nixos.nix:83-85`), and starts `jaunder serve`. It has no module option for
-package selection or PostgreSQL password injection; operators supply
-`JAUNDER_DB_PASSWORD[_FILE]` through the service manager when needed. There is
-no site symlink; the module comment names #237 as the reason. Two
-`nixosConfigurations` test VMs (interactive, PostgreSQL) exist for development
-only.
+The `services.jaunder` module (`nix/nixos.nix`) has the ADR-0142 operator
+options `enable`, `bind`, `db`, and `prod`, plus the empty-by-default
+`trustedProxies` string list from the
+[trusted proxy client-IP derivation](adr/drafts/trusted-proxy-client-ip.md). It
+creates a dedicated `jaunder` user/group, runs under systemd from
+`StateDirectory=jaunder` with `WorkingDirectory=%S/jaunder`, passes `bind` and
+`db` through unconditionally, `JAUNDER_ENV=prod` only when `prod` is set, and
+`JAUNDER_TRUSTED_PROXIES` only when `trustedProxies` is nonempty (comma-joined),
+runs `jaunder init --db "$JAUNDER_DB" --skip-if-exists` in `preStart`, and
+starts `jaunder serve`. It has no module option for package selection or
+PostgreSQL password injection; operators supply `JAUNDER_DB_PASSWORD[_FILE]`
+through the service manager when needed. There is no site symlink; the module
+comment names #237 as the reason. Two `nixosConfigurations` test VMs
+(interactive, PostgreSQL) exist for development only.
 
 `nixosModules.jaunder-stack` imports the minimal module and exposes
 `services.jaunder.stack` as a complete single-host composition
@@ -2449,7 +2472,11 @@ letter or digit. Production-mode Jaunder and the OpenTelemetry Collector remain
 on loopback; Jaunder emits JSON logs, and the collector routes Jaunder metrics,
 parsed structured fields from the `jaunder.service` journal, and traces into
 persistent single-node VictoriaMetrics, VictoriaLogs, and VictoriaTraces stores.
-Each store and its built-in web UI remains loopback-only.
+Each store and its built-in web UI remains loopback-only. The stack sets
+`trustedProxies = [ "127.0.0.1/32" ]` for its immediate Caddy Transport Peer;
+its application route removes caller-supplied `Forwarded` while Caddy owns the
+trusted `X-Forwarded-For` chain. CDN ranges and vendor-header normalization stay
+in Caddy configuration rather than becoming Jaunder defaults.
 
 The services use native `/metrics`, `/logs`, and `/traces` HTTP path prefixes;
 Collector exporters use the corresponding prefixed ingestion endpoints directly

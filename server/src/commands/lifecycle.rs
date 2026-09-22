@@ -18,6 +18,7 @@ use tokio::{net::TcpListener, sync::oneshot::Receiver, task::JoinHandle};
 
 use super::support;
 use crate::cli::StorageArgs;
+use crate::create_router_with_trusted_proxies;
 use crate::feed::worker::FeedWorker;
 use crate::maintenance::{self, DatabaseMaintenance};
 use crate::metrics::{self, SaturationSources};
@@ -611,11 +612,12 @@ fn compose_server_router(
     mailer: Arc<dyn common::mailer::MailSender>,
     prod: bool,
     trace_parent_enabled: bool,
+    trusted_proxies: crate::trusted_proxy::TrustedProxyConfig,
 ) -> Router {
     let storage_path = Arc::new(storage_path);
     let locks = Arc::new(MediaContentLocks::new(Arc::clone(&storage_path)));
     let (resolver, ownership) =
-        media_ownership(instance_id.clone(), Arc::clone(&dependencies.site_config));
+        media_ownership(instance_id.clone(), dependencies.site_config.clone());
     let publisher = publisher_service(
         (*storage_path).clone(),
         Arc::clone(&dependencies.publisher),
@@ -675,14 +677,13 @@ fn compose_server_router(
             prod,
         ),
     );
-    let public_projector = public_projector(dependencies);
     let app = crate::application_routes(
         crate::client_telemetry_routes(
             Arc::clone(&dependencies.sessions),
             dependencies.write_scope.clone(),
         ),
         contexts,
-        public_projector,
+        public_projector(dependencies),
     );
     let app = crate::context::with_media_extensions(app, ownership, manager, locks, storage_path);
     let app = crate::context::with_post_account_extensions(
@@ -706,7 +707,13 @@ fn compose_server_router(
         Arc::clone(&dependencies.sessions),
         dependencies.write_scope.clone(),
     );
-    crate::create_router(app, instance_id, prod, trace_parent_enabled)
+    create_router_with_trusted_proxies(
+        app,
+        instance_id,
+        prod,
+        trace_parent_enabled,
+        trusted_proxies,
+    )
 }
 
 async fn reconcile_theme_assets(
@@ -801,6 +808,28 @@ pub async fn prepare_server(
     otel_tracing_enabled: bool,
     capture: Option<&ServeCapturePaths>,
 ) -> anyhow::Result<PreparedServer> {
+    let trusted_proxies = crate::trusted_proxy::TrustedProxyConfig::default();
+    prepare_server_with_trusted_proxies(
+        storage,
+        bind,
+        prod,
+        telemetry,
+        otel_tracing_enabled,
+        capture,
+        trusted_proxies,
+    )
+    .await
+}
+
+async fn prepare_server_with_trusted_proxies(
+    storage: &StorageArgs,
+    bind: SocketAddr,
+    prod: bool,
+    telemetry: &TelemetryConfig,
+    otel_tracing_enabled: bool,
+    capture: Option<&ServeCapturePaths>,
+    trusted_proxies: crate::trusted_proxy::TrustedProxyConfig,
+) -> anyhow::Result<PreparedServer> {
     let (runtime_guard, start_time) = prepare_runtime_identity(&storage.storage_path, bind)?;
     // The exclusive OS lock and live reservation above prove no valid upload can
     // be active. Establish a clean transient area before any upload-capable
@@ -844,6 +873,7 @@ pub async fn prepare_server(
         mailer,
         prod,
         otel_tracing_enabled,
+        trusted_proxies,
     );
 
     let listener = tokio::net::TcpListener::bind(bind).await?;
@@ -895,9 +925,12 @@ async fn serve_with_shutdown(
     router: axum::Router,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
-    axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown)
-        .await?;
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown)
+    .await?;
     Ok(())
 }
 
@@ -1063,6 +1096,28 @@ pub async fn cmd_serve(
     otel_tracing_enabled: bool,
     capture: Option<&ServeCapturePaths>,
 ) -> anyhow::Result<()> {
+    let trusted_proxies = crate::trusted_proxy::TrustedProxyConfig::default();
+    cmd_serve_with_trusted_proxies(
+        storage,
+        bind,
+        prod,
+        telemetry,
+        otel_tracing_enabled,
+        capture,
+        trusted_proxies,
+    )
+    .await
+}
+
+pub(crate) async fn cmd_serve_with_trusted_proxies(
+    storage: &StorageArgs,
+    bind: SocketAddr,
+    prod: bool,
+    telemetry: &TelemetryConfig,
+    otel_tracing_enabled: bool,
+    capture: Option<&ServeCapturePaths>,
+    trusted_proxies: crate::trusted_proxy::TrustedProxyConfig,
+) -> anyhow::Result<()> {
     // Telemetry is owned by `run`, which holds the TelemetryGuard across this
     // call (see `server/src/main.rs`); `cmd_serve` does not init it, matching
     // every other `cmd_*`.
@@ -1078,13 +1133,14 @@ pub async fn cmd_serve(
         mut workers,
         runtime_guard,
         saturation_metrics,
-    } = prepare_server(
+    } = prepare_server_with_trusted_proxies(
         storage,
         bind,
         prod,
         telemetry,
         otel_tracing_enabled,
         capture,
+        trusted_proxies,
     )
     .await?;
 
@@ -1954,6 +2010,69 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn live_axum_server_preserves_connect_info_for_trusted_proxy_context() {
+        async fn context(request: axum::extract::Request) -> String {
+            let peer = request
+                .extensions()
+                .get::<axum::extract::ConnectInfo<SocketAddr>>();
+            let address = request
+                .extensions()
+                .get::<crate::trusted_proxy::RequestAddress>();
+            matches!(
+                (peer, address),
+                (
+                    Some(axum::extract::ConnectInfo(peer)),
+                    Some(address),
+                ) if peer.ip().is_loopback()
+                    && peer.port() != 0
+                    && address.transport_peer == Some(*peer)
+                    && address.effective_client_ip == Some("203.0.113.10".parse().expect("IP"))
+                    && address.outcome == crate::trusted_proxy::ResolutionOutcome::Forwarded
+            )
+            .to_string()
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind listener");
+        let address = listener.local_addr().expect("listener address");
+        let trusted_proxies = crate::trusted_proxy::TrustedProxyConfig::new(["127.0.0.1"
+            .parse()
+            .expect("loopback CIDR")])
+        .expect("trusted proxy configuration");
+        let instance_id = "123e4567-e89b-12d3-a456-426614174000"
+            .parse()
+            .expect("instance ID");
+        let router = crate::create_router_with_trusted_proxies(
+            axum::Router::new().route("/", axum::routing::get(context)),
+            &instance_id,
+            false,
+            false,
+            trusted_proxies,
+        );
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(serve_with_shutdown(listener, router, async move {
+            let _ = shutdown_rx.await;
+        }));
+
+        let response = reqwest::Client::new()
+            .get(format!("http://{address}/"))
+            .header("x-forwarded-for", "203.0.113.10")
+            .send()
+            .await
+            .expect("request live server");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert_eq!(response.text().await.expect("context response"), "true");
+        shutdown_tx
+            .send(())
+            .expect("server must still wait for shutdown");
+        server
+            .await
+            .expect("server task")
+            .expect("graceful server completion");
+    }
+
     // The shutdown tests below raise a REAL signal to their own process. This is
     // safe only under `cargo nextest` (one process per test): installation is
     // synchronous, so the signal is delivered to this command's handler rather
@@ -2009,10 +2128,18 @@ mod tests {
         let runtime_path = runtime_file::canonical_runtime_path(&storage.storage_path);
         let telemetry = test_telemetry(Some("http://127.0.0.1:4317"));
         let bind = "127.0.0.1:0".parse().expect("bind address");
-        let mut command =
-            tokio::spawn(
-                async move { cmd_serve(&storage, bind, false, &telemetry, false, None).await },
-            );
+        let mut command = tokio::spawn(async move {
+            cmd_serve_with_trusted_proxies(
+                &storage,
+                bind,
+                false,
+                &telemetry,
+                false,
+                None,
+                crate::trusted_proxy::TrustedProxyConfig::default(),
+            )
+            .await
+        });
 
         wait_for_ready_or_abort(
             Duration::from_secs(5),

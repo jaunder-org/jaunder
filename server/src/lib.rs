@@ -21,6 +21,7 @@ mod server_fn_response;
 pub mod site;
 mod soft_path;
 pub mod theme_content;
+pub mod trusted_proxy;
 
 pub mod websub;
 
@@ -122,6 +123,23 @@ pub fn create_router(
     secure_cookies: bool,
     trace_parent_enabled: bool,
 ) -> Router {
+    create_router_with_trusted_proxies(
+        app,
+        instance_id,
+        secure_cookies,
+        trace_parent_enabled,
+        crate::trusted_proxy::TrustedProxyConfig::default(),
+    )
+}
+
+/// Completes a router with trusted-proxy context in addition to common middleware.
+pub fn create_router_with_trusted_proxies(
+    app: Router,
+    instance_id: &InstanceId,
+    secure_cookies: bool,
+    trace_parent_enabled: bool,
+    trusted_proxies: crate::trusted_proxy::TrustedProxyConfig,
+) -> Router {
     // A non-header-safe value would violate `InstanceId`'s canonical UUID invariant.
     let instance_header = instance_id
         .to_string()
@@ -132,9 +150,14 @@ pub fn create_router(
         retire_session_cookie,
     ));
 
-    crate::observability::with_http_observability(app, trace_parent_enabled).layer(
-        axum::middleware::from_fn_with_state(instance_header, set_instance_header),
+    crate::trusted_proxy::with_request_address(
+        crate::observability::with_http_observability(app, trace_parent_enabled),
+        trusted_proxies,
     )
+    .layer(axum::middleware::from_fn_with_state(
+        instance_header,
+        set_instance_header,
+    ))
 }
 
 /// Builds client-telemetry routes from their exact storage dependencies.

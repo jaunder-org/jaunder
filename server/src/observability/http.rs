@@ -54,12 +54,17 @@ async fn extract_trace_context(
 /// Builds the per-request tracing span, adopting any extracted upstream trace
 /// context as its parent.
 fn make_request_span(request: &Request) -> Span {
+    let trusted_proxy_outcome = request
+        .extensions()
+        .get::<crate::trusted_proxy::RequestAddress>()
+        .map(|address| address.outcome.as_str());
     let span = tracing::span!(
         Level::INFO,
         "request",
         method = %request.method(),
         uri = request.uri().path(),
         version = ?request.version(),
+        trusted_proxy.outcome = ?trusted_proxy_outcome,
     );
     if let Some(parent) = request.extensions().get::<ExtractedTraceContext>()
         && span.set_parent(parent.0.clone()).is_err()
@@ -239,13 +244,21 @@ mod tests {
     fn request_span_records_only_safe_http_fields() {
         let fields = SpanFields::default();
         let subscriber = tracing_subscriber::registry().with(fields.clone());
-        let request = Request::builder()
+        let mut request = Request::builder()
             .method("GET")
             .uri("/atompub/nonexistent/posts?access_token=secret-query-value")
             .header("authorization", "Bearer secret-authorization-value")
             .header("cookie", "session=secret-cookie-value")
+            .header("x-forwarded-for", "203.0.113.10")
             .body(Body::empty())
             .expect("failed to build request");
+        request
+            .extensions_mut()
+            .insert(crate::trusted_proxy::RequestAddress {
+                transport_peer: Some("10.0.0.2:443".parse().expect("peer")),
+                effective_client_ip: Some("203.0.113.10".parse().expect("client IP")),
+                outcome: crate::trusted_proxy::ResolutionOutcome::Forwarded,
+            });
 
         tracing::subscriber::with_default(subscriber, || {
             drop(make_request_span(&request));
@@ -257,7 +270,7 @@ mod tests {
                 .iter()
                 .map(|(name, _)| name.as_str())
                 .collect::<Vec<_>>(),
-            ["method", "uri", "version"]
+            ["method", "uri", "version", "trusted_proxy.outcome"]
         );
         let serialized = format!("{fields:?}");
         assert!(serialized.contains("/atompub/nonexistent/posts"));
@@ -265,6 +278,7 @@ mod tests {
             "secret-query-value",
             "secret-authorization-value",
             "secret-cookie-value",
+            "203.0.113.10",
         ] {
             assert!(
                 !serialized.contains(secret),

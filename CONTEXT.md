@@ -6,6 +6,20 @@ and conversation stay consistent.
 
 ## Language
 
+### Networking
+
+**Transport Peer**: The direct network endpoint that opened a request's
+connection to Jaunder. It is the root of the trusted-proxy decision and remains
+distinct from any client address reported through forwarding headers. _Avoid_:
+client address (the peer may be a reverse proxy), real IP.
+
+**Effective Client IP**: The IP address attributed to a request after walking
+forwarding evidence only through explicitly trusted Transport Peers. Without
+usable trusted evidence it is the Transport Peer's IP; without a Transport Peer
+it is absent. It is diagnostic context, not authentication or authorization
+evidence. _Avoid_: real IP (the value is derived under an operator-configured
+trust boundary), remote address (ambiguous with Transport Peer).
+
 ### Registration
 
 **Registration Policy**: The instance-wide rule for admitting new Users and
