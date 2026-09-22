@@ -250,7 +250,7 @@ fn AnchoredPostActions(
                             aria-expanded=move || expanded.get().to_string()
                             popovertarget=popover_id.clone()
                         >
-                            "Actions"
+                            {posts::render::POST_ACTIONS_LABEL}
                         </button>
                     </div>
                     <div

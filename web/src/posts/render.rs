@@ -47,6 +47,9 @@ pub fn edit_post_url(post_id: PostId) -> RootRelativeUrl {
     url
 }
 
+/// The shared visible and baseline-probe label for trusted Post Actions.
+pub(crate) const POST_ACTIONS_LABEL: &str = "Actions";
+
 /// Names the CSS anchor reserved for a Post's trusted Actions control.
 ///
 /// This is shared by the projected markup and the wasm enhancement so a
@@ -253,8 +256,10 @@ pub(crate) fn post_content(view: &PostView) -> Markup {
             }
             span class="j-post-handle" data-jaunder-part="author-handle" { "@" (view.username) }
             span class="j-spacer" {}
-            time class="j-post-time" data-jaunder-part="published-time" { (view.time) }
-            (post_action_slot(view.post_id))
+            span class="j-post-action-group" {
+                time class="j-post-time" data-jaunder-part="published-time" { (view.time) }
+                (post_action_slot(view.post_id))
+            }
         }
         (post_heading(view.rendered_title, view.permalink))
         @if let Some(banner) = view.banner {
@@ -328,14 +333,14 @@ pub(crate) fn post_heading(
 fn post_action_slot(post_id: PostId) -> Markup {
     let anchor_name = post_action_anchor_name(post_id);
     let style = format!(
-        "all:initial!important;display:block!important;box-sizing:border-box!important;position:static!important;flex:0 0 72px!important;min-width:72px!important;max-width:72px!important;width:72px!important;min-height:32px!important;max-height:32px!important;height:32px!important;anchor-name:{anchor_name}!important"
+        "all:initial!important;display:block!important;box-sizing:border-box!important;position:static!important;flex:0 0 72px!important;min-width:72px!important;max-width:72px!important;width:72px!important;min-height:32px!important;max-height:32px!important;height:32px!important;overflow:hidden!important;color:transparent!important;text-shadow:none!important;text-indent:-9999px!important;pointer-events:none!important;user-select:none!important;font-family:Inter,system-ui,-apple-system,sans-serif!important;font-size:14px!important;font-style:normal!important;font-weight:400!important;line-height:1.55!important;letter-spacing:normal!important;white-space:nowrap!important;padding:7px 14px!important;border:1px solid transparent!important;anchor-name:{anchor_name}!important"
     );
     Markup::new(html! {
         span
             class="j-post-actions-slot"
             style=(style)
             aria-hidden="true"
-        {}
+        { (POST_ACTIONS_LABEL) }
     })
 }
 
@@ -695,7 +700,7 @@ mod tests {
         );
         assert!(
             html.contains(
-                "class=\"j-post-actions-slot\" style=\"all:initial!important;display:block!important;box-sizing:border-box!important;position:static!important;flex:0 0 72px!important;min-width:72px!important;max-width:72px!important;width:72px!important;min-height:32px!important;max-height:32px!important;height:32px!important;anchor-name:--j-post-actions-1!important\" aria-hidden=\"true\""
+                "class=\"j-post-actions-slot\" style=\"all:initial!important;display:block!important;box-sizing:border-box!important;position:static!important;flex:0 0 72px!important;min-width:72px!important;max-width:72px!important;width:72px!important;min-height:32px!important;max-height:32px!important;height:32px!important;overflow:hidden!important;color:transparent!important;text-shadow:none!important;text-indent:-9999px!important;pointer-events:none!important;user-select:none!important;font-family:Inter,system-ui,-apple-system,sans-serif!important;font-size:14px!important;font-style:normal!important;font-weight:400!important;line-height:1.55!important;letter-spacing:normal!important;white-space:nowrap!important;padding:7px 14px!important;border:1px solid transparent!important;anchor-name:--j-post-actions-1!important\" aria-hidden=\"true\">Actions</span>"
             ),
             "the shared header must reserve the protected Actions footprint: {html}"
         );
