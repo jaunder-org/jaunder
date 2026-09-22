@@ -1369,6 +1369,7 @@ async fn update_org_current_sync_succeeds_and_stale_sync_preserves_post(#[case] 
         .expect("read current audiences");
     let current_etag = host::etag::post_content_etag(
         before.title.as_ref(),
+        &before.slug,
         &before.body,
         &before.format,
         before.summary.as_ref(),

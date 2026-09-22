@@ -67,7 +67,7 @@ Out:
     Unicode encoding, query preservation, and indistinguishable misses for
     absent, Deleted, future, and anonymously hidden targets.
 
-- [ ] Task 4: Make protocol projections observe repaired canonical identity
+- [x] Task 4: Make protocol projections observe repaired canonical identity
   - Contract: slug joins the canonical AtomPub strong-ETag input tuple without
     changing Post ID Member identity. Migration-updated representations and
     feeds expose repaired canonical links. Emacs continues to join by Post ID

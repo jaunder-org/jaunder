@@ -4,8 +4,8 @@ use std::{fmt, str::FromStr};
 
 use common::{
     etag::ETag, feed::FeedFormat, media::ContentHash, post_body::PostBody,
-    post_summary::PostSummary, post_title::PostTitle, render::PostFormat, tag::TagLabel,
-    time::UtcInstant,
+    post_summary::PostSummary, post_title::PostTitle, render::PostFormat, slug::Slug,
+    tag::TagLabel, time::UtcInstant,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -193,6 +193,7 @@ const fn serializer_revision(format: FeedFormat) -> u16 {
 #[must_use]
 pub fn post_content_etag<'a>(
     title: Option<&'a PostTitle>,
+    slug: &'a Slug,
     body: &'a PostBody,
     format: &'a PostFormat,
     summary: Option<&'a PostSummary>,
@@ -203,6 +204,7 @@ pub fn post_content_etag<'a>(
     #[derive(Serialize)]
     struct Content<'a> {
         title: Option<&'a PostTitle>,
+        slug: &'a Slug,
         body: &'a PostBody,
         format: String,
         summary: Option<&'a PostSummary>,
@@ -214,6 +216,7 @@ pub fn post_content_etag<'a>(
     let audiences = crate::atompub::canonical_audience_values(&audience_targets);
     let content = Content {
         title,
+        slug,
         body,
         format: format.to_string(),
         summary,
@@ -231,7 +234,10 @@ mod tests {
     use crate::feed::{FeedDescription, FeedTitle};
     use common::{
         ids::PostId,
-        test_support::{parse_post_summary, parse_url, parse_utc_instant, rendered_html},
+        test_support::{
+            parse_post_body, parse_post_summary, parse_post_title, parse_slug, parse_tag_label,
+            parse_url, parse_utc_instant, rendered_html,
+        },
         time::UtcInstant,
     };
 
@@ -388,6 +394,38 @@ mod tests {
             etag(FeedFormat::Atom, &metadata, &items, time(1)),
             etag(FeedFormat::Json, &metadata, &items, time(1)),
         );
+    }
+
+    #[test]
+    fn post_content_etag_includes_the_canonical_slug() {
+        let title = parse_post_title("Title");
+        let body = parse_post_body("Body");
+        let format = common::render::PostFormat::Markdown;
+        let summary = parse_post_summary("Summary");
+        let tags = [parse_tag_label("tag")];
+        let first_slug = parse_slug("first-canonical-slug");
+        let second_slug = parse_slug("second-canonical-slug");
+
+        let first = post_content_etag(
+            Some(&title),
+            &first_slug,
+            &body,
+            &format,
+            Some(&summary),
+            &tags,
+            false,
+        );
+        let second = post_content_etag(
+            Some(&title),
+            &second_slug,
+            &body,
+            &format,
+            Some(&summary),
+            &tags,
+            false,
+        );
+
+        assert_ne!(first, second);
     }
 
     #[test]

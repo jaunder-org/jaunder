@@ -466,6 +466,7 @@ pub(crate) fn update_expectation_error(
 
     let current_etag = etag::post_content_etag(
         existing.title.as_ref(),
+        &existing.slug,
         &existing.body,
         &existing.format,
         existing.summary.as_ref(),

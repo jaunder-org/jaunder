@@ -124,6 +124,7 @@ impl PostServices {
 pub(crate) fn etag_for(post: &PostRecord, audiences: &[AudienceTarget]) -> ETag {
     etag::post_content_etag(
         post.title.as_ref(),
+        &post.slug,
         &post.body,
         &post.format,
         post.summary.as_ref(),
@@ -845,15 +846,14 @@ mod etag_tests {
     }
 
     #[test]
-    fn etag_for_ignores_identity_and_timestamps() {
-        // AC2/AC5: nothing outside the content fields moves the ETag — including a
-        // published_at whose *value* advances while staying Some (non-draft).
+    fn etag_for_ignores_noncanonical_identity_and_timestamps() {
+        // AC2/AC5: nothing outside the canonical content fields moves the ETag —
+        // including a published_at whose *value* advances while staying Some.
         let e = etag_for(&base_post(), &[]);
         let later = parse_utc_instant("1970-04-15T04:00:00Z");
         let mut p = base_post();
         p.post_id = PostId::from(999);
         p.user_id = UserId::from(42);
-        p.slug = "other-slug".parse().expect("parse slug");
         p.created_at = later;
         p.updated_at = later;
         p.published_at = Some(later);
@@ -885,6 +885,10 @@ mod etag_tests {
         };
         assert_ne!(flip(&|p| p.title = Some(parse_post_title("Other"))), e); // title value
         assert_ne!(flip(&|p| p.title = None), e); // title present->absent
+        assert_ne!(
+            flip(&|p| p.slug = "other-slug".parse().expect("parse slug")),
+            e
+        ); // canonical slug
         assert_ne!(flip(&|p| p.body = parse_post_body("Different body.")), e); // body
         assert_ne!(flip(&|p| p.summary = Some(parse_post_summary("Other"))), e); // summary value
         assert_ne!(flip(&|p| p.summary = None), e); // summary present->absent

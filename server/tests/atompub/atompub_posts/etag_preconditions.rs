@@ -3,7 +3,7 @@ use axum::{
     http::{Method, StatusCode, header},
 };
 use common::root_relative_url::RootRelativeUrl;
-use common::test_support::parse_post_body;
+use common::test_support::{parse_post_body, parse_slug};
 use rstest::*;
 use rstest_reuse::*;
 use tower::ServiceExt;
@@ -12,6 +12,7 @@ use crate::helpers::{
     SeededSession, atompub, atompub_at, atompub_get, atompub_location, atompub_post_xml,
     atompub_put_xml, body_string, create_user_and_session, make_app,
 };
+use storage::sql::QueryStorageExt;
 use storage::test_support::{Backend, backends, backends_matrix};
 
 use super::fixtures::{entry_xml, etag_of};
@@ -401,9 +402,9 @@ async fn etag_is_content_hash_format(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
-async fn identical_posts_share_etag(#[case] backend: Backend) {
-    // AC2: two distinct posts with identical content get the same ETag — the
-    // per-post id / tag ids / slug are excluded from the hash.
+async fn colliding_post_slugs_produce_distinct_etags(#[case] backend: Backend) {
+    // Two otherwise-identical Posts receive different canonical slugs, and the
+    // slug is part of the mutable Member representation guarded by the ETag.
     let env = backend.setup().await;
     let base = &env.base;
     let session = create_user_and_session(
@@ -416,7 +417,56 @@ async fn identical_posts_share_etag(#[case] backend: Backend) {
 
     let e1 = create_etag(app.clone(), &session).await;
     let e2 = create_etag(app, &session).await;
-    assert_eq!(e1, e2);
+    assert_ne!(e1, e2);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn canonical_slug_repair_invalidates_the_prior_etag(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let post = session
+        .seed_post()
+        .seed(env.posts(), env.feed_events(), env.write_scope())
+        .await;
+    let member = format!("posts/{}", post.post_id);
+    let before = make_app!(&env, base)
+        .oneshot(atompub_get(&session, &member))
+        .await
+        .unwrap();
+    let prior_etag = etag_of(&before);
+    let repaired_slug = parse_slug("repaired-canonical-slug");
+    storage::with_closeable_pool!(env.base.pool(), pool, {
+        sqlx::query("UPDATE posts SET slug = $1 WHERE post_id = $2")
+            .bind_storage(&repaired_slug)
+            .bind_storage(post.post_id)
+            .execute(pool)
+            .await
+            .unwrap();
+    });
+
+    let repaired = make_app!(&env, base)
+        .oneshot(atompub_get(&session, &member))
+        .await
+        .unwrap();
+    assert_ne!(etag_of(&repaired), prior_etag);
+    let response = make_app!(&env, base)
+        .oneshot(
+            atompub(&session, Method::PUT, &member)
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::IF_MATCH, prior_etag)
+                .body(Body::from(entry_xml("Changed", "text", "changed")))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
 }
 
 #[apply(backends)]
