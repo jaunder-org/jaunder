@@ -154,7 +154,7 @@ by URL scheme: `DbConnectOptions` (`storage/src/db.rs`) parses `sqlite:` vs
 `postgres://` and `open_database`/`open_existing_database` dispatch accordingly.
 Each backend has its own migration tree under
 `storage/migrations/{sqlite,postgres}`; the two trees carry identical numbered
-filenames (currently `0001`–`0025`), and maintaining that parity — same
+filenames (currently `0001`–`0041`), and maintaining that parity — same
 migrations, same behavior — is the accepted cost of the pluggable strategy
 ([ADR-0001](adr/0001-storage-backends.md)).
 
