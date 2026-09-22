@@ -146,6 +146,76 @@ When DRAFT is non-nil, create a draft Member."
           :content-type (dom-attr content 'type)
           :body (dom-inner-text content))))
 
+(ert-deftest jaunder-reconcile-detects-audience-only-remote-change ()
+  "Audience-only ETag movement produces server-ahead, then conflict with local edits."
+  (jaunder-test--with-live-server
+   (let* ((root (file-name-as-directory (make-temp-file "jaunder-audience-reconcile-" t)))
+          (path (expand-file-name "audience.org" root))
+          (jaunder-blogs (list (cons root (list :base-url jaunder-test-base-url
+                                                :username jaunder-test-username))))
+          (jaunder--audience-capability-cache nil)
+          buffer)
+     (unwind-protect
+         (progn
+           (with-temp-file path
+             (insert (concat "#+TITLE: Audience reconcile\n"
+                             "#+PROPERTY: JAUNDER_STATUS published\n"
+                             "#+PROPERTY: JAUNDER_AUDIENCE public\n\nBody.\n")))
+           (setq buffer (find-file-noselect path))
+           (with-current-buffer buffer (jaunder-publish) (save-buffer))
+           (setq path (buffer-file-name buffer))
+           (set-file-times path (time-subtract (current-time) (seconds-to-time 5)))
+           (jaunder--call-with-blog
+            root
+            (lambda ()
+              (let* ((id (with-current-buffer buffer
+                           (jaunder--buffer-property "JAUNDER_ID")))
+                     (old-etag (with-current-buffer buffer
+                                 (jaunder--buffer-property "JAUNDER_SYNCED")))
+                     (updated
+                      (jaunder--http-request
+                       "PUT" (jaunder--member-url id)
+                       (jaunder--atom-entry->xml
+                        (jaunder--make-entry
+                         :title "Audience reconcile" :audiences '("private")
+                         :content-type "text/org" :body "Body."))
+                       "application/atom+xml"
+                       (list (cons "If-Match" old-etag))))
+                     (new-etag (jaunder--response-header updated "ETag")))
+                (should (eq (plist-get updated :status) 200))
+                (should-not (equal old-etag new-etag))
+                (let* ((report
+                        (jaunder--reconcile-build-report
+                         root (jaunder--inventory-for-root root)))
+                       (row
+                        (cl-find
+                         id (jaunder-reconcile-report-rows report)
+                         :key (lambda (candidate)
+                                (let ((member (jaunder-reconcile-row-member candidate)))
+                                  (and member (jaunder-inventory-member-id member))))
+                         :test #'equal)))
+                  (should (eq (jaunder-reconcile-row-state row) 'server-ahead)))
+                (with-current-buffer buffer
+                  (goto-char (point-max))
+                  (insert "Local change.\n")
+                  (save-buffer))
+                (set-file-times path (time-add (current-time) (seconds-to-time 5)))
+                (let* ((report
+                        (jaunder--reconcile-build-report
+                         root (jaunder--inventory-for-root root)))
+                       (row
+                        (cl-find
+                         id (jaunder-reconcile-report-rows report)
+                         :key (lambda (candidate)
+                                (let ((member (jaunder-reconcile-row-member candidate)))
+                                  (and member (jaunder-inventory-member-id member))))
+                         :test #'equal)))
+                  (should (eq (jaunder-reconcile-row-state row) 'conflict)))))))
+       (when (buffer-live-p buffer)
+         (with-current-buffer buffer (set-buffer-modified-p nil))
+         (kill-buffer buffer))
+       (delete-directory root t)))))
+
 (defun jaunder-reconcile-live--run-selected (root keys command)
   "Build ROOT's report, mark KEYS, confirm COMMAND, and return its results/prompt."
   (jaunder-reconcile root)

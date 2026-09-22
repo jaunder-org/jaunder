@@ -37,12 +37,41 @@
       (should id)
       (should slug)
       (should synced)
+      (let* ((member (jaunder--http-request "GET" (jaunder--member-url id)))
+             (fields (jaunder--harvest-response-fields (plist-get member :body))))
+        (should (equal (cdr (assq 'audiences fields)) '("private"))))
       (should (equal (file-name-nondirectory (buffer-file-name))
                      (concat slug ".org")))
       ;; Re-publish updates the same post (id unchanged), not a duplicate.
       (goto-char (point-max)) (insert "More.\n") (save-buffer)
       (jaunder-publish)
       (should (equal (jaunder--buffer-property "JAUNDER_ID") id))))))
+
+(ert-deftest jaunder-publish-round-trips-explicit-audience-unions ()
+  (jaunder-test--with-live-server
+   (jaunder-pub-test--in-buffer
+    (concat "#+TITLE: Audience\n"
+            "#+PROPERTY: JAUNDER_STATUS published\n"
+            "#+PROPERTY: JAUNDER_AUDIENCE private\n\nBody.\n")
+    (jaunder-publish)
+    (let* ((id (jaunder--buffer-property "JAUNDER_ID"))
+           (member-url (jaunder--member-url id))
+           (private (jaunder--http-request "GET" member-url))
+           (private-fields
+            (jaunder--harvest-response-fields (plist-get private :body))))
+      (should (equal (cdr (assq 'audiences private-fields)) '("private")))
+      (goto-char (point-min))
+      (re-search-forward "JAUNDER_AUDIENCE private")
+      (replace-match "JAUNDER_AUDIENCE subscribers")
+      (end-of-line)
+      (insert "\n#+PROPERTY: JAUNDER_AUDIENCE public")
+      (save-buffer)
+      (jaunder-publish)
+      (let* ((union (jaunder--http-request "GET" member-url))
+             (union-fields
+              (jaunder--harvest-response-fields (plist-get union :body))))
+        (should (equal (cdr (assq 'audiences union-fields))
+                       '("public" "subscribers"))))))))
 
 (ert-deftest jaunder-publish-uploads-pdf-and-sends-harvested-media-url ()
   (jaunder-test--with-live-server

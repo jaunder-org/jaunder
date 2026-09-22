@@ -76,7 +76,7 @@ Out:
     handling, foreign/wrong/missing capability evidence, and pre-mutation
     failure.
 
-- [ ] **Task 4: Prove the live workflow and document authoring and upgrades**
+- [x] **Task 4: Prove the live workflow and document authoring and upgrades**
   - Contract: real-server Emacs tests cover explicit create, Private-to-Public
     replacement, multi-target union retention, omission behavior, pull, and
     audience-only reconciliation states.
