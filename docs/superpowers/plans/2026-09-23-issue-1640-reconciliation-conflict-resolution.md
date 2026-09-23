@@ -41,7 +41,7 @@ HTTP/filesystem or Media, and changes to ordinary non-conflict operations.
     collision, rename-after-replace partial commit and batch isolation; live
     Emacs coverage for successful replacement and concurrent remote edit.
 
-- [ ] 3. Accept reviewed local authored content through a conditional PUT with
+- [x] 3. Accept reviewed local authored content through a conditional PUT with
       no pre-PUT local Post metadata write.
   - Contract: the publish seam accepts an explicit reviewed strong `If-Match`
     for this operation without changing ordinary publish/create recovery.

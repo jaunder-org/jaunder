@@ -66,6 +66,7 @@
   (define-key jaunder-reconcile-report-mode-map "m" #'jaunder-reconcile-toggle-mark)
   (define-key jaunder-reconcile-report-mode-map "p" #'jaunder-reconcile-push-selected)
   (define-key jaunder-reconcile-report-mode-map "f" #'jaunder-reconcile-pull-selected)
+  (define-key jaunder-reconcile-report-mode-map "l" #'jaunder-reconcile-keep-local-selected)
   (define-key jaunder-reconcile-report-mode-map "r" #'jaunder-reconcile-keep-remote-selected)
   (define-key jaunder-reconcile-report-mode-map "g" #'jaunder-reconcile-refresh)
   (define-key jaunder-reconcile-report-mode-map "D" #'jaunder-reconcile-delete-selected))
@@ -1013,6 +1014,104 @@ remote strong-ETag revalidation, one local preflight, then replacement."
        (lambda ()
          (jaunder--reconcile-execute-batch buffer rows 'pull
                                            #'jaunder--reconcile-pull-row))))))
+
+(defun jaunder--reconcile-keep-local-send (row path xml)
+  "Send reviewed XML for ROW, then checkpoint PATH only on confirmed commit."
+  (let* ((etag (jaunder-reconcile-row-remote-etag row))
+         (response
+          (condition-case err
+              (list :value (jaunder--send-reviewed-update
+                            (jaunder-inventory-member-edit-uri
+                             (jaunder-reconcile-row-member row)) etag xml))
+            (error (list :error err))))
+         (lost (plist-get response :error))
+         (received (plist-get response :value))
+         (status (plist-get received :status)))
+    (cond
+     (lost
+      (list :outcome 'unknown :post-id (jaunder--reconcile-row-post-id row)
+            :slug (jaunder--reconcile-row-slug row) :etag etag
+            :local-effect 'unchanged :reason 'remote-outcome-unknown
+            :detail (format "PUT response lost; reconcile before retrying: %s"
+                            (error-message-string lost))))
+     ((eq status 412)
+      (append (jaunder--reconcile-blocked row 'etag-stale)
+              (list :etag etag :http-status status)))
+     ((not (memq status '(200 201)))
+      (list :outcome 'failed :post-id (jaunder--reconcile-row-post-id row)
+            :slug (jaunder--reconcile-row-slug row) :etag etag
+            :http-status status :local-effect 'unchanged :reason 'publish-http-error))
+     (t
+      (let ((drift (jaunder--reconcile-pull-preflight
+                    row (list :slug (jaunder--reconcile-row-slug row)))))
+        (if drift
+            (list :outcome 'partial :post-id (jaunder--reconcile-row-post-id row)
+                  :slug (jaunder--reconcile-row-slug row)
+                  :etag (jaunder--response-header received "ETag")
+                  :http-status status :local-effect 'unchanged
+                  :reason 'local-changed-after-commit
+                  :detail (format "Remote PUT committed; %s; reconcile before retrying" drift))
+          (let ((checkpoint
+                 (condition-case err
+                     (list :value
+                           (jaunder--reconcile-call-with-source-buffer
+                            path
+                            (lambda ()
+                              ;; Record timezone only after confirmed commitment.
+                              (jaunder--ensure-date-tz)
+                              (let ((slug (jaunder--write-back received nil nil t)))
+                                (list :slug slug :path (jaunder--rename-to-slug slug))))))
+                   (error (list :error err)))))
+            (if (plist-get checkpoint :error)
+                (list :outcome 'partial :post-id (jaunder--reconcile-row-post-id row)
+                      :slug (jaunder--reconcile-row-slug row)
+                      :etag (jaunder--response-header received "ETag")
+                      :http-status status :local-effect 'checkpoint-uncertain
+                      :reason 'local-write-back-failed
+                      :detail (format "Remote PUT committed; inspect local Post before retrying: %s"
+                                      (error-message-string (plist-get checkpoint :error))))
+              (let ((installed (plist-get checkpoint :value)))
+                (list :outcome 'success :post-id (jaunder--reconcile-row-post-id row)
+                      :slug (plist-get installed :slug)
+                      :etag (jaunder--response-header received "ETag")
+                      :http-status status
+                      :local-effect (if (equal path (plist-get installed :path))
+                                        'updated 'renamed)))))))))))
+
+(defun jaunder--reconcile-keep-local-row (row)
+  "Publish reviewed ROW locally authored content without any pre-PUT Post write."
+  (let ((initial (jaunder--reconcile-conflict-preflight row)))
+    (if (not (plist-get initial :ok))
+        initial
+      (let* ((path (jaunder-inventory-local-path (jaunder-reconcile-row-local row)))
+             (prepared
+              (condition-case err
+                  (list :xml (jaunder--reconcile-call-with-source-buffer
+                              path #'jaunder--prepare-reviewed-update))
+                (error (list :error err)))))
+        (if (plist-get prepared :error)
+            (list :outcome 'failed :post-id (jaunder--reconcile-row-post-id row)
+                  :slug (jaunder--reconcile-row-slug row) :local-effect 'unchanged
+                  :reason 'publish-preparation-failed
+                  :detail (error-message-string (plist-get prepared :error)))
+          (let ((final (jaunder--reconcile-conflict-preflight row)))
+            (if (not (plist-get final :ok))
+                final
+              (jaunder--reconcile-keep-local-send row path (plist-get prepared :xml)))))))))
+
+(defun jaunder-reconcile-keep-local-selected ()
+  "Publish reviewed local content for selected conflicts after confirmation."
+  (interactive)
+  (let ((rows (jaunder-reconcile-selected-rows))
+        (buffer (current-buffer)))
+    (unless rows (user-error "No reconciliation rows selected"))
+    (when (jaunder--reconcile-confirm
+           "Keep local for %d selected Post(s)? " (length rows))
+      (jaunder--call-with-blog
+       (jaunder-reconcile-report-root jaunder-reconcile-report)
+       (lambda ()
+         (jaunder--reconcile-execute-batch
+          buffer rows 'keep-local #'jaunder--reconcile-keep-local-row))))))
 
 (defun jaunder--reconcile-keep-remote-row (row)
   "Install ROW's reviewed remote Post, or return a structured blocked result."

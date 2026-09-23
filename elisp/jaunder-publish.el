@@ -429,6 +429,37 @@ have committed after a response-less request."
                        'matched
                      'changed))))
 
+(defun jaunder--prepare-reviewed-update ()
+  "Return publishable XML for an existing Post without changing its local file.
+This is the conflict-resolution preparation path: validation, audience and
+Local Post Link checks, and Media localization run as for ordinary publishing,
+but no timezone, synchronization, or create-intent metadata is written before
+its conditional PUT.  Uploaded Media can survive a later blocked Post write."
+  (let* ((status (jaunder--buffer-property "JAUNDER_STATUS"))
+         (date-raw (jaunder--buffer-keyword "DATE"))
+         (tz (jaunder--buffer-property "JAUNDER_DATE_TZ"))
+         (entry (jaunder--org->atom)))
+    (unless (jaunder--buffer-property "JAUNDER_ID")
+      (error "jaunder: conflict resolution requires an existing Post ID"))
+    (jaunder--validate-publish entry status date-raw tz)
+    (jaunder--require-audience-capability
+     (jaunder--active-base-url) (jaunder-entry-audiences entry))
+    (setf (jaunder-entry-body entry)
+          (jaunder--localize-post-links (jaunder-entry-body entry)))
+    (jaunder--warn-zone-mismatch tz)
+    (jaunder--warn-missing-format-media-type (jaunder--active-base-url))
+    (setf (jaunder-entry-body entry)
+          (jaunder--localize-media (jaunder-entry-body entry)))
+    (jaunder--atom-entry->xml entry)))
+
+(defun jaunder--send-reviewed-update (edit-uri etag xml)
+  "PUT XML at reviewed EDIT-URI conditionally on strong ETAG."
+  (unless (jaunder--strong-etag-p etag)
+    (error "jaunder: conflict resolution requires a strong reviewed ETag"))
+  (jaunder--http-request
+   "PUT" edit-uri xml jaunder--entry-content-type
+   (list (cons "If-Match" etag))))
+
 (defun jaunder-publish (&optional force-draft)
   "Publish the current buffer's org post over AtomPub.
 Resolves the blog from the buffer's file, records the machine zone when unset,
