@@ -17,14 +17,18 @@ import {
 } from "./helpers";
 import { fetchFeedSnapshot } from "./feeds";
 import { navigateInApp } from "./navigate";
-import { openComposerControl, openComposerFromSidebar } from "./posts";
+import {
+  openComposerControl,
+  openComposerFromSidebar,
+  selectComposerAudience,
+} from "./posts";
 import { allowSecondBoot } from "./bootBudget";
 import { SEL } from "./selectors";
 
 // Content Visibility — Layer A end-to-end (Task 22).
 //
 // Drives the whole chain through the real UI: the post-editor audience picker
-// (`#audience-base` select + named-audience checkboxes), Subscribe/Unsubscribe
+// (independent built-in and named-audience checkboxes), Subscribe/Unsubscribe
 // on a profile, named-audience management on `/audiences`, viewer-aware read
 // filtering on timelines and permalinks, and the Public-only published feed.
 //
@@ -46,8 +50,7 @@ async function publishWithBaseAudience(
     await goto(page, "/posts/new");
   }
   await page.fill(SEL.postBody, `# ${title}\n\nBody for ${title}`);
-  await openComposerControl(page, "Audience");
-  await page.selectOption("#audience-base", base);
+  await selectComposerAudience(page, base);
   await click(page, SEL.publishButton("true"));
   await waitForSelector(page, SEL.saveSummary);
   await expect(page.locator(SEL.saveSummary)).toContainText("Post published.");
@@ -299,8 +302,7 @@ test("Named audience: assigned member sees a Friends post; an unassigned non-mem
   // The authenticated sidebar is the real in-app route to the full composer.
   await openComposerFromSidebar(page);
   await page.fill(SEL.postBody, "# Friends Post\n\nBody for Friends Post");
-  await openComposerControl(page, "Audience");
-  await page.selectOption("#audience-base", "subscribers");
+  await selectComposerAudience(page, "subscribers");
   await page
     .locator("label", { hasText: "Friends" })
     .locator('input[type="checkbox"]')

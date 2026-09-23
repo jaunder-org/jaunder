@@ -16,7 +16,7 @@ use common::render::PostFormat;
 use common::seed::{AuthoredPost, TagSummary};
 use common::slug::Slug;
 use common::time::{self, UtcInstant};
-use common::visibility::{AudienceBase, AudienceSelection};
+use common::visibility::AudienceSelection;
 
 use crate::forms::Field;
 use crate::posts::PostInputs;
@@ -129,8 +129,8 @@ impl ComposeState {
             tags: RwSignal::new(Vec::new()),
             tags_supplied: RwSignal::new(false),
             audience: RwSignal::new(AudienceSelection {
-                base: AudienceBase::Public,
-                named: Vec::new(),
+                public: true,
+                ..AudienceSelection::default()
             }),
         }
     }
@@ -279,7 +279,7 @@ mod tests {
     use common::render::PostFormat;
     use common::slug::Slug;
     use common::time::UtcInstant;
-    use common::visibility::{AudienceBase, AudienceSelection};
+    use common::visibility::AudienceSelection;
     use leptos::prelude::*;
 
     #[test]
@@ -322,10 +322,7 @@ mod tests {
             let initial =
                 CreationComposerSnapshot::capture(state, slug, String::new(), String::new());
             state.body.set_value("draft");
-            let resolved = AudienceSelection {
-                base: AudienceBase::Private,
-                named: Vec::new(),
-            };
+            let resolved = AudienceSelection::default();
 
             let baseline = initial.with_audience(resolved.clone());
             state.audience.set(resolved);
@@ -603,7 +600,7 @@ mod tests {
                 PostFormat::Org,
                 "an author writing a run of posts keeps their format"
             );
-            assert_eq!(state.audience.get().base, AudienceBase::Public);
+            assert!(state.audience.get().public);
         });
     }
 }

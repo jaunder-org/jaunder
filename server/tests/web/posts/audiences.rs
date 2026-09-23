@@ -1,7 +1,7 @@
 use axum::http::StatusCode;
 use common::render::PostFormat;
-use common::test_support::parse_post_body;
-use common::visibility::{AudienceBase, AudienceSelection};
+use common::test_support::{parse_audience_name, parse_post_body};
+use common::visibility::{AudienceSelection, AudienceTarget};
 use server_fn::ServerFn;
 use web::posts::PostInputs;
 
@@ -9,10 +9,10 @@ use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{
-    confirmed_created_post, create_post_json, create_user_and_session, make_app, post_form,
-    post_json,
+    confirmed_created_post, confirmed_mutation, create_post_json, create_user_and_session,
+    make_app, post_form, post_json, update_post_json,
 };
-use storage::test_support::{Backend, backends};
+use storage::test_support::{Backend, backends, confirmed_for};
 use storage::{SessionStorage, UserStorage, WriteScope};
 
 // ── Audience-picker server fns ────────────────────────────────
@@ -54,7 +54,8 @@ async fn default_audience_selection_returns_private_by_default(#[case] backend: 
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let selection: AudienceSelection = serde_json::from_str(&body).unwrap();
-    assert_eq!(selection.base, AudienceBase::Private);
+    assert!(!selection.public);
+    assert!(!selection.subscribers);
     assert!(selection.named.is_empty());
 }
 
@@ -106,8 +107,150 @@ async fn post_audience_selection_returns_public_for_new_post(#[case] backend: Ba
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let selection: AudienceSelection = serde_json::from_str(&body).unwrap();
     // A post created with no audience field defaults to Public.
-    assert_eq!(selection.base, AudienceBase::Public);
+    assert!(selection.public);
+    assert!(!selection.subscribers);
     assert!(selection.named.is_empty());
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn web_audience_set_survives_create_update_and_owner_read(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let author = create_user_and_session(env.users(), env.sessions(), env.write_scope()).await;
+    let cookie = author.cookie();
+    let author_id = author.user_id;
+    let audiences = env.audiences();
+    let new_audience = |name: &'static str| {
+        let audiences = std::sync::Arc::clone(&audiences);
+        let scope = env.write_scope();
+        async move {
+            confirmed_for(
+                scope
+                    .run(move |tx| {
+                        Box::pin(async move {
+                            audiences
+                                .create_audience(tx, author_id, &parse_audience_name(name))
+                                .await
+                        })
+                    })
+                    .await
+                    .unwrap(),
+                "named audience",
+            )
+        }
+    };
+    let friends = new_audience("Friends").await;
+    let family = new_audience("Family").await;
+    let selected = AudienceSelection {
+        public: true,
+        subscribers: true,
+        named: vec![friends, family],
+    };
+    let read_selection = |post_id| {
+        let app = app.clone();
+        let cookie = cookie.clone();
+        async move {
+            let (status, body) = post_form(
+                app,
+                <web::posts::GetAudienceSelection as ServerFn>::PATH,
+                format!("post_id={post_id}"),
+                Some(&cookie),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "read body: {body}");
+            serde_json::from_str::<AudienceSelection>(&body).unwrap()
+        }
+    };
+
+    let (status, body) = create_post_json(
+        app.clone(),
+        PostInputs {
+            publish: Some(true),
+            audience: Some(selected.clone()),
+            ..PostInputs::new(parse_post_body("# Audience set"), PostFormat::Markdown)
+        },
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created = confirmed_created_post(&body);
+    assert_eq!(read_selection(created.post_id).await, selected);
+    let stored = env
+        .posts()
+        .get_post_audiences(created.post_id)
+        .await
+        .unwrap();
+    assert_eq!(stored.len(), 4);
+    for target in [
+        AudienceTarget::Public,
+        AudienceTarget::Subscribers,
+        AudienceTarget::Named(friends),
+        AudienceTarget::Named(family),
+    ] {
+        assert!(stored.contains(&target), "missing target {target:?}");
+    }
+
+    let narrower = AudienceSelection {
+        public: false,
+        ..selected.clone()
+    };
+    let (status, body) = update_post_json(
+        app.clone(),
+        created.post_id,
+        PostInputs {
+            publish: Some(true),
+            audience: Some(narrower.clone()),
+            ..PostInputs::new(parse_post_body("# Audience set"), PostFormat::Markdown)
+        },
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "update body: {body}");
+    let _ = confirmed_mutation::<web::posts::SavedPost>(&body);
+    assert_eq!(read_selection(created.post_id).await, narrower);
+
+    let named_only = AudienceSelection {
+        subscribers: false,
+        ..narrower
+    };
+    let (status, body) = update_post_json(
+        app.clone(),
+        created.post_id,
+        PostInputs {
+            publish: Some(true),
+            audience: Some(named_only.clone()),
+            ..PostInputs::new(parse_post_body("# Audience set"), PostFormat::Markdown)
+        },
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "named-only body: {body}");
+    assert_eq!(read_selection(created.post_id).await, named_only);
+
+    let (status, body) = update_post_json(
+        app.clone(),
+        created.post_id,
+        PostInputs {
+            publish: Some(true),
+            audience: Some(AudienceSelection::default()),
+            ..PostInputs::new(parse_post_body("# Audience set"), PostFormat::Markdown)
+        },
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "private body: {body}");
+    assert_eq!(
+        read_selection(created.post_id).await,
+        AudienceSelection::default()
+    );
+    assert!(
+        env.posts()
+            .get_post_audiences(created.post_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[apply(backends)]

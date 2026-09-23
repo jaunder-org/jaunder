@@ -1,7 +1,7 @@
 //! Host-compiled disclosure ownership for the Post composer control grid.
 
 use common::root_relative_url::RootRelativeUrl;
-use common::visibility::AudienceBase;
+use common::visibility::AudienceSelection;
 use leptos::prelude::{Get, RwSignal, Set};
 
 use super::composer_media::ComposerMediaState;
@@ -75,11 +75,17 @@ pub fn publish_disclosure_value(value: &str) -> String {
 }
 
 #[must_use]
-pub const fn audience_disclosure_value(base: AudienceBase) -> &'static str {
-    match base {
-        AudienceBase::Private => "Private",
-        AudienceBase::Public => "Public",
-        AudienceBase::Subscribers => "Subscribers",
+pub fn audience_disclosure_value(selection: &AudienceSelection) -> String {
+    if selection.public {
+        "Public".to_owned()
+    } else if selection.subscribers {
+        "Subscribers".to_owned()
+    } else {
+        match selection.named.len() {
+            0 => "Private".to_owned(),
+            1 => "1 audience".to_owned(),
+            count => format!("{count} audiences"),
+        }
     }
 }
 
@@ -96,6 +102,7 @@ pub fn record_media_upload(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use common::ids::AudienceId;
     use common::test_support::parse_root_relative_url;
     use leptos::prelude::Owner;
 
@@ -160,11 +167,20 @@ mod tests {
             publish_disclosure_value("2026-09-18T14:30"),
             "2026-09-18 14:30"
         );
-        assert_eq!(audience_disclosure_value(AudienceBase::Private), "Private");
-        assert_eq!(audience_disclosure_value(AudienceBase::Public), "Public");
+        let mut selection = AudienceSelection::default();
+        assert_eq!(audience_disclosure_value(&selection), "Private");
+        selection.named.push(AudienceId::from(7));
+        assert_eq!(audience_disclosure_value(&selection), "1 audience");
+        selection.named.push(AudienceId::from(8));
+        assert_eq!(audience_disclosure_value(&selection), "2 audiences");
+        selection.subscribers = true;
+        assert_eq!(audience_disclosure_value(&selection), "Subscribers");
+        selection.public = true;
+        assert_eq!(audience_disclosure_value(&selection), "Public");
         assert_eq!(
-            audience_disclosure_value(AudienceBase::Subscribers),
-            "Subscribers"
+            selection.named.len(),
+            2,
+            "summary never discards narrower choices"
         );
     }
 }

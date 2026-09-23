@@ -996,9 +996,8 @@ pub(super) fn ComposeOptions(
             publication_time.map_or_else(|| state.publish_at.get(), |edit| edit.value.get());
         posts::publish_disclosure_value(&value)
     });
-    let audience_value = Signal::derive(move || {
-        posts::audience_disclosure_value(state.audience.get().base).to_owned()
-    });
+    let audience_value =
+        Signal::derive(move || posts::audience_disclosure_value(&state.audience.get()));
     view! {
         <div class="j-compose-options">
             {matches!(publication, LoadedPublication::Draft)
@@ -1059,6 +1058,7 @@ pub(super) fn ComposeOptions(
                 value=audience_value
                 disclosures=disclosures
                 body_id="composer-audience-control"
+                wide=true
             >
                 <AudiencePickerWithState selection=state.audience named=named />
             </ComposerDisclosure>

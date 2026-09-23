@@ -2101,7 +2101,8 @@ mod tests {
     #[test]
     fn audience_picker_loading_and_failed_states_cannot_submit() {
         let selection = AudienceSelection {
-            base: common::visibility::AudienceBase::Subscribers,
+            public: false,
+            subscribers: true,
             named: vec![common::ids::AudienceId::from(7)],
         };
         let loading = NamedAudienceState::resolve(None);
@@ -2116,7 +2117,8 @@ mod tests {
     #[test]
     fn audience_picker_ready_empty_is_a_real_loaded_state() {
         let selection = AudienceSelection {
-            base: common::visibility::AudienceBase::Subscribers,
+            public: false,
+            subscribers: true,
             named: Vec::new(),
         };
         let state = NamedAudienceState::resolve(Some(Ok(Vec::new())));
@@ -2137,7 +2139,8 @@ mod tests {
             name: "Confidants".parse().unwrap(),
         }];
         let selection = AudienceSelection {
-            base: common::visibility::AudienceBase::Subscribers,
+            public: false,
+            subscribers: true,
             named: vec![audience_id],
         };
         let state = NamedAudienceState::resolve(Some(Ok(audiences.clone())));

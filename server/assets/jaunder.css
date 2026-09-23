@@ -1621,11 +1621,46 @@
   margin: 0;
 }
 
+.j-audience-picker,
 .j-audience-named,
 .j-creation-schedule-editor {
   display: flex;
   flex-direction: column;
   gap: 7px;
+}
+
+.j-audience-picker > .j-form-help {
+  padding: 8px 0;
+}
+
+.j-audience-choice {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 36px;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.j-audience-choice:hover,
+.j-audience-choice:focus-within {
+  background: var(--line-soft);
+}
+
+.j-audience-choice input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.j-audience-clear {
+  align-self: flex-start;
+  padding: 6px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-soft);
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 .j-creation-schedule > p {

@@ -82,7 +82,13 @@ export async function createPostViaApi(
           ...(opts.publishAt ? { publish_at: opts.publishAt } : {}),
           ...(opts.tags ? { tags: opts.tags } : {}),
           ...(opts.audience
-            ? { audience: { base: opts.audience, named: [] } }
+            ? {
+                audience: {
+                  public: opts.audience === "public",
+                  subscribers: opts.audience === "subscribers",
+                  named: [],
+                },
+              }
             : {}),
         },
       },
@@ -137,6 +143,18 @@ export async function openComposerControl(
   await expect(trigger).toHaveAttribute("aria-expanded", "true");
 }
 
+/** Choose one built-in target or Private in the shared composer picker. */
+export async function selectComposerAudience(
+  page: Page,
+  audience: "public" | "subscribers" | "private",
+): Promise<void> {
+  await openComposerControl(page, "Audience");
+  await click(page, ".j-audience-clear");
+  if (audience !== "private") {
+    await page.locator(`#audience-${audience}`).check();
+  }
+}
+
 /** Compose and submit a post through the `/posts/new` UI: fill the body (and the
  *  summary / slug inputs when provided), click publish/save, and wait for the
  *  save-summary panel. Returns the `.j-save-summary` locator for follow-up
@@ -174,8 +192,7 @@ export async function composePost(
       await page.fill(SEL.postSlug, opts.slug);
     }
     if (opts.audience !== undefined) {
-      await openComposerControl(page, "Audience");
-      await page.selectOption("#audience-base", opts.audience);
+      await selectComposerAudience(page, opts.audience);
     }
     await click(page, SEL.publishButton(opts.publish ? "true" : "false"));
     await waitForSelector(page, SEL.saveSummary);
