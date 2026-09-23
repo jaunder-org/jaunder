@@ -80,7 +80,8 @@ async function expectPostActionsTextAlignment(page: Page, post: Locator) {
       return {
         borderBottomWidth: style.borderBottomWidth,
         borderTopWidth: style.borderTopWidth,
-        fontFamily: style.fontFamily,
+        // Browsers differ only in whether computed family names retain quotes.
+        fontFamily: style.fontFamily.replace(/["']/g, ""),
         fontSize: style.fontSize,
         fontStyle: style.fontStyle,
         fontWeight: style.fontWeight,
