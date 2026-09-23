@@ -121,6 +121,36 @@ test("Site Settings clears a persisted Local tagline", async ({ page }) => {
   await expect(page.locator(".j-topbar .j-sub")).toHaveCount(0);
 });
 
+test("Site Default Audience round-trips independently", async ({ page }) => {
+  await signInAs(page, "testoperator");
+  await Promise.all([
+    page.waitForResponse((response) =>
+      response.url().includes("/api/site/get_default_audience"),
+    ),
+    goto(page, "/admin/site"),
+  ]);
+
+  const audience = page.locator("select#site-default-audience");
+  const save = page.locator('button:has-text("Save Site Default Audience")');
+  await expect(audience).toHaveValue("private");
+
+  await audience.selectOption("public");
+  let saved = page.waitForResponse((response) =>
+    response.url().includes("/api/site/update_default_audience"),
+  );
+  await save.click();
+  expect((await saved).ok()).toBe(true);
+  await reenterAdminSettings(page, "site");
+  await expect(audience).toHaveValue("public");
+
+  await audience.selectOption("private");
+  saved = page.waitForResponse((response) =>
+    response.url().includes("/api/site/update_default_audience"),
+  );
+  await save.click();
+  expect((await saved).ok()).toBe(true);
+});
+
 // #552: media uploads are a separately saved site capability. Toggling it must
 // not submit or overwrite the independently persisted site identity.
 test.describe("Media upload capability", () => {
@@ -247,12 +277,14 @@ test("non-operator user is denied access to /admin/site", async ({ page }) => {
   // Try to navigate to site settings page
   await goto(page, "/admin/site");
 
-  // Identity and media capability load through separate operator-gated reads, so
-  // a denied member sees one real authorization error for each card.
+  // Identity, Site Default Audience, and Media Upload Capability load through
+  // separate operator-gated reads, so a denied member sees one real
+  // authorization error for each card.
   const errors = page.locator(SEL.error);
-  await expect(errors).toHaveCount(2, { timeout: 5_000 });
-  await expect(errors.nth(0)).toContainText("unauthorized");
-  await expect(errors.nth(1)).toContainText("unauthorized");
+  await expect(errors).toHaveCount(3, { timeout: 5_000 });
+  for (let index = 0; index < 3; index += 1) {
+    await expect(errors.nth(index)).toContainText("unauthorized");
+  }
 });
 
 // #575: the site base-URL warning is a persisted-condition projection in mounted

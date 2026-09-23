@@ -2,6 +2,7 @@ use crate::error::WebResult;
 use common::MutationOutcome;
 use common::site::{SiteIdentity, SiteTagline, SiteTitle};
 use common::tagged_url::BaseUrl;
+use common::visibility::DefaultAudience;
 use serde::{Deserialize, Serialize};
 
 /// One cohesive Site Settings identity mutation (ADR-0129).
@@ -32,6 +33,34 @@ pub async fn get_identity() -> WebResult<SiteIdentity> {
         .get_identity()
         .await
         .map_err(InternalError::storage)
+}
+
+#[macros::server]
+pub async fn get_default_audience() -> WebResult<DefaultAudience> {
+    auth::require_operator().await?;
+    let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
+    site_config
+        .get_default_audience()
+        .await
+        .map_err(InternalError::storage)
+}
+
+#[macros::server(skip_all)]
+pub async fn update_default_audience(audience: DefaultAudience) -> WebResult<MutationOutcome<()>> {
+    auth::require_operator().await?;
+    let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
+    let write_scope = expect_context::<WriteScope>();
+    write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                site_config
+                    .set_default_audience(transaction, &audience)
+                    .await
+                    .map_err(InternalError::storage)
+            })
+        })
+        .await
+        .map_err(from_write_scope_error)
 }
 
 #[macros::server]
@@ -85,4 +114,17 @@ pub async fn is_base_url_warning_visible() -> WebResult<bool> {
     }
     let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
     Ok(site_config.get_identity().await?.base_url.is_none())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::UpdateDefaultAudience;
+    use common::visibility::DefaultAudience;
+
+    #[test]
+    fn site_default_audience_wire_accepts_only_closed_values() {
+        let request: UpdateDefaultAudience = serde_qs::from_str("audience=subscribers").unwrap();
+        assert_eq!(request.audience, DefaultAudience::Subscribers);
+        assert!(serde_qs::from_str::<UpdateDefaultAudience>("audience=friends").is_err());
+    }
 }

@@ -32,7 +32,7 @@ Out:
 
 ## Task outline
 
-- [ ] Task 1: Resolve and expose hierarchical defaults on every creation path
+- [x] Task 1: Resolve and expose hierarchical defaults on every creation path
   - Contract: add a validated `UserConfigKey` for an optional `DefaultAudience`;
     storage exposes get/set-or-clear operations and one Effective Default
     Audience resolver over exact `UserConfigStorage` and `SiteConfigStorage`

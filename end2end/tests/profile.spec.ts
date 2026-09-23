@@ -20,6 +20,8 @@ import { SEL } from "./selectors";
 const UPDATE_BUTTON = 'button:has-text("Update Profile")';
 const DISPLAY_NAME = 'input[name="display_name"]';
 const BIO = 'textarea[name="bio"]';
+const DEFAULT_AUDIENCE = "select#default-audience";
+const DEFAULT_AUDIENCE_SAVE = 'button:has-text("Save Default Audience")';
 const CONTENT_LICENSE = "select#content-license";
 const CONTENT_LICENSE_SAVE = 'button:has-text("Save Content License")';
 
@@ -174,7 +176,7 @@ test("profile update persists a valid bio", async ({ registeredPage }) => {
 // proving the typed arg encodes and decodes. Two flips confirm it persists the
 // *selected* value, not a constant.
 const FORMAT_SELECT = "select#default-post-format";
-const FORMAT_SAVE = 'button:has-text("Save")';
+const FORMAT_SAVE = 'button:text-is("Save")';
 
 test("default post format round-trips through the typed dispatch", async ({
   registeredPage,
@@ -194,6 +196,35 @@ test("default post format round-trips through the typed dispatch", async ({
 
   await saveAndReenter("org");
   await saveAndReenter("markdown");
+});
+
+test("User Default Audience round-trips and can return to site inheritance", async ({
+  registeredPage,
+}) => {
+  const page = await registeredPage("/profile");
+
+  await expect(page.locator(DEFAULT_AUDIENCE)).toHaveValue("inherit");
+  await expect(
+    page.locator(`${DEFAULT_AUDIENCE} option[value="inherit"]`),
+  ).toHaveText("Use site default (Private)");
+
+  await page.selectOption(DEFAULT_AUDIENCE, "subscribers");
+  let saved = page.waitForResponse((response) =>
+    response.url().includes("profile/set_default_audience"),
+  );
+  await page.click(DEFAULT_AUDIENCE_SAVE);
+  expect((await saved).ok()).toBe(true);
+  await reenterProfile(page);
+  await expect(page.locator(DEFAULT_AUDIENCE)).toHaveValue("subscribers");
+
+  await page.selectOption(DEFAULT_AUDIENCE, "inherit");
+  saved = page.waitForResponse((response) =>
+    response.url().includes("profile/set_default_audience"),
+  );
+  await page.click(DEFAULT_AUDIENCE_SAVE);
+  expect((await saved).ok()).toBe(true);
+  await reenterProfile(page);
+  await expect(page.locator(DEFAULT_AUDIENCE)).toHaveValue("inherit");
 });
 
 // #58: the default-format request is authoritative. A transport failure must

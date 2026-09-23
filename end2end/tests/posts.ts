@@ -56,7 +56,10 @@ type ClassifiedSavedPost = {
  *  contextful message, and returns the typed JSON. `publish` defaults to `true`;
  *  `slug` maps to the `slug_override` wire field; `publishAt` carries an exact
  *  RFC3339 instant when supplied; `tags` is sent only when provided (matching
- *  the current no-tag call sites). The fields are nested under a `post` wrapper
+ *  the current no-tag call sites). Audience defaults explicitly to Public so
+ *  general-purpose fixtures do not depend on configurable Site/User defaults.
+ *  Tests of default resolution deliberately omit the field themselves. The
+ *  fields are nested under a `post` wrapper
  *  (#299): the endpoint takes a single typed input struct, and the wire key is
  *  the parameter's name. */
 export function audienceForWire(

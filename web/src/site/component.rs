@@ -1,4 +1,6 @@
-use super::{UpdateIdentity, UpdateIdentityRequest, UpdateMediaUploadsEnabled};
+use super::{
+    UpdateDefaultAudience, UpdateIdentity, UpdateIdentityRequest, UpdateMediaUploadsEnabled,
+};
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
 use crate::reactive::Invalidator;
@@ -8,6 +10,7 @@ use client::reactive;
 use common::MutationOutcome;
 use common::site::{SiteIdentity, SiteTagline, SiteTitle};
 use common::tagged_url::BaseUrl;
+use common::visibility::DefaultAudience;
 use leptos::prelude::*;
 
 #[component]
@@ -35,6 +38,7 @@ pub fn SiteSettingsPage() -> impl IntoView {
                         }
                     })}
                 </Suspense>
+                <DefaultAudienceCard />
                 <MediaUploadsCard />
                 {move || {
                     update_action
@@ -65,6 +69,130 @@ pub fn SiteSettingsPage() -> impl IntoView {
         </div>
     }
 }
+
+fn default_audience_label(audience: DefaultAudience) -> &'static str {
+    match audience {
+        DefaultAudience::Public => "Public",
+        DefaultAudience::Subscribers => "Subscribers",
+        DefaultAudience::Private => "Private",
+    }
+}
+
+#[component]
+fn DefaultAudienceCard() -> impl IntoView {
+    use strum::VariantArray;
+
+    let action = ServerAction::<UpdateDefaultAudience>::new();
+    let initial = Resource::new(
+        move || action.version().get(),
+        |_| super::get_default_audience(),
+    );
+    let audience = RwSignal::new(None::<DefaultAudience>);
+    let save = move |_| {
+        if let Some(audience) = audience.get() {
+            action.dispatch(UpdateDefaultAudience { audience });
+        }
+    };
+
+    view! {
+        <Suspense fallback=|| {
+            view! { <p class="j-loading j-settings-loading">"Loading\u{2026}"</p> }
+        }>
+            {move || Suspend::new(async move {
+                match initial.await {
+                    Ok(current) => {
+                        audience.set(Some(current));
+                        view! {
+                            <div class="j-card">
+                                <div class="j-card-head">
+                                    <div>
+                                        <h2>"Site Default Audience"</h2>
+                                        <div class="j-sub">
+                                            "The fallback for new Posts when a User has no override."
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="j-form-body">
+                                    <label class="j-form-field">
+                                        <span class="j-form-label">"Site default audience"</span>
+                                        <select
+                                            id="site-default-audience"
+                                            name="audience"
+                                            class="j-form-input"
+                                            prop:value=move || {
+                                                audience
+                                                    .get()
+                                                    .map_or_else(String::new, |choice| choice.to_string())
+                                            }
+                                            on:change=move |event| {
+                                                audience.set(event_target_value(&event).parse().ok());
+                                            }
+                                        >
+                                            <For
+                                                each=move || DefaultAudience::VARIANTS.iter().copied()
+                                                key=|choice| *choice
+                                                children=move |choice| {
+                                                    view! {
+                                                        <option value=choice
+                                                            .to_string()>{default_audience_label(choice)}</option>
+                                                    }
+                                                }
+                                            />
+                                        </select>
+                                    </label>
+                                    <p class="j-sub">
+                                        "Applies only when a new Post has neither an explicit Audience Selection nor a User Default Audience."
+                                    </p>
+                                </div>
+                                <div class="j-form-actions">
+                                    <button
+                                        type="button"
+                                        class="j-btn is-primary"
+                                        prop:disabled=move || {
+                                            audience.get().is_none() || action.pending().get()
+                                        }
+                                        on:click=save
+                                    >
+                                        "Save Site Default Audience"
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                            .into_any()
+                    }
+                    Err(error) => {
+                        view! { <p class="error j-settings-error">{error.to_string()}</p> }
+                            .into_any()
+                    }
+                }
+            })}
+        </Suspense>
+        {move || {
+            action
+                .value()
+                .get()
+                .map(|result: Result<MutationOutcome<()>, WebError>| {
+                    match crate::mutation_feedback::classify(
+                        result,
+                        "Save acknowledgement was lost; reload to verify the Site Default Audience.",
+                    ) {
+                        crate::mutation_feedback::MutationFeedback::Confirmed(()) => {
+                            view! {
+                                <p class="success" role="status" data-settings-saved>
+                                    "Site Default Audience saved."
+                                </p>
+                            }
+                                .into_any()
+                        }
+                        crate::mutation_feedback::MutationFeedback::Error(message) => {
+                            view! { <p class="error j-settings-error">{message}</p> }.into_any()
+                        }
+                    }
+                })
+        }}
+    }
+}
+
 #[component]
 fn MediaUploadsCard() -> impl IntoView {
     // This card is a local scope: its action and persisted capability resource

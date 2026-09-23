@@ -1,5 +1,5 @@
 use axum::http::StatusCode;
-use common::{MutationOutcome, site::SiteIdentity};
+use common::{MutationOutcome, site::SiteIdentity, visibility::DefaultAudience};
 use host::feed::FeedPath;
 use server_fn::ServerFn;
 
@@ -526,6 +526,88 @@ async fn update_site_identity_requires_operator(#[case] backend: Backend) {
         "body: {member_body}"
     );
     assert!(member_body.contains("unauthorized"), "body: {member_body}");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn site_default_audience_requires_operator(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let member_cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
+
+    for (path, body) in [
+        (<web::site::GetDefaultAudience as ServerFn>::PATH, ""),
+        (
+            <web::site::UpdateDefaultAudience as ServerFn>::PATH,
+            "audience=public",
+        ),
+    ] {
+        let (status, response) = post_form(app.clone(), path, body, Some(&member_cookie)).await;
+        assert_eq!(
+            status,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "body: {response}"
+        );
+        assert!(response.contains("unauthorized"), "body: {response}");
+    }
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn site_default_audience_defaults_private_and_round_trips(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
+
+    let (status, body) = post_form(
+        app.clone(),
+        <web::site::GetDefaultAudience as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert_eq!(body, "\"private\"");
+
+    for audience in [
+        DefaultAudience::Public,
+        DefaultAudience::Subscribers,
+        DefaultAudience::Private,
+    ] {
+        let (status, body) = post_form(
+            app.clone(),
+            <web::site::UpdateDefaultAudience as ServerFn>::PATH,
+            format!("audience={audience}"),
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {body}");
+
+        let (status, body) = post_form(
+            app.clone(),
+            <web::site::GetDefaultAudience as ServerFn>::PATH,
+            "",
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {body}");
+        assert_eq!(
+            serde_json::from_str::<DefaultAudience>(&body).unwrap(),
+            audience
+        );
+    }
 }
 
 #[apply(backends)]

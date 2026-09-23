@@ -197,10 +197,18 @@ async function expectValidationError(
 
 async function expectSiteForms(page: Page) {
   await waitForSelector(page, 'input[name="title"]');
+  await waitForSelector(page, "select#site-default-audience");
   await waitForSelector(page, 'input[name="uploads_enabled"]');
   const presentation = await expectStandardCard(page, "Site Settings", [
     { name: "title", label: "Site title", standardChrome: true },
     { name: "base_url", label: "Base URL", standardChrome: true },
+  ]);
+  await expectStandardCard(page, "Site Default Audience", [
+    {
+      name: "audience",
+      label: "Site default audience",
+      standardChrome: true,
+    },
   ]);
   await expectStandardCard(page, "Media Uploads", [
     {

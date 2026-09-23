@@ -2,7 +2,7 @@ use axum::http::StatusCode;
 use common::tag::MAX_TAGS_PER_POST;
 use common::test_support::{parse_post_body, parse_row_limit, parse_slug, parse_tag_label};
 use common::time::UtcInstant;
-use common::visibility::AudienceSelection;
+use common::visibility::{AudienceBase, AudienceSelection, AudienceTarget, DefaultAudience};
 use jiff::ToSpan;
 use server_fn::ServerFn;
 use storage::{AudienceStorage, PostFormat, WriteScope};
@@ -571,6 +571,214 @@ async fn create_post_applies_tags_from_param(#[case] backend: Backend) {
     let slugs: Vec<&str> = stored_tags.iter().map(|t| t.tag_slug.as_ref()).collect();
     assert_eq!(slugs, vec!["rust", "web-dev"]);
     assert!(stored_tags.iter().any(|t| t.tag_display == "Rust"));
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn create_post_resolves_explicit_then_user_then_site_default_audience(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let cookie = session.cookie();
+    let site_config = std::sync::Arc::clone(&env.site_config());
+    let user_config = std::sync::Arc::clone(&env.user_config());
+    let site_config_for_write = std::sync::Arc::clone(&site_config);
+    let user_config_for_write = std::sync::Arc::clone(&user_config);
+    env.write_scope()
+        .run(move |transaction| {
+            Box::pin(async move {
+                site_config_for_write
+                    .set_default_audience(transaction, &DefaultAudience::Subscribers)
+                    .await?;
+                storage::set_user_default_audience(
+                    user_config_for_write.as_ref(),
+                    transaction,
+                    session.user_id,
+                    Some(DefaultAudience::Private),
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
+
+    let create = |title: &'static str, audience| PostInputs {
+        publish: Some(false),
+        audience,
+        ..PostInputs::new(parse_post_body(title), PostFormat::Markdown)
+    };
+    let (status, body) = create_post_json(
+        app.clone(),
+        create("Uses user default", None),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let user_default = confirmed_created_post(&body);
+    assert!(
+        env.posts()
+            .get_post_audiences(user_default.post_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let (status, body) = create_post_json(
+        app.clone(),
+        create(
+            "Uses explicit audience",
+            Some(AudienceSelection {
+                base: AudienceBase::Public,
+                named: Vec::new(),
+            }),
+        ),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let explicit = confirmed_created_post(&body);
+    assert_eq!(
+        env.posts()
+            .get_post_audiences(explicit.post_id)
+            .await
+            .unwrap(),
+        vec![AudienceTarget::Public]
+    );
+
+    let user_config_for_write = std::sync::Arc::clone(&user_config);
+    env.write_scope()
+        .run(move |transaction| {
+            Box::pin(async move {
+                storage::set_user_default_audience(
+                    user_config_for_write.as_ref(),
+                    transaction,
+                    session.user_id,
+                    None,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
+    let (status, body) =
+        create_post_json(app, create("Uses site default", None), Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let site_default = confirmed_created_post(&body);
+    assert_eq!(
+        env.posts()
+            .get_post_audiences(site_default.post_id)
+            .await
+            .unwrap(),
+        vec![AudienceTarget::Subscribers]
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn create_post_rejects_malformed_user_default_only_when_a_default_is_needed(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let cookie = session.cookie();
+    let user_config = std::sync::Arc::clone(&env.user_config());
+    env.write_scope()
+        .run(move |transaction| {
+            Box::pin(async move {
+                user_config
+                    .set(
+                        transaction,
+                        session.user_id,
+                        host::config_key::UserConfigKey::DefaultAudience,
+                        "friends",
+                    )
+                    .await
+            })
+        })
+        .await
+        .unwrap();
+
+    let (status, _) = create_post_json(
+        app.clone(),
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(
+                parse_post_body("Missing audience fails"),
+                PostFormat::Markdown,
+            )
+        },
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+
+    let (status, body) = create_post_json(
+        app,
+        PostInputs {
+            publish: Some(false),
+            audience: Some(AudienceSelection {
+                base: AudienceBase::Public,
+                named: Vec::new(),
+            }),
+            ..PostInputs::new(
+                parse_post_body("Explicit audience succeeds"),
+                PostFormat::Markdown,
+            )
+        },
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn create_post_propagates_site_default_audience_storage_errors(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let mut site_config = storage::MockSiteConfigStorage::new();
+    site_config
+        .expect_get_default_audience()
+        .times(1)
+        .return_once(|| Err(sqlx::Error::PoolClosed));
+    let app = make_app!(
+        &env,
+        &env.base;
+        override_site_config = std::sync::Arc::new(site_config)
+    );
+
+    let (status, _) = create_post_json(
+        app,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(
+                parse_post_body("Unavailable site default"),
+                PostFormat::Markdown,
+            )
+        },
+        Some(&session.cookie()),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
 
 #[apply(backends)]

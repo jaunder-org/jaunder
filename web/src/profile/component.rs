@@ -3,12 +3,12 @@ use crate::forms::{Field, ValidatedInput, ValidatedTextarea};
 use crate::topbar::Topbar;
 use common::{
     MutationOutcome, bio::Bio, content_license::ContentLicense, display_name::DisplayName,
-    render::PostFormat,
+    render::PostFormat, visibility::DefaultAudience,
 };
 use leptos::prelude::*;
 
 use super::DefaultPostFormatState;
-use super::api::{self, SetDefaultPostFormat};
+use super::api::{self, SetDefaultAudience, SetDefaultPostFormat};
 
 /// Profile page — shows username, display name, bio; allows updating.
 #[component]
@@ -86,6 +86,7 @@ pub fn ProfilePage() -> impl IntoView {
                                             </button>
                                         </div>
                                     </div>
+                                    <DefaultAudienceControl />
                                     <DefaultPostFormatControl />
                                     <ContentLicenseControl />
                                 }
@@ -113,6 +114,153 @@ pub fn ProfilePage() -> impl IntoView {
                 }}
             </div>
         </div>
+    }
+}
+
+const INHERIT_SITE_AUDIENCE: &str = "inherit";
+
+fn default_audience_label(audience: DefaultAudience) -> &'static str {
+    match audience {
+        DefaultAudience::Public => "Public",
+        DefaultAudience::Subscribers => "Subscribers",
+        DefaultAudience::Private => "Private",
+    }
+}
+
+/// Control for setting or clearing the User Default Audience override.
+#[component]
+fn DefaultAudienceControl() -> impl IntoView {
+    let action = ServerAction::<SetDefaultAudience>::new();
+    let initial = Resource::new(
+        move || action.version().get(),
+        |_| api::get_default_audience(),
+    );
+
+    view! {
+        <Suspense fallback=|| {
+            view! { <p class="j-loading">"Loading\u{2026}"</p> }
+        }>
+            {move || Suspend::new(async move {
+                match initial.await {
+                    Ok(preference) => default_audience_form(preference, action).into_any(),
+                    Err(error) => view! { <p class="error">{error.to_string()}</p> }.into_any(),
+                }
+            })}
+        </Suspense>
+    }
+}
+
+fn default_audience_form(
+    preference: api::DefaultAudiencePreference,
+    action: ServerAction<SetDefaultAudience>,
+) -> impl IntoView {
+    use strum::VariantArray;
+
+    let selection = RwSignal::new(Some(preference.audience));
+    let save = move |_| {
+        if let Some(audience) = selection.get() {
+            action.dispatch(SetDefaultAudience { audience });
+        }
+    };
+
+    view! {
+        <div class="j-card">
+            <div class="j-card-head">
+                <div>
+                    <h2>"Default Audience"</h2>
+                    <div class="j-sub">
+                        "Used for new Posts only when no Audience Selection is supplied."
+                    </div>
+                </div>
+            </div>
+            <div class="j-form-body">
+                <label class="j-form-field">
+                    <span class="j-form-label">"User default audience"</span>
+                    <select
+                        id="default-audience"
+                        name="audience"
+                        class="j-form-input"
+                        prop:value=move || {
+                            selection
+                                .get()
+                                .flatten()
+                                .map_or_else(
+                                    || INHERIT_SITE_AUDIENCE.to_owned(),
+                                    |audience| audience.to_string(),
+                                )
+                        }
+                        on:change=move |event| {
+                            let value = event_target_value(&event);
+                            if value == INHERIT_SITE_AUDIENCE {
+                                selection.set(Some(None));
+                            } else if let Ok(audience) = value.parse() {
+                                selection.set(Some(Some(audience)));
+                            }
+                        }
+                    >
+                        <option value=INHERIT_SITE_AUDIENCE>
+                            {format!(
+                                "Use site default ({})",
+                                default_audience_label(preference.site_audience),
+                            )}
+                        </option>
+                        <For
+                            each=move || DefaultAudience::VARIANTS.iter().copied()
+                            key=|audience| *audience
+                            children=move |audience| {
+                                view! {
+                                    <option value=audience
+                                        .to_string()>{default_audience_label(audience)}</option>
+                                }
+                            }
+                        />
+                    </select>
+                    <span class="j-form-help">
+                        "Named Audiences remain explicit per-Post choices."
+                    </span>
+                </label>
+            </div>
+            <DefaultAudienceFeedback action=action />
+            <div class="j-form-actions">
+                <button
+                    type="button"
+                    class="j-btn is-primary"
+                    prop:disabled=move || selection.get().is_none() || action.pending().get()
+                    on:click=save
+                >
+                    "Save Default Audience"
+                </button>
+            </div>
+        </div>
+    }
+}
+
+#[component]
+fn DefaultAudienceFeedback(action: ServerAction<SetDefaultAudience>) -> impl IntoView {
+    view! {
+        {move || {
+            action
+                .value()
+                .get()
+                .map(|result: Result<MutationOutcome<()>, WebError>| {
+                    match crate::mutation_feedback::classify(
+                        result,
+                        "Save acknowledgement was lost; reload to verify the default audience.",
+                    ) {
+                        crate::mutation_feedback::MutationFeedback::Confirmed(()) => {
+                            view! {
+                                <p class="success" role="status">
+                                    "Default audience saved."
+                                </p>
+                            }
+                                .into_any()
+                        }
+                        crate::mutation_feedback::MutationFeedback::Error(message) => {
+                            view! { <p class="error">{message}</p> }.into_any()
+                        }
+                    }
+                })
+        }}
     }
 }
 

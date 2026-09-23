@@ -433,3 +433,126 @@ async fn create_widens_each_default_audience(
         "AtomPub create must widen the configured DefaultAudience"
     );
 }
+
+#[apply(backends)]
+#[tokio::test]
+async fn create_prefers_user_default_audience_over_site_default(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let site_config = Arc::clone(&env.site_config());
+    let user_config = Arc::clone(&env.user_config());
+    env.write_scope()
+        .run(move |transaction| {
+            Box::pin(async move {
+                site_config
+                    .set_default_audience(transaction, &DefaultAudience::Public)
+                    .await?;
+                storage::set_user_default_audience(
+                    user_config.as_ref(),
+                    transaction,
+                    session.user_id,
+                    Some(DefaultAudience::Private),
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
+
+    let app = make_app!(&env, &env.base);
+    let response = app
+        .oneshot(atompub_post_xml(
+            &session,
+            "posts",
+            &entry_xml("Private by preference", "text", "body"),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert!(
+        env.posts()
+            .get_post_audiences(PostId::from(location_post_id(&response)))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn create_propagates_site_default_audience_storage_errors(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let mut site_config = storage::MockSiteConfigStorage::new();
+    site_config
+        .expect_get_default_audience()
+        .times(1)
+        .return_once(|| Err(sqlx::Error::PoolClosed));
+    let app = make_app!(
+        &env,
+        &env.base;
+        override_site_config = Arc::new(site_config)
+    );
+
+    let response = app
+        .oneshot(atompub_post_xml(
+            &session,
+            "posts",
+            &entry_xml("Unavailable site default", "text", "body"),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn create_rejects_malformed_user_default_audience(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let user_config = Arc::clone(&env.user_config());
+    env.write_scope()
+        .run(move |transaction| {
+            Box::pin(async move {
+                user_config
+                    .set(
+                        transaction,
+                        session.user_id,
+                        host::config_key::UserConfigKey::DefaultAudience,
+                        "friends",
+                    )
+                    .await
+            })
+        })
+        .await
+        .unwrap();
+
+    let app = make_app!(&env, &env.base);
+    let response = app
+        .oneshot(atompub_post_xml(
+            &session,
+            "posts",
+            &entry_xml("Malformed default", "text", "body"),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}

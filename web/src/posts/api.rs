@@ -62,9 +62,26 @@ use {
         self, AudienceStorage, CurrentPostRevisionSummary, FeedEventStorage, MediaContentLocks,
         PerformUpdateError, PostBookkeepingExpectation, PostCreation, PostLifecycle, PostRecord,
         PostRevisionDetail, PostRevisionMetadata, PostStorage, PostUpdate, PublishUpdate,
-        SiteConfigStorage, ThemeStorage, WriteScope,
+        SiteConfigStorage, ThemeStorage, UserConfigStorage, WriteScope,
     },
 };
+
+/// Resolves omitted audience input once, at the authenticated Post boundary.
+#[cfg(feature = "server")]
+async fn effective_default_audience_targets(
+    user_id: common::ids::UserId,
+) -> Result<Vec<AudienceTarget>, InternalError> {
+    let user_config = expect_context::<Arc<dyn UserConfigStorage>>();
+    let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
+    let default = storage::get_effective_default_audience(
+        user_config.as_ref(),
+        site_config.as_ref(),
+        user_id,
+    )
+    .await
+    .map_err(InternalError::storage)?;
+    Ok(vec![default.into()])
+}
 
 /// Builds structured lifecycle only when the transport explicitly supplied a
 /// publication control. Omission lets an Org header lifecycle take effect.
@@ -592,7 +609,7 @@ pub async fn create(post: PostInputs) -> WebResult<MutationOutcome<ClassifiedSav
         let metadata = normalized.metadata;
         let audiences = match metadata.audiences {
             Presence::Present(audiences) => audiences,
-            Presence::Absent => visibility::audience_targets_or_public(None),
+            Presence::Absent => effective_default_audience_targets(auth.user_id).await?,
         };
         validate_org_audiences(&audiences, auth.user_id).await?;
         let published_at = match metadata.lifecycle {
@@ -632,7 +649,10 @@ pub async fn create(post: PostInputs) -> WebResult<MutationOutcome<ClassifiedSav
             body,
             None,
             summary,
-            structured_audiences.unwrap_or_else(|| visibility::audience_targets_or_public(None)),
+            match structured_audiences {
+                Some(audiences) => audiences,
+                None => effective_default_audience_targets(auth.user_id).await?,
+            },
             published_at,
             PostBookkeepingExpectation::default(),
             structured_tags.unwrap_or_default(),
@@ -941,16 +961,12 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<MutationOutc
     Ok(outcome)
 }
 
-/// Returns the audience-picker selection for a new post: the site-wide
-/// default audience. Used to initialize the editor on the create page.
+/// Returns the Effective Default Audience for a new Post's picker.
 #[macros::server]
 pub async fn get_default_audience_selection() -> WebResult<AudienceSelection> {
-    let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
-    auth::require_auth().await?;
-    let default: AudienceTarget = site_config.get_default_audience().await?.into();
-    Ok(visibility::targets_to_audience_selection(
-        std::slice::from_ref(&default),
-    ))
+    let auth = auth::require_auth().await?;
+    let targets = effective_default_audience_targets(auth.user_id).await?;
+    Ok(visibility::targets_to_audience_selection(&targets))
 }
 
 /// Returns the audience-picker selection for an existing post (its current
