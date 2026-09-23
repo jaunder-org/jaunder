@@ -162,6 +162,86 @@ async fn collection_paging_emits_next_link(#[case] backend: Backend) {
     );
 }
 
+// Each Collection Entry advertises the same validator as its own Member response,
+// even when the user retrieves the Collection a page at a time.
+#[apply(backends)]
+#[tokio::test]
+async fn collection_entries_advertise_member_etags_across_pages(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    for _ in 0..2 {
+        session
+            .seed_post()
+            .seed(env.posts(), env.feed_events(), env.write_scope())
+            .await;
+    }
+    let app = make_app!(&env, base);
+    let first = app
+        .clone()
+        .oneshot(atompub_get(&session, "posts?limit=1"))
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let first_body = body_string(first).await;
+    let first_feed: host::atompub::Feed = first_body.parse().expect("valid Atom feed");
+    let next = first_feed
+        .links()
+        .iter()
+        .find(|link| link.rel() == "next")
+        .expect("second page")
+        .href()
+        .to_string();
+    let prefix = format!("https://example.com/atompub/{}/", session.username);
+    let second = app
+        .clone()
+        .oneshot(atompub_get(
+            &session,
+            next.strip_prefix(&prefix)
+                .expect("same-origin collection cursor"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::OK);
+    let second_body = body_string(second).await;
+    let second_feed: host::atompub::Feed = second_body.parse().expect("valid Atom feed");
+    for (xml, feed) in [(&first_body, &first_feed), (&second_body, &second_feed)] {
+        assert_eq!(feed.entries().len(), 1);
+        let entry = &feed.entries()[0];
+        let edit = entry
+            .links()
+            .iter()
+            .find(|link| link.rel() == "edit")
+            .expect("edit link");
+        let member = app
+            .clone()
+            .oneshot(atompub_get(
+                &session,
+                edit.href()
+                    .strip_prefix(&prefix)
+                    .expect("same-origin member"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(member.status(), StatusCode::OK);
+        let etag = member.headers()[header::ETAG].to_str().unwrap();
+        let marker = format!(
+            "<j:etag xmlns:j=\"https://jaunder.org/ns/atompub\">&quot;{}&quot;</j:etag>",
+            etag.trim_matches('"')
+        );
+        assert_eq!(xml.matches("<j:etag ").count(), 1, "one validator: {xml}");
+        assert!(
+            xml.contains(&marker),
+            "validator must match Member header: {xml}"
+        );
+    }
+}
+
 #[apply(backends)]
 #[tokio::test]
 async fn collection_clamps_out_of_range_limit(#[case] backend: Backend) {

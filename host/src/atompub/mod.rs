@@ -24,7 +24,7 @@ pub(crate) use entry::canonical_audience_values;
 pub use entry::{
     FeedMeta, InvalidAtomAudience, MediaLinkEntry, draft_marker, entry_to_xml, is_draft,
     j_audiences, j_slug, render_feed, render_media_link_entry, set_draft, set_j_audiences,
-    set_j_slug,
+    set_j_member_etag, set_j_slug,
 };
 
 pub mod service;

@@ -250,7 +250,8 @@ async fn audience_only_update_changes_etag_and_rejects_stale_precondition(
         .await
         .unwrap();
     assert_eq!(updated.status(), StatusCode::OK);
-    assert_ne!(old_etag, etag_of(&updated));
+    let current_etag = etag_of(&updated);
+    assert_ne!(old_etag, current_etag);
     let body = body_string(updated).await;
     let entry: host::atompub::Entry = body.parse().expect("update is an Atom entry");
     assert_eq!(
@@ -258,6 +259,22 @@ async fn audience_only_update_changes_etag_and_rejects_stale_precondition(
         Some(vec![AudienceTarget::Private]),
         "an empty stored target set must read back as explicit private",
     );
+
+    // Changing only audience must also change the advertised Collection validator.
+    let collection = app
+        .clone()
+        .oneshot(atompub_get(&session, "posts"))
+        .await
+        .unwrap();
+    let body = body_string(collection).await;
+    assert!(
+        body.contains(&format!(
+            "<j:etag xmlns:j=\"https://jaunder.org/ns/atompub\">&quot;{}&quot;</j:etag>",
+            current_etag.trim_matches('"')
+        )),
+        "Collection must advertise the current audience-sensitive Member ETag: {body}"
+    );
+    assert!(!body.contains(&old_etag));
 
     let stale = app
         .oneshot(

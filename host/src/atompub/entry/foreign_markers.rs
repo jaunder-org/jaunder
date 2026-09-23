@@ -1,8 +1,8 @@
 //! Jaunder-owned `AtomPub` foreign markers.
 //!
 //! `atom_syndication` owns namespace-aware extension I/O (ADR-0089). This leaf
-//! recognizes RFC 5023's `app:control/app:draft` and Jaunder's `j:slug` and
-//! repeated `j:audience` target set.
+//! recognizes RFC 5023's `app:control/app:draft` and Jaunder's `j:slug`,
+//! `j:etag`, and repeated `j:audience` target set.
 
 use atom_syndication::Entry;
 use atom_syndication::extension::{ExpandedName, Extension, ExtensionContent};
@@ -306,6 +306,23 @@ pub fn set_j_slug(entry: &mut Entry, slug: &str) {
     marker
         .content
         .push(ExtensionContent::Text(slug.to_string()));
+    entry.extensions.push(marker);
+}
+
+/// Attach the read-only Member validator to a Collection Entry.
+///
+/// This is deliberately not part of standalone Member responses: their validator
+/// travels in the HTTP `ETag` header, while a feed needs per-Entry metadata.
+pub fn set_j_member_etag(entry: &mut Entry, etag: &str) {
+    let prefix = preferred_prefix(entry, ns::J_NS, "etag", "j");
+    entry
+        .extensions
+        .retain(|extension| !has_name(extension, ns::J_NS, "etag"));
+
+    let mut marker = extension(ns::J_NS, "etag", &prefix);
+    marker
+        .content
+        .push(ExtensionContent::Text(etag.to_string()));
     entry.extensions.push(marker);
 }
 

@@ -348,9 +348,9 @@ pub async fn collection_get(
     let mut entries = Vec::with_capacity(records.len());
     for post in &records {
         let audiences = posts.get_post_audiences(post.post_id).await?;
-        entries.push(mapping::post_to_entry_with_audiences(
-            post, &audiences, &base,
-        )?);
+        let mut entry = mapping::post_to_entry_with_audiences(post, &audiences, &base)?;
+        atompub::set_j_member_etag(&mut entry, etag_for(post, &audiences).as_ref());
+        entries.push(entry);
     }
 
     let updated = records

@@ -127,7 +127,7 @@ async fn service_document_returns_200_with_app_password(#[case] backend: Backend
     // Jaunder wire extensions this server understands.
     assert!(body.contains("j:extension"), "j:extension missing: {body}");
     assert!(
-        body.contains("features=\"format-media-type slug audience\""),
+        body.contains("features=\"format-media-type slug audience member-etag\""),
         "extension features missing: {body}"
     );
     assert!(
