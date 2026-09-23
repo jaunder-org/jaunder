@@ -1004,7 +1004,7 @@ audience set, rather than the Collection page's validator. The service document
 advertises `member-etag`; extension-aware consumers can classify Posts without
 one Member request per match and fall back to Member reads for absent or invalid
 metadata
-([Collection Member ETags](adr/drafts/atompub-collection-member-etags.md)).
+([Collection Member ETags](adr/0209-atompub-collection-member-etags.md)).
 
 Repeated text-valued `j:audience` elements carry the complete target set as
 canonical `public`, `subscribers`, `private`, or `named:<id>` tokens. Public,
