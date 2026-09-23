@@ -622,6 +622,44 @@ The current filename supplies the local slug evidence used by matched-pull tests
             (should (string-match-p "server-only (1)" (buffer-string)))))
       (delete-directory root t))))
 
+(ert-deftest jaunder-reconcile-initial-and-manual-refresh-show-synchronous-progress ()
+  "Both interactive paths display work before I/O and finish truthfully."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-progress-" t)))
+         (jaunder-blogs (list (cons root '(:base-url "https://example.test"
+                                                     :username "alice"))))
+         (inventory (jaunder--make-inventory))
+         events fail)
+    (unwind-protect
+        (cl-letf (((symbol-function 'message)
+                   (lambda (format-string &rest args)
+                     (push (apply #'format format-string args) events)))
+                  ((symbol-function 'redisplay) (lambda (&rest _) (push 'paint events)))
+                  ((symbol-function 'jaunder--inventory-for-root)
+                   (lambda (_) (push 'inventory events)
+                     (if fail (error "offline") inventory)))
+                  ((symbol-function 'display-buffer) (lambda (&rest _) nil)))
+          (jaunder-reconcile root)
+          (should (equal (nreverse events)
+                         '("Jaunder reconcile: fetching and classifying Posts..."
+                           paint inventory "Jaunder reconcile: report ready")))
+          (setq events nil)
+          (with-current-buffer "*Jaunder Reconcile*"
+            (jaunder-reconcile-refresh))
+          (should (equal (nreverse events)
+                         '("Jaunder reconcile: fetching and classifying Posts..."
+                           paint inventory "Jaunder reconcile: report ready")))
+          (setq events nil fail t)
+          (with-current-buffer "*Jaunder Reconcile*"
+            (let ((old-report jaunder-reconcile-report)
+                  (old-text (buffer-string)))
+              (should-error (jaunder-reconcile-refresh))
+              (should (eq jaunder-reconcile-report old-report))
+              (should (equal (buffer-string) old-text))))
+          (should (equal (nreverse events)
+                         '("Jaunder reconcile: fetching and classifying Posts..."
+                           paint inventory "Jaunder reconcile: report refresh failed"))))
+      (delete-directory root t))))
+
 (ert-deftest jaunder-reconcile-keeps-valid-markers-when-mtime-is-unreadable ()
   "An mtime failure classifies a valid matched Post as file-mtime-unreadable."
   (let* ((root (make-temp-file "jaunder-reconcile-markers-" t))

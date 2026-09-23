@@ -50,7 +50,7 @@ changes to Member write/conditional semantics, and #1641's compression work.
     and without extensions, per-page rather than per-match request count on
     multiple Posts, and fallback failure rows; live Emacs integration test
     proves the paginated server-to-client path without per-Member preview reads.
-- [ ] Make initial reconciliation and refresh visibly synchronous
+- [x] Make initial reconciliation and refresh visibly synchronous
   - Contract: expose an in-progress status before blocking network work for
     initial `jaunder-reconcile` and `g`, finish truthfully on success or error,
     retain the previous report and selection on refresh failure, and keep

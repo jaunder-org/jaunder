@@ -456,10 +456,27 @@ hide otherwise valid synchronization markers."
          (set-buffer-modified-p modified)
          (signal (car err) (cdr err)))))))
 
+(defun jaunder--reconcile-with-progress (success failure work)
+  "Display synchronous WORK before blocking; report SUCCESS or FAILURE at exit."
+  (message "Jaunder reconcile: fetching and classifying Posts...")
+  ;; A message alone may remain unpainted until synchronous curl returns.
+  (redisplay)
+  (condition-case err
+      (prog1 (funcall work)
+        (message "Jaunder reconcile: %s" success))
+    (error
+     (message "Jaunder reconcile: %s" failure)
+     (signal (car err) (cdr err)))
+    (quit
+     (message "Jaunder reconcile: %s" failure)
+     (signal (car err) (cdr err)))))
+
 (defun jaunder-reconcile-refresh ()
   "Refresh the current reconciliation report from local and remote state."
   (interactive)
-  (jaunder--reconcile-refresh-buffer (current-buffer)))
+  (jaunder--reconcile-with-progress
+   "report ready" "report refresh failed"
+   (lambda () (jaunder--reconcile-refresh-buffer (current-buffer)))))
 
 (defun jaunder--reconcile-execute-batch (buffer rows action operation &optional cancelled-p)
   "Run OPERATION for ROWS sequentially, retaining every terminal result in BUFFER.
@@ -951,19 +968,22 @@ remote strong-ETag revalidation, one local preflight, then replacement."
 (defun jaunder-reconcile (root)
   "Reconcile ROOT with its configured AtomPub Collection without resolving it."
   (interactive (list default-directory))
-  (jaunder--call-with-blog
-   root
+  (jaunder--reconcile-with-progress
+   "report ready" "report failed"
    (lambda ()
-     (let* ((configured-root (car (jaunder--blog-entry-for root)))
-            (inventory (jaunder--inventory-for-root configured-root))
-            (report (jaunder--reconcile-build-report configured-root inventory))
-            (buffer (jaunder--render-reconcile-report report)))
-       (with-current-buffer buffer
-         (setq-local jaunder-reconcile-last-batch-results nil)
-         (setq-local jaunder-reconcile-marks (make-hash-table :test #'equal))
-         (jaunder--render-reconcile-report report buffer))
-       (display-buffer buffer)
-       report))))
+     (jaunder--call-with-blog
+      root
+      (lambda ()
+        (let* ((configured-root (car (jaunder--blog-entry-for root)))
+               (inventory (jaunder--inventory-for-root configured-root))
+               (report (jaunder--reconcile-build-report configured-root inventory))
+               (buffer (jaunder--render-reconcile-report report)))
+          (with-current-buffer buffer
+            (setq-local jaunder-reconcile-last-batch-results nil)
+            (setq-local jaunder-reconcile-marks (make-hash-table :test #'equal))
+            (jaunder--render-reconcile-report report buffer))
+          (display-buffer buffer)
+          report))))))
 
 
 
