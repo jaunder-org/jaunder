@@ -1,6 +1,6 @@
-# ADR-DRAFT: Active Post slug uniqueness and historical permalink aliases
+# ADR-0208: Active Post slug uniqueness and historical permalink aliases
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-22
 - Issue: [#1616](https://github.com/jaunder-org/jaunder/issues/1616)
 
@@ -21,7 +21,7 @@ repairing existing installations before the new index can be installed. Those
 repairs change canonical permalinks, which must not silently break previously
 shared links.
 
-[Current-publication-state slug freezing](../0130-current-publication-state-slug-freeze.md)
+[Current-publication-state slug freezing](0130-current-publication-state-slug-freeze.md)
 keeps author-driven slug mutability tied to the current Post state. The repair
 is a one-time correction of invalid identity data, not a new reason to rename an
 existing Post when later content is created.
@@ -57,7 +57,7 @@ existing Post when later content is created.
   `302` preserving the query string. An unavailable target remains the existing
   shell miss.
 - The User-omitting compatibility route from
-  [the WordPress-compatible permalink alias decision](../0189-wordpress-compatible-permalink-alias.md)
+  [the WordPress-compatible permalink alias decision](0189-wordpress-compatible-permalink-alias.md)
   remains a separate lookup and never treats historical aliases as candidate
   Posts.
 - AtomPub and Emacs continue to use Post ID as resource identity. AtomPub emits

@@ -235,6 +235,7 @@ convention). See the Status column below for each ADR's current status.
 | [0205](adr/0205-trusted-proxy-client-ip.md)                            | Trusted proxy client-IP derivation                                                                           | accepted   |
 | [0206](adr/0206-user-wide-current-content-rights.md)                   | User-wide current Content Rights                                                                             | accepted   |
 | [0207](adr/0207-atompub-post-audience-round-trip.md)                   | AtomPub Post Audience Round-Trip                                                                             | accepted   |
+| [0208](adr/0208-active-post-slug-uniqueness.md)                        | Active Post slug uniqueness and historical permalink aliases                                                 | accepted   |
 
 <!-- adr-table:end -->
 

@@ -60,7 +60,7 @@ Emacs Protocol Client, historical public permalinks continue to redirect, and
   detector. Reconciliation continues to use Post ID as the identity join and
   does not gain an automatic conflict-resolution escape hatch.
 - The durable decision is recorded in
-  `docs/adr/drafts/active-post-slug-uniqueness.md` and projected into the
+  `docs/adr/0208-active-post-slug-uniqueness.md` and projected into the
   architecture view.
 
 ## Acceptance

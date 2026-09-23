@@ -741,7 +741,7 @@ canonical AtomPub strong-ETag input, so changing the canonical slug invalidates
 the prior Member validator. A current canonical route always wins; a canonical
 miss may redirect an anonymously visible alias to the Post's current permalink
 without making the alias an AtomPub or Emacs identity
-([active Post slug uniqueness and historical aliases](adr/drafts/active-post-slug-uniqueness.md)).
+([active Post slug uniqueness and historical aliases](adr/0208-active-post-slug-uniqueness.md)).
 
 **Visibility starts with active/not-deleted eligibility, then applies two
 orthogonal predicates on the same reads.** _Time_: an active Post is draft
