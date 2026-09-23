@@ -738,7 +738,7 @@ mod etag_tests {
     use common::ids::{AudienceId, TagId, UserId};
     use common::tag::{Tag, TagLabel};
     use common::test_support::{
-        parse_post_body, parse_post_summary, parse_post_title, parse_utc_instant,
+        parse_post_body, parse_post_summary, parse_post_title, parse_url, parse_utc_instant,
     };
     use storage::{MockAudienceStorage, PostFormat, PostTag, PublishUpdate};
 
@@ -827,6 +827,21 @@ mod etag_tests {
             "the empty stored target set uses the wire's canonical private projection",
         );
         assert_eq!(etag_for(&post, &union), etag_for(&post, &reordered));
+    }
+
+    #[test]
+    fn post_entry_response_rejects_an_invalid_stored_audience_set() {
+        let base: BaseUrl = parse_url("https://example.com");
+        let username: Username = "alice".parse().expect("valid username");
+        let result = post_entry_response(
+            StatusCode::OK,
+            &base_post(),
+            &[AudienceTarget::Private, AudienceTarget::Public],
+            &base,
+            &username,
+        );
+
+        assert!(matches!(result, Err(HandlerError::Internal(_))));
     }
 
     #[test]
