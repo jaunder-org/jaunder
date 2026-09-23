@@ -38,6 +38,47 @@
      (should (eq (plist-get fetched :status) 200))
      (should (equal (dom-inner-text content) (concat body "\n"))))))
 
+(ert-deftest jaunder-transport-roundtrips-canonical-conditional-etags ()
+  "Created and fetched validators support writes, but stale values do not."
+  (jaunder-test--with-live-server
+   (let* ((url (jaunder--build-url jaunder-test-base-url "atompub"
+                                   jaunder-test-username "posts"))
+          (original (jaunder--atom-entry->xml
+                     (jaunder--make-entry :title "conditional" :content-type "text"
+                                          :body "original")))
+          (changed (jaunder--atom-entry->xml
+                    (jaunder--make-entry :title "conditional" :content-type "text"
+                                         :body "changed")))
+          (created (jaunder--http-request "POST" url original "application/atom+xml"))
+          (location (jaunder--response-header created "Location"))
+          (etag (jaunder--response-header created "ETag")))
+     (should (eq (plist-get created :status) 201))
+     (should (equal (jaunder--response-header created "Cache-Control") "no-transform"))
+     (let ((fetched (jaunder--http-request "GET" location)))
+       (should (eq (plist-get fetched :status) 200))
+       (should (equal (jaunder--response-header fetched "ETag") etag))
+       (should (equal (jaunder--response-header fetched "Cache-Control") "no-transform")))
+     (let ((updated (jaunder--http-request
+                     "PUT" location changed "application/atom+xml"
+                     (list (cons "If-Match" etag)))))
+       (should (eq (plist-get updated :status) 200))
+       (should (equal (jaunder--response-header updated "Cache-Control") "no-transform"))
+       (let* ((current-etag (jaunder--response-header updated "ETag"))
+              (stale (jaunder--http-request
+                      "PUT" location original "application/atom+xml"
+                      (list (cons "If-Match" etag)))))
+         (should-not (equal etag current-etag))
+         (should (eq (plist-get stale :status) 412))
+         (should (equal (jaunder--response-header stale "Cache-Control") "no-transform"))
+         (let ((still-current (jaunder--http-request "GET" location)))
+           (should (equal (jaunder--response-header still-current "ETag") current-etag))
+           (should (string-match-p "changed" (plist-get still-current :body))))
+         (let ((deleted (jaunder--http-request
+                         "DELETE" location nil nil (list (cons "If-Match" current-etag)))))
+           (should (eq (plist-get deleted :status) 204))
+           (should (equal (jaunder--response-header deleted "Cache-Control")
+                          "no-transform"))))))))
+
 (ert-deftest jaunder-transport-error-status-returned-not-signalled ()
   "A 4xx from the server is returned in :status, not signalled."
   (jaunder-test--with-live-server

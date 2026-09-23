@@ -50,6 +50,33 @@ built-in UIs, remain loopback-only. The collector sends metrics, logs, and
 traces directly to the native `/metrics`, `/logs`, and `/traces` ingestion
 prefixes over loopback; this traffic never traverses Caddy.
 
+#### AtomPub encoding and conditional writes
+
+An AtomPub Post's strong `ETag` is its canonical `If-Match` validator for later
+PUT and DELETE. Caddy's `encode zstd gzip` rewrites strong ETags on coded
+responses, which makes an otherwise-current write fail with `412` when the
+client replays the received value. Jaunder sends `Cache-Control: no-transform`
+on `/atompub/*` responses so compliant encoders do not change the bytes or
+validator. If you add response compression to the application's Caddy virtual
+host, also exclude the AtomPub routes explicitly:
+
+```caddyfile
+@nonAtomPub not path /atompub/*
+encode @nonAtomPub zstd gzip
+```
+
+Do not keep an additional unconditional `encode` on that virtual host; it would
+defeat the path exception. Other application routes and public Syndication Feeds
+can still be compressed. A custom proxy must likewise honor `no-transform` or
+exclude `/atompub/*`; never rewrite `If-Match` or teach the server to accept a
+proxy-specific ETag suffix. The opt-in live regression
+`server/tests/proxy/atompub_etag.py` accepts Jaunder and Caddy binary paths
+(`--jaunder`, `--caddy`) plus `--emacs`. It tests the original encoded false
+`412`, then isolates the server header and proxy path exception, and finally
+tests both advertised encodings and an Emacs `local-ahead` push against the
+combined configuration. This is the
+[AtomPub validator delivery decision](adr/drafts/atompub-conditional-etag-delivery.md).
+
 ### Trusted reverse proxies
 
 Jaunder trusts no forwarding header by default. For a custom NixOS deployment,

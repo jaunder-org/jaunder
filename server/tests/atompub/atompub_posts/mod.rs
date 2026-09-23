@@ -1,5 +1,6 @@
 mod authorization;
 mod collection_reads;
+mod encoding;
 mod entry_mutations;
 mod etag_preconditions;
 mod fixtures;

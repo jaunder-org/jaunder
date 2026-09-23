@@ -409,6 +409,21 @@ lifecycle, and is not a maintenance-cleanup domain. This supersedes only
 ADR-0167's one-hour Post-create mapping rule; that decision's other
 transient-data policies stand.
 
+### AtomPub Post validators through proxies
+
+AtomPub Post create, Member GET, and successful update return Jaunder's
+canonical strong content ETag. Conditional PUT and DELETE compare `If-Match`
+with that validator exactly; stale writes still return `412`. Every `/atompub/*`
+response carries `Cache-Control: no-transform` without discarding other cache
+restrictions, so a compliant intermediary cannot encode the representation and
+change the strong ETag into a value that Jaunder would reject on the next write.
+Operator Caddy configurations also exclude `/atompub/*` from `encode` while
+retaining compression for other content. The Emacs Protocol Client requests
+identity encoding as a separate safeguard and never strips proxy suffixes or
+relaxes conditional matching. Public Syndication Feeds have an independent
+representation and compression policy
+([AtomPub conditional ETag delivery](adr/drafts/atompub-conditional-etag-delivery.md)).
+
 ### Testing (summary)
 
 Storage tests are homed by what they prove: backend-common tests run on both

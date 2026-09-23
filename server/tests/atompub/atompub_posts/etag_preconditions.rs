@@ -53,6 +53,7 @@ async fn update_with_stale_if_match_returns_412(#[case] backend: Backend) {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-transform");
 }
 
 /// A stale Org `JAUNDER_SYNCED` is an independent `AtomPub` precondition: even a
@@ -205,9 +206,23 @@ async fn update_with_matching_if_match_succeeds(#[case] backend: Backend) {
         .to_str()
         .unwrap()
         .to_string();
+    assert_eq!(created.headers()[header::CACHE_CONTROL], "no-transform");
+
+    let fetched = app
+        .clone()
+        .oneshot(
+            atompub_at(&session, Method::GET, &location)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(fetched.headers()[header::CACHE_CONTROL], "no-transform");
+    assert_eq!(fetched.headers()[header::ETAG], etag);
 
     // A matching If-Match passes the precondition and the update proceeds.
     let updated = app
+        .clone()
         .oneshot(
             atompub_at(&session, Method::PUT, &location)
                 .header(header::CONTENT_TYPE, "application/atom+xml")
@@ -218,6 +233,19 @@ async fn update_with_matching_if_match_succeeds(#[case] backend: Backend) {
         .await
         .unwrap();
     assert_eq!(updated.status(), StatusCode::OK);
+    assert_eq!(updated.headers()[header::CACHE_CONTROL], "no-transform");
+    let updated_etag = updated.headers()[header::ETAG].clone();
+    let deleted = app
+        .oneshot(
+            atompub_at(&session, Method::DELETE, &location)
+                .header(header::IF_MATCH, updated_etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+    assert_eq!(deleted.headers()[header::CACHE_CONTROL], "no-transform");
 }
 
 const ETAG_POST_XML: &str = r#"<?xml version="1.0"?>

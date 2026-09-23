@@ -136,7 +136,10 @@ the auth header under load (ADR-0038)."
                   (lambda (h) (cons (car h) (jaunder--curl-header-value (cdr h))))
                   (append
                    (list (jaunder--basic-auth-header (jaunder--active-username)
-                                                     (jaunder--auth-secret)))
+                                                     (jaunder--auth-secret))
+                         ;; A proxy's coded strong ETag cannot be replayed as
+                         ;; the canonical AtomPub If-Match on a later write.
+                         (cons "Accept-Encoding" "identity"))
                    (when content-type (list (cons "Content-Type" content-type)))
                    extra-headers)))
         (verb (intern (downcase method))))

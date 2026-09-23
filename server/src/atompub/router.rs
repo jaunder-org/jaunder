@@ -35,6 +35,41 @@ where
         .layer(middleware::from_fn(record_atompub_request))
 }
 
+/// Keep intermediaries from encoding `AtomPub` responses and changing strong
+/// Post `ETags` into validators that the server cannot accept on a later write.
+pub(crate) async fn prevent_atompub_transformation(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let is_atompub = request.uri().path().starts_with("/atompub/");
+    let mut response = next.run(request).await;
+    if !is_atompub {
+        return response;
+    }
+    let headers = response.headers_mut();
+    let mut cache_control = Vec::new();
+    for value in headers.get_all(header::CACHE_CONTROL) {
+        if !cache_control.is_empty() {
+            cache_control.extend_from_slice(b", ");
+        }
+        cache_control.extend_from_slice(value.as_bytes());
+    }
+    if !cache_control.is_empty() {
+        cache_control.extend_from_slice(b", ");
+    }
+    cache_control.extend_from_slice(b"no-transform");
+    if let Ok(value) = axum::http::HeaderValue::from_bytes(&cache_control) {
+        headers.insert(header::CACHE_CONTROL, value);
+    } else {
+        // Preserve unusual existing directives if they cannot be joined.
+        headers.append(
+            header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("no-transform"),
+        );
+    }
+    response
+}
+
 /// Projects authentication failures from protected `AtomPub` routes onto the
 /// HTTP Basic challenge required by protocol clients.
 async fn add_basic_auth_challenge(
@@ -107,8 +142,43 @@ fn atompub_result(status: StatusCode) -> host::metrics::AtompubResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{atompub_op, atompub_result};
-    use axum::http::{Method, StatusCode};
+    use super::{atompub_op, atompub_result, prevent_atompub_transformation};
+    use axum::body::Body;
+    use axum::http::{HeaderValue, Method, Request, StatusCode, header};
+    use axum::{Router, middleware, response::Response, routing::get};
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn no_transform_retains_all_existing_cache_restrictions() {
+        let app = Router::new()
+            .route(
+                "/atompub/service",
+                get(|| async {
+                    let mut response = Response::new(Body::from("service"));
+                    response
+                        .headers_mut()
+                        .append(header::CACHE_CONTROL, HeaderValue::from_static("private"));
+                    response
+                        .headers_mut()
+                        .append(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+                    response
+                }),
+            )
+            .layer(middleware::from_fn(prevent_atompub_transformation));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/atompub/service")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "private, no-store, no-transform"
+        );
+    }
 
     #[test]
     fn atompub_op_maps_every_route_and_method() {
