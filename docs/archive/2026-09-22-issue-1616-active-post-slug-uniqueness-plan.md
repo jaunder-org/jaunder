@@ -80,7 +80,7 @@ Out:
     conflict.
 
 - [x] Task 5: Finalize durable decision documentation
-  - Contract: keep `docs/adr/drafts/active-post-slug-uniqueness.md`,
+  - Contract: keep `docs/adr/0208-active-post-slug-uniqueness.md`,
     `CONTEXT.md`, and `docs/ARCHITECTURE.md` aligned with the implemented
     contracts; do not edit the generated ADR index or promote the draft on this
     branch.
