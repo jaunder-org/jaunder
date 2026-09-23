@@ -58,15 +58,12 @@ pub(crate) async fn prevent_atompub_transformation(
         cache_control.extend_from_slice(b", ");
     }
     cache_control.extend_from_slice(b"no-transform");
-    if let Ok(value) = axum::http::HeaderValue::from_bytes(&cache_control) {
-        headers.insert(header::CACHE_CONTROL, value);
-    } else {
-        // Preserve unusual existing directives if they cannot be joined.
-        headers.append(
-            header::CACHE_CONTROL,
-            axum::http::HeaderValue::from_static("no-transform"),
-        );
-    }
+    // Existing header values are already validated; the ASCII separator and
+    // directive cannot introduce an invalid byte.
+    let Ok(value) = axum::http::HeaderValue::from_bytes(&cache_control) else {
+        unreachable!("validated Cache-Control values joined with ASCII remain valid");
+    };
+    headers.insert(header::CACHE_CONTROL, value);
     response
 }
 
