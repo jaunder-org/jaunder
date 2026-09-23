@@ -609,7 +609,7 @@ async fn get_post_audiences_round_trips(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
-async fn post_update_invalid_slug(#[case] backend: Backend) {
+async fn post_update_occupied_slug_returns_slug_conflict(#[case] backend: Backend) {
     let env = backend.setup().await;
     let user = SeedUser::new()
         .seed(env.users(), env.write_scope())
@@ -641,12 +641,15 @@ async fn post_update_invalid_slug(#[case] backend: Backend) {
             .build()
     );
 
-    match update_result {
-        Err(storage::WriteScopeError::Operation(UpdatePostError::Internal(_))) => {
-            // Expected: unique constraint violation on slug
-        }
-        other => panic!("Expected Internal error, got {other:?}"),
-    }
+    assert!(
+        matches!(
+            update_result,
+            Err(storage::WriteScopeError::Operation(
+                UpdatePostError::SlugConflict
+            ))
+        ),
+        "an occupied explicit slug must return the bounded conflict: {update_result:?}"
+    );
 }
 
 #[apply(backends)]
