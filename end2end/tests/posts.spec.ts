@@ -839,6 +839,54 @@ test("failed named-audience load shows an error and gates compose actions", asyn
   await expect(page.locator(SEL.publishButton("true"))).toBeDisabled();
 });
 
+test("failed Named-audience load cannot overwrite an existing Named-only Post", async ({
+  registeredPage,
+}) => {
+  const page = await registeredPage("/audiences");
+  await page.fill('input[name="name"]', "Confidants");
+  await click(page, 'button:has-text("Create")');
+  await expect(
+    page.locator(".j-audience-item", { hasText: "Confidants" }),
+  ).toBeVisible();
+
+  await openComposerFromSidebar(page);
+  await openComposerControl(page, "Audience");
+  await page.getByRole("checkbox", { name: "Confidants" }).check();
+  await page.fill(SEL.postBody, "# Named load failure\n\nKeep this audience");
+  await click(page, SEL.publishButton("false"));
+  await waitForSelector(page, SEL.saveSummary);
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  const permalinkPath = new URL(page.url()).pathname;
+
+  const editor = await page.context().newPage();
+  try {
+    await failServerFn(editor, "audiences/list_mine");
+    await goto(editor, permalinkPath);
+    await openEditor(editor);
+    await openComposerControl(editor, "Audience");
+    await expect(
+      editor.getByText("Could not load named audiences."),
+    ).toBeVisible();
+    await expect(editor.locator(SEL.publishButton("false"))).toBeDisabled();
+    await expect(editor.locator(SEL.publishButton("true"))).toBeDisabled();
+    await expect(editor.locator(SEL.saveSummary)).toHaveCount(0);
+  } finally {
+    await editor.close();
+  }
+
+  await openEditor(page);
+  await openComposerControl(page, "Audience");
+  await expect(
+    page.getByRole("checkbox", { name: "Confidants" }),
+  ).toBeChecked();
+  await expect(
+    page.getByRole("checkbox", { name: "Public" }),
+  ).not.toBeChecked();
+  await expect(
+    page.locator(".j-composer-control-summary").filter({ hasText: "Audience" }),
+  ).toContainText("1 audience");
+});
+
 test("failed Default Audience load prevents creating with a placeholder selection", async ({
   page,
 }) => {
