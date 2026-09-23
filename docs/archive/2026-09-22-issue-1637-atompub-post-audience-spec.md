@@ -60,7 +60,7 @@ the existing omission semantics for clients that do not supply it.
 - Named audiences use their canonical `named:<numeric-id>` form. Friendly
   discovery, labels, or an audience picker are not part of this issue.
 - This public protocol decision is recorded in
-  `docs/adr/drafts/atompub-post-audience-round-trip.md` and projected into the
+  `docs/adr/0207-atompub-post-audience-round-trip.md` and projected into the
   architecture view.
 
 ## Acceptance
