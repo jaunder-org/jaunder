@@ -5,7 +5,7 @@
 > metadata to the Emacs Protocol Client's durable create checkpoint must
 > preserve replay/local-ahead safety and legacy-server compatibility. The
 > approved spec is
-> `docs/superpowers/specs/2026-09-23-issue-1635-org-audience-reflection.md`.
+> `docs/archive/2026-09-23-issue-1635-org-audience-reflection-spec.md`.
 
 ## Scope
 
