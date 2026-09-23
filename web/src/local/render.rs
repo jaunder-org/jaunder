@@ -7,8 +7,8 @@ use maud::html;
 
 use crate::html::Markup;
 
-/// The Local page masthead — the topbar with its anonymous Sign-in action and the
-/// Register action available only under Open Registration Policy.
+/// The Local page masthead — the topbar with anonymous Sign in, Register under
+/// Open Registration Policy, and the timeline sort action.
 ///
 /// The single source both the projector (`crate::posts::render::body`) and reactive
 /// `local::LocalPage` render, so coincidence holds by construction (ADR-0041 §2) — no
@@ -21,7 +21,7 @@ pub(crate) fn masthead(
     logo: &Markup,
     order: TimelineOrder,
 ) -> Markup {
-    let cta = Markup::new(html! {
+    let actions = Markup::new(html! {
         a href="/login" class="j-btn j-anon-only" { "Sign in" }
         @if registration_policy == Some(RegistrationPolicy::Open) {
             a href="/register" class="j-btn is-primary j-anon-only" { "Register" }
@@ -33,7 +33,7 @@ pub(crate) fn masthead(
             identity.title.as_ref(),
             identity.title.as_ref(),
             identity.tagline.as_ref().map(AsRef::as_ref),
-            &cta,
+            &actions,
             logo,
         ))
     })
