@@ -236,6 +236,7 @@ convention). See the Status column below for each ADR's current status.
 | [0206](adr/0206-user-wide-current-content-rights.md)                   | User-wide current Content Rights                                                                             | accepted   |
 | [0207](adr/0207-atompub-post-audience-round-trip.md)                   | AtomPub Post Audience Round-Trip                                                                             | accepted   |
 | [0208](adr/0208-active-post-slug-uniqueness.md)                        | Active Post slug uniqueness and historical permalink aliases                                                 | accepted   |
+| [0209](adr/0209-atompub-collection-member-etags.md)                    | Publish Member ETags in AtomPub Collection Entries                                                           | accepted   |
 
 <!-- adr-table:end -->
 

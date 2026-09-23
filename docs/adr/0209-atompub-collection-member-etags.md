@@ -1,6 +1,6 @@
-# ADR-DRAFT: Publish Member ETags in AtomPub Collection Entries
+# ADR-0209: Publish Member ETags in AtomPub Collection Entries
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-23
 - Issue: [#1636](https://github.com/jaunder-org/jaunder/issues/1636)
 
@@ -39,10 +39,10 @@ without the extension, or receiving absent, duplicate, weak, malformed,
 attributed, nested, whitespace-padded, or namespace-spoofed values, uses a
 Member `GET` instead. This is a public Atom foreign-markup extension, not an
 Emacs-specific transport; unaware Protocol Clients may ignore it as with
-[ADR-0023](../0023-atompub-jaunder-wire-extensions.md). Keep Atom document I/O
+[ADR-0023](0023-atompub-jaunder-wire-extensions.md). Keep Atom document I/O
 delegated to the namespace-aware upstream model as required by
-[ADR-0089](../0089-upstream-atom-document-io.md) and
-[the namespace-aware fork decision](../0172-temporary-atom-namespace-fork.md).
+[ADR-0089](0089-upstream-atom-document-io.md) and
+[the namespace-aware fork decision](0172-temporary-atom-namespace-fork.md).
 
 The Collection validator accelerates _report classification only_. Pull, push,
 and delete retain fresh remote checks, conditional requests, explicit user
