@@ -26,7 +26,8 @@ use tokio::sync::Barrier;
 
 use storage::{
     CacheCommitOutcome, FeedCacheRow, ProfileUpdate, PublisherGeneration, PublisherStorage,
-    WriteScope, sql::QueryStorageExt,
+    WriteScope,
+    sql::QueryStorageExt,
     test_support::{Backend, SeedRawPost, SeedUser, backends, backends_matrix, confirmed_for, fp},
 };
 
