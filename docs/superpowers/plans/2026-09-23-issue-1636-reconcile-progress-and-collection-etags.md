@@ -30,7 +30,7 @@ changes to Member write/conditional semantics, and #1641's compression work.
     an audience-only update, service discovery, and an ignored incoming
     extension; host Atom serialization tests check namespace identity and
     well-formed output.
-- [ ] Parse optional validators without trusting malformed wire data
+- [x] Parse optional validators without trusting malformed wire data
   - Contract: an inventory Member holds the optional validator only for exactly
     one direct namespace-qualified `etag` element with bare, exact strong-ETag
     text and no attributes or nested content. Absent, duplicate, weak, padded,

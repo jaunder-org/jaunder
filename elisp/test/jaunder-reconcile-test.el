@@ -82,6 +82,25 @@ The current filename supplies the local slug evidence used by matched-pull tests
     (should (equal (mapcar #'jaunder-inventory-member-slug members) '("first" "second")))
     (should (equal (plist-get page :next) "https://example.test/page-2"))))
 
+(ert-deftest jaunder-inventory-page-reads-only-one-valid-member-etag ()
+  "Member validators are expanded-name XML data, not textual-prefix matches."
+  (let ((entry (jaunder-reconcile-test--entry "7" "first")))
+    (dolist (fixture '(("<j:etag>&quot;current&quot;</j:etag>" . "\"current\"")
+                       ("<v:etag xmlns:v=\"https://jaunder.org/ns/atompub\">&quot;current&quot;</v:etag>" . "\"current\"")
+                       ("<j:etag>W/&quot;current&quot;</j:etag>" . nil)
+                       ("<j:etag> &quot;current&quot;</j:etag>" . nil)
+                       ("<j:etag extra=\"1\">&quot;current&quot;</j:etag>" . nil)
+                       ("<j:etag><j:inner/>&quot;current&quot;</j:etag>" . nil)
+                       ("<v:etag xmlns:v=\"urn:foreign\">&quot;current&quot;</v:etag>" . nil)
+                       ("<j:etag>&quot;current&quot;</j:etag><j:etag>&quot;current&quot;</j:etag>" . nil)))
+      (let* ((xml (replace-regexp-in-string
+                   "</entry>" (concat (car fixture) "</entry>") entry t t))
+             (page (jaunder--parse-collection-page
+                    (jaunder-reconcile-test--page (list xml))
+                    "https://example.test/atompub/alice/posts"))
+             (member (car (plist-get page :members))))
+        (should (equal (jaunder-inventory-member-etag member) (cdr fixture)))))))
+
 (ert-deftest jaunder-inventory-page-rejects-multiple-next-links ()
   ;; More than one continuation makes the Collection traversal ambiguous.
   (should-error
