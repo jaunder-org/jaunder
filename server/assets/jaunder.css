@@ -484,6 +484,23 @@
   gap: 10px;
 }
 
+.j-feed-discovery-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  color: var(--ink-soft);
+  flex: 0 0 auto;
+}
+
+.j-feed-discovery-link:hover,
+.j-feed-discovery-link:focus-visible {
+  background: var(--surface-alt);
+  color: var(--ink);
+}
+
 .j-sb-foot-body {
   flex: 1;
   min-width: 0;

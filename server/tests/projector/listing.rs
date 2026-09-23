@@ -22,9 +22,9 @@ use storage::{
 };
 
 use super::fixtures::{
-    TEST_SHELL, assert_sanitized_internal_server_error, failing_site_theme_selection, get,
-    projector_app, projector_app_with_dependencies, projector_app_with_site_config,
-    seed_published_post, seed_tagged_post,
+    TEST_SHELL, assert_sanitized_internal_server_error, assert_shell_miss,
+    failing_site_theme_selection, get, projector_app, projector_app_with_dependencies,
+    projector_app_with_site_config, seed_published_post, seed_tagged_post,
 };
 
 #[apply(backends)]
@@ -45,6 +45,99 @@ async fn profile_projects_user_timeline(#[case] backend: Backend) {
     );
     assert!(html.contains(title.as_ref()), "post title present");
     assert!(html.contains(r#"id="jaunder-seed""#), "data blob present");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn local_discovery_projects_three_existing_syndication_formats(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let response = projector_app(env.posts(), env.users(), env.themes())
+        .oneshot(get("/feeds"))
+        .await
+        .expect("request");
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = body_string(response).await;
+    assert!(html.contains("Syndication feeds for Local"), "{html}");
+    for (label, url) in [
+        ("RSS", "/feed.rss"),
+        ("Atom", "/feed.atom"),
+        ("JSON Feed", "/feed.json"),
+    ] {
+        assert!(
+            html.contains(&format!(r#"href="{url}">{label}</a>"#)),
+            "{html}"
+        );
+    }
+    assert!(html.contains(r#""FeedDiscovery":"Site""#), "{html}");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn contextual_discovery_links_match_each_timeline(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let (username, _) = seed_tagged_post(env.users(), env.posts(), env.write_scope()).await;
+    let app = projector_app(env.posts(), env.users(), env.themes());
+    for (path, context, prefix) in [
+        (
+            "/tags/rust/feeds".to_owned(),
+            "site tag #rust".to_owned(),
+            "/tags/rust/feed".to_owned(),
+        ),
+        (
+            format!("/~{username}/feeds"),
+            format!("User ~{username}"),
+            format!("/~{username}/feed"),
+        ),
+        (
+            format!("/~{username}/tags/rust/feeds"),
+            format!("User ~{username} tag #rust"),
+            format!("/~{username}/tags/rust/feed"),
+        ),
+    ] {
+        let response = app.clone().oneshot(get(&path)).await.expect("request");
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        let html = body_string(response).await;
+        assert!(
+            html.contains(&format!("Syndication feeds for {context}")),
+            "{html}"
+        );
+        for (extension, label) in [("rss", "RSS"), ("atom", "Atom"), ("json", "JSON Feed")] {
+            assert!(
+                html.contains(&format!(r#"href="{prefix}.{extension}">{label}</a>"#)),
+                "{html}"
+            );
+        }
+        assert!(
+            !html.contains("rel=\"EditURI\""),
+            "discovery index is not the profile: {html}"
+        );
+    }
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn discovery_preserves_empty_and_missing_context_semantics(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let app = projector_app(env.posts(), env.users(), env.themes());
+    for (path, context) in [
+        ("/tags/unused/feeds", "site tag #unused"),
+        ("/~nobody/feeds", "User ~nobody"),
+    ] {
+        let response = app.clone().oneshot(get(path)).await.expect("request");
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = body_string(response).await;
+        assert!(
+            html.contains(&format!("Syndication feeds for {context}")),
+            "{html}"
+        );
+    }
+    for path in [
+        "/~nobody/tags/unused/feeds",
+        "/tags/%20/feeds",
+        "/~%20/feeds",
+    ] {
+        assert_shell_miss(app.clone().oneshot(get(path)).await.expect("request")).await;
+    }
 }
 
 #[apply(backends)]
@@ -592,6 +685,7 @@ async fn every_page_seed_variant_serializes_without_null_fallback(#[case] backen
             page,
         },
         PageSeed::Permalink(web::posts::public_authored_post(record, false)),
+        PageSeed::FeedDiscovery(common::feed::FeedSurface::Site),
     ];
 
     for seed in seeds {
@@ -605,6 +699,7 @@ async fn every_page_seed_variant_serializes_without_null_fallback(#[case] backen
             PageSeed::SiteTag { .. } => "site tag",
             PageSeed::UserTag { .. } => "user tag",
             PageSeed::Permalink(_) => "permalink",
+            PageSeed::FeedDiscovery(_) => "feed discovery",
         };
         let presentation = PublicPresentation {
             theme: PublishedThemePresentation::built_in(Theme::Studio),

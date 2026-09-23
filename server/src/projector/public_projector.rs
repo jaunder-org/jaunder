@@ -3,6 +3,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use common::{
+    feed::FeedSurface,
     pagination::PageSize,
     permalink_route::PermalinkRoute,
     seed::{PageSeed, PublicPresentation, TimelineOrder, TimelinePageRequest},
@@ -30,6 +31,7 @@ use super::{Shell, document};
 /// Route handlers decode their soft path segments before selecting an operation,
 /// preserving their SPA-shell behavior for malformed paths.
 pub(crate) enum PublicProjection {
+    FeedDiscovery(FeedSurface),
     SiteTimeline(TimelineOrder),
     Profile(Username, TimelineOrder),
     SiteTag(Tag, TimelineOrder),
@@ -80,6 +82,7 @@ impl PublicProjector {
 
     async fn execute(&self, operation: PublicProjection) -> ProjectionResult {
         match operation {
+            PublicProjection::FeedDiscovery(surface) => self.feed_discovery(surface).await,
             PublicProjection::SiteTimeline(order) => self.site_timeline(order).await,
             PublicProjection::Profile(username, order) => self.profile(username, order).await,
             PublicProjection::SiteTag(tag, order) => self.site_tag(tag, order).await,
@@ -202,6 +205,29 @@ impl PublicProjector {
         Ok(PublicPresentation {
             theme,
             page: PageSeed::Permalink(posts::public_authored_post(record, false)),
+        })
+    }
+
+    async fn feed_discovery(&self, surface: FeedSurface) -> ProjectionResult {
+        // Reuse the timeline projection's theme and missing-context decision; the
+        // index has no separate publication or existence rules of its own.
+        let presentation = match &surface {
+            FeedSurface::Site => self.site_timeline(TimelineOrder::Newest).await?,
+            FeedSurface::SiteTag { tag } => {
+                self.site_tag(tag.clone(), TimelineOrder::Newest).await?
+            }
+            FeedSurface::User { username } => {
+                self.profile(username.clone(), TimelineOrder::Newest)
+                    .await?
+            }
+            FeedSurface::UserTag { username, tag } => {
+                self.user_tag(username.clone(), tag.clone(), TimelineOrder::Newest)
+                    .await?
+            }
+        };
+        Ok(PublicPresentation {
+            theme: presentation.theme,
+            page: PageSeed::FeedDiscovery(surface),
         })
     }
 

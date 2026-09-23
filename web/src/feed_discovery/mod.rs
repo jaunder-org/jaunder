@@ -1,4 +1,4 @@
-//! Feed / RSD auto-discovery `<link>` tags and their pure URL/label helpers.
+//! Public Syndication Feed discovery: head links and a visible contextual index.
 #[cfg(target_arch = "wasm32")]
 mod component;
 // Pure label/URL helpers, host-tested. Compiled only where actually used — the
@@ -7,6 +7,8 @@ mod component;
 // plain `mod labels;` would be dead code on the non-test host lib build.
 #[cfg(any(target_arch = "wasm32", test))]
 mod labels;
+pub mod render;
+pub mod routes;
 
 #[cfg(target_arch = "wasm32")]
-pub use component::{FeedDiscovery, RsdDiscovery};
+pub use component::{FeedDiscovery, FeedIndexPage, RsdDiscovery};

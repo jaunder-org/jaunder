@@ -416,7 +416,7 @@ impl Theme {
 /// from leaking onto private application routes.
 #[must_use]
 pub fn is_public_presentation_path(path: &str) -> bool {
-    path == "/" || path.starts_with("/tags/") || path.starts_with("/~")
+    path == "/" || path == "/feeds" || path.starts_with("/tags/") || path.starts_with("/~")
 }
 
 #[cfg(test)]
@@ -439,7 +439,16 @@ mod tests {
 
     #[test]
     fn public_path_classifier_excludes_private_application_routes() {
-        for path in ["/", "/tags/rust", "/~alice", "/~alice/2026/01/02/post"] {
+        for path in [
+            "/",
+            "/feeds",
+            "/tags/rust",
+            "/tags/rust/feeds",
+            "/~alice",
+            "/~alice/feeds",
+            "/~alice/tags/rust/feeds",
+            "/~alice/2026/01/02/post",
+        ] {
             assert!(is_public_presentation_path(path), "{path}");
         }
         for path in ["/app", "/profile", "/admin/site", "/login"] {

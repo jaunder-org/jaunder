@@ -23,7 +23,7 @@ pages, new Style Contract hooks, or feed/autodiscovery changes.
     capture paths; compare the finished UI under those same conditions.
   - Verification: baseline images exist before any presentation mutation and are
     reproducible for final comparison.
-- [ ] Define and project the typed discovery context and four public
+- [x] Define and project the typed discovery context and four public
       destinations.
   - Contract: `PageSeed` distinguishes a discovery destination from a timeline
     and carries its `FeedSurface` context; canonical feed links derive from
@@ -35,7 +35,7 @@ pages, new Style Contract hooks, or feed/autodiscovery changes.
     format links per context, empty valid timelines, unknown User profile versus
     unknown User-tag fallback, malformed path fallback, seed round-trip, and
     unchanged feed/profile RSD autodiscovery.
-- [ ] Add the contextual marker and client-side discovery navigation.
+- [x] Add the contextual marker and client-side discovery navigation.
   - Contract: marker derives its destination from the same typed timeline
     context, appears only in the public navigation-rail footer, and has the
     accessible name “Syndication feeds”; authenticated `/` still redirects
