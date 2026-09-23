@@ -12,6 +12,7 @@ pub mod backup;
 pub mod bio;
 pub mod client_telemetry;
 pub mod content_license;
+pub mod copyright_declaration;
 pub mod display_name;
 pub mod email;
 pub mod etag;

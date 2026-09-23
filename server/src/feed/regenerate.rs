@@ -121,15 +121,13 @@ fn build_feed_items(base: &BaseUrl, records: &[SyndicationPostRecord]) -> Vec<Fe
             let published_at = p.published_at.unwrap_or(p.created_at);
             FeedItem {
                 id: p.post_id,
-                creation_year: jiff::tz::TimeZone::UTC
-                    .to_datetime(p.created_at.value())
-                    .date()
-                    .year(),
-                author_name: p
-                    .author_display_name
-                    .as_ref()
-                    .map_or_else(|| p.author_username.to_string(), ToString::to_string),
-                content_license: p.content_license,
+                copyright_declaration:
+                    common::copyright_declaration::CopyrightDeclaration::for_post(
+                        p.created_at,
+                        p.author_display_name.as_ref(),
+                        &p.author_username,
+                        p.content_license,
+                    ),
                 // Feed readers consume persisted Rendered Title projections only; they
                 // never parse authored Markdown, Org, or HTML source.
                 rendered_title: p.rendered_title.clone(),

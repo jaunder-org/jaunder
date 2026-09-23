@@ -39,16 +39,11 @@ pub fn render_rss(meta: &FeedMetadata, items: &[FeedItem]) -> SyndicationFeedRep
                         .build(),
                 ))
                 .dublin_core_ext(Some(DublinCoreExtension {
-                    rights: vec![format!(
-                        "© {} {} · {}",
-                        i.creation_year,
-                        i.author_name,
-                        i.content_license.label()
-                    )],
+                    rights: vec![i.copyright_declaration.text()],
                     ..Default::default()
                 }))
                 .build();
-            if let Some(url) = i.content_license.canonical_url() {
+            if let Some(url) = i.copyright_declaration.license().canonical_url() {
                 let mut extensions = BTreeMap::new();
                 extensions.insert(
                     CREATIVE_COMMONS_NAMESPACE.to_owned(),
@@ -101,10 +96,12 @@ pub fn render_rss(meta: &FeedMetadata, items: &[FeedItem]) -> SyndicationFeedRep
         .items(rss_items);
 
     let mut channel = builder.build();
-    if items
-        .iter()
-        .any(|item| item.content_license.canonical_url().is_some())
-    {
+    if items.iter().any(|item| {
+        item.copyright_declaration
+            .license()
+            .canonical_url()
+            .is_some()
+    }) {
         channel.set_namespaces(BTreeMap::from([(
             "creativeCommons".to_owned(),
             CREATIVE_COMMONS_NAMESPACE.to_owned(),
@@ -237,9 +234,14 @@ mod tests {
 
         for &license in ContentLicense::VARIANTS {
             let item = FeedItem {
-                creation_year: 2024,
-                author_name: "Alice Example".to_owned(),
-                content_license: license,
+                copyright_declaration:
+                    common::copyright_declaration::CopyrightDeclaration::from_resolved(
+                        2024,
+                        common::copyright_declaration::CopyrightAuthor::DisplayName(
+                            "Alice Example".parse().unwrap(),
+                        ),
+                        license,
+                    ),
                 ..item(Some("Hello"))
             };
             let body = render_rss(&meta(None, Some("A site")), &[item])
