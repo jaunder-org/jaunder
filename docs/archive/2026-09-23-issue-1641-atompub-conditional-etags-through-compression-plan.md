@@ -4,7 +4,7 @@
 > independent work. This outline exists because the fix crosses a public HTTP
 > validator contract, Emacs Protocol Client transport, and a separately owned
 > production Caddy configuration. The approved
-> [spec](../specs/2026-09-23-issue-1641-atompub-conditional-etags-through-compression.md)
+> [spec](2026-09-23-issue-1641-atompub-conditional-etags-through-compression-spec.md)
 > is authoritative.
 
 ## Scope
