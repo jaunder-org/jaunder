@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::{
     body::Body,
     http::{Method, Request, StatusCode, header},
@@ -13,6 +15,7 @@ use crate::helpers::body_string;
 use common::permalink_route::canonical_permalink_path;
 use common::test_support::{parse_slug, parse_utc_instant, permalink_date};
 use common::{time::UtcInstant, visibility::AudienceTarget};
+use storage::MockPostStorage;
 use storage::sql::QueryStorageExt;
 use storage::test_support::{Backend, CloseablePool, SeedRawPost, SeedUser, backends};
 
@@ -234,6 +237,42 @@ async fn historical_permalink_alias_hidden_targets_serve_shell(#[case] backend: 
             .expect("historical alias request");
         assert_shell_miss(response).await;
     }
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn historical_permalink_alias_storage_failure_reports_boundary_once(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let mut posts = MockPostStorage::new();
+    posts
+        .expect_get_post_by_permalink()
+        .once()
+        .returning(|_, _, _, _, _| Ok(None));
+    posts
+        .expect_resolve_historical_post_permalink_alias()
+        .once()
+        .returning(|_, _, _, _| Err(sqlx::Error::PoolClosed));
+    let app = projector_app(Arc::new(posts), env.users(), env.themes());
+
+    let (response, event) = crate::assert_error_signal!(
+        async {
+            app.oneshot(get("/~alice/2025/07/03/historical-source"))
+                .await
+                .expect("historical alias request")
+        },
+        event = "server function failed",
+        event_kind = "Storage",
+        event_class = "Bug",
+        metric_kind = "storage",
+        metric_class = "bug",
+        disposition = "boundary",
+        context = "server.projector.historical_permalink_alias"
+    );
+
+    assert_sanitized_internal_server_error(response).await;
+    assert!(event.contains("pool"), "typed storage source: {event}");
 }
 
 #[apply(backends)]

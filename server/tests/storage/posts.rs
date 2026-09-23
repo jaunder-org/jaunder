@@ -16,8 +16,8 @@ use rstest_reuse::*;
 use sqlx::query;
 use storage::sql::QueryStorageExt;
 use storage::test_support::{
-    Backend, SeedRawPost, SeedUser, UpdateRawPost, backends, confirmed, confirmed_for,
-    media_url_for,
+    Backend, CloseablePool, SeedRawPost, SeedUser, UpdateRawPost, backends, confirmed,
+    confirmed_for, media_url_for,
 };
 use storage::{
     AudienceStorage, CreatePostError, PostBookkeepingExpectation, PostFormat, PostLifecycle,
@@ -649,6 +649,74 @@ async fn post_update_occupied_slug_returns_slug_conflict(#[case] backend: Backen
             ))
         ),
         "an occupied explicit slug must return the bounded conflict: {update_result:?}"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn post_update_non_slug_database_failure_maps_to_internal(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let user = SeedUser::new()
+        .seed(env.users(), env.write_scope())
+        .await
+        .user_id;
+    let post_id = SeedRawPost::new(user)
+        .draft()
+        .seed(env.posts(), env.write_scope())
+        .await
+        .post_id;
+
+    match env.base.pool() {
+        CloseablePool::Sqlite(pool) => {
+            sqlx::query(
+                "CREATE TRIGGER force_post_update_failure
+                 BEFORE UPDATE ON posts
+                 BEGIN SELECT RAISE(ABORT, 'forced non-slug update failure'); END",
+            )
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+        CloseablePool::Postgres(pool) => {
+            sqlx::query(
+                "CREATE FUNCTION force_post_update_failure() RETURNS trigger
+                 LANGUAGE plpgsql AS $$
+                 BEGIN RAISE EXCEPTION 'forced non-slug update failure'; END
+                 $$",
+            )
+            .execute(pool)
+            .await
+            .unwrap();
+            sqlx::query(
+                "CREATE TRIGGER force_post_update_failure
+                 BEFORE UPDATE ON posts FOR EACH ROW
+                 EXECUTE FUNCTION force_post_update_failure()",
+            )
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+    }
+
+    let result = update_post!(
+        Arc::clone(&env.posts()),
+        env.write_scope(),
+        post_id,
+        user,
+        UpdateRawPost::new("still-unique")
+            .title("Updated")
+            .body(parse_post_body("Updated content"))
+            .unpublish()
+            .build()
+    );
+    assert!(
+        matches!(
+            result,
+            Err(storage::WriteScopeError::Operation(
+                UpdatePostError::Internal(_)
+            ))
+        ),
+        "a non-slug database failure must remain internal: {result:?}"
     );
 }
 
