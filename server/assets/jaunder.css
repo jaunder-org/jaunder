@@ -940,8 +940,15 @@
   border-radius: 3px;
 }
 
-.j-post-time {
+.j-post-action-group {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: baseline;
+  gap: 6px;
   margin-left: auto;
+}
+
+.j-post-time {
   font-size: 12px;
   color: var(--muted);
 }
@@ -1183,9 +1190,19 @@
   pointer-events: auto;
 }
 
-.j-post-action-trigger {
+.j-root .j-post-action-trigger {
   width: 100%;
   height: 100%;
+  font-family:
+    "Inter",
+    system-ui,
+    -apple-system,
+    sans-serif;
+  font-size: 14px;
+  font-style: normal;
+  font-weight: 400;
+  line-height: 1.55;
+  letter-spacing: normal;
 }
 
 .j-post-action-popover {
