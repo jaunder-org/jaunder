@@ -1595,14 +1595,14 @@ test("Home collapses its pristine composer at the scroll threshold", async ({
   await page.evaluate(() => window.scrollBy(0, 100));
   await expect(collapse).toBeVisible();
 
-  await page.evaluate(() => window.scrollTo(0, 24));
+  await page.evaluate(() => window.scrollTo(0, 0));
   await page.evaluate(
     () =>
       new Promise<void>((resolve) =>
         requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
       ),
   );
-  await page.evaluate(() => window.scrollTo(0, 96));
+  await page.keyboard.press("PageDown");
   await expect(expand).toBeVisible();
 });
 
