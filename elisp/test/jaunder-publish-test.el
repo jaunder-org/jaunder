@@ -46,6 +46,17 @@ Lets the warning tests assert on emitted warnings without touching the real
        ,@body)
      (nreverse jaunder-test--warnings)))
 
+(ert-deftest jaunder-reviewed-update-requires-post-id-and-strong-etag ()
+  "Conflict preparation and conditional send reject missing mutation authority."
+  (with-temp-buffer
+    (org-mode)
+    (cl-letf (((symbol-function 'jaunder--org->atom) (lambda () nil))
+              ((symbol-function 'jaunder--http-request)
+               (lambda (&rest _) (ert-fail "Missing evidence sent a PUT"))))
+      (should-error (jaunder--prepare-reviewed-update))
+      (should-error (jaunder--send-reviewed-update
+                     "https://example.test/edit/7" "W/\"old\"" "<entry/>")))))
+
 ;;; publish validation + Location->id + force-draft
 
 (ert-deftest jaunder-validate-publish-rejects-empty-body ()
