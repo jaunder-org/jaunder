@@ -30,7 +30,7 @@ HTTP/filesystem or Media, and changes to ordinary non-conflict operations.
   - Verification: pure ERT state × action and local/remote preflight matrix;
     assert no write occurs on any blocked path.
 
-- [ ] 2. Accept a conflict's remote Post through the existing staged matched
+- [x] 2. Accept a conflict's remote Post through the existing staged matched
       pull without loosening other states' eligibility.
   - Contract: after confirmation stage Member and Media, require staged and
     final Member identity/ETag to match the reviewed row, and reuse ADR-0200's

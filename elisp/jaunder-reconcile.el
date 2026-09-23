@@ -66,6 +66,7 @@
   (define-key jaunder-reconcile-report-mode-map "m" #'jaunder-reconcile-toggle-mark)
   (define-key jaunder-reconcile-report-mode-map "p" #'jaunder-reconcile-push-selected)
   (define-key jaunder-reconcile-report-mode-map "f" #'jaunder-reconcile-pull-selected)
+  (define-key jaunder-reconcile-report-mode-map "r" #'jaunder-reconcile-keep-remote-selected)
   (define-key jaunder-reconcile-report-mode-map "g" #'jaunder-reconcile-refresh)
   (define-key jaunder-reconcile-report-mode-map "D" #'jaunder-reconcile-delete-selected))
 
@@ -1012,6 +1013,49 @@ remote strong-ETag revalidation, one local preflight, then replacement."
        (lambda ()
          (jaunder--reconcile-execute-batch buffer rows 'pull
                                            #'jaunder--reconcile-pull-row))))))
+
+(defun jaunder--reconcile-keep-remote-row (row)
+  "Install ROW's reviewed remote Post, or return a structured blocked result."
+  (let ((initial (jaunder--reconcile-conflict-preflight row)))
+    (if (not (plist-get initial :ok))
+        initial
+      (condition-case err
+          (let* ((root (jaunder-reconcile-report-root jaunder-reconcile-report))
+                 (member (jaunder-reconcile-row-member row))
+                 (path (jaunder-inventory-local-path (jaunder-reconcile-row-local row)))
+                 (jaunder--pull-link-inventory
+                  (jaunder-reconcile-report-inventory jaunder-reconcile-report))
+                 (staged (jaunder--pull-stage-member root member))
+                 (reviewed (jaunder-reconcile-row-remote-etag row)))
+            (if (not (and (equal (plist-get staged :etag) reviewed)
+                          (equal (plist-get staged :id)
+                                 (jaunder-inventory-member-id member))
+                          (equal (plist-get staged :slug)
+                                 (jaunder-inventory-member-slug member))))
+                (jaunder--reconcile-blocked row 'staged-identity-changed)
+              (let ((final (jaunder--reconcile-conflict-preflight row)))
+                (if (not (plist-get final :ok))
+                    final
+                  (jaunder--reconcile-pull-install-staged row staged final path)))))
+        (jaunder-pull-stage-identity-changed
+         (jaunder--reconcile-blocked row 'staged-identity-changed))
+        (error (list :outcome 'failed :post-id (jaunder--reconcile-row-post-id row)
+                     :slug (jaunder--reconcile-row-slug row) :local-effect 'unchanged
+                     :reason 'pull-failed :detail (error-message-string err)))))))
+
+(defun jaunder-reconcile-keep-remote-selected ()
+  "Accept the reviewed remote Post for selected conflicts after confirmation."
+  (interactive)
+  (let ((rows (jaunder-reconcile-selected-rows))
+        (buffer (current-buffer)))
+    (unless rows (user-error "No reconciliation rows selected"))
+    (when (jaunder--reconcile-confirm
+           "Keep remote for %d selected Post(s)? " (length rows))
+      (jaunder--call-with-blog
+       (jaunder-reconcile-report-root jaunder-reconcile-report)
+       (lambda ()
+         (jaunder--reconcile-execute-batch
+          buffer rows 'keep-remote #'jaunder--reconcile-keep-remote-row))))))
 
 (defun jaunder-reconcile-delete-selected ()
   "Explicitly soft-delete selected remote Posts after reviewing fresh ETags."

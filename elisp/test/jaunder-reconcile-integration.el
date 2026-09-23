@@ -240,6 +240,88 @@ When DRAFT is non-nil, create a draft Member."
          (kill-buffer buffer))
        (delete-directory root t)))))
 
+(ert-deftest jaunder-reconcile-live-keep-remote-blocks-drift-then-accepts-reviewed-post ()
+  "A later remote edit blocks; refreshing permits a confirmed remote choice."
+  (jaunder-test--with-live-server
+   (let* ((root (file-name-as-directory (make-temp-file "jaunder-conflict-remote-" t)))
+          (jaunder-blogs (list (cons root (list :base-url jaunder-test-base-url
+                                                :username jaunder-test-username))))
+          id path local)
+     (unwind-protect
+         (jaunder--call-with-blog
+          root
+          (lambda ()
+            (setq id (jaunder-reconcile-live--create-pagination-member
+                      "Conflict baseline" "Original body" t))
+            (let* ((inventory (jaunder--inventory-for-root root))
+                   (member (cl-find id (jaunder-inventory-server-only inventory)
+                                    :key #'jaunder-inventory-member-id :test #'equal))
+                   (pulled (and member (jaunder--pull-member root member))))
+              (should member)
+              (should (eq (jaunder-pull-result-status pulled) 'pulled))
+              (setq path (jaunder-pull-result-path pulled)
+                    local (find-file-noselect path)))
+            (with-current-buffer local
+              (goto-char (point-max)) (insert "Local authored change.\n")
+              (save-buffer))
+            (set-file-times path (time-add (current-time) (seconds-to-time 5)))
+            (let ((update-remote
+                   (lambda (title body)
+                     (let* ((url (jaunder--member-url id))
+                            (before (jaunder--http-request "GET" url))
+                            (etag (jaunder--response-header before "ETag"))
+                            (response (jaunder--http-request
+                                       "PUT" url
+                                       (jaunder--atom-entry->xml
+                                        (jaunder--make-entry
+                                         :title title :draft t
+                                         :content-type "text/org" :body body))
+                                       "application/atom+xml"
+                                       (list (cons "If-Match" etag)))))
+                       (should (eq (plist-get response :status) 200))
+                       response))))
+              (funcall update-remote "Remote first" "First remote version")
+              (jaunder-reconcile root)
+              (with-current-buffer "*Jaunder Reconcile*"
+                (let ((row (cl-find id (jaunder-reconcile-report-rows
+                                        jaunder-reconcile-report)
+                                    :key #'jaunder--reconcile-row-post-id
+                                    :test #'equal))
+                      (before (with-temp-buffer
+                                (insert-file-contents-literally path) (buffer-string))))
+                  (should (eq (jaunder-reconcile-row-state row) 'conflict))
+                  (puthash (format "post:%s" id) t jaunder-reconcile-marks)
+                  (funcall update-remote "Remote second" "Second remote version")
+                  (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
+                    (jaunder-reconcile-keep-remote-selected))
+                  (should (eq (jaunder-reconcile-result-reason
+                               (car jaunder-reconcile-last-batch-results))
+                              'etag-stale))
+                  (should (equal (with-temp-buffer
+                                   (insert-file-contents-literally path) (buffer-string))
+                                 before))
+                  (puthash (format "post:%s" id) t jaunder-reconcile-marks)
+                  (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
+                    (jaunder-reconcile-keep-remote-selected))
+                  (should (eq (jaunder-reconcile-result-outcome
+                               (car jaunder-reconcile-last-batch-results))
+                              'success))
+                  (should (eq (jaunder-reconcile-result-local-effect
+                               (car jaunder-reconcile-last-batch-results))
+                              'renamed))
+                  (setq path (buffer-file-name local))
+                  (should (string-match-p "Second remote version"
+                                          (with-temp-buffer
+                                            (insert-file-contents path)
+                                            (buffer-string))))
+                  (with-current-buffer local
+                    (should-not (buffer-modified-p))
+                    (should (string-match-p "Second remote version" (buffer-string)))))))))
+       (when (buffer-live-p local)
+         (with-current-buffer local (set-buffer-modified-p nil))
+         (kill-buffer local))
+       (delete-directory root t)))))
+
 (defun jaunder-reconcile-live--run-selected (root keys command)
   "Build ROOT's report, mark KEYS, confirm COMMAND, and return its results/prompt."
   (jaunder-reconcile root)
