@@ -65,7 +65,7 @@
 (cl-defstruct (jaunder-reconcile-merge-session
                (:constructor jaunder--make-reconcile-merge-session))
   "One conflict's review evidence and independently editable scratch result."
-  row report-buffer path scratch local-view remote-view ediff-active)
+  row report-buffer path scratch local-view remote-view ediff-active ediff-ready)
 
 (defvar-local jaunder-reconcile-merge-session nil
   "The owned conflict merge session of the current scratch buffer.")
@@ -1341,6 +1341,8 @@ unknown, failed, or partial result; only confirmed success retires it."
          (report-buffer (and session (jaunder-reconcile-merge-session-report-buffer session))))
     (unless (and row (buffer-live-p report-buffer))
       (user-error "This merge has no live reconciliation report; retain its scratch"))
+    (unless (jaunder-reconcile-merge-session-ediff-ready session)
+      (user-error "Ediff did not open; this scratch cannot be published"))
     (when (y-or-n-p
            (format "Publish merged Post %s against reviewed ETag %s? "
                    (jaunder--reconcile-row-post-id row)
@@ -1450,7 +1452,7 @@ operations write there, never to either Post.  `C-c C-c' explicitly finishes."
                     (session (jaunder--make-reconcile-merge-session
                               :row row :report-buffer report-buffer :path path
                               :local-view local-view :remote-view remote-view))
-                    (ediff-opened
+                    (ediff-error
                      (condition-case err
                          (progn
                            (setf (jaunder-reconcile-merge-session-ediff-active session) t)
@@ -1462,26 +1464,30 @@ operations write there, never to either Post.  `C-c C-c' explicitly finishes."
                            (unless (buffer-live-p
                                     (jaunder-reconcile-merge-session-scratch session))
                              (error "Ediff did not expose its merge output"))
-                           t)
+                           (setf (jaunder-reconcile-merge-session-ediff-ready session) t)
+                           nil)
                        (error
                         (setf (jaunder-reconcile-merge-session-ediff-active session) nil)
-                        (message "Ediff could not open: %s" (error-message-string err))
-                        nil))))
-               (unless (buffer-live-p (jaunder-reconcile-merge-session-scratch session))
-                 ;; Ediff can be unavailable in a terminal or during setup.  Once
-                 ;; staging succeeded, preserve a safe local-starting scratch.
-                 (let ((scratch (get-buffer-create name)))
-                   (with-current-buffer scratch
-                     (jaunder-reconcile-merge-mode)
-                     (insert local-bytes)
-                     (setq-local jaunder-reconcile-merge-session session)
-                     (set-buffer-modified-p nil))
-                   (setf (jaunder-reconcile-merge-session-scratch session) scratch)))
-               (display-buffer (jaunder-reconcile-merge-session-scratch session))
-               (message "%s; edit %s, then C-c C-c to complete"
-                        (if ediff-opened "Two-way Ediff merge opened"
-                          "Ediff unavailable; merge scratch retained") name)
-               (jaunder-reconcile-merge-session-scratch session)))))))))
+                        err))))
+               (if ediff-error
+                   (let ((result (list :outcome 'failed
+                                       :post-id (jaunder--reconcile-row-post-id row)
+                                       :slug (jaunder--reconcile-row-slug row)
+                                       :local-effect 'unchanged
+                                       :reason 'ediff-unavailable
+                                       :detail (error-message-string ediff-error))))
+                     (jaunder--reconcile-merge-close-views session)
+                     (jaunder--reconcile-merge-record session report-buffer result)
+                     ;; If Ediff had already created C, retain that work for
+                     ;; inspection but never allow a failed session to publish.
+                     (when (buffer-live-p (jaunder-reconcile-merge-session-scratch session))
+                       (display-buffer (jaunder-reconcile-merge-session-scratch session)))
+                     (message "Ediff could not open: %s" (error-message-string ediff-error))
+                     nil)
+                 (display-buffer (jaunder-reconcile-merge-session-scratch session))
+                 (message "Two-way Ediff merge opened; edit %s, then C-c C-c to complete"
+                          name)
+                 (jaunder-reconcile-merge-session-scratch session))))))))))
 
 (defun jaunder--reconcile-keep-remote-row (row)
   "Install ROW's reviewed remote Post, or return a structured blocked result."

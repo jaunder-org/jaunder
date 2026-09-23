@@ -1867,13 +1867,57 @@ The current filename supplies the local slug evidence used by matched-pull tests
       (when (buffer-live-p report-buffer) (kill-buffer report-buffer))
       (delete-directory root t))))
 
-(ert-deftest jaunder-reconcile-merge-direct-kill-cleans-failed-ediff-snapshots ()
-  "A confirmed C-x k after Ediff startup failure cannot leak owned snapshots."
-  (let* ((root (file-name-as-directory (make-temp-file "jaunder-merge-kill-" t)))
+(ert-deftest jaunder-reconcile-merge-ediff-startup-failure-cannot-publish-local-only ()
+  "Without two-way Ediff there is no finishable result or leaked snapshots."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-merge-no-ediff-" t)))
          (path (expand-file-name "old.org" root))
          (bytes (jaunder-reconcile-test--pulled-bytes "7" "old" "\"saved\""))
-         (report-buffer (generate-new-buffer "*Jaunder merge kill report*"))
-         row scratch session consent)
+         (report-buffer (generate-new-buffer "*Jaunder no Ediff report*"))
+         (make-snapshot (symbol-function 'jaunder--reconcile-merge-snapshot))
+         snapshots row)
+    (unwind-protect
+        (progn
+          (with-temp-file path (insert bytes))
+          (setq row (jaunder-reconcile-test--matched-pull-row path "old" 'conflict))
+          (jaunder--render-reconcile-report
+           (jaunder--make-reconcile-report :root root :rows (list row)) report-buffer)
+          (with-current-buffer report-buffer
+            (puthash "post:7" t jaunder-reconcile-marks)
+            (cl-letf (((symbol-function 'jaunder--call-with-blog)
+                       (lambda (_root thunk) (funcall thunk)))
+                      ((symbol-function 'jaunder--reconcile-conflict-preflight)
+                       (lambda (_) '(:ok t :etag "\"old\"")))
+                      ((symbol-function 'jaunder--pull-stage-member)
+                       (lambda (&rest _)
+                         (list :id "7" :slug "old" :etag "\"old\"" :bytes bytes)))
+                      ((symbol-function 'jaunder--reconcile-merge-snapshot)
+                       (lambda (name contents)
+                         (let ((snapshot (funcall make-snapshot name contents)))
+                           (push snapshot snapshots)
+                           snapshot)))
+                      ((symbol-function 'ediff-merge-buffers)
+                       (lambda (&rest _) (error "Ediff unavailable"))))
+              (should-not (jaunder-reconcile-merge-selected))
+              (should (eq (jaunder-reconcile-result-reason
+                           (car jaunder-reconcile-last-batch-results))
+                          'ediff-unavailable))))
+          (should-not (get-buffer (jaunder--reconcile-merge-scratch-name row root)))
+          (should (= (length snapshots) 2))
+          (should-not (cl-some #'buffer-live-p snapshots))
+          (should (equal (with-temp-buffer (insert-file-contents-literally path)
+                                           (buffer-string)) bytes)))
+      (dolist (snapshot snapshots)
+        (when (buffer-live-p snapshot) (kill-buffer snapshot)))
+      (when (buffer-live-p report-buffer) (kill-buffer report-buffer))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-reconcile-merge-partial-ediff-startup-retains-unpublishable-result ()
+  "A C output created before Ediff fails is recoverable but never publishable."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-merge-partial-" t)))
+         (path (expand-file-name "old.org" root))
+         (bytes (jaunder-reconcile-test--pulled-bytes "7" "old" "\"saved\""))
+         (report-buffer (generate-new-buffer "*Jaunder partial Ediff report*"))
+         row scratch consent)
     (unwind-protect
         (progn
           (with-temp-file path (insert bytes))
@@ -1890,20 +1934,30 @@ The current filename supplies the local slug evidence used by matched-pull tests
                        (lambda (&rest _)
                          (list :id "7" :slug "old" :etag "\"old\"" :bytes bytes)))
                       ((symbol-function 'ediff-merge-buffers)
-                       (lambda (&rest _) (error "Ediff unavailable"))))
-              (setq scratch (jaunder-reconcile-merge-selected))))
-          (setq session (buffer-local-value 'jaunder-reconcile-merge-session scratch))
-          (should (buffer-live-p (jaunder-reconcile-merge-session-local-view session)))
+                       (lambda (_a _b &optional startup _job _file)
+                         (let ((result (generate-new-buffer " *Ediff partial C*")))
+                           (with-current-buffer result (insert bytes))
+                           (with-temp-buffer
+                             (setq-local ediff-buffer-C result)
+                             (dolist (hook startup) (funcall hook)))
+                           (setq scratch result)
+                           (error "Ediff startup interrupted")))))
+              (should-not (jaunder-reconcile-merge-selected))
+              (should (eq (jaunder-reconcile-result-reason
+                           (car jaunder-reconcile-last-batch-results))
+                          'ediff-unavailable))))
+          (should (buffer-live-p scratch))
+          (with-current-buffer scratch
+            (should-error (jaunder-reconcile-merge-finish) :type 'user-error)
+            (should (string-match-p "Body" (buffer-string))))
           (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) consent)))
             (should-not (kill-buffer scratch))
-            (should (buffer-live-p scratch))
             (setq consent t)
             (should (kill-buffer scratch)))
-          (should-not (buffer-live-p (jaunder-reconcile-merge-session-local-view session)))
-          (should-not (buffer-live-p (jaunder-reconcile-merge-session-remote-view session))))
+          (should (equal (with-temp-buffer (insert-file-contents-literally path)
+                                           (buffer-string)) bytes)))
       (when (buffer-live-p scratch)
-        (with-current-buffer scratch
-          (setq-local jaunder-reconcile-merge-allow-kill t))
+        (with-current-buffer scratch (setq-local jaunder-reconcile-merge-allow-kill t))
         (kill-buffer scratch))
       (when (buffer-live-p report-buffer) (kill-buffer report-buffer))
       (delete-directory root t))))
@@ -1960,7 +2014,7 @@ The current filename supplies the local slug evidence used by matched-pull tests
            (jaunder--make-reconcile-report :root root :rows (list row)) report-buffer)
           (setq session (jaunder--make-reconcile-merge-session
                          :row row :report-buffer report-buffer :path path
-                         :scratch scratch))
+                         :scratch scratch :ediff-ready t))
           (with-current-buffer scratch
             (jaunder-reconcile-merge-mode)
             (insert original "\nEdited merge result\n")
@@ -2024,7 +2078,8 @@ The current filename supplies the local slug evidence used by matched-pull tests
           (jaunder--render-reconcile-report
            (jaunder--make-reconcile-report :root root :rows (list row)) report-buffer)
           (setq session (jaunder--make-reconcile-merge-session
-                         :row row :report-buffer report-buffer :path path :scratch scratch)
+                         :row row :report-buffer report-buffer :path path :scratch scratch
+                         :ediff-ready t)
                 visiting (find-file-noselect path))
           (with-current-buffer scratch
             (jaunder-reconcile-merge-mode)
@@ -2081,7 +2136,7 @@ The current filename supplies the local slug evidence used by matched-pull tests
            (jaunder--make-reconcile-report :root root :rows (list row)) report-buffer)
           (setq session (jaunder--make-reconcile-merge-session
                          :row row :report-buffer report-buffer :path path
-                         :scratch scratch))
+                         :scratch scratch :ediff-ready t))
           (with-current-buffer scratch
             (jaunder-reconcile-merge-mode)
             (insert (replace-regexp-in-string "Body" "Merged author text" original))

@@ -247,9 +247,12 @@ reviewed local Post. Exiting Ediff **never** publishes. In the scratch,
 `C-c C-c` explicitly confirms completion after fresh local and remote checks;
 `C-c C-k` cancels but retains the scratch; `C-c C-d` discards it only after
 confirmation. Killing the scratch buffer also asks before discarding it. An
-initial staging failure opens no scratch. Once opened, edits survive
-cancellation, blocked completion, an unknown remote outcome, or a partial commit
-so they can be inspected later.
+initial staging or Ediff setup failure opens no finishable scratch. If Ediff
+fails after creating its C result, that result remains available for inspection
+or explicit discard but cannot be published; reopen a fresh reconciliation
+report and merge session after fixing Ediff. Once a two-way result is open,
+edits survive cancellation, blocked completion, an unknown remote outcome, or a
+partial commit so they can be inspected later.
 
 A rejected conditional PUT changes neither Post. Uploaded Media or verified
 Local Media Copies may persist even if a later Post action blocks. If a PUT
