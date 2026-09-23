@@ -2903,13 +2903,14 @@ buffer, and the fresh Member identity and strong ETag; no later ETag is silently
 adopted. Keep-local prepares authored content without a local Post metadata
 write, then sends a conditional PUT with the reviewed `If-Match`. Keep-remote
 stages the Member and Media and reuses the matched-pull final checks and atomic
-replacement/rename. Ediff compares read-only local and staged remote snapshots;
-its separate editable scratch result applies only authored fields. Client-owned
-identity, slug and synchronization metadata come from the reviewed local Post.
-Exiting Ediff cannot publish: explicit completion rechecks both sides and sends
-conditionally before installing the merge locally. Initial staging failure
-creates no scratch; cancellation or a blocked/unknown/partial finish retains
-existing edited scratch until explicitly discarded.
+replacement/rename. Two-way Ediff compares read-only local and staged remote
+snapshots; its C merge output is the separate editable scratch result, so Ediff
+copy actions and direct edits land on that result. Client-owned identity, slug
+and synchronization metadata come from the reviewed local Post. Exiting Ediff
+cannot publish: explicit completion rechecks both sides and sends conditionally
+before installing the merge locally. Initial staging failure creates no scratch;
+cancellation or a blocked/unknown/partial finish retains existing edited scratch
+until explicitly discarded.
 
 A rejected PUT preserves both Posts, whereas a lost response reports an
 **unknown remote outcome** without retrying or checkpointing the local Post. A

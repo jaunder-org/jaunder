@@ -237,17 +237,19 @@ being adopted as a new baseline. A failure in one row does not undo earlier
 successes or stop later eligible Posts; cancellation takes effect only between
 Posts.
 
-For `e`, select exactly one conflict row. Ediff compares read-only snapshots of
-the actual local and staged remote Post; an independent Org merge scratch starts
-with the local version. Edit its authored fields (title, body, summary, tags,
-audiences, date and publication state) as needed. Identity, slug and sync
-markers in scratch are ignored and restored from the reviewed local Post.
-Exiting Ediff **never** publishes. In the scratch, `C-c C-c` explicitly confirms
-completion after fresh local and remote checks; `C-c C-k` cancels but retains
-the scratch; `C-c C-d` discards it only after confirmation. Killing the scratch
-buffer also asks before discarding it. An initial staging failure opens no
-scratch. Once opened, edits survive cancellation, blocked completion, an unknown
-remote outcome, or a partial commit so they can be inspected later.
+For `e`, select exactly one conflict row. Two-way Ediff compares read-only
+snapshots of the actual local and staged remote Post; **Ediff's merge output**
+is the independent editable Org scratch. Copy either side's hunks through Ediff
+or edit its authored fields (title, body, summary, tags, audiences, date and
+publication state) directly. There is no saved common content ancestor.
+Identity, slug and sync markers in scratch are ignored and restored from the
+reviewed local Post. Exiting Ediff **never** publishes. In the scratch,
+`C-c C-c` explicitly confirms completion after fresh local and remote checks;
+`C-c C-k` cancels but retains the scratch; `C-c C-d` discards it only after
+confirmation. Killing the scratch buffer also asks before discarding it. An
+initial staging failure opens no scratch. Once opened, edits survive
+cancellation, blocked completion, an unknown remote outcome, or a partial commit
+so they can be inspected later.
 
 A rejected conditional PUT changes neither Post. Uploaded Media or verified
 Local Media Copies may persist even if a later Post action blocks. If a PUT

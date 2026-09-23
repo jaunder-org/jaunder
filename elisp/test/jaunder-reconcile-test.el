@@ -1560,6 +1560,40 @@ The current filename supplies the local slug evidence used by matched-pull tests
      :member (jaunder-reconcile-test--member id slug)
      :local-sha256 (jaunder--reconcile-file-sha256 path) :remote-etag "\"old\"")))
 
+(ert-deftest jaunder-reconcile-conflict-preflight-blocks-stale-clean-visiting-buffer ()
+  "Reviewed disk bytes cannot authorize stale clean in-memory authored content."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-stale-clean-" t)))
+         (path (expand-file-name "old.org" root))
+         (old (jaunder-reconcile-test--pulled-bytes "7" "old" "\"saved\""))
+         (new (concat old "\nExternal authored revision.\n"))
+         (jaunder-reconcile-report (jaunder--make-reconcile-report :root root))
+         visiting)
+    (unwind-protect
+        (progn
+          (with-temp-file path (insert old))
+          (setq visiting (find-file-noselect path))
+          (with-temp-file path (insert new))
+          (let ((row (jaunder-reconcile-test--matched-pull-row path "old" 'conflict)))
+            (should-not (with-current-buffer visiting (buffer-modified-p)))
+            (should (equal (jaunder--reconcile-file-sha256 path)
+                           (jaunder-reconcile-row-local-sha256 row)))
+            (cl-letf (((symbol-function 'jaunder--http-request)
+                       (lambda (&rest _) (ert-fail "stale buffer permitted Member request")))
+                      ((symbol-function 'jaunder--reconcile-pull-unique-match)
+                       (lambda (_) '(:ok t))))
+              (dolist (action (list #'jaunder--reconcile-conflict-preflight
+                                    #'jaunder--reconcile-keep-local-row
+                                    #'jaunder--reconcile-keep-remote-row
+                                    #'jaunder--reconcile-merge-stage))
+                (should (eq (plist-get (funcall action row) :reason)
+                            'local-buffer-stale)))))
+          (should (equal (with-temp-buffer
+                           (insert-file-contents-literally path) (buffer-string)) new)))
+      (when (buffer-live-p visiting)
+        (with-current-buffer visiting (set-buffer-modified-p nil))
+        (kill-buffer visiting))
+      (delete-directory root t))))
+
 (ert-deftest jaunder-reconcile-conflict-preflight-refuses-other-report-states ()
   "No other classification may turn a reviewed selection into resolution authority."
   (dolist (state '(server-only server-ahead unchanged local-ahead
@@ -1739,7 +1773,7 @@ The current filename supplies the local slug evidence used by matched-pull tests
          (local-bytes (jaunder-reconcile-test--pulled-bytes "7" "old" "\"saved\""))
          (remote-bytes (jaunder-reconcile-test--pulled-bytes "7" "old" "\"old\""))
          (report-buffer (generate-new-buffer "*Jaunder merge test*"))
-         row scratch seen)
+         row scratch seen ediff-output)
     (unwind-protect
         (progn
           (with-temp-file path (insert local-bytes))
@@ -1757,15 +1791,27 @@ The current filename supplies the local slug evidence used by matched-pull tests
                          (list :id "7" :slug "old" :etag "\"old\""
                                :bytes remote-bytes)))
                       ((symbol-function 'ediff-buffers)
-                       (lambda (a b &rest _)
+                       (lambda (&rest _) (ert-fail "must use Ediff merge output")))
+                      ((symbol-function 'ediff-merge-buffers)
+                       (lambda (a b &optional startup _job _file)
                          (setq seen (list (with-current-buffer a (buffer-string))
-                                          (with-current-buffer b (buffer-string)))))))
+                                          (with-current-buffer b (buffer-string)))
+                               ediff-output (generate-new-buffer " *Ediff result fixture*"))
+                         (with-current-buffer ediff-output (insert local-bytes))
+                         (with-temp-buffer
+                           (setq-local ediff-buffer-C ediff-output)
+                           (dolist (hook startup) (funcall hook))
+                           ;; This is Ediff writing into its own C buffer.
+                           (with-current-buffer ediff-output
+                             (goto-char (point-max))
+                             (insert "\nChoice copied via Ediff\n"))))))
               (setq scratch (jaunder-reconcile-merge-selected))))
           (should (equal seen (list local-bytes remote-bytes)))
+          (should (eq scratch ediff-output))
           (should (buffer-live-p scratch))
           (with-current-buffer scratch
             (should (derived-mode-p 'org-mode))
-            (should (equal (buffer-string) local-bytes))
+            (should (string-match-p "Choice copied via Ediff" (buffer-string)))
             (goto-char (point-max)) (insert "\nMerged authored content\n")
             (jaunder-reconcile-merge-cancel)
             (should (string-match-p "Merged authored content" (buffer-string))))
@@ -1818,6 +1864,47 @@ The current filename supplies the local slug evidence used by matched-pull tests
                           'etag-stale))
               (should-not (get-buffer (jaunder--reconcile-merge-scratch-name
                                        row root))))))
+      (when (buffer-live-p report-buffer) (kill-buffer report-buffer))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-reconcile-merge-direct-kill-cleans-failed-ediff-snapshots ()
+  "A confirmed C-x k after Ediff startup failure cannot leak owned snapshots."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-merge-kill-" t)))
+         (path (expand-file-name "old.org" root))
+         (bytes (jaunder-reconcile-test--pulled-bytes "7" "old" "\"saved\""))
+         (report-buffer (generate-new-buffer "*Jaunder merge kill report*"))
+         row scratch session consent)
+    (unwind-protect
+        (progn
+          (with-temp-file path (insert bytes))
+          (setq row (jaunder-reconcile-test--matched-pull-row path "old" 'conflict))
+          (jaunder--render-reconcile-report
+           (jaunder--make-reconcile-report :root root :rows (list row)) report-buffer)
+          (with-current-buffer report-buffer
+            (puthash "post:7" t jaunder-reconcile-marks)
+            (cl-letf (((symbol-function 'jaunder--call-with-blog)
+                       (lambda (_root thunk) (funcall thunk)))
+                      ((symbol-function 'jaunder--reconcile-conflict-preflight)
+                       (lambda (_) '(:ok t :etag "\"old\"")))
+                      ((symbol-function 'jaunder--pull-stage-member)
+                       (lambda (&rest _)
+                         (list :id "7" :slug "old" :etag "\"old\"" :bytes bytes)))
+                      ((symbol-function 'ediff-merge-buffers)
+                       (lambda (&rest _) (error "Ediff unavailable"))))
+              (setq scratch (jaunder-reconcile-merge-selected))))
+          (setq session (buffer-local-value 'jaunder-reconcile-merge-session scratch))
+          (should (buffer-live-p (jaunder-reconcile-merge-session-local-view session)))
+          (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) consent)))
+            (should-not (kill-buffer scratch))
+            (should (buffer-live-p scratch))
+            (setq consent t)
+            (should (kill-buffer scratch)))
+          (should-not (buffer-live-p (jaunder-reconcile-merge-session-local-view session)))
+          (should-not (buffer-live-p (jaunder-reconcile-merge-session-remote-view session))))
+      (when (buffer-live-p scratch)
+        (with-current-buffer scratch
+          (setq-local jaunder-reconcile-merge-allow-kill t))
+        (kill-buffer scratch))
       (when (buffer-live-p report-buffer) (kill-buffer report-buffer))
       (delete-directory root t))))
 
@@ -2591,6 +2678,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
           (with-temp-file path (insert (jaunder-reconcile-test--pulled-bytes "8" "old" "\"old\"")))
           (setf (jaunder-reconcile-row-local-sha256 row)
                 (jaunder--reconcile-file-sha256 path))
+          (should (eq (jaunder--reconcile-pull-preflight row '(:slug "old"))
+                      'local-buffer-stale))
+          (with-current-buffer buffer (revert-buffer t t))
           (should (eq (jaunder--reconcile-pull-preflight row '(:slug "old"))
                       'matched-identity-changed)))
       (when (buffer-live-p buffer) (kill-buffer buffer))
