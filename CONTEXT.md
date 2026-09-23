@@ -121,9 +121,21 @@ reference as ownership of another user's Media Record.
 interpretation for AtomPub `type="text"` content. Real HTML
 (`type="html"`/`xhtml"`) always overrides to `Html` regardless of this setting.
 
-**Default Audience**: The instance-wide audience applied when a new Post has no
-explicit audience. It is exactly `Public`, `Subscribers`, or `Private`; a Named
-audience is per-author and cannot be an instance-wide default.
+**Site Default Audience**: The operator-controlled instance-wide fallback used
+when a new Post has no explicit audience and its author has no User Default
+Audience. It is exactly `Public`, `Subscribers`, or `Private`.
+
+**User Default Audience**: A User's optional override of the Site Default
+Audience for their newly created Posts. It is exactly `Public`, `Subscribers`,
+or `Private`; leaving it unset means “use the Site Default Audience.” Named
+Audiences are excluded because their independent lifecycle could otherwise
+silently invalidate or change the meaning of the default.
+
+**Effective Default Audience**: The audience resolved for a new Post that has no
+explicit audience: its author's User Default Audience when set, otherwise the
+Site Default Audience. It never changes an existing Post. _Avoid_: Default
+Audience without a qualifier when discussing stored configuration, because it is
+ambiguous between the site and user settings.
 
 **Deleted Post**: A locally authored Post retained under a deletion tombstone
 but absent from active web, Syndication Feed, and AtomPub Collection surfaces.

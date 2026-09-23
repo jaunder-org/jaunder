@@ -780,11 +780,16 @@ The reference is opaque inside its channel namespace, non-blank in Rust, and
 zero-length-rejected by both schemas. Typed reads validate before projecting
 display text; migration aborts rather than inventing or deleting an invalid
 identity (`docs/adr/0151-subscriber-reference-invariant.md`,
-[ADR-0020](adr/0020-content-visibility-and-subscription-model.md)). The
-instance-wide Default Audience is separately the closed
-`DefaultAudience::{Public, Subscribers, Private}` value: it cannot be a
-per-author `Named` target and widens to `AudienceTarget` only at the web and
-AtomPub per-Post boundaries.
+[ADR-0020](adr/0020-content-visibility-and-subscription-model.md)). Defaulting
+is a hierarchy of closed `DefaultAudience::{Public, Subscribers, Private}`
+values. The operator-owned **Site Default Audience** is the instance fallback;
+an optional author-owned **User Default Audience** overrides it; the **Effective
+Default Audience** is the resolved value used by web and AtomPub creation when
+no audience is explicit. Neither stored default admits a per-author `Named`
+target, whose independent lifecycle could silently invalidate or change a
+default, and neither mutates existing Posts. The resolved value widens to
+`AudienceTarget` only at per-Post boundaries
+([hierarchical Default Audience](adr/drafts/hierarchical-default-audience.md)).
 
 **Local Post lifecycle.** A Post row is durable canonical identity and latest
 state. Storage treats every meaningful top-level content, tag, audience, media,
@@ -1027,12 +1032,12 @@ canonical `public`, `subscribers`, `private`, or `named:<id>` tokens. Public,
 Subscribers, and Named targets compose by union and remain represented even when
 Public dominates effective visibility; Private represents the empty set and
 stands alone. Incoming Atom audience is structured presence and wins as one
-complete set over Org-header audience; omission retains Default Audience on
-create and preserves current audience on update when no Org header supplies it.
-Responses order Public, then Subscribers, then Named IDs ascending, and the same
-projection enters the strong Member ETag. Only the Jaunder namespace, supported
-version `1`, and `audience` feature token together advertise support, and an
-explicit-audience client refuses mutation without them
+complete set over Org-header audience; omission uses the Effective Default
+Audience on create and preserves current audience on update when no Org header
+supplies it. Responses order Public, then Subscribers, then Named IDs ascending,
+and the same projection enters the strong Member ETag. Only the Jaunder
+namespace, supported version `1`, and `audience` feature token together
+advertise support, and an explicit-audience client refuses mutation without them
 ([AtomPub Post audience round-trip](adr/0207-atompub-post-audience-round-trip.md)).
 
 `CollectionDecl::accept` models Service Document discovery ranges with the
@@ -2469,11 +2474,18 @@ storage failures propagate. Operators change the same closed-registry value
 through either `site-config` or an independently saved Media Uploads card on
 `/admin/site`; neither byte limits nor quotas carry capability semantics.
 
-`posts.default_audience` declares that `DefaultAudience` type directly in the
-same registry. `SiteConfigStorage` exposes the closed type at its getter/setter
-boundary; an absent or unparseable stored row defensively reads as `Private`,
-while database errors propagate. The stored tokens and parser come from the
-closed-enum convention rather than a config-specific matcher
+`posts.default_audience` stores the Site Default Audience and declares the
+closed `DefaultAudience` type directly in the same registry. `SiteConfigStorage`
+exposes that type at its getter/setter boundary; an absent or unparseable stored
+row defensively reads as `Private`, while database errors propagate. Each User
+may separately store an optional User Default Audience; absence inherits the
+current site value rather than copying it, while a malformed user value rejects
+resolution rather than inheriting a potentially broader site value. Post
+creation resolves the User value over the Site value at the boundary, while
+explicit input wins and existing Posts remain unchanged
+([hierarchical Default Audience](adr/drafts/hierarchical-default-audience.md)).
+The stored tokens and parser come from the closed-enum convention rather than a
+config-specific matcher
 ([ADR-0091](adr/0091-text-enum-closed-string-enum-convention.md)).
 
 `ThemeStorage` owns typed site and author theme selections. A selection is
