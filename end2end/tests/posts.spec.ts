@@ -1091,7 +1091,10 @@ test("full composer: narrow layout stays reachable and format round-trips", asyn
   const audience = page.getByRole("group", { name: "Audience" });
   await expect(audience).toBeVisible();
   await expect(
-    audience.getByRole("combobox", { name: "Audience" }),
+    audience.getByRole("checkbox", { name: "Public" }),
+  ).toBeVisible();
+  await expect(
+    audience.getByRole("checkbox", { name: "Subscribers" }),
   ).toBeVisible();
 
   await openComposerControl(page, "Format");
@@ -1231,7 +1234,7 @@ test("edit page: format control prefills accessibly and round-trips a change", a
   await expect(
     page
       .getByRole("group", { name: "Audience" })
-      .getByRole("combobox", { name: "Audience" }),
+      .getByRole("checkbox", { name: "Public" }),
   ).toBeVisible();
 
   await openComposerControl(page, "Format");
@@ -1262,62 +1265,114 @@ test("edit page: format control prefills accessibly and round-trips a change", a
   await expectRenderedFormat(page, "markdown");
 });
 
-test("edit page pre-selects the post's current audience", async ({
+test("Post audience picker preserves union targets and Private across save and reopen", async ({
   registeredPage,
 }) => {
   test.slow();
-  // Characterization test (#643): opening the editor must render the post's
-  // stored base audience and named-audience checkbox selection. Pins the seed
-  // behavior before it is refactored from a post-mount Effect into the Suspense
-  // block; must pass on the current (unrefactored) code too. The picker renders
-  // only for unpublished posts, so this targets a draft.
-
-  // A named audience must exist for its checkbox to appear in the picker.
   const page = await registeredPage("/audiences");
-  await page.fill('input[name="name"]', "Confidants");
-  await click(page, 'button:has-text("Create")');
-  await expect(
-    page.locator(".j-audience-item", { hasText: "Confidants" }),
-  ).toBeVisible();
+  for (const name of ["Confidants", "Family"]) {
+    await page.fill('input[name="name"]', name);
+    await click(page, 'button:has-text("Create")');
+    await expect(
+      page.locator(".j-audience-item", { hasText: name }),
+    ).toBeVisible();
+  }
 
-  // Reach the full composer through the authenticated sidebar rather than
-  // taking a second document load after managing the audience.
   await openComposerFromSidebar(page);
   await openComposerControl(page, "Audience");
   const audience = page.getByRole("group", { name: "Audience" });
-  await expect(
-    audience.getByText("Choose who can see", { exact: false }),
-  ).toHaveCount(0);
-  await expect(
-    audience.getByText("Also share with", { exact: true }),
-  ).toBeVisible();
-  const audienceBase = audience.getByRole("combobox", { name: "Audience" });
+  const trigger = page
+    .locator(".j-composer-control-summary")
+    .filter({ hasText: "Audience" });
+  const publicChoice = audience.getByRole("checkbox", { name: "Public" });
+  const subscribers = audience.getByRole("checkbox", { name: "Subscribers" });
   const confidants = audience.getByRole("checkbox", { name: "Confidants" });
-  await expect(audienceBase).toBeVisible();
-  await expect(audienceBase).toHaveValue("private");
-  await expect(confidants).toBeDisabled();
-
-  await audienceBase.selectOption("subscribers");
-  await expect(confidants).toBeEnabled();
+  const family = audience.getByRole("checkbox", { name: "Family" });
+  await trigger.focus();
+  await trigger.press("Enter");
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+  await trigger.press("Enter");
+  await expect(trigger).toHaveAttribute("aria-expanded", "true");
+  await page.keyboard.press("Tab");
+  await expect(publicChoice).toBeFocused();
+  await expect(trigger).toContainText("Private");
+  await expect(
+    audience.getByText("Private — only you can see this Post."),
+  ).toBeVisible();
+  await publicChoice.check();
+  await subscribers.check();
   await confidants.check();
+  await family.check();
+  await expect(trigger).toContainText("Public");
   await page.fill(SEL.postBody, "# Targeted Draft\n\nbody for targeted draft");
-  await expect(page.locator(SEL.publishButton("false"))).toBeEnabled();
   await click(page, SEL.publishButton("false"));
   await waitForSelector(page, SEL.saveSummary);
 
-  // Reach the draft's edit page through the shared in-app navigation hops.
+  // Each hop reloads the persisted target set rather than trusting picker state.
   await followPermalink(page, page.locator(SEL.saveSummary));
   await openEditor(page);
   await openComposerControl(page, "Audience");
-  const editedAudience = page.getByRole("group", { name: "Audience" });
-  const editedAudienceBase = editedAudience.getByRole("combobox", {
-    name: "Audience",
-  });
-  await expect(editedAudienceBase).toHaveValue("subscribers");
+  const edited = page.getByRole("group", { name: "Audience" });
+  await expect(edited.getByRole("checkbox", { name: "Public" })).toBeChecked();
   await expect(
-    editedAudience.getByRole("checkbox", { name: "Confidants" }),
+    edited.getByRole("checkbox", { name: "Subscribers" }),
   ).toBeChecked();
-  await expect(page.locator(SEL.publishButton("false"))).toBeEnabled();
+  await expect(
+    edited.getByRole("checkbox", { name: "Confidants" }),
+  ).toBeChecked();
+  await expect(edited.getByRole("checkbox", { name: "Family" })).toBeChecked();
+  await edited.getByRole("checkbox", { name: "Public" }).uncheck();
+  await expect(trigger).toContainText("Subscribers");
+  await edited.getByRole("checkbox", { name: "Public" }).check();
+  await expect(
+    edited.getByRole("checkbox", { name: "Confidants" }),
+  ).toBeChecked();
+  await edited.getByRole("checkbox", { name: "Public" }).uncheck();
+  await click(page, SEL.publishButton("false"));
+  await waitForSelector(page, SEL.saveSummary);
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  await openEditor(page);
+  await openComposerControl(page, "Audience");
+  const narrower = page.getByRole("group", { name: "Audience" });
+  await expect(
+    narrower.getByRole("checkbox", { name: "Public" }),
+  ).not.toBeChecked();
+  await expect(
+    narrower.getByRole("checkbox", { name: "Subscribers" }),
+  ).toBeChecked();
+  await expect(
+    narrower.getByRole("checkbox", { name: "Confidants" }),
+  ).toBeChecked();
+  await expect(
+    narrower.getByRole("checkbox", { name: "Family" }),
+  ).toBeChecked();
+  await narrower.getByRole("checkbox", { name: "Subscribers" }).uncheck();
+  await expect(trigger).toContainText("2 audiences");
+  await narrower.getByRole("checkbox", { name: "Family" }).uncheck();
+  await expect(trigger).toContainText("1 audience");
+  await click(page, SEL.publishButton("false"));
+  await waitForSelector(page, SEL.saveSummary);
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  await openEditor(page);
+  await openComposerControl(page, "Audience");
+  await expect(
+    page.getByRole("checkbox", { name: "Confidants" }),
+  ).toBeChecked();
+  await click(page, ".j-audience-clear");
+  await expect(trigger).toContainText("Private");
+  await click(page, SEL.publishButton("false"));
+  await waitForSelector(page, SEL.saveSummary);
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  await openEditor(page);
+  await openComposerControl(page, "Audience");
+  const privatePicker = page.getByRole("group", { name: "Audience" });
+  await expect(
+    privatePicker.getByRole("checkbox", { name: "Confidants" }),
+  ).not.toBeChecked();
+  await expect(
+    privatePicker.getByRole("checkbox", { name: "Public" }),
+  ).not.toBeChecked();
+  await expect(trigger).toContainText("Private");
 });
 
 test("editing an invalid or nonexistent post shows not-found", async ({

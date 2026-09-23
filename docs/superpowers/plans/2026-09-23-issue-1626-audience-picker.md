@@ -50,7 +50,7 @@ Out:
   - Verification: focused host transition tests and browser flows for delayed
     default, failed default/current selection, and failed Named-audience load
     without a destructive write.
-- [ ] Task 3: Prove the complete editor interaction and finish its visual
+- [x] Task 3: Prove the complete editor interaction and finish its visual
       presentation.
   - Contract: No new data model; use the picker and load guards from tasks 1–2
     across `/posts/new`, inline Home `/app`, and the existing-Post editor. Keep

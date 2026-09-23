@@ -37,7 +37,7 @@ pub(super) fn AudiencePickerWithState(
             .with(|current| !current.public && !current.subscribers && current.named.is_empty())
     };
     view! {
-        <fieldset class="j-form-field j-composer-group j-audience-picker">
+        <fieldset class="j-form-field j-composer-group j-audience-picker" aria-label="Audience">
             <legend class="j-form-label">"Audience"</legend>
             <Show when=is_private>
                 <p class="j-form-help">"Private — only you can see this Post."</p>

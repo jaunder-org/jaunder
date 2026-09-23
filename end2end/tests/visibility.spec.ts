@@ -223,9 +223,9 @@ test("Subscribers post: visible after Subscribe, hidden again after Unsubscribe"
 // Targeting model (verified from `audience_selection_to_targets` +
 // `resolution_where`): a post's audience is the UNION of its targets — a viewer
 // is admitted if they match ANY target. The editor picker expresses a named
-// audience as `base ∪ Named(id)`; a `private` base drops the named set, so the
-// least-broad base that still carries a named audience is `subscribers`. We
-// therefore target the Friends post as `[Subscribers, Named(Friends)]` and keep
+// audience as independent Public, Subscribers, and Named targets; zero checked
+// targets is Private. We target the Friends post as
+// `[Subscribers, Named(Friends)]` and keep
 // the excluded user Y OUTSIDE the subscriber set, so the audience gate is the
 // sole reason Y is denied. X is an active subscriber added to Friends and is
 // admitted; Y (not subscribed, not in Friends) is denied.

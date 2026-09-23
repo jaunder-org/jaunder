@@ -144,7 +144,13 @@ async function createLegacyPostViaApi(
           publish: true,
           ...(opts.publishAt ? { publish_at: opts.publishAt } : {}),
           ...(opts.audience
-            ? { audience: { base: opts.audience, named: [] } }
+            ? {
+                audience: {
+                  public: opts.audience === "public",
+                  subscribers: opts.audience === "subscribers",
+                  named: [],
+                },
+              }
             : {}),
         },
       },
