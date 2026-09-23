@@ -450,12 +450,14 @@ pub fn PostCreateForm(
         move |outcome| {
             if posts::notify_create_settlement(outcome, on_mutation, on_success) {
                 state.reset();
-                baseline.set(posts::CreationComposerSnapshot::capture(
-                    state,
-                    slug_field,
-                    schedule.date.get(),
-                    schedule.time.get(),
-                ));
+                baseline.set(untrack(|| {
+                    posts::CreationComposerSnapshot::capture(
+                        state,
+                        slug_field,
+                        schedule.date.get(),
+                        schedule.time.get(),
+                    )
+                }));
             }
         },
     );
