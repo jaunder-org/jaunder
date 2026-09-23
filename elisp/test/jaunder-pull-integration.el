@@ -94,6 +94,7 @@
                                                         (should-not (string-match-p "^#\\+TITLE:" bytes))
                                                         (should (string-match-p
                                                                  (concat "\\`#\\+PROPERTY: JAUNDER_STATUS draft\n"
+                                                                         "#\\+PROPERTY: JAUNDER_AUDIENCE private\n"
                                                                          "#\\+PROPERTY: JAUNDER_FORMAT org\n"
                                                                          "#\\+PROPERTY: JAUNDER_SLUG "
                                                                          (regexp-quote

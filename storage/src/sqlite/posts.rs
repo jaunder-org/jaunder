@@ -25,6 +25,10 @@ type MediaRefRow = (
     common::media::MediaReferenceKind,
     common::media::MediaReferenceForm,
 );
+type AudienceRow = (
+    common::visibility::TargetKind,
+    Option<common::ids::AudienceId>,
+);
 
 /// SQLite-backed post storage.
 pub type SqlitePostStorage = PostStore<Sqlite>;
@@ -47,6 +51,20 @@ async fn fetch_post(
     )
     .bind_storage(post_id)
     .fetch_one(&mut *conn)
+    .await
+}
+
+async fn fetch_post_audience_rows(
+    conn: &mut sqlx::SqliteConnection,
+    post_id: PostId,
+) -> Result<Vec<AudienceRow>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT tk.name, pa.audience_id FROM post_audiences pa
+         JOIN target_kinds tk ON tk.kind_id = pa.target_kind_id
+         WHERE pa.post_id = $1",
+    )
+    .bind_storage(post_id)
+    .fetch_all(conn)
     .await
 }
 
@@ -191,26 +209,25 @@ impl PostDialect for Sqlite {
         .fetch_all(&mut *conn)
         .await?;
         let desired_tags = input.tags.as_deref().unwrap_or(&tags);
-        if let Some(error) = lifecycle::update_expectation_error(post_id, &existing, &tags, input) {
+        let existing_audiences = fetch_post_audience_rows(conn, post_id).await?;
+        let current_audiences = existing_audiences
+            .iter()
+            .filter_map(|(kind, audience_id)| {
+                visibility::audience_target_from_row(*kind, *audience_id)
+            })
+            .collect::<Vec<_>>();
+        if let Some(error) = lifecycle::update_expectation_error(
+            post_id,
+            &existing,
+            &tags,
+            &current_audiences,
+            input,
+        ) {
             return Err(error);
         }
         let previous = fetch_post(conn, post_id).await?;
         let existing_tags = previous.tags.clone();
         let tag_diff = tags::post_tag_diff(&existing_tags, desired_tags);
-        let existing_audiences = sqlx::query_as::<
-            _,
-            (
-                common::visibility::TargetKind,
-                Option<common::ids::AudienceId>,
-            ),
-        >(
-            "SELECT tk.name, pa.audience_id FROM post_audiences pa
-             JOIN target_kinds tk ON tk.kind_id = pa.target_kind_id
-             WHERE pa.post_id = $1",
-        )
-        .bind_storage(post_id)
-        .fetch_all(&mut *conn)
-        .await?;
         let previous_has_public_audience = existing_audiences
             .iter()
             .any(|(kind, _)| matches!(kind, common::visibility::TargetKind::Public));

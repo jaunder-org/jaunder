@@ -67,6 +67,52 @@ steps in `cargo xtask check` and `cargo xtask validate` — both via
 `devtool check` — and, through the same implementation, as part of the
 `static-checks` Nix check (so `nix flake check` covers them too).
 
+## Post audience metadata
+
+An Org Post may declare its explicit audience with repeated file properties:
+
+```org
+#+PROPERTY: JAUNDER_AUDIENCE public
+#+PROPERTY: JAUNDER_AUDIENCE subscribers
+#+PROPERTY: JAUNDER_AUDIENCE named:42
+```
+
+Accepted values are `public`, `subscribers`, `private`, and `named:<id>`, where
+`<id>` is a positive canonical decimal integer (no sign, zero, or leading
+zeros). `public`, `subscribers`, and any number of distinct Named audiences
+compose as a union. `private` is the empty target set and must appear alone.
+Jaunder writes pulled properties in canonical order: Public, Subscribers, then
+Named IDs ascending.
+
+Omitting every `JAUNDER_AUDIENCE` property is intentional compatibility
+behavior, not Private: create uses the server's Default Audience and update
+preserves the Post's current audience. Use an explicit `private` property when
+that is the intended target set. Named audiences currently require their raw
+numeric IDs; the Emacs client has no discovery or friendly-name picker.
+
+Before publishing an explicit audience, the client requires the Service Document
+to advertise the `audience` feature on the exact Jaunder extension namespace at
+version `1`. It fails before Local Post Link localization, Media upload, or Post
+mutation when that evidence is absent or malformed.
+
+### One-time ETag rebaseline after upgrading
+
+Audience now contributes to every strong AtomPub Member ETag. After upgrading a
+server, previously synchronized Posts therefore show one expected ETag mismatch:
+
+1. Run `M-x jaunder-reconcile`.
+2. For an unchanged `server-ahead` Post, mark it and press `f` to fetch the
+   remote representation. This installs explicit canonical audience properties
+   and the new ETag.
+3. For a conflict, first copy the local file outside the managed blog root. Then
+   fetch the remote Post to capture its current content, audience, and ETag;
+   reapply the intended local edits from the preserved copy; and publish
+   normally so the update remains conditional on that fetched ETag.
+
+Do not resolve a conflict by deleting `JAUNDER_SYNCED`, guessing which side
+wins, or blindly replacing the remote audience. Reconciliation deliberately
+requires an explicit review when both local and remote state may have changed.
+
 ### Live integration tests
 
 The `*-integration.el` runner boots one real `jaunder` server for the full

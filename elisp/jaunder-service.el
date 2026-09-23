@@ -26,8 +26,9 @@
 (require 'cl-lib)
 (require 'dom)
 (require 'subr-x)
+(require 'xml)
+(require 'jaunder-atom)
 (require 'jaunder-config)
-(require 'jaunder-entry)
 (require 'jaunder-transport)
 (require 'jaunder-warn)
 
@@ -35,6 +36,9 @@
   "Session-scoped alist of BASE-URL -> list of advertised feature tokens.
 Populated on the first successful service-doc fetch per base-url; failures are
 not cached, so a later publish may retry.  Reset only by restarting Emacs.")
+
+(defvar jaunder--audience-capability-cache nil
+  "Session-scoped list of base URLs with proven audience capability.")
 
 (defconst jaunder--entry-content-type "application/atom+xml;type=entry"
   "AtomPub media type accepted by Jaunder's Posts Collection.")
@@ -44,17 +48,51 @@ not cached, so a later publish may retry.  Reset only by restarting Emacs.")
   (condition-case nil
       (with-temp-buffer
         (insert (or body ""))
-        (let ((dom (libxml-parse-xml-region (point-min) (point-max))))
-          (if (and dom (eq (dom-tag dom) 'service))
+        (let ((dom (car (xml-parse-region (point-min) (point-max)))))
+          (if (and dom (eq (jaunder--atom-local-name (dom-tag dom)) 'service))
               dom
             'unknown)))
     (error 'unknown)))
 
+(defun jaunder--service-descendants (node tag)
+  "Return NODE descendants whose local XML name is TAG, in document order."
+  (let (matches)
+    (dolist (child (dom-children node) matches)
+      (when (listp child)
+        (when (eq (jaunder--atom-local-name (dom-tag child)) tag)
+          (setq matches (append matches (list child))))
+        (setq matches
+              (append matches (jaunder--service-descendants child tag)))))))
+
+(defun jaunder--service-extensions (dom)
+  "Return all direct supported Jaunder extension markers in DOM."
+  (let* ((root-namespaces (jaunder--atom-namespace-context dom nil))
+         (workspaces (jaunder--atom-direct-elements-in-namespace
+                      dom 'workspace jaunder--app-ns root-namespaces))
+         extensions)
+    (dolist (workspace workspaces extensions)
+      (let ((namespaces (jaunder--atom-namespace-context
+                         workspace root-namespaces)))
+        (dolist (extension
+                 (jaunder--atom-direct-elements-in-namespace
+                  workspace 'extension jaunder--atompub-ns namespaces))
+          (when (equal (dom-attr extension 'version) "1")
+            (push extension extensions)))))))
+
 (defun jaunder--service-features (dom)
-  "Return the extension feature tokens advertised by service DOM."
-  (let* ((extension (car (dom-by-tag dom 'extension)))
-         (features (and extension (dom-attr extension 'features))))
-    (if features (split-string features) '())))
+  "Return supported extension feature tokens advertised by service DOM."
+  (delete-dups
+   (apply #'append
+          (mapcar
+           (lambda (extension)
+             (let ((features (dom-attr extension 'features)))
+               (if features (split-string features) '())))
+           (jaunder--service-extensions dom)))))
+
+(defun jaunder--service-advertises-audience-p (dom)
+  "Return non-nil when DOM exactly advertises Jaunder audience version 1."
+  (and (not (eq dom 'unknown))
+       (member "audience" (jaunder--service-features dom))))
 
 (defun jaunder--parse-service-features (body)
   "Parse service-doc BODY into its advertised feature tokens.
@@ -77,13 +115,13 @@ categories are returned; categories from other Collections are ignored."
              (lambda (accept)
                (equal (string-trim (dom-inner-text accept))
                       jaunder--entry-content-type))
-             (dom-by-tag collection 'accept)))
-          (dom-by-tag dom 'collection))))
+             (jaunder--service-descendants collection 'accept)))
+          (jaunder--service-descendants dom 'collection))))
     (if (/= (length posts) 1)
         'unknown
       (let ((terms
              (mapcar (lambda (category) (dom-attr category 'term))
-                     (dom-by-tag (car posts) 'category))))
+                     (jaunder--service-descendants (car posts) 'category))))
         (if (cl-every #'jaunder--valid-tag-slug-p terms)
             terms
           'unknown)))))
@@ -101,6 +139,18 @@ Transport errors, non-2xx responses, and invalid documents never signal."
             (jaunder--parse-service-document (plist-get response :body))
           'unknown))
     (error 'unknown)))
+
+(defun jaunder--require-audience-capability (base-url audiences)
+  "Require BASE-URL to advertise audience support when AUDIENCES is explicit.
+Successful evidence is cached for the Emacs session.  Missing, malformed, or
+unsupported evidence signals before publish-side mutation begins."
+  (when (and audiences
+             (not (member base-url jaunder--audience-capability-cache)))
+    (let ((dom (jaunder--fetch-service-document base-url)))
+      (unless (jaunder--service-advertises-audience-p dom)
+        (error "jaunder: server at %s does not advertise audience feature version 1"
+               base-url))
+      (push base-url jaunder--audience-capability-cache))))
 
 (defun jaunder--fetch-service-tags (base-url)
   "Fetch BASE-URL's Posts Collection Tags, or return `unknown'."

@@ -30,7 +30,47 @@
 Holds abstract field values only; wire encoding (namespaces, media types,
 `app:draft' nesting) lives in `jaunder--atom-entry->xml'.  `body' is the
 body-only content with the metadata header block stripped."
-  title categories summary draft content-type body published)
+  title categories summary audiences draft content-type body published)
+
+(defconst jaunder--max-audience-id 9223372036854775807
+  "Largest Named audience ID accepted by the AtomPub protocol.")
+
+(defun jaunder--audience-sort-key (audience)
+  "Return the canonical sort key for validated AUDIENCE."
+  (cond
+   ((equal audience "public") '(0 0))
+   ((equal audience "subscribers") '(1 0))
+   ((equal audience "private") '(2 0))
+   (t (list 3 (string-to-number (substring audience (length "named:")))))))
+
+(defun jaunder--canonical-audiences (audiences)
+  "Validate and canonically order AUDIENCES, preserving nil as omission.
+Accepted values are `public', `subscribers', `private', and canonical positive
+`named:ID' values within the signed 64-bit range.  Duplicates are rejected and
+`private' must stand alone."
+  (when audiences
+    (unless (listp audiences)
+      (error "jaunder: audiences must be a list"))
+    (dolist (audience audiences)
+      (unless
+          (and
+           (stringp audience)
+           (or (member audience '("public" "subscribers" "private"))
+               (and (string-match-p "\\`named:[1-9][0-9]*\\'" audience)
+                    (<= (string-to-number (substring audience (length "named:")))
+                        jaunder--max-audience-id))))
+        (error "jaunder: invalid audience value %S" audience)))
+    (when (/= (length audiences) (length (delete-dups (copy-sequence audiences))))
+      (error "jaunder: duplicate audience value"))
+    (when (and (member "private" audiences) (/= (length audiences) 1))
+      (error "jaunder: private audience must stand alone"))
+    (sort (copy-sequence audiences)
+          (lambda (left right)
+            (let ((left-key (jaunder--audience-sort-key left))
+                  (right-key (jaunder--audience-sort-key right)))
+              (or (< (car left-key) (car right-key))
+                  (and (= (car left-key) (car right-key))
+                       (< (cadr left-key) (cadr right-key)))))))))
 
 (defun jaunder--ascii-tag-alphanumeric-p (character)
   "Return non-nil when CHARACTER is an ASCII letter or digit."

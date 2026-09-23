@@ -1,6 +1,8 @@
+use std::fmt::Write as _;
 use std::sync::Arc;
 
-use axum::http::StatusCode;
+use axum::body::Body;
+use axum::http::{Method, StatusCode, header};
 use common::ids::PostId;
 use common::test_support::parse_post_body;
 use common::visibility::{AudienceTarget, DefaultAudience};
@@ -9,17 +11,33 @@ use rstest_reuse::*;
 use tower::ServiceExt;
 
 use crate::helpers::{
-    atompub_get, atompub_post_xml, atompub_put_xml, body_string, create_user_and_session, make_app,
+    atompub_at, atompub_get, atompub_location, atompub_post_xml, atompub_put_xml, body_string,
+    create_user_and_session, make_app,
 };
 use storage::test_support::{Backend, backends, backends_matrix};
 
-use super::fixtures::{entry_xml, location_post_id};
+use super::fixtures::{entry_xml, etag_of, location_post_id};
+
+fn with_audiences(xml: &str, values: &[&str]) -> String {
+    let elements = values.iter().fold(String::new(), |mut elements, value| {
+        writeln!(elements, "  <j:audience>{value}</j:audience>")
+            .expect("write audience fixture element");
+        elements
+    });
+    xml.replace(
+        "<entry xmlns=\"http://www.w3.org/2005/Atom\">",
+        &format!(
+            "<entry xmlns=\"http://www.w3.org/2005/Atom\" xmlns:j=\"{}\">\n{elements}",
+            host::atompub::J_NS,
+        ),
+    )
+}
 
 /// Named audience metadata is resolved in the authenticated author's namespace;
 /// foreign and nonexistent IDs deliberately share `AtomPub`'s opaque 400 outcome.
 #[apply(backends)]
 #[tokio::test]
-async fn org_named_audiences_are_author_scoped(#[case] backend: Backend) {
+async fn structured_named_audiences_are_author_scoped(#[case] backend: Backend) {
     let env = backend.setup().await;
     let base = &env.base;
     let author = create_user_and_session(
@@ -65,12 +83,13 @@ async fn org_named_audiences_are_author_scoped(#[case] backend: Backend) {
         "foreign audience fixture",
     );
 
-    let owned_xml = entry_xml(
-        "Audience",
-        "text/org",
-        &format!(
-            "#+PROPERTY: JAUNDER_STATUS draft\n#+PROPERTY: JAUNDER_AUDIENCE named:{owned}\n\nBody"
+    let owned_xml = with_audiences(
+        &entry_xml(
+            "Audience",
+            "text/org",
+            "#+PROPERTY: JAUNDER_STATUS draft\n\nBody",
         ),
+        &[&format!("named:{owned}")],
     );
     let response = make_app!(&env, base)
         .oneshot(atompub_post_xml(&author, "posts", &owned_xml))
@@ -79,12 +98,13 @@ async fn org_named_audiences_are_author_scoped(#[case] backend: Backend) {
     assert_eq!(response.status(), StatusCode::CREATED);
 
     for audience_id in [foreign_audience.to_string(), "999999999".to_string()] {
-        let xml = entry_xml(
-            "Rejected",
-            "text/org",
-            &format!(
-                "#+PROPERTY: JAUNDER_STATUS draft\n#+PROPERTY: JAUNDER_AUDIENCE named:{audience_id}\n\nBody"
+        let xml = with_audiences(
+            &entry_xml(
+                "Rejected",
+                "text/org",
+                "#+PROPERTY: JAUNDER_STATUS draft\n\nBody",
             ),
+            &[&format!("named:{audience_id}")],
         );
         let response = make_app!(&env, base)
             .oneshot(atompub_post_xml(&author, "posts", &xml))
@@ -96,6 +116,160 @@ async fn org_named_audiences_are_author_scoped(#[case] backend: Backend) {
             "audience {audience_id} must remain opaque"
         );
     }
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn structured_audience_overrides_org_and_round_trips(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+
+    let xml = with_audiences(
+        &entry_xml(
+            "Audience",
+            "text/org",
+            "#+PROPERTY: JAUNDER_AUDIENCE private\n\nBody",
+        ),
+        &["subscribers", "public"],
+    );
+    let response = make_app!(&env, base)
+        .oneshot(atompub_post_xml(&session, "posts", &xml))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let post_id = PostId::from(location_post_id(&response));
+    assert_eq!(
+        env.posts().get_post_audiences(post_id).await.unwrap(),
+        vec![AudienceTarget::Public, AudienceTarget::Subscribers],
+        "structured Atom audience must replace the conflicting Org header",
+    );
+
+    let body = body_string(response).await;
+    let entry: host::atompub::Entry = body.parse().expect("response is an Atom entry");
+    assert_eq!(
+        host::atompub::j_audiences(&entry).unwrap(),
+        Some(vec![AudienceTarget::Public, AudienceTarget::Subscribers]),
+        "the create response must expose the complete canonical target union",
+    );
+
+    let member = make_app!(&env, base)
+        .oneshot(atompub_get(&session, &format!("posts/{post_id}")))
+        .await
+        .unwrap();
+    let body = body_string(member).await;
+    let entry: host::atompub::Entry = body.parse().expect("member is an Atom entry");
+    assert_eq!(
+        host::atompub::j_audiences(&entry).unwrap(),
+        Some(vec![AudienceTarget::Public, AudienceTarget::Subscribers]),
+    );
+
+    let collection = make_app!(&env, base)
+        .oneshot(atompub_get(&session, "posts"))
+        .await
+        .unwrap();
+    let body = body_string(collection).await;
+    let feed: host::atompub::Feed = body.parse().expect("collection is an Atom feed");
+    assert_eq!(feed.entries().len(), 1);
+    assert_eq!(
+        host::atompub::j_audiences(&feed.entries()[0]).unwrap(),
+        Some(vec![AudienceTarget::Public, AudienceTarget::Subscribers]),
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn malformed_structured_audience_is_rejected(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let xml = with_audiences(
+        &entry_xml("Audience", "text", "Body"),
+        &["public", "public"],
+    );
+
+    let response = make_app!(&env, base)
+        .oneshot(atompub_post_xml(&session, "posts", &xml))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn audience_only_update_changes_etag_and_rejects_stale_precondition(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
+    let original = with_audiences(&entry_xml("Audience", "text", "Body"), &["public"]);
+    let created = app
+        .clone()
+        .oneshot(atompub_post_xml(&session, "posts", &original))
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let old_etag = etag_of(&created);
+    let member = atompub_location(
+        created
+            .headers()
+            .get(header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap(),
+    );
+    let private = with_audiences(&entry_xml("Audience", "text", "Body"), &["private"]);
+
+    let updated = app
+        .clone()
+        .oneshot(
+            atompub_at(&session, Method::PUT, &member)
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::IF_MATCH, &old_etag)
+                .body(Body::from(private.clone()))
+                .expect("build audience update"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.status(), StatusCode::OK);
+    assert_ne!(old_etag, etag_of(&updated));
+    let body = body_string(updated).await;
+    let entry: host::atompub::Entry = body.parse().expect("update is an Atom entry");
+    assert_eq!(
+        host::atompub::j_audiences(&entry).unwrap(),
+        Some(vec![AudienceTarget::Private]),
+        "an empty stored target set must read back as explicit private",
+    );
+
+    let stale = app
+        .oneshot(
+            atompub_at(&session, Method::PUT, &member)
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::IF_MATCH, old_etag)
+                .body(Body::from(private))
+                .expect("build stale audience update"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), StatusCode::PRECONDITION_FAILED);
 }
 
 #[apply(backends)]

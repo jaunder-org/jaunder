@@ -46,10 +46,13 @@ are omitted when nil, one `<category term>' per tag, and the
 draft.  All wire knowledge (namespaces, media types, element order) lives
 here."
   (let* ((draft (jaunder-entry-draft entry))
+         (audiences (jaunder--canonical-audiences
+                     (jaunder-entry-audiences entry)))
          (attrs (append
                  (list (cons 'xmlns jaunder--atom-ns))
-                 ;; Declare the app namespace only when it is used.
-                 (when draft (list (cons 'xmlns:app jaunder--app-ns)))))
+                 ;; Declare foreign namespaces only when they are used.
+                 (when draft (list (cons 'xmlns:app jaunder--app-ns)))
+                 (when audiences (list (cons 'xmlns:j jaunder--atompub-ns)))))
          (children '()))
     (when (jaunder-entry-title entry)
       (push (list 'title nil (jaunder-entry-title entry)) children))
@@ -57,6 +60,8 @@ here."
       (push (list 'summary nil (jaunder-entry-summary entry)) children))
     (dolist (term (jaunder-entry-categories entry))
       (push (list 'category (list (cons 'term term))) children))
+    (dolist (audience audiences)
+      (push (list 'j:audience nil audience) children))
     (push (list 'content
                 (list (cons 'type (jaunder-entry-content-type entry)))
                 (or (jaunder-entry-body entry) ""))
@@ -129,12 +134,13 @@ checks that wrapper's namespace separately."
 The existing singular `content-src', `content-type', `slug', and `published'
 keys retain their first direct-child values.  The ordered plural `titles',
 `categories', `summaries', `content-nodes', `drafts', `published-values',
-`edit-uris', and `slugs' keys expose all direct-child values for Member parsing.
+`edit-uris', `slugs', and `audiences' keys expose all direct-child values for
+Member parsing.
 `content-nodes' deliberately retains DOM nodes for the later text/XHTML
 projection.  Atom metadata is accepted only from the Atom namespace,
-`app:control'/`app:draft' only from APP, and `slug' only from the Jaunder
-extension namespace.  No Member-required cardinality is enforced here, so media
-and publish responses remain valid."
+`app:control'/`app:draft' only from APP, and `slug'/`audience' only from the
+Jaunder extension namespace.  No Member-required cardinality is enforced here,
+so media and publish responses remain valid."
   (let* ((dom (with-temp-buffer
                 (insert xml)
                 (car (xml-parse-region (point-min) (point-max)))))
@@ -155,6 +161,8 @@ and publish responses remain valid."
                  dom 'link jaunder--atom-ns entry-namespaces))
          (slugs (jaunder--atom-direct-elements-in-namespace
                  dom 'slug jaunder--atompub-ns entry-namespaces))
+         (audiences (jaunder--atom-direct-elements-in-namespace
+                     dom 'audience jaunder--atompub-ns entry-namespaces))
          (drafts (apply #'append
                         (mapcar
                          (lambda (control)
@@ -187,7 +195,8 @@ and publish responses remain valid."
                                    edit-links))
           (cons 'alternate-uris (mapcar (lambda (link) (dom-attr link 'href))
                                         alternate-links))
-          (cons 'slugs (mapcar #'dom-inner-text slugs)))))
+          (cons 'slugs (mapcar #'dom-inner-text slugs))
+          (cons 'audiences (mapcar #'dom-inner-text audiences)))))
 
 (provide 'jaunder-atom)
 ;;; jaunder-atom.el ends here

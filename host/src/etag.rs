@@ -197,6 +197,7 @@ pub fn post_content_etag<'a>(
     format: &'a PostFormat,
     summary: Option<&'a PostSummary>,
     tags: impl IntoIterator<Item = &'a TagLabel>,
+    audiences: impl IntoIterator<Item = &'a common::visibility::AudienceTarget>,
     draft: bool,
 ) -> ETag {
     #[derive(Serialize)]
@@ -206,14 +207,18 @@ pub fn post_content_etag<'a>(
         format: String,
         summary: Option<&'a PostSummary>,
         tags: Vec<&'a TagLabel>,
+        audiences: Vec<String>,
         draft: bool,
     }
+    let audience_targets = audiences.into_iter().cloned().collect::<Vec<_>>();
+    let audiences = crate::atompub::canonical_audience_values(&audience_targets);
     let content = Content {
         title,
         body,
         format: format.to_string(),
         summary,
         tags: tags.into_iter().collect(),
+        audiences,
         draft,
     };
     let bytes = serde_json::to_vec(&content).unwrap_or_else(|_| Vec::new());

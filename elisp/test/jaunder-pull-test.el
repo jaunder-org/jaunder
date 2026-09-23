@@ -90,6 +90,43 @@
         ;; status, and bookkeeping block stays structured client-side.
         (should (equal (jaunder-entry-body entry) "# Body\nhttps://h/media/y.png"))))))
 
+(ert-deftest jaunder-atom->org-writes-canonical-repeated-audiences ()
+  (let ((xml (jaunder-pull-test--entry
+              "<title>Audience</title>"
+              "<published>2026-08-24T10:00:00Z</published>"
+              "<link rel=\"edit\" href=\"https://h/atompub/alice/posts/9\"/>"
+              "<j:slug>audience-post</j:slug>"
+              "<j:audience>named:17</j:audience>"
+              "<j:audience>public</j:audience>"
+              "<j:audience>subscribers</j:audience>"
+              "<content type=\"text/org\">Body</content>")))
+    (should
+     (string-match-p
+      (concat "#\\+PROPERTY: JAUNDER_STATUS published\n"
+              "#\\+PROPERTY: JAUNDER_AUDIENCE public\n"
+              "#\\+PROPERTY: JAUNDER_AUDIENCE subscribers\n"
+              "#\\+PROPERTY: JAUNDER_AUDIENCE named:17\n")
+      (jaunder-pull-test--org xml)))))
+
+(ert-deftest jaunder-atom->org-rejects-malformed-audiences ()
+  (dolist (audiences
+           '(("public" "public")
+             ("private" "subscribers")
+             ("named:01")
+             ("named:-1")))
+    (should-error
+     (jaunder-pull-test--org
+      (apply #'jaunder-pull-test--entry
+             (append
+              '("<title>Audience</title>"
+                "<published>2026-08-24T10:00:00Z</published>"
+                "<link rel=\"edit\" href=\"https://h/atompub/alice/posts/9\"/>"
+                "<j:slug>audience-post</j:slug>")
+              (mapcar (lambda (value)
+                        (format "<j:audience>%s</j:audience>" value))
+                      audiences)
+              '("<content type=\"text/org\">Body</content>")))))))
+
 (ert-deftest jaunder-atom->org-published-html-and-xhtml-bodies ()
   ;; Escaped HTML remains source text; XHTML drops only its required wrapper and
   ;; canonically serializes the ordered child nodes.

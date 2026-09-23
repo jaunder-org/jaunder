@@ -1,10 +1,14 @@
 //! Jaunder-owned `AtomPub` foreign markers.
 //!
 //! `atom_syndication` owns namespace-aware extension I/O (ADR-0089). This leaf
-//! recognizes only RFC 5023's `app:control/app:draft` and Jaunder's `j:slug`.
+//! recognizes RFC 5023's `app:control/app:draft` and Jaunder's `j:slug` and
+//! repeated `j:audience` target set.
 
 use atom_syndication::Entry;
 use atom_syndication::extension::{ExpandedName, Extension, ExtensionContent};
+use common::ids::AudienceId;
+use common::visibility::AudienceTarget;
+use thiserror::Error;
 
 use super::super::ns;
 
@@ -141,6 +145,142 @@ pub fn set_draft(entry: &mut Entry, draft: bool) {
 }
 
 // ---------------------------------------------------------------------------
+// Audience markers (j:audience) helpers
+// ---------------------------------------------------------------------------
+
+/// An invalid repeated `j:audience` representation.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+#[error("invalid Jaunder Atom audience")]
+pub struct InvalidAtomAudience;
+
+fn parse_audience(value: &str) -> Result<AudienceTarget, InvalidAtomAudience> {
+    match value {
+        "public" => Ok(AudienceTarget::Public),
+        "subscribers" => Ok(AudienceTarget::Subscribers),
+        "private" => Ok(AudienceTarget::Private),
+        _ => {
+            let id = value
+                .strip_prefix("named:")
+                .filter(|id| {
+                    let mut bytes = id.bytes();
+                    matches!(bytes.next(), Some(b'1'..=b'9'))
+                        && bytes.all(|byte| byte.is_ascii_digit())
+                })
+                .and_then(|id| id.parse::<i64>().ok())
+                .filter(|id| *id > 0)
+                .ok_or(InvalidAtomAudience)?;
+            Ok(AudienceTarget::Named(AudienceId::from(id)))
+        }
+    }
+}
+
+fn audience_value(audience: &AudienceTarget) -> String {
+    match audience {
+        AudienceTarget::Public => "public".to_string(),
+        AudienceTarget::Subscribers => "subscribers".to_string(),
+        AudienceTarget::Private => "private".to_string(),
+        AudienceTarget::Named(id) => format!("named:{id}"),
+    }
+}
+
+fn projected_audiences(audiences: &[AudienceTarget]) -> Vec<AudienceTarget> {
+    let mut canonical = if audiences.is_empty() {
+        vec![AudienceTarget::Private]
+    } else {
+        audiences.to_vec()
+    };
+    canonical.sort_by_key(|audience| match audience {
+        AudienceTarget::Public => (0, 0),
+        AudienceTarget::Subscribers => (1, 0),
+        AudienceTarget::Named(id) => (2, i64::from(*id)),
+        AudienceTarget::Private => (3, 0),
+    });
+    canonical
+}
+
+pub(crate) fn canonical_audience_values(audiences: &[AudienceTarget]) -> Vec<String> {
+    projected_audiences(audiences)
+        .iter()
+        .map(audience_value)
+        .collect()
+}
+
+fn canonical_audiences(
+    audiences: &[AudienceTarget],
+) -> Result<Vec<AudienceTarget>, InvalidAtomAudience> {
+    let canonical = projected_audiences(audiences);
+    let mut unique = Vec::with_capacity(canonical.len());
+    for audience in &canonical {
+        if unique.contains(audience) {
+            return Err(InvalidAtomAudience);
+        }
+        unique.push(audience.clone());
+    }
+    if canonical
+        .iter()
+        .any(|audience| matches!(audience, AudienceTarget::Private))
+        && canonical.len() != 1
+    {
+        return Err(InvalidAtomAudience);
+    }
+    Ok(canonical)
+}
+
+/// Reads the complete canonical target set from direct `j:audience` extensions.
+///
+/// Absence is distinct from explicit Private. Empty stored targeting is emitted
+/// as `private` by [`set_j_audiences`], so a present element set is always
+/// nonempty.
+///
+/// # Errors
+///
+/// Returns [`InvalidAtomAudience`] when any value is noncanonical, duplicated,
+/// or combines Private with another target.
+pub fn j_audiences(entry: &Entry) -> Result<Option<Vec<AudienceTarget>>, InvalidAtomAudience> {
+    let values = entry
+        .extensions
+        .iter()
+        .filter(|extension| has_name(extension, ns::J_NS, "audience"))
+        .map(|extension| match extension.content.as_slice() {
+            [ExtensionContent::Text(value)] => parse_audience(value),
+            _ => Err(InvalidAtomAudience),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if values.is_empty() {
+        Ok(None)
+    } else {
+        canonical_audiences(&values).map(Some)
+    }
+}
+
+/// Replaces every direct `j:audience` extension with the canonical target set.
+///
+/// An empty stored target set is Private under ADR-0020 and is serialized as an
+/// explicit `private` marker rather than omission.
+///
+/// # Errors
+///
+/// Returns [`InvalidAtomAudience`] when the typed set contains a duplicate or
+/// combines Private with another target.
+pub fn set_j_audiences(
+    entry: &mut Entry,
+    audiences: &[AudienceTarget],
+) -> Result<(), InvalidAtomAudience> {
+    let audiences = canonical_audiences(audiences)?;
+    let prefix = preferred_prefix(entry, ns::J_NS, "audience", "j");
+    entry
+        .extensions
+        .retain(|extension| !has_name(extension, ns::J_NS, "audience"));
+    for audience in audiences {
+        let value = audience_value(&audience);
+        let mut marker = extension(ns::J_NS, "audience", &prefix);
+        marker.content.push(ExtensionContent::Text(value));
+        entry.extensions.push(marker);
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Slug marker (j:slug) helpers
 // ---------------------------------------------------------------------------
 
@@ -174,6 +314,8 @@ mod tests {
     use super::*;
     use atom_syndication::extension::ExtensionAttribute;
     use atom_syndication::{Category, Content, Link, Text};
+    use common::ids::AudienceId;
+    use common::visibility::AudienceTarget;
 
     use super::super::entry_document::entry_to_xml;
 
@@ -201,6 +343,117 @@ mod tests {
             .parse::<Entry>()
             .expect("reparse");
         assert_eq!(j_slug(&parsed), Some("my-post".to_string()));
+    }
+
+    #[test]
+    fn j_audiences_round_trip_in_canonical_union_order() {
+        let mut entry = sample_entry();
+        set_j_audiences(
+            &mut entry,
+            &[
+                AudienceTarget::Named(AudienceId::from(7)),
+                AudienceTarget::Subscribers,
+                AudienceTarget::Public,
+                AudienceTarget::Named(AudienceId::from(2)),
+            ],
+        )
+        .expect("valid audience union");
+
+        let parsed = entry_to_xml(&entry)
+            .expect("serialize")
+            .parse::<Entry>()
+            .expect("reparse");
+        assert_eq!(
+            j_audiences(&parsed).expect("valid audience extensions"),
+            Some(vec![
+                AudienceTarget::Public,
+                AudienceTarget::Subscribers,
+                AudienceTarget::Named(AudienceId::from(2)),
+                AudienceTarget::Named(AudienceId::from(7)),
+            ])
+        );
+    }
+
+    #[test]
+    fn j_audiences_distinguishes_absence_from_explicit_private() {
+        let absent = sample_entry();
+        assert_eq!(j_audiences(&absent).expect("absence is valid"), None);
+
+        let mut private = sample_entry();
+        set_j_audiences(&mut private, &[]).expect("empty storage targets mean Private");
+        assert_eq!(
+            j_audiences(&private).expect("private marker is valid"),
+            Some(vec![AudienceTarget::Private])
+        );
+    }
+
+    #[test]
+    fn j_audiences_rejects_noncanonical_values_and_invalid_sets() {
+        for invalid in [
+            "",
+            " public",
+            "PUBLIC",
+            "named:",
+            "named:0",
+            "named:01",
+            "named:+1",
+            "named:-1",
+            "named:9223372036854775808",
+        ] {
+            let mut entry = sample_entry();
+            entry
+                .extensions
+                .push(extension_with_text(ns::J_NS, "audience", "j", invalid));
+            assert_eq!(
+                j_audiences(&entry),
+                Err(InvalidAtomAudience),
+                "value {invalid:?}"
+            );
+        }
+
+        for invalid in [
+            vec![AudienceTarget::Public, AudienceTarget::Public],
+            vec![AudienceTarget::Private, AudienceTarget::Subscribers],
+        ] {
+            let mut entry = sample_entry();
+            assert_eq!(
+                set_j_audiences(&mut entry, &invalid),
+                Err(InvalidAtomAudience)
+            );
+        }
+    }
+
+    #[test]
+    fn j_audiences_rejects_nested_or_mixed_content() {
+        let entry: Entry = format!(
+            r#"<entry xmlns="http://www.w3.org/2005/Atom" xmlns:j="{}" xmlns:x="urn:foreign"><id>tag:example.com,2026:post/1</id><title>Hello</title><updated>2026-01-02T00:00:00Z</updated><j:audience>pub<x:ignored/>lic</j:audience></entry>"#,
+            ns::J_NS,
+        )
+        .parse()
+        .expect("well-formed mixed audience extension");
+
+        assert_eq!(j_audiences(&entry), Err(InvalidAtomAudience));
+    }
+
+    #[test]
+    fn j_audience_matching_uses_the_namespace_uri() {
+        let mut entry = sample_entry();
+        entry.extensions.push(extension_with_text(
+            "urn:foreign",
+            "audience",
+            "j",
+            "public",
+        ));
+        entry.extensions.push(extension_with_text(
+            ns::J_NS,
+            "audience",
+            "other",
+            "subscribers",
+        ));
+        assert_eq!(
+            j_audiences(&entry).expect("Jaunder marker is valid"),
+            Some(vec![AudienceTarget::Subscribers])
+        );
     }
 
     #[test]
