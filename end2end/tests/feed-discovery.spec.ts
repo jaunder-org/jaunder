@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import { BASE_URL, goto } from "./helpers";
-import { allowEngineDependentBoot, allowSecondBoot } from "./bootBudget";
+import { allowEngineDependentBoot } from "./bootBudget";
 import { navigateInApp } from "./navigate";
 import { randomUUID } from "node:crypto";
 import { applySeededSession, seedUserViaTool } from "./seed";
@@ -245,11 +245,10 @@ test("authenticated root redirects before a Local feed marker can paint", async 
   const session = await seedUserViaTool(username, "discovery-test-password");
   await applySeededSession(context, session);
   await observeMarkerHrefs(page);
-  allowSecondBoot(page, "the authenticated root pre-paint redirect loads Home");
   allowEngineDependentBoot(
     page,
-    "/",
-    "the root document can commit before its blocking head script redirects, depending on the browser",
+    "/app",
+    "Firefox commits the root document before the pre-paint redirect loads Home; Chromium does not",
   );
   await goto(page, "/");
   await expect(page).toHaveURL(`${BASE_URL}/app`);
