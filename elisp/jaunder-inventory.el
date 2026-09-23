@@ -21,7 +21,7 @@
 (cl-defstruct (jaunder-inventory-member
                (:constructor jaunder--make-inventory-member))
   "One Post advertised by an AtomPub Collection."
-  id slug edit-uri alternate-href alternate-invalid-reason)
+  id slug edit-uri alternate-href alternate-invalid-reason etag)
 
 (cl-defstruct (jaunder-inventory-local
                (:constructor jaunder--make-inventory-local))
@@ -145,6 +145,25 @@ The result is (HREF REASON), where exactly one member is non-nil."
         (list nil 'alternate-cross-origin))
        (t (list href nil)))))))
 
+(defun jaunder--collection-member-etag (entry namespaces)
+  "Return ENTRY's valid Jaunder Member ETag, or nil for invalid wire data.
+NAMESPACES are the in-scope bindings at ENTRY; a child may rebind a prefix."
+  (let ((markers (jaunder--atom-direct-elements-in-namespace
+                  entry 'etag jaunder--atompub-ns namespaces)))
+    (when (= (length markers) 1)
+      (let* ((marker (car markers))
+             (attributes (cl-remove-if
+                          (lambda (attribute)
+                            (let ((name (symbol-name (car attribute))))
+                              (or (equal name "xmlns")
+                                  (string-prefix-p "xmlns:" name))))
+                          (cadr marker)))
+             (children (dom-children marker)))
+        (when (and (null attributes) (= (length children) 1)
+                   (stringp (car children))
+                   (jaunder--strong-etag-p (car children)))
+          (car children))))))
+
 (defun jaunder--parse-collection-member
     (entry collection-url &optional alternate-entry inherited-namespaces)
   "Parse one Collection ENTRY beneath COLLECTION-URL into an inventory Member.
@@ -175,7 +194,8 @@ ENTRY itself uses the established libxml direct-child parsing for Member fields.
       (jaunder--inventory-error "Member j:slug must be non-empty"))
     (jaunder--make-inventory-member
      :id id :slug slug :edit-uri href
-     :alternate-href (car alternate) :alternate-invalid-reason (cadr alternate))))
+     :alternate-href (car alternate) :alternate-invalid-reason (cadr alternate)
+     :etag (jaunder--collection-member-etag alternate-entry entry-namespaces))))
 
 (defun jaunder--parse-collection-page (xml collection-url)
   "Parse Collection XML beneath COLLECTION-URL into (:members MEMBERS :next URI).

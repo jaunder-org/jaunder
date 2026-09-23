@@ -260,11 +260,16 @@ hide otherwise valid synchronization markers."
                (error nil))))))
 
 (defun jaunder--reconcile-member-outcome (member)
-  "Fetch MEMBER once, retaining a transport failure as row-local data."
-  (condition-case err
-      (list :response (jaunder--http-request
-                       "GET" (jaunder-inventory-member-edit-uri member)))
-    (error (list :error err))))
+  "Use MEMBER's Collection ETag, or fetch it and retain row-local errors."
+  (let ((etag (jaunder-inventory-member-etag member)))
+    (if etag
+        ;; Preserve the existing classification prerequisites, but do not mistake
+        ;; this preview evidence for a fresh Member response at mutation time.
+        (list :response (list :status 200 :headers (list (cons "etag" etag))))
+      (condition-case err
+          (list :response (jaunder--http-request
+                           "GET" (jaunder-inventory-member-edit-uri member)))
+        (error (list :error err))))))
 
 (defun jaunder--reconcile-match-row (match)
   "Fetch and classify one MATCH without letting its failure hide other rows."
@@ -451,10 +456,27 @@ hide otherwise valid synchronization markers."
          (set-buffer-modified-p modified)
          (signal (car err) (cdr err)))))))
 
+(defun jaunder--reconcile-with-progress (success failure work)
+  "Display synchronous WORK before blocking; report SUCCESS or FAILURE at exit."
+  (message "Jaunder reconcile: fetching and classifying Posts...")
+  ;; A message alone may remain unpainted until synchronous curl returns.
+  (redisplay)
+  (condition-case err
+      (prog1 (funcall work)
+        (message "Jaunder reconcile: %s" success))
+    (error
+     (message "Jaunder reconcile: %s" failure)
+     (signal (car err) (cdr err)))
+    (quit
+     (message "Jaunder reconcile: %s" failure)
+     (signal (car err) (cdr err)))))
+
 (defun jaunder-reconcile-refresh ()
   "Refresh the current reconciliation report from local and remote state."
   (interactive)
-  (jaunder--reconcile-refresh-buffer (current-buffer)))
+  (jaunder--reconcile-with-progress
+   "report ready" "report refresh failed"
+   (lambda () (jaunder--reconcile-refresh-buffer (current-buffer)))))
 
 (defun jaunder--reconcile-execute-batch (buffer rows action operation &optional cancelled-p)
   "Run OPERATION for ROWS sequentially, retaining every terminal result in BUFFER.
@@ -946,19 +968,22 @@ remote strong-ETag revalidation, one local preflight, then replacement."
 (defun jaunder-reconcile (root)
   "Reconcile ROOT with its configured AtomPub Collection without resolving it."
   (interactive (list default-directory))
-  (jaunder--call-with-blog
-   root
+  (jaunder--reconcile-with-progress
+   "report ready" "report failed"
    (lambda ()
-     (let* ((configured-root (car (jaunder--blog-entry-for root)))
-            (inventory (jaunder--inventory-for-root configured-root))
-            (report (jaunder--reconcile-build-report configured-root inventory))
-            (buffer (jaunder--render-reconcile-report report)))
-       (with-current-buffer buffer
-         (setq-local jaunder-reconcile-last-batch-results nil)
-         (setq-local jaunder-reconcile-marks (make-hash-table :test #'equal))
-         (jaunder--render-reconcile-report report buffer))
-       (display-buffer buffer)
-       report))))
+     (jaunder--call-with-blog
+      root
+      (lambda ()
+        (let* ((configured-root (car (jaunder--blog-entry-for root)))
+               (inventory (jaunder--inventory-for-root configured-root))
+               (report (jaunder--reconcile-build-report configured-root inventory))
+               (buffer (jaunder--render-reconcile-report report)))
+          (with-current-buffer buffer
+            (setq-local jaunder-reconcile-last-batch-results nil)
+            (setq-local jaunder-reconcile-marks (make-hash-table :test #'equal))
+            (jaunder--render-reconcile-report report buffer))
+          (display-buffer buffer)
+          report))))))
 
 
 

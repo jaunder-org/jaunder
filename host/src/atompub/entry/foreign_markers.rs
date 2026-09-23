@@ -1,11 +1,12 @@
 //! Jaunder-owned `AtomPub` foreign markers.
 //!
 //! `atom_syndication` owns namespace-aware extension I/O (ADR-0089). This leaf
-//! recognizes RFC 5023's `app:control/app:draft` and Jaunder's `j:slug` and
-//! repeated `j:audience` target set.
+//! recognizes RFC 5023's `app:control/app:draft` and Jaunder's `j:slug`,
+//! `j:etag`, and repeated `j:audience` target set.
 
 use atom_syndication::Entry;
 use atom_syndication::extension::{ExpandedName, Extension, ExtensionContent};
+use common::etag::ETag;
 use common::ids::AudienceId;
 use common::visibility::AudienceTarget;
 use thiserror::Error;
@@ -309,6 +310,43 @@ pub fn set_j_slug(entry: &mut Entry, slug: &str) {
     entry.extensions.push(marker);
 }
 
+/// Read one direct, text-only Jaunder Member validator from a Collection Entry.
+///
+/// This uses the expanded XML name; a textual prefix is not part of the wire
+/// identity. Ambiguous or malformed foreign markup is not a validator.
+#[must_use]
+pub fn j_member_etag(entry: &Entry) -> Option<ETag> {
+    let mut markers = entry
+        .extensions
+        .iter()
+        .filter(|extension| has_name(extension, ns::J_NS, "etag"));
+    let marker = markers.next()?;
+    if markers.next().is_some() || !marker.attributes.is_empty() {
+        return None;
+    }
+    match marker.content.as_slice() {
+        [ExtensionContent::Text(text)] => text.parse().ok(),
+        _ => None,
+    }
+}
+
+/// Attach the read-only Member validator to a Collection Entry.
+///
+/// This is deliberately not part of standalone Member responses: their validator
+/// travels in the HTTP `ETag` header, while a feed needs per-Entry metadata.
+pub fn set_j_member_etag(entry: &mut Entry, etag: &ETag) {
+    let prefix = preferred_prefix(entry, ns::J_NS, "etag", "j");
+    entry
+        .extensions
+        .retain(|extension| !has_name(extension, ns::J_NS, "etag"));
+
+    let mut marker = extension(ns::J_NS, "etag", &prefix);
+    marker
+        .content
+        .push(ExtensionContent::Text(etag.to_string()));
+    entry.extensions.push(marker);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,6 +369,36 @@ mod tests {
             .content
             .push(ExtensionContent::Text(text.to_string()));
         extension
+    }
+
+    #[test]
+    fn collection_member_etag_is_a_single_expanded_name() {
+        let mut entry = sample_entry();
+        let etag: ETag = "\"sha256-example\"".parse().unwrap();
+        set_j_member_etag(&mut entry, &etag);
+        let parsed = entry_to_xml(&entry)
+            .unwrap()
+            .parse::<Entry>()
+            .expect("Atom entry round trips");
+        assert_eq!(j_member_etag(&parsed), Some(etag.clone()));
+        let mut renamed = parsed;
+        renamed
+            .extensions
+            .iter_mut()
+            .find(|ext| has_name(ext, ns::J_NS, "etag"))
+            .unwrap()
+            .name
+            .preferred_prefix = Some("other".to_string());
+        assert_eq!(j_member_etag(&renamed), Some(etag));
+        renamed
+            .extensions
+            .push(extension_with_text(ns::J_NS, "etag", "j", "\"other\""));
+        assert_eq!(j_member_etag(&renamed), None);
+        renamed
+            .extensions
+            .retain(|ext| !has_name(ext, ns::J_NS, "etag"));
+        renamed.extensions.push(extension(ns::J_NS, "etag", "j"));
+        assert_eq!(j_member_etag(&renamed), None);
     }
 
     #[test]

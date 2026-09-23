@@ -995,9 +995,16 @@ header can supply only its absence. The authoritative invariant is
 
 Jaunder wire extensions ride the namespace `https://jaunder.org/ns/atompub`.
 Every Entry carries the read-only `j:slug` — drafts and scheduled included,
-incoming values ignored — and the Service Document advertises
-`<j:extension version="1" features="format-media-type slug audience"/>`
-([ADR-0023](adr/0023-atompub-jaunder-wire-extensions.md)).
+incoming values ignored — and the Service Document advertises the version-1
+format, slug, audience, and `member-etag` capabilities
+([ADR-0023](adr/0023-atompub-jaunder-wire-extensions.md)). Authenticated
+Collection Entries additionally carry read-only `j:etag`, the exact strong
+validator of their Member resource computed from Post content and its complete
+audience set, rather than the Collection page's validator. The service document
+advertises `member-etag`; extension-aware consumers can classify Posts without
+one Member request per match and fall back to Member reads for absent or invalid
+metadata
+([Collection Member ETags](adr/drafts/atompub-collection-member-etags.md)).
 
 Repeated text-valued `j:audience` elements carry the complete target set as
 canonical `public`, `subscribers`, `private`, or `named:<id>` tokens. Public,
@@ -2808,10 +2815,13 @@ and one captured wall-clock/zone pair. `jaunder--pull-member` validates the
 inventory identity against the response, blocks an occupied root-level
 `<slug>.org` before network work, and installs through a same-directory
 temporary file without overwrite. Inventory exhausts Collection pagination and
-joins root-level Org files to Members by Post ID; `jaunder-reconcile` reports
-divergence without resolving it automatically and lets the User explicitly
-choose a confirmed batch action. Remote deletion remains an explicit,
-ETag-guarded operation.
+joins root-level Org files to Members by Post ID; when a Collection Entry
+provides one valid `j:etag`, matched-Post preview classification uses that
+Member validator without an extra HTTP request, otherwise it falls back to a
+Member GET. Initial and refreshed reports show synchronous progress before
+fetching; `jaunder-reconcile` reports divergence without resolving it
+automatically and lets the User explicitly choose a confirmed batch action.
+Remote deletion remains an explicit, ETag-guarded operation.
 
 For Org source, pull considers only body-level HTTP(S) link destinations and
 reverses one to `./<slug>.org` only when its destination string exactly equals,

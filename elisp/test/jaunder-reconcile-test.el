@@ -82,6 +82,25 @@ The current filename supplies the local slug evidence used by matched-pull tests
     (should (equal (mapcar #'jaunder-inventory-member-slug members) '("first" "second")))
     (should (equal (plist-get page :next) "https://example.test/page-2"))))
 
+(ert-deftest jaunder-inventory-page-reads-only-one-valid-member-etag ()
+  "Member validators are expanded-name XML data, not textual-prefix matches."
+  (let ((entry (jaunder-reconcile-test--entry "7" "first")))
+    (dolist (fixture '(("<j:etag>&quot;current&quot;</j:etag>" . "\"current\"")
+                       ("<v:etag xmlns:v=\"https://jaunder.org/ns/atompub\">&quot;current&quot;</v:etag>" . "\"current\"")
+                       ("<j:etag>W/&quot;current&quot;</j:etag>" . nil)
+                       ("<j:etag> &quot;current&quot;</j:etag>" . nil)
+                       ("<j:etag extra=\"1\">&quot;current&quot;</j:etag>" . nil)
+                       ("<j:etag><j:inner/>&quot;current&quot;</j:etag>" . nil)
+                       ("<v:etag xmlns:v=\"urn:foreign\">&quot;current&quot;</v:etag>" . nil)
+                       ("<j:etag>&quot;current&quot;</j:etag><j:etag>&quot;current&quot;</j:etag>" . nil)))
+      (let* ((xml (replace-regexp-in-string
+                   "</entry>" (concat (car fixture) "</entry>") entry t t))
+             (page (jaunder--parse-collection-page
+                    (jaunder-reconcile-test--page (list xml))
+                    "https://example.test/atompub/alice/posts"))
+             (member (car (plist-get page :members))))
+        (should (equal (jaunder-inventory-member-etag member) (cdr fixture)))))))
+
 (ert-deftest jaunder-inventory-page-rejects-multiple-next-links ()
   ;; More than one continuation makes the Collection traversal ambiguous.
   (should-error
@@ -476,6 +495,39 @@ The current filename supplies the local slug evidence used by matched-pull tests
                      (encode-time 2 0 12 25 8 2026 t)))))
         (should (eq (jaunder-reconcile-row-state row) (nth 2 fixture)))))))
 
+(ert-deftest jaunder-reconcile-matched-preview-uses-page-etags-and-falls-back-per-row ()
+  "Page validators avoid matched reads; old servers still expose read failures."
+  (let* ((first (jaunder--make-inventory-member
+                 :id "7" :slug "one" :etag "\"new\""
+                 :edit-uri "https://example.test/atompub/alice/posts/7"))
+         (second (jaunder--make-inventory-member
+                  :id "8" :slug "two" :etag "\"old\""
+                  :edit-uri "https://example.test/atompub/alice/posts/8"))
+         (older (jaunder-reconcile-test--member "9" "three"))
+         (inventory (jaunder--make-inventory
+                     :matched (cl-loop for member in (list first second older)
+                                       collect (jaunder--make-inventory-match
+                                                :local (jaunder-reconcile-test--local
+                                                        (format "/tmp/%s.org"
+                                                                (jaunder-inventory-member-slug member))
+                                                        (jaunder-inventory-member-id member))
+                                                :member member))))
+         requests)
+    (cl-letf (((symbol-function 'jaunder--reconcile-local-markers)
+               (lambda (_) (list "\"old\"" "2026-08-25T12:00:00Z" nil
+                                 (encode-time 2 0 12 25 8 2026 t))))
+              ((symbol-function 'jaunder--http-request)
+               (lambda (_method url)
+                 (push url requests)
+                 (error "offline"))))
+      (let ((rows (jaunder-reconcile-report-rows
+                   (jaunder--reconcile-build-report "/tmp" inventory))))
+        (should (equal (mapcar #'jaunder-reconcile-row-state rows)
+                       '(server-ahead unchanged unclassifiable)))
+        (should (eq (jaunder-reconcile-row-reason (nth 2 rows))
+                    'member-transport-error))
+        (should (equal requests (list (jaunder-inventory-member-edit-uri older))))))))
+
 (ert-deftest jaunder-reconcile-persisted-local-ahead-beats-mtime-tolerance ()
   "Recovery's explicit marker survives a within-tolerance write-back."
   (let* ((match (jaunder--make-inventory-match
@@ -586,6 +638,60 @@ The current filename supplies the local slug evidence used by matched-pull tests
           (jaunder-reconcile root)
           (with-current-buffer "*Jaunder Reconcile*"
             (should (string-match-p "server-only (1)" (buffer-string)))))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-reconcile-initial-and-manual-refresh-show-synchronous-progress ()
+  "Both interactive paths display work before I/O and finish truthfully."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-progress-" t)))
+         (jaunder-blogs (list (cons root '(:base-url "https://example.test"
+                                                     :username "alice"))))
+         (inventory (jaunder--make-inventory))
+         events fail)
+    (unwind-protect
+        (cl-letf (((symbol-function 'message)
+                   (lambda (format-string &rest args)
+                     (push (apply #'format format-string args) events)))
+                  ((symbol-function 'redisplay) (lambda (&rest _) (push 'paint events)))
+                  ((symbol-function 'jaunder--inventory-for-root)
+                   (lambda (_) (push 'inventory events)
+                     (pcase fail
+                       ('error (error "offline"))
+                       ('quit (signal 'quit nil))
+                       (_ inventory))))
+                  ((symbol-function 'display-buffer) (lambda (&rest _) nil)))
+          (jaunder-reconcile root)
+          (should (equal (nreverse events)
+                         '("Jaunder reconcile: fetching and classifying Posts..."
+                           paint inventory "Jaunder reconcile: report ready")))
+          (setq events nil)
+          (with-current-buffer "*Jaunder Reconcile*"
+            (jaunder-reconcile-refresh))
+          (should (equal (nreverse events)
+                         '("Jaunder reconcile: fetching and classifying Posts..."
+                           paint inventory "Jaunder reconcile: report ready")))
+          (setq events nil fail 'error)
+          (with-current-buffer "*Jaunder Reconcile*"
+            (let ((old-report jaunder-reconcile-report)
+                  (old-text (buffer-string)))
+              (should-error (jaunder-reconcile-refresh))
+              (should (eq jaunder-reconcile-report old-report))
+              (should (equal (buffer-string) old-text))))
+          (should (equal (nreverse events)
+                         '("Jaunder reconcile: fetching and classifying Posts..."
+                           paint inventory "Jaunder reconcile: report refresh failed")))
+          (setq events nil fail 'quit)
+          (with-current-buffer "*Jaunder Reconcile*"
+            (let ((old-report jaunder-reconcile-report)
+                  (old-text (buffer-string)))
+              (should (eq (condition-case nil
+                              (jaunder-reconcile-refresh)
+                            (quit 'cancelled))
+                          'cancelled))
+              (should (eq jaunder-reconcile-report old-report))
+              (should (equal (buffer-string) old-text))))
+          (should (equal (nreverse events)
+                         '("Jaunder reconcile: fetching and classifying Posts..."
+                           paint inventory "Jaunder reconcile: report refresh failed"))))
       (delete-directory root t))))
 
 (ert-deftest jaunder-reconcile-keeps-valid-markers-when-mtime-is-unreadable ()

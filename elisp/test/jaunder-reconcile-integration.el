@@ -68,7 +68,32 @@
                       (mapcar #'jaunder-inventory-member-id
                               (jaunder-inventory-server-only inventory))))
                 (dolist (id created-ids)
-                  (should (= (cl-count id server-only-ids :test #'equal) 1)))))))
+                  (should (= (cl-count id server-only-ids :test #'equal) 1)))
+                ;; Make two Posts on separate Collection pages local matches. The
+                ;; real server's Entry validators must remove the Member GET fanout.
+                (dolist (id (list (car created-ids) (car (last created-ids))))
+                  (let ((member (cl-find id (jaunder-inventory-server-only inventory)
+                                         :key #'jaunder-inventory-member-id :test #'equal)))
+                    (should (jaunder--strong-etag-p (jaunder-inventory-member-etag member)))
+                    (jaunder-reconcile-live--write-local
+                     root (concat (jaunder-inventory-member-slug member) ".org")
+                     "Matched" id)))
+                (let ((real-request (symbol-function 'jaunder--http-request))
+                      (member-reads 0))
+                  (cl-letf (((symbol-function 'jaunder--http-request)
+                             (lambda (method url &rest args)
+                               (when (and (equal method "GET")
+                                          (string-match-p "/posts/[0-9]+\\'" url))
+                                 (setq member-reads (1+ member-reads)))
+                               (apply real-request method url args))))
+                    (let* ((report (jaunder--reconcile-build-report
+                                    root (jaunder--inventory-for-root root)))
+                           (rows (jaunder-reconcile-report-rows report)))
+                      (should (= (length (jaunder-inventory-matched
+                                          (jaunder-reconcile-report-inventory report))) 2))
+                      (should (= (length (cl-remove-if-not
+                                          #'jaunder-reconcile-row-local rows)) 2))))
+                  (should (= member-reads 0)))))))
        (delete-directory root t)))))
 
 (ert-deftest jaunder-reconcile-inventory-remains-a-server-only-preview ()

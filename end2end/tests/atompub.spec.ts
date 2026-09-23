@@ -268,7 +268,9 @@ test("full AtomPub Org publishing flow over HTTP with an app password", async ({
     headers: { authorization: auth },
   });
   expect(service.status()).toBe(200);
-  expect(await service.text()).toContain("app:service");
+  const serviceBody = await service.text();
+  expect(serviceBody).toContain("app:service");
+  expect(serviceBody).toContain("member-etag");
 
   // 2. Create an Org post. Atom title wins over the header, while omitted
   // categories and summary are supplied by its Org metadata.
@@ -317,14 +319,83 @@ Org body</content>
   expect(memberBody).not.toContain("#+DESCRIPTION:");
   expect(memberBody).not.toContain("JAUNDER_STATUS");
 
-  // 4. List the collection feed.
-  const list = await request.get(`${BASE_URL}/atompub/${username}/posts`, {
-    headers: { authorization: auth },
+  // 4. A second Post forces two pages. Each Collection Entry's public
+  // validator must agree with the corresponding Member response, independently
+  // of the Emacs Protocol Client or the order in which the pages are read.
+  const second = await request.post(`${BASE_URL}/atompub/${username}/posts`, {
+    headers: xml,
+    data: `<entry xmlns="http://www.w3.org/2005/Atom"><title>Second</title><content type="text/org">Second body</content></entry>`,
   });
-  expect(list.status()).toBe(200);
-  const listBody = await list.text();
-  expect(listBody).toContain("<feed");
-  expect(listBody).toContain('rel="edit"');
+  expect(second.status()).toBe(201);
+  let pageUrl = `${BASE_URL}/atompub/${username}/posts?limit=1`;
+  const seenMembers = new Set<string>();
+  for (let pageIndex = 0; pageIndex < 2; pageIndex++) {
+    const list = await request.get(pageUrl, {
+      headers: { authorization: auth },
+    });
+    expect(list.status()).toBe(200);
+    const collection = await page.evaluate(
+      (source) => {
+        const doc = new DOMParser().parseFromString(source, "application/xml");
+        if (doc.getElementsByTagName("parsererror").length) {
+          throw new Error("Collection is not XML");
+        }
+        const atom = "http://www.w3.org/2005/Atom";
+        const jaunder = "https://jaunder.org/ns/atompub";
+        const children = (node: Element) => Array.from(node.children);
+        const entries = children(doc.documentElement).filter(
+          (node) => node.namespaceURI === atom && node.localName === "entry",
+        );
+        const entry = entries[0];
+        const elements = entry ? children(entry) : [];
+        const etags = elements.filter(
+          (node) => node.namespaceURI === jaunder && node.localName === "etag",
+        );
+        const links = (node: Element) =>
+          children(node).filter(
+            (child) =>
+              child.namespaceURI === atom && child.localName === "link",
+          );
+        return {
+          count: entries.length,
+          edit: elements
+            .find(
+              (node) =>
+                node.namespaceURI === atom &&
+                node.localName === "link" &&
+                node.getAttribute("rel") === "edit",
+            )
+            ?.getAttribute("href"),
+          etagCount: etags.length,
+          etag: etags[0]?.textContent,
+          etagHasAttributes: Array.from(etags[0]?.attributes ?? []).some(
+            (attribute) =>
+              attribute.namespaceURI !== "http://www.w3.org/2000/xmlns/",
+          ),
+          next: links(doc.documentElement)
+            .find((link) => link.getAttribute("rel") === "next")
+            ?.getAttribute("href"),
+        };
+      },
+      await list.text(),
+    );
+    expect(collection.count).toBe(1);
+    expect(collection.edit).toBeTruthy();
+    expect(seenMembers.has(collection.edit!)).toBe(false);
+    seenMembers.add(collection.edit!);
+    const current = await request.get(onServer(collection.edit!), {
+      headers: { authorization: auth },
+    });
+    expect(current.status()).toBe(200);
+    expect(collection.etagCount).toBe(1);
+    expect(collection.etagHasAttributes).toBe(false);
+    expect(collection.etag).toBe(current.headers()["etag"]);
+    if (pageIndex === 0) {
+      expect(collection.next).toBeTruthy();
+      pageUrl = onServer(collection.next!);
+    }
+  }
+  expect(seenMembers.size).toBe(2);
 
   // 5. Update with matching bookkeeping and a separate matching If-Match.
   const editedSlug = "atom-edited";

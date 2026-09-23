@@ -5,7 +5,9 @@ use rstest::*;
 use rstest_reuse::*;
 use tower::ServiceExt;
 
-use crate::helpers::{atompub_get, body_string, create_user_and_session, make_app};
+use crate::helpers::{
+    atompub_get, atompub_post_xml, atompub_put_xml, body_string, create_user_and_session, make_app,
+};
 use storage::test_support::{Backend, backends, backends_matrix};
 
 // #560: the AtomPub surface composes absolute URLs, so it *requires* `site.base_url`.
@@ -159,6 +161,147 @@ async fn collection_paging_emits_next_link(#[case] backend: Backend) {
         body.matches("<entry").count(),
         1,
         "expected exactly one entry"
+    );
+}
+
+// Each Collection Entry advertises the same validator as its own Member response,
+// even when the user retrieves the Collection a page at a time.
+#[apply(backends)]
+#[tokio::test]
+async fn collection_entries_advertise_member_etags_across_pages(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    for _ in 0..2 {
+        session
+            .seed_post()
+            .seed(env.posts(), env.feed_events(), env.write_scope())
+            .await;
+    }
+    let app = make_app!(&env, base);
+    let first = app
+        .clone()
+        .oneshot(atompub_get(&session, "posts?limit=1"))
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let first_body = body_string(first).await;
+    let first_feed: host::atompub::Feed = first_body.parse().expect("valid Atom feed");
+    let next = first_feed
+        .links()
+        .iter()
+        .find(|link| link.rel() == "next")
+        .expect("second page")
+        .href()
+        .to_string();
+    let prefix = format!("https://example.com/atompub/{}/", session.username);
+    let second = app
+        .clone()
+        .oneshot(atompub_get(
+            &session,
+            next.strip_prefix(&prefix)
+                .expect("same-origin collection cursor"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::OK);
+    let second_body = body_string(second).await;
+    let second_feed: host::atompub::Feed = second_body.parse().expect("valid Atom feed");
+    for feed in [&first_feed, &second_feed] {
+        assert_eq!(feed.entries().len(), 1);
+        let entry = &feed.entries()[0];
+        let edit = entry
+            .links()
+            .iter()
+            .find(|link| link.rel() == "edit")
+            .expect("edit link");
+        let member = app
+            .clone()
+            .oneshot(atompub_get(
+                &session,
+                edit.href()
+                    .strip_prefix(&prefix)
+                    .expect("same-origin member"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(member.status(), StatusCode::OK);
+        let etag = member.headers()[header::ETAG].to_str().unwrap();
+        assert_eq!(
+            host::atompub::j_member_etag(entry)
+                .as_ref()
+                .map(AsRef::as_ref),
+            Some(etag),
+            "Collection validator must match Member header"
+        );
+    }
+}
+
+// The Collection validator is server-owned. A forged incoming extension on
+// either write cannot become the Member or subsequent Collection validator.
+#[apply(backends)]
+#[tokio::test]
+async fn collection_ignores_incoming_member_etag_on_create_and_update(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
+    let entry = |body| {
+        format!(
+            r#"<entry xmlns="http://www.w3.org/2005/Atom" xmlns:j="https://jaunder.org/ns/atompub"><title>Validator</title><content type="text/markdown">{body}</content><j:etag>&quot;forged&quot;</j:etag></entry>"#
+        )
+    };
+    let created = app
+        .clone()
+        .oneshot(atompub_post_xml(&session, "posts", &entry("first")))
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let first_etag = created.headers()[header::ETAG].to_str().unwrap().to_owned();
+    assert_ne!(first_etag, "\"forged\"");
+    let post_id = created.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .rsplit('/')
+        .next()
+        .unwrap();
+    let member_path = format!("posts/{post_id}");
+    let updated = app
+        .clone()
+        .oneshot(atompub_put_xml(&session, &member_path, &entry("changed")))
+        .await
+        .unwrap();
+    assert_eq!(updated.status(), StatusCode::OK);
+    let current_etag = updated.headers()[header::ETAG].to_str().unwrap();
+    assert_ne!(current_etag, "\"forged\"");
+    assert_ne!(current_etag, first_etag);
+    let member = app
+        .clone()
+        .oneshot(atompub_get(&session, &member_path))
+        .await
+        .unwrap();
+    assert_eq!(member.headers()[header::ETAG], current_etag);
+    let member_body = body_string(member).await;
+    let member_entry: host::atompub::Entry = member_body.parse().unwrap();
+    assert!(host::atompub::j_member_etag(&member_entry).is_none());
+    let collection = app.oneshot(atompub_get(&session, "posts")).await.unwrap();
+    let feed: host::atompub::Feed = body_string(collection).await.parse().unwrap();
+    assert_eq!(feed.entries().len(), 1);
+    assert_eq!(
+        host::atompub::j_member_etag(&feed.entries()[0])
+            .expect("server-owned Collection validator")
+            .as_ref(),
+        current_etag
     );
 }
 
