@@ -174,14 +174,14 @@ root. Opening it or refreshing with `g` shows a fetching/classifying message
 before synchronous work begins; it does not run in the background. A Jaunder
 AtomPub Collection advertises each Post's strong Member ETag as a read-only
 `j:etag` Entry element (`https://jaunder.org/ns/atompub`), with the
-`member-etag` Service Document feature. The client uses a valid element to
-classify matched Posts without fetching each Member; older servers and unusable
-metadata fall back to Member reads. A report is only a preview: operations still
-perform their own remote and local safety checks. It never chooses a direction
-or mutates either side on its own. Press `m` on a row to toggle its mark.
-Alternatively, make an active contiguous region over report rows; the region
-takes precedence over marks for the next command. The report keeps display
-order, so every selected batch has a predictable order.
+`member-etag` Service Document feature. The Emacs Protocol Client uses a valid
+element to classify matched Posts without fetching each Member; older servers
+and unusable metadata fall back to Member reads. A report is only a preview:
+operations still perform their own remote and local safety checks. It never
+chooses a direction or mutates either side on its own. Press `m` on a row to
+toggle its mark. Alternatively, make an active contiguous region over report
+rows; the region takes precedence over marks for the next command. The report
+keeps display order, so every selected batch has a predictable order.
 
 Use `g` to refresh the report from current local and remote state, `p` to push
 selected local drafts or safely local-ahead Posts, `f` to fetch selected

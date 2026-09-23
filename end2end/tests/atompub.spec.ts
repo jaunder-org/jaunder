@@ -321,7 +321,7 @@ Org body</content>
 
   // 4. A second Post forces two pages. Each Collection Entry's public
   // validator must agree with the corresponding Member response, independently
-  // of this Emacs client or the order in which the pages are read.
+  // of the Emacs Protocol Client or the order in which the pages are read.
   const second = await request.post(`${BASE_URL}/atompub/${username}/posts`, {
     headers: xml,
     data: `<entry xmlns="http://www.w3.org/2005/Atom"><title>Second</title><content type="text/org">Second body</content></entry>`,
@@ -334,27 +334,65 @@ Org body</content>
       headers: { authorization: auth },
     });
     expect(list.status()).toBe(200);
-    const listBody = await list.text();
-    expect(listBody).toContain("<feed");
-    const entry = listBody.match(/<entry>([\s\S]*?)<\/entry>/)?.[1];
-    expect(entry, "one paginated Entry").toBeTruthy();
-    const edit = entry!.match(/<link href="([^"]+)" rel="edit"\/>/)?.[1];
-    expect(edit).toBeTruthy();
-    expect(seenMembers.has(edit!)).toBe(false);
-    seenMembers.add(edit!);
-    const current = await request.get(onServer(edit!), {
+    const collection = await page.evaluate(
+      (source) => {
+        const doc = new DOMParser().parseFromString(source, "application/xml");
+        if (doc.getElementsByTagName("parsererror").length) {
+          throw new Error("Collection is not XML");
+        }
+        const atom = "http://www.w3.org/2005/Atom";
+        const jaunder = "https://jaunder.org/ns/atompub";
+        const children = (node: Element) => Array.from(node.children);
+        const entries = children(doc.documentElement).filter(
+          (node) => node.namespaceURI === atom && node.localName === "entry",
+        );
+        const entry = entries[0];
+        const elements = entry ? children(entry) : [];
+        const etags = elements.filter(
+          (node) => node.namespaceURI === jaunder && node.localName === "etag",
+        );
+        const links = (node: Element) =>
+          children(node).filter(
+            (child) =>
+              child.namespaceURI === atom && child.localName === "link",
+          );
+        return {
+          count: entries.length,
+          edit: elements
+            .find(
+              (node) =>
+                node.namespaceURI === atom &&
+                node.localName === "link" &&
+                node.getAttribute("rel") === "edit",
+            )
+            ?.getAttribute("href"),
+          etagCount: etags.length,
+          etag: etags[0]?.textContent,
+          etagHasAttributes: Array.from(etags[0]?.attributes ?? []).some(
+            (attribute) =>
+              attribute.namespaceURI !== "http://www.w3.org/2000/xmlns/",
+          ),
+          next: links(doc.documentElement)
+            .find((link) => link.getAttribute("rel") === "next")
+            ?.getAttribute("href"),
+        };
+      },
+      await list.text(),
+    );
+    expect(collection.count).toBe(1);
+    expect(collection.edit).toBeTruthy();
+    expect(seenMembers.has(collection.edit!)).toBe(false);
+    seenMembers.add(collection.edit!);
+    const current = await request.get(onServer(collection.edit!), {
       headers: { authorization: auth },
     });
     expect(current.status()).toBe(200);
-    const etag = current.headers()["etag"];
-    expect(etag).toBeTruthy();
-    const marker = `<j:etag xmlns:j="https://jaunder.org/ns/atompub">&quot;${etag.slice(1, -1)}&quot;</j:etag>`;
-    expect(entry!.match(/<j:etag\b/g)).toHaveLength(1);
-    expect(entry).toContain(marker);
+    expect(collection.etagCount).toBe(1);
+    expect(collection.etagHasAttributes).toBe(false);
+    expect(collection.etag).toBe(current.headers()["etag"]);
     if (pageIndex === 0) {
-      const next = listBody.match(/<link href="([^"]+)" rel="next"\/>/)?.[1];
-      expect(next).toBeTruthy();
-      pageUrl = onServer(next!.replaceAll("&amp;", "&"));
+      expect(collection.next).toBeTruthy();
+      pageUrl = onServer(collection.next!);
     }
   }
   expect(seenMembers.size).toBe(2);

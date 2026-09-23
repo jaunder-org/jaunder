@@ -210,7 +210,7 @@ async fn collection_entries_advertise_member_etags_across_pages(#[case] backend:
     assert_eq!(second.status(), StatusCode::OK);
     let second_body = body_string(second).await;
     let second_feed: host::atompub::Feed = second_body.parse().expect("valid Atom feed");
-    for (xml, feed) in [(&first_body, &first_feed), (&second_body, &second_feed)] {
+    for feed in [&first_feed, &second_feed] {
         assert_eq!(feed.entries().len(), 1);
         let entry = &feed.entries()[0];
         let edit = entry
@@ -230,14 +230,12 @@ async fn collection_entries_advertise_member_etags_across_pages(#[case] backend:
             .unwrap();
         assert_eq!(member.status(), StatusCode::OK);
         let etag = member.headers()[header::ETAG].to_str().unwrap();
-        let marker = format!(
-            "<j:etag xmlns:j=\"https://jaunder.org/ns/atompub\">&quot;{}&quot;</j:etag>",
-            etag.trim_matches('"')
-        );
-        assert_eq!(xml.matches("<j:etag ").count(), 1, "one validator: {xml}");
-        assert!(
-            xml.contains(&marker),
-            "validator must match Member header: {xml}"
+        assert_eq!(
+            host::atompub::j_member_etag(entry)
+                .as_ref()
+                .map(AsRef::as_ref),
+            Some(etag),
+            "Collection validator must match Member header"
         );
     }
 }

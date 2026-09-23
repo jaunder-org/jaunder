@@ -267,14 +267,12 @@ async fn audience_only_update_changes_etag_and_rejects_stale_precondition(
         .await
         .unwrap();
     let body = body_string(collection).await;
-    assert!(
-        body.contains(&format!(
-            "<j:etag xmlns:j=\"https://jaunder.org/ns/atompub\">&quot;{}&quot;</j:etag>",
-            current_etag.trim_matches('"')
-        )),
-        "Collection must advertise the current audience-sensitive Member ETag: {body}"
-    );
-    assert!(!body.contains(&old_etag));
+    let feed: host::atompub::Feed = body.parse().expect("collection is an Atom feed");
+    assert_eq!(feed.entries().len(), 1);
+    let advertised = host::atompub::j_member_etag(&feed.entries()[0])
+        .expect("Collection advertises a strong Member ETag");
+    assert_eq!(advertised.as_ref(), current_etag);
+    assert_ne!(advertised.as_ref(), old_etag);
 
     let stale = app
         .oneshot(
