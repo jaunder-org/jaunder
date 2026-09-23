@@ -1240,6 +1240,7 @@ an unconditional update."
           (jaunder-new-post '(4))
           (setq created (current-buffer)
                 path (buffer-file-name))
+          (jaunder--set-property "JAUNDER_AUDIENCE" "private")
           (insert "Retry body")
           (save-buffer)
           (let ((before-buffer (buffer-string))
@@ -1248,7 +1249,7 @@ an unconditional update."
                    (insert-file-contents path)
                    (buffer-string))))
             (cl-letf (((symbol-function 'jaunder--fetch-service-document)
-                       #'jaunder-publish-test--legacy-service-document)
+                       #'jaunder-publish-test--audience-service-document)
                       ((symbol-function 'jaunder--http-request)
                        (lambda (&rest _)
                          (setq transport-calls (1+ transport-calls))
@@ -1259,6 +1260,15 @@ an unconditional update."
             (should (= transport-calls 3))
             (should (buffer-live-p created))
             (should (string-match-p "Retry body" (buffer-string)))
+            (should (equal (jaunder--buffer-property "JAUNDER_AUDIENCE") "private"))
+            (should (string-match-p
+                     "^#\\+PROPERTY: JAUNDER_AUDIENCE private$" before-buffer))
+            (should (string-match-p
+                     "^#\\+PROPERTY: JAUNDER_AUDIENCE private$" before-file))
+            (should (string-match-p
+                     "^#\\+PROPERTY: JAUNDER_AUDIENCE private$"
+                     (with-temp-buffer
+                       (insert-file-contents path) (buffer-string))))
             (should (jaunder--buffer-property "JAUNDER_CREATE_KEY"))
             (should (jaunder--buffer-property "JAUNDER_CREATE_DIGEST"))
             (should (jaunder--buffer-property "JAUNDER_CREATE_ATTEMPT_AT"))
