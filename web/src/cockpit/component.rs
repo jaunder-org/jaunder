@@ -12,7 +12,7 @@ use leptos_router::hooks::{use_navigate, use_query_map};
 use super::CockpitState;
 use crate::posts::InlineComposer;
 use crate::reactive::Invalidator;
-use crate::timeline::{self, NoIdentity, TimelineGate};
+use crate::timeline::{self, NoIdentity, TimelineGate, TimelineOrderControl};
 use crate::topbar::Topbar;
 
 #[component]
@@ -99,8 +99,6 @@ pub fn CockpitPage() -> impl IntoView {
             state=state.timeline
             on_mutate=on_mutate
             on_load_more=on_load_more
-            order=Signal::derive(move || order.get())
-            on_order_change=on_order_change
             no_identity=NoIdentity::Redirect("/login")
         >
             {move || match read_username() {
@@ -108,7 +106,12 @@ pub fn CockpitPage() -> impl IntoView {
                 Some(_) => {
                     view! {
                         <div class="j-home-chrome">
-                            <Topbar title="Home" sub="Your published Posts" />
+                            <Topbar title="Home" sub="Your published Posts">
+                                <TimelineOrderControl
+                                    order=Signal::derive(move || order.get())
+                                    on_order_change
+                                />
+                            </Topbar>
                             <InlineComposer on_publish=on_mutate />
                         </div>
                     }
