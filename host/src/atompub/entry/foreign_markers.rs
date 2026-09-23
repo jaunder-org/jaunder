@@ -174,14 +174,41 @@ fn parse_audience(value: &str) -> Result<AudienceTarget, InvalidAtomAudience> {
     }
 }
 
-fn canonical_audiences(
-    audiences: &[AudienceTarget],
-) -> Result<Vec<AudienceTarget>, InvalidAtomAudience> {
+fn audience_value(audience: &AudienceTarget) -> String {
+    match audience {
+        AudienceTarget::Public => "public".to_string(),
+        AudienceTarget::Subscribers => "subscribers".to_string(),
+        AudienceTarget::Private => "private".to_string(),
+        AudienceTarget::Named(id) => format!("named:{id}"),
+    }
+}
+
+fn projected_audiences(audiences: &[AudienceTarget]) -> Vec<AudienceTarget> {
     let mut canonical = if audiences.is_empty() {
         vec![AudienceTarget::Private]
     } else {
         audiences.to_vec()
     };
+    canonical.sort_by_key(|audience| match audience {
+        AudienceTarget::Public => (0, 0),
+        AudienceTarget::Subscribers => (1, 0),
+        AudienceTarget::Named(id) => (2, i64::from(*id)),
+        AudienceTarget::Private => (3, 0),
+    });
+    canonical
+}
+
+pub(crate) fn canonical_audience_values(audiences: &[AudienceTarget]) -> Vec<String> {
+    projected_audiences(audiences)
+        .iter()
+        .map(audience_value)
+        .collect()
+}
+
+fn canonical_audiences(
+    audiences: &[AudienceTarget],
+) -> Result<Vec<AudienceTarget>, InvalidAtomAudience> {
+    let canonical = projected_audiences(audiences);
     let mut unique = Vec::with_capacity(canonical.len());
     for audience in &canonical {
         if unique.contains(audience) {
@@ -196,12 +223,6 @@ fn canonical_audiences(
     {
         return Err(InvalidAtomAudience);
     }
-    canonical.sort_by_key(|audience| match audience {
-        AudienceTarget::Public => (0, 0),
-        AudienceTarget::Subscribers => (1, 0),
-        AudienceTarget::Named(id) => (2, i64::from(*id)),
-        AudienceTarget::Private => (3, 0),
-    });
     Ok(canonical)
 }
 
@@ -220,7 +241,10 @@ pub fn j_audiences(entry: &Entry) -> Result<Option<Vec<AudienceTarget>>, Invalid
         .extensions
         .iter()
         .filter(|extension| has_name(extension, ns::J_NS, "audience"))
-        .map(|extension| parse_audience(&direct_text(extension)))
+        .map(|extension| match extension.content.as_slice() {
+            [ExtensionContent::Text(value)] => parse_audience(value),
+            _ => Err(InvalidAtomAudience),
+        })
         .collect::<Result<Vec<_>, _>>()?;
     if values.is_empty() {
         Ok(None)
@@ -248,12 +272,7 @@ pub fn set_j_audiences(
         .extensions
         .retain(|extension| !has_name(extension, ns::J_NS, "audience"));
     for audience in audiences {
-        let value = match audience {
-            AudienceTarget::Public => "public".to_string(),
-            AudienceTarget::Subscribers => "subscribers".to_string(),
-            AudienceTarget::Private => "private".to_string(),
-            AudienceTarget::Named(id) => format!("named:{id}"),
-        };
+        let value = audience_value(&audience);
         let mut marker = extension(ns::J_NS, "audience", &prefix);
         marker.content.push(ExtensionContent::Text(value));
         entry.extensions.push(marker);
@@ -402,6 +421,18 @@ mod tests {
                 Err(InvalidAtomAudience)
             );
         }
+    }
+
+    #[test]
+    fn j_audiences_rejects_nested_or_mixed_content() {
+        let entry: Entry = format!(
+            r#"<entry xmlns="http://www.w3.org/2005/Atom" xmlns:j="{}" xmlns:x="urn:foreign"><id>tag:example.com,2026:post/1</id><title>Hello</title><updated>2026-01-02T00:00:00Z</updated><j:audience>pub<x:ignored/>lic</j:audience></entry>"#,
+            ns::J_NS,
+        )
+        .parse()
+        .expect("well-formed mixed audience extension");
+
+        assert_eq!(j_audiences(&entry), Err(InvalidAtomAudience));
     }
 
     #[test]

@@ -64,26 +64,30 @@ not cached, so a later publish may retry.  Reset only by restarting Emacs.")
         (setq matches
               (append matches (jaunder--service-descendants child tag)))))))
 
-(defun jaunder--service-extension (dom)
-  "Return DOM's direct supported Jaunder extension marker, or nil."
+(defun jaunder--service-extensions (dom)
+  "Return all direct supported Jaunder extension markers in DOM."
   (let* ((root-namespaces (jaunder--atom-namespace-context dom nil))
          (workspaces (jaunder--atom-direct-elements-in-namespace
-                      dom 'workspace jaunder--app-ns root-namespaces)))
-    (cl-loop for workspace in workspaces
-             for namespaces = (jaunder--atom-namespace-context
-                               workspace root-namespaces)
-             thereis
-             (cl-find-if
-              (lambda (extension)
-                (equal (dom-attr extension 'version) "1"))
-              (jaunder--atom-direct-elements-in-namespace
-               workspace 'extension jaunder--atompub-ns namespaces)))))
+                      dom 'workspace jaunder--app-ns root-namespaces))
+         extensions)
+    (dolist (workspace workspaces extensions)
+      (let ((namespaces (jaunder--atom-namespace-context
+                         workspace root-namespaces)))
+        (dolist (extension
+                 (jaunder--atom-direct-elements-in-namespace
+                  workspace 'extension jaunder--atompub-ns namespaces))
+          (when (equal (dom-attr extension 'version) "1")
+            (push extension extensions)))))))
 
 (defun jaunder--service-features (dom)
   "Return supported extension feature tokens advertised by service DOM."
-  (let* ((extension (jaunder--service-extension dom))
-         (features (and extension (dom-attr extension 'features))))
-    (if features (split-string features) '())))
+  (delete-dups
+   (apply #'append
+          (mapcar
+           (lambda (extension)
+             (let ((features (dom-attr extension 'features)))
+               (if features (split-string features) '())))
+           (jaunder--service-extensions dom)))))
 
 (defun jaunder--service-advertises-audience-p (dom)
   "Return non-nil when DOM exactly advertises Jaunder audience version 1."

@@ -50,6 +50,14 @@ Lets the warning tests assert on emitted warnings without touching the real
                         "<app:workspace><x:extension version=\"1\""
                         " features=\"slug audience\"/></app:workspace></app:service>"))))
     (should (jaunder--service-advertises-audience-p valid)))
+  (let ((multiple (jaunder--parse-service-document
+                   (concat "<app:service xmlns:app=\"http://www.w3.org/2007/app\""
+                           " xmlns:j=\"https://jaunder.org/ns/atompub\">"
+                           "<app:workspace>"
+                           "<j:extension version=\"1\" features=\"slug\"/>"
+                           "<j:extension version=\"1\" features=\"audience\"/>"
+                           "</app:workspace></app:service>"))))
+    (should (jaunder--service-advertises-audience-p multiple)))
   (dolist (extension
            '("<f:extension version=\"1\" features=\"audience\"/>"
              "<j:extension version=\"2\" features=\"audience\"/>"

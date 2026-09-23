@@ -68,8 +68,12 @@
      (jaunder-test--entry
       (concat "#+PROPERTY: JAUNDER_AUDIENCE named:17\n"
               "#+PROPERTY: JAUNDER_AUDIENCE subscribers\n"
+              "#+PROPERTY: JAUNDER_AUDIENCE named:2\n"
               "#+PROPERTY: JAUNDER_AUDIENCE public\n\nBody\n")))
-    '("public" "subscribers" "named:17"))))
+    '("public" "subscribers" "named:2" "named:17"))))
+
+(ert-deftest jaunder-canonical-audiences-rejects-non-list-input ()
+  (should-error (jaunder--canonical-audiences "public")))
 
 (ert-deftest jaunder-org->atom-audience-omission-remains-nil ()
   (should-not

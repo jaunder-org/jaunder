@@ -210,30 +210,8 @@ pub fn post_content_etag<'a>(
         audiences: Vec<String>,
         draft: bool,
     }
-    let mut audiences = audiences
-        .into_iter()
-        .map(|target| match target {
-            common::visibility::AudienceTarget::Public => "public".to_owned(),
-            common::visibility::AudienceTarget::Subscribers => "subscribers".to_owned(),
-            common::visibility::AudienceTarget::Private => "private".to_owned(),
-            common::visibility::AudienceTarget::Named(id) => format!("named:{id}"),
-        })
-        .collect::<Vec<_>>();
-    audiences.sort_by(|left, right| {
-        let key = |value: &str| match value {
-            "public" => (0, 0),
-            "subscribers" => (1, 0),
-            "private" => (2, 0),
-            named => (
-                3,
-                named
-                    .strip_prefix("named:")
-                    .and_then(|id| id.parse::<i64>().ok())
-                    .unwrap_or(0),
-            ),
-        };
-        key(left).cmp(&key(right))
-    });
+    let audience_targets = audiences.into_iter().cloned().collect::<Vec<_>>();
+    let audiences = crate::atompub::canonical_audience_values(&audience_targets);
     let content = Content {
         title,
         body,

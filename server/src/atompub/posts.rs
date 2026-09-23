@@ -821,6 +821,11 @@ mod etag_tests {
         ];
 
         assert_ne!(etag_for(&post, &[]), etag_for(&post, &public));
+        assert_eq!(
+            etag_for(&post, &[]),
+            etag_for(&post, &[AudienceTarget::Private]),
+            "the empty stored target set uses the wire's canonical private projection",
+        );
         assert_eq!(etag_for(&post, &union), etag_for(&post, &reordered));
     }
 
