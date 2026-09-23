@@ -32,6 +32,7 @@ import {
   openComposerControl,
   openComposerFromSidebar,
   openPostActions,
+  selectComposerAudience,
 } from "./posts";
 import { navigateInApp } from "./navigate";
 import { allowSecondBoot } from "./bootBudget";
@@ -836,6 +837,63 @@ test("failed named-audience load shows an error and gates compose actions", asyn
   await page.fill(SEL.postBody, "# Audience failure\n\nMust not publish");
   await expect(page.locator(SEL.publishButton("false"))).toBeDisabled();
   await expect(page.locator(SEL.publishButton("true"))).toBeDisabled();
+});
+
+test("failed Default Audience load prevents creating with a placeholder selection", async ({
+  page,
+}) => {
+  await signInAsNewUser(page);
+  await failServerFn(page, "posts/get_default_audience_selection");
+  await goto(page, "/posts/new");
+  await expect(
+    page.getByText("Could not load the Default Audience.", { exact: false }),
+  ).toBeVisible();
+  await page.fill(SEL.postBody, "# Default failed\n\nMust not publish");
+  await expect(page.locator(SEL.publishButton("false"))).toBeDisabled();
+  await expect(page.locator(SEL.publishButton("true"))).toBeDisabled();
+  await expect(page.locator(SEL.saveSummary)).toHaveCount(0);
+});
+
+test("late Default Audience load keeps the author's intervening choice", async ({
+  page,
+}) => {
+  await signInAsNewUser(page);
+  const release = await stallServerFn(
+    page,
+    "posts/get_default_audience_selection",
+  );
+  await goto(page, "/posts/new");
+  await page.fill(SEL.postBody, "# Delayed default\n\nChosen Subscribers");
+  await selectComposerAudience(page, "subscribers");
+  await expect(page.locator(SEL.publishButton("false"))).toBeDisabled();
+  release();
+  await expect(page.locator(SEL.publishButton("false"))).toBeEnabled();
+  await expect(page.locator("#audience-subscribers")).toBeChecked();
+  await expect(page.locator("#audience-public")).not.toBeChecked();
+  await expect(
+    page.locator(".j-composer-control-summary").filter({ hasText: "Audience" }),
+  ).toContainText("Subscribers");
+});
+
+test("failed current audience load never shows a saveable Public editor", async ({
+  page,
+}) => {
+  await signInAsNewUser(page);
+  const saved = await createPostViaApi(page, {
+    body: "# Current audience failure\n\nMust remain unchanged",
+    publish: false,
+    audience: "private",
+  });
+  const editor = await page.context().newPage();
+  try {
+    await failServerFn(editor, "posts/get_audience_selection");
+    await goto(editor, `/posts/${saved.post_id}/edit`);
+    await expect(editor.locator("main p.error")).toBeVisible();
+    await expect(editor.locator(SEL.postBody)).toHaveCount(0);
+    await expect(editor.locator(SEL.publishButton("false"))).toHaveCount(0);
+  } finally {
+    await editor.close();
+  }
 });
 
 test("authenticated user can create a post with a summary", async ({

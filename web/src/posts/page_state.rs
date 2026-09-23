@@ -53,6 +53,47 @@ use crate::posts::{
     RevisionHistoryPage, RevisionLifecycle, SavedPost, UnpublishedPost,
 };
 
+/// Whether a new Post's site Default Audience has resolved without erasing edits.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InitialAudienceState {
+    #[default]
+    Loading,
+    EditedWhileLoading,
+    Ready,
+    Failed,
+}
+
+impl InitialAudienceState {
+    /// Record an explicit picker change even if it returns to the placeholder.
+    #[must_use]
+    pub const fn edited(self) -> Self {
+        match self {
+            Self::Loading => Self::EditedWhileLoading,
+            state => state,
+        }
+    }
+
+    /// The resolved default seeds the picker only if the author never edited it.
+    #[must_use]
+    pub const fn settle(self, succeeded: bool) -> (Self, bool) {
+        if succeeded {
+            (Self::Ready, matches!(self, Self::Loading))
+        } else {
+            (Self::Failed, false)
+        }
+    }
+
+    #[must_use]
+    pub const fn can_submit(self) -> bool {
+        matches!(self, Self::Ready)
+    }
+
+    #[must_use]
+    pub const fn failed(self) -> bool {
+        matches!(self, Self::Failed)
+    }
+}
+
 /// Resolution state for the named audiences offered by the post editor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NamedAudienceState {
@@ -2096,6 +2137,20 @@ mod tests {
             notify_with_fallback(unsupplied, None);
             assert!(never.get(), "the sink was writable all along");
         });
+    }
+
+    #[test]
+    fn late_default_does_not_overwrite_an_explicit_author_choice() {
+        let initial = InitialAudienceState::default();
+        assert!(!initial.can_submit());
+        let edited = initial.edited();
+        assert_eq!(edited.settle(true), (InitialAudienceState::Ready, false));
+        assert!(edited.settle(true).0.can_submit());
+        assert_eq!(initial.settle(true), (InitialAudienceState::Ready, true));
+        let failed = edited.settle(false).0;
+        assert!(failed.failed());
+        assert!(!failed.can_submit());
+        assert!(!failed.edited().can_submit());
     }
 
     #[test]

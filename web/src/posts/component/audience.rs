@@ -22,7 +22,7 @@ pub(super) fn load_named_audiences() -> RwSignal<NamedAudienceState> {
 #[component]
 pub fn AudiencePicker(selection: RwSignal<AudienceSelection>) -> impl IntoView {
     let named = load_named_audiences();
-    view! { <AudiencePickerWithState selection=selection named=named /> }
+    view! { <AudiencePickerWithState selection=selection named=named on_user_change=None /> }
 }
 
 /// The picker view over a load state shared with its owning action gate.
@@ -30,6 +30,7 @@ pub fn AudiencePicker(selection: RwSignal<AudienceSelection>) -> impl IntoView {
 pub(super) fn AudiencePickerWithState(
     selection: RwSignal<AudienceSelection>,
     named: RwSignal<NamedAudienceState>,
+    on_user_change: Option<Callback<()>>,
 ) -> impl IntoView {
     let is_private = move || {
         selection
@@ -48,6 +49,7 @@ pub(super) fn AudiencePickerWithState(
                     prop:checked=move || selection.get().public
                     on:change=move |ev| {
                         selection.update(|sel| sel.public = event_target_checked(&ev));
+                        notify_user_change(on_user_change);
                     }
                 />
                 "Public"
@@ -59,19 +61,30 @@ pub(super) fn AudiencePickerWithState(
                     prop:checked=move || selection.get().subscribers
                     on:change=move |ev| {
                         selection.update(|sel| sel.subscribers = event_target_checked(&ev));
+                        notify_user_change(on_user_change);
                     }
                 />
                 "Subscribers"
             </label>
-            <NamedAudienceOptions named=named selection=selection />
+            <NamedAudienceOptions named=named selection=selection on_user_change />
             <button
                 class="j-audience-clear"
                 type="button"
-                on:click=move |_| selection.set(AudienceSelection::default())
+                on:click=move |_| {
+                    selection.set(AudienceSelection::default());
+                    notify_user_change(on_user_change);
+                }
             >
                 "Clear all"
             </button>
         </fieldset>
+    }
+}
+
+/// Record an intentional picker interaction, independent of its resulting value.
+fn notify_user_change(on_user_change: Option<Callback<()>>) {
+    if let Some(notify) = on_user_change {
+        notify.run(());
     }
 }
 
@@ -80,6 +93,7 @@ pub(super) fn AudiencePickerWithState(
 fn NamedAudienceOptions(
     named: RwSignal<NamedAudienceState>,
     selection: RwSignal<AudienceSelection>,
+    on_user_change: Option<Callback<()>>,
 ) -> impl IntoView {
     view! {
         <Show
@@ -89,7 +103,13 @@ fn NamedAudienceOptions(
                     <Show
                         when=move || named.with(|state| matches!(state, NamedAudienceState::Failed))
                         fallback=move || {
-                            view! { <ReadyNamedAudienceOptions named=named selection=selection /> }
+                            view! {
+                                <ReadyNamedAudienceOptions
+                                    named=named
+                                    selection=selection
+                                    on_user_change
+                                />
+                            }
                         }
                     >
                         <p class="error">"Could not load named audiences."</p>
@@ -107,6 +127,7 @@ fn NamedAudienceOptions(
 fn ReadyNamedAudienceOptions(
     named: RwSignal<NamedAudienceState>,
     selection: RwSignal<AudienceSelection>,
+    on_user_change: Option<Callback<()>>,
 ) -> impl IntoView {
     view! {
         <Show
@@ -121,7 +142,7 @@ fn ReadyNamedAudienceOptions(
                     })
             }
             fallback=move || {
-                view! { <NamedAudienceRows named=named selection=selection /> }
+                view! { <NamedAudienceRows named=named selection=selection on_user_change /> }
             }
         >
             <p class="j-sub">"No named audiences."</p>
@@ -134,6 +155,7 @@ fn ReadyNamedAudienceOptions(
 fn NamedAudienceRows(
     named: RwSignal<NamedAudienceState>,
     selection: RwSignal<AudienceSelection>,
+    on_user_change: Option<Callback<()>>,
 ) -> impl IntoView {
     let audiences = move || {
         named.with(|state| match state {
@@ -148,7 +170,7 @@ fn NamedAudienceRows(
             <For
                 each=audiences
                 key=|audience| audience.audience_id
-                children=move |audience| audience_checkbox(audience, selection)
+                children=move |audience| audience_checkbox(audience, selection, on_user_change)
             />
         </div>
     }
@@ -159,6 +181,7 @@ fn NamedAudienceRows(
 fn audience_checkbox(
     audience: audiences::Summary,
     selection: RwSignal<AudienceSelection>,
+    on_user_change: Option<Callback<()>>,
 ) -> impl IntoView {
     let id = audience.audience_id;
     let input_id = format!("audience-named-{id}");
@@ -178,6 +201,7 @@ fn audience_checkbox(
                                 sel.named.push(id);
                             }
                         });
+                    notify_user_change(on_user_change);
                 }
             />
             " "

@@ -40,7 +40,7 @@ Out:
     Named, Named-only, and Private, plus unchanged viewer access and Public-only
     syndication; the updated picker and existing affected browser helpers
     compile and run together.
-- [ ] Task 2: Make composer audience initialization and submission safe across
+- [x] Task 2: Make composer audience initialization and submission safe across
       asynchronous loads.
   - Contract: Default/current-Post selection and Named-audience data have
     distinct pending, ready, and failed outcomes. A placeholder is never
