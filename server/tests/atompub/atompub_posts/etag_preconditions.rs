@@ -452,10 +452,29 @@ async fn canonical_slug_repair_invalidates_the_prior_etag(#[case] backend: Backe
     });
 
     let repaired = make_app!(&env, base)
-        .oneshot(atompub_get(&session, &member))
+        .oneshot(
+            atompub(&session, Method::GET, &member)
+                .header(header::IF_NONE_MATCH, prior_etag.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
+    assert_eq!(
+        repaired.status(),
+        StatusCode::OK,
+        "the pre-repair validator must revalidate to the repaired representation"
+    );
     assert_ne!(etag_of(&repaired), prior_etag);
+    let repaired_body = body_string(repaired).await;
+    let repaired_entry = repaired_body
+        .parse::<host::atompub::Entry>()
+        .expect("repaired Member response is an Atom Entry");
+    assert_eq!(
+        host::atompub::j_slug(&repaired_entry).as_deref(),
+        Some(repaired_slug.as_ref())
+    );
+
     let response = make_app!(&env, base)
         .oneshot(
             atompub(&session, Method::PUT, &member)
