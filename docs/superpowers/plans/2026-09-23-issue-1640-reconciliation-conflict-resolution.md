@@ -73,7 +73,7 @@ HTTP/filesystem or Media, and changes to ordinary non-conflict operations.
     local failure separately. Cover post-launch drift, final conditional header,
     and write order.
 
-- [ ] 5. Prove and explain the completed conflict-resolution surface.
+- [x] 5. Prove and explain the completed conflict-resolution surface.
   - Contract: keep existing ordered Last batch results across fresh inventory on
     every successful direction; show blocked/unknown/partial recovery without
     claiming two-sided preservation. Update `elisp/README.md` with conflict
