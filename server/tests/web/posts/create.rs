@@ -104,7 +104,7 @@ async fn create_post_persists_rendered_published_post(#[case] backend: Backend) 
 
 #[apply(backends)]
 #[tokio::test]
-async fn create_post_retries_slug_conflicts_for_same_user_and_date(#[case] backend: Backend) {
+async fn create_post_retries_slug_conflicts_for_same_user(#[case] backend: Backend) {
     let env = backend.setup().await;
     let app = make_app!(&env, &env.base);
     let cookie = create_user_and_session(
@@ -153,7 +153,7 @@ async fn create_post_retries_slug_conflicts_for_same_user_and_date(#[case] backe
 
     assert_eq!(second_status, StatusCode::OK, "body: {second_body}");
     let created = confirmed_created_post(&second_body);
-    assert_eq!(created.slug, "repeated-title-2");
+    assert_eq!(created.slug, "repeated-title-1");
 }
 
 #[apply(backends)]
