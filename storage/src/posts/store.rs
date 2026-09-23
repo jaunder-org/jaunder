@@ -40,6 +40,7 @@ use common::media::{
     ContentHash, Filename, MediaRef, MediaReferenceForm, MediaReferenceKind, MediaSource,
 };
 use common::pagination::{PageSize, RowLimit};
+use common::permalink_route::PermalinkRoute;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
 use common::render::PostFormat;
@@ -231,6 +232,16 @@ pub trait PostStorage: Send + Sync {
         viewer: &ViewerIdentity,
         now: UtcInstant,
     ) -> Result<Option<PublicPresentationPostRecord>>;
+
+    /// Resolves a stored historical User-qualified permalink to the target
+    /// Post's current canonical route, applying anonymous public visibility.
+    async fn resolve_historical_post_permalink_alias(
+        &self,
+        username: &Username,
+        date: PermalinkDate,
+        slug: &Slug,
+        now: UtcInstant,
+    ) -> Result<Option<PermalinkRoute>>;
 
     /// Resolves a User-omitting public permalink alias across all Users.
     ///
@@ -561,6 +572,14 @@ pub trait PostDialect: Backend {
     /// The alias has no User bind, unlike [`Self::PERMALINK_DATE_CLAUSE`], so
     /// its date occupies a different placeholder position.
     const PERMALINK_ALIAS_DATE_CLAUSE: &'static str;
+
+    /// Predicate matching a stored Historical Post Permalink Alias date against
+    /// its `$3` canonical `YYYY-MM-DD` bind.
+    const HISTORICAL_PERMALINK_DATE_CLAUSE: &'static str;
+
+    /// Compares a current Post's canonical date with a Historical Post
+    /// Permalink Alias source date when checking canonical precedence.
+    const HISTORICAL_ALIAS_SHADOW_DATE_CLAUSE: &'static str;
 
     /// Deletes every `post_audiences` row for a post. Bind order: `post_id`.
     const DELETE_POST_AUDIENCES: &'static str;
@@ -1308,6 +1327,62 @@ where
             .bind_storage(date_text)
             .bind_storage(now);
         Ok(binds.bind_onto(query).fetch_optional(&self.pool).await?)
+    }
+
+    #[tracing::instrument(
+        name = "storage.posts.resolve_historical_permalink_alias",
+        skip(self),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn resolve_historical_post_permalink_alias(
+        &self,
+        username: &Username,
+        date: PermalinkDate,
+        slug: &Slug,
+        now: UtcInstant,
+    ) -> Result<Option<PermalinkRoute>> {
+        let date_text = PermalinkDateText::from(date);
+        let (resolution, binds, _) = visibility::resolution_where(&ViewerIdentity::Anonymous, 5);
+        let sql = format!(
+            "SELECT {POST_RECORD_COLUMNS}, {tags} AS tags
+             FROM post_permalink_aliases alias
+             JOIN posts p ON p.post_id = alias.post_id AND p.user_id = alias.user_id
+             JOIN users u ON u.user_id = alias.user_id
+             WHERE u.username = $1
+               AND alias.slug = $2
+               AND {date_clause}
+               AND NOT EXISTS (
+                   SELECT 1 FROM posts shadow
+                   WHERE shadow.user_id = alias.user_id
+                     AND shadow.slug = alias.slug
+                     AND shadow.deleted_at IS NULL
+                     AND {shadow_date_clause}
+               )
+               AND p.published_at IS NOT NULL
+               AND p.published_at <= $4
+               AND p.deleted_at IS NULL
+               AND {resolution}",
+            tags = DB::TAGS_SUBQUERY,
+            date_clause = DB::HISTORICAL_PERMALINK_DATE_CLAUSE,
+            shadow_date_clause = DB::HISTORICAL_ALIAS_SHADOW_DATE_CLAUSE,
+        );
+        let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
+            .bind_storage(username)
+            .bind_storage(slug)
+            .bind_storage(date_text)
+            .bind_storage(now);
+        let Some(record) = binds.bind_onto(query).fetch_optional(&self.pool).await? else {
+            return Ok(None);
+        };
+        let target_date = jiff::tz::TimeZone::UTC
+            .to_datetime(record.published_at.unwrap_or(record.created_at).value())
+            .date()
+            .into();
+        Ok(Some(PermalinkRoute {
+            username: record.author_username,
+            date: target_date,
+            slug: record.slug,
+        }))
     }
 
     #[tracing::instrument(
@@ -2428,6 +2503,180 @@ mod tests {
             .expect("owner can decode a draft record");
         assert_eq!(draft.published_at, None);
         assert_eq!(draft.deleted_at, None);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn draft_update_rejects_another_active_posts_slug_without_partial_state(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let [user] = seed_users::<1>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
+        let owner = SeedRawPost::new(user)
+            .slug("occupied-update-slug")
+            .draft()
+            .seed(env.posts(), env.write_scope())
+            .await;
+        let edited = SeedRawPost::new(user)
+            .slug("unchanged-update-slug")
+            .draft()
+            .seed(env.posts(), env.write_scope())
+            .await;
+
+        let result = update_post_scoped(
+            env.posts(),
+            env.write_scope(),
+            edited.post_id,
+            user,
+            UpdateRawPost::new(owner.slug.as_ref())
+                .unpublish()
+                .body(parse_post_body("must roll back"))
+                .build(),
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(crate::WriteScopeError::Operation(
+                UpdatePostError::SlugConflict
+            ))
+        ));
+        let retained = env
+            .posts()
+            .get_post_by_id(edited.post_id, &ViewerIdentity::Local { user_id: user })
+            .await
+            .unwrap()
+            .expect("the losing draft remains readable");
+        assert_eq!(retained.slug, edited.slug);
+        assert_ne!(retained.body, parse_post_body("must roll back"));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn concurrent_draft_updates_arbitrate_one_free_slug_atomically(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let [user] = seed_users::<1>(
+            std::sync::Arc::clone(&env.users()),
+            env.write_scope().clone(),
+        )
+        .await;
+        let first = SeedRawPost::new(user)
+            .slug("first-racing-draft")
+            .draft()
+            .seed(env.posts(), env.write_scope())
+            .await;
+        let second = SeedRawPost::new(user)
+            .slug("second-racing-draft")
+            .draft()
+            .seed(env.posts(), env.write_scope())
+            .await;
+        let viewer = ViewerIdentity::Local { user_id: user };
+        let first_before = env
+            .posts()
+            .get_post_by_id(first.post_id, &viewer)
+            .await
+            .unwrap()
+            .unwrap();
+        let second_before = env
+            .posts()
+            .get_post_by_id(second.post_id, &viewer)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let barrier = Arc::new(Barrier::new(3));
+        let first_update = tokio::spawn({
+            let posts = env.posts();
+            let write_scope = env.write_scope();
+            let barrier = Arc::clone(&barrier);
+            async move {
+                barrier.wait().await;
+                update_post_scoped(
+                    posts,
+                    write_scope,
+                    first.post_id,
+                    user,
+                    UpdateRawPost::new("racing-draft-slug")
+                        .unpublish()
+                        .body(parse_post_body("first race winner"))
+                        .build(),
+                )
+                .await
+            }
+        });
+        let second_update = tokio::spawn({
+            let posts = env.posts();
+            let write_scope = env.write_scope();
+            let barrier = Arc::clone(&barrier);
+            async move {
+                barrier.wait().await;
+                update_post_scoped(
+                    posts,
+                    write_scope,
+                    second.post_id,
+                    user,
+                    UpdateRawPost::new("racing-draft-slug")
+                        .unpublish()
+                        .body(parse_post_body("second race winner"))
+                        .build(),
+                )
+                .await
+            }
+        });
+        barrier.wait().await;
+        let first_result = first_update
+            .await
+            .expect("first update task does not panic");
+        let second_result = second_update
+            .await
+            .expect("second update task does not panic");
+        let results = [&first_result, &second_result];
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| matches!(
+                    result,
+                    Err(crate::WriteScopeError::Operation(
+                        UpdatePostError::SlugConflict
+                    ))
+                ))
+                .count(),
+            1
+        );
+
+        let first_after = env
+            .posts()
+            .get_post_by_id(first_before.post_id, &viewer)
+            .await
+            .unwrap()
+            .unwrap();
+        let second_after = env
+            .posts()
+            .get_post_by_id(second_before.post_id, &viewer)
+            .await
+            .unwrap()
+            .unwrap();
+        let (loser_before, loser_after) = if first_result.is_err() {
+            (&first_before, &first_after)
+        } else {
+            (&second_before, &second_after)
+        };
+        assert_eq!(loser_after.post_id, loser_before.post_id);
+        assert_eq!(loser_after.slug, loser_before.slug);
+        assert_eq!(loser_after.body, loser_before.body);
+        assert_eq!(loser_after.updated_at, loser_before.updated_at);
+        assert_eq!(
+            [first_after, second_after]
+                .iter()
+                .filter(|record| record.slug == "racing-draft-slug")
+                .count(),
+            1
+        );
     }
 
     /// Two independent edits whose old/new media sets are reversed must complete:
@@ -5559,6 +5808,161 @@ mod tests {
                 .is_err(),
             "an explicit invalid license must fail public projection decode"
         );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn historical_permalink_alias_follows_current_canonical_state_and_visibility(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
+        let now = parse_utc_instant("2026-08-01T12:00:00Z");
+        let source_date = PermalinkDate::from_ymd(2025, 7, 3).unwrap();
+        let source_slug = parse_slug("historical-source");
+        let target = SeedRawPost::new(user.user_id)
+            .slug("current-target")
+            .published_at(now)
+            .seed(env.posts(), env.write_scope().clone())
+            .await;
+        match env.base.pool() {
+            crate::test_support::CloseablePool::Sqlite(pool) => {
+                sqlx::query(
+                    "INSERT INTO post_permalink_aliases
+                     (post_id, user_id, permalink_date, slug) VALUES ($1, $2, $3, $4)",
+                )
+                .bind_storage(target.post_id)
+                .bind_storage(user.user_id)
+                .bind_storage(PermalinkDateText::from(source_date))
+                .bind_storage(&source_slug)
+                .execute(pool)
+                .await
+                .expect("seed SQLite Historical Post Permalink Alias");
+            }
+            crate::test_support::CloseablePool::Postgres(pool) => {
+                sqlx::query(
+                    "INSERT INTO post_permalink_aliases
+                     (post_id, user_id, permalink_date, slug) VALUES ($1, $2, $3::date, $4)",
+                )
+                .bind_storage(target.post_id)
+                .bind_storage(user.user_id)
+                .bind_storage(PermalinkDateText::from(source_date))
+                .bind_storage(&source_slug)
+                .execute(pool)
+                .await
+                .expect("seed PostgreSQL Historical Post Permalink Alias");
+            }
+        }
+
+        let resolved = env
+            .posts()
+            .resolve_historical_post_permalink_alias(&user.username, source_date, &source_slug, now)
+            .await
+            .unwrap()
+            .expect("public alias resolves");
+        assert_eq!(resolved.username, user.username);
+        assert_eq!(resolved.slug, target.slug);
+
+        let later_slug = parse_slug("later-canonical-target");
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query("UPDATE posts SET slug = $1 WHERE post_id = $2")
+                .bind_storage(&later_slug)
+                .bind_storage(target.post_id)
+                .execute(pool)
+                .await
+                .expect("change target canonical slug");
+        });
+        let resolved = env
+            .posts()
+            .resolve_historical_post_permalink_alias(&user.username, source_date, &source_slug, now)
+            .await
+            .unwrap()
+            .expect("alias follows the current canonical identity");
+        assert_eq!(resolved.slug, later_slug);
+
+        soft_delete_post_confirmed(env.posts(), env.write_scope(), target.post_id, user.user_id)
+            .await;
+        assert!(
+            env.posts()
+                .resolve_historical_post_permalink_alias(
+                    &user.username,
+                    source_date,
+                    &source_slug,
+                    now,
+                )
+                .await
+                .unwrap()
+                .is_none(),
+            "a Historical Post Permalink Alias never broadens current visibility"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn historical_permalink_alias_excludes_hidden_and_future_targets(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let user = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await;
+        let now = parse_utc_instant("2026-08-01T12:00:00Z");
+        let future = UtcInstant::from(
+            now.value()
+                .checked_add(Duration::from_hours(1))
+                .expect("future fixture remains representable"),
+        );
+        let private = SeedRawPost::new(user.user_id)
+            .slug("historical-private-target")
+            .published_at(now)
+            .audiences(vec![AudienceTarget::Private])
+            .seed(env.posts(), env.write_scope().clone())
+            .await;
+        let scheduled = SeedRawPost::new(user.user_id)
+            .slug("historical-future-target")
+            .published_at(future)
+            .seed(env.posts(), env.write_scope().clone())
+            .await;
+        let private_source = parse_slug("historical-private-source");
+        let future_source = parse_slug("historical-future-source");
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query(
+                "INSERT INTO post_permalink_aliases
+                 (post_id, user_id, permalink_date, slug) VALUES
+                 ($1, $2, '2025-07-01', $3),
+                 ($4, $5, '2025-07-02', $6)",
+            )
+            .bind_storage(private.post_id)
+            .bind_storage(user.user_id)
+            .bind_storage(&private_source)
+            .bind_storage(scheduled.post_id)
+            .bind_storage(user.user_id)
+            .bind_storage(&future_source)
+            .execute(pool)
+            .await
+            .expect("seed hidden Historical Post Permalink Aliases");
+        });
+
+        for (date, slug) in [
+            (PermalinkDate::from_ymd(2025, 7, 1).unwrap(), private_source),
+            (PermalinkDate::from_ymd(2025, 7, 2).unwrap(), future_source),
+        ] {
+            assert!(
+                env.posts()
+                    .resolve_historical_post_permalink_alias(&user.username, date, &slug, now)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
     }
 
     #[apply(backends)]

@@ -7,7 +7,7 @@ use common::{
     post_summary::PostSummary,
     render::PostFormat,
     tagged_url::HubUrl,
-    test_support::parse_post_body,
+    test_support::{parse_post_body, parse_slug},
     time::UtcInstant,
     visibility::AudienceTarget,
 };
@@ -27,6 +27,7 @@ use tokio::sync::Barrier;
 use storage::{
     CacheCommitOutcome, FeedCacheRow, ProfileUpdate, PublisherGeneration, PublisherStorage,
     WriteScope,
+    sql::QueryStorageExt,
     test_support::{Backend, SeedRawPost, SeedUser, backends, backends_matrix, confirmed_for, fp},
 };
 
@@ -247,6 +248,38 @@ async fn render_user_feed_returns_expected_rss_representation(#[case] backend: B
         "application/rss+xml; charset=utf-8",
         "RSS content type"
     );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn regenerated_feed_uses_the_repaired_current_slug(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let user = SeedUser::new()
+        .seed(Arc::clone(&env.users()), env.write_scope())
+        .await;
+    let post = SeedRawPost::new(user.user_id)
+        .slug("pre-repair-feed-slug")
+        .seed(Arc::clone(&env.posts()), env.write_scope())
+        .await;
+    let repaired_slug = parse_slug("repaired-feed-slug");
+    storage::with_closeable_pool!(env.base.pool(), pool, {
+        sqlx::query("UPDATE posts SET slug = $1 WHERE post_id = $2")
+            .bind_storage(&repaired_slug)
+            .bind_storage(post.post_id)
+            .execute(pool)
+            .await
+            .unwrap();
+    });
+
+    let row = render_feed(
+        env.publisher(),
+        env.posts(),
+        fp(&format!("/~{}/feed.rss", user.username)),
+    )
+    .await;
+    let body = row.representation().body();
+    assert!(body.contains("/repaired-feed-slug"), "feed body: {body}");
+    assert!(!body.contains("/pre-repair-feed-slug"), "feed body: {body}");
 }
 
 #[apply(backends_matrix)]

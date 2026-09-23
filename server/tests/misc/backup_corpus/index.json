@@ -25,6 +25,12 @@
       "format_version": 2,
       "support": "supported",
       "digest": "33d1bc82fac64732141aacecf6dd2971c95db7de7d012b97721d2a08cdac3912"
+    },
+    {
+      "fixture": "format-3",
+      "format_version": 3,
+      "support": "supported",
+      "digest": "eaf125a7bfa4a773c6a7ade027b355f6aac4e19d8c9562ff8e84cae7276caeb6"
     }
   ]
 }

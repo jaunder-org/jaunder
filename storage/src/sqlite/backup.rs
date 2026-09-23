@@ -173,10 +173,13 @@ async fn restore_database_transaction(
 
     let result = async {
         let mut validation_report = RestoreValidationReport::default();
-        // Clear every table before loading any, keeping the two backends' restore
-        // shape identical (docs/adr/0115-clear-then-load-restore.md).
-        // Restore table names originate in the validated catalog and are SQLite-quoted.
-        for table in &manifest.tables {
+        // Clear every live portable table before loading any, including tables
+        // introduced after an older supported manifest. This keeps restore
+        // authoritative across format versions and preserves backend parity
+        // (docs/adr/0115-clear-then-load-restore.md).
+        // Table names originate in the validated catalog and are SQLite-quoted.
+        let live_tables = existing_export_tables(&mut connection).await?;
+        for table in &live_tables {
             sqlx::query(AssertSqlSafe(format!(
                 "DELETE FROM {}",
                 sql::quote_identifier(table)

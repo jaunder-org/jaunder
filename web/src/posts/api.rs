@@ -657,7 +657,9 @@ pub async fn create(post: PostInputs) -> WebResult<MutationOutcome<ClassifiedSav
             format,
             slug_override: slug_override.as_ref(),
             published_at,
-            max_attempts: 100,
+            // Active slugs are finite database rows, so creation must keep
+            // searching until it reaches the first free suffix.
+            max_attempts: usize::MAX,
             summary,
             audiences,
             idempotency_key: None,
@@ -1371,8 +1373,8 @@ mod tests {
     #[test]
     fn candidate_slug_appends_numeric_suffix_after_conflict() {
         let base: Slug = "hello-world".parse().unwrap();
-        assert_eq!(candidate_slug(&base, 1).unwrap().as_ref(), "hello-world-2");
-        assert_eq!(candidate_slug(&base, 2).unwrap().as_ref(), "hello-world-3");
+        assert_eq!(candidate_slug(&base, 1).unwrap().as_ref(), "hello-world-1");
+        assert_eq!(candidate_slug(&base, 2).unwrap().as_ref(), "hello-world-2");
     }
 
     #[test]

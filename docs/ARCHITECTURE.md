@@ -154,7 +154,7 @@ by URL scheme: `DbConnectOptions` (`storage/src/db.rs`) parses `sqlite:` vs
 `postgres://` and `open_database`/`open_existing_database` dispatch accordingly.
 Each backend has its own migration tree under
 `storage/migrations/{sqlite,postgres}`; the two trees carry identical numbered
-filenames (currently `0001`–`0025`), and maintaining that parity — same
+filenames (currently `0001`–`0041`), and maintaining that parity — same
 migrations, same behavior — is the accepted cost of the pluggable strategy
 ([ADR-0001](adr/0001-storage-backends.md)).
 
@@ -325,14 +325,17 @@ reproducible manifest — so a migration that adds a table needs no backup code
 change; server contract tests pin the exact set. Consequently the complete
 `post_revisions` scalar rows, their immutable
 `post_revision_tags`/`post_revision_audiences` children, and revision-qualified
-`post_media` rows travel with every whole-store backup, without a
-revision-specific export path; typed restore validation covers their domain
-fields ([ADR-0136](adr/0136-local-post-lifecycle.md),
+`post_media` rows and durable `post_permalink_aliases` travel with every
+whole-store backup, without revision- or alias-specific export paths; typed
+restore validation covers their domain fields
+([ADR-0136](adr/0136-local-post-lifecycle.md),
 [ADR-0064](adr/0064-backup-target-auto-derivation.md)).
 
 **Compatibility is explicit and independent of package chronology.** The
-manifest format version governs wire readability: exports identify format 1, and
-legacy manifests with no format-version member are format 1. The
+manifest format version governs wire readability: current exports identify
+format 3, readers retain formats 1 and 2, and legacy manifests with no
+format-version member are format 1. Format 3 adds durable Historical Post
+Permalink Aliases to the exact table inventory. The
 [test-owned corpus](../server/tests/misc/backup_corpus/README.md) is
 [ADR-0174](adr/0174-backup-format-and-schema-compatibility.md)'s independent
 reader/writer enforcement mechanism: immutable historical inputs exercise public
@@ -721,6 +724,24 @@ slug editable on a later update, and scheduling or publishing freezes it again
 (`storage/src/{sqlite,postgres}/posts.rs::update_post`,
 [scheduled publishing](adr/0027-scheduled-publishing-time-gated-visibility.md),
 [current-state slug freeze](adr/0130-current-publication-state-slug-freeze.md)).
+
+**Active Post slugs are unique per User.** Both schemas enforce
+`(user_id, slug)` only while `deleted_at IS NULL`; a Deleted Post releases the
+active slug, and another User has an independent namespace. Creation keeps an
+existing owner stable and allocates the first available numeric suffix beginning
+at `-1`, with the database constraint arbitrating concurrent attempts. Legacy
+duplicate groups are repaired once: the newest Post keeps the base slug to match
+the existing Emacs filename layout, while older Posts receive deterministic,
+unoccupied suffixes. Before remediation changes a slug, storage records a
+Historical Post Permalink Alias from the old User-qualified date-and-slug path
+to the Post ID. Each repaired Post follows the ordinary lifecycle-mutation
+contract: one complete prior-state Revision and a strictly advanced
+`updated_at`, with derived feed/cache state invalidated. Slug is part of the
+canonical AtomPub strong-ETag input, so changing the canonical slug invalidates
+the prior Member validator. A current canonical route always wins; a canonical
+miss may redirect an anonymously visible alias to the Post's current permalink
+without making the alias an AtomPub or Emacs identity
+([active Post slug uniqueness and historical aliases](adr/drafts/active-post-slug-uniqueness.md)).
 
 **Visibility starts with active/not-deleted eligibility, then applies two
 orthogonal predicates on the same reads.** _Time_: an active Post is draft

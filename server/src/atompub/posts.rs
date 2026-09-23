@@ -122,15 +122,17 @@ impl PostServices {
 /// A strong, content-hash `ETag` for a post's mutable representation, including
 /// its complete stored audience target set.
 pub(crate) fn etag_for(post: &PostRecord, audiences: &[AudienceTarget]) -> ETag {
-    etag::post_content_etag(
-        post.title.as_ref(),
-        &post.body,
-        &post.format,
-        post.summary.as_ref(),
-        post.tags.iter().map(|tag| &tag.tag_display),
-        audiences,
-        post.published_at.is_none(),
-    )
+    etag::PostContentEtag {
+        title: post.title.as_ref(),
+        slug: &post.slug,
+        body: &post.body,
+        format: post.format,
+        summary: post.summary.as_ref(),
+        tags: post.tags.iter().map(|tag| &tag.tag_display).collect(),
+        audiences: audiences.to_vec(),
+        draft: post.published_at.is_none(),
+    }
+    .etag()
 }
 
 /// Whether a request's `If-Match` precondition is satisfied for a post with ETAG.
@@ -546,7 +548,9 @@ pub async fn collection_post(
             format,
             slug_override: None,
             published_at,
-            max_attempts: 100,
+            // Active slugs are finite database rows, so creation must keep
+            // searching until it reaches the first free suffix.
+            max_attempts: usize::MAX,
             summary,
             audiences,
             tags: categories.clone(),
@@ -845,15 +849,14 @@ mod etag_tests {
     }
 
     #[test]
-    fn etag_for_ignores_identity_and_timestamps() {
-        // AC2/AC5: nothing outside the content fields moves the ETag — including a
-        // published_at whose *value* advances while staying Some (non-draft).
+    fn etag_for_ignores_noncanonical_identity_and_timestamps() {
+        // AC2/AC5: nothing outside the canonical content fields moves the ETag —
+        // including a published_at whose *value* advances while staying Some.
         let e = etag_for(&base_post(), &[]);
         let later = parse_utc_instant("1970-04-15T04:00:00Z");
         let mut p = base_post();
         p.post_id = PostId::from(999);
         p.user_id = UserId::from(42);
-        p.slug = "other-slug".parse().expect("parse slug");
         p.created_at = later;
         p.updated_at = later;
         p.published_at = Some(later);
@@ -885,6 +888,10 @@ mod etag_tests {
         };
         assert_ne!(flip(&|p| p.title = Some(parse_post_title("Other"))), e); // title value
         assert_ne!(flip(&|p| p.title = None), e); // title present->absent
+        assert_ne!(
+            flip(&|p| p.slug = "other-slug".parse().expect("parse slug")),
+            e
+        ); // canonical slug
         assert_ne!(flip(&|p| p.body = parse_post_body("Different body.")), e); // body
         assert_ne!(flip(&|p| p.summary = Some(parse_post_summary("Other"))), e); // summary value
         assert_ne!(flip(&|p| p.summary = None), e); // summary present->absent

@@ -336,6 +336,24 @@ The current filename supplies the local slug evidence used by matched-pull tests
     (should (equal (jaunder-inventory-conflict-members conflict) (list one two)))
     (should-not (jaunder-inventory-matched inventory))))
 
+(ert-deftest jaunder-inventory-join-matches-repaired-unique-target-slugs-by-id ()
+  ;; Migration keeps the newest base filename and gives older Posts unique suffixes;
+  ;; stable IDs then join every local file without weakening duplicate detection.
+  (let* ((oldest (jaunder-reconcile-test--local "shared-1.org" "1"))
+         (middle (jaunder-reconcile-test--local "shared-2.org" "2"))
+         (newest (jaunder-reconcile-test--local "shared.org" "3"))
+         (oldest-member (jaunder-reconcile-test--member "1" "shared-1"))
+         (middle-member (jaunder-reconcile-test--member "2" "shared-2"))
+         (newest-member (jaunder-reconcile-test--member "3" "shared"))
+         (inventory
+          (jaunder--join-inventory
+           (list oldest middle newest)
+           (list oldest-member middle-member newest-member))))
+    (should (= (length (jaunder-inventory-matched inventory)) 3))
+    (should-not (jaunder-inventory-conflicts inventory))
+    (should-not (jaunder-inventory-server-only inventory))
+    (should-not (jaunder-inventory-orphans inventory))))
+
 (ert-deftest jaunder-inventory-join-is-a-deterministic-total-partition ()
   ;; Inputs in a conflict are owned once; ordinary lists retain their source order.
   (let* ((draft (jaunder-reconcile-test--local "draft.org"))

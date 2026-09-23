@@ -4,10 +4,10 @@ use std::{fmt, str::FromStr};
 
 use common::{
     etag::ETag, feed::FeedFormat, media::ContentHash, post_body::PostBody,
-    post_summary::PostSummary, post_title::PostTitle, render::PostFormat, tag::TagLabel,
-    time::UtcInstant,
+    post_summary::PostSummary, post_title::PostTitle, render::PostFormat, slug::Slug,
+    tag::TagLabel, time::UtcInstant,
 };
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
@@ -189,40 +189,34 @@ const fn serializer_revision(format: FeedFormat) -> u16 {
     }
 }
 
-/// Computes the canonical strong validator for a Post's mutable content.
-#[must_use]
-pub fn post_content_etag<'a>(
-    title: Option<&'a PostTitle>,
-    body: &'a PostBody,
-    format: &'a PostFormat,
-    summary: Option<&'a PostSummary>,
-    tags: impl IntoIterator<Item = &'a TagLabel>,
-    audiences: impl IntoIterator<Item = &'a common::visibility::AudienceTarget>,
-    draft: bool,
-) -> ETag {
-    #[derive(Serialize)]
-    struct Content<'a> {
-        title: Option<&'a PostTitle>,
-        body: &'a PostBody,
-        format: String,
-        summary: Option<&'a PostSummary>,
-        tags: Vec<&'a TagLabel>,
-        audiences: Vec<String>,
-        draft: bool,
+/// Complete serializer inputs for a Post's canonical strong validator.
+#[derive(Serialize)]
+pub struct PostContentEtag<'a> {
+    pub title: Option<&'a PostTitle>,
+    pub slug: &'a Slug,
+    pub body: &'a PostBody,
+    pub format: PostFormat,
+    pub summary: Option<&'a PostSummary>,
+    pub tags: Vec<&'a TagLabel>,
+    #[serde(serialize_with = "serialize_canonical_audiences")]
+    pub audiences: Vec<common::visibility::AudienceTarget>,
+    pub draft: bool,
+}
+
+impl PostContentEtag<'_> {
+    /// Computes the canonical strong validator from the complete content tuple.
+    #[must_use]
+    pub fn etag(&self) -> ETag {
+        let bytes = serde_json::to_vec(self).unwrap_or_else(|_| Vec::new());
+        sha256_of(bytes)
     }
-    let audience_targets = audiences.into_iter().cloned().collect::<Vec<_>>();
-    let audiences = crate::atompub::canonical_audience_values(&audience_targets);
-    let content = Content {
-        title,
-        body,
-        format: format.to_string(),
-        summary,
-        tags: tags.into_iter().collect(),
-        audiences,
-        draft,
-    };
-    let bytes = serde_json::to_vec(&content).unwrap_or_else(|_| Vec::new());
-    sha256_of(bytes)
+}
+
+fn serialize_canonical_audiences<S: Serializer>(
+    audiences: &[common::visibility::AudienceTarget],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    crate::atompub::canonical_audience_values(audiences).serialize(serializer)
 }
 
 #[cfg(test)]
@@ -231,7 +225,10 @@ mod tests {
     use crate::feed::{FeedDescription, FeedTitle};
     use common::{
         ids::PostId,
-        test_support::{parse_post_summary, parse_url, parse_utc_instant, rendered_html},
+        test_support::{
+            parse_post_body, parse_post_summary, parse_post_title, parse_slug, parse_tag_label,
+            parse_url, parse_utc_instant, rendered_html,
+        },
         time::UtcInstant,
     };
 
@@ -388,6 +385,42 @@ mod tests {
             etag(FeedFormat::Atom, &metadata, &items, time(1)),
             etag(FeedFormat::Json, &metadata, &items, time(1)),
         );
+    }
+
+    #[test]
+    fn post_content_etag_includes_the_canonical_slug() {
+        let title = parse_post_title("Title");
+        let body = parse_post_body("Body");
+        let format = common::render::PostFormat::Markdown;
+        let summary = parse_post_summary("Summary");
+        let tags = [parse_tag_label("tag")];
+        let first_slug = parse_slug("first-canonical-slug");
+        let second_slug = parse_slug("second-canonical-slug");
+
+        let content = |slug| PostContentEtag {
+            title: Some(&title),
+            slug,
+            body: &body,
+            format,
+            summary: Some(&summary),
+            tags: tags.iter().collect(),
+            audiences: vec![],
+            draft: false,
+        };
+        let first = content(&first_slug).etag();
+        let second = content(&second_slug).etag();
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn post_content_etag_preserves_format_wire_tokens() {
+        for format in [PostFormat::Markdown, PostFormat::Org, PostFormat::Html] {
+            assert_eq!(
+                serde_json::to_value(format).unwrap(),
+                serde_json::Value::String(format.to_string()),
+            );
+        }
     }
 
     #[test]

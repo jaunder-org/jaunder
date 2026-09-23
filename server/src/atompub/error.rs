@@ -253,6 +253,7 @@ impl From<storage::PerformUpdateError> for HandlerError {
         match err {
             storage::PerformUpdateError::EmptyPost
             | storage::PerformUpdateError::BookkeepingMismatch => HandlerError::BadRequest,
+            storage::PerformUpdateError::SlugConflict => HandlerError::Status(StatusCode::CONFLICT),
             storage::PerformUpdateError::StaleContent => HandlerError::PreconditionFailed,
             storage::PerformUpdateError::NotFound | storage::PerformUpdateError::Unauthorized => {
                 HandlerError::NotFound
@@ -444,6 +445,10 @@ mod tests {
         assert_eq!(
             status(PerformUpdateError::BookkeepingMismatch.into()),
             StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            status(PerformUpdateError::SlugConflict.into()),
+            StatusCode::CONFLICT
         );
         assert_eq!(
             status(PerformUpdateError::StaleContent.into()),

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::{
     body::Body,
     http::{Method, Request, StatusCode, header},
@@ -10,8 +12,12 @@ use rstest_reuse::*;
 
 use crate::helpers::body_string;
 
-use common::time::UtcInstant;
-use storage::test_support::{Backend, SeedRawPost, SeedUser, backends};
+use common::permalink_route::canonical_permalink_path;
+use common::test_support::{parse_slug, parse_utc_instant, permalink_date};
+use common::{time::UtcInstant, visibility::AudienceTarget};
+use storage::MockPostStorage;
+use storage::sql::QueryStorageExt;
+use storage::test_support::{Backend, CloseablePool, SeedRawPost, SeedUser, backends};
 
 use super::fixtures::{
     assert_sanitized_internal_server_error, assert_shell_miss, failing_author_theme_selection,
@@ -60,6 +66,213 @@ async fn permalink_projects_cacheable_crawlable_html(#[case] backend: Backend) {
     .await
     .unwrap();
     assert_eq!(html.as_bytes(), body2.as_ref(), "identical bytes per URL");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn historical_permalink_alias_redirects_to_current_canonical_route(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let user = SeedUser::new().seed(env.users(), env.write_scope()).await;
+    let published_at = parse_utc_instant("2026-08-01T12:00:00Z");
+    let target = SeedRawPost::new(user.user_id)
+        .slug("current-界")
+        .published_at(published_at)
+        .seed(env.posts(), env.write_scope())
+        .await;
+    let source_slug = parse_slug("historical-source");
+    match env.base.pool() {
+        CloseablePool::Sqlite(pool) => {
+            sqlx::query(
+                "INSERT INTO post_permalink_aliases
+                 (post_id, user_id, permalink_date, slug)
+                 VALUES ($1, $2, '2025-07-03', $3)",
+            )
+            .bind_storage(target.post_id)
+            .bind_storage(user.user_id)
+            .bind_storage(&source_slug)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+        CloseablePool::Postgres(pool) => {
+            sqlx::query(
+                "INSERT INTO post_permalink_aliases
+                 (post_id, user_id, permalink_date, slug)
+                 VALUES ($1, $2, '2025-07-03', $3)",
+            )
+            .bind_storage(target.post_id)
+            .bind_storage(user.user_id)
+            .bind_storage(&source_slug)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+    }
+    let uri = format!("/~{}/2025/07/03/{}?utm=a%2Fb", user.username, source_slug);
+
+    let response = projector_app(env.posts(), env.users(), env.themes())
+        .oneshot(get(&uri))
+        .await
+        .expect("request");
+
+    assert_eq!(response.status(), StatusCode::FOUND);
+    let target_path =
+        canonical_permalink_path(&user.username, permalink_date(2026, 8, 1), &target.slug);
+    let encoded_target = target_path.as_ref().replace('界', "%E7%95%8C");
+    assert_eq!(
+        response.headers().get(header::LOCATION).unwrap(),
+        format!("{encoded_target}?utm=a%2Fb").as_str()
+    );
+    assert_eq!(
+        response.headers().get(header::CACHE_CONTROL).unwrap(),
+        "no-store"
+    );
+
+    SeedRawPost::new(user.user_id)
+        .slug(&source_slug)
+        .published_at(parse_utc_instant("2025-07-03T12:00:00Z"))
+        .seed(env.posts(), env.write_scope())
+        .await;
+    let canonical_response = projector_app(env.posts(), env.users(), env.themes())
+        .oneshot(get(&uri))
+        .await
+        .expect("canonical request");
+    assert_eq!(
+        canonical_response.status(),
+        StatusCode::OK,
+        "a current canonical Post shadows the historical alias"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn historical_permalink_alias_hidden_targets_serve_shell(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let user = SeedUser::new().seed(env.users(), env.write_scope()).await;
+    let public_time = parse_utc_instant("2026-08-01T12:00:00Z");
+    let private = SeedRawPost::new(user.user_id)
+        .slug("private-alias-target")
+        .published_at(public_time)
+        .audiences(vec![AudienceTarget::Private])
+        .seed(env.posts(), env.write_scope())
+        .await;
+    let future = SeedRawPost::new(user.user_id)
+        .slug("future-alias-target")
+        .published_at(parse_utc_instant("2099-08-01T12:00:00Z"))
+        .seed(env.posts(), env.write_scope())
+        .await;
+    let deleted = SeedRawPost::new(user.user_id)
+        .slug("deleted-alias-target")
+        .published_at(public_time)
+        .seed(env.posts(), env.write_scope())
+        .await;
+    let private_source = parse_slug("private-alias-source");
+    let future_source = parse_slug("future-alias-source");
+    let deleted_source = parse_slug("deleted-alias-source");
+    match env.base.pool() {
+        CloseablePool::Sqlite(pool) => {
+            sqlx::query(
+                "INSERT INTO post_permalink_aliases
+                 (post_id, user_id, permalink_date, slug) VALUES
+                 ($1, $2, '2025-07-01', $3),
+                 ($4, $5, '2025-07-02', $6),
+                 ($7, $8, '2025-07-03', $9)",
+            )
+            .bind_storage(private.post_id)
+            .bind_storage(user.user_id)
+            .bind_storage(&private_source)
+            .bind_storage(future.post_id)
+            .bind_storage(user.user_id)
+            .bind_storage(&future_source)
+            .bind_storage(deleted.post_id)
+            .bind_storage(user.user_id)
+            .bind_storage(&deleted_source)
+            .execute(pool)
+            .await
+            .unwrap();
+            sqlx::query("UPDATE posts SET deleted_at = $1 WHERE post_id = $2")
+                .bind_storage(public_time)
+                .bind_storage(deleted.post_id)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+        CloseablePool::Postgres(pool) => {
+            sqlx::query(
+                "INSERT INTO post_permalink_aliases
+                 (post_id, user_id, permalink_date, slug) VALUES
+                 ($1, $2, '2025-07-01', $3),
+                 ($4, $5, '2025-07-02', $6),
+                 ($7, $8, '2025-07-03', $9)",
+            )
+            .bind_storage(private.post_id)
+            .bind_storage(user.user_id)
+            .bind_storage(&private_source)
+            .bind_storage(future.post_id)
+            .bind_storage(user.user_id)
+            .bind_storage(&future_source)
+            .bind_storage(deleted.post_id)
+            .bind_storage(user.user_id)
+            .bind_storage(&deleted_source)
+            .execute(pool)
+            .await
+            .unwrap();
+            sqlx::query("UPDATE posts SET deleted_at = $1 WHERE post_id = $2")
+                .bind_storage(public_time)
+                .bind_storage(deleted.post_id)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+    }
+
+    for uri in [
+        format!("/~{}/2025/07/01/{private_source}", user.username),
+        format!("/~{}/2025/07/02/{future_source}", user.username),
+        format!("/~{}/2025/07/03/{deleted_source}", user.username),
+    ] {
+        let response = projector_app(env.posts(), env.users(), env.themes())
+            .oneshot(get(&uri))
+            .await
+            .expect("historical alias request");
+        assert_shell_miss(response).await;
+    }
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn historical_permalink_alias_storage_failure_reports_boundary_once(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let mut posts = MockPostStorage::new();
+    posts
+        .expect_get_post_by_permalink()
+        .once()
+        .returning(|_, _, _, _, _| Ok(None));
+    posts
+        .expect_resolve_historical_post_permalink_alias()
+        .once()
+        .returning(|_, _, _, _| Err(sqlx::Error::PoolClosed));
+    let app = projector_app(Arc::new(posts), env.users(), env.themes());
+
+    let (response, event) = crate::assert_error_signal!(
+        async {
+            app.oneshot(get("/~alice/2025/07/03/historical-source"))
+                .await
+                .expect("historical alias request")
+        },
+        event = "server function failed",
+        event_kind = "Storage",
+        event_class = "Bug",
+        metric_kind = "storage",
+        metric_class = "bug",
+        disposition = "boundary",
+        context = "server.projector.historical_permalink_alias"
+    );
+
+    assert_sanitized_internal_server_error(response).await;
+    assert!(event.contains("pool"), "typed storage source: {event}");
 }
 
 #[apply(backends)]

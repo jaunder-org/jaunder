@@ -264,7 +264,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            40
+            41
         );
         assert_eq!(
             db.pool
@@ -457,6 +457,389 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
+    async fn migration_0041_repairs_duplicate_active_slugs_before_enforcing_uniqueness(
+        #[case] backend: Backend,
+    ) {
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(40).await.unwrap();
+        let insert_user = match &db.pool {
+            CloseablePool::Sqlite(_) => {
+                "INSERT INTO users (user_id, username, password_hash, created_at) VALUES
+                 (6101, 'slug-migration-a', 'hash', CURRENT_TIMESTAMP),
+                 (6102, 'slug-migration-b', 'hash', CURRENT_TIMESTAMP)"
+            }
+            CloseablePool::Postgres(_) => {
+                "INSERT INTO users (user_id, username, password_hash, created_at)
+                 OVERRIDING SYSTEM VALUE VALUES
+                 (6101, 'slug-migration-a', 'hash', CURRENT_TIMESTAMP),
+                 (6102, 'slug-migration-b', 'hash', CURRENT_TIMESTAMP)"
+            }
+        };
+        db.pool.execute(insert_user).await.unwrap();
+        let insert_posts = match &db.pool {
+            CloseablePool::Sqlite(_) => {
+                "INSERT INTO posts
+                 (post_id, user_id, title, rendered_title, slug, body, format, rendered_html,
+                  created_at, updated_at, published_at, summary, deleted_at) VALUES
+                 (6110, 6101, 'Oldest', 'Oldest', 'shared', 'oldest', 'html', '<p>oldest</p>',
+                  '2026-01-01T00:00:00Z', '2030-01-01T00:00:00Z', '2026-01-01T00:00:00Z', NULL, NULL),
+                 (6111, 6101, 'Middle', 'Middle', 'shared', 'middle', 'html', '<p>middle</p>',
+                  '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z', NULL, NULL),
+                 (6112, 6101, 'Newest', 'Newest', 'shared', 'newest', 'html', '<p>newest</p>',
+                  '2026-01-03T00:00:00Z', '2026-01-03T00:00:00Z', '2026-01-03T00:00:00Z', NULL, NULL),
+                 (6113, 6101, 'Occupied', 'Occupied', 'shared-1', 'occupied', 'html', '<p>occupied</p>',
+                  '2026-01-04T00:00:00Z', '2026-01-04T00:00:00Z', '2026-01-04T00:00:00Z', NULL, NULL),
+                 (6114, 6101, 'Deleted', 'Deleted', 'shared', 'deleted', 'html', '<p>deleted</p>',
+                  '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z', NULL, '2026-01-06T00:00:00Z'),
+                 (6120, 6102, 'Other User', 'Other User', 'shared', 'other', 'html', '<p>other</p>',
+                  '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', NULL, NULL)"
+            }
+            CloseablePool::Postgres(_) => {
+                "INSERT INTO posts
+                 (post_id, user_id, title, rendered_title, slug, body, format, rendered_html,
+                  created_at, updated_at, published_at, summary, deleted_at)
+                 OVERRIDING SYSTEM VALUE VALUES
+                 (6110, 6101, 'Oldest', 'Oldest', 'shared', 'oldest', 'html', '<p>oldest</p>',
+                  '2026-01-01T00:00:00Z', '2030-01-01T00:00:00Z', '2026-01-01T00:00:00Z', NULL, NULL),
+                 (6111, 6101, 'Middle', 'Middle', 'shared', 'middle', 'html', '<p>middle</p>',
+                  '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z', NULL, NULL),
+                 (6112, 6101, 'Newest', 'Newest', 'shared', 'newest', 'html', '<p>newest</p>',
+                  '2026-01-03T00:00:00Z', '2026-01-03T00:00:00Z', '2026-01-03T00:00:00Z', NULL, NULL),
+                 (6113, 6101, 'Occupied', 'Occupied', 'shared-1', 'occupied', 'html', '<p>occupied</p>',
+                  '2026-01-04T00:00:00Z', '2026-01-04T00:00:00Z', '2026-01-04T00:00:00Z', NULL, NULL),
+                 (6114, 6101, 'Deleted', 'Deleted', 'shared', 'deleted', 'html', '<p>deleted</p>',
+                  '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z', NULL, '2026-01-06T00:00:00Z'),
+                 (6120, 6102, 'Other User', 'Other User', 'shared', 'other', 'html', '<p>other</p>',
+                  '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', NULL, NULL)"
+            }
+        };
+        db.pool.execute(insert_posts).await.unwrap();
+        let insert_long_slugs = match &db.pool {
+            CloseablePool::Sqlite(_) => {
+                "INSERT INTO posts
+                 (post_id, user_id, title, rendered_title, slug, body, format, rendered_html,
+                  created_at, updated_at, published_at) VALUES
+                 (6121, 6102, 'Long Old', 'Long Old', replace(hex(zeroblob(80)), '00', '界'),
+                  'old', 'html', '<p>old</p>', '2026-02-01T00:00:00Z',
+                  '2026-02-01T00:00:00Z', '2026-02-01T00:00:00Z'),
+                 (6122, 6102, 'Long New', 'Long New', replace(hex(zeroblob(80)), '00', '界'),
+                  'new', 'html', '<p>new</p>', '2026-02-02T00:00:00Z',
+                  '2026-02-02T00:00:00Z', '2026-02-02T00:00:00Z')"
+            }
+            CloseablePool::Postgres(_) => {
+                "INSERT INTO posts
+                 (post_id, user_id, title, rendered_title, slug, body, format, rendered_html,
+                  created_at, updated_at, published_at)
+                 OVERRIDING SYSTEM VALUE VALUES
+                 (6121, 6102, 'Long Old', 'Long Old', repeat('界', 80),
+                  'old', 'html', '<p>old</p>', '2026-02-01T00:00:00Z',
+                  '2026-02-01T00:00:00Z', '2026-02-01T00:00:00Z'),
+                 (6122, 6102, 'Long New', 'Long New', repeat('界', 80),
+                  'new', 'html', '<p>new</p>', '2026-02-02T00:00:00Z',
+                  '2026-02-02T00:00:00Z', '2026-02-02T00:00:00Z')"
+            }
+        };
+        db.pool.execute(insert_long_slugs).await.unwrap();
+        let insert_edge_groups = match &db.pool {
+            CloseablePool::Sqlite(_) => {
+                "INSERT INTO posts
+                 (post_id, user_id, title, rendered_title, slug, body, format, rendered_html,
+                  created_at, updated_at, published_at) VALUES
+                 (6123, 6102, 'Colliding Long Old', 'Colliding Long Old',
+                  replace(hex(zeroblob(78)), '00', '界') || '甲乙', 'old', 'html', '<p>old</p>',
+                  '2026-02-03T00:00:00Z', '2026-02-03T00:00:00Z', '2026-02-03T00:00:00Z'),
+                 (6124, 6102, 'Colliding Long New', 'Colliding Long New',
+                  replace(hex(zeroblob(78)), '00', '界') || '甲乙', 'new', 'html', '<p>new</p>',
+                  '2026-02-04T00:00:00Z', '2026-02-04T00:00:00Z', '2026-02-04T00:00:00Z'),
+                 (6140, 6101, 'Quad One', 'Quad One', 'quad', 'one', 'html', '<p>one</p>',
+                  '2026-03-01T00:00:00Z', '2026-03-01T00:00:00Z', '2026-03-01T00:00:00Z'),
+                 (6141, 6101, 'Quad Two', 'Quad Two', 'quad', 'two', 'html', '<p>two</p>',
+                  '2026-03-02T00:00:00Z', '2026-03-02T00:00:00Z', '2026-03-02T00:00:00Z'),
+                 (6142, 6101, 'Quad Three', 'Quad Three', 'quad', 'three', 'html', '<p>three</p>',
+                  '2026-03-03T00:00:00Z', '2026-03-03T00:00:00Z', '2026-03-03T00:00:00Z'),
+                 (6143, 6101, 'Quad Four', 'Quad Four', 'quad', 'four', 'html', '<p>four</p>',
+                  '2026-03-04T00:00:00Z', '2026-03-04T00:00:00Z', '2026-03-04T00:00:00Z'),
+                 (6150, 6102, 'Cutoff Old', 'Cutoff Old',
+                  replace(hex(zeroblob(77)), '00', 'a') || '-bb', 'old', 'html', '<p>old</p>',
+                  '2026-04-01T00:00:00Z', '2026-04-01T00:00:00Z', '2026-04-01T00:00:00Z'),
+                 (6151, 6102, 'Cutoff New', 'Cutoff New',
+                  replace(hex(zeroblob(77)), '00', 'a') || '-bb', 'new', 'html', '<p>new</p>',
+                  '2026-04-02T00:00:00Z', '2026-04-02T00:00:00Z', '2026-04-02T00:00:00Z')"
+            }
+            CloseablePool::Postgres(_) => {
+                "INSERT INTO posts
+                 (post_id, user_id, title, rendered_title, slug, body, format, rendered_html,
+                  created_at, updated_at, published_at)
+                 OVERRIDING SYSTEM VALUE VALUES
+                 (6123, 6102, 'Colliding Long Old', 'Colliding Long Old',
+                  repeat('界', 78) || '甲乙', 'old', 'html', '<p>old</p>',
+                  '2026-02-03T00:00:00Z', '2026-02-03T00:00:00Z', '2026-02-03T00:00:00Z'),
+                 (6124, 6102, 'Colliding Long New', 'Colliding Long New',
+                  repeat('界', 78) || '甲乙', 'new', 'html', '<p>new</p>',
+                  '2026-02-04T00:00:00Z', '2026-02-04T00:00:00Z', '2026-02-04T00:00:00Z'),
+                 (6140, 6101, 'Quad One', 'Quad One', 'quad', 'one', 'html', '<p>one</p>',
+                  '2026-03-01T00:00:00Z', '2026-03-01T00:00:00Z', '2026-03-01T00:00:00Z'),
+                 (6141, 6101, 'Quad Two', 'Quad Two', 'quad', 'two', 'html', '<p>two</p>',
+                  '2026-03-02T00:00:00Z', '2026-03-02T00:00:00Z', '2026-03-02T00:00:00Z'),
+                 (6142, 6101, 'Quad Three', 'Quad Three', 'quad', 'three', 'html', '<p>three</p>',
+                  '2026-03-03T00:00:00Z', '2026-03-03T00:00:00Z', '2026-03-03T00:00:00Z'),
+                 (6143, 6101, 'Quad Four', 'Quad Four', 'quad', 'four', 'html', '<p>four</p>',
+                  '2026-03-04T00:00:00Z', '2026-03-04T00:00:00Z', '2026-03-04T00:00:00Z'),
+                 (6150, 6102, 'Cutoff Old', 'Cutoff Old', repeat('a', 77) || '-bb',
+                  'old', 'html', '<p>old</p>', '2026-04-01T00:00:00Z',
+                  '2026-04-01T00:00:00Z', '2026-04-01T00:00:00Z'),
+                 (6151, 6102, 'Cutoff New', 'Cutoff New', repeat('a', 77) || '-bb',
+                  'new', 'html', '<p>new</p>', '2026-04-02T00:00:00Z',
+                  '2026-04-02T00:00:00Z', '2026-04-02T00:00:00Z')"
+            }
+        };
+        db.pool.execute(insert_edge_groups).await.unwrap();
+        db.pool
+            .execute("INSERT INTO tags (tag_id, tag_slug) VALUES (6130, 'migration-tag')")
+            .await
+            .unwrap();
+        db.pool
+            .execute("INSERT INTO post_tags (post_id, tag_id, tag_display) VALUES (6110, 6130, 'Migration Tag')")
+            .await
+            .unwrap();
+        db.pool
+            .execute(
+                "INSERT INTO post_audiences (post_id, target_kind_id, audience_id)
+                 SELECT 6110, kind_id, NULL FROM target_kinds WHERE name = 'public'",
+            )
+            .await
+            .unwrap();
+        db.pool
+            .execute(
+                "INSERT INTO post_media
+                 (post_id, source, sha256, filename, reference_kind, reference_form)
+                 VALUES (6110, 'local', 'hash', 'migration.png', 'legacy', '')",
+            )
+            .await
+            .unwrap();
+        db.pool
+            .execute(
+                "INSERT INTO feed_cache
+                 (feed_url, body, etag, content_type, representation_modified_at, generated_at, semantic_fingerprint)
+                 VALUES ('/~slug-migration-a/feed.atom', '<feed/>', '\"old\"', 'application/atom+xml',
+                         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
+                         '0000000000000000000000000000000000000000000000000000000000000000')",
+            )
+            .await
+            .unwrap();
+
+        db.migrate_current().await.unwrap();
+
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM posts WHERE post_id = 6112 AND slug = 'shared'")
+                .await
+                .unwrap(),
+            1,
+            "newest duplicate retains the base slug"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT CAST(substr(slug, 8) AS BIGINT) FROM posts WHERE post_id = 6110"
+                )
+                .await
+                .unwrap(),
+            2,
+            "oldest duplicate takes the first unoccupied suffix"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT CAST(substr(slug, 8) AS BIGINT) FROM posts WHERE post_id = 6111"
+                )
+                .await
+                .unwrap(),
+            3,
+            "later repaired duplicates skip earlier allocations"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM post_permalink_aliases WHERE user_id = 6101 AND slug = 'shared'")
+                .await
+                .unwrap(),
+            2,
+            "each renamed Post retains its old permalink identity"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM posts
+                     WHERE post_id = 6121 AND length(slug) = 80 AND slug LIKE '%-1'",
+                )
+                .await
+                .unwrap(),
+            1,
+            "suffix allocation preserves the Unicode scalar length boundary"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM posts
+                     WHERE post_id = 6123 AND length(slug) = 80 AND slug LIKE '%-2'",
+                )
+                .await
+                .unwrap(),
+            1,
+            "backend-neutral queue order resolves colliding truncated candidates"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM posts
+                     WHERE post_id = 6150 AND length(slug) = 79
+                       AND slug LIKE '%-1' AND slug NOT LIKE '%--1'",
+                )
+                .await
+                .unwrap(),
+            1,
+            "migration suffixes trim a hyphen exposed at the truncation boundary"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM posts WHERE
+                     (post_id = 6140 AND slug = 'quad-1') OR
+                     (post_id = 6141 AND slug = 'quad-2') OR
+                     (post_id = 6142 AND slug = 'quad-3') OR
+                     (post_id = 6143 AND slug = 'quad')",
+                )
+                .await
+                .unwrap(),
+            4,
+            "four-Post groups keep the newest base and suffix oldest-first"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM posts WHERE post_id = 6114 AND slug = 'shared'")
+                .await
+                .unwrap(),
+            1,
+            "Deleted Posts do not participate in repair"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM posts WHERE post_id = 6120 AND slug = 'shared'")
+                .await
+                .unwrap(),
+            1,
+            "each User has an independent active slug namespace"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM post_revisions WHERE post_id IN (6110, 6111)")
+                .await
+                .unwrap(),
+            2,
+            "each repair captures exactly one prior-state Revision"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM post_revisions
+                     WHERE post_id = 6110 AND slug = 'shared' AND body = 'oldest'
+                       AND updated_at = '2030-01-01T00:00:00Z'",
+                )
+                .await
+                .unwrap(),
+            1,
+            "the Revision retains the complete pre-repair scalar state"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM post_revision_tags prt
+                     JOIN post_revisions pr ON pr.revision_id = prt.revision_id
+                     WHERE pr.post_id = 6110 AND prt.tag_slug = 'migration-tag'",
+                )
+                .await
+                .unwrap(),
+            1,
+            "repair preserves Revision tag state"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM post_revision_audiences pra
+                     JOIN post_revisions pr ON pr.revision_id = pra.revision_id
+                     WHERE pr.post_id = 6110 AND pra.target_kind = 'public'",
+                )
+                .await
+                .unwrap(),
+            1,
+            "repair preserves Revision audience state"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM post_media pm
+                     JOIN post_revisions pr ON pr.revision_id = pm.revision_id
+                     WHERE pr.post_id = 6110 AND pm.subject_kind = 'revision'",
+                )
+                .await
+                .unwrap(),
+            1,
+            "repair snapshots current media references"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM posts WHERE post_id = 6110 AND updated_at > '2030-01-01T00:00:00Z'")
+                .await
+                .unwrap(),
+            1,
+            "repair clock is strictly later even for restored future timestamps"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM feed_cache")
+                .await
+                .unwrap(),
+            0,
+            "permalink-bearing cache state is invalidated"
+        );
+        db.pool
+            .execute(
+                "INSERT INTO posts
+                 (user_id, title, rendered_title, slug, body, format, rendered_html,
+                  created_at, updated_at, published_at)
+                 VALUES (6101, 'Conflict', 'Conflict', 'shared', 'body', 'html', '<p>body</p>',
+                         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            )
+            .await
+            .expect_err("the active per-User slug constraint must arbitrate writes");
+        db.pool
+            .execute("UPDATE posts SET deleted_at = CURRENT_TIMESTAMP WHERE post_id = 6112")
+            .await
+            .unwrap();
+        db.pool
+            .execute(
+                "INSERT INTO posts
+                 (user_id, title, rendered_title, slug, body, format, rendered_html,
+                  created_at, updated_at, published_at)
+                 VALUES (6101, 'Replacement', 'Replacement', 'shared', 'body', 'html', '<p>body</p>',
+                         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            )
+            .await
+            .expect("soft deletion releases the active slug");
+
+        db.migrate_current().await.unwrap();
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM post_revisions WHERE post_id IN (6110, 6111)")
+                .await
+                .unwrap(),
+            2,
+            "an already-applied migration is inert"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
     async fn migration_0034_removes_legacy_theme_rows_after_0033_backfill(
         #[case] backend: Backend,
     ) {
@@ -523,7 +906,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            40,
+            41,
         );
     }
 
@@ -995,7 +1378,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            40
+            41
         );
         assert_eq!(
             db.pool

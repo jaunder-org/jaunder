@@ -159,14 +159,13 @@ async fn restore_database_transaction(
         .await?;
     let result = async {
         let mut validation_report = RestoreValidationReport::default();
-        // Clear every table before loading any: `SET CONSTRAINTS` defers foreign-key
-        // *checks*, not `ON DELETE CASCADE` *actions*
+        // Clear every live portable table before loading any, including tables
+        // introduced after an older supported manifest. `SET CONSTRAINTS` defers
+        // foreign-key *checks*, not `ON DELETE CASCADE` *actions*
         // (docs/adr/0115-clear-then-load-restore.md).
-        // Restore table names originate in the validated catalog and are PostgreSQL-quoted.
-        for table in backup::restore_table_order(&manifest.tables)
-            .into_iter()
-            .rev()
-        {
+        // Table names originate in the validated catalog and are PostgreSQL-quoted.
+        let live_tables = existing_export_tables(&mut connection).await?;
+        for table in backup::restore_table_order(&live_tables).into_iter().rev() {
             sqlx::query(AssertSqlSafe(format!(
                 "DELETE FROM {}",
                 sql::quote_identifier(table)
@@ -377,6 +376,7 @@ fn restore_type(column: &ColumnInfo) -> &'static str {
     match column.type_name.as_str() {
         "bytea" => "BYTEA",
         "bool" => "BOOLEAN",
+        "date" => "DATE",
         "int2" => "SMALLINT",
         "int4" => "INTEGER",
         "int8" => "BIGINT",
@@ -803,6 +803,16 @@ mod tests {
 
         assert!(sql.contains("to_jsonb(export_row)::text"));
         assert!(sql.contains("ORDER BY \"post_id\", \"tag_id\""));
+    }
+
+    #[test]
+    fn date_columns_restore_through_their_catalog_type() {
+        let column = ColumnInfo {
+            name: "permalink_date".to_owned(),
+            type_name: "date".to_owned(),
+        };
+
+        assert_eq!(restore_type(&column), "DATE");
     }
 
     #[test]

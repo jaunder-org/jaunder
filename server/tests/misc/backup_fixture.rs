@@ -285,6 +285,7 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
         .tags(["Backup-Test"])
         .seed(factory.posts(), write_scope.clone())
         .await;
+    seed_historical_permalink_alias(args, public.post_id, author).await;
     let (viewer, audience, subscription, named_post) = seed_named_audience_post(
         factory.users(),
         factory.subscriptions(),
@@ -321,6 +322,43 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
         passkey_serialization: passkey.serialization,
         passkey_created_at: passkey.created_at,
         passkey_last_used_at: passkey.last_used_at,
+    }
+}
+
+async fn seed_historical_permalink_alias(args: &StorageArgs, post_id: PostId, user_id: UserId) {
+    match &args.db {
+        storage::DbConnectOptions::Sqlite(options) => {
+            let pool = SqlitePoolOptions::new()
+                .connect_with(options.clone())
+                .await
+                .expect("connect SQLite for Historical Post Permalink Alias fixture");
+            sqlx::query(
+                "INSERT INTO post_permalink_aliases
+                 (post_id, user_id, permalink_date, slug)
+                 VALUES ($1, $2, '2025-01-02', 'historical-backup-alias')",
+            )
+            .bind(post_id)
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .expect("seed SQLite Historical Post Permalink Alias fixture");
+        }
+        storage::DbConnectOptions::Postgres { options, .. } => {
+            let pool = PgPoolOptions::new()
+                .connect_with(options.clone())
+                .await
+                .expect("connect PostgreSQL for Historical Post Permalink Alias fixture");
+            sqlx::query(
+                "INSERT INTO post_permalink_aliases
+                 (post_id, user_id, permalink_date, slug)
+                 VALUES ($1, $2, '2025-01-02', 'historical-backup-alias')",
+            )
+            .bind(post_id)
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .expect("seed PostgreSQL Historical Post Permalink Alias fixture");
+        }
     }
 }
 
