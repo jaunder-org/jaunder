@@ -142,6 +142,7 @@ mod tests {
                     tagline: None,
                     base_url: None,
                 },
+                registration_policy: common::registration::RegistrationPolicy::Open,
                 order: common::seed::TimelineOrder::Newest,
                 page: Page {
                     posts: vec![],

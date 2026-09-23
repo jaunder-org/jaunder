@@ -46,6 +46,7 @@ pub fn thumbnail_document(
                 tagline: None,
                 base_url: None,
             },
+            registration_policy: common::registration::RegistrationPolicy::Open,
             order: TimelineOrder::Newest,
             page: Page {
                 posts: vec![fixture_post()?],

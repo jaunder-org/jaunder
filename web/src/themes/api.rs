@@ -1080,6 +1080,9 @@ pub async fn preview(scope: OwnershipScope, theme_id: ThemeId) -> WebResult<Them
                 identity: expect_context::<Arc<dyn SiteConfigStorage>>()
                     .get_identity()
                     .await?,
+                registration_policy: expect_context::<Arc<dyn SiteConfigStorage>>()
+                    .get_registration_policy()
+                    .await?,
                 order: common::seed::TimelineOrder::Newest,
                 page: crate::timeline::fetch_local_timeline(
                     expect_context::<Arc<dyn PostStorage>>().as_ref(),

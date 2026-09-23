@@ -3,6 +3,7 @@ use std::sync::Arc;
 use axum::http::{StatusCode, header};
 use tower::ServiceExt;
 
+use common::registration::RegistrationPolicy;
 use common::theme::{PublishedThemePresentation, Theme};
 use common::time::{PermalinkDate, UtcInstant};
 use common::visibility::ViewerIdentity;
@@ -86,6 +87,53 @@ async fn site_timeline_projects_local_posts(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
+async fn site_timeline_projects_register_only_for_open_policy(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    for (policy, expect_register) in [
+        (RegistrationPolicy::Closed, false),
+        (RegistrationPolicy::OperatorInvites, false),
+        (RegistrationPolicy::MemberInvites, false),
+        (RegistrationPolicy::Open, true),
+    ] {
+        let mut site_config = MockSiteConfigStorage::new();
+        site_config.expect_get_identity().times(1).return_once(|| {
+            Ok(SiteIdentity {
+                title: "Jaunder".parse().unwrap(),
+                tagline: None,
+                base_url: None,
+            })
+        });
+        site_config
+            .expect_get_registration_policy()
+            .times(1)
+            .returning(move || Ok(policy));
+
+        let response = projector_app_with_site_config(
+            env.posts(),
+            env.users(),
+            env.themes(),
+            Arc::new(site_config) as Arc<dyn SiteConfigStorage>,
+        )
+        .oneshot(get("/"))
+        .await
+        .expect("request");
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = body_string(response).await;
+        assert!(html.contains(">Sign in</a>"), "{policy:?}: {html}");
+        assert_eq!(
+            html.contains(">Register</a>"),
+            expect_register,
+            "{policy:?}: {html}"
+        );
+        assert!(
+            html.contains(&format!(r#""registration_policy":"{}""#, policy.as_ref())),
+            "same policy must travel in the seed for {policy:?}: {html}"
+        );
+    }
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn site_timeline_resolves_one_configured_identity_for_head_body_and_seed(
     #[case] backend: Backend,
 ) {
@@ -98,6 +146,10 @@ async fn site_timeline_resolves_one_configured_identity_for_head_body_and_seed(
             base_url: None,
         })
     });
+    site_config
+        .expect_get_registration_policy()
+        .times(1)
+        .returning(|| Ok(RegistrationPolicy::Open));
 
     let response = projector_app_with_site_config(
         env.posts(),
@@ -156,6 +208,39 @@ async fn site_timeline_maps_identity_storage_failure_at_the_projector_boundary(
     let mut site_config = MockSiteConfigStorage::new();
     site_config
         .expect_get_identity()
+        .times(1)
+        .return_once(|| Err(sqlx::Error::PoolClosed));
+
+    let response = projector_app_with_site_config(
+        env.posts(),
+        env.users(),
+        env.themes(),
+        Arc::new(site_config) as Arc<dyn SiteConfigStorage>,
+    )
+    .oneshot(get("/"))
+    .await
+    .expect("request");
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_sanitized_internal_server_error(response).await;
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn site_timeline_maps_registration_policy_failure_at_the_projector_boundary(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let mut site_config = MockSiteConfigStorage::new();
+    site_config.expect_get_identity().times(1).return_once(|| {
+        Ok(SiteIdentity {
+            title: "Jaunder".parse().unwrap(),
+            tagline: None,
+            base_url: None,
+        })
+    });
+    site_config
+        .expect_get_registration_policy()
         .times(1)
         .return_once(|| Err(sqlx::Error::PoolClosed));
 
@@ -486,6 +571,7 @@ async fn every_page_seed_variant_serializes_without_null_fallback(#[case] backen
                 tagline: None,
                 base_url: None,
             },
+            registration_policy: RegistrationPolicy::Open,
             order: common::seed::TimelineOrder::Newest,
             page: page.clone(),
         },

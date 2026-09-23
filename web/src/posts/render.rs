@@ -77,10 +77,11 @@ pub(crate) fn body_with_logo(seed: &PageSeed, logo: &Markup, header: &Markup) ->
         }),
         PageSeed::SiteTimeline {
             identity,
+            registration_policy,
             order,
             page,
         } => render_timeline_page(
-            &render::masthead(identity, logo),
+            &render::masthead(identity, Some(*registration_policy), logo),
             header,
             *order,
             &page.posts,
@@ -635,6 +636,7 @@ mod tests {
         };
         let html = body(&PageSeed::SiteTimeline {
             identity: site_identity(),
+            registration_policy: common::registration::RegistrationPolicy::Open,
             order: common::seed::TimelineOrder::Newest,
             page,
         })
@@ -684,6 +686,7 @@ mod tests {
     fn post_header_has_one_protected_viewer_independent_action_slot() {
         let html = body(&PageSeed::SiteTimeline {
             identity: site_identity(),
+            registration_policy: common::registration::RegistrationPolicy::Open,
             order: common::seed::TimelineOrder::Newest,
             page: one_post_page(),
         })
@@ -705,6 +708,7 @@ mod tests {
     fn local_body_has_semantic_hero_topbar_signin_and_posts() {
         let html = body(&PageSeed::SiteTimeline {
             identity: site_identity(),
+            registration_policy: common::registration::RegistrationPolicy::Open,
             order: common::seed::TimelineOrder::Newest,
             page: one_post_page(),
         })
@@ -748,6 +752,7 @@ mod tests {
         page.has_more = true;
         let with = body(&PageSeed::SiteTimeline {
             identity: site_identity(),
+            registration_policy: common::registration::RegistrationPolicy::Open,
             order: common::seed::TimelineOrder::Newest,
             page,
         })
@@ -759,6 +764,7 @@ mod tests {
 
         let without = body(&PageSeed::SiteTimeline {
             identity: site_identity(),
+            registration_policy: common::registration::RegistrationPolicy::Open,
             order: common::seed::TimelineOrder::Newest,
             page: one_post_page(),
         })
@@ -770,6 +776,7 @@ mod tests {
     fn style_contract_hooks_preserve_route_presence_and_post_landmarks() {
         let timeline = body(&PageSeed::SiteTimeline {
             identity: site_identity(),
+            registration_policy: common::registration::RegistrationPolicy::Open,
             order: common::seed::TimelineOrder::Newest,
             page: one_post_page(),
         })
