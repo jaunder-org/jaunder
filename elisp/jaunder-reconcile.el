@@ -815,7 +815,7 @@ Post body and all other metadata still come from the staged response."
     (goto-char (point-min))
     (let ((case-fold-search t)
           lines)
-      (while (looking-at-p "^[ \t]*#\\+[[:alnum:]_]+:")
+      (while (looking-at-p org-keyword-regexp)
         (when (looking-at
                "^[ \t]*#\\+PROPERTY:[ \t]+JAUNDER_AUDIENCE\\(?:[ \t].*\\)?$")
           (push (buffer-substring-no-properties

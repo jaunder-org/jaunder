@@ -169,8 +169,16 @@
     "#+TITLE: D\n#+DATE: [2026-07-01 Wed 09:00]\n#+PROPERTY: JAUNDER_STATUS published\n\nDraft body.\n"
     ;; Force-draft even though status=published; must succeed and get an id.
     (jaunder-save-draft)
-    (should (jaunder--buffer-property "JAUNDER_ID"))
-    (should (equal (jaunder--buffer-property "JAUNDER_AUDIENCE") "private")))))
+    (let* ((id (jaunder--buffer-property "JAUNDER_ID"))
+           (path (buffer-file-name))
+           (member (jaunder--http-request "GET" (jaunder--member-url id)))
+           (fields (jaunder--harvest-response-fields (plist-get member :body))))
+      (should id)
+      (should (equal (jaunder--buffer-property "JAUNDER_AUDIENCE") "private"))
+      (should (string-match-p
+               "^#\\+PROPERTY: JAUNDER_AUDIENCE private$"
+               (with-temp-buffer (insert-file-contents path) (buffer-string))))
+      (should (equal (cdr (assq 'audiences fields)) '("private")))))))
 
 (provide 'jaunder-publish-integration)
 ;;; jaunder-publish-integration.el ends here
