@@ -59,6 +59,16 @@ type ClassifiedSavedPost = {
  *  the current no-tag call sites). The fields are nested under a `post` wrapper
  *  (#299): the endpoint takes a single typed input struct, and the wire key is
  *  the parameter's name. */
+export function audienceForWire(
+  audience: "public" | "subscribers" | "private",
+) {
+  return {
+    public: audience === "public",
+    subscribers: audience === "subscribers",
+    named: [],
+  };
+}
+
 export async function createPostViaApi(
   page: Page,
   opts: {
@@ -83,11 +93,7 @@ export async function createPostViaApi(
           ...(opts.tags ? { tags: opts.tags } : {}),
           ...(opts.audience
             ? {
-                audience: {
-                  public: opts.audience === "public",
-                  subscribers: opts.audience === "subscribers",
-                  named: [],
-                },
+                audience: audienceForWire(opts.audience),
               }
             : {}),
         },

@@ -23,7 +23,12 @@ import {
   type SandboxSeedManifest,
   type SeedRecord,
 } from "./seed";
-import { composePost, followPermalink, openComposerFromSidebar } from "./posts";
+import {
+  audienceForWire,
+  composePost,
+  followPermalink,
+  openComposerFromSidebar,
+} from "./posts";
 import { mintAppPassword } from "./sessions";
 import { SEL } from "./selectors";
 
@@ -145,11 +150,7 @@ async function createLegacyPostViaApi(
           ...(opts.publishAt ? { publish_at: opts.publishAt } : {}),
           ...(opts.audience
             ? {
-                audience: {
-                  public: opts.audience === "public",
-                  subscribers: opts.audience === "subscribers",
-                  named: [],
-                },
+                audience: audienceForWire(opts.audience),
               }
             : {}),
         },
