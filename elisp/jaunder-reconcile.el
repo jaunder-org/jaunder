@@ -1411,19 +1411,30 @@ unknown, failed, or partial result; only confirmed success retires it."
 Called from Ediff's control-buffer startup hook after its two-way merge output
 is initialized.  Ediff's copy commands and direct Org edits then write the
 same buffer; no local Post file is associated with that buffer."
-  (let ((result ediff-buffer-C))
+  (let ((result ediff-buffer-C)
+        complete)
     (unless (and (buffer-live-p result) (not (buffer-file-name result)))
       (error "Ediff did not provide a non-file-visiting merge output"))
-    (with-current-buffer result
-      (rename-buffer name)
-      (jaunder-reconcile-merge-mode)
-      (setq-local jaunder-reconcile-merge-session session))
-    (setf (jaunder-reconcile-merge-session-scratch session) result)
-    ;; Never let a user-wide Ediff autostore preference save or retire this
-    ;; client-managed result on Ediff quit; only explicit finish may publish.
-    (setq-local ediff-autostore-merges nil)
-    (add-hook 'ediff-quit-hook
-              (lambda () (jaunder--reconcile-merge-close-views session)) nil t)))
+    (unwind-protect
+        (progn
+          (with-current-buffer result
+            (rename-buffer name)
+            (jaunder-reconcile-merge-mode)
+            (setq-local jaunder-reconcile-merge-session session))
+          (setf (jaunder-reconcile-merge-session-scratch session) result)
+          ;; Never let a user-wide Ediff autostore preference save or retire
+          ;; this result on quit; only explicit finish may publish.
+          (setq-local ediff-autostore-merges nil)
+          (add-hook 'ediff-quit-hook
+                    (lambda () (jaunder--reconcile-merge-close-views session)) nil t)
+          (setq complete t))
+      (unless complete
+        (setf (jaunder-reconcile-merge-session-scratch session) nil)
+        (when (buffer-live-p result)
+          (with-current-buffer result
+            (setq-local jaunder-reconcile-merge-allow-kill t)
+            (set-buffer-modified-p nil))
+          (kill-buffer result))))))
 
 (defun jaunder-reconcile-merge-selected ()
   "Stage exactly one reviewed conflict and open a two-way Ediff merge.

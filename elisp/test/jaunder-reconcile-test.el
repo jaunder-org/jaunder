@@ -1959,6 +1959,55 @@ The current filename supplies the local slug evidence used by matched-pull tests
       (when (buffer-live-p report-buffer) (kill-buffer report-buffer))
       (delete-directory root t))))
 
+(ert-deftest jaunder-reconcile-merge-c-mode-hook-failure-removes-unbound-result ()
+  "A failing C-mode hook cannot strand a named, sessionless Ediff result."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-merge-c-hook-" t)))
+         (path (expand-file-name "old.org" root))
+         (bytes (jaunder-reconcile-test--pulled-bytes "7" "old" "\"saved\""))
+         (report-buffer (generate-new-buffer "*Jaunder C hook report*"))
+         row result (org-starts 0))
+    (unwind-protect
+        (progn
+          (with-temp-file path (insert bytes))
+          (setq row (jaunder-reconcile-test--matched-pull-row path "old" 'conflict))
+          (jaunder--render-reconcile-report
+           (jaunder--make-reconcile-report :root root :rows (list row)) report-buffer)
+          (with-current-buffer report-buffer
+            (puthash "post:7" t jaunder-reconcile-marks)
+            (cl-letf (((symbol-function 'jaunder--call-with-blog)
+                       (lambda (_root thunk) (funcall thunk)))
+                      ((symbol-function 'jaunder--reconcile-conflict-preflight)
+                       (lambda (_) '(:ok t :etag "\"old\"")))
+                      ((symbol-function 'jaunder--pull-stage-member)
+                       (lambda (&rest _)
+                         (list :id "7" :slug "old" :etag "\"old\"" :bytes bytes)))
+                      ((symbol-function 'ediff-merge-buffers)
+                       (lambda (_a _b &optional startup _job _file)
+                         (setq result (generate-new-buffer " *Ediff failing C*"))
+                         (with-current-buffer result (insert bytes))
+                         (with-temp-buffer
+                           (setq-local ediff-buffer-C result)
+                           (dolist (hook startup) (funcall hook))))))
+              (let ((org-mode-hook
+                     (list (lambda ()
+                             (setq org-starts (1+ org-starts))
+                             (when (= org-starts 3)
+                               (error "Org failed on Ediff C"))))))
+                (should-not (jaunder-reconcile-merge-selected)))
+              (should (eq (jaunder-reconcile-result-reason
+                           (car jaunder-reconcile-last-batch-results))
+                          'ediff-unavailable))))
+          (should (= org-starts 3))
+          (should-not (buffer-live-p result))
+          (should-not (get-buffer (jaunder--reconcile-merge-scratch-name row root)))
+          (should (equal (with-temp-buffer (insert-file-contents-literally path)
+                                           (buffer-string)) bytes)))
+      (when (buffer-live-p result)
+        (with-current-buffer result (setq-local jaunder-reconcile-merge-allow-kill t))
+        (kill-buffer result))
+      (when (buffer-live-p report-buffer) (kill-buffer report-buffer))
+      (delete-directory root t))))
+
 (ert-deftest jaunder-reconcile-merge-partial-ediff-startup-retains-unpublishable-result ()
   "A C output created before Ediff fails is recoverable but never publishable."
   (let* ((root (file-name-as-directory (make-temp-file "jaunder-merge-partial-" t)))
