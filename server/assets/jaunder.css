@@ -322,10 +322,7 @@
 
 .j-timeline-order {
   display: flex;
-  justify-content: flex-end;
   align-items: center;
-  padding: 10px 28px;
-  border-bottom: 1px var(--border-style) var(--line);
 }
 
 .j-timeline-order .j-timeline-order-button {
@@ -2185,8 +2182,7 @@
     height: auto;
   }
 
-  .j-topbar,
-  .j-timeline-order {
+  .j-topbar {
     padding-right: 16px;
     padding-left: 16px;
   }

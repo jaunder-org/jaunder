@@ -84,9 +84,8 @@ pub(crate) fn body_with_logo(seed: &PageSeed, logo: &Markup, header: &Markup) ->
             order,
             page,
         } => render_timeline_page(
-            &render::masthead(identity, Some(*registration_policy), logo),
+            &render::masthead(identity, Some(*registration_policy), logo, *order),
             header,
-            *order,
             &page.posts,
             page.has_more,
             &TagCtx::SiteWide,
@@ -101,11 +100,10 @@ pub(crate) fn body_with_logo(seed: &PageSeed, logo: &Markup, header: &Markup) ->
                 "Jaunder",
                 &format!("Posts by {username}"),
                 Some("User timeline"),
-                &Markup::empty(),
+                &crate::timeline::render::order_control(*order),
                 logo,
             ),
             header,
-            *order,
             &page.posts,
             page.has_more,
             &TagCtx::ForUser(username.clone()),
@@ -116,11 +114,10 @@ pub(crate) fn body_with_logo(seed: &PageSeed, logo: &Markup, header: &Markup) ->
                 "Jaunder",
                 &format!("#{tag}"),
                 Some("Posts on this instance"),
-                &Markup::empty(),
+                &crate::timeline::render::order_control(*order),
                 logo,
             ),
             header,
-            *order,
             &page.posts,
             page.has_more,
             &TagCtx::SiteWide,
@@ -136,11 +133,10 @@ pub(crate) fn body_with_logo(seed: &PageSeed, logo: &Markup, header: &Markup) ->
                 "Jaunder",
                 &format!("#{tag}"),
                 Some(&format!("Posts by ~{username}")),
-                &Markup::empty(),
+                &crate::timeline::render::order_control(*order),
                 logo,
             ),
             header,
-            *order,
             &page.posts,
             page.has_more,
             &TagCtx::ForUser(username.clone()),
@@ -346,16 +342,15 @@ fn post_action_slot(post_id: PostId) -> Markup {
 }
 
 /// A timeline page's `<main>` content: the given leading `chrome` (a `Topbar`, or
-/// Local's masthead), then a bare `j-scroll` holding the pure order control
-/// immediately above either the empty placeholder or post list and load-more
-/// button — the same structure the shared `TimelineRows` renders, so projector
+/// Local's masthead) with its sort action, then a bare `j-scroll` holding the
+/// empty placeholder or post list and load-more button — the same structure
+/// the shared `TimelineRows` renders, so projector
 /// paint and the reactive `LocalPage` / `UserTimelinePage` / `SiteTagPage` /
 /// `UserTagPage` coincide (the anonymous `SubscribeButton` renders nothing).
 #[must_use]
 fn render_timeline_page(
     chrome: &Markup,
     header: &Markup,
-    order: common::seed::TimelineOrder,
     posts: &[RenderedPost],
     has_more: bool,
     tag_ctx: &TagCtx,
@@ -364,7 +359,6 @@ fn render_timeline_page(
     Markup::new(html! {
         (crate::app::render_theme_hero(chrome, header))
         div class="j-scroll" {
-            (crate::timeline::render::order_control(order))
             div data-jaunder-part="post-list" {
                 @if posts.is_empty() {
                     p { (empty_text) }
@@ -628,6 +622,10 @@ mod tests {
         })
         .into_string();
         assert!(html.contains("Posts by bob"), "expected heading: {html}");
+        assert!(
+            html.contains("class=\"j-topbar-right\"><div class=\"j-timeline-order\""),
+            "User timeline order control belongs in the masthead: {html}"
+        );
         assert!(html.contains("First"), "expected post title: {html}");
         assert!(html.contains("<p>body</p>"), "expected body: {html}");
     }
@@ -657,18 +655,15 @@ mod tests {
             page: one_post_page(),
         })
         .into_string();
-        // Tag pages use the same pure order-control bytes immediately above the list.
         assert!(site.contains("<h1>#rust</h1>"), "{site}");
         assert!(site.contains("Posts on this instance"), "{site}");
-        let control = site
-            .find("data-jaunder-part=\"timeline-order\"")
-            .expect("order control");
-        let list = site
-            .find("data-jaunder-part=\"post-list\"")
-            .expect("post list");
         assert!(
-            control < list,
-            "order control must precede the post list: {site}"
+            site.contains("class=\"j-topbar-right\"><div class=\"j-timeline-order\""),
+            "site-tag order control belongs in the masthead: {site}"
+        );
+        assert!(
+            site.contains("<div class=\"j-scroll\"><div data-jaunder-part=\"post-list\""),
+            "the timeline begins with posts, not a separate order row: {site}"
         );
         assert!(
             site.contains("aria-label=\"Newest first; show oldest first\""),
@@ -685,6 +680,10 @@ mod tests {
         .into_string();
         assert!(user.contains("<h1>#rust</h1>"), "{user}");
         assert!(user.contains("Posts by ~bob"), "{user}");
+        assert!(
+            user.contains("class=\"j-topbar-right\"><div class=\"j-timeline-order\""),
+            "user-tag order control belongs in the masthead: {user}"
+        );
     }
 
     #[test]
@@ -734,16 +733,19 @@ mod tests {
             1,
             "{html}"
         );
-        // The shared pure order control immediately precedes the semantic post list.
+        let signin = html.find("href=\"/login\"").expect("sign in action");
+        let register = html.find("href=\"/register\"").expect("register action");
         let control = html
             .find("data-jaunder-part=\"timeline-order\"")
             .expect("order control");
-        let list = html
-            .find("data-jaunder-part=\"post-list\"")
-            .expect("post list");
+        let end_masthead = html.find("</header>").expect("masthead close");
         assert!(
-            control < list,
-            "order control must precede the post list: {html}"
+            signin < register && register < control && control < end_masthead,
+            "Local actions and order control stay together in masthead order: {html}"
+        );
+        assert!(
+            html.contains("<div class=\"j-scroll\"><div data-jaunder-part=\"post-list\""),
+            "the timeline begins with posts, not a separate order row: {html}"
         );
         assert!(
             html.contains("aria-label=\"Newest first; show oldest first\""),

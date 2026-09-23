@@ -67,6 +67,21 @@ fn local_identity_metadata(identity: RwSignal<Option<SiteIdentity>>) -> impl Int
     }
 }
 
+/// Keep the projector-owned masthead bytes while wiring the sort action on its
+/// containing node; inserting a reactive button here would duplicate it at mount.
+fn interactive_masthead(
+    markup: crate::html::Markup,
+    order: Memo<TimelineOrder>,
+    on_order_change: Callback<TimelineOrder>,
+) -> impl IntoView {
+    markup.inject_into(leptos::html::div().class("j-contents").on(
+        leptos::ev::click,
+        move |event| {
+            timeline::handle_order_click(&event, order.get_untracked(), on_order_change);
+        },
+    ))
+}
+
 #[component]
 pub fn LocalPage() -> impl IntoView {
     let presentation = crate::app::theme_presentation();
@@ -167,26 +182,24 @@ pub fn LocalPage() -> impl IntoView {
         // masthead + rows together. The gate keeps that subtree alive across
         // `Loading → Rows` rather than rebuilding it, which matters here because it
         // is projector-coincident markup (ADR-0041 §2).
-        <TimelineGate
-            state=state
-            on_mutate=on_mutate
-            on_load_more=on_load_more
-            order=Signal::derive(move || order.get())
-            on_order_change=on_order_change
-        >
+        <TimelineGate state=state on_mutate=on_mutate on_load_more=on_load_more>
             {move || {
                 identity
                     .get()
                     .map(|identity| {
-                        crate::app::render_theme_hero(
+                        interactive_masthead(
+                            crate::app::render_theme_hero(
                                 &super::render::masthead(
                                     &identity,
                                     registration_policy.get(),
                                     &crate::app::render_theme_logo(&theme.get()),
+                                    order.get(),
                                 ),
                                 &crate::app::render_theme_header(&theme.get()),
-                            )
-                            .inject_into(leptos::html::div().class("j-contents"))
+                            ),
+                            order,
+                            on_order_change,
+                        )
                     })
             }}
         </TimelineGate>

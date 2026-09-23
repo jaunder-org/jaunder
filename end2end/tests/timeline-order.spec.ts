@@ -29,17 +29,16 @@ async function expectOrderControl(page: Page): Promise<void> {
   });
   await expect(order).toHaveAttribute("data-order", "newest");
   await expect(order.locator("svg")).toHaveCount(1);
+  const masthead = page.locator('[data-jaunder-part="masthead"]');
+  await expect(
+    masthead.locator(`.j-topbar-right ${ORDER_CONTROL}`),
+  ).toHaveCount(1);
   const scroll = page
     .locator(".j-scroll")
     .filter({ has: page.locator(POST_LIST) });
   await expect(scroll).toHaveCount(1);
-  const timelineParts = scroll.locator(`${ORDER_CONTROL}, ${POST_LIST}`);
-  await expect(timelineParts).toHaveCount(2);
-  expect(
-    await timelineParts.evaluateAll((elements) =>
-      elements.map((element) => element.getAttribute("data-jaunder-part")),
-    ),
-  ).toEqual(["timeline-order", "post-list"]);
+  await expect(scroll.locator(ORDER_CONTROL)).toHaveCount(0);
+  await expect(page.locator(ORDER_CONTROL)).toHaveCount(1);
 }
 
 async function createOrderedPosts(page: Page, tag: string): Promise<void> {
@@ -160,6 +159,34 @@ test("timeline order is URL-driven on every post timeline surface", async ({
     await goto(routePage, path, { timeout: firstNav });
     await expectOrderControl(routePage);
     if (path === "/") {
+      const actions = routePage.locator(".j-topbar-right");
+      await expect(actions.locator('a[href="/login"]')).toHaveCount(1);
+      const controls = await actions
+        .locator(`a, ${ORDER_CONTROL}`)
+        .evaluateAll((elements) =>
+          elements.map((element) =>
+            element.tagName === "A"
+              ? element.getAttribute("href")
+              : element.getAttribute("data-jaunder-part"),
+          ),
+        );
+      expect(controls).toEqual(
+        controls.includes("/register")
+          ? ["/login", "/register", "timeline-order"]
+          : ["/login", "timeline-order"],
+      );
+    }
+    if (path === "/app") {
+      const masthead = routePage.locator('[data-jaunder-part="masthead"]');
+      await expect(routePage.locator(".j-home-chrome > .j-topbar")).toHaveCount(
+        1,
+      );
+      await expect(
+        routePage.locator(".j-home-chrome > .j-home-composer"),
+      ).toHaveCount(1);
+      await expect(masthead.locator(ORDER_CONTROL)).toHaveCount(1);
+    }
+    if (path === "/") {
       await expectPublishedTimeOrder(routePage, "descending");
     } else {
       await expectOrderedPosts(routePage, NEWEST_TITLES);
@@ -231,6 +258,54 @@ test("timeline order is URL-driven on every post timeline surface", async ({
   await unknownPage.close();
   await userTagPage.close();
   await appPage.close();
+});
+
+test("Local masthead actions remain usable without overflow at 390px", async ({
+  page,
+  firstNav,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await goto(page, "/", { timeout: firstNav });
+  await expectOrderControl(page);
+
+  const actions = page.locator(".j-topbar-right");
+  const signIn = actions.locator('a[href="/login"]');
+  const sort = actions.locator(`${ORDER_CONTROL} button`);
+  await expect(signIn).toBeVisible();
+  await expect(sort).toBeVisible();
+  const register = actions.locator('a[href="/register"]');
+  const controls = [
+    signIn,
+    ...((await register.count()) ? [register] : []),
+    sort,
+  ];
+  const boxes = await Promise.all(
+    controls.map((control) => control.boundingBox()),
+  );
+  if (boxes.some((box) => box === null)) {
+    throw new Error("a Local masthead action has no visible box");
+  }
+  const layout = await page.evaluate(() => ({
+    viewport: document.documentElement.clientWidth,
+    scroll: document.documentElement.scrollWidth,
+  }));
+  expect(layout.scroll).toBeLessThanOrEqual(layout.viewport);
+  for (let index = 0; index < boxes.length; index += 1) {
+    const box = boxes[index]!;
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(layout.viewport);
+    for (const other of boxes.slice(index + 1)) {
+      expect(
+        box.x < other!.x + other!.width &&
+          other!.x < box.x + box.width &&
+          box.y < other!.y + other!.height &&
+          other!.y < box.y + box.height,
+      ).toBe(false);
+    }
+  }
+  await click(page, `${ORDER_CONTROL} button`);
+  await page.waitForURL(`${BASE_URL}/?order=oldest`);
+  await expect(sort).toHaveAttribute("data-order", "oldest");
 });
 
 test("Oldest timeline seeds remain ordered through CSR mount and load more", async ({

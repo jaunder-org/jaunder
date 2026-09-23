@@ -68,6 +68,44 @@ pub fn wire_timeline_destination(
     });
 }
 
+/// The masthead action shared by every web Post timeline. Its HTML comes from
+/// the same pure renderer as the public projector, keeping the first paint
+/// coincident with the mounted control.
+pub fn handle_order_click(
+    event: &web_sys::MouseEvent,
+    order: TimelineOrder,
+    on_order_change: Callback<TimelineOrder>,
+) {
+    let Some(target) = event
+        .target()
+        .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
+    else {
+        return;
+    };
+    let Ok(Some(_)) = target.closest("[data-jaunder-part=\"timeline-order\"]") else {
+        return;
+    };
+    on_order_change.run(super::render::opposite_order(order));
+}
+
+#[component]
+pub fn TimelineOrderControl(
+    order: Signal<TimelineOrder>,
+    on_order_change: Callback<TimelineOrder>,
+) -> impl IntoView {
+    view! {
+        <div
+            class="j-contents"
+            on:click=move |event| handle_order_click(&event, order.get_untracked(), on_order_change)
+        >
+            {move || {
+                super::render::order_control(order.get())
+                    .inject_into(leptos::html::div().class("j-contents"))
+            }}
+        </div>
+    }
+}
+
 /// The shared error → loading → rows gate every timeline page paints through.
 ///
 /// The body is a `Memo` plus a bare `match`: the decision itself is
@@ -78,8 +116,6 @@ pub fn TimelineGate(
     state: TimelineState,
     on_mutate: Callback<()>,
     on_load_more: Callback<()>,
-    order: Signal<TimelineOrder>,
-    on_order_change: Callback<TimelineOrder>,
     /// Row context for each `PostCard`'s tag chips, and the page's route-derived
     /// identity in one: `None` means the URL segment has not resolved to a user, so
     /// no rows are painted. Defaults to site-wide, which four of five pages want.
@@ -126,8 +162,6 @@ pub fn TimelineGate(
                         state=state
                         on_mutate=on_mutate
                         on_load_more=on_load_more
-                        order=order
-                        on_order_change=on_order_change
                         tag_context=tag_context
                         empty_text=empty_text
                     />
@@ -151,8 +185,6 @@ pub fn TimelineRows(
     state: TimelineState,
     on_mutate: Callback<()>,
     on_load_more: Callback<()>,
-    order: Signal<TimelineOrder>,
-    on_order_change: Callback<TimelineOrder>,
     /// Tag-chip linking context for each row's `PostCard`. Defaults to
     /// `SiteWide` (the site/cockpit timelines); the user timeline passes
     /// `ForUser` so chips also render the "· here" per-author link.
@@ -166,24 +198,8 @@ pub fn TimelineRows(
     let read_rows = move || state.rows.get();
     let read_has_more = move || state.has_more.get();
     let read_in_flight = move || state.status.get().is_in_flight();
-    let toggle_order = move |event: web_sys::MouseEvent| {
-        let Some(target) = event
-            .target()
-            .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
-        else {
-            return;
-        };
-        let Ok(Some(_)) = target.closest("[data-jaunder-part=\"timeline-order\"]") else {
-            return;
-        };
-        on_order_change.run(super::render::opposite_order(order.get_untracked()));
-    };
     view! {
-        <div class="j-scroll" on:click=toggle_order>
-            {move || {
-                super::render::order_control(order.get())
-                    .inject_into(leptos::html::div().class("j-contents"))
-            }}
+        <div class="j-scroll">
             <div data-jaunder-part="post-list">
                 {move || {
                     let rows = read_rows();

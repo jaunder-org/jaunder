@@ -1437,19 +1437,10 @@ test("per-user timeline presents and operates its continuation control", async (
       ),
     )
     .toContain("underline");
-  await continuation.evaluate((button) => {
-    if (!(button instanceof HTMLElement))
-      throw new Error("continuation is not an HTML element");
-    const focusable = Array.from(
-      document.querySelectorAll<HTMLElement>(
-        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-      ),
-    );
-    const preceding = focusable[focusable.indexOf(button) - 1];
-    if (!preceding)
-      throw new Error("continuation has no preceding focus target");
-    preceding.focus();
-  });
+  // Exercise actual keyboard order rather than guessing the preceding focus
+  // target from a DOM selector (which can include hidden Post actions).
+  await continuation.focus();
+  await page.keyboard.press("Shift+Tab");
   await page.keyboard.press("Tab");
   await expect(continuation).toBeFocused();
   await expect
@@ -1771,9 +1762,9 @@ test("Home uses one responsive page scroll for its composer and Posts", async ({
     }
   };
 
-  // Page Down must move the one page scroll while wide Home chrome stays pinned.
+  // Page Down must move the one page scroll while wide Home chrome and
+  // its masthead ordering action stay pinned.
   await expectDocumentOwnsScroll();
-  const desktopOrderTop = (await order.boundingBox())!.y;
   await page.keyboard.press("PageDown");
   await expect
     .poll(() => page.evaluate(() => window.scrollY))
@@ -1784,7 +1775,11 @@ test("Home uses one responsive page scroll for its composer and Posts", async ({
     pinnedTopbar.height,
     0,
   );
-  expect((await order.boundingBox())!.y).toBeLessThan(desktopOrderTop - 200);
+  const pinnedOrder = (await order.boundingBox())!;
+  expect(pinnedOrder.y).toBeGreaterThanOrEqual(0);
+  expect(pinnedOrder.y + pinnedOrder.height).toBeLessThanOrEqual(
+    pinnedTopbar.height,
+  );
 
   // An expanded field yields stickiness to the document rather than trapping tall
   // control content inside the pinned composer.

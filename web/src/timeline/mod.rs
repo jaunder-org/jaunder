@@ -47,4 +47,7 @@ pub use server::{
 #[cfg(target_arch = "wasm32")]
 mod component;
 #[cfg(target_arch = "wasm32")]
-pub use component::{TimelineGate, TimelineRows, spawn_load_more, wire_timeline_destination};
+pub use component::{
+    TimelineGate, TimelineOrderControl, TimelineRows, handle_order_click, spawn_load_more,
+    wire_timeline_destination,
+};

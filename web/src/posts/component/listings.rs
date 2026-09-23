@@ -8,7 +8,7 @@ use crate::feed_discovery::{FeedDiscovery, RsdDiscovery};
 use crate::posts::ListingRoute;
 use crate::reactive::Invalidator;
 use crate::subscriptions::SubscribeButton;
-use crate::timeline::{self, TimelineGate, TimelineState};
+use crate::timeline::{self, TimelineGate, TimelineOrderControl, TimelineState};
 use crate::topbar::Topbar;
 use common::seed::PageSeed;
 use common::tag::Tag;
@@ -74,7 +74,12 @@ fn PublicListingPage(route: Memo<ListingRoute>) -> impl IntoView {
                 })
         }}
         <crate::app::ThemeHero theme>
-            <Topbar title=move || route.get().title() sub=move || route.get().subtitle() />
+            <Topbar title=move || route.get().title() sub=move || route.get().subtitle()>
+                <TimelineOrderControl
+                    order=Signal::derive(move || route.get().order())
+                    on_order_change
+                />
+            </Topbar>
         </crate::app::ThemeHero>
         {move || {
             route
@@ -88,8 +93,6 @@ fn PublicListingPage(route: Memo<ListingRoute>) -> impl IntoView {
             state
             on_mutate
             on_load_more
-            order=Signal::derive(move || route.get().order())
-            on_order_change
             tag_context=Signal::derive(move || route.get().tag_context())
             empty_text
         />

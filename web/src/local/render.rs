@@ -2,13 +2,13 @@
 //! beside `component`): non-reactive markup only, so it stays host-tested and
 //! coverage-measured while the reactive `LocalPage` injects the very same bytes.
 
-use common::{registration::RegistrationPolicy, site::SiteIdentity};
+use common::{registration::RegistrationPolicy, seed::TimelineOrder, site::SiteIdentity};
 use maud::html;
 
 use crate::html::Markup;
 
-/// The Local page masthead — the topbar with its anonymous Sign-in action and the
-/// Register action available only under Open Registration Policy.
+/// The Local page masthead — the topbar with anonymous Sign in, Register under
+/// Open Registration Policy, and the timeline sort action.
 ///
 /// The single source both the projector (`crate::posts::render::body`) and reactive
 /// `local::LocalPage` render, so coincidence holds by construction (ADR-0041 §2) — no
@@ -19,19 +19,21 @@ pub(crate) fn masthead(
     identity: &SiteIdentity,
     registration_policy: Option<RegistrationPolicy>,
     logo: &Markup,
+    order: TimelineOrder,
 ) -> Markup {
-    let cta = Markup::new(html! {
+    let actions = Markup::new(html! {
         a href="/login" class="j-btn j-anon-only" { "Sign in" }
         @if registration_policy == Some(RegistrationPolicy::Open) {
             a href="/register" class="j-btn is-primary j-anon-only" { "Register" }
         }
+        (crate::timeline::render::order_control(order))
     });
     Markup::new(html! {
         (crate::topbar::render(
             identity.title.as_ref(),
             identity.title.as_ref(),
             identity.tagline.as_ref().map(AsRef::as_ref),
-            &cta,
+            &actions,
             logo,
         ))
     })
@@ -41,7 +43,7 @@ pub(crate) fn masthead(
 mod tests {
     use super::masthead;
     use crate::html::Markup;
-    use common::{registration::RegistrationPolicy, site::SiteIdentity};
+    use common::{registration::RegistrationPolicy, seed::TimelineOrder, site::SiteIdentity};
 
     fn identity(tagline: Option<&str>) -> SiteIdentity {
         SiteIdentity {
@@ -57,6 +59,7 @@ mod tests {
             &identity(Some("Thoughtful <publishing>.")),
             Some(RegistrationPolicy::Open),
             &Markup::empty(),
+            TimelineOrder::Newest,
         );
         let html = markup.as_str();
         assert!(
@@ -102,7 +105,13 @@ mod tests {
             (RegistrationPolicy::MemberInvites, false),
             (RegistrationPolicy::Open, true),
         ] {
-            let html = masthead(&identity(None), Some(policy), &Markup::empty()).into_string();
+            let html = masthead(
+                &identity(None),
+                Some(policy),
+                &Markup::empty(),
+                TimelineOrder::Newest,
+            )
+            .into_string();
             assert!(html.contains(">Sign in</a>"), "{policy:?}: {html}");
             assert_eq!(
                 html.contains(">Register</a>"),
@@ -111,7 +120,13 @@ mod tests {
             );
         }
 
-        let unresolved = masthead(&identity(None), None, &Markup::empty()).into_string();
+        let unresolved = masthead(
+            &identity(None),
+            None,
+            &Markup::empty(),
+            TimelineOrder::Newest,
+        )
+        .into_string();
         assert!(unresolved.contains(">Sign in</a>"), "{unresolved}");
         assert!(!unresolved.contains(">Register</a>"), "{unresolved}");
     }
@@ -130,6 +145,7 @@ mod tests {
                 &identity(Some(&tagline)),
                 Some(RegistrationPolicy::Open),
                 &Markup::empty(),
+                TimelineOrder::Newest,
             )
             .into_string();
             assert!(
@@ -145,6 +161,7 @@ mod tests {
             &identity(None),
             Some(RegistrationPolicy::Open),
             &Markup::empty(),
+            TimelineOrder::Newest,
         )
         .into_string();
         assert!(!html.contains("j-sub"), "{html}");
