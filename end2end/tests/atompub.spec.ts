@@ -268,7 +268,9 @@ test("full AtomPub Org publishing flow over HTTP with an app password", async ({
     headers: { authorization: auth },
   });
   expect(service.status()).toBe(200);
-  expect(await service.text()).toContain("app:service");
+  const serviceBody = await service.text();
+  expect(serviceBody).toContain("app:service");
+  expect(serviceBody).toContain("member-etag");
 
   // 2. Create an Org post. Atom title wins over the header, while omitted
   // categories and summary are supplied by its Org metadata.
@@ -317,14 +319,45 @@ Org body</content>
   expect(memberBody).not.toContain("#+DESCRIPTION:");
   expect(memberBody).not.toContain("JAUNDER_STATUS");
 
-  // 4. List the collection feed.
-  const list = await request.get(`${BASE_URL}/atompub/${username}/posts`, {
-    headers: { authorization: auth },
+  // 4. A second Post forces two pages. Each Collection Entry's public
+  // validator must agree with the corresponding Member response, independently
+  // of this Emacs client or the order in which the pages are read.
+  const second = await request.post(`${BASE_URL}/atompub/${username}/posts`, {
+    headers: xml,
+    data: `<entry xmlns="http://www.w3.org/2005/Atom"><title>Second</title><content type="text/org">Second body</content></entry>`,
   });
-  expect(list.status()).toBe(200);
-  const listBody = await list.text();
-  expect(listBody).toContain("<feed");
-  expect(listBody).toContain('rel="edit"');
+  expect(second.status()).toBe(201);
+  let pageUrl = `${BASE_URL}/atompub/${username}/posts?limit=1`;
+  const seenMembers = new Set<string>();
+  for (let pageIndex = 0; pageIndex < 2; pageIndex++) {
+    const list = await request.get(pageUrl, {
+      headers: { authorization: auth },
+    });
+    expect(list.status()).toBe(200);
+    const listBody = await list.text();
+    expect(listBody).toContain("<feed");
+    const entry = listBody.match(/<entry>([\s\S]*?)<\/entry>/)?.[1];
+    expect(entry, "one paginated Entry").toBeTruthy();
+    const edit = entry!.match(/<link href="([^"]+)" rel="edit"\/>/)?.[1];
+    expect(edit).toBeTruthy();
+    expect(seenMembers.has(edit!)).toBe(false);
+    seenMembers.add(edit!);
+    const current = await request.get(onServer(edit!), {
+      headers: { authorization: auth },
+    });
+    expect(current.status()).toBe(200);
+    const etag = current.headers()["etag"];
+    expect(etag).toBeTruthy();
+    const marker = `<j:etag xmlns:j="https://jaunder.org/ns/atompub">&quot;${etag.slice(1, -1)}&quot;</j:etag>`;
+    expect(entry!.match(/<j:etag\b/g)).toHaveLength(1);
+    expect(entry).toContain(marker);
+    if (pageIndex === 0) {
+      const next = listBody.match(/<link href="([^"]+)" rel="next"\/>/)?.[1];
+      expect(next).toBeTruthy();
+      pageUrl = onServer(next!.replaceAll("&amp;", "&"));
+    }
+  }
+  expect(seenMembers.size).toBe(2);
 
   // 5. Update with matching bookkeeping and a separate matching If-Match.
   const editedSlug = "atom-edited";

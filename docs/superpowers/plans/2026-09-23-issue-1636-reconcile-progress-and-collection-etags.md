@@ -58,7 +58,7 @@ changes to Member write/conditional semantics, and #1641's compression work.
   - Verification: focused Emacs ERT as above for initial/refresh start, success,
     failure and report preservation; `devtool run -- devtool check ert` for the
     complete pure suite.
-- [ ] Prove the public endpoint and cross-surface result
+- [x] Prove the public endpoint and cross-surface result
   - Contract: the extension is usable by non-Emacs AtomPub consumers;
     documentation names `j:etag`, `member-etag`, fallback, and the non-atomic
     nature of preview. Preserve the Collection application endpoint's
