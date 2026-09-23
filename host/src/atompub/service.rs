@@ -74,6 +74,8 @@ pub fn render_service_document(doc: &ServiceDocument) -> String {
 
     let mut root = BytesStart::new("app:service");
     root.push_attribute(("xmlns", ns::ATOM_NS));
+    // `atom:title` and `atom:category` use a prefix, not the default namespace.
+    root.push_attribute(("xmlns:atom", ns::ATOM_NS));
     root.push_attribute(("xmlns:app", ns::APP_NS));
     // Declare the Jaunder foreign-markup namespace so the `j:extension`
     // capability marker below is well-formed (ADR-0023).
@@ -206,6 +208,10 @@ mod tests {
     #[test]
     fn service_document_serializes_exact_workspace_and_collection_titles() {
         let out = render_service_document(&sample_doc());
+        assert!(
+            out.contains(&format!(r#"xmlns:atom="{}""#, ns::ATOM_NS)),
+            "prefixed Atom titles require a declared namespace: {out}"
+        );
         assert!(out.contains("<atom:title>alice</atom:title>"), "out: {out}");
         assert!(out.contains("<atom:title>Posts</atom:title>"), "out: {out}");
         assert!(out.contains("<atom:title>Media</atom:title>"), "out: {out}");

@@ -33,8 +33,9 @@ Lets the warning tests assert on emitted warnings without touching the real
 (defconst jaunder-test--service-doc-with-feature
   (concat "<?xml version=\"1.0\"?>"
           "<service xmlns=\"http://www.w3.org/2007/app\""
-          " xmlns:j=\"https://jaunder.org/ns/atompub\">"
-          "<workspace><j:extension version=\"1\""
+          " xmlns:j=\"https://jaunder.org/ns/atompub\""
+          " xmlns:atom=\"http://www.w3.org/2005/Atom\">"
+          "<workspace><atom:title>Blog</atom:title><j:extension version=\"1\""
           " features=\"format-media-type slug\"/></workspace></service>")
   "A service document advertising the format-media-type feature.")
 
@@ -46,14 +47,17 @@ Lets the warning tests assert on emitted warnings without touching the real
 (ert-deftest jaunder-service-advertises-audience-only-for-exact-extension ()
   (let ((valid (jaunder--parse-service-document
                 (concat "<app:service xmlns:app=\"http://www.w3.org/2007/app\""
-                        " xmlns:x=\"https://jaunder.org/ns/atompub\">"
-                        "<app:workspace><x:extension version=\"1\""
+                        " xmlns:x=\"https://jaunder.org/ns/atompub\""
+                        " xmlns:atom=\"http://www.w3.org/2005/Atom\">"
+                        "<app:workspace><atom:title>Blog</atom:title>"
+                        "<x:extension version=\"1\""
                         " features=\"slug audience\"/></app:workspace></app:service>"))))
     (should (jaunder--service-advertises-audience-p valid)))
   (let ((multiple (jaunder--parse-service-document
                    (concat "<app:service xmlns:app=\"http://www.w3.org/2007/app\""
-                           " xmlns:j=\"https://jaunder.org/ns/atompub\">"
-                           "<app:workspace>"
+                           " xmlns:j=\"https://jaunder.org/ns/atompub\""
+                           " xmlns:atom=\"http://www.w3.org/2005/Atom\">"
+                           "<app:workspace><atom:title>Blog</atom:title>"
                            "<j:extension version=\"1\" features=\"slug\"/>"
                            "<j:extension version=\"1\" features=\"audience\"/>"
                            "</app:workspace></app:service>"))))
@@ -66,8 +70,9 @@ Lets the warning tests assert on emitted warnings without touching the real
     (let ((dom (jaunder--parse-service-document
                 (concat "<app:service xmlns:app=\"http://www.w3.org/2007/app\""
                         " xmlns:j=\"https://jaunder.org/ns/atompub\""
-                        " xmlns:f=\"https://example.invalid/foreign\">"
-                        "<app:workspace>" extension
+                        " xmlns:f=\"https://example.invalid/foreign\""
+                        " xmlns:atom=\"http://www.w3.org/2005/Atom\">"
+                        "<app:workspace><atom:title>Blog</atom:title>" extension
                         "</app:workspace></app:service>"))))
       (should-not (jaunder--service-advertises-audience-p dom)))))
 
@@ -75,12 +80,16 @@ Lets the warning tests assert on emitted warnings without touching the real
   "Omitted audience still requires fresh valid service evidence."
   (let ((documents
          (list (jaunder--parse-service-document
-                "<service xmlns=\"http://www.w3.org/2007/app\"><workspace/></service>")
+                (concat "<service xmlns=\"http://www.w3.org/2007/app\""
+                        " xmlns:atom=\"http://www.w3.org/2005/Atom\">"
+                        "<workspace><atom:title>Blog</atom:title></workspace></service>"))
                (jaunder--parse-service-document
                 (concat "<service xmlns=\"http://www.w3.org/2007/app\""
-                        " xmlns:j=\"https://jaunder.org/ns/atompub\">"
-                        "<workspace><j:extension version=\"1\""
-                        " features=\"audience\"/></workspace></service>"))
+                        " xmlns:j=\"https://jaunder.org/ns/atompub\""
+                        " xmlns:atom=\"http://www.w3.org/2005/Atom\">"
+                        "<workspace><atom:title>Blog</atom:title>"
+                        "<j:extension version=\"1\" features=\"audience\"/>"
+                        "</workspace></service>"))
                'unknown))
         (fetches 0))
     (cl-letf (((symbol-function 'jaunder--fetch-service-document)
@@ -109,8 +118,10 @@ Lets the warning tests assert on emitted warnings without touching the real
 (ert-deftest jaunder-parse-service-features-absent-is-empty ()
   ;; Parses fine but advertises nothing → empty list, not `unknown'.
   (should (equal (jaunder--parse-service-features
-                  (concat "<service xmlns=\"http://www.w3.org/2007/app\">"
-                          "<workspace/></service>"))
+                  (concat "<service xmlns=\"http://www.w3.org/2007/app\""
+                          " xmlns:atom=\"http://www.w3.org/2005/Atom\">"
+                          "<workspace><atom:title>Blog</atom:title>"
+                          "</workspace></service>"))
                  '())))
 
 (ert-deftest jaunder-parse-service-features-ignores-incidental-text ()
@@ -132,8 +143,11 @@ Lets the warning tests assert on emitted warnings without touching the real
 (ert-deftest jaunder-service-rejects-incomplete-service-structure ()
   (dolist (body
            '("<service xmlns=\"http://www.w3.org/2007/app\"/>"
+             "<service xmlns=\"http://www.w3.org/2007/app\"><workspace/></service>"
+             "<service xmlns=\"http://www.w3.org/2007/app\"><workspace><title>Wrong namespace</title></workspace></service>"
              "<service xmlns=\"http://www.w3.org/2007/app\"><workspace xmlns=\"https://example.invalid\"/></service>"
-             "<service xmlns=\"http://www.w3.org/2007/app\"><workspace/></service><service xmlns=\"http://www.w3.org/2007/app\"><workspace/></service>"))
+             "<service xmlns=\"http://www.w3.org/2007/app\" xmlns:atom=\"http://www.w3.org/2005/Atom\"><workspace><atom:title>A</atom:title><atom:title>B</atom:title></workspace></service>"
+             "<service xmlns=\"http://www.w3.org/2007/app\" xmlns:atom=\"http://www.w3.org/2005/Atom\"><workspace><atom:title>A</atom:title></workspace></service><service xmlns=\"http://www.w3.org/2007/app\" xmlns:atom=\"http://www.w3.org/2005/Atom\"><workspace><atom:title>B</atom:title></workspace></service>"))
     (should (eq (jaunder--parse-service-document body) 'unknown))))
 
 (ert-deftest jaunder-parse-service-features-unparseable-is-unknown ()

@@ -19,14 +19,18 @@
   "Return valid audience-capable service evidence."
   (jaunder--parse-service-document
    (concat "<service xmlns=\"http://www.w3.org/2007/app\""
-           " xmlns:j=\"https://jaunder.org/ns/atompub\">"
-           "<workspace><j:extension version=\"1\" features=\"audience\"/>"
+           " xmlns:j=\"https://jaunder.org/ns/atompub\""
+           " xmlns:atom=\"http://www.w3.org/2005/Atom\">"
+           "<workspace><atom:title>Blog</atom:title>"
+           "<j:extension version=\"1\" features=\"audience\"/>"
            "</workspace></service>")))
 
 (defun jaunder-publish-test--legacy-service-document (&rest _)
   "Return valid legacy capability evidence for independent publish tests."
   (jaunder--parse-service-document
-   "<service xmlns=\"http://www.w3.org/2007/app\"><workspace/></service>"))
+   (concat "<service xmlns=\"http://www.w3.org/2007/app\""
+           " xmlns:atom=\"http://www.w3.org/2005/Atom\">"
+           "<workspace><atom:title>Blog</atom:title></workspace></service>")))
 
 ;;; Publish-time warnings (shared idiom) ----------------------------------
 
@@ -71,8 +75,10 @@ Lets the warning tests assert on emitted warnings without touching the real
           (cl-letf (((symbol-function 'jaunder--fetch-service-document)
                      (lambda (_base)
                        (jaunder--parse-service-document
-                        (concat "<app:service xmlns:app=\"http://www.w3.org/2007/app\">"
-                                "<app:workspace/></app:service>"))))
+                        (concat "<app:service xmlns:app=\"http://www.w3.org/2007/app\""
+                                " xmlns:atom=\"http://www.w3.org/2005/Atom\">"
+                                "<app:workspace><atom:title>Blog</atom:title>"
+                                "</app:workspace></app:service>"))))
                     ((symbol-function 'jaunder--localize-post-links)
                      (lambda (body) (cl-incf mutations) body))
                     ((symbol-function 'jaunder--localize-media)
@@ -802,7 +808,7 @@ an unconditional update."
                  (concat
                   "<app:service xmlns:app=\"http://www.w3.org/2007/app\""
                   " xmlns:atom=\"http://www.w3.org/2005/Atom\">"
-                  "<app:workspace>"
+                  "<app:workspace><atom:title>Blog</atom:title>"
                   "<app:collection href=\"https://blog/atompub/alice/posts\">"
                   "<app:accept>application/atom+xml;type=entry</app:accept>"
                   "<app:categories><atom:category term=\"rust\"/>"

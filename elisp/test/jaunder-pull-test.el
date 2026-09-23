@@ -512,14 +512,18 @@
 (defun jaunder-pull-test--legacy-service-document (&rest _)
   "Return valid legacy capability evidence for independent pull-path tests."
   (jaunder--parse-service-document
-   "<service xmlns=\"http://www.w3.org/2007/app\"><workspace/></service>"))
+   (concat "<service xmlns=\"http://www.w3.org/2007/app\""
+           " xmlns:atom=\"http://www.w3.org/2005/Atom\">"
+           "<workspace><atom:title>Blog</atom:title></workspace></service>")))
 
 (defun jaunder-pull-test--audience-service-document (&rest _)
   "Return valid audience-capable service evidence."
   (jaunder--parse-service-document
    (concat "<service xmlns=\"http://www.w3.org/2007/app\""
-           " xmlns:j=\"https://jaunder.org/ns/atompub\">"
-           "<workspace><j:extension version=\"1\" features=\"audience\"/>"
+           " xmlns:j=\"https://jaunder.org/ns/atompub\""
+           " xmlns:atom=\"http://www.w3.org/2005/Atom\">"
+           "<workspace><atom:title>Blog</atom:title>"
+           "<j:extension version=\"1\" features=\"audience\"/>"
            "</workspace></service>")))
 
 (defun jaunder-pull-test--member (&optional id slug)

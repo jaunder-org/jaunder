@@ -52,11 +52,21 @@ not cached, so a later publish may retry.  Reset only by restarting Emacs.")
                    (eq (jaunder--atom-local-name (dom-tag dom)) 'service)
                    (equal (jaunder--atom-element-namespace
                            dom (jaunder--atom-namespace-context dom nil))
-                          jaunder--app-ns)
-                   (jaunder--atom-direct-elements-in-namespace
-                    dom 'workspace jaunder--app-ns
-                    (jaunder--atom-namespace-context dom nil)))
-              dom
+                          jaunder--app-ns))
+              (let* ((namespaces (jaunder--atom-namespace-context dom nil))
+                     (workspaces (jaunder--atom-direct-elements-in-namespace
+                                  dom 'workspace jaunder--app-ns namespaces)))
+                (if (and workspaces
+                         (cl-every
+                          (lambda (workspace)
+                            (= (length
+                                (jaunder--atom-direct-elements-in-namespace
+                                 workspace 'title jaunder--atom-ns
+                                 (jaunder--atom-namespace-context workspace namespaces)))
+                               1))
+                          workspaces))
+                    dom
+                  'unknown))
             'unknown)))
     (error 'unknown)))
 

@@ -13,8 +13,10 @@ In: per-operation audience capability evidence, publish/update write-back,
 server-only and selected server-ahead pull, focused Emacs tests, and user-facing
 synchronization guidance.
 
-Out: wire/server changes, database changes, bulk local backfill, automatic
-conflict resolution, and Named audience discovery.
+Out: new wire/server behavior, database changes, bulk local backfill, automatic
+conflict resolution, and Named audience discovery. Owner-approved exception:
+declare the existing Atom prefix on the server's Service Document so its
+title/category elements form valid namespace-qualified XML.
 
 ## Task outline
 

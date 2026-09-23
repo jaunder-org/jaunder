@@ -997,13 +997,14 @@ Jaunder wire extensions ride the namespace `https://jaunder.org/ns/atompub`.
 Every Entry carries the read-only `j:slug` — drafts and scheduled included,
 incoming values ignored — and the Service Document advertises the version-1
 format, slug, audience, and `member-etag` capabilities
-([ADR-0023](adr/0023-atompub-jaunder-wire-extensions.md)). Authenticated
-Collection Entries additionally carry read-only `j:etag`, the exact strong
-validator of their Member resource computed from Post content and its complete
-audience set, rather than the Collection page's validator. The service document
-advertises `member-etag`; extension-aware consumers can classify Posts without
-one Member request per match and fall back to Member reads for absent or invalid
-metadata
+([ADR-0023](adr/0023-atompub-jaunder-wire-extensions.md)). It binds the `atom`
+prefix to the Atom namespace for its workspace/collection titles and categories,
+so its existing markup is namespace-valid. Authenticated Collection Entries
+additionally carry read-only `j:etag`, the exact strong validator of their
+Member resource computed from Post content and its complete audience set, rather
+than the Collection page's validator. The service document advertises
+`member-etag`; extension-aware consumers can classify Posts without one Member
+request per match and fall back to Member reads for absent or invalid metadata
 ([Collection Member ETags](adr/0209-atompub-collection-member-etags.md)).
 
 Repeated text-valued `j:audience` elements carry the complete target set as

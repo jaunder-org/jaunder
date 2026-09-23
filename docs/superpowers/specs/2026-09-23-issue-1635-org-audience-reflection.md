@@ -79,7 +79,9 @@ merely because the author relied on the server's Default Audience.
 - Rejection/412 and blocked pull do not add, delete, or alter local audience
   headers.
 - Ordinary Emacs unit and live integration suites and the applicable repository
-  verification gates pass; no server-side behavior or database migration is
+  verification gates pass. The existing Service Document must be
+  namespace-valid; declaring the Atom prefix used by its titles and categories
+  is the sole server-side serialization correction. No database migration is
   needed.
 
 ## Boundaries
@@ -89,4 +91,6 @@ merely because the author relied on the server's Default Audience.
   authoritative audience evidence.
 - Do not add Named audience discovery, audience editing UI, automatic conflict
   resolution, or a new AtomPub extension version. Do not make absence of
-  `JAUNDER_AUDIENCE` mean Private or drop legacy-server compatibility.
+  `JAUNDER_AUDIENCE` mean Private or drop legacy-server compatibility. The
+  owner-approved namespace declaration for existing Service Document Atom
+  elements introduces no new element, capability, or audience behavior.
