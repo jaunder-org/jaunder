@@ -56,7 +56,7 @@ HTTP/filesystem or Media, and changes to ordinary non-conflict operations.
     deliberate response loss and post-commit local failure; live Emacs proof of
     successful local choice and concurrent remote edit (no unconditional PUT).
 
-- [ ] 4. Merge one conflict through two-way Ediff into a client-managed scratch
+- [x] 4. Merge one conflict through two-way Ediff into a client-managed scratch
       result, then finalize only with explicit User action.
   - Contract: stage actual remote Member and Media before opening Ediff; keep
     the local Post, remote Post, reviewed evidence, and report-buffer identity

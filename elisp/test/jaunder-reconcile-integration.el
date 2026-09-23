@@ -408,6 +408,90 @@ When DRAFT is non-nil, create a draft Member."
          (kill-buffer local))
        (delete-directory root t)))))
 
+(ert-deftest jaunder-reconcile-live-merge-publishes-only-explicit-authored-result ()
+  "A real conflict stages both sides, then explicit completion installs merged Org."
+  (jaunder-test--with-live-server
+   (let* ((root (file-name-as-directory (make-temp-file "jaunder-merge-live-" t)))
+          (jaunder-blogs (list (cons root (list :base-url jaunder-test-base-url
+                                                :username jaunder-test-username))))
+          id path local scratch compared)
+     (unwind-protect
+         (jaunder--call-with-blog
+          root
+          (lambda ()
+            (setq id (jaunder-reconcile-live--create-pagination-member
+                      "Merge baseline" "Initial body" t))
+            (let* ((inventory (jaunder--inventory-for-root root))
+                   (member (cl-find id (jaunder-inventory-server-only inventory)
+                                    :key #'jaunder-inventory-member-id :test #'equal)))
+              (setq path (jaunder-pull-result-path
+                          (jaunder--pull-member root member))
+                    local (find-file-noselect path)))
+            (with-current-buffer local
+              (goto-char (point-max)) (insert "Local authored revision.\n")
+              (save-buffer))
+            (set-file-times path (time-add (current-time) (seconds-to-time 5)))
+            (let* ((url (jaunder--member-url id))
+                   (before (jaunder--http-request "GET" url))
+                   (response (jaunder--http-request
+                              "PUT" url
+                              (jaunder--atom-entry->xml
+                               (jaunder--make-entry
+                                :title "Remote authored title" :draft t
+                                :content-type "text/org" :body "Remote authored revision"))
+                              "application/atom+xml"
+                              (list (cons "If-Match"
+                                          (jaunder--response-header before "ETag"))))))
+              (should (= (plist-get response :status) 200)))
+            (jaunder-reconcile root)
+            (with-current-buffer "*Jaunder Reconcile*"
+              (let ((row (cl-find id (jaunder-reconcile-report-rows
+                                      jaunder-reconcile-report)
+                                  :key #'jaunder--reconcile-row-post-id :test #'equal)))
+                (should (eq (jaunder-reconcile-row-state row) 'conflict))
+                (puthash (format "post:%s" id) t jaunder-reconcile-marks)
+                (cl-letf (((symbol-function 'ediff-buffers)
+                           (lambda (a b &rest _)
+                             (setq compared
+                                   (list (with-current-buffer a (buffer-string))
+                                         (with-current-buffer b (buffer-string)))))))
+                  (setq scratch (jaunder-reconcile-merge-selected)))
+                (should (string-match-p "Local authored revision" (car compared)))
+                (should (string-match-p "Remote authored revision" (cadr compared)))
+                (should-not (string-match-p "Merged authored revision"
+                                            (plist-get (jaunder--http-request
+                                                        "GET" (jaunder--member-url id))
+                                                       :body)))
+                (with-current-buffer scratch
+                  (goto-char (point-min))
+                  (re-search-forward "^#\\+TITLE:.*$")
+                  (replace-match "#+TITLE: Merged authored title")
+                  (goto-char (point-max))
+                  (insert "Merged authored revision.\n")
+                  (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
+                    (jaunder-reconcile-merge-finish)))
+                (should-not (buffer-live-p scratch))
+                (should (eq (jaunder-reconcile-result-outcome
+                             (car jaunder-reconcile-last-batch-results)) 'success))
+                (let ((remote (jaunder--http-request "GET" (jaunder--member-url id))))
+                  (should (string-match-p "Merged authored revision"
+                                          (plist-get remote :body)))
+                  (should (string-match-p "Merged authored title"
+                                          (plist-get remote :body)))
+                  (with-current-buffer local
+                    (should-not (buffer-modified-p))
+                    (should (equal (jaunder--buffer-property "JAUNDER_SYNCED")
+                                   (jaunder--response-header remote "ETag")))
+                    (should (string-match-p "Merged authored revision"
+                                            (buffer-string)))))))))
+       (when (buffer-live-p scratch)
+         (with-current-buffer scratch (set-buffer-modified-p nil))
+         (kill-buffer scratch))
+       (when (buffer-live-p local)
+         (with-current-buffer local (set-buffer-modified-p nil))
+         (kill-buffer local))
+       (delete-directory root t)))))
+
 (defun jaunder-reconcile-live--run-selected (root keys command)
   "Build ROOT's report, mark KEYS, confirm COMMAND, and return its results/prompt."
   (jaunder-reconcile root)

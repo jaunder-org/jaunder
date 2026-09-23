@@ -1732,6 +1732,367 @@ The current filename supplies the local slug evidence used by matched-pull tests
             (should (eq (cadr executed) 'pull))))
       (kill-buffer buffer))))
 
+(ert-deftest jaunder-reconcile-merge-ediff-keeps-independent-authored-scratch ()
+  "Ediff compares the real local/remote copies; cancelling retains edited work."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-merge-ediff-" t)))
+         (path (expand-file-name "old.org" root))
+         (local-bytes (jaunder-reconcile-test--pulled-bytes "7" "old" "\"saved\""))
+         (remote-bytes (jaunder-reconcile-test--pulled-bytes "7" "old" "\"old\""))
+         (report-buffer (generate-new-buffer "*Jaunder merge test*"))
+         row scratch seen)
+    (unwind-protect
+        (progn
+          (with-temp-file path (insert local-bytes))
+          (setq row (jaunder-reconcile-test--matched-pull-row path "old" 'conflict))
+          (jaunder--render-reconcile-report
+           (jaunder--make-reconcile-report :root root :rows (list row)) report-buffer)
+          (with-current-buffer report-buffer
+            (puthash "post:7" t jaunder-reconcile-marks)
+            (cl-letf (((symbol-function 'jaunder--call-with-blog)
+                       (lambda (_root thunk) (funcall thunk)))
+                      ((symbol-function 'jaunder--reconcile-conflict-preflight)
+                       (lambda (_) '(:ok t :etag "\"old\"")))
+                      ((symbol-function 'jaunder--pull-stage-member)
+                       (lambda (&rest _)
+                         (list :id "7" :slug "old" :etag "\"old\""
+                               :bytes remote-bytes)))
+                      ((symbol-function 'ediff-buffers)
+                       (lambda (a b &rest _)
+                         (setq seen (list (with-current-buffer a (buffer-string))
+                                          (with-current-buffer b (buffer-string)))))))
+              (setq scratch (jaunder-reconcile-merge-selected))))
+          (should (equal seen (list local-bytes remote-bytes)))
+          (should (buffer-live-p scratch))
+          (with-current-buffer scratch
+            (should (derived-mode-p 'org-mode))
+            (should (equal (buffer-string) local-bytes))
+            (goto-char (point-max)) (insert "\nMerged authored content\n")
+            (jaunder-reconcile-merge-cancel)
+            (should (string-match-p "Merged authored content" (buffer-string))))
+          (should (equal (with-temp-buffer (insert-file-contents-literally path)
+                                           (buffer-string)) local-bytes)))
+      (when (buffer-live-p scratch)
+        (jaunder--reconcile-merge-close-views
+         (buffer-local-value 'jaunder-reconcile-merge-session scratch))
+        (with-current-buffer scratch
+          (setq-local jaunder-reconcile-merge-allow-kill t))
+        (kill-buffer scratch))
+      (when (buffer-live-p report-buffer) (kill-buffer report-buffer))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-reconcile-merge-post-staging-drift-does-not-open-scratch ()
+  "A final Member drift after Media staging is not a merge session."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-merge-stage-drift-" t)))
+         (path (expand-file-name "old.org" root))
+         (bytes (jaunder-reconcile-test--pulled-bytes "7" "old" "\"saved\""))
+         (report-buffer (generate-new-buffer "*Jaunder merge staging drift*"))
+         row (checks 0))
+    (unwind-protect
+        (progn
+          (with-temp-file path (insert bytes))
+          (setq row (jaunder-reconcile-test--matched-pull-row path "old" 'conflict))
+          (jaunder--render-reconcile-report
+           (jaunder--make-reconcile-report :root root :rows (list row)) report-buffer)
+          (with-current-buffer report-buffer
+            (puthash "post:7" t jaunder-reconcile-marks)
+            (cl-letf (((symbol-function 'jaunder--call-with-blog)
+                       (lambda (_root thunk) (funcall thunk)))
+                      ((symbol-function 'jaunder--reconcile-conflict-preflight)
+                       (lambda (_)
+                         (setq checks (1+ checks))
+                         (if (= checks 2)
+                             (jaunder--reconcile-blocked row 'etag-stale)
+                           '(:ok t :etag "\"old\""))))
+                      ((symbol-function 'jaunder--pull-stage-member)
+                       (lambda (&rest _)
+                         (list :id "7" :slug "old" :etag "\"old\""
+                               :bytes bytes)))
+                      ((symbol-function 'jaunder--reconcile-refresh-buffer)
+                       (lambda (_) nil))
+                      ((symbol-function 'ediff-buffers)
+                       (lambda (&rest _) (ert-fail "Ediff opened on drift"))))
+              (should-not (jaunder-reconcile-merge-selected))
+              (should (= checks 2))
+              (should (eq (jaunder-reconcile-result-reason
+                           (car jaunder-reconcile-last-batch-results))
+                          'etag-stale))
+              (should-not (get-buffer (jaunder--reconcile-merge-scratch-name
+                                       row root))))))
+      (when (buffer-live-p report-buffer) (kill-buffer report-buffer))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-reconcile-merge-scratch-cannot-claim-client-metadata ()
+  "Only authored metadata survives the editable result; identity stays local."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-merge-owned-" t)))
+         (path (expand-file-name "old.org" root))
+         (scratch (generate-new-buffer "*Jaunder metadata scratch*")))
+    (unwind-protect
+        (progn
+          (with-temp-file path
+            (insert "#+TITLE: Original\n#+PROPERTY: JAUNDER_ID 7\n"
+                    "#+PROPERTY: JAUNDER_SLUG old\n#+PROPERTY: JAUNDER_SYNCED \"saved\"\n"
+                    "#+PROPERTY: JAUNDER_DATE_TZ UTC\n"
+                    "#+PROPERTY: JAUNDER_STATUS draft\n\nOriginal body\n"))
+          (with-current-buffer scratch
+            (insert "#+TITLE: Merged title\n#+PROPERTY: JAUNDER_ID 88\n"
+                    "#+PROPERTY: JAUNDER_SLUG attacker\n"
+                    "#+PROPERTY: JAUNDER_SYNCED \"forged\"\n"
+                    "#+PROPERTY: JAUNDER_AUDIENCE followers\n"
+                    "#+PROPERTY: JAUNDER_STATUS published\n\nMerged body\n"))
+          (let* ((session (jaunder--make-reconcile-merge-session
+                           :path path :scratch scratch))
+                 (bytes (jaunder--reconcile-merge-authorized-bytes session)))
+            (with-temp-buffer
+              (insert bytes)
+              (org-mode)
+              (should (equal (jaunder--buffer-property "JAUNDER_ID") "7"))
+              (should (equal (jaunder--buffer-property "JAUNDER_SLUG") "old"))
+              (should (equal (jaunder--buffer-property "JAUNDER_SYNCED") "\"saved\""))
+              (should (equal (jaunder--buffer-property "JAUNDER_DATE_TZ") "UTC"))
+              (should (equal (jaunder--buffer-property "JAUNDER_STATUS") "published"))
+              (should (equal (jaunder--buffer-property "JAUNDER_AUDIENCE") "followers"))
+              (should (equal (jaunder--buffer-keyword "TITLE") "Merged title"))
+              (should (string-match-p "Merged body" (buffer-string)))
+              (should-not (string-match-p "attacker\\|forged\\|JAUNDER_ID 88" bytes)))))
+      (when (buffer-live-p scratch) (kill-buffer scratch))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-reconcile-merge-finish-retains-scratch-after-each-failure ()
+  "Late drift, unknown remote outcome, and partial local commit retain edits."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-merge-finish-" t)))
+         (path (expand-file-name "old.org" root))
+         (original (jaunder-reconcile-test--pulled-bytes "7" "old" "\"saved\""))
+         (report-buffer (generate-new-buffer "*Jaunder finish test*"))
+         (scratch (generate-new-buffer "*Jaunder finish scratch*"))
+         row session mode (checks 0) (sends 0) outcomes)
+    (unwind-protect
+        (progn
+          (with-temp-file path (insert original))
+          (setq row (jaunder-reconcile-test--matched-pull-row path "old" 'conflict))
+          (jaunder--render-reconcile-report
+           (jaunder--make-reconcile-report :root root :rows (list row)) report-buffer)
+          (setq session (jaunder--make-reconcile-merge-session
+                         :row row :report-buffer report-buffer :path path
+                         :scratch scratch))
+          (with-current-buffer scratch
+            (jaunder-reconcile-merge-mode)
+            (insert original "\nEdited merge result\n")
+            (setq-local jaunder-reconcile-merge-session session))
+          (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
+                    ((symbol-function 'jaunder--call-with-blog)
+                     (lambda (_root thunk) (funcall thunk)))
+                    ((symbol-function 'jaunder--reconcile-conflict-preflight)
+                     (lambda (_)
+                       (setq checks (1+ checks))
+                       (if (and (eq mode 'blocked) (= checks 2))
+                           (jaunder--reconcile-blocked row 'etag-stale)
+                         '(:ok t :etag "\"old\""))))
+                    ((symbol-function 'jaunder--prepare-reviewed-update)
+                     (lambda ()
+                       (should (string-match-p "Edited merge result" (buffer-string)))
+                       (should (equal (jaunder--buffer-property "JAUNDER_ID") "7"))
+                       "<entry/>"))
+                    ((symbol-function 'jaunder--http-request)
+                     (lambda (method _url _body _type headers)
+                       (setq sends (1+ sends))
+                       (should (equal method "PUT"))
+                       (should (equal headers '(("If-Match" . "\"old\""))))
+                       (if (eq mode 'unknown)
+                           (error "lost response")
+                         '(:status 200 :headers (("etag" . "\"new\""))))))
+                    ((symbol-function 'jaunder--write-back)
+                     (lambda (&rest _) (error "local checkpoint failed")))
+                    ((symbol-function 'jaunder--reconcile-merge-record)
+                     (lambda (_session _report value)
+                       (push (plist-get value :outcome) outcomes))))
+            (dolist (scenario '((blocked blocked 0) (unknown unknown 1)
+                                (partial partial 2)))
+              (setq mode (car scenario) checks 0)
+              (with-current-buffer scratch (jaunder-reconcile-merge-finish))
+              (should (eq (car outcomes) (cadr scenario)))
+              (should (= sends (nth 2 scenario)))
+              (should (buffer-live-p scratch))
+              (with-current-buffer scratch
+                (should (string-match-p "Edited merge result" (buffer-string)))))))
+      (when (buffer-live-p scratch)
+        (with-current-buffer scratch
+          (setq-local jaunder-reconcile-merge-allow-kill t)
+          (set-buffer-modified-p nil))
+        (kill-buffer scratch))
+      (when (buffer-live-p report-buffer) (kill-buffer report-buffer))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-reconcile-merge-finish-blocks-post-ediff-local-and-remote-drift ()
+  "An edited scratch survives a dirty visiting buffer and a newer Member."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-merge-drift-" t)))
+         (path (expand-file-name "old.org" root))
+         (original (jaunder-reconcile-test--pulled-bytes "7" "old" "\"saved\""))
+         (report-buffer (generate-new-buffer "*Jaunder merge drift report*"))
+         (scratch (generate-new-buffer "*Jaunder merge drift scratch*"))
+         row session visiting (gets 0) result)
+    (unwind-protect
+        (progn
+          (with-temp-file path (insert original))
+          (setq row (jaunder-reconcile-test--matched-pull-row path "old" 'conflict))
+          (jaunder--render-reconcile-report
+           (jaunder--make-reconcile-report :root root :rows (list row)) report-buffer)
+          (setq session (jaunder--make-reconcile-merge-session
+                         :row row :report-buffer report-buffer :path path :scratch scratch)
+                visiting (find-file-noselect path))
+          (with-current-buffer scratch
+            (jaunder-reconcile-merge-mode)
+            (insert original "\nEdited scratch survives\n")
+            (setq-local jaunder-reconcile-merge-session session))
+          (with-current-buffer visiting
+            (goto-char (point-max)) (insert "Unsaved visiting buffer change"))
+          (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
+                    ((symbol-function 'jaunder--call-with-blog)
+                     (lambda (_root thunk) (funcall thunk)))
+                    ((symbol-function 'jaunder--reconcile-pull-unique-match)
+                     (lambda (_) '(:ok t)))
+                    ((symbol-function 'jaunder--http-request)
+                     (lambda (method &rest _)
+                       (should (equal method "GET"))
+                       (setq gets (1+ gets))
+                       '(:status 200 :headers (("etag" . "\"new\"")))))
+                    ((symbol-function 'jaunder--reconcile-merge-record)
+                     (lambda (_session _report value) (setq result value))))
+            (with-current-buffer scratch (jaunder-reconcile-merge-finish))
+            (should (eq (plist-get result :reason) 'local-buffer-modified))
+            (should (= gets 0))
+            (with-current-buffer visiting (revert-buffer t t))
+            (with-current-buffer scratch (jaunder-reconcile-merge-finish))
+            (should (eq (plist-get result :reason) 'etag-stale))
+            (should (= gets 1))
+            (should (buffer-live-p scratch))
+            (with-current-buffer scratch
+              (should (string-match-p "Edited scratch survives" (buffer-string))))))
+      (when (buffer-live-p visiting)
+        (with-current-buffer visiting (set-buffer-modified-p nil))
+        (kill-buffer visiting))
+      (when (buffer-live-p scratch)
+        (with-current-buffer scratch
+          (setq-local jaunder-reconcile-merge-allow-kill t)
+          (set-buffer-modified-p nil))
+        (kill-buffer scratch))
+      (when (buffer-live-p report-buffer) (kill-buffer report-buffer))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-reconcile-merge-finish-installs-only-after-confirmed-put ()
+  "The explicit merge result replaces local bytes only after server confirmation."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-merge-commit-" t)))
+         (path (expand-file-name "old.org" root))
+         (original (jaunder-reconcile-test--pulled-bytes "7" "old" "\"saved\""))
+         (report-buffer (generate-new-buffer "*Jaunder merge commit report*"))
+         (scratch (generate-new-buffer "*Jaunder merge commit scratch*"))
+         row session (checks 0) (committed nil) result)
+    (unwind-protect
+        (progn
+          (with-temp-file path (insert original))
+          (setq row (jaunder-reconcile-test--matched-pull-row path "old" 'conflict))
+          (jaunder--render-reconcile-report
+           (jaunder--make-reconcile-report :root root :rows (list row)) report-buffer)
+          (setq session (jaunder--make-reconcile-merge-session
+                         :row row :report-buffer report-buffer :path path
+                         :scratch scratch))
+          (with-current-buffer scratch
+            (jaunder-reconcile-merge-mode)
+            (insert (replace-regexp-in-string "Body" "Merged author text" original))
+            (setq-local jaunder-reconcile-merge-session session))
+          (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
+                    ((symbol-function 'jaunder--call-with-blog)
+                     (lambda (_root thunk) (funcall thunk)))
+                    ((symbol-function 'jaunder--reconcile-conflict-preflight)
+                     (lambda (_)
+                       (setq checks (1+ checks))
+                       '(:ok t :etag "\"old\"")))
+                    ((symbol-function 'jaunder--prepare-reviewed-update)
+                     (lambda () "<merged/>"))
+                    ((symbol-function 'jaunder--http-request)
+                     (lambda (method _url xml _type headers)
+                       (should (equal method "PUT"))
+                       (should (equal xml "<merged/>"))
+                       (should (equal headers '(("If-Match" . "\"old\""))))
+                       (should (equal (with-temp-buffer
+                                        (insert-file-contents-literally path)
+                                        (buffer-string)) original))
+                       (setq committed t)
+                       '(:status 200 :headers (("etag" . "\"new\"")))))
+                    ((symbol-function 'jaunder--write-back)
+                     (lambda (&rest _)
+                       (should committed)
+                       (should (string-match-p "Merged author text" (buffer-string)))
+                       "old"))
+                    ((symbol-function 'jaunder--reconcile-merge-record)
+                     (lambda (_session _report value)
+                       (setq result value))))
+            (with-current-buffer scratch (jaunder-reconcile-merge-finish)))
+          (should (= checks 2))
+          (should (eq (plist-get result :outcome) 'success))
+          (should-not (buffer-live-p scratch))
+          (should (string-match-p "Merged author text"
+                                  (with-temp-buffer (insert-file-contents path)
+                                                    (buffer-string)))))
+      (when (buffer-live-p scratch) (kill-buffer scratch))
+      (when (buffer-live-p report-buffer) (kill-buffer report-buffer))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-reconcile-merge-discard-requires-explicit-consent ()
+  "Declining discard retains even modified scratch; consent retires it."
+  (let* ((scratch (generate-new-buffer "*Jaunder discard scratch*"))
+         (session (jaunder--make-reconcile-merge-session :scratch scratch))
+         consent)
+    (unwind-protect
+        (with-current-buffer scratch
+          (jaunder-reconcile-merge-mode)
+          (insert "Unsaved authored merge")
+          (setq-local jaunder-reconcile-merge-session session)
+          (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) consent)))
+            (should-not (jaunder--reconcile-merge-confirm-kill))
+            (jaunder-reconcile-merge-discard)
+            (should (buffer-live-p scratch))
+            (setq consent t)
+            (jaunder-reconcile-merge-discard)
+            (should-not (buffer-live-p scratch))))
+      (when (buffer-live-p scratch) (kill-buffer scratch)))))
+
+(ert-deftest jaunder-reconcile-merge-stage-failure-has-no-result-scratch ()
+  "A failed Member or Media stage cannot create an editable merge result."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-merge-fail-" t)))
+         (path (expand-file-name "old.org" root))
+         (bytes (jaunder-reconcile-test--pulled-bytes "7" "old" "\"saved\""))
+         (report-buffer (generate-new-buffer "*Jaunder merge stage test*"))
+         row)
+    (unwind-protect
+        (progn
+          (with-temp-file path (insert bytes))
+          (setq row (jaunder-reconcile-test--matched-pull-row path "old" 'conflict))
+          (jaunder--render-reconcile-report
+           (jaunder--make-reconcile-report :root root :rows (list row)) report-buffer)
+          (with-current-buffer report-buffer
+            (puthash "post:7" t jaunder-reconcile-marks)
+            (cl-letf (((symbol-function 'jaunder--call-with-blog)
+                       (lambda (_root thunk) (funcall thunk)))
+                      ((symbol-function 'jaunder--reconcile-conflict-preflight)
+                       (lambda (_) '(:ok t :etag "\"old\"")))
+                      ((symbol-function 'jaunder--pull-stage-member)
+                       (lambda (&rest _) (error "untrusted Media")))
+                      ((symbol-function 'jaunder--reconcile-refresh-buffer)
+                       (lambda (_) nil))
+                      ((symbol-function 'ediff-buffers)
+                       (lambda (&rest _) (ert-fail "Ediff opened on stage failure"))))
+              (should-not (jaunder-reconcile-merge-selected))
+              (should (eq (jaunder-reconcile-result-reason
+                           (car jaunder-reconcile-last-batch-results))
+                          'merge-staging-failed))))
+          (should-not (cl-find-if
+                       (lambda (buffer)
+                         (string-match-p "\\`\\*Jaunder Merge Result 7 "
+                                         (buffer-name buffer)))
+                       (buffer-list))))
+      (when (buffer-live-p report-buffer) (kill-buffer report-buffer))
+      (delete-directory root t))))
+
 (ert-deftest jaunder-reconcile-keep-local-confirms-selection-and-refuses-other-states ()
   "Only a confirmed conflict may reach the conditional local publish seam."
   (let* ((rows (list (jaunder--make-reconcile-row :state 'conflict :key "post:1"
