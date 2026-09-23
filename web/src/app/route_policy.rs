@@ -182,6 +182,7 @@ macro_rules! app_routes {
     ($consumer:ident) => {
         $consumer! {
             (Local, Public, "/", leptos_router::StaticSegment(""), $crate::local::LocalPage)
+            (LocalFeeds, Public, "/feeds", leptos_router::StaticSegment("feeds"), $crate::feed_discovery::FeedIndexPage)
             (App, Private, "/app", leptos_router::StaticSegment("app"), $crate::cockpit::CockpitPage)
             (Register, Public, "/register", leptos_router::StaticSegment("register"), $crate::registration::RegisterPage)
             (Login, Public, "/login", leptos_router::StaticSegment("login"), $crate::auth::LoginPage)
@@ -209,8 +210,11 @@ macro_rules! app_routes {
             (ForgotPassword, Public, "/forgot-password", leptos_router::StaticSegment("forgot-password"), $crate::password_reset::ForgotPasswordPage)
             (ResetPassword, Public, "/reset-password", leptos_router::StaticSegment("reset-password"), $crate::password_reset::ResetPasswordPage)
             (SiteTag, Public, "/tags/:tag", (leptos_router::StaticSegment("tags"), leptos_router::ParamSegment("tag")), $crate::posts::SiteTagPage)
+            (SiteTagFeeds, Public, "/tags/:tag/feeds", (leptos_router::StaticSegment("tags"), leptos_router::ParamSegment("tag"), leptos_router::StaticSegment("feeds")), $crate::feed_discovery::FeedIndexPage)
             (UserTag, Public, "/:username/tags/:tag", (leptos_router::ParamSegment("username"), leptos_router::StaticSegment("tags"), leptos_router::ParamSegment("tag")), $crate::posts::UserTagPage)
+            (UserTagFeeds, Public, "/:username/tags/:tag/feeds", (leptos_router::ParamSegment("username"), leptos_router::StaticSegment("tags"), leptos_router::ParamSegment("tag"), leptos_router::StaticSegment("feeds")), $crate::feed_discovery::FeedIndexPage)
             (UserTimeline, Public, "/:username", leptos_router::ParamSegment("username"), $crate::posts::UserTimelinePage)
+            (UserFeeds, Public, "/:username/feeds", (leptos_router::ParamSegment("username"), leptos_router::StaticSegment("feeds")), $crate::feed_discovery::FeedIndexPage)
             (Post, Public, "/~:username/:year/:month/:day/:slug", ($crate::route_segments::TildeUsername("username"), leptos_router::ParamSegment("year"), leptos_router::ParamSegment("month"), leptos_router::ParamSegment("day"), leptos_router::ParamSegment("slug")), $crate::posts::PostPage)
         }
     };
@@ -234,7 +238,7 @@ mod tests {
     fn route_catalog_conforms_to_the_approved_private_inventory() {
         assert_eq!(
             route_catalog().len(),
-            31,
+            35,
             "every declared route is classified"
         );
         assert!(private_inventory_conforms(route_catalog()));

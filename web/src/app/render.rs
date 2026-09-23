@@ -134,6 +134,13 @@ pub fn render_head(seed: &PageSeed, early_wasm_fetch_script: Option<&str>) -> Ma
         ),
         PageSeed::SiteTag { tag, .. } => (format!("#{tag}"), String::new()),
         PageSeed::UserTag { username, tag, .. } => (format!("#{tag} by {username}"), String::new()),
+        PageSeed::FeedDiscovery(surface) => (
+            format!(
+                "Syndication feeds for {}",
+                crate::feed_discovery::render::context_label(surface)
+            ),
+            String::new(),
+        ),
     };
     Markup::new(html! {
         @if let Some(script) = early_wasm_fetch_script {
@@ -181,20 +188,9 @@ pub const PROJECTED_LOCAL_METADATA_SELECTOR: &str = "[data-jaunder-projected-loc
 /// permalink page renders none. Post-boot the reactive components re-add
 /// identical links; the duplicates are invisible.
 fn render_discovery(seed: &PageSeed) -> Markup {
-    use common::feed::{FeedFormat, FeedSurface, canonicalize};
+    use common::feed::{FeedFormat, canonicalize};
 
-    let surface = match seed {
-        PageSeed::SiteTimeline { .. } => Some(FeedSurface::Site),
-        PageSeed::SiteTag { tag, .. } => Some(FeedSurface::SiteTag { tag: tag.clone() }),
-        PageSeed::Profile { username, .. } => Some(FeedSurface::User {
-            username: username.clone(),
-        }),
-        PageSeed::UserTag { username, tag, .. } => Some(FeedSurface::UserTag {
-            username: username.clone(),
-            tag: tag.clone(),
-        }),
-        PageSeed::Permalink(_) => None,
-    };
+    let surface = crate::feed_discovery::routes::timeline_seed_surface(seed);
 
     Markup::new(html! {
         @if let Some(surface) = surface {
@@ -245,7 +241,12 @@ pub fn render_shell(presentation: &PublicPresentation<PageSeed>) -> Markup {
         div class="j-root" data-theme=(presentation.theme.data_theme()) {
             div class="j-theme-clip" data-jaunder-theme-clip {
                 div class="j-shell" data-jaunder-theme-surface data-jaunder-style-contract=(theme::STYLE_CONTRACT_VERSION) {
-                    aside class="j-sidebar" data-jaunder-part="navigation-rail" { (crate::sidebar::render_sidebar(active_key)) }
+                    aside class="j-sidebar" data-jaunder-part="navigation-rail" {
+                        (crate::sidebar::render_sidebar(
+                            active_key,
+                            crate::feed_discovery::routes::timeline_seed_surface(seed).as_ref(),
+                        ))
+                    }
                     div class="j-main-region" {
                         main class="j-main" data-jaunder-part="main" {
                             (crate::posts::render::body_with_logo(

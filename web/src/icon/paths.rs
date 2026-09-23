@@ -9,6 +9,8 @@ pub struct Icons;
 impl Icons {
     pub const HOME: &'static str = "M3 10l7-6 7 6v7a1 1 0 0 1-1 1h-4v-5H8v5H4a1 1 0 0 1-1-1z";
     pub const LOCAL: &'static str = "M4 5h12v10H4z M4 9h12";
+    /// Three strokes of the standard RSS symbol: dot, near arc, and far arc.
+    pub const RSS: &'static str = "M4 16h.01 M4 10a6 6 0 0 1 6 6 M4 4a12 12 0 0 1 12 12";
     pub const FED: &'static str =
         "M10 3a7 7 0 1 0 0 14a7 7 0 0 0 0-14zM3 10h14 M10 3c2 3 2 11 0 14 M10 3c-2 3-2 11 0 14";
     pub const REPLY: &'static str = "M4 4h12v9H7l-3 3z";

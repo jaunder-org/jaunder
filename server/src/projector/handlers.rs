@@ -5,9 +5,9 @@ use axum::{
     response::Response,
     routing::get,
 };
-use common::seed::TimelineOrder;
 use common::tag::Tag;
 use common::username::Username;
+use common::{feed::FeedSurface, seed::TimelineOrder};
 use common::{permalink_route::PermalinkRoute, slug::Slug, time::PermalinkDate};
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Deserializer};
@@ -30,14 +30,18 @@ where
 {
     router
         .route("/", get(site_timeline))
+        .route("/feeds", get(site_feeds))
         .route("/~{username}", get(profile))
+        .route("/~{username}/feeds", get(user_feeds))
         .route("/~{username}/{year}/{month}/{day}/{slug}", get(permalink))
         .route(
             "/{year}/{month}/{day}/{slug}",
             get(permalink_alias).head(permalink_alias_head),
         )
         .route("/tags/{tag}", get(site_tag))
+        .route("/tags/{tag}/feeds", get(site_tag_feeds))
         .route("/~{username}/tags/{tag}", get(user_tag))
+        .route("/~{username}/tags/{tag}/feeds", get(user_tag_feeds))
         .layer(Extension(projector))
 }
 
@@ -136,6 +140,63 @@ async fn site_timeline(
 ) -> Response {
     projector
         .project(PublicProjection::SiteTimeline(query.order()), &headers)
+        .await
+}
+
+async fn site_feeds(
+    Extension(projector): Extension<PublicProjector>,
+    headers: HeaderMap,
+) -> Response {
+    projector
+        .project(PublicProjection::FeedDiscovery(FeedSurface::Site), &headers)
+        .await
+}
+
+async fn user_feeds(
+    Extension(projector): Extension<PublicProjector>,
+    headers: HeaderMap,
+    Path(username): Path<SoftPath<Username>>,
+) -> Response {
+    let Some(username) = username.into() else {
+        return projector.shell_response();
+    };
+    projector
+        .project(
+            PublicProjection::FeedDiscovery(FeedSurface::User { username }),
+            &headers,
+        )
+        .await
+}
+
+async fn site_tag_feeds(
+    Extension(projector): Extension<PublicProjector>,
+    headers: HeaderMap,
+    Path(tag): Path<SoftPath<Tag>>,
+) -> Response {
+    let Some(tag) = tag.into() else {
+        return projector.shell_response();
+    };
+    projector
+        .project(
+            PublicProjection::FeedDiscovery(FeedSurface::SiteTag { tag }),
+            &headers,
+        )
+        .await
+}
+
+async fn user_tag_feeds(
+    Extension(projector): Extension<PublicProjector>,
+    headers: HeaderMap,
+    Path((username, tag)): Path<(SoftPath<Username>, SoftPath<Tag>)>,
+) -> Response {
+    let (Some(username), Some(tag)) = (username.into(), tag.into()) else {
+        return projector.shell_response();
+    };
+    projector
+        .project(
+            PublicProjection::FeedDiscovery(FeedSurface::UserTag { username, tag }),
+            &headers,
+        )
         .await
 }
 

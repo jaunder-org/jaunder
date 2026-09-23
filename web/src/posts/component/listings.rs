@@ -24,6 +24,7 @@ fn PublicListingPage(route: Memo<ListingRoute>) -> impl IntoView {
     let presentation = crate::app::theme_presentation();
     let theme = crate::app::public_theme();
     let seed = use_context::<Option<PageSeed>>().flatten();
+    let confirmed_user_tag = crate::feed_discovery::ConfirmedUserTag::current();
 
     state.adopt_seed(route.get_untracked().seeded_page(seed));
     let first_destination = AtomicBool::new(true);
@@ -32,12 +33,20 @@ fn PublicListingPage(route: Memo<ListingRoute>) -> impl IntoView {
         move || {
             if !first_destination.swap(false, Ordering::Relaxed) {
                 state.begin_replacement();
+                confirmed_user_tag.0.set(None);
             }
             (route.get(), invalidator.track())
         },
         move |(route, _)| route.destination(),
     );
-    timeline::wire_timeline_destination(state, destination, presentation);
+    let on_settled = Callback::new(move |resolved: bool| {
+        let surface = resolved
+            .then(|| route.get_untracked().feed_surface())
+            .flatten()
+            .filter(|surface| matches!(surface, common::feed::FeedSurface::UserTag { .. }));
+        confirmed_user_tag.0.set(surface);
+    });
+    timeline::wire_timeline_destination(state, destination, presentation, on_settled);
 
     let on_mutate = Callback::new(move |()| invalidator.notify());
     let on_load_more = Callback::new(move |()| {

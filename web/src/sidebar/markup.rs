@@ -1,6 +1,8 @@
 use std::sync::LazyLock;
 
-use common::{registration::RegistrationPolicy, root_relative_url::RootRelativeUrl};
+use common::{
+    feed::FeedSurface, registration::RegistrationPolicy, root_relative_url::RootRelativeUrl,
+};
 use maud::html;
 
 use crate::html::Markup;
@@ -238,7 +240,19 @@ pub(super) fn test_selector(key: &str) -> Option<&'static str> {
 /// reactive re-render coincide; authenticated users get the reactive build (extra
 /// nav, footer avatar) layered on top (#181).
 #[must_use]
-pub(crate) fn render_sidebar(active_key: &str) -> Markup {
+pub(crate) fn feed_link(surface: Option<&FeedSurface>) -> Markup {
+    Markup::new(html! {
+        @if let Some(surface) = surface {
+            a class="j-feed-discovery-link" href=(surface.discovery_path()) aria-label="Syndication feeds" {
+                (icon::render(Icons::RSS, 18))
+            }
+        }
+    })
+}
+
+/// Anonymous rail chrome, including only the current timeline's RSS marker.
+#[must_use]
+pub(crate) fn render_sidebar(active_key: &str, surface: Option<&FeedSurface>) -> Markup {
     Markup::new(html! {
         a class="j-brand" href="/" data-jaunder-part="site-brand" {
             div class="j-brand-mark" { "j" }
@@ -262,7 +276,7 @@ pub(crate) fn render_sidebar(active_key: &str) -> Markup {
                 }
             }
         }
-        div class="j-sb-foot" {}
+        div class="j-sb-foot" { (feed_link(surface)) }
     })
 }
 
@@ -272,7 +286,7 @@ mod tests {
 
     #[test]
     fn sidebar_renders_local_as_the_sole_anonymous_destination() {
-        let markup = render_sidebar("local");
+        let markup = render_sidebar("local", None);
         let html = markup.as_str();
         assert!(
             html.contains("<div class=\"j-brand-text\">Jaunder</div>"),
@@ -304,8 +318,46 @@ mod tests {
     }
 
     #[test]
+    fn public_rail_footer_links_only_the_current_syndication_context() {
+        for (surface, path) in [
+            (FeedSurface::Site, "/feeds"),
+            (
+                FeedSurface::SiteTag {
+                    tag: "rust".parse().unwrap(),
+                },
+                "/tags/rust/feeds",
+            ),
+            (
+                FeedSurface::User {
+                    username: "alice".parse().unwrap(),
+                },
+                "/~alice/feeds",
+            ),
+            (
+                FeedSurface::UserTag {
+                    username: "alice".parse().unwrap(),
+                    tag: "rust".parse().unwrap(),
+                },
+                "/~alice/tags/rust/feeds",
+            ),
+        ] {
+            let html = render_sidebar("", Some(&surface)).into_string();
+            assert!(
+                html.contains(&format!("href=\"{path}\" aria-label=\"Syndication feeds\"")),
+                "{html}"
+            );
+            assert_eq!(html.matches("aria-label=\"Syndication feeds\"").count(), 1);
+        }
+        assert!(
+            !render_sidebar("", None)
+                .as_str()
+                .contains("Syndication feeds")
+        );
+    }
+
+    #[test]
     fn sidebar_active_class_absent_for_non_local_route() {
-        let markup = render_sidebar("tags");
+        let markup = render_sidebar("tags", None);
         let html = markup.as_str();
         assert!(
             html.contains("<a class=\"j-nav-item\" href=\"/\">"),
@@ -348,7 +400,7 @@ mod tests {
         assert!(authenticated.contains(&"home"));
         assert!(authenticated.contains(&"sessions"));
         assert!(!authenticated.contains(&"local"));
-        let anonymous = render_sidebar("").into_string();
+        let anonymous = render_sidebar("", None).into_string();
         assert!(anonymous.contains(">Local<"), "{anonymous}");
         assert!(!anonymous.contains(">Home<"), "{anonymous}");
     }

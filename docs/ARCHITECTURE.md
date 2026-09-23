@@ -1490,8 +1490,9 @@ orchestration seam. Its constructor declares exactly its `PostStorage`,
 `AppState` or service bundle
 ([ADR-0016](adr/0016-dependency-injection-and-appstate.md)). Its closed
 `PublicProjection` operation represents permalink, site timeline, profile,
-site-tag, and user-tag projection; the implementation is a leaf module, leaving
-`projector/mod.rs` as declaration and explicit-re-export assembly
+site-tag, user-tag, and contextual Syndication Feed discovery projection; the
+implementation is a leaf module, leaving `projector/mod.rs` as declaration and
+explicit-re-export assembly
 ([ADR-0128](adr/0128-mod-rs-assembles-module-surface.md)).
 
 Handlers retain soft route decoding and select an operation only after a valid

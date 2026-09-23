@@ -7,6 +7,7 @@
 
 use crate::content_license::ContentLicense;
 use crate::display_name::DisplayName;
+use crate::feed::FeedSurface;
 use serde::{Deserialize, Serialize};
 
 use crate::ids::PostId;
@@ -227,6 +228,8 @@ pub enum PageSeed {
         page: Page<RenderedPost, TimelineCursor>,
     },
     Permalink(AuthoredPost),
+    /// A public index of existing Syndication Feed representations, scoped to one timeline.
+    FeedDiscovery(FeedSurface),
 }
 
 #[cfg(test)]

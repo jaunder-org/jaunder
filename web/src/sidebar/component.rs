@@ -43,6 +43,7 @@ fn SidebarNavItem(
 #[component]
 pub fn Sidebar() -> impl IntoView {
     let location = hooks::use_location();
+    let confirmed_user_tag = crate::feed_discovery::ConfirmedUserTag::current();
     let active_for_path = move || markup::active_key(&location.pathname.get()).unwrap_or("");
 
     // The shared session context (#591) is the single source: its `current` signal
@@ -67,9 +68,14 @@ pub fn Sidebar() -> impl IntoView {
         <aside class="j-sidebar" data-jaunder-part="navigation-rail">
             {move || {
                 let active_key = active_for_path();
+                let confirmed = confirmed_user_tag.0.get();
+                let surface = crate::feed_discovery::routes::timeline_marker_surface(
+                    &location.pathname.get(),
+                    confirmed.as_ref(),
+                );
                 match session.get() {
                     None => {
-                        markup::render_sidebar(active_key)
+                        markup::render_sidebar(active_key, surface.as_ref())
                             .inject_into(leptos::html::div().class("j-contents"))
                             .into_any()
                     }
@@ -79,7 +85,13 @@ pub fn Sidebar() -> impl IntoView {
                             .flatten()
                             .and_then(Result::ok)
                             .unwrap_or(RegistrationPolicy::Closed);
-                        authed_sidebar(active_key, &user.username, user.is_operator, policy)
+                        authed_sidebar(
+                                active_key,
+                                &user.username,
+                                user.is_operator,
+                                policy,
+                                surface.as_ref(),
+                            )
                             .into_any()
                     }
                 }
@@ -97,6 +109,7 @@ fn authed_sidebar(
     username: &Username,
     is_operator: bool,
     policy: RegistrationPolicy,
+    surface: Option<&common::feed::FeedSurface>,
 ) -> impl IntoView {
     let active_key = active_key.to_string();
     let username = username.clone();
@@ -135,6 +148,7 @@ fn authed_sidebar(
                 <a class="j-sign-out" href="/logout">
                     "Sign out"
                 </a>
+                {markup::feed_link(surface).inject_into(leptos::html::div().class("j-contents"))}
             </div>
         </div>
     }

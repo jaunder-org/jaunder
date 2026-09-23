@@ -38,12 +38,25 @@ impl FeedFormat {
 }
 
 /// The public page whose Syndication Feed representation is addressed.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FeedSurface {
     Site,
     SiteTag { tag: Tag },
     User { username: Username },
     UserTag { username: Username, tag: Tag },
+}
+
+impl FeedSurface {
+    /// The human-facing discovery route for this public Syndication Feed context.
+    #[must_use]
+    pub fn discovery_path(&self) -> String {
+        match self {
+            Self::Site => "/feeds".to_string(),
+            Self::SiteTag { tag } => format!("/tags/{tag}/feeds"),
+            Self::User { username } => format!("/~{username}/feeds"),
+            Self::UserTag { username, tag } => format!("/~{username}/tags/{tag}/feeds"),
+        }
+    }
 }
 
 /// Returns the canonical relative URL for a public Syndication Feed representation.

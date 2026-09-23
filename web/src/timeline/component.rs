@@ -52,18 +52,28 @@ pub fn wire_timeline_destination(
         )>,
     >,
     presentation: crate::app::ThemePresentationCoordinator,
+    on_settled: Callback<bool>,
 ) {
     Effect::new(move |_| match destination.try_get().flatten() {
         Some(Ok((theme, page))) => {
             spawn_local(async move {
                 match presentation.adopt(theme).await {
-                    Ok(crate::app::ThemeAdoption::Applied) => state.apply(Ok(page)),
+                    Ok(crate::app::ThemeAdoption::Applied) => {
+                        state.apply(Ok(page));
+                        on_settled.run(true);
+                    }
                     Ok(crate::app::ThemeAdoption::Superseded) => {}
-                    Err(error) => state.apply(Err(error)),
+                    Err(error) => {
+                        state.apply(Err(error));
+                        on_settled.run(false);
+                    }
                 }
             });
         }
-        Some(Err(error)) => state.apply(Err(error)),
+        Some(Err(error)) => {
+            state.apply(Err(error));
+            on_settled.run(false);
+        }
         None => presentation.begin_navigation(),
     });
 }

@@ -71,6 +71,9 @@ pub(crate) fn body(seed: &PageSeed) -> Markup {
 
 pub(crate) fn body_with_logo(seed: &PageSeed, logo: &Markup, header: &Markup) -> Markup {
     match seed {
+        PageSeed::FeedDiscovery(surface) => {
+            crate::feed_discovery::render::body(surface, logo, header)
+        }
         PageSeed::Permalink(authored) => Markup::new(html! {
             (crate::app::render_theme_hero(
                 &topbar::render("Jaunder", &format!("Post by {}", authored.post.username), None, &Markup::empty(), logo),
