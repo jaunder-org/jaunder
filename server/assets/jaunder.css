@@ -999,6 +999,22 @@
   margin: 0;
 }
 
+.j-post-body pre {
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 12px 14px;
+  border: 1px var(--border-style) var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-alt);
+  font-size: 0.9em;
+  line-height: 1.5;
+}
+
+.j-post-body pre,
+.j-post-body pre * {
+  font-family: var(--font-mono);
+}
+
 .j-provider-embed {
   margin: 1rem 0;
   max-width: 100%;

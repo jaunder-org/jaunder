@@ -128,6 +128,44 @@ test("authenticated user can create a post through the UI", async ({
   );
 });
 
+test("published Org source blocks are distinct and readable on narrow screens", async ({
+  registeredPage,
+}) => {
+  const page = await registeredPage("/posts/new");
+  const summary = await composePost(page, {
+    body: "#+TITLE: Code sample\n\nIntro paragraph.\n\n#+begin_src emacs-lisp\n;; source line\n(use-package consult\n  :after (project)\n  :bind (([remap switch-to-buffer] . consult-buffer)))\n#+end_src\n\nOutro paragraph.",
+    format: "org",
+    audience: "public",
+    publish: true,
+  });
+  await followPermalink(page, summary);
+  const code = page.locator(".j-post-body pre");
+  await expect(code).toContainText("(use-package consult");
+  const style = await code.evaluate((element) => {
+    const css = getComputedStyle(element);
+    return {
+      background: css.backgroundColor,
+      overflowX: css.overflowX,
+      padding: css.padding,
+    };
+  });
+  // A plain <pre> preserves whitespace but is otherwise indistinguishable from prose.
+  expect(style.background).not.toBe("rgba(0, 0, 0, 0)");
+  expect(style.padding).not.toBe("0px");
+  expect(style.overflowX).toBe("auto");
+  await page.setViewportSize({ width: 390, height: 844 });
+  const geometry = await code.evaluate((element) => ({
+    codeWidth: element.getBoundingClientRect().width,
+    postWidth: element.closest(".j-post-body")!.getBoundingClientRect().width,
+    scrollWidth: element.scrollWidth,
+    viewport: document.documentElement.clientWidth,
+    pageWidth: document.documentElement.scrollWidth,
+  }));
+  expect(geometry.codeWidth).toBeLessThanOrEqual(geometry.postWidth);
+  expect(geometry.scrollWidth).toBeGreaterThan(geometry.codeWidth);
+  expect(geometry.pageWidth).toBeLessThanOrEqual(geometry.viewport);
+});
+
 test("published Markdown shortcodes render responsive provider embeds", async ({
   registeredPage,
 }) => {
