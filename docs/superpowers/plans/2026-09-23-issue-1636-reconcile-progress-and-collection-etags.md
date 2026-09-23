@@ -40,7 +40,7 @@ changes to Member write/conditional semantics, and #1641's compression work.
     `devtool run -- emacs --batch -Q -L elisp -l elisp/test/jaunder-reconcile-test.el --eval '(ert-run-tests-batch-and-exit "jaunder-reconcile-")'`
     for valid and invalid wire fixtures and paginated inventory (narrower test
     selector if a single new test answers the current question).
-- [ ] Classify matched Posts from the fast path or existing fallback
+- [x] Classify matched Posts from the fast path or existing fallback
   - Contract: a validated inventory Member ETag replaces the preview's
     matched-Post `GET`; an absent validator invokes the existing Member
     request/classifier and retains row-local transport/HTTP failure evidence.

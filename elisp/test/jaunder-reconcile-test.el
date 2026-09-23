@@ -477,6 +477,39 @@ The current filename supplies the local slug evidence used by matched-pull tests
                      (encode-time 2 0 12 25 8 2026 t)))))
         (should (eq (jaunder-reconcile-row-state row) (nth 2 fixture)))))))
 
+(ert-deftest jaunder-reconcile-matched-preview-uses-page-etags-and-falls-back-per-row ()
+  "Page validators avoid matched reads; old servers still expose read failures."
+  (let* ((first (jaunder--make-inventory-member
+                 :id "7" :slug "one" :etag "\"new\""
+                 :edit-uri "https://example.test/atompub/alice/posts/7"))
+         (second (jaunder--make-inventory-member
+                  :id "8" :slug "two" :etag "\"old\""
+                  :edit-uri "https://example.test/atompub/alice/posts/8"))
+         (older (jaunder-reconcile-test--member "9" "three"))
+         (inventory (jaunder--make-inventory
+                     :matched (cl-loop for member in (list first second older)
+                                       collect (jaunder--make-inventory-match
+                                                :local (jaunder-reconcile-test--local
+                                                        (format "/tmp/%s.org"
+                                                                (jaunder-inventory-member-slug member))
+                                                        (jaunder-inventory-member-id member))
+                                                :member member))))
+         requests)
+    (cl-letf (((symbol-function 'jaunder--reconcile-local-markers)
+               (lambda (_) (list "\"old\"" "2026-08-25T12:00:00Z" nil
+                                 (encode-time 2 0 12 25 8 2026 t))))
+              ((symbol-function 'jaunder--http-request)
+               (lambda (_method url)
+                 (push url requests)
+                 (error "offline"))))
+      (let ((rows (jaunder-reconcile-report-rows
+                   (jaunder--reconcile-build-report "/tmp" inventory))))
+        (should (equal (mapcar #'jaunder-reconcile-row-state rows)
+                       '(server-ahead unchanged unclassifiable)))
+        (should (eq (jaunder-reconcile-row-reason (nth 2 rows))
+                    'member-transport-error))
+        (should (equal requests (list (jaunder-inventory-member-edit-uri older))))))))
+
 (ert-deftest jaunder-reconcile-persisted-local-ahead-beats-mtime-tolerance ()
   "Recovery's explicit marker survives a within-tolerance write-back."
   (let* ((match (jaunder--make-inventory-match

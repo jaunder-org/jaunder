@@ -260,11 +260,16 @@ hide otherwise valid synchronization markers."
                (error nil))))))
 
 (defun jaunder--reconcile-member-outcome (member)
-  "Fetch MEMBER once, retaining a transport failure as row-local data."
-  (condition-case err
-      (list :response (jaunder--http-request
-                       "GET" (jaunder-inventory-member-edit-uri member)))
-    (error (list :error err))))
+  "Use MEMBER's Collection ETag, or fetch it and retain row-local errors."
+  (let ((etag (jaunder-inventory-member-etag member)))
+    (if etag
+        ;; Preserve the existing classification prerequisites, but do not mistake
+        ;; this preview evidence for a fresh Member response at mutation time.
+        (list :response (list :status 200 :headers (list (cons "etag" etag))))
+      (condition-case err
+          (list :response (jaunder--http-request
+                           "GET" (jaunder-inventory-member-edit-uri member)))
+        (error (list :error err))))))
 
 (defun jaunder--reconcile-match-row (match)
   "Fetch and classify one MATCH without letting its failure hide other rows."
