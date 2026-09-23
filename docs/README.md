@@ -234,6 +234,7 @@ convention). See the Status column below for each ADR's current status.
 | [0204](adr/0204-persist-inline-rendered-post-titles.md)                | Persist inline-rendered Post titles                                                                          | accepted   |
 | [0205](adr/0205-trusted-proxy-client-ip.md)                            | Trusted proxy client-IP derivation                                                                           | accepted   |
 | [0206](adr/0206-user-wide-current-content-rights.md)                   | User-wide current Content Rights                                                                             | accepted   |
+| [0207](adr/0207-atompub-post-audience-round-trip.md)                   | AtomPub Post Audience Round-Trip                                                                             | accepted   |
 
 <!-- adr-table:end -->
 

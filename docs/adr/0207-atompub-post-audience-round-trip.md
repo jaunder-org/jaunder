@@ -1,6 +1,6 @@
-# ADR-DRAFT: AtomPub Post Audience Round-Trip
+# ADR-0207: AtomPub Post Audience Round-Trip
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-22
 - Issue: [#1637](https://github.com/jaunder-org/jaunder/issues/1637)
 
@@ -17,7 +17,7 @@ local audience therefore disappears: create applies the instance Default
 Audience, and update preserves the Post's prior audience. Re-inserting the
 property into `atom:content` would make audience the sole exception to the
 body-only content contract established by
-[ADR-0024](../0024-server-side-org-canonicalization.md) and would still leave
+[ADR-0024](0024-server-side-org-canonicalization.md) and would still leave
 responses unable to report the current audience.
 
 Audience is mutable Post state and can contain multiple targets. ADR-0020 makes
@@ -40,17 +40,17 @@ exactly one canonical audience token: `public`, `subscribers`, `private`, or
 range; zero, signs, negatives, and leading zeros are rejected rather than
 normalized.
 
-The wire projects
-[ADR-0020](../0020-content-visibility-and-subscription-model.md) directly. Any
-deduplicated combination of Public, Subscribers, and Named audiences is valid
-and retained even when Public currently dominates effective visibility. Private
-represents the empty target set and is valid only by itself. Canonical output
-orders Public, then Subscribers, then Named audiences by ascending numeric ID.
+The wire projects [ADR-0020](0020-content-visibility-and-subscription-model.md)
+directly. Any deduplicated combination of Public, Subscribers, and Named
+audiences is valid and retained even when Public currently dominates effective
+visibility. Private represents the empty target set and is valid only by itself.
+Canonical output orders Public, then Subscribers, then Named audiences by
+ascending numeric ID.
 
 An incoming nonempty `j:audience` set is structured audience presence. It wins
 as a complete set over audience values in an Org metadata block, following the
 structured-input precedence established by
-[ADR-0155](../0155-server-side-org-metadata-block.md). Absence preserves the
+[ADR-0155](0155-server-side-org-metadata-block.md). Absence preserves the
 existing contract: an Org header may supply the field; otherwise create applies
 the Default Audience and update preserves the current audience. Empty,
 duplicate, malformed, unauthorized, and Private-plus-other representations
@@ -78,8 +78,8 @@ audiences remain authorable only through canonical numeric IDs; discovery and
 friendly selection are separate work.
 
 This decision extends, rather than replaces, the format and slug extension
-contract in [ADR-0023](../0023-atompub-jaunder-wire-extensions.md). Raw Org
-clients may continue using `JAUNDER_AUDIENCE`; the Atom element is the canonical
+contract in [ADR-0023](0023-atompub-jaunder-wire-extensions.md). Raw Org clients
+may continue using `JAUNDER_AUDIENCE`; the Atom element is the canonical
 structured representation for extension-aware clients.
 
 ## Consequences

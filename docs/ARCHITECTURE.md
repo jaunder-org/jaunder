@@ -1010,7 +1010,7 @@ Responses order Public, then Subscribers, then Named IDs ascending, and the same
 projection enters the strong Member ETag. Only the Jaunder namespace, supported
 version `1`, and `audience` feature token together advertise support, and an
 explicit-audience client refuses mutation without them
-([AtomPub Post audience round-trip](adr/drafts/atompub-post-audience-round-trip.md)).
+([AtomPub Post audience round-trip](adr/0207-atompub-post-audience-round-trip.md)).
 
 `CollectionDecl::accept` models Service Document discovery ranges with the
 closed `CollectionAccept` type, separately from concrete uploaded-media
@@ -2678,7 +2678,7 @@ The response reader harvests the complete repeated `j:audience` set. The Org
 mapper carries repeated local `JAUNDER_AUDIENCE` properties into the Entry IR;
 pull synthesizes them in canonical order, and reconciliation treats audience as
 mutable Post state
-([AtomPub Post audience round-trip](adr/drafts/atompub-post-audience-round-trip.md)).
+([AtomPub Post audience round-trip](adr/0207-atompub-post-audience-round-trip.md)).
 
 A body-level relative Org `file` link whose filesystem path ends in `.org` is a
 **Local Post Link candidate** and is claimed before media. It becomes a **Local
@@ -2716,7 +2716,7 @@ foreign-namespace extension, unsupported or missing version, or missing
 `audience` feature fails before any Local Post Link, Media, or Post mutation
 because an older Atom processor may ignore the foreign element and publish with
 unintended visibility
-([AtomPub Post audience round-trip](adr/drafts/atompub-post-audience-round-trip.md)).
+([AtomPub Post audience round-trip](adr/0207-atompub-post-audience-round-trip.md)).
 
 ### Publish orchestration
 
