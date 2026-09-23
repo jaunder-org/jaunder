@@ -1560,6 +1560,112 @@ The current filename supplies the local slug evidence used by matched-pull tests
      :member (jaunder-reconcile-test--member id slug)
      :local-sha256 (jaunder--reconcile-file-sha256 path) :remote-etag "\"old\"")))
 
+(ert-deftest jaunder-reconcile-conflict-preflight-refuses-other-report-states ()
+  "No other classification may turn a reviewed selection into resolution authority."
+  (dolist (state '(server-only server-ahead unchanged local-ahead
+                               unclassifiable orphan local-draft inventory-conflict))
+    (let ((row (jaunder--make-reconcile-row :state state)))
+      (cl-letf (((symbol-function 'jaunder--http-request)
+                 (lambda (&rest _) (ert-fail "ineligible row made a request"))))
+        (let ((result (jaunder--reconcile-conflict-preflight row)))
+          (should (eq (plist-get result :outcome) 'blocked))
+          (should (eq (plist-get result :reason) 'conflict-ineligible)))))))
+
+(ert-deftest jaunder-reconcile-conflict-preflight-needs-complete-reviewed-evidence ()
+  "Missing identity or a weak reviewed ETag cannot authorize a conflict choice."
+  (let ((row (jaunder--make-reconcile-row :state 'conflict)))
+    (should (eq (plist-get (jaunder--reconcile-conflict-preflight row) :reason)
+                'matched-identity-changed))
+    (setf (jaunder-reconcile-row-local row)
+          (jaunder-reconcile-test--local "/tmp/no-reviewed-etag.org" "7")
+          (jaunder-reconcile-row-member row)
+          (jaunder-reconcile-test--member "7" "old"))
+    (should (eq (plist-get (jaunder--reconcile-conflict-preflight row) :reason)
+                'reviewed-etag-invalid))))
+
+(ert-deftest jaunder-reconcile-conflict-preflight-rejects-local-and-remote-drift ()
+  "The reviewed file and Member, not a newer Collection, authorize a choice."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-conflict-" t)))
+         (path (expand-file-name "old.org" root))
+         (jaunder--active-blog '(:base-url "https://example.test" :username "alice"))
+         (jaunder-reconcile-report (jaunder--make-reconcile-report :root root))
+         (jaunder-blogs (list (cons root jaunder--active-blog)))
+         (member-etag "\"old\"")
+         (member-status 200)
+         member-edit-uri member-body collection-offline member-offline row visiting)
+    (unwind-protect
+        (progn
+          (with-temp-file path
+            (insert (jaunder-reconcile-test--pulled-bytes "7" "old" "\"synced\"")))
+          (setq row (jaunder-reconcile-test--matched-pull-row path "old" 'conflict))
+          (cl-letf (((symbol-function 'jaunder--http-request)
+                     (lambda (method url &rest _)
+                       (should (equal method "GET"))
+                       (cond
+                        ((string-suffix-p "/posts" url)
+                         (when collection-offline (error "Collection unavailable"))
+                         (list :status 200
+                               :body (jaunder-reconcile-test--page
+                                      (list (jaunder-reconcile-test--entry "7" "old")))))
+                        ((string-suffix-p "/posts/7" url)
+                         (when member-offline (error "Member unavailable"))
+                         (list :status member-status
+                               :headers (list (cons "etag" member-etag))
+                               :body (or member-body
+                                         (concat "<entry xmlns=\"http://www.w3.org/2005/Atom\""
+                                                 " xmlns:j=\"https://jaunder.org/ns/atompub\">"
+                                                 "<link rel=\"edit\" href=\""
+                                                 (or member-edit-uri url) "\"/>"
+                                                 "<j:slug>old</j:slug></entry>"))))
+                        (t (ert-fail (format "unexpected Member URL %s" url)))))))
+            (let ((result (jaunder--reconcile-conflict-preflight row)))
+              (should (plist-get result :ok))
+              (should (equal (plist-get result :etag) "\"old\"")))
+            (with-temp-file path (insert "changed"))
+            (should (eq (plist-get (jaunder--reconcile-conflict-preflight row) :reason)
+                        'local-bytes-changed))
+            (with-temp-file path
+              (insert (jaunder-reconcile-test--pulled-bytes "7" "old" "\"synced\"")))
+            (setq member-etag "\"new\"")
+            (should (eq (plist-get (jaunder--reconcile-conflict-preflight row) :reason)
+                        'etag-stale))
+            (setq member-etag "\"old\""
+                  member-edit-uri "https://other.example/atompub/alice/posts/7")
+            (should (eq (plist-get (jaunder--reconcile-conflict-preflight row) :reason)
+                        'member-identity-changed))
+            (setq member-edit-uri nil
+                  visiting (find-file-noselect path))
+            (with-current-buffer visiting (insert "unsaved edit"))
+            (should (eq (plist-get (jaunder--reconcile-conflict-preflight row) :reason)
+                        'local-buffer-modified))
+            (with-current-buffer visiting (set-buffer-modified-p nil))
+            (kill-buffer visiting)
+            (setq visiting nil)
+            (with-temp-file (expand-file-name "duplicate.org" root)
+              (insert (jaunder-reconcile-test--pulled-bytes "7" "duplicate" "\"synced\"")))
+            (should (eq (plist-get (jaunder--reconcile-conflict-preflight row) :reason)
+                        'duplicate-local-id))
+            (delete-file (expand-file-name "duplicate.org" root))
+            (setq member-etag "W/\"old\"")
+            (should (eq (plist-get (jaunder--reconcile-conflict-preflight row) :reason)
+                        'current-etag-invalid))
+            (setq member-status 503)
+            (should (eq (plist-get (jaunder--reconcile-conflict-preflight row) :reason)
+                        'member-http-error))
+            (setq member-status 200 member-etag "\"old\"" member-body "<entry/>")
+            (should (eq (plist-get (jaunder--reconcile-conflict-preflight row) :reason)
+                        'member-identity-changed))
+            (setq member-body nil member-offline t)
+            (should (eq (plist-get (jaunder--reconcile-conflict-preflight row) :reason)
+                        'member-transport-error))
+            (setq member-offline nil collection-offline t)
+            (should (eq (plist-get (jaunder--reconcile-conflict-preflight row) :reason)
+                        'fresh-inventory-failed))))
+      (when (buffer-live-p visiting)
+        (with-current-buffer visiting (set-buffer-modified-p nil))
+        (kill-buffer visiting))
+      (delete-directory root t))))
+
 (ert-deftest jaunder-reconcile-pull-state-matrix-returns-complete-task-two-results ()
   "Pull accepts exactly server-only/server-ahead, no-ops unchanged, and blocks six states."
   (dolist (state '(server-only server-ahead unchanged local-ahead conflict

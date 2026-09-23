@@ -2871,11 +2871,10 @@ boundaries as the rest of pull.
 synchronizer. Its persistent report supports arbitrary marks or a contiguous
 active-region selection and explicit, confirmed batch push, pull, and
 remote-delete commands. Operations run deterministically and sequentially;
-unsafe rows are retained as blocked results rather than becoming an overwrite or
-conflict-resolution escape hatch. The buffer refreshes from a new inventory
-after completion or cancellation while retaining the ordered terminal results
-from the last batch, so completed work and independent failures remain visible
-and safe to retry.
+unsafe rows are retained as blocked results rather than becoming an overwrite.
+The buffer refreshes from a new inventory after completion or cancellation while
+retaining the ordered terminal results from the last batch, so completed work
+and independent failures remain visible and safe to retry.
 
 A selected matched `server-ahead` Post may be pulled only after revalidating its
 report-snapshotted local path/SHA-256 and remote strong ETag
@@ -2893,6 +2892,24 @@ local file only after the server's `204`, while a server-only deletion has no
 local-file effect. Completed batch mutations are never rolled back; cancellation
 is honored only between Posts, and rerunning the refreshed report retries only
 the work that remains.
+
+#### Committed direction — conflict resolution
+
+A uniquely matched `conflict` will admit only explicit, confirmed keep-local,
+keep-remote, or single-Post two-way Ediff merge
+([revalidated conflict choices](adr/drafts/emacs-reconciliation-conflict-resolution.md)).
+Each path will verify reviewed local bytes/identity, a clean visiting buffer,
+and a fresh Member identity and strong ETag before commitment. Keep-local and
+merge will send chosen authored content with `If-Match` without first rewriting
+local synchronization metadata; keep-remote will stage and atomically install
+the Member under the matched-pull recovery contract. Ediff's edited result will
+remain separate until explicit completion and available after cancellation or
+blocked publication. A lost PUT response will be reported as an unknown remote
+outcome; a confirmed remote commit followed by failed local write-back will be
+partial success, not two-sided preservation. Verified Local Media Copies and
+uploaded Media may remain after a blocked Post action. Successful actions will
+refresh the report while retaining ordered terminal results. No operation will
+silently adopt a newer ETag or roll back a committed Post.
 
 #### Local Media Copies
 

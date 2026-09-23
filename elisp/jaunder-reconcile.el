@@ -24,6 +24,7 @@
 (declare-function jaunder--pull-destination-exists-p "jaunder-pull")
 (declare-function jaunder--pull-member "jaunder-pull")
 (declare-function jaunder--pull-stage-member "jaunder-pull")
+(declare-function jaunder--pull-response-identity "jaunder-pull")
 (declare-function jaunder-pull-result-status "jaunder-pull")
 (declare-function jaunder-pull-result-id "jaunder-pull")
 (declare-function jaunder-pull-result-slug "jaunder-pull")
@@ -776,6 +777,61 @@ than an exception flattened into a generic pull failure."
              :detail (format "fresh inventory has duplicate remote Post ID %s" id)))
       (error (list :reason 'fresh-inventory-failed
                    :detail (error-message-string err))))))
+
+(defun jaunder--reconcile-conflict-preflight (row)
+  "Return fresh evidence for reviewed conflict ROW, or a blocked result.
+No server or local Post mutation is authorized by the preview ETag alone."
+  (let* ((member (jaunder-reconcile-row-member row))
+         (local (jaunder-reconcile-row-local row))
+         (reviewed (jaunder-reconcile-row-remote-etag row)))
+    (cond
+     ((not (eq (jaunder-reconcile-row-state row) 'conflict))
+      (jaunder--reconcile-blocked row 'conflict-ineligible))
+     ((not (and local member))
+      (jaunder--reconcile-blocked row 'matched-identity-changed))
+     ((not (jaunder--strong-etag-p reviewed))
+      (jaunder--reconcile-blocked row 'reviewed-etag-invalid))
+     (t
+      (let ((local-reason
+             (jaunder--reconcile-pull-preflight
+              row (list :slug (jaunder-inventory-member-slug member)))))
+        (if local-reason
+            (jaunder--reconcile-blocked row local-reason)
+          (let ((match (jaunder--reconcile-pull-unique-match row)))
+            (if (not (plist-get match :ok))
+                (jaunder--reconcile-blocked row (plist-get match :reason)
+                                            (plist-get match :detail))
+              (condition-case err
+                  (let* ((response (jaunder--http-request
+                                    "GET" (jaunder-inventory-member-edit-uri member)))
+                         (status (plist-get response :status))
+                         (etag (jaunder--response-header response "ETag")))
+                    (cond
+                     ((not (and (integerp status) (<= 200 status 299)))
+                      (jaunder--reconcile-blocked row 'member-http-error status))
+                     ((not (jaunder--strong-etag-p etag))
+                      (jaunder--reconcile-blocked row 'current-etag-invalid))
+                     ((not (equal reviewed etag))
+                      (jaunder--reconcile-blocked row 'etag-stale))
+                     (t
+                      (let* ((body (plist-get response :body))
+                             (identity
+                              (condition-case nil
+                                  (jaunder--pull-response-identity body)
+                                (error nil)))
+                             (edit-uris
+                              (and identity
+                                   (cdr (assq 'edit-uris
+                                              (jaunder--harvest-response-fields body))))))
+                        (if (and (equal identity
+                                        (cons (jaunder-inventory-member-id member)
+                                              (jaunder-inventory-member-slug member)))
+                                 (equal edit-uris
+                                        (list (jaunder-inventory-member-edit-uri member))))
+                            (list :ok t :etag etag :http-status status)
+                          (jaunder--reconcile-blocked row 'member-identity-changed))))))
+                (error (jaunder--reconcile-blocked
+                        row 'member-transport-error (error-message-string err))))))))))))
 
 (defun jaunder--reconcile-replace-pulled-file (path destination bytes)
   "Atomically replace PATH then rename to DESTINATION, reporting committed state."
