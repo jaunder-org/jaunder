@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
-import { goto, signInAsNewUser } from "./helpers";
+import { goto, signInAs, signInAsNewUser } from "./helpers";
 import { uploadMedia } from "./media-helpers";
 import { createPostViaApi } from "./posts";
 import {
@@ -91,6 +91,17 @@ test("oversized Post images fit the Post body while small images remain natural"
   } finally {
     await context.close();
   }
+  const homePage = await page.context().newPage();
+  try {
+    await homePage.setViewportSize({ width: 390, height: 844 });
+    await goto(homePage, "/app", { timeout: firstNav });
+    const home = await imageGeometry(homePage, "Wide");
+    expect(home.width).toBeLessThanOrEqual(home.bodyWidth + 1);
+    expect(home.width / home.height).toBeCloseTo(1.5, 2);
+    expect(home.documentOverflow).toBeLessThanOrEqual(1);
+  } finally {
+    await homePage.close();
+  }
 });
 
 test("authored dimensions retain natural proportions under a custom Theme Package", async ({
@@ -115,11 +126,12 @@ test("authored dimensions retain natural proportions under a custom Theme Packag
   const context = await tracedContext();
   async function atRoute(
     route: string,
+    width: number,
     check: (publicPage: Page) => Promise<void>,
   ) {
     const publicPage = await context.newPage();
     try {
-      await publicPage.setViewportSize({ width: 390, height: 844 });
+      await publicPage.setViewportSize({ width, height: 844 });
       await goto(publicPage, route, { timeout: firstNav });
       await check(publicPage);
     } finally {
@@ -128,24 +140,66 @@ test("authored dimensions retain natural proportions under a custom Theme Packag
   }
   try {
     for (const route of [`/~${username}`, post.permalink]) {
-      await atRoute(route, async (publicPage) => {
+      for (const width of [390, 1280]) {
+        await atRoute(route, width, async (publicPage) => {
+          await expect(publicPage.locator(".j-root")).toHaveAttribute(
+            "data-theme",
+            "custom",
+          );
+          const image = publicPage.locator(`${BODY} img[alt="Authored"]`);
+          await expect(image).toHaveAttribute("width", "1000");
+          await expect(image).toHaveAttribute("height", "200");
+          const geometry = await imageGeometry(publicPage, "Authored");
+          expect(geometry.width).toBeLessThanOrEqual(geometry.bodyWidth + 1);
+          expect(geometry.width / geometry.height).toBeCloseTo(1.5, 2);
+          expect(geometry.documentOverflow).toBeLessThanOrEqual(1);
+        });
+      }
+    }
+    await atRoute("/", 390, async (publicPage) => {
+      const local = await imageGeometry(publicPage, "Authored");
+      expect(local.width).toBeCloseTo(local.bodyWidth, 0);
+    });
+  } finally {
+    await context.close();
+  }
+});
+
+test("a site Theme Package inherits the image fit on Local and public permalinks", async ({
+  page,
+  tracedContext,
+  firstNav,
+}) => {
+  await signInAs(page, "testoperator");
+  const wide = await uploadMedia(
+    page,
+    "site-wide.svg",
+    imageBytes(1200, 800),
+    "image/svg+xml",
+  );
+  const post = await createPostViaApi(page, {
+    body: `![Site wide](${wide.url})`,
+  });
+  await publishAndSelectTheme(page, conformanceThemePackage(), "site");
+  const context = await tracedContext();
+  try {
+    for (const route of ["/", post.permalink]) {
+      const publicPage = await context.newPage();
+      try {
+        await publicPage.setViewportSize({ width: 390, height: 844 });
+        await goto(publicPage, route, { timeout: firstNav });
         await expect(publicPage.locator(".j-root")).toHaveAttribute(
           "data-theme",
           "custom",
         );
-        const image = publicPage.locator(`${BODY} img[alt="Authored"]`);
-        await expect(image).toHaveAttribute("width", "1000");
-        await expect(image).toHaveAttribute("height", "200");
-        const geometry = await imageGeometry(publicPage, "Authored");
-        expect(geometry.width).toBeLessThanOrEqual(geometry.bodyWidth + 1);
-        expect(geometry.width / geometry.height).toBeCloseTo(1.5, 2);
-        expect(geometry.documentOverflow).toBeLessThanOrEqual(1);
-      });
+        const image = await imageGeometry(publicPage, "Site wide");
+        expect(image.width).toBeLessThanOrEqual(image.bodyWidth + 1);
+        expect(image.width / image.height).toBeCloseTo(1.5, 2);
+        expect(image.documentOverflow).toBeLessThanOrEqual(1);
+      } finally {
+        await publicPage.close();
+      }
     }
-    await atRoute("/", async (publicPage) => {
-      const home = await imageGeometry(publicPage, "Authored");
-      expect(home.width).toBeCloseTo(home.bodyWidth, 0);
-    });
   } finally {
     await context.close();
   }
