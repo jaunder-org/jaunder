@@ -394,6 +394,11 @@ mod tests {
             .extensions
             .push(extension_with_text(ns::J_NS, "etag", "j", "\"other\""));
         assert_eq!(j_member_etag(&renamed), None);
+        renamed
+            .extensions
+            .retain(|ext| !has_name(ext, ns::J_NS, "etag"));
+        renamed.extensions.push(extension(ns::J_NS, "etag", "j"));
+        assert_eq!(j_member_etag(&renamed), None);
     }
 
     #[test]

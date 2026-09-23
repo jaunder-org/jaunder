@@ -636,7 +636,10 @@ The current filename supplies the local slug evidence used by matched-pull tests
                   ((symbol-function 'redisplay) (lambda (&rest _) (push 'paint events)))
                   ((symbol-function 'jaunder--inventory-for-root)
                    (lambda (_) (push 'inventory events)
-                     (if fail (error "offline") inventory)))
+                     (pcase fail
+                       ('error (error "offline"))
+                       ('quit (signal 'quit nil))
+                       (_ inventory))))
                   ((symbol-function 'display-buffer) (lambda (&rest _) nil)))
           (jaunder-reconcile root)
           (should (equal (nreverse events)
@@ -648,11 +651,24 @@ The current filename supplies the local slug evidence used by matched-pull tests
           (should (equal (nreverse events)
                          '("Jaunder reconcile: fetching and classifying Posts..."
                            paint inventory "Jaunder reconcile: report ready")))
-          (setq events nil fail t)
+          (setq events nil fail 'error)
           (with-current-buffer "*Jaunder Reconcile*"
             (let ((old-report jaunder-reconcile-report)
                   (old-text (buffer-string)))
               (should-error (jaunder-reconcile-refresh))
+              (should (eq jaunder-reconcile-report old-report))
+              (should (equal (buffer-string) old-text))))
+          (should (equal (nreverse events)
+                         '("Jaunder reconcile: fetching and classifying Posts..."
+                           paint inventory "Jaunder reconcile: report refresh failed")))
+          (setq events nil fail 'quit)
+          (with-current-buffer "*Jaunder Reconcile*"
+            (let ((old-report jaunder-reconcile-report)
+                  (old-text (buffer-string)))
+              (should (eq (condition-case nil
+                              (jaunder-reconcile-refresh)
+                            (quit 'cancelled))
+                          'cancelled))
               (should (eq jaunder-reconcile-report old-report))
               (should (equal (buffer-string) old-text))))
           (should (equal (nreverse events)
