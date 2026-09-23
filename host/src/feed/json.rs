@@ -26,11 +26,11 @@ pub fn render_json(meta: &FeedMetadata, items: &[FeedItem]) -> SyndicationFeedRe
                 o["tags"] = json!(i.tags);
             }
             o["_jaunder"] = json!({
-                "copyright": format!("© {} {}", i.creation_year, i.author_name),
-                "rights": i.content_license.label(),
-                "license": i.content_license.spdx_id().map_or(Value::Null, |spdx_id| json!({
+                "copyright": i.copyright_declaration.copyright(),
+                "rights": i.copyright_declaration.license().label(),
+                "license": i.copyright_declaration.license().spdx_id().map_or(Value::Null, |spdx_id| json!({
                     "spdx_id": spdx_id,
-                    "url": i.content_license.canonical_url(),
+                    "url": i.copyright_declaration.license().canonical_url(),
                 })),
             });
             o
@@ -193,9 +193,14 @@ mod tests {
 
         for &license in ContentLicense::VARIANTS {
             let item = FeedItem {
-                creation_year: 2024,
-                author_name: "Alice Example".to_owned(),
-                content_license: license,
+                copyright_declaration:
+                    common::copyright_declaration::CopyrightDeclaration::from_resolved(
+                        2024,
+                        common::copyright_declaration::CopyrightAuthor::DisplayName(
+                            "Alice Example".parse().unwrap(),
+                        ),
+                        license,
+                    ),
                 ..item(None, vec![])
             };
             let value: Value =

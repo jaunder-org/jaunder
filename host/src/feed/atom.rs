@@ -54,7 +54,7 @@ pub fn render_atom(
                 rel: "alternate".to_string(),
                 ..Default::default()
             }];
-            if let Some(url) = i.content_license.canonical_url() {
+            if let Some(url) = i.copyright_declaration.license().canonical_url() {
                 entry.links.push(Link {
                     href: url.to_owned(),
                     rel: "license".to_owned(),
@@ -62,12 +62,7 @@ pub fn render_atom(
                     ..Default::default()
                 });
             }
-            entry.rights = Some(Text::plain(format!(
-                "© {} {} · {}",
-                i.creation_year,
-                i.author_name,
-                i.content_license.label()
-            )));
+            entry.rights = Some(Text::plain(i.copyright_declaration.text()));
             entry.content = Some(Content {
                 content_type: Some("html".to_string()),
                 value: Some(i.content_html.to_string()),
@@ -279,9 +274,14 @@ mod tests {
 
         for &license in ContentLicense::VARIANTS {
             let item = FeedItem {
-                creation_year: 2024,
-                author_name: "Alice Example".to_owned(),
-                content_license: license,
+                copyright_declaration:
+                    common::copyright_declaration::CopyrightDeclaration::from_resolved(
+                        2024,
+                        common::copyright_declaration::CopyrightAuthor::DisplayName(
+                            "Alice Example".parse().unwrap(),
+                        ),
+                        license,
+                    ),
                 ..item()
             };
             let body = render_atom(&meta(None, Some("A site")), &[item])

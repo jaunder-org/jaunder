@@ -4,7 +4,7 @@ use macros::StrNewtype;
 use thiserror::Error;
 
 use common::{
-    content_license::ContentLicense,
+    copyright_declaration::CopyrightDeclaration,
     feed::FeedSurface,
     ids::PostId,
     post_summary::PostSummary,
@@ -121,12 +121,8 @@ pub struct FeedMetadata {
 #[derive(Debug, Clone)]
 pub struct FeedItem {
     pub id: PostId,
-    /// Immutable UTC calendar year in which the Post was created.
-    pub creation_year: i16,
-    /// The author's current Display Name, with Username fallback applied.
-    pub author_name: String,
-    /// The author's current publication-wide rights choice.
-    pub content_license: ContentLicense,
+    /// Current projection of the Post's public rights metadata.
+    pub copyright_declaration: CopyrightDeclaration,
     /// Persisted inline HTML for Atom's `type="html"` title construct.
     pub rendered_title: Option<RenderedPostTitle>,
     /// Entity-decoded marker-free title for RSS and JSON Feed, omitted when empty.
@@ -148,11 +144,14 @@ impl crate::feed::window::HasPublishedAt for FeedItem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::feed::test_support::feed_item;
+    use crate::feed::{
+        render_atom, render_json, render_rss,
+        test_support::{feed_item, feed_metadata},
+    };
     use common::feed::FeedSurface;
     use common::{
         site::{SiteTagline, SiteTitle},
-        test_support::{parse_url, parse_utc_instant, rendered_html},
+        test_support::{parse_display_name, parse_url, parse_utc_instant, rendered_html},
         time::UtcInstant,
     };
     #[test]
@@ -259,6 +258,49 @@ mod tests {
                 ts,
             )
         }
+    }
+
+    #[test]
+    fn rights_feed_bytes_and_identity_match_pre_refactor_baseline() {
+        use common::{
+            content_license::ContentLicense, copyright_declaration::CopyrightAuthor,
+            feed::FeedFormat,
+        };
+
+        let metadata = feed_metadata(parse_url("https://example.com/feed.atom"));
+        let item = FeedItem {
+            copyright_declaration: CopyrightDeclaration::from_resolved(
+                2024,
+                CopyrightAuthor::DisplayName(parse_display_name("Ada <&>")),
+                ContentLicense::CcBy4_0,
+            ),
+            ..feed_item(
+                PostId::from(7),
+                parse_url("https://example.com/~ada/posts/7"),
+                rendered_html("<p>Hi</p>"),
+                parse_utc_instant("2026-01-02T03:04:05Z"),
+            )
+        };
+        let items = [item];
+        let bodies = [
+            render_atom(&metadata, &items).unwrap(),
+            render_rss(&metadata, &items),
+            render_json(&metadata, &items),
+        ];
+        // These are baseline hashes of the complete pre-refactor bytes, not
+        // recomputed expectations from the serialization code under test.
+        assert_eq!(
+            bodies.map(|body| crate::etag::sha256_of(body.body()).to_string()),
+            [
+                "\"sha256-59d4069d2ea71d9dc3c505459b8cb786827e859bdb5c344e1f0a1ff9000b554b\"",
+                "\"sha256-7e762d0517527c413a05b41c8bbde5963ac1ce99172c402a36d76014d2c3bf75\"",
+                "\"sha256-bdcfd180c65e64b3b421102e7623ca8fea015e95f19bc752ad64ec2bd4900047\"",
+            ]
+        );
+        assert_eq!(
+            crate::etag::feed_semantic_fingerprint(FeedFormat::Atom, &metadata, &items).to_string(),
+            "b546db8800b065733a060fcdf57eccbce4ceadf490670583a7200fe45ff479e9"
+        );
     }
 
     #[test]

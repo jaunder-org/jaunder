@@ -272,7 +272,9 @@ pub(crate) fn post_content(view: &PostView) -> Markup {
         footer class="j-post-foot" data-jaunder-part="post-footer" {
             (taglist::render(view.tags, view.tag_ctx))
             @if let Some(license) = view.content_license {
-                (copyright_declaration(view.created_at, view.display_name, view.username, license))
+                (copyright_declaration(&common::copyright_declaration::CopyrightDeclaration::for_post(
+                    view.created_at, view.display_name, view.username, license,
+                )))
             }
             span class="j-spacer" {}
         }
@@ -280,16 +282,12 @@ pub(crate) fn post_content(view: &PostView) -> Markup {
 }
 
 fn copyright_declaration(
-    created_at: common::time::UtcInstant,
-    display_name: Option<&DisplayName>,
-    username: &Username,
-    license: common::content_license::ContentLicense,
+    declaration: &common::copyright_declaration::CopyrightDeclaration,
 ) -> Markup {
-    let year = jiff::tz::Offset::UTC.to_datetime(created_at.value()).year();
-    let name = display_name.map_or(username.as_ref(), AsRef::as_ref);
+    let license = declaration.license();
     Markup::new(html! {
         span {
-            "© " (year) " " (name) " · "
+            (declaration.copyright()) " · "
             @if let Some(url) = license.canonical_url() {
                 a href=(url) rel="license" { (license.label()) }
             } @else {
@@ -890,10 +888,20 @@ mod tests {
         post.post.content_license = Some(common::content_license::ContentLicense::CcBy4_0);
         let html = permalink_article(&post.post).into_string();
 
-        assert!(
-            html.contains("© 2026 Ada &lt;&amp;&gt; · <a href=\"https://creativecommons.org/licenses/by/4.0/\" rel=\"license\">CC BY 4.0</a>"),
-            "{html}"
+        let declaration = copyright_declaration(
+            &common::copyright_declaration::CopyrightDeclaration::for_post(
+                post.post.created_at,
+                post.post.display_name.as_ref(),
+                &post.post.username,
+                post.post.content_license.unwrap(),
+            ),
+        )
+        .into_string();
+        assert_eq!(
+            declaration,
+            "<span>© 2026 Ada &lt;&amp;&gt; · <a href=\"https://creativecommons.org/licenses/by/4.0/\" rel=\"license\">CC BY 4.0</a></span>"
         );
+        assert!(html.contains(&declaration), "{html}");
         let tags = html
             .find("data-jaunder-part=\"tag-list\"")
             .expect("tag list");

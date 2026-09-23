@@ -139,9 +139,7 @@ fn semantic_fingerprint_with_revision(
     write_bytes(&mut hasher, &(items.len() as u64).to_be_bytes());
     for item in items {
         write_bytes(&mut hasher, &i64::from(item.id).to_be_bytes());
-        write_bytes(&mut hasher, &item.creation_year.to_be_bytes());
-        write_string(&mut hasher, &item.author_name);
-        write_string(&mut hasher, item.content_license.as_ref());
+        write_declaration_identity(&mut hasher, &item.copyright_declaration);
         write_optional_string(&mut hasher, item.rendered_title.as_ref().map(AsRef::as_ref));
         write_optional_string(&mut hasher, item.visible_title.as_deref());
         write_string(&mut hasher, item.permalink.as_ref());
@@ -155,6 +153,17 @@ fn semantic_fingerprint_with_revision(
         }
     }
     FeedSemanticFingerprint(ContentHash::from_digest(hasher.finalize().into()))
+}
+
+// Keep the existing length-prefixed year/name/license preimage in exactly this
+// order: representation modification time depends on fingerprint equality.
+fn write_declaration_identity(
+    hasher: &mut impl sha2::digest::Update,
+    declaration: &common::copyright_declaration::CopyrightDeclaration,
+) {
+    write_bytes(hasher, &declaration.year().to_be_bytes());
+    write_bytes(hasher, declaration.author_name().as_bytes());
+    write_bytes(hasher, declaration.license().as_ref().as_bytes());
 }
 
 fn write_optional_string(hasher: &mut Sha256, value: Option<&str>) {
@@ -176,8 +185,8 @@ fn write_timestamp(hasher: &mut Sha256, value: UtcInstant) {
     hasher.update(value.value().subsec_nanosecond().to_be_bytes());
 }
 
-fn write_bytes(hasher: &mut Sha256, value: &[u8]) {
-    hasher.update((value.len() as u64).to_be_bytes());
+fn write_bytes(hasher: &mut impl sha2::digest::Update, value: &[u8]) {
+    hasher.update(&(value.len() as u64).to_be_bytes());
     hasher.update(value);
 }
 
@@ -248,9 +257,14 @@ mod tests {
     fn item(id: i64) -> FeedItem {
         FeedItem {
             id: PostId::from(id),
-            creation_year: 2026,
-            author_name: "Alice".to_owned(),
-            content_license: common::content_license::ContentLicense::default(),
+            copyright_declaration:
+                common::copyright_declaration::CopyrightDeclaration::from_resolved(
+                    2026,
+                    common::copyright_declaration::CopyrightAuthor::DisplayName(
+                        "Alice".parse().unwrap(),
+                    ),
+                    common::content_license::ContentLicense::default(),
+                ),
             rendered_title: Some(common::render::sanitize_post_title("Title")),
             visible_title: Some("Title".to_owned()),
             permalink: parse_url(format!("https://example.com/{id}").as_str()),
@@ -261,6 +275,22 @@ mod tests {
             tags: vec!["one".parse().unwrap(), "two".parse().unwrap()],
         }
     }
+    #[test]
+    fn copyright_declaration_identity_preimage_matches_pre_refactor_encoding() {
+        struct Capture(Vec<u8>);
+        impl sha2::digest::Update for Capture {
+            fn update(&mut self, data: &[u8]) {
+                self.0.extend_from_slice(data);
+            }
+        }
+        let mut captured = Capture(Vec::new());
+        write_declaration_identity(&mut captured, &item(1).copyright_declaration);
+        assert_eq!(
+            captured.0,
+            b"\x00\x00\x00\x00\x00\x00\x00\x02\x07\xea\x00\x00\x00\x00\x00\x00\x00\x05Alice\x00\x00\x00\x00\x00\x00\x00\x13all-rights-reserved"
+        );
+    }
+
     fn fingerprint(metadata: &FeedMetadata, items: &[FeedItem]) -> FeedSemanticFingerprint {
         feed_semantic_fingerprint(FeedFormat::Atom, metadata, items)
     }
@@ -298,6 +328,50 @@ mod tests {
         )
     }
 
+    fn item_mutations() -> [fn(&mut FeedItem); 12] {
+        [
+            |item| item.id = PostId::from(9),
+            |item| {
+                item.copyright_declaration =
+                    common::copyright_declaration::CopyrightDeclaration::from_resolved(
+                        2025,
+                        common::copyright_declaration::CopyrightAuthor::DisplayName(
+                            "Alice".parse().unwrap(),
+                        ),
+                        item.copyright_declaration.license(),
+                    );
+            },
+            |item| {
+                item.copyright_declaration =
+                    common::copyright_declaration::CopyrightDeclaration::from_resolved(
+                        item.copyright_declaration.year(),
+                        common::copyright_declaration::CopyrightAuthor::DisplayName(
+                            "Bob".parse().unwrap(),
+                        ),
+                        item.copyright_declaration.license(),
+                    );
+            },
+            |item| {
+                item.copyright_declaration =
+                    common::copyright_declaration::CopyrightDeclaration::from_resolved(
+                        item.copyright_declaration.year(),
+                        common::copyright_declaration::CopyrightAuthor::DisplayName(
+                            "Alice".parse().unwrap(),
+                        ),
+                        common::content_license::ContentLicense::CcBy4_0,
+                    );
+            },
+            |item| item.rendered_title = None,
+            |item| item.visible_title = None,
+            |item| item.permalink = parse_url("https://example.com/other"),
+            |item| item.summary = None,
+            |item| item.content_html = rendered_html("<p>Other</p>"),
+            |item| item.published_at = time(3),
+            |item| item.updated_at = time(3),
+            |item| item.tags.reverse(),
+        ]
+    }
+
     #[test]
     fn feed_etag_covers_complete_inputs_for_each_format() {
         let metadata = metadata();
@@ -309,20 +383,6 @@ mod tests {
             |metadata| metadata.canonical_url = parse_url("https://other.example/"),
             |metadata| metadata.self_url = parse_url("https://example.com/other.atom"),
             |metadata| metadata.hub_url = None,
-        ];
-        let item_mutations: [fn(&mut FeedItem); 12] = [
-            |item| item.id = PostId::from(9),
-            |item| item.creation_year = 2025,
-            |item| item.author_name = "Bob".to_owned(),
-            |item| item.content_license = common::content_license::ContentLicense::CcBy4_0,
-            |item| item.rendered_title = None,
-            |item| item.visible_title = None,
-            |item| item.permalink = parse_url("https://example.com/other"),
-            |item| item.summary = None,
-            |item| item.content_html = rendered_html("<p>Other</p>"),
-            |item| item.published_at = time(3),
-            |item| item.updated_at = time(3),
-            |item| item.tags.reverse(),
         ];
 
         for format in formats {
@@ -341,7 +401,7 @@ mod tests {
                     "{format:?} ETag changes for metadata",
                 );
             }
-            for mutate in item_mutations {
+            for mutate in item_mutations() {
                 let mut changed = items.clone();
                 mutate(&mut changed[0]);
                 assert_ne!(
