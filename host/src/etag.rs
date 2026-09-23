@@ -189,17 +189,22 @@ const fn serializer_revision(format: FeedFormat) -> u16 {
     }
 }
 
+/// Scalar inputs to the canonical strong validator for a Post's mutable content.
+pub struct PostContentEtagInput<'a> {
+    pub title: Option<&'a PostTitle>,
+    pub slug: &'a Slug,
+    pub body: &'a PostBody,
+    pub format: &'a PostFormat,
+    pub summary: Option<&'a PostSummary>,
+    pub draft: bool,
+}
+
 /// Computes the canonical strong validator for a Post's mutable content.
 #[must_use]
 pub fn post_content_etag<'a>(
-    title: Option<&'a PostTitle>,
-    slug: &'a Slug,
-    body: &'a PostBody,
-    format: &'a PostFormat,
-    summary: Option<&'a PostSummary>,
+    input: &PostContentEtagInput<'a>,
     tags: impl IntoIterator<Item = &'a TagLabel>,
     audiences: impl IntoIterator<Item = &'a common::visibility::AudienceTarget>,
-    draft: bool,
 ) -> ETag {
     #[derive(Serialize)]
     struct Content<'a> {
@@ -215,14 +220,14 @@ pub fn post_content_etag<'a>(
     let audience_targets = audiences.into_iter().cloned().collect::<Vec<_>>();
     let audiences = crate::atompub::canonical_audience_values(&audience_targets);
     let content = Content {
-        title,
-        slug,
-        body,
-        format: format.to_string(),
-        summary,
+        title: input.title,
+        slug: input.slug,
+        body: input.body,
+        format: input.format.to_string(),
+        summary: input.summary,
         tags: tags.into_iter().collect(),
         audiences,
-        draft,
+        draft: input.draft,
     };
     let bytes = serde_json::to_vec(&content).unwrap_or_else(|_| Vec::new());
     sha256_of(bytes)
@@ -406,24 +411,16 @@ mod tests {
         let first_slug = parse_slug("first-canonical-slug");
         let second_slug = parse_slug("second-canonical-slug");
 
-        let first = post_content_etag(
-            Some(&title),
-            &first_slug,
-            &body,
-            &format,
-            Some(&summary),
-            &tags,
-            false,
-        );
-        let second = post_content_etag(
-            Some(&title),
-            &second_slug,
-            &body,
-            &format,
-            Some(&summary),
-            &tags,
-            false,
-        );
+        let input = |slug| PostContentEtagInput {
+            title: Some(&title),
+            slug,
+            body: &body,
+            format: &format,
+            summary: Some(&summary),
+            draft: false,
+        };
+        let first = post_content_etag(&input(&first_slug), &tags, &[]);
+        let second = post_content_etag(&input(&second_slug), &tags, &[]);
 
         assert_ne!(first, second);
     }

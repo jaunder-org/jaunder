@@ -123,14 +123,16 @@ impl PostServices {
 /// its complete stored audience target set.
 pub(crate) fn etag_for(post: &PostRecord, audiences: &[AudienceTarget]) -> ETag {
     etag::post_content_etag(
-        post.title.as_ref(),
-        &post.slug,
-        &post.body,
-        &post.format,
-        post.summary.as_ref(),
+        &etag::PostContentEtagInput {
+            title: post.title.as_ref(),
+            slug: &post.slug,
+            body: &post.body,
+            format: &post.format,
+            summary: post.summary.as_ref(),
+            draft: post.published_at.is_none(),
+        },
         post.tags.iter().map(|tag| &tag.tag_display),
         audiences,
-        post.published_at.is_none(),
     )
 }
 

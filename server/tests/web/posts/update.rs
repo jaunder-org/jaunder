@@ -1368,14 +1368,16 @@ async fn update_org_current_sync_succeeds_and_stale_sync_preserves_post(#[case] 
         .await
         .expect("read current audiences");
     let current_etag = host::etag::post_content_etag(
-        before.title.as_ref(),
-        &before.slug,
-        &before.body,
-        &before.format,
-        before.summary.as_ref(),
+        &host::etag::PostContentEtagInput {
+            title: before.title.as_ref(),
+            slug: &before.slug,
+            body: &before.body,
+            format: &before.format,
+            summary: before.summary.as_ref(),
+            draft: before.published_at.is_none(),
+        },
         before.tags.iter().map(|tag| &tag.tag_display),
         &before_audiences,
-        before.published_at.is_none(),
     );
     let (status, body) = update_post_json(app.clone(), created.post_id,
     PostInputs {

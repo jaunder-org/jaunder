@@ -465,14 +465,16 @@ pub(crate) fn update_expectation_error(
     }
 
     let current_etag = etag::post_content_etag(
-        existing.title.as_ref(),
-        &existing.slug,
-        &existing.body,
-        &existing.format,
-        existing.summary.as_ref(),
+        &etag::PostContentEtagInput {
+            title: existing.title.as_ref(),
+            slug: &existing.slug,
+            body: &existing.body,
+            format: &existing.format,
+            summary: existing.summary.as_ref(),
+            draft: existing.published_at.is_none(),
+        },
         tags.iter(),
         audiences,
-        existing.published_at.is_none(),
     );
     expected
         .content_etag
