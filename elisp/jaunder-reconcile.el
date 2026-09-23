@@ -518,6 +518,19 @@ hide otherwise valid synchronization markers."
    "report ready" "report refresh failed"
    (lambda () (jaunder--reconcile-refresh-buffer (current-buffer)))))
 
+(defun jaunder--reconcile-show-results-and-refresh (buffer)
+  "Show BUFFER's terminal results before a fallible fresh inventory refresh.
+A failed refresh must not erase the ordered recovery evidence.  The stale
+report remains visibly reviewable, and the User must refresh before retrying."
+  (with-current-buffer buffer
+    (jaunder--render-reconcile-report jaunder-reconcile-report buffer))
+  (condition-case err
+      (jaunder--reconcile-refresh-buffer buffer)
+    (error
+     (message "Jaunder reconcile: refresh failed; Last batch retained: %s"
+              (error-message-string err))
+     'refresh-failed)))
+
 (defun jaunder--reconcile-execute-batch (buffer rows action operation &optional cancelled-p)
   "Run OPERATION for ROWS sequentially, retaining every terminal result in BUFFER.
 CANCELLED-P is checked only between completed items.  OPERATION receives one
@@ -552,8 +565,10 @@ row and returns a result plist; its independent errors become failed results."
                       (and cancelled-p (funcall cancelled-p)) quit-flag)
               (setq cancelled t))))))
     (when cancelled (setq quit-flag nil))
-    (jaunder--reconcile-refresh-buffer buffer)
-    (if cancelled 'cancelled 'completed)))
+    (let ((refresh (jaunder--reconcile-show-results-and-refresh buffer)))
+      (if (eq refresh 'refresh-failed)
+          'refresh-failed
+        (if cancelled 'cancelled 'completed)))))
 
 (defun jaunder--reconcile-row-post-id (row)
   "Return ROW's remote Post ID, when it has an unambiguous Member."
@@ -1203,8 +1218,7 @@ Do not create an editable result until both before/after-staging guards pass."
     (with-current-buffer report-buffer
       (setq-local jaunder-reconcile-last-batch-results
                   (list (jaunder--reconcile-terminal-result 'merge row value)))
-      (jaunder--render-reconcile-report jaunder-reconcile-report report-buffer)
-      (jaunder--reconcile-refresh-buffer report-buffer))))
+      (jaunder--reconcile-show-results-and-refresh report-buffer))))
 
 (defun jaunder--reconcile-merge-snapshot (name bytes)
   "Create a read-only Org snapshot named NAME of reviewed literal BYTES."
@@ -1441,7 +1455,15 @@ that buffer does not publish or change the local Post; `C-c C-c' finishes."
               (let ((final (jaunder--reconcile-conflict-preflight row)))
                 (if (not (plist-get final :ok))
                     final
-                  (jaunder--reconcile-pull-install-staged row staged final path)))))
+                  (let ((installed (jaunder--reconcile-pull-install-staged
+                                    row staged final path)))
+                    (when (and (eq (plist-get installed :outcome) 'failed)
+                               (eq (plist-get installed :local-effect)
+                                   'replaced-at-old-path))
+                      ;; The Post was atomically replaced; only its canonical
+                      ;; rename failed.  The old path remains recoverable.
+                      (setq installed (plist-put installed :outcome 'partial)))
+                    installed)))))
         (jaunder-pull-stage-identity-changed
          (jaunder--reconcile-blocked row 'staged-identity-changed))
         (error (list :outcome 'failed :post-id (jaunder--reconcile-row-post-id row)

@@ -2093,6 +2093,41 @@ The current filename supplies the local slug evidence used by matched-pull tests
       (when (buffer-live-p report-buffer) (kill-buffer report-buffer))
       (delete-directory root t))))
 
+(ert-deftest jaunder-reconcile-conflict-results-survive-failed-report-refresh ()
+  "Unknown and partial terminal results stay ordered and visible on refresh failure."
+  (let* ((rows (list (jaunder--make-reconcile-row :state 'conflict :key "post:1"
+                                                  :member (jaunder-reconcile-test--member "1" "one"))
+                     (jaunder--make-reconcile-row :state 'conflict :key "post:2"
+                                                  :member (jaunder-reconcile-test--member "2" "two"))))
+         (buffer (jaunder--render-reconcile-report
+                  (jaunder--make-reconcile-report :root "/tmp" :rows rows)))
+         (outcomes '(unknown partial)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'jaunder--reconcile-refresh-buffer)
+                   (lambda (_) (error "fresh inventory unavailable"))))
+          (should (eq (jaunder--reconcile-execute-batch
+                       buffer rows 'keep-local
+                       (lambda (_)
+                         (list :outcome (pop outcomes) :reason 'needs-reconciliation)))
+                      'refresh-failed))
+          (with-current-buffer buffer
+            (let ((text (buffer-string)))
+              (should (string-match-p "Last batch" text))
+              (should (string-match-p "keep-local post:1: unknown" text))
+              (should (string-match-p "keep-local post:2: partial" text))
+              (should (< (string-match "post:1: unknown" text)
+                         (string-match "post:2: partial" text))))
+            (should (equal (mapcar #'jaunder-reconcile-result-outcome
+                                   jaunder-reconcile-last-batch-results)
+                           '(unknown partial))))
+          (jaunder--reconcile-merge-record
+           (car rows) buffer (list :outcome 'partial :reason 'local-write-back-failed))
+          (with-current-buffer buffer
+            (should (string-match-p "merge post:1: partial" (buffer-string)))
+            (should (eq (jaunder-reconcile-result-outcome
+                         (car jaunder-reconcile-last-batch-results)) 'partial))))
+      (kill-buffer buffer))))
+
 (ert-deftest jaunder-reconcile-keep-local-confirms-selection-and-refuses-other-states ()
   "Only a confirmed conflict may reach the conditional local publish seam."
   (let* ((rows (list (jaunder--make-reconcile-row :state 'conflict :key "post:1"
@@ -2252,6 +2287,40 @@ The current filename supplies the local slug evidence used by matched-pull tests
         (let ((result (jaunder--reconcile-keep-remote-row row)))
           (should (eq (plist-get result :outcome) 'blocked))
           (should (eq (plist-get result :reason) 'conflict-ineligible)))))))
+
+(ert-deftest jaunder-reconcile-keep-remote-rename-failure-is-partial-success ()
+  "A replaced Post at the old path is a durable local commit, not failed work."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-conflict-rename-" t)))
+         (path (expand-file-name "local.org" root))
+         (destination (expand-file-name "old.org" root))
+         (original (jaunder-reconcile-test--pulled-bytes "7" "local" "\"saved\""))
+         (remote (jaunder-reconcile-test--pulled-bytes "7" "old" "\"old\""))
+         (jaunder-reconcile-report (jaunder--make-reconcile-report :root root)))
+    (unwind-protect
+        (progn
+          (with-temp-file path (insert original))
+          (let ((row (jaunder-reconcile-test--matched-pull-row path "old" 'conflict))
+                (real-rename (symbol-function 'rename-file)))
+            (cl-letf (((symbol-function 'jaunder--reconcile-conflict-preflight)
+                       (lambda (_) '(:ok t :etag "\"old\"" :http-status 200)))
+                      ((symbol-function 'jaunder--pull-stage-member)
+                       (lambda (&rest _)
+                         (list :id "7" :slug "old" :etag "\"old\""
+                               :bytes remote)))
+                      ((symbol-function 'rename-file)
+                       (lambda (from to &optional overwrite)
+                         (if (and (equal from path) (equal to destination))
+                             (error "final rename failed")
+                           (funcall real-rename from to overwrite)))))
+              (let ((result (jaunder--reconcile-keep-remote-row row)))
+                (should (eq (plist-get result :outcome) 'partial))
+                (should (eq (plist-get result :reason) 'pull-rename-failed))
+                (should (eq (plist-get result :local-effect) 'replaced-at-old-path))
+                (should-not (file-exists-p destination))
+                (should (equal (with-temp-buffer
+                                 (insert-file-contents-literally path) (buffer-string))
+                               remote))))))
+      (delete-directory root t))))
 
 (ert-deftest jaunder-reconcile-keep-remote-rejects-staging-drift-and-errors ()
   "A staged Member cannot bypass reviewed identity and media validation."
