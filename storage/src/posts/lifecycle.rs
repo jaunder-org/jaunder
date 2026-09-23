@@ -464,18 +464,17 @@ pub(crate) fn update_expectation_error(
         return Some(UpdatePostError::BookkeepingMismatch);
     }
 
-    let current_etag = etag::post_content_etag(
-        &etag::PostContentEtagInput {
-            title: existing.title.as_ref(),
-            slug: &existing.slug,
-            body: &existing.body,
-            format: &existing.format,
-            summary: existing.summary.as_ref(),
-            draft: existing.published_at.is_none(),
-        },
-        tags.iter(),
-        audiences,
-    );
+    let current_etag = etag::PostContentEtag {
+        title: existing.title.as_ref(),
+        slug: &existing.slug,
+        body: &existing.body,
+        format: existing.format,
+        summary: existing.summary.as_ref(),
+        tags: tags.iter().collect(),
+        audiences: audiences.to_vec(),
+        draft: existing.published_at.is_none(),
+    }
+    .etag();
     expected
         .content_etag
         .as_ref()

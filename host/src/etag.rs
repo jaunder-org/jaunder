@@ -7,7 +7,7 @@ use common::{
     post_summary::PostSummary, post_title::PostTitle, render::PostFormat, slug::Slug,
     tag::TagLabel, time::UtcInstant,
 };
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
@@ -189,48 +189,34 @@ const fn serializer_revision(format: FeedFormat) -> u16 {
     }
 }
 
-/// Scalar inputs to the canonical strong validator for a Post's mutable content.
-pub struct PostContentEtagInput<'a> {
+/// Complete serializer inputs for a Post's canonical strong validator.
+#[derive(Serialize)]
+pub struct PostContentEtag<'a> {
     pub title: Option<&'a PostTitle>,
     pub slug: &'a Slug,
     pub body: &'a PostBody,
-    pub format: &'a PostFormat,
+    pub format: PostFormat,
     pub summary: Option<&'a PostSummary>,
+    pub tags: Vec<&'a TagLabel>,
+    #[serde(serialize_with = "serialize_canonical_audiences")]
+    pub audiences: Vec<common::visibility::AudienceTarget>,
     pub draft: bool,
 }
 
-/// Computes the canonical strong validator for a Post's mutable content.
-#[must_use]
-pub fn post_content_etag<'a>(
-    input: &PostContentEtagInput<'a>,
-    tags: impl IntoIterator<Item = &'a TagLabel>,
-    audiences: impl IntoIterator<Item = &'a common::visibility::AudienceTarget>,
-) -> ETag {
-    #[derive(Serialize)]
-    struct Content<'a> {
-        title: Option<&'a PostTitle>,
-        slug: &'a Slug,
-        body: &'a PostBody,
-        format: String,
-        summary: Option<&'a PostSummary>,
-        tags: Vec<&'a TagLabel>,
-        audiences: Vec<String>,
-        draft: bool,
+impl PostContentEtag<'_> {
+    /// Computes the canonical strong validator from the complete content tuple.
+    #[must_use]
+    pub fn etag(&self) -> ETag {
+        let bytes = serde_json::to_vec(self).unwrap_or_else(|_| Vec::new());
+        sha256_of(bytes)
     }
-    let audience_targets = audiences.into_iter().cloned().collect::<Vec<_>>();
-    let audiences = crate::atompub::canonical_audience_values(&audience_targets);
-    let content = Content {
-        title: input.title,
-        slug: input.slug,
-        body: input.body,
-        format: input.format.to_string(),
-        summary: input.summary,
-        tags: tags.into_iter().collect(),
-        audiences,
-        draft: input.draft,
-    };
-    let bytes = serde_json::to_vec(&content).unwrap_or_else(|_| Vec::new());
-    sha256_of(bytes)
+}
+
+fn serialize_canonical_audiences<S: Serializer>(
+    audiences: &[common::visibility::AudienceTarget],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    crate::atompub::canonical_audience_values(audiences).serialize(serializer)
 }
 
 #[cfg(test)]
@@ -411,18 +397,30 @@ mod tests {
         let first_slug = parse_slug("first-canonical-slug");
         let second_slug = parse_slug("second-canonical-slug");
 
-        let input = |slug| PostContentEtagInput {
+        let content = |slug| PostContentEtag {
             title: Some(&title),
             slug,
             body: &body,
-            format: &format,
+            format,
             summary: Some(&summary),
+            tags: tags.iter().collect(),
+            audiences: vec![],
             draft: false,
         };
-        let first = post_content_etag(&input(&first_slug), &tags, &[]);
-        let second = post_content_etag(&input(&second_slug), &tags, &[]);
+        let first = content(&first_slug).etag();
+        let second = content(&second_slug).etag();
 
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn post_content_etag_preserves_format_wire_tokens() {
+        for format in [PostFormat::Markdown, PostFormat::Org, PostFormat::Html] {
+            assert_eq!(
+                serde_json::to_value(format).unwrap(),
+                serde_json::Value::String(format.to_string()),
+            );
+        }
     }
 
     #[test]
