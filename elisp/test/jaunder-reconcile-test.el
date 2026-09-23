@@ -1911,6 +1911,54 @@ The current filename supplies the local slug evidence used by matched-pull tests
       (when (buffer-live-p report-buffer) (kill-buffer report-buffer))
       (delete-directory root t))))
 
+(ert-deftest jaunder-reconcile-merge-snapshot-hook-failure-cleans-its-buffer ()
+  "A failing Org startup hook does not orphan a partially initialized view."
+  (let ((name " *Jaunder failing snapshot fixture*"))
+    (let ((org-mode-hook (list (lambda () (error "org-mode setup failed")))))
+      (should-error (jaunder--reconcile-merge-snapshot name "Body")))
+    (should-not (get-buffer name))))
+
+(ert-deftest jaunder-reconcile-merge-second-snapshot-failure-reports-and-cleans-first ()
+  "Failure preparing B cannot leave A live or an unreported conflict."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-merge-snapshot-" t)))
+         (path (expand-file-name "old.org" root))
+         (bytes (jaunder-reconcile-test--pulled-bytes "7" "old" "\"saved\""))
+         (report-buffer (generate-new-buffer "*Jaunder snapshot failure report*"))
+         (make-snapshot (symbol-function 'jaunder--reconcile-merge-snapshot))
+         row first-view (calls 0))
+    (unwind-protect
+        (progn
+          (with-temp-file path (insert bytes))
+          (setq row (jaunder-reconcile-test--matched-pull-row path "old" 'conflict))
+          (jaunder--render-reconcile-report
+           (jaunder--make-reconcile-report :root root :rows (list row)) report-buffer)
+          (with-current-buffer report-buffer
+            (puthash "post:7" t jaunder-reconcile-marks)
+            (cl-letf (((symbol-function 'jaunder--call-with-blog)
+                       (lambda (_root thunk) (funcall thunk)))
+                      ((symbol-function 'jaunder--reconcile-conflict-preflight)
+                       (lambda (_) '(:ok t :etag "\"old\"")))
+                      ((symbol-function 'jaunder--pull-stage-member)
+                       (lambda (&rest _)
+                         (list :id "7" :slug "old" :etag "\"old\"" :bytes bytes)))
+                      ((symbol-function 'jaunder--reconcile-merge-snapshot)
+                       (lambda (name contents)
+                         (setq calls (1+ calls))
+                         (if (= calls 2) (error "B snapshot failed")
+                           (setq first-view (funcall make-snapshot name contents)))))
+                      ((symbol-function 'ediff-merge-buffers)
+                       (lambda (&rest _) (ert-fail "Ediff must not open"))))
+              (should-not (jaunder-reconcile-merge-selected))
+              (should (eq (jaunder-reconcile-result-reason
+                           (car jaunder-reconcile-last-batch-results))
+                          'ediff-unavailable))))
+          (should (= calls 2))
+          (should-not (buffer-live-p first-view))
+          (should-not (get-buffer (jaunder--reconcile-merge-scratch-name row root))))
+      (when (buffer-live-p first-view) (kill-buffer first-view))
+      (when (buffer-live-p report-buffer) (kill-buffer report-buffer))
+      (delete-directory root t))))
+
 (ert-deftest jaunder-reconcile-merge-partial-ediff-startup-retains-unpublishable-result ()
   "A C output created before Ediff fails is recoverable but never publishable."
   (let* ((root (file-name-as-directory (make-temp-file "jaunder-merge-partial-" t)))
@@ -1949,7 +1997,8 @@ The current filename supplies the local slug evidence used by matched-pull tests
           (should (buffer-live-p scratch))
           (with-current-buffer scratch
             (should-error (jaunder-reconcile-merge-finish) :type 'user-error)
-            (should (string-match-p "Body" (buffer-string))))
+            (should (string-match-p "Body" (buffer-string)))
+            (jaunder-reconcile-merge-cancel))
           (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) consent)))
             (should-not (kill-buffer scratch))
             (setq consent t)

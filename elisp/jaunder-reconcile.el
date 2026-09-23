@@ -1250,13 +1250,18 @@ Do not create an editable result until both before/after-staging guards pass."
 
 (defun jaunder--reconcile-merge-snapshot (name bytes)
   "Create a read-only Org snapshot named NAME of reviewed literal BYTES."
-  (let ((buffer (generate-new-buffer name)))
-    (with-current-buffer buffer
-      (org-mode)
-      (insert bytes)
-      (set-buffer-modified-p nil)
-      (setq buffer-read-only t))
-    buffer))
+  (let ((buffer (generate-new-buffer name))
+        complete)
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (org-mode)
+            (insert bytes)
+            (set-buffer-modified-p nil)
+            (setq buffer-read-only t))
+          (setq complete t)
+          buffer)
+      (unless complete (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
 (defconst jaunder--reconcile-merge-owned-properties
   '("JAUNDER_ID" "JAUNDER_SLUG" "JAUNDER_SYNCED" "JAUNDER_SYNCED_AT"
@@ -1395,7 +1400,10 @@ unknown, failed, or partial result; only confirmed success retires it."
   (interactive)
   (unless jaunder-reconcile-merge-session
     (user-error "This buffer is not a reconciliation merge result"))
-  (message "Merge cancelled; %s retained for later completion or explicit discard"
+  (message (if (jaunder-reconcile-merge-session-ediff-ready
+                jaunder-reconcile-merge-session)
+               "Merge cancelled; %s retained for later completion or explicit discard"
+             "Ediff failed; %s retained for inspection or explicit discard; start a fresh merge")
            (buffer-name)))
 
 (defun jaunder--reconcile-merge-bind-ediff-result (session name)
@@ -1441,23 +1449,25 @@ operations write there, never to either Post.  `C-c C-c' explicitly finishes."
                  nil)
              (let* ((path (jaunder-inventory-local-path
                            (jaunder-reconcile-row-local row)))
-                    (local-bytes (with-temp-buffer
-                                   (insert-file-contents-literally path)
-                                   (buffer-string)))
-                    (staged (plist-get review :staged))
-                    (local-view (jaunder--reconcile-merge-snapshot
-                                 " *Jaunder Merge Local*" local-bytes))
-                    (remote-view (jaunder--reconcile-merge-snapshot
-                                  " *Jaunder Merge Remote*" (plist-get staged :bytes)))
                     (session (jaunder--make-reconcile-merge-session
-                              :row row :report-buffer report-buffer :path path
-                              :local-view local-view :remote-view remote-view))
-                    (ediff-error
+                              :row row :report-buffer report-buffer :path path))
+                    (setup-error
                      (condition-case err
                          (progn
+                           (setf (jaunder-reconcile-merge-session-local-view session)
+                                 (jaunder--reconcile-merge-snapshot
+                                  " *Jaunder Merge Local*"
+                                  (with-temp-buffer
+                                    (insert-file-contents-literally path)
+                                    (buffer-string))))
+                           (setf (jaunder-reconcile-merge-session-remote-view session)
+                                 (jaunder--reconcile-merge-snapshot
+                                  " *Jaunder Merge Remote*"
+                                  (plist-get (plist-get review :staged) :bytes)))
                            (setf (jaunder-reconcile-merge-session-ediff-active session) t)
                            (ediff-merge-buffers
-                            local-view remote-view
+                            (jaunder-reconcile-merge-session-local-view session)
+                            (jaunder-reconcile-merge-session-remote-view session)
                             (list (lambda ()
                                     (jaunder--reconcile-merge-bind-ediff-result
                                      session name))))
@@ -1469,20 +1479,20 @@ operations write there, never to either Post.  `C-c C-c' explicitly finishes."
                        (error
                         (setf (jaunder-reconcile-merge-session-ediff-active session) nil)
                         err))))
-               (if ediff-error
+               (if setup-error
                    (let ((result (list :outcome 'failed
                                        :post-id (jaunder--reconcile-row-post-id row)
                                        :slug (jaunder--reconcile-row-slug row)
                                        :local-effect 'unchanged
                                        :reason 'ediff-unavailable
-                                       :detail (error-message-string ediff-error))))
+                                       :detail (error-message-string setup-error))))
                      (jaunder--reconcile-merge-close-views session)
                      (jaunder--reconcile-merge-record session report-buffer result)
                      ;; If Ediff had already created C, retain that work for
                      ;; inspection but never allow a failed session to publish.
                      (when (buffer-live-p (jaunder-reconcile-merge-session-scratch session))
                        (display-buffer (jaunder-reconcile-merge-session-scratch session)))
-                     (message "Ediff could not open: %s" (error-message-string ediff-error))
+                     (message "Merge could not open: %s" (error-message-string setup-error))
                      nil)
                  (display-buffer (jaunder-reconcile-merge-session-scratch session))
                  (message "Two-way Ediff merge opened; edit %s, then C-c C-c to complete"
