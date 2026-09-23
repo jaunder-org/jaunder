@@ -22,7 +22,7 @@ changes to Member write/conditional semantics, and #1641's compression work.
     text; incoming values are ignored. Service Document version 1 advertises
     `member-etag`. Compute from the existing content-and-audience ETag function,
     not a second formula. Preserve upstream Atom serialization and other
-    clients' parsing. Author the proposed ADR draft and its
+    Protocol Clients' parsing. Author the proposed ADR draft and its
     `docs/ARCHITECTURE.md` projection with this slice.
   - Verification:
     `devtool run -- cargo xtask test-local -- -p jaunder -E 'test(/atompub/)'`
@@ -49,7 +49,8 @@ changes to Member write/conditional semantics, and #1641's compression work.
   - Verification: focused Emacs ERT as above for same classification matrix with
     and without extensions, per-page rather than per-match request count on
     multiple Posts, and fallback failure rows; live Emacs integration test
-    proves the paginated server-to-client path without per-Member preview reads.
+    proves the paginated server-to-Emacs Protocol Client path without per-Member
+    preview reads.
 - [x] Make initial reconciliation and refresh visibly synchronous
   - Contract: expose an in-progress status before blocking network work for
     initial `jaunder-reconcile` and `g`, finish truthfully on success or error,

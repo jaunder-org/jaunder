@@ -38,7 +38,7 @@ Entry value without separately fetching the Service Document. A Protocol Client
 without the extension, or receiving absent, duplicate, weak, malformed,
 attributed, nested, whitespace-padded, or namespace-spoofed values, uses a
 Member `GET` instead. This is a public Atom foreign-markup extension, not an
-Emacs-specific transport; unaware clients may ignore it as with
+Emacs-specific transport; unaware Protocol Clients may ignore it as with
 [ADR-0023](../0023-atompub-jaunder-wire-extensions.md). Keep Atom document I/O
 delegated to the namespace-aware upstream model as required by
 [ADR-0089](../0089-upstream-atom-document-io.md) and

@@ -15,14 +15,14 @@ Collection remains a public, interoperable AtomPub surface.
   denotes `https://jaunder.org/ns/atompub` (the prefix itself is not
   significant). Its sole content is the exact quoted strong Post ETag sent in
   that Entry's Member `GET` response, with no padding whitespace or attributes;
-  incoming `j:etag` values on writes are ignored. Clients unaware of the
-  extension may ignore it. Do not create an Emacs-only endpoint or persist ETags
-  in storage.
+  incoming `j:etag` values on writes are ignored. Protocol Clients unaware of
+  the extension may ignore it. Do not create an Emacs-only endpoint or persist
+  ETags in storage.
 - Advertise the additive `member-etag` feature token in version `1` of the
   existing Jaunder Service Document `j:extension` capability. The Collection
-  Entry itself is the read authority: a client may use a valid `j:etag` without
-  first fetching the Service Document, and a missing feature token does not
-  suppress a valid Entry value.
+  Entry itself is the read authority: a Protocol Client may use a valid `j:etag`
+  without first fetching the Service Document, and a missing feature token does
+  not suppress a valid Entry value.
 - Compute the advertised validator from the same Post content and complete
   audience target set used by the Member response and conditional writes. The
   extension is metadata about the Member's mutable representation, **not** the
