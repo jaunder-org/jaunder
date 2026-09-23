@@ -332,6 +332,14 @@ fn AppShell() -> impl IntoView {
     // (per-navigation reconcile), which requires the `<Router>` context, and every
     // consumer renders under this shell (#591).
     crate::auth::provide_session_context();
+    let seeded_user_tag = use_context::<Option<common::seed::PageSeed>>()
+        .flatten()
+        .as_ref()
+        .and_then(crate::feed_discovery::routes::timeline_seed_surface)
+        .filter(|surface| matches!(surface, common::feed::FeedSurface::UserTag { .. }));
+    let confirmed_user_tag =
+        crate::feed_discovery::ConfirmedUserTag(RwSignal::new(seeded_user_tag));
+    provide_context(confirmed_user_tag);
 
     let theme = public_theme();
     let location = use_location();
@@ -339,8 +347,15 @@ fn AppShell() -> impl IntoView {
     presentation.adopt_initial();
     provide_context(presentation);
     Effect::new(move |_| {
-        if !common::theme::is_public_presentation_path(&location.pathname.get()) {
+        let path = location.pathname.get();
+        if !common::theme::is_public_presentation_path(&path) {
             presentation.clear_for_private_route();
+        }
+        let confirmed = confirmed_user_tag.0.get_untracked();
+        let retained =
+            crate::feed_discovery::routes::confirmed_user_tag_on_path(confirmed.clone(), &path);
+        if confirmed != retained {
+            confirmed_user_tag.0.set(retained);
         }
     });
     // `data-theme` must be a plain dynamic attribute, NOT `attr:data-theme`: the

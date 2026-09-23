@@ -2192,6 +2192,8 @@
   .j-sidebar .j-sb-foot {
     flex: 0 0 auto;
     margin: 0 0 0 auto;
+    padding-top: 0;
+    padding-bottom: 0;
   }
 
   .j-main-region {

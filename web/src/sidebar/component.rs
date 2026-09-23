@@ -43,6 +43,7 @@ fn SidebarNavItem(
 #[component]
 pub fn Sidebar() -> impl IntoView {
     let location = hooks::use_location();
+    let confirmed_user_tag = crate::feed_discovery::ConfirmedUserTag::current();
     let active_for_path = move || markup::active_key(&location.pathname.get()).unwrap_or("");
 
     // The shared session context (#591) is the single source: its `current` signal
@@ -67,8 +68,10 @@ pub fn Sidebar() -> impl IntoView {
         <aside class="j-sidebar" data-jaunder-part="navigation-rail">
             {move || {
                 let active_key = active_for_path();
-                let surface = crate::feed_discovery::routes::timeline_surface(
+                let confirmed = confirmed_user_tag.0.get();
+                let surface = crate::feed_discovery::routes::timeline_marker_surface(
                     &location.pathname.get(),
+                    confirmed.as_ref(),
                 );
                 match session.get() {
                     None => {

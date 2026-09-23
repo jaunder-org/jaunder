@@ -11,4 +11,4 @@ pub mod render;
 pub mod routes;
 
 #[cfg(target_arch = "wasm32")]
-pub use component::{FeedDiscovery, FeedIndexPage, RsdDiscovery};
+pub use component::{ConfirmedUserTag, FeedDiscovery, FeedIndexPage, RsdDiscovery};

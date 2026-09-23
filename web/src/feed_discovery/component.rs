@@ -39,6 +39,19 @@ pub fn FeedDiscovery<'a>(surface: &'a FeedSurface) -> impl IntoView + use<> {
     }
 }
 
+/// The last User-tag timeline whose first page was actually resolved. A soft
+/// shell fallback never claims a marker just because the path parses.
+#[derive(Clone, Copy)]
+pub struct ConfirmedUserTag(pub RwSignal<Option<FeedSurface>>);
+
+impl ConfirmedUserTag {
+    /// Missing shell context fails closed rather than guessing User existence.
+    #[must_use]
+    pub fn current() -> Self {
+        use_context::<Self>().unwrap_or_else(|| Self(RwSignal::new(None)))
+    }
+}
+
 /// A public index whose first paint adopts the exact projector seed. In-app
 /// navigation resolves the same timeline presentation for theme/missing-context
 /// policy, then paints through the projector's non-reactive markup builder.
@@ -51,6 +64,9 @@ pub fn FeedIndexPage() -> impl IntoView {
     let path = location.pathname.get_untracked();
     let initial = super::routes::seeded_discovery(seed, &path);
     let surface = RwSignal::new(initial);
+    let visible = Memo::new(move |_| {
+        super::routes::visible_discovery_surface(surface.get(), &location.pathname.get())
+    });
     let error = RwSignal::<Option<String>>::new(None);
     let destination = Resource::new(move || location.pathname.get(), discovery_destination);
     Effect::new(move |_| match destination.try_get().flatten() {
@@ -72,11 +88,12 @@ pub fn FeedIndexPage() -> impl IntoView {
         }
         None => {
             presentation.begin_navigation();
+            error.set(None);
         }
     });
     view! {
         <Title text=move || {
-            surface
+            visible
                 .get()
                 .map_or_else(
                     || "Syndication feeds".to_owned(),
@@ -85,7 +102,7 @@ pub fn FeedIndexPage() -> impl IntoView {
                     },
                 )
         } />
-        {move || match surface.get() {
+        {move || match visible.get() {
             Some(surface) => {
                 super::render::body(
                         &surface,

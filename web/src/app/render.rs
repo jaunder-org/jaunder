@@ -188,20 +188,9 @@ pub const PROJECTED_LOCAL_METADATA_SELECTOR: &str = "[data-jaunder-projected-loc
 /// permalink page renders none. Post-boot the reactive components re-add
 /// identical links; the duplicates are invisible.
 fn render_discovery(seed: &PageSeed) -> Markup {
-    use common::feed::{FeedFormat, FeedSurface, canonicalize};
+    use common::feed::{FeedFormat, canonicalize};
 
-    let surface = match seed {
-        PageSeed::SiteTimeline { .. } => Some(FeedSurface::Site),
-        PageSeed::SiteTag { tag, .. } => Some(FeedSurface::SiteTag { tag: tag.clone() }),
-        PageSeed::Profile { username, .. } => Some(FeedSurface::User {
-            username: username.clone(),
-        }),
-        PageSeed::UserTag { username, tag, .. } => Some(FeedSurface::UserTag {
-            username: username.clone(),
-            tag: tag.clone(),
-        }),
-        PageSeed::Permalink(_) | PageSeed::FeedDiscovery(_) => None,
-    };
+    let surface = crate::feed_discovery::routes::timeline_seed_surface(seed);
 
     Markup::new(html! {
         @if let Some(surface) = surface {

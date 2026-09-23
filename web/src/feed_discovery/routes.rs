@@ -52,6 +52,35 @@ pub fn timeline_surface(path: &str) -> Option<FeedSurface> {
     }
 }
 
+/// A User-tag shell is not a feed-bearing timeline until its User resolves.
+/// Other valid timeline contexts do not require that extra existence check.
+#[must_use]
+pub fn timeline_marker_surface(
+    path: &str,
+    confirmed_user_tag: Option<&FeedSurface>,
+) -> Option<FeedSurface> {
+    let surface = timeline_surface(path)?;
+    if matches!(surface, FeedSurface::UserTag { .. }) && confirmed_user_tag != Some(&surface) {
+        return None;
+    }
+    Some(surface)
+}
+
+/// Revoke a resolved User-tag when navigation leaves that exact timeline.
+#[must_use]
+pub fn confirmed_user_tag_on_path(
+    confirmed: Option<FeedSurface>,
+    path: &str,
+) -> Option<FeedSurface> {
+    confirmed.filter(|current| timeline_surface(path).as_ref() == Some(current))
+}
+
+/// Keep an index's prior context out of the paint during route transitions.
+#[must_use]
+pub fn visible_discovery_surface(surface: Option<FeedSurface>, path: &str) -> Option<FeedSurface> {
+    surface.filter(|current| discovery_surface(path).as_ref() == Some(current))
+}
+
 /// Resolve only a nested feed-discovery destination, never a timeline itself.
 #[must_use]
 pub fn discovery_surface(path: &str) -> Option<FeedSurface> {
@@ -72,6 +101,33 @@ mod tests {
         );
         assert_eq!(seeded_discovery(Some(seed), "/~alice/feeds"), None);
         assert_eq!(seeded_discovery(None, "/feeds"), None);
+    }
+
+    #[test]
+    fn unknown_user_tag_has_no_marker_and_stale_index_cannot_paint() {
+        let user_tag = FeedSurface::UserTag {
+            username: "alice".parse().unwrap(),
+            tag: "rust".parse().unwrap(),
+        };
+        assert_eq!(timeline_marker_surface("/~alice/tags/rust", None), None);
+        assert_eq!(
+            timeline_marker_surface("/~alice/tags/rust", Some(&user_tag)),
+            Some(user_tag.clone())
+        );
+        assert_eq!(timeline_marker_surface("/", None), Some(FeedSurface::Site));
+        assert_eq!(
+            confirmed_user_tag_on_path(Some(user_tag.clone()), "/~alice/tags/rust"),
+            Some(user_tag.clone())
+        );
+        assert_eq!(confirmed_user_tag_on_path(Some(user_tag), "/feeds"), None);
+        assert_eq!(
+            visible_discovery_surface(Some(FeedSurface::Site), "/feeds"),
+            Some(FeedSurface::Site)
+        );
+        assert_eq!(
+            visible_discovery_surface(Some(FeedSurface::Site), "/~alice/feeds"),
+            None
+        );
     }
 
     #[test]

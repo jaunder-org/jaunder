@@ -157,10 +157,72 @@ test("User-tag discovery renders on direct visit for an existing User", async ({
   ).toHaveText("Atom");
 });
 
+test("unknown User-tag timeline never gains a contextual marker after boot", async ({
+  page,
+}) => {
+  await goto(page, "/~nobody/tags/unused");
+  await expect(page.locator("main p.error")).toHaveText("user not found");
+  await expect(page.getByRole("link", { name: markerName })).toHaveCount(0);
+});
+
 test("unknown User-tag does not invent a discovery index", async ({ page }) => {
   await goto(page, "/~nobody/tags/unused/feeds");
   await expect(page.locator("main p.error")).toHaveText("user not found");
   await expect(page.getByRole("link", { name: markerName })).toHaveCount(0);
+});
+
+test("changing discovery context never paints the previous index", async ({
+  page,
+}) => {
+  const first = `discover${randomUUID().replaceAll("-", "").slice(0, 10)}`;
+  const second = `discover${randomUUID().replaceAll("-", "").slice(0, 10)}`;
+  await seedUserViaTool(first, "discovery-test-password");
+  await seedUserViaTool(second, "discovery-test-password");
+  await goto(page, `/~${first}/feeds`);
+  await page.evaluate((destination) => {
+    const frames: string[][] = [];
+    (window as Window & { __feedIndexFrames?: string[][] }).__feedIndexFrames =
+      frames;
+    const sample = () => {
+      if (location.pathname === destination) {
+        frames.push(
+          Array.from(
+            document.querySelectorAll('main a[href$="/feed.rss"]'),
+          ).map((link) => link.getAttribute("href") ?? ""),
+        );
+      }
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+    const link = document.createElement("a");
+    link.href = destination;
+    link.textContent = "Next User's feeds";
+    link.setAttribute("data-test", "next-feed-index");
+    document.querySelector("main")?.append(link);
+  }, `/~${second}/feeds`);
+  await navigateInApp(
+    page,
+    () => page.locator('[data-test="next-feed-index"]').click(),
+    {
+      url: `/~${second}/feeds`,
+      ready: `main h1:has-text('User ~${second}')`,
+    },
+  );
+  await expect(page.locator(`main a[href="/~${second}/feed.rss"]`)).toHaveCount(
+    1,
+  );
+  await expect(page.locator(`main a[href="/~${first}/feed.rss"]`)).toHaveCount(
+    0,
+  );
+  const frames = await page.evaluate(async () => {
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => resolve()),
+    );
+    return (window as Window & { __feedIndexFrames?: string[][] })
+      .__feedIndexFrames;
+  });
+  expect(frames?.length).toBeGreaterThan(0);
+  expect(frames?.flat()).not.toContain(`/~${first}/feed.rss`);
 });
 
 test("private Home has no contextual feed marker", async ({
