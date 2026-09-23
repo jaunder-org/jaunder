@@ -123,7 +123,11 @@ async fn explicit_atom_draft_no_beats_org_metadata_and_canonicalizes_org(#[case]
 #+PROPERTY: JAUNDER_STATUS draft
 #+UNKNOWN: retained
 
-Org body</content>
+Org body
+
+#+begin_src rust
+    println!("&lt;script&gt;alert(1)&lt;/script&gt;");
+#+end_src</content>
   <category term="atom-tag"/>
   <app:control><app:draft>no</app:draft></app:control>
 </entry>"#;
@@ -134,6 +138,7 @@ Org body</content>
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::CREATED);
+    let post_id = PostId::from(location_post_id(&response));
     let location = atompub_location(
         response
             .headers()
@@ -164,6 +169,32 @@ Org body</content>
     assert!(!body.contains("app:draft"), "body: {body}");
     assert!(body.contains("#+UNKNOWN: retained"), "body: {body}");
     assert!(body.contains("Org body"), "body: {body}");
+    assert!(
+        body.contains("#+begin_src rust"),
+        "native Org source: {body}"
+    );
+    assert!(
+        body.contains("&lt;script&gt;alert(1)&lt;/script&gt;"),
+        "native source round-trip: {body}"
+    );
+    let post = env
+        .posts()
+        .get_post_by_id(
+            post_id,
+            &common::visibility::ViewerIdentity::local(session.user_id),
+        )
+        .await
+        .expect("published Post read")
+        .expect("published Post visible to its author");
+    assert!(post.body.contains("#+begin_src rust"));
+    assert!(post.body.contains("<script>alert(1)</script>"));
+    let html = post.rendered_html.as_ref();
+    assert!(html.contains("<pre><code"), "published code block: {html}");
+    assert!(
+        html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"),
+        "escaped code block: {html}"
+    );
+    assert!(!html.contains("<script>"), "executable source: {html}");
     assert!(!body.contains("JAUNDER_STATUS"), "body: {body}");
     assert!(!body.contains("#+TITLE:"), "body: {body}");
     assert!(!body.contains("#+DESCRIPTION:"), "body: {body}");

@@ -708,6 +708,52 @@ async fn regenerated_feeds_project_effective_summaries_without_changing_complete
     }
 }
 
+/// Public Syndication Feeds use the same sanitized Org projection as Post views,
+/// including code blocks whose source looks like markup.
+#[apply(backends)]
+#[tokio::test]
+async fn regenerated_feeds_preserve_org_source_block_html(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let user = SeedUser::new()
+        .seed(Arc::clone(&env.users()), env.write_scope())
+        .await;
+    let post = SeedRawPost::new(user.user_id)
+        .format(PostFormat::Org)
+        .body(parse_post_body(
+            "#+begin_src rust\n    println!(\"<script>alert(1)</script>\");\n#+end_src",
+        ))
+        .seed(Arc::clone(&env.posts()), env.write_scope())
+        .await;
+    let html = post.rendered_html.as_ref();
+    assert!(
+        html.contains("<pre><code"),
+        "published source block: {html}"
+    );
+    assert!(html.contains("&lt;script&gt;"), "escaped source: {html}");
+
+    for extension in ["atom", "rss", "json"] {
+        let row = render_feed(
+            Arc::clone(&env.publisher()),
+            Arc::clone(&env.posts()),
+            fp(&format!("/~{}/feed.{extension}", user.username)),
+        )
+        .await;
+        let body = row.representation().body();
+        match extension {
+            "atom" => assert!(
+                body.contains(&xml_text(html).replace('"', "&quot;")),
+                "Atom: {body}"
+            ),
+            "rss" => assert!(body.contains(html), "RSS: {body}"),
+            "json" => {
+                let feed: serde_json::Value = serde_json::from_str(body).expect("JSON Feed");
+                assert_eq!(feed["items"][0]["content_html"], html);
+            }
+            _ => unreachable!("fixed Syndication Feed extension"),
+        }
+    }
+}
+
 /// Feed regeneration resolves the current User-wide rights state without changing
 /// authored title, summary, or rendered body projections.
 #[apply(backends)]
