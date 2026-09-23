@@ -1688,6 +1688,54 @@ The current filename supplies the local slug evidence used by matched-pull tests
                      (buffer-string)))))
       (delete-directory root t))))
 
+(ert-deftest jaunder-reconcile-legacy-refresh-preserves-local-audience-lines ()
+  (let ((path (make-temp-file "jaunder-legacy-audience-" nil ".org"))
+        (staged (concat "#+TITLE: Remote\n#+PROPERTY: JAUNDER_STATUS published\n"
+                        "#+PROPERTY: JAUNDER_ID 42\n\nRemote body.\n")))
+    (unwind-protect
+        (progn
+          (with-temp-file path
+            (insert (concat "#+TITLE: Local\n"
+                            "#+PROPERTY: JAUNDER_AUDIENCE named:17\n"
+                            "#+PROPERTY: JAUNDER_ID 42\n"
+                            "#+PROPERTY: JAUNDER_AUDIENCE public\n\n"
+                            "Local body.\n#+PROPERTY: JAUNDER_AUDIENCE body-text\n")))
+          (should
+           (equal (jaunder--reconcile-preserve-legacy-audience path staged)
+                  (concat "#+TITLE: Remote\n#+PROPERTY: JAUNDER_STATUS published\n"
+                          "#+PROPERTY: JAUNDER_AUDIENCE named:17\n"
+                          "#+PROPERTY: JAUNDER_AUDIENCE public\n"
+                          "#+PROPERTY: JAUNDER_ID 42\n\nRemote body.\n"))))
+      (delete-file path))))
+
+(ert-deftest jaunder-reconcile-legacy-staged-install-retains-audience ()
+  (let* ((path (make-temp-file "jaunder-legacy-install-" nil ".org"))
+         (staged (list :slug "remote" :id "42" :etag "\"remote\""
+                       :audience-omitted t :synced-at "2026-08-25T00:00:00Z"
+                       :bytes (concat "#+TITLE: Remote\n"
+                                      "#+PROPERTY: JAUNDER_STATUS published\n"
+                                      "#+PROPERTY: JAUNDER_ID 42\n\nRemote body.\n"))))
+    (unwind-protect
+        (progn
+          (with-temp-file path
+            (insert (concat "#+TITLE: Local\n"
+                            "#+PROPERTY: JAUNDER_AUDIENCE subscribers\n"
+                            "#+PROPERTY: JAUNDER_ID 42\n\nLocal body.\n")))
+          (cl-letf (((symbol-function 'jaunder--reconcile-pull-preflight)
+                     (lambda (&rest _) nil))
+                    ((symbol-function 'jaunder--reconcile-pull-destination)
+                     (lambda (&rest _) path)))
+            (should (eq (plist-get
+                         (jaunder--reconcile-pull-install-staged
+                          nil staged '(:http-status 200) path)
+                         :outcome) 'success)))
+          (should (equal (with-temp-buffer (insert-file-contents path) (buffer-string))
+                         (concat "#+TITLE: Remote\n"
+                                 "#+PROPERTY: JAUNDER_STATUS published\n"
+                                 "#+PROPERTY: JAUNDER_AUDIENCE subscribers\n"
+                                 "#+PROPERTY: JAUNDER_ID 42\n\nRemote body.\n"))))
+      (delete-file path))))
+
 (ert-deftest jaunder-reconcile-pull-stale-etag-blocks-before-local-replacement ()
   "A changed staged ETag leaves the reviewed matched file untouched."
   (let* ((root (file-name-as-directory (make-temp-file "jaunder-pull-stale-" t)))

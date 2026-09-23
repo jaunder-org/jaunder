@@ -44,7 +44,7 @@ conflict resolution, and Named audience discovery.
     changed-audience and body-only/omitted-audience replays: retain local-ahead
     state, then perform a conditional update and assert the authored audience
     intent reaches the server. Rejection and 412 must preserve header bytes.
-- [ ] **Pull/reconciliation audience reflection.** Reuse the same capability
+- [x] **Pull/reconciliation audience reflection.** Reuse the same capability
       verdict for server-only pull and selected server-ahead refresh; keep the
       existing staged no-clobber and stale-ETag checks. Assert canonical remote
       targets reach the new or replaced Org file; a valid legacy response

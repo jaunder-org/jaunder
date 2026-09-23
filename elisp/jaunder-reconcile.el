@@ -806,14 +806,43 @@ than an exception flattened into a generic pull failure."
                            :detail (error-message-string err))))))
       (when (and temporary (file-exists-p temporary)) (delete-file temporary)))))
 
+(defun jaunder--reconcile-preserve-legacy-audience (path bytes)
+  "Carry PATH's exact leading audience header lines into staged Org BYTES.
+Only used when a valid legacy service omits the Member audience.  The remote
+Post body and all other metadata still come from the staged response."
+  (with-temp-buffer
+    (insert-file-contents path)
+    (goto-char (point-min))
+    (let ((case-fold-search t)
+          lines)
+      (while (looking-at-p "^[ \t]*#\\+[[:alnum:]_]+:")
+        (when (looking-at
+               "^[ \t]*#\\+PROPERTY:[ \t]+JAUNDER_AUDIENCE\\(?:[ \t].*\\)?$")
+          (push (buffer-substring-no-properties
+                 (line-beginning-position) (line-end-position)) lines))
+        (forward-line 1))
+      (if (null lines)
+          bytes
+        (unless (string-match
+                 "^#\\+PROPERTY: JAUNDER_STATUS [^\n]*\n" bytes)
+          (error "jaunder: staged Post has no status header"))
+        (let ((position (match-end 0)))
+          (concat (substring bytes 0 position)
+                  (mapconcat #'identity (nreverse lines) "\n") "\n"
+                  (substring bytes position)))))))
+
 (defun jaunder--reconcile-pull-install-staged (row staged remote path)
   "Install STAGED ROW bytes after successful REMOTE revalidation at PATH."
   (let ((preflight (jaunder--reconcile-pull-preflight row staged)))
     (if preflight
         (jaunder--reconcile-blocked row preflight)
       (let* ((destination (jaunder--reconcile-pull-destination row (plist-get staged :slug)))
+             (bytes (if (plist-get staged :audience-omitted)
+                        (jaunder--reconcile-preserve-legacy-audience
+                         path (plist-get staged :bytes))
+                      (plist-get staged :bytes)))
              (installed (jaunder--reconcile-replace-pulled-file
-                         path destination (plist-get staged :bytes)))
+                         path destination bytes))
              (committed (eq (plist-get installed :local-effect) 'replaced-at-old-path)))
         (append (list :outcome (if committed 'failed 'success)
                       :post-id (plist-get staged :id) :slug (plist-get staged :slug)

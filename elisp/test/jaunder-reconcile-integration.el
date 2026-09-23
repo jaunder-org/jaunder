@@ -276,6 +276,7 @@ When DRAFT is non-nil, create a draft Member."
             (setq shadow (expand-file-name "remote-editor.org" nested))
             (copy-file local shadow)
             (with-current-buffer (find-file-noselect shadow)
+              (jaunder--replace-audience-properties '("public" "subscribers"))
               (goto-char (point-max)) (insert "Remote change.\n")
               (jaunder-publish) (save-buffer) (set-buffer-modified-p nil))
             ;; 26 creates force at least two 25-Member Collection pages.
@@ -335,13 +336,26 @@ When DRAFT is non-nil, create a draft Member."
                   (should (stringp (jaunder-reconcile-result-synced-at server-result)))
                   (should (= (jaunder-reconcile-result-http-status server-result) 200))
                   (should (eq (jaunder-reconcile-result-local-effect server-result) 'created)))
-                (should (file-exists-p (expand-file-name
-                                        (concat (jaunder-inventory-member-slug
-                                                 (cl-find success-id (jaunder-inventory-server-only inventory)
-                                                          :key #'jaunder-inventory-member-id :test #'equal))
-                                                ".org") root)))
+                (let ((pulled-path
+                       (expand-file-name
+                        (concat (jaunder-inventory-member-slug
+                                 (cl-find success-id (jaunder-inventory-server-only inventory)
+                                          :key #'jaunder-inventory-member-id :test #'equal))
+                                ".org") root)))
+                  (should (file-exists-p pulled-path))
+                  (should (string-match-p
+                           "^#\\+PROPERTY: JAUNDER_AUDIENCE private$"
+                           (with-temp-buffer
+                             (insert-file-contents pulled-path) (buffer-string)))))
                 (with-current-buffer local-buffer
                   (should (string-match-p "Remote change" (buffer-string)))
+                  (should (string-match-p
+                           (regexp-quote
+                            (concat "#+PROPERTY: JAUNDER_AUDIENCE public\n"
+                                    "#+PROPERTY: JAUNDER_AUDIENCE subscribers\n"))
+                           (buffer-string)))
+                  (should-not (string-match-p "JAUNDER_AUDIENCE private"
+                                              (buffer-string)))
                   (should-not (buffer-modified-p))))))))
      (dolist (buffer (list local-buffer (get-file-buffer shadow)))
        (when (buffer-live-p buffer)

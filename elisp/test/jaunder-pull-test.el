@@ -108,6 +108,22 @@
               "#\\+PROPERTY: JAUNDER_AUDIENCE named:17\n")
       (jaunder-pull-test--org xml)))))
 
+(ert-deftest jaunder-atom->org-requires-audience-on-advertised-server ()
+  (let ((xml (jaunder-pull-test--entry
+              "<title>Audience</title>"
+              "<published>2026-08-24T10:00:00Z</published>"
+              "<link rel=\"edit\" href=\"https://h/atompub/alice/posts/9\"/>"
+              "<j:slug>audience-post</j:slug>"
+              "<content type=\"text/org\">Body</content>")))
+    (should-error
+     (jaunder--atom->org xml "\"etag\""
+                         (date-to-time "2026-08-25T00:00:00Z") "UTC" t))
+    (should-not (string-match-p
+                 "JAUNDER_AUDIENCE"
+                 (jaunder--atom->org xml "\"etag\""
+                                     (date-to-time "2026-08-25T00:00:00Z")
+                                     "UTC" nil)))))
+
 (ert-deftest jaunder-atom->org-rejects-malformed-audiences ()
   (dolist (audiences
            '(("public" "public")
@@ -498,6 +514,14 @@
   (jaunder--parse-service-document
    "<service xmlns=\"http://www.w3.org/2007/app\"><workspace/></service>"))
 
+(defun jaunder-pull-test--audience-service-document (&rest _)
+  "Return valid audience-capable service evidence."
+  (jaunder--parse-service-document
+   (concat "<service xmlns=\"http://www.w3.org/2007/app\""
+           " xmlns:j=\"https://jaunder.org/ns/atompub\">"
+           "<workspace><j:extension version=\"1\" features=\"audience\"/>"
+           "</workspace></service>")))
+
 (defun jaunder-pull-test--member (&optional id slug)
   "Return a D1 Member fixture with optional ID and SLUG."
   (jaunder--make-inventory-member
@@ -555,6 +579,28 @@
                    (lambda (&rest _) (cl-incf member-gets))))
           (should-error (jaunder--pull-member root (jaunder-pull-test--member)))
           (should (= member-gets 0))
+          (should-not (file-exists-p path)))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-pull-rejects-advertised-audience-omission-before-install ()
+  (let* ((root (make-temp-file "jaunder-pull-incomplete-" t))
+         (path (expand-file-name "untitled-note.org" root))
+         (jaunder-blogs (list (cons (file-name-as-directory root)
+                                    '(:base-url "https://h" :username "alice"))))
+         (media-operations 0))
+    (unwind-protect
+        (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                   #'jaunder-pull-test--audience-service-document)
+                  ((symbol-function 'jaunder--http-request)
+                   (lambda (&rest _)
+                     (list :status 200
+                           :headers '(("etag" . "\"sha256-test\"")
+                                      ("x-jaunder-instance" . "12345678-1234-1234-1234-123456789abc"))
+                           :body (jaunder-pull-test--response-entry))))
+                  ((symbol-function 'jaunder--pull-media-materialize)
+                   (lambda (&rest _) (cl-incf media-operations))))
+          (should-error (jaunder--pull-member root (jaunder-pull-test--member)))
+          (should (= media-operations 0))
           (should-not (file-exists-p path)))
       (delete-directory root t))))
 
