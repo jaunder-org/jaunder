@@ -455,7 +455,7 @@ safe retry."
          ;; Explicit audience metadata relies on the round-trip protocol.  Prove
          ;; capability before Local Post Link localization, Media upload, or any
          ;; Post mutation.
-         (jaunder--require-audience-capability
+         (jaunder--require-synchronization-audience-evidence
           (jaunder--active-base-url) (jaunder-entry-audiences entry))
          ;; Claim and validate Local Post Links before any upload or Post
          ;; mutation.  Like media localization, this changes only the sent body.

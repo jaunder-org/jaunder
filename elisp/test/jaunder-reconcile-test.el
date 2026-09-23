@@ -12,6 +12,11 @@
 (require 'cl-lib)
 (require 'jaunder)
 
+(defun jaunder-reconcile-test--legacy-service-document (&rest _)
+  "Return valid legacy capability evidence for independent reconcile tests."
+  (jaunder--parse-service-document
+   "<service xmlns=\"http://www.w3.org/2007/app\"><workspace/></service>"))
+
 (defun jaunder-reconcile-test--entry (id slug &optional href)
   "Return a minimal Collection Entry XML for ID, SLUG, and optional HREF."
   (format (concat "<entry><link rel=\"edit\" href=\"%s\"/>"
@@ -1649,7 +1654,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
                              (list source-member target-member)))
                  (jaunder-reconcile-report
                   (jaunder--make-reconcile-report :root root :inventory inventory)))
-            (cl-letf (((symbol-function 'jaunder--http-request)
+            (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                       #'jaunder-reconcile-test--legacy-service-document)
+                      ((symbol-function 'jaunder--http-request)
                        (lambda (&rest _)
                          (push 'get calls)
                          (if (cdr calls)
@@ -1943,7 +1950,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
         (progn
           (with-temp-file path (insert before))
           (setq row (jaunder-reconcile-test--matched-pull-row path "old"))
-          (cl-letf (((symbol-function 'jaunder--http-request)
+          (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                     #'jaunder-reconcile-test--legacy-service-document)
+                    ((symbol-function 'jaunder--http-request)
                      (lambda (method url &rest _)
                        (should (equal method "GET"))
                        (should (equal url "https://example.test/atompub/alice/posts/7"))

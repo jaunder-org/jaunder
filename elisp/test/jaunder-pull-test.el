@@ -298,7 +298,9 @@
         (progn
           (write-region "#+PROPERTY: JAUNDER_ID 7\n#+PROPERTY: JAUNDER_SLUG target\n\nBody"
                         nil target nil 'silent)
-          (cl-letf (((symbol-function 'jaunder--http-request)
+          (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                     #'jaunder-pull-test--legacy-service-document)
+                    ((symbol-function 'jaunder--http-request)
                      (lambda (&rest _)
                        (list :status 200
                              :headers '(("etag" . "\"sha256-test\"")
@@ -349,7 +351,9 @@
                         '(:base-url "https://h" :username "alice"))))
            trace)
       (unwind-protect
-          (cl-letf (((symbol-function 'jaunder--http-request)
+          (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                     #'jaunder-pull-test--legacy-service-document)
+                    ((symbol-function 'jaunder--http-request)
                      (lambda (&rest _)
                        (list :status 200
                              :headers '(("etag" . "\"sha256-test\"")
@@ -417,7 +421,9 @@
          (attempt 0)
          (member-gets 0))
     (unwind-protect
-        (cl-letf (((symbol-function 'jaunder--http-request)
+        (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                   #'jaunder-pull-test--legacy-service-document)
+                  ((symbol-function 'jaunder--http-request)
                    (lambda (&rest _)
                      (setq member-gets (1+ member-gets))
                      (list :status 200
@@ -466,7 +472,9 @@
          (member-gets 0)
          observed)
     (unwind-protect
-        (cl-letf (((symbol-function 'jaunder--http-request)
+        (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                   #'jaunder-pull-test--legacy-service-document)
+                  ((symbol-function 'jaunder--http-request)
                    (lambda (&rest _)
                      (setq member-gets (1+ member-gets))
                      (list :status 200
@@ -484,6 +492,11 @@
           (should-not (file-exists-p path))
           (should-not (directory-files-recursively root "\\.jaunder-media-" nil)))
       (delete-directory root t))))
+
+(defun jaunder-pull-test--legacy-service-document (&rest _)
+  "Return valid legacy capability evidence for independent pull-path tests."
+  (jaunder--parse-service-document
+   "<service xmlns=\"http://www.w3.org/2007/app\"><workspace/></service>"))
 
 (defun jaunder-pull-test--member (&optional id slug)
   "Return a D1 Member fixture with optional ID and SLUG."
@@ -528,6 +541,23 @@
                              "winner")))))
       (delete-directory root t))))
 
+(ert-deftest jaunder-pull-requires-service-evidence-before-member-get ()
+  "No local Post is installed when the server's audience support is unknown."
+  (let* ((root (make-temp-file "jaunder-pull-evidence-" t))
+         (path (expand-file-name "untitled-note.org" root))
+         (jaunder-blogs (list (cons (file-name-as-directory root)
+                                    '(:base-url "https://h" :username "alice"))))
+         (member-gets 0))
+    (unwind-protect
+        (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                   (lambda (_base) 'unknown))
+                  ((symbol-function 'jaunder--http-request)
+                   (lambda (&rest _) (cl-incf member-gets))))
+          (should-error (jaunder--pull-member root (jaunder-pull-test--member)))
+          (should (= member-gets 0))
+          (should-not (file-exists-p path)))
+      (delete-directory root t))))
+
 (ert-deftest jaunder-pull-member-gets-d1-uri-and-installs-exact-file ()
   ;; The D3-facing seam resolves the configured blog, GETs the D1 edit URI, and
   ;; returns one exact pulled path without leaking its same-directory temp file.
@@ -538,7 +568,9 @@
                       '(:base-url "https://h" :username "alice"))))
          requested)
     (unwind-protect
-        (cl-letf (((symbol-function 'jaunder--http-request)
+        (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                   #'jaunder-pull-test--legacy-service-document)
+                  ((symbol-function 'jaunder--http-request)
                    (lambda (method url &rest _)
                      (setq requested
                            (list method url (jaunder--active-base-url)
@@ -596,7 +628,9 @@
             (list (cons (file-name-as-directory root)
                         '(:base-url "https://h" :username "alice")))))
       (unwind-protect
-          (cl-letf (((symbol-function 'jaunder--http-request)
+          (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                     #'jaunder-pull-test--legacy-service-document)
+                    ((symbol-function 'jaunder--http-request)
                      (lambda (&rest _)
                        (list :status 200
                              :headers '(("etag" . "\"sha256-test\"")
@@ -619,7 +653,9 @@
            (real-write (symbol-function 'write-region))
            (real-link (symbol-function 'add-name-to-file)))
       (unwind-protect
-          (cl-letf (((symbol-function 'jaunder--http-request)
+          (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                     #'jaunder-pull-test--legacy-service-document)
+                    ((symbol-function 'jaunder--http-request)
                      (lambda (&rest _)
                        (pcase failure
                          ('http '(:status 503 :headers nil :body "no"))
@@ -659,7 +695,9 @@
                       '(:base-url "https://h" :username "alice"))))
          (real-write (symbol-function 'write-region)))
     (unwind-protect
-        (cl-letf (((symbol-function 'jaunder--http-request)
+        (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                   #'jaunder-pull-test--legacy-service-document)
+                  ((symbol-function 'jaunder--http-request)
                    (lambda (&rest _)
                      (list :status 200
                            :headers '(("etag" . "\"sha256-test\"")

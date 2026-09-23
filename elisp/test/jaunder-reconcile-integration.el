@@ -178,7 +178,6 @@ When DRAFT is non-nil, create a draft Member."
           (path (expand-file-name "audience.org" root))
           (jaunder-blogs (list (cons root (list :base-url jaunder-test-base-url
                                                 :username jaunder-test-username))))
-          (jaunder--audience-capability-cache nil)
           buffer)
      (unwind-protect
          (progn

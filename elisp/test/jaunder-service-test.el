@@ -71,6 +71,41 @@ Lets the warning tests assert on emitted warnings without touching the real
                         "</app:workspace></app:service>"))))
       (should-not (jaunder--service-advertises-audience-p dom)))))
 
+(ert-deftest jaunder-synchronization-rechecks-audience-capability-per-operation ()
+  "Omitted audience still requires fresh valid service evidence."
+  (let ((documents
+         (list (jaunder--parse-service-document
+                "<service xmlns=\"http://www.w3.org/2007/app\"><workspace/></service>")
+               (jaunder--parse-service-document
+                (concat "<service xmlns=\"http://www.w3.org/2007/app\""
+                        " xmlns:j=\"https://jaunder.org/ns/atompub\">"
+                        "<workspace><j:extension version=\"1\""
+                        " features=\"audience\"/></workspace></service>"))
+               'unknown))
+        (fetches 0))
+    (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+               (lambda (_base)
+                 (cl-incf fetches)
+                 (pop documents))))
+      (should-not (jaunder--require-synchronization-audience-evidence
+                   "https://blog" nil))
+      (should (jaunder--require-synchronization-audience-evidence
+               "https://blog" nil))
+      (should-error (jaunder--require-synchronization-audience-evidence
+                     "https://blog" nil))
+      (should (= fetches 3)))))
+
+(ert-deftest jaunder-synchronization-classifies-response-audience-by-capability ()
+  (should-not (jaunder--synchronized-response-audiences
+               '((audiences)) nil))
+  (should-error (jaunder--synchronized-response-audiences
+                 '((audiences)) t))
+  (should (equal (jaunder--synchronized-response-audiences
+                  '((audiences "named:17" "public" "subscribers")) t)
+                 '("public" "subscribers" "named:17")))
+  (should-error (jaunder--synchronized-response-audiences
+                 '((audiences "private" "public")) t)))
+
 (ert-deftest jaunder-parse-service-features-absent-is-empty ()
   ;; Parses fine but advertises nothing → empty list, not `unknown'.
   (should (equal (jaunder--parse-service-features
@@ -87,6 +122,12 @@ Lets the warning tests assert on emitted warnings without touching the real
                     "<workspace><atom:title"
                     " xmlns:atom=\"http://www.w3.org/2005/Atom\">"
                     "format-media-type</atom:title></workspace></service>")))))
+
+(ert-deftest jaunder-service-rejects-foreign-service-root-as-capability-evidence ()
+  (should
+   (eq (jaunder--parse-service-document
+        "<service xmlns=\"https://example.invalid\"><workspace/></service>")
+       'unknown)))
 
 (ert-deftest jaunder-parse-service-features-unparseable-is-unknown ()
   ;; AC-216d: a 2xx body that is not parseable XML → unknown, not "absent".

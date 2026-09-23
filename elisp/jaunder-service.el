@@ -37,9 +37,6 @@
 Populated on the first successful service-doc fetch per base-url; failures are
 not cached, so a later publish may retry.  Reset only by restarting Emacs.")
 
-(defvar jaunder--audience-capability-cache nil
-  "Session-scoped list of base URLs with proven audience capability.")
-
 (defconst jaunder--entry-content-type "application/atom+xml;type=entry"
   "AtomPub media type accepted by Jaunder's Posts Collection.")
 
@@ -49,7 +46,11 @@ not cached, so a later publish may retry.  Reset only by restarting Emacs.")
       (with-temp-buffer
         (insert (or body ""))
         (let ((dom (car (xml-parse-region (point-min) (point-max)))))
-          (if (and dom (eq (jaunder--atom-local-name (dom-tag dom)) 'service))
+          (if (and dom
+                   (eq (jaunder--atom-local-name (dom-tag dom)) 'service)
+                   (equal (jaunder--atom-element-namespace
+                           dom (jaunder--atom-namespace-context dom nil))
+                          jaunder--app-ns))
               dom
             'unknown)))
     (error 'unknown)))
@@ -140,17 +141,29 @@ Transport errors, non-2xx responses, and invalid documents never signal."
           'unknown))
     (error 'unknown)))
 
-(defun jaunder--require-audience-capability (base-url audiences)
-  "Require BASE-URL to advertise audience support when AUDIENCES is explicit.
-Successful evidence is cached for the Emacs session.  Missing, malformed, or
-unsupported evidence signals before publish-side mutation begins."
-  (when (and audiences
-             (not (member base-url jaunder--audience-capability-cache)))
-    (let ((dom (jaunder--fetch-service-document base-url)))
-      (unless (jaunder--service-advertises-audience-p dom)
+(defun jaunder--require-synchronization-audience-evidence (base-url audiences)
+  "Return BASE-URL's audience capability for one synchronization operation.
+A valid service document without support is a legacy server; unavailable or
+malformed evidence cannot establish that the audience may be omitted.  Explicit
+AUDIENCES still require the advertised extension before mutation."
+  (let ((document (jaunder--fetch-service-document base-url)))
+    (when (eq document 'unknown)
+      (error "jaunder: cannot verify audience capability at %s" base-url))
+    (let ((supported (jaunder--service-advertises-audience-p document)))
+      (when (and audiences (not supported))
         (error "jaunder: server at %s does not advertise audience feature version 1"
                base-url))
-      (push base-url jaunder--audience-capability-cache))))
+      supported)))
+
+(defun jaunder--synchronized-response-audiences (fields audience-capable)
+  "Return FIELDS' complete canonical audience, or nil for legacy omission.
+AUDIENCE-CAPABLE is the service evidence bound to the current synchronization
+operation.  An advertised extension must never yield an audience-less Entry:
+that would falsely checkpoint a local file as synchronized with unknown scope."
+  (let ((audiences (cdr (assq 'audiences fields))))
+    (when (and audience-capable (null audiences))
+      (error "jaunder: audience-capable server omitted Post audience"))
+    (jaunder--canonical-audiences audiences)))
 
 (defun jaunder--fetch-service-tags (base-url)
   "Fetch BASE-URL's Posts Collection Tags, or return `unknown'."

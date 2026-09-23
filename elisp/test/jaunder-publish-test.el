@@ -15,6 +15,11 @@
         :headers (mapcar (lambda (h) (cons (downcase (car h)) (cdr h))) headers)
         :body body))
 
+(defun jaunder-publish-test--legacy-service-document (&rest _)
+  "Return valid legacy capability evidence for independent publish tests."
+  (jaunder--parse-service-document
+   "<service xmlns=\"http://www.w3.org/2007/app\"><workspace/></service>"))
+
 ;;; Publish-time warnings (shared idiom) ----------------------------------
 
 (defmacro jaunder-test--capturing-warnings (&rest body)
@@ -45,7 +50,6 @@ Lets the warning tests assert on emitted warnings without touching the real
   (let* ((root (file-name-as-directory (make-temp-file "jaunder-audience-cap-" t)))
          (path (expand-file-name "post.org" root))
          (jaunder-blogs (list (cons root '(:base-url "https://blog" :username "alice"))))
-         (jaunder--audience-capability-cache nil)
          (jaunder-warn-zone-mismatch nil)
          (jaunder-warn-untracked-media nil)
          (jaunder-warn-missing-format-media-type nil)
@@ -69,6 +73,30 @@ Lets the warning tests assert on emitted warnings without touching the real
                      (lambda (&rest _) (cl-incf mutations) '(:status 201))))
             (should-error (jaunder-publish))
             (should (= mutations 0))))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-publish-with-omitted-audience-requires-service-evidence ()
+  "An unverified server cannot turn omission into an unknown Post audience."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-audience-evidence-" t)))
+         (path (expand-file-name "post.org" root))
+         (jaunder-blogs (list (cons root '(:base-url "https://blog" :username "alice"))))
+         (jaunder-warn-missing-format-media-type nil)
+         (mutations 0))
+    (unwind-protect
+        (with-temp-buffer
+          (org-mode)
+          (insert "#+TITLE: T\n\nBody\n")
+          (set-visited-file-name path nil t)
+          (let ((original (buffer-string)))
+            (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                       (lambda (_base) 'unknown))
+                      ((symbol-function 'jaunder--localize-post-links)
+                       (lambda (body) (cl-incf mutations) body))
+                      ((symbol-function 'jaunder--http-request)
+                       (lambda (&rest _) (cl-incf mutations) '(:status 201))))
+              (should-error (jaunder-publish))
+              (should (= mutations 0))
+              (should (equal (buffer-string) original)))))
       (delete-directory root t))))
 
 (ert-deftest jaunder-location->id-extracts-numeric-tail ()
@@ -174,6 +202,8 @@ Lets the warning tests assert on emitted warnings without touching the real
                         (find-file-noselect path))))
           (with-current-buffer buffer
             (cl-letf (((symbol-function 'sleep-for) (lambda (&rest _) nil))
+                      ((symbol-function 'jaunder--fetch-service-document)
+                       #'jaunder-publish-test--legacy-service-document)
                       ((symbol-function 'jaunder--http-request)
                        (lambda (&rest _) '(:status 500))))
               (should-error (jaunder-publish)))
@@ -187,7 +217,9 @@ Lets the warning tests assert on emitted warnings without touching the real
               (goto-char (point-max))
               (insert "Changed after uncertain create.\n")
               (save-buffer)
-              (cl-letf (((symbol-function 'jaunder--http-request)
+              (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                         #'jaunder-publish-test--legacy-service-document)
+                        ((symbol-function 'jaunder--http-request)
                          (lambda (method _url &rest _)
                            (if (equal method "POST") response
                              (list :status 200 :headers '(("etag" . "\"remote\"")))))))
@@ -277,7 +309,9 @@ an unconditional update."
               (should (stringp (jaunder--buffer-property "JAUNDER_SYNCED_AT")))
               (should (jaunder--buffer-property "JAUNDER_CREATE_KEY"))
               (let (methods put-headers)
-                (cl-letf (((symbol-function 'jaunder--http-request)
+                (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                           #'jaunder-publish-test--legacy-service-document)
+                          ((symbol-function 'jaunder--http-request)
                            (lambda (method _url _body _content-type headers)
                              (push method methods)
                              (setq put-headers headers)
@@ -393,6 +427,8 @@ an unconditional update."
                    (lambda () "Europe/London"))
                   ((symbol-function 'jaunder--fetch-service-features)
                    (lambda (_base) '("slug")))
+                  ((symbol-function 'jaunder--fetch-service-document)
+                   #'jaunder-publish-test--legacy-service-document)
                   ((symbol-function 'jaunder--write-back) (lambda (&rest _) nil))
                   ((symbol-function 'jaunder--http-request)
                    (lambda (method _url &optional body &rest _)
@@ -986,7 +1022,9 @@ an unconditional update."
                  (with-temp-buffer
                    (insert-file-contents path)
                    (buffer-string))))
-            (cl-letf (((symbol-function 'jaunder--http-request)
+            (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                       #'jaunder-publish-test--legacy-service-document)
+                      ((symbol-function 'jaunder--http-request)
                        (lambda (&rest _)
                          (setq transport-calls (1+ transport-calls))
                          '(:status 500)))

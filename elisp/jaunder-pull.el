@@ -334,6 +334,8 @@ mutated.  The caller owns the final destination safety check and installation.
 standalone server-only pulls acquire equivalent complete evidence themselves."
   (unless (jaunder-inventory-member-p member)
     (jaunder--pull-error "pull input must be a D1 inventory Member"))
+  (jaunder--require-synchronization-audience-evidence
+   (jaunder--active-base-url) nil)
   (let ((response (jaunder--http-request "GET" (jaunder-inventory-member-edit-uri member))))
     (unless (and (integerp (plist-get response :status))
                  (<= 200 (plist-get response :status) 299))
