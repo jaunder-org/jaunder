@@ -12,7 +12,9 @@ use crate::helpers::{
     confirmed_created_post, confirmed_mutation, create_post_json, create_user_and_session,
     make_app, post_form, post_json, update_post_json,
 };
-use storage::test_support::{Backend, backends, confirmed_for};
+use storage::test_support::{Backend, backends, confirmed_for, fp};
+
+use super::fixtures::get_post_form;
 use storage::{SessionStorage, UserStorage, WriteScope};
 
 // ── Audience-picker server fns ────────────────────────────────
@@ -191,6 +193,48 @@ async fn web_audience_set_survives_create_update_and_owner_read(#[case] backend:
         assert!(stored.contains(&target), "missing target {target:?}");
     }
 
+    // A Public target still admits anonymous readers and syndication even
+    // alongside Subscribers and Named targets; removing it must remove both.
+    let record = env
+        .posts()
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::local(author_id),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let date = jiff::tz::Offset::UTC
+        .to_datetime(record.created_at.value())
+        .date();
+    let (year, month, day) = (
+        i32::from(date.year()),
+        u32::try_from(date.month()).unwrap(),
+        u32::try_from(date.day()).unwrap(),
+    );
+    let (status, body) = get_post_form(
+        app.clone(),
+        &author.username,
+        year,
+        month,
+        day,
+        &created.slug,
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "mixed-target anonymous read: {body}"
+    );
+    let feed_path = fp(&format!("/~{}/feed.rss", author.username));
+    let snapshot = env.publisher().snapshot().await.unwrap();
+    let mixed_feed =
+        jaunder::feed::regenerate::render(&snapshot, env.posts().as_ref(), feed_path.clone())
+            .await
+            .unwrap();
+    assert!(mixed_feed.representation().body().contains("Audience set"));
+
     let narrower = AudienceSelection {
         public: false,
         ..selected.clone()
@@ -209,6 +253,27 @@ async fn web_audience_set_survives_create_update_and_owner_read(#[case] backend:
     assert_eq!(status, StatusCode::OK, "update body: {body}");
     let _ = confirmed_mutation::<web::posts::SavedPost>(&body);
     assert_eq!(read_selection(created.post_id).await, narrower);
+    let (status, _) = get_post_form(
+        app.clone(),
+        &author.username,
+        year,
+        month,
+        day,
+        &created.slug,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let narrower_feed =
+        jaunder::feed::regenerate::render(&snapshot, env.posts().as_ref(), feed_path)
+            .await
+            .unwrap();
+    assert!(
+        !narrower_feed
+            .representation()
+            .body()
+            .contains("Audience set")
+    );
 
     let named_only = AudienceSelection {
         subscribers: false,

@@ -532,9 +532,18 @@ test("loaded edit controls remain coherent in wide and mobile layouts", async ({
   await expect(
     grid.locator('.j-tag-chip-label:has-text("#layout")'),
   ).toBeVisible();
-  await expect(grid.getByLabel("Audience", { exact: true })).toHaveValue(
-    "private",
-  );
+  const audienceSummary = grid
+    .locator(".j-composer-control-summary")
+    .filter({ hasText: "Audience" });
+  await expect(audienceSummary).toContainText("Private");
+  await audienceSummary.click();
+  const audienceChoices = grid.getByRole("group", { name: "Audience" });
+  await expect(
+    audienceChoices.getByRole("checkbox", { name: "Public" }),
+  ).not.toBeChecked();
+  await expect(
+    audienceChoices.getByRole("checkbox", { name: "Subscribers" }),
+  ).not.toBeChecked();
   await expect(grid.locator('input[name="slug_override"]')).toHaveValue(
     "populated-edit-layout",
   );
