@@ -134,33 +134,19 @@ async fn discovery_destination(
 async fn discovery_theme(
     surface: &FeedSurface,
 ) -> WebResult<common::theme::PublishedThemePresentation> {
-    use crate::posts::ListingRoute;
     use crate::timeline;
     use common::seed::TimelineOrder;
 
-    let route = match surface {
-        FeedSurface::Site => {
-            return Ok(timeline::list_local_timeline(TimelinePageRequest {
-                order: TimelineOrder::Newest,
-                cursor: None,
-                limit: None,
-            })
-            .await?
-            .theme);
-        }
-        FeedSurface::SiteTag { tag } => {
-            ListingRoute::SiteTag(Some(tag.clone()), TimelineOrder::Newest)
-        }
-        FeedSurface::User { username } => {
-            ListingRoute::Profile(Some(username.clone()), TimelineOrder::Newest)
-        }
-        FeedSurface::UserTag { username, tag } => ListingRoute::UserTag(
-            Some(username.clone()),
-            Some(tag.clone()),
-            TimelineOrder::Newest,
-        ),
-    };
-    Ok(route.destination().await?.0)
+    match super::routes::listing_route_for_discovery(surface) {
+        Some(route) => Ok(route.destination().await?.0),
+        None => Ok(timeline::list_local_timeline(TimelinePageRequest {
+            order: TimelineOrder::Newest,
+            cursor: None,
+            limit: None,
+        })
+        .await?
+        .theme),
+    }
 }
 
 /// Renders the `RSD` (`EditURI`) autodiscovery link for a user's `AtomPub`

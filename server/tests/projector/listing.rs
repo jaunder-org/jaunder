@@ -135,6 +135,8 @@ async fn discovery_preserves_empty_and_missing_context_semantics(#[case] backend
         "/~nobody/tags/unused/feeds",
         "/tags/%20/feeds",
         "/~%20/feeds",
+        "/~%20/tags/unused/feeds",
+        "/~alice/tags/%20/feeds",
     ] {
         assert_shell_miss(app.clone().oneshot(get(path)).await.expect("request")).await;
     }

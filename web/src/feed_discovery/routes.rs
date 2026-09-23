@@ -2,7 +2,33 @@
 //! The parser accepts only feed-bearing timelines; a Post permalink or private
 //! route never acquires a Syndication Feed marker by matching a path prefix.
 
-use common::{feed::FeedSurface, seed::PageSeed};
+use crate::posts::ListingRoute;
+use common::{
+    feed::FeedSurface,
+    seed::{PageSeed, TimelineOrder},
+};
+
+/// Existing listing policy for a discovery destination; Local uses its own
+/// timeline endpoint, and every other context uses the shared listing route.
+#[must_use]
+pub fn listing_route_for_discovery(surface: &FeedSurface) -> Option<ListingRoute> {
+    match surface {
+        FeedSurface::Site => None,
+        FeedSurface::SiteTag { tag } => Some(ListingRoute::SiteTag(
+            Some(tag.clone()),
+            TimelineOrder::Newest,
+        )),
+        FeedSurface::User { username } => Some(ListingRoute::Profile(
+            Some(username.clone()),
+            TimelineOrder::Newest,
+        )),
+        FeedSurface::UserTag { username, tag } => Some(ListingRoute::UserTag(
+            Some(username.clone()),
+            Some(tag.clone()),
+            TimelineOrder::Newest,
+        )),
+    }
+}
 
 /// Adopt a projected index only when its typed context matches the current URL.
 #[must_use]
@@ -91,6 +117,40 @@ pub fn discovery_surface(path: &str) -> Option<FeedSurface> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovery_uses_each_existing_listing_policy() {
+        let username: common::username::Username = "alice".parse().unwrap();
+        let tag: common::tag::Tag = "rust".parse().unwrap();
+        assert_eq!(listing_route_for_discovery(&FeedSurface::Site), None);
+        assert_eq!(
+            listing_route_for_discovery(&FeedSurface::SiteTag { tag: tag.clone() }),
+            Some(ListingRoute::SiteTag(
+                Some(tag.clone()),
+                TimelineOrder::Newest
+            ))
+        );
+        assert_eq!(
+            listing_route_for_discovery(&FeedSurface::User {
+                username: username.clone()
+            }),
+            Some(ListingRoute::Profile(
+                Some(username.clone()),
+                TimelineOrder::Newest
+            ))
+        );
+        assert_eq!(
+            listing_route_for_discovery(&FeedSurface::UserTag {
+                username: username.clone(),
+                tag: tag.clone()
+            }),
+            Some(ListingRoute::UserTag(
+                Some(username),
+                Some(tag),
+                TimelineOrder::Newest
+            ))
+        );
+    }
 
     #[test]
     fn seed_is_adopted_only_for_its_exact_discovery_route() {
