@@ -29,7 +29,7 @@ conflict resolution, and Named audience discovery.
     malformed Service Documents in publish and pull paths. On unavailable or
     malformed evidence, assert unchanged audience-header bytes and no Post
     mutation or local file replacement; retain the explicit-audience gate.
-- [ ] **Publish/checkpoint audience reflection.** Project a valid returned
+- [x] **Publish/checkpoint audience reflection.** Project a valid returned
       audience into canonical Org properties on ordinary create, draft save, and
       conditional update. Keep an unchanged replay in sync; when the recorded
       create-request digest differs, preserve the current authored properties
@@ -55,8 +55,10 @@ conflict resolution, and Named audience discovery.
     tests; prove a blocked pull leaves audience-header bytes and the entire
     local file unchanged. Run the full pure suite with
     `devtool run -- emacs --batch -Q -l elisp/scripts/run-tests.el` and the live
-    suite with `devtool run -- cargo xtask elisp-integration`. Commit via the
-    precommit hook; the prepush hook and PR CI gate the complete final tree.
+    suite after `devtool run -- cargo build -p jaunder` with
+    `devtool run -- env JAUNDER_TEST_BINARY=<absolute-checkout>/target/debug/jaunder emacs --batch -Q -l elisp/scripts/run-integration-tests.el`.
+    Commit via the precommit hook; the prepush hook and PR CI gate the complete
+    final tree.
 
 ## Risk checks
 
