@@ -1705,7 +1705,13 @@ The current filename supplies the local slug evidence used by matched-pull tests
                   (concat "#+TITLE: Remote\n#+PROPERTY: JAUNDER_STATUS published\n"
                           "#+PROPERTY: JAUNDER_AUDIENCE named:17\n"
                           "#+PROPERTY: JAUNDER_AUDIENCE public\n"
-                          "#+PROPERTY: JAUNDER_ID 42\n\nRemote body.\n"))))
+                          "#+PROPERTY: JAUNDER_ID 42\n\nRemote body.\n")))
+          (should-error
+           (jaunder--reconcile-preserve-legacy-audience
+            path "#+TITLE: Invalid staged Post\n\nRemote body.\n")))
+      (should (string-match-p
+               "Local body"
+               (with-temp-buffer (insert-file-contents path) (buffer-string))))
       (delete-file path))))
 
 (ert-deftest jaunder-reconcile-legacy-staged-install-retains-audience ()

@@ -129,6 +129,13 @@ Lets the warning tests assert on emitted warnings without touching the real
         "<service xmlns=\"https://example.invalid\"><workspace/></service>")
        'unknown)))
 
+(ert-deftest jaunder-service-rejects-incomplete-service-structure ()
+  (dolist (body
+           '("<service xmlns=\"http://www.w3.org/2007/app\"/>"
+             "<service xmlns=\"http://www.w3.org/2007/app\"><workspace xmlns=\"https://example.invalid\"/></service>"
+             "<service xmlns=\"http://www.w3.org/2007/app\"><workspace/></service><service xmlns=\"http://www.w3.org/2007/app\"><workspace/></service>"))
+    (should (eq (jaunder--parse-service-document body) 'unknown))))
+
 (ert-deftest jaunder-parse-service-features-unparseable-is-unknown ()
   ;; AC-216d: a 2xx body that is not parseable XML → unknown, not "absent".
   (should (eq (jaunder--parse-service-features "garbage, not xml") 'unknown)))

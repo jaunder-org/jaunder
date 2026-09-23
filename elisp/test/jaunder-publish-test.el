@@ -97,7 +97,9 @@ Lets the warning tests assert on emitted warnings without touching the real
           (set-visited-file-name path nil t)
           (let ((original (buffer-string)))
             (cl-letf (((symbol-function 'jaunder--fetch-service-document)
-                       (lambda (_base) 'unknown))
+                       (lambda (_base)
+                         (jaunder--parse-service-document
+                          "<service xmlns=\"http://www.w3.org/2007/app\"/>")))
                       ((symbol-function 'jaunder--localize-post-links)
                        (lambda (body) (cl-incf mutations) body))
                       ((symbol-function 'jaunder--http-request)
@@ -292,6 +294,74 @@ Lets the warning tests assert on emitted warnings without touching the real
             (should (equal (buffer-string) before))
             (should-not (jaunder--buffer-property "JAUNDER_SYNCED")))
         (delete-file path)))))
+
+(ert-deftest jaunder-publish-changed-audience-replay-sends-unsent-conditional-put ()
+  "An authored audience edit survives a replay and reaches the next PUT."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-audience-replay-" t)))
+         (path (expand-file-name "draft.org" root))
+         (jaunder-blogs (list (cons root '(:base-url "https://blog" :username "alice"))))
+         (jaunder-warn-zone-mismatch nil)
+         (jaunder-warn-untracked-media nil)
+         (jaunder-warn-missing-format-media-type nil)
+         (post-response
+          (jaunder-test--response
+           201 '(("Location" . "https://blog/atompub/alice/posts/42")
+                 ("ETag" . "\"created\""))
+           (concat "<entry xmlns=\"http://www.w3.org/2005/Atom\""
+                   " xmlns:j=\"https://jaunder.org/ns/atompub\">"
+                   "<j:slug>recovered</j:slug>"
+                   "<j:audience>public</j:audience></entry>")))
+         (put-response
+          (jaunder-test--response
+           200 '(("ETag" . "\"updated\""))
+           (concat "<entry xmlns=\"http://www.w3.org/2005/Atom\""
+                   " xmlns:j=\"https://jaunder.org/ns/atompub\">"
+                   "<j:slug>recovered</j:slug>"
+                   "<j:audience>subscribers</j:audience></entry>")))
+         methods sent-audience)
+    (unwind-protect
+        (let ((buffer (progn
+                        (with-temp-file path
+                          (insert (concat "#+TITLE: Recovery\n"
+                                          "#+PROPERTY: JAUNDER_STATUS published\n"
+                                          "#+PROPERTY: JAUNDER_AUDIENCE public\n\nBody.\n")))
+                        (find-file-noselect path))))
+          (unwind-protect
+              (with-current-buffer buffer
+                (jaunder--create-intent
+                 (jaunder--atom-entry->xml (jaunder--org->atom)))
+                (jaunder--set-property "JAUNDER_AUDIENCE" "subscribers")
+                (save-buffer)
+                (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                           #'jaunder-publish-test--audience-service-document)
+                          ((symbol-function 'jaunder--http-request)
+                           (lambda (method _url &optional body _type headers)
+                             (push method methods)
+                             (pcase method
+                               ("POST" post-response)
+                               ("PUT"
+                                (should (equal headers
+                                               '(("If-Match" . "\"created\""))))
+                                (setq sent-audience body)
+                                put-response)
+                               (_ (error "unexpected HTTP method %s" method))))))
+                  (jaunder-publish)
+                  (should (equal (jaunder--buffer-property "JAUNDER_AUDIENCE")
+                                 "subscribers"))
+                  (should (equal (jaunder--buffer-property "JAUNDER_LOCAL_AHEAD")
+                                 "true"))
+                  (jaunder-publish))
+                (should (equal (nreverse methods) '("POST" "PUT")))
+                (should (string-match-p
+                         (regexp-quote "<j:audience>subscribers</j:audience>")
+                         sent-audience))
+                (should (equal (jaunder--buffer-property "JAUNDER_AUDIENCE")
+                               "subscribers"))
+                (should-not (jaunder--buffer-property "JAUNDER_LOCAL_AHEAD")))
+            (when (buffer-live-p buffer)
+              (with-current-buffer buffer (set-buffer-modified-p nil))
+              (kill-buffer buffer))))
+      (delete-directory root t))))
 
 (ert-deftest jaunder-publish-replay-with-changed-entry-remains-local-ahead ()
   "A recovered create keeps the replay baseline while exposing local changes."

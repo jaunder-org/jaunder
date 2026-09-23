@@ -45,12 +45,17 @@ not cached, so a later publish may retry.  Reset only by restarting Emacs.")
   (condition-case nil
       (with-temp-buffer
         (insert (or body ""))
-        (let ((dom (car (xml-parse-region (point-min) (point-max)))))
-          (if (and dom
+        (let* ((roots (xml-parse-region (point-min) (point-max)))
+               (dom (car roots)))
+          (if (and (= (length roots) 1)
+                   (listp dom)
                    (eq (jaunder--atom-local-name (dom-tag dom)) 'service)
                    (equal (jaunder--atom-element-namespace
                            dom (jaunder--atom-namespace-context dom nil))
-                          jaunder--app-ns))
+                          jaunder--app-ns)
+                   (jaunder--atom-direct-elements-in-namespace
+                    dom 'workspace jaunder--app-ns
+                    (jaunder--atom-namespace-context dom nil)))
               dom
             'unknown)))
     (error 'unknown)))
