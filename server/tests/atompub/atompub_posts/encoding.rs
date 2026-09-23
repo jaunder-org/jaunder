@@ -1,3 +1,6 @@
+//! Verifies that all `AtomPub` response paths prohibit intermediary transformation
+//! without changing unrelated application response policies.
+
 use axum::{
     body::Body,
     http::{Method, Request, StatusCode, header},

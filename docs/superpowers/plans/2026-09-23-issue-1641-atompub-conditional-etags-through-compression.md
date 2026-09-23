@@ -65,7 +65,7 @@ committing/pushing/deploying the operator checkout.
   - Verification: record the full wire matrix separately from both independent
     defense fixtures; ensure the public Syndication Feed and unrelated content
     remain eligible for compression.
-- [ ] **Record the contract and handoff:** Commit a tracked, numberless draft
+- [x] **Record the contract and handoff:** Commit a tracked, numberless draft
       ADR and project it into `docs/ARCHITECTURE.md`; update public deployment
       and Emacs documentation without private host details. Do not promote the
       ADR or edit `docs/README.md`.

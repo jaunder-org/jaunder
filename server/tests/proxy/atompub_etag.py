@@ -16,7 +16,30 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
+
+
+@dataclass(frozen=True)
+class Scenario:
+    name: str
+    exclude_atompub: bool
+    strip_cache_control: bool
+    expect_false_412: bool
+    encodings: tuple[str, ...]
+    run_emacs: bool
+
+
+SCENARIOS = (
+    Scenario(name="before", exclude_atompub=False, strip_cache_control=True,
+             expect_false_412=True, encodings=("zstd",), run_emacs=False),
+    Scenario(name="server", exclude_atompub=False, strip_cache_control=False,
+             expect_false_412=False, encodings=("zstd",), run_emacs=False),
+    Scenario(name="operator", exclude_atompub=True, strip_cache_control=True,
+             expect_false_412=False, encodings=("zstd",), run_emacs=False),
+    Scenario(name="combined", exclude_atompub=True, strip_cache_control=False,
+             expect_false_412=False, encodings=("zstd", "identity"), run_emacs=True),
+)
 
 
 def free_port():
@@ -86,20 +109,20 @@ def plain_response(result, status, canonical=None, cache=True):
     return headers, body
 
 
-def start_proxy(caddy, directory, port, upstream, mode):
+def start_proxy(caddy, directory, port, upstream, scenario):
     policy = "encode zstd gzip"
-    if mode in ("operator", "combined"):
+    if scenario.exclude_atompub:
         policy = "@nonAtomPub not path /atompub/*\n encode @nonAtomPub zstd gzip"
     # Removing the header at the upstream boundary simulates the pre-fix
     # server; it proves the path exception independently of no-transform.
-    header_down = "header_down -Cache-Control" if mode in ("before", "operator") else ""
+    header_down = "header_down -Cache-Control" if scenario.strip_cache_control else ""
     config = directory / "Caddyfile"
     config.write_text(
         f"{{\n admin off\n auto_https off\n}}\nhttp://127.0.0.1:{port} {{\n"
         f" {policy}\n reverse_proxy 127.0.0.1:{upstream} {{\n"
         f"  {header_down}\n }}\n}}\n"
     )
-    log = (directory / f"caddy-{mode}.log").open("w+")
+    log = (directory / f"caddy-{scenario.name}.log").open("w+")
     process = subprocess.Popen(
         [str(caddy), "run", "--config", str(config), "--adapter", "caddyfile"],
         stdout=log, stderr=log,
@@ -107,20 +130,20 @@ def start_proxy(caddy, directory, port, upstream, mode):
     try:
         wait_for(
             lambda: process.poll() is None and request(f"http://127.0.0.1:{port}/", "unused")[0],
-            f"Caddy {mode}",
+            f"Caddy {scenario.name}",
         )
     except Exception:
         process.terminate()
         process.wait(timeout=5)
         log.seek(0)
-        raise AssertionError(f"Caddy {mode} did not start: {log.read()[-1500:]}") from None
+        raise AssertionError(f"Caddy {scenario.name} did not start: {log.read()[-1500:]}") from None
     return process, log
 
 
-def exercise(base, direct, token, mode, encoding="zstd"):
+def exercise(base, direct, token, scenario, encoding):
     body = "A" * 3000
     created = request(base + "/atompub/alice/posts", token, "POST", entry(body), encoding=encoding)
-    assert created[0] == 201, (mode, created[0], created[2][:200])
+    assert created[0] == 201, (scenario.name, created[0], created[2][:200])
     location = created[1]["Location"]
     assert location.startswith(base + "/atompub/alice/posts/"), location
     path = location.removeprefix(base)
@@ -128,7 +151,7 @@ def exercise(base, direct, token, mode, encoding="zstd"):
     canonical = request(direct + path, token, encoding="identity")
     canonical_etag = canonical[1]["ETag"]
     assert canonical[0] == 200 and canonical[1].get("Content-Encoding") is None
-    if mode == "before":
+    if scenario.expect_false_412:
         assert current[1].get("Content-Encoding") == "zstd", current[1]
         assert current[1]["ETag"].endswith('-zstd"'), current[1]["ETag"]
         assert current[1]["ETag"] != canonical_etag
@@ -138,23 +161,26 @@ def exercise(base, direct, token, mode, encoding="zstd"):
         print("before: zstd, suffixed ETag, false 412, Post unchanged")
         return
 
-    headers, representation = plain_response(
-        current, 200, canonical_etag, cache=mode != "operator"
-    )
+    cache = not scenario.strip_cache_control
+    created_headers, created_body = plain_response(created, 201, canonical_etag, cache=cache)
+    assert body in created_body.decode("utf-8"), "create response was not identity Atom XML"
+    headers, representation = plain_response(current, 200, canonical_etag, cache=cache)
     assert representation == canonical[2], "AtomPub bytes changed in transit"
-    if mode in ("operator", "combined") and encoding == "zstd":
+    if scenario.exclude_atompub and encoding == "zstd":
         outside = request(base + "/", token)
         assert outside[0] == 200 and outside[1].get("Content-Encoding") == "zstd", outside[:2]
-    updated = request(location, token, "PUT", entry("B" * 3000), headers["ETag"], encoding)
-    updated_headers, _ = plain_response(updated, 200, cache=mode != "operator")
+    updated = request(location, token, "PUT", entry("B" * 3000), created_headers["ETag"], encoding)
+    updated_headers, _ = plain_response(updated, 200, cache=cache)
     new_etag = updated_headers["ETag"]
     assert new_etag != canonical_etag
     stale = request(location, token, "PUT", entry("C" * 3000), canonical_etag, encoding)
     assert stale[0] == 412
     assert request(direct + path, token, encoding="identity")[1]["ETag"] == new_etag
-    deleted = request(location, token, "DELETE", etag=new_etag, encoding=encoding)
-    plain_response(deleted, 204, cache=mode != "operator")
-    print(f"{mode}/{encoding}: identity Post bytes, canonical GET/PUT/DELETE, stale 412 unchanged")
+    fetched_update = request(location, token, encoding=encoding)
+    plain_response(fetched_update, 200, new_etag, cache=cache)
+    deleted = request(location, token, "DELETE", etag=fetched_update[1]["ETag"], encoding=encoding)
+    plain_response(deleted, 204, cache=cache)
+    print(f"{scenario.name}/{encoding}: identity create/GET, canonical PUT/DELETE, stale 412 unchanged")
 
 
 def main():
@@ -188,12 +214,12 @@ def main():
             port = free_port()
             base = f"http://127.0.0.1:{port}"
             call(args.jaunder, "site-config", "set", *common, "site.base_url", base)
-            for mode in ("before", "server", "operator", "combined"):
-                proxy, proxy_log = start_proxy(args.caddy, directory, port, upstream, mode)
+            for scenario in SCENARIOS:
+                proxy, proxy_log = start_proxy(args.caddy, directory, port, upstream, scenario)
                 try:
-                    if mode == "combined":
-                        for encoding in ("zstd", "identity"):
-                            exercise(base, direct, token, mode, encoding)
+                    for encoding in scenario.encodings:
+                        exercise(base, direct, token, scenario, encoding)
+                    if scenario.run_emacs:
                         local_root = directory / "emacs-posts"
                         local_root.mkdir()
                         elisp = Path(__file__).resolve().parents[3] / "elisp/test/proxy/atompub-local-ahead.el"
@@ -203,11 +229,9 @@ def main():
                                  "JAUNDER_PROXY_BASE": base, "JAUNDER_PROXY_TOKEN": token},
                             capture_output=True, text=True,
                         )
-                        if emacs.returncode:
+                        if emacs.returncode or "Emacs local-ahead: identity validator" not in emacs.stderr:
                             raise AssertionError(f"Emacs proxy proof failed: {emacs.stderr[-2000:]}")
-                        print("Emacs local-ahead: identity ETag, reconciliation push succeeded")
-                    else:
-                        exercise(base, direct, token, mode)
+                        print("Emacs local-ahead: create/read markers replayed, push succeeded")
                 finally:
                     proxy.terminate()
                     proxy.wait(timeout=5)
