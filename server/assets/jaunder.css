@@ -549,6 +549,29 @@
 }
 
 /* ─── composer ─── */
+.j-home-composer-toggle {
+  display: flex;
+  min-height: 52px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 22px;
+  border-bottom: 1px var(--border-style) var(--line);
+  background: var(--surface);
+}
+
+#home-composer-body[hidden] {
+  display: none;
+}
+
+.j-home-composer-toggle > strong {
+  font-size: 14px;
+}
+
+.j-home-composer-toggle .j-btn {
+  min-height: 36px;
+}
+
 .j-composer {
   container-type: inline-size;
   flex: 0 1 50%;

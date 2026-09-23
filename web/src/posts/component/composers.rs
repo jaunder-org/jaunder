@@ -402,9 +402,33 @@ pub fn PostCreateForm(
     /// Called on every textarea input event (compact mode only).
     #[prop(optional)]
     on_input: Option<Callback<()>>,
+    /// Reports whether current creation inputs differ from their initialized values.
+    #[prop(optional)]
+    on_dirty_change: Option<Callback<bool>>,
 ) -> impl IntoView {
     let create_action = ServerAction::<Create>::new();
     let state = ComposeState::new();
+    let slug_field = Field::<Slug>::optional();
+    let schedule = CreationSchedule::new();
+    let baseline = RwSignal::new(posts::CreationComposerSnapshot::capture(
+        state,
+        slug_field,
+        schedule.date.get(),
+        schedule.time.get(),
+    ));
+
+    if let Some(on_dirty_change) = on_dirty_change {
+        Effect::new(move |_| {
+            on_dirty_change.run(
+                posts::CreationComposerSnapshot::capture(
+                    state,
+                    slug_field,
+                    schedule.date.get(),
+                    schedule.time.get(),
+                ) != baseline.get(),
+            );
+        });
+    }
 
     let default_audience = Resource::new(|| (), |()| posts::get_default_audience_selection());
     // The site-wide default audience resolves asynchronously; the composer must
@@ -413,7 +437,10 @@ pub fn PostCreateForm(
     // sets. The author can then edit the selection via `AudiencePicker`.
     support::on_settled_ok(
         move || default_audience.get(),
-        move |default| state.audience.set(default),
+        move |default| {
+            state.audience.set(default.clone());
+            baseline.set(baseline.get_untracked().with_audience(default));
+        },
     );
 
     // Revalidate parent state after either outcome, but reserve success UI and
@@ -423,6 +450,14 @@ pub fn PostCreateForm(
         move |outcome| {
             if posts::notify_create_settlement(outcome, on_mutation, on_success) {
                 state.reset();
+                baseline.set(untrack(|| {
+                    posts::CreationComposerSnapshot::capture(
+                        state,
+                        slug_field,
+                        schedule.date.get(),
+                        schedule.time.get(),
+                    )
+                }));
             }
         },
     );
@@ -431,6 +466,8 @@ pub fn PostCreateForm(
     view! {
         <CreationComposer
             state=state
+            slug_field=slug_field
+            schedule=schedule
             create_action=create_action
             rows=rows
             placeholder=placeholder
@@ -446,6 +483,8 @@ pub fn PostCreateForm(
 #[component]
 fn CreationComposer(
     state: ComposeState,
+    slug_field: Field<Slug>,
+    schedule: CreationSchedule,
     create_action: ServerAction<Create>,
     rows: u32,
     placeholder: &'static str,
@@ -453,9 +492,7 @@ fn CreationComposer(
     textarea_class: &'static str,
     on_input: Option<Callback<()>>,
 ) -> impl IntoView {
-    let slug_field = Field::<Slug>::optional();
     let named = audience::load_named_audiences();
-    let schedule = CreationSchedule::new();
     let (submit_disabled, dispatch) = posts::submit_gate(
         state.body,
         Signal::derive(move || {
@@ -538,9 +575,96 @@ fn CreateErrorFlash(action: ServerAction<Create>) -> impl IntoView {
     }
 }
 
+fn home_scroll_offset() -> f64 {
+    leptos::web_sys::window()
+        .and_then(|window| window.scroll_y().ok())
+        .unwrap_or_default()
+}
+
+fn focus_home_composer_toggle(id: &'static str) {
+    use leptos::leptos_dom::helpers::request_animation_frame;
+    use wasm_bindgen::JsCast;
+
+    request_animation_frame(move || {
+        let button = leptos::web_sys::window()
+            .and_then(|window| window.document())
+            .and_then(|document| document.get_element_by_id(id))
+            .and_then(|element| element.dyn_into::<leptos::web_sys::HtmlElement>().ok());
+        if let Some(button) = button {
+            let _ = button.focus();
+        }
+    });
+}
+
+#[component]
+fn HomeComposerToggle(
+    collapsed: RwSignal<bool>,
+    on_collapse: Callback<()>,
+    on_expand: Callback<()>,
+) -> impl IntoView {
+    let presentation =
+        Memo::new(move |_| posts::home_composer_toggle_presentation(collapsed.get()));
+    view! {
+        <div class="j-home-composer-toggle">
+            <strong>"New post"</strong>
+            <button
+                id=move || presentation.get().id
+                class="j-btn"
+                type="button"
+                aria-expanded=move || presentation.get().expanded
+                aria-controls="home-composer-body"
+                on:click=move |_| match presentation.get().action {
+                    posts::HomeComposerToggleAction::Collapse => on_collapse.run(()),
+                    posts::HomeComposerToggleAction::Expand => on_expand.run(()),
+                }
+            >
+                {move || presentation.get().label}
+            </button>
+        </div>
+    }
+}
+
 #[component]
 pub fn InlineComposer(on_publish: Callback<()>) -> impl IntoView {
+    use leptos::ev;
+    use leptos::leptos_dom::helpers::window_event_listener;
+
     let flash: RwSignal<Option<(String, String)>> = RwSignal::new(None);
+    let collapsed = RwSignal::new(false);
+    let dirty = RwSignal::new(false);
+    let focus_within = RwSignal::new(false);
+    let auto_collapse_armed = RwSignal::new(true);
+    let previous_scroll_y = RwSignal::new(home_scroll_offset());
+
+    let scroll_listener = window_event_listener(ev::scroll, move |_| {
+        let scroll_y = home_scroll_offset();
+        let decision = posts::home_composer_scroll_decision(
+            scroll_y,
+            previous_scroll_y.get_untracked(),
+            auto_collapse_armed.get_untracked(),
+            !collapsed.get_untracked() && !dirty.get_untracked() && !focus_within.get_untracked(),
+        );
+        auto_collapse_armed.set(decision.armed);
+        if decision.collapse {
+            collapsed.set(true);
+            focus_home_composer_toggle("home-composer-expand");
+        }
+        previous_scroll_y.set(scroll_y);
+    });
+    on_cleanup(move || scroll_listener.remove());
+
+    let collapse = Callback::new(move |()| {
+        auto_collapse_armed.set(false);
+        collapsed.set(true);
+        focus_home_composer_toggle("home-composer-expand");
+    });
+    let expand = Callback::new(move |()| {
+        auto_collapse_armed.set(posts::home_composer_armed_after_expansion(
+            home_scroll_offset(),
+        ));
+        collapsed.set(false);
+        focus_home_composer_toggle("home-composer-collapse");
+    });
 
     let on_success = Callback::new(move |created: ClassifiedSavedPost| {
         use leptos_dom::helpers::set_timeout;
@@ -557,27 +681,38 @@ pub fn InlineComposer(on_publish: Callback<()>) -> impl IntoView {
     });
 
     view! {
-        <div class="j-composer">
-            <PostCreateForm
-                compact=true
-                on_success=on_success
-                on_mutation=on_mutation
-                rows=6
-                placeholder="What\u{2019}s on your mind?"
-                on_input=Callback::new(move |()| flash.set(None))
-            />
-            {move || {
-                flash
-                    .get()
-                    .map(|(url, msg)| {
-                        view! {
-                            <p class="success">
-                                <a href=url>{msg}</a>
-                            </p>
-                        }
-                    })
-            }}
-        </div>
+        <section class="j-home-composer" aria-label="New post">
+            <HomeComposerToggle collapsed on_collapse=collapse on_expand=expand />
+            <div
+                id="home-composer-body"
+                hidden=move || collapsed.get()
+                on:focusin=move |_| focus_within.set(true)
+                on:focusout=move |_| focus_within.set(false)
+            >
+                <div class="j-composer">
+                    <PostCreateForm
+                        compact=true
+                        on_success=on_success
+                        on_mutation=on_mutation
+                        rows=6
+                        placeholder="What\u{2019}s on your mind?"
+                        on_input=Callback::new(move |()| flash.set(None))
+                        on_dirty_change=Callback::new(move |is_dirty| dirty.set(is_dirty))
+                    />
+                    {move || {
+                        flash
+                            .get()
+                            .map(|(url, msg)| {
+                                view! {
+                                    <p class="success">
+                                        <a href=url>{msg}</a>
+                                    </p>
+                                }
+                            })
+                    }}
+                </div>
+            </div>
+        </section>
     }
 }
 

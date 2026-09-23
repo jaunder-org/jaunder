@@ -1564,6 +1564,164 @@ test("Home shows only the authenticated User's published Posts with pagination",
   await secondContext.close();
 });
 
+test("Home collapses its pristine composer at the scroll threshold", async ({
+  page,
+  firstNav,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const me = await signInAsNewUser(page);
+  await seedPostsViaTool(me, HOME_POST_SELF_COUNT, "Home Collapse Post");
+  await goto(page, "/app", { timeout: firstNav });
+
+  const expand = page.getByRole("button", { name: "Expand composer" });
+  const collapse = page.getByRole("button", { name: "Collapse composer" });
+  await expect(collapse).toBeVisible();
+  await expect(expand).toBeHidden();
+
+  await page.evaluate(() => window.scrollTo(0, 95));
+  await expect(collapse).toBeVisible();
+  await page.evaluate(() => window.scrollTo(0, 96));
+  await expect(expand).toBeVisible();
+  await expect(expand).toBeFocused();
+
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await expand.click();
+  await expect(collapse).toBeFocused();
+  await page.keyboard.press("PageDown");
+  await expect(expand).toBeVisible();
+
+  await expand.click();
+  await expect(collapse).toBeFocused();
+  await page.evaluate(() => window.scrollBy(0, 100));
+  await expect(collapse).toBeVisible();
+
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+  await page.keyboard.press("PageDown");
+  await expect(expand).toBeVisible();
+});
+
+test("Home preserves editing state while its composer is compact", async ({
+  page,
+  firstNav,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const me = await signInAsNewUser(page);
+  await seedPostsViaTool(me, HOME_POST_SELF_COUNT, "Home Editing Post");
+  await goto(page, "/app", { timeout: firstNav });
+
+  const body = page.locator(SEL.postBody);
+  const expand = page.getByRole("button", { name: "Expand composer" });
+  const collapse = page.getByRole("button", { name: "Collapse composer" });
+  const format = page.getByRole("button", { name: /Format Markdown/ });
+
+  await body.focus();
+  await page.evaluate(() => window.scrollTo(0, 96));
+  await expect(collapse).toBeVisible();
+
+  await body.fill("A preserved draft");
+  await page.locator(".j-topbar h1").click();
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.evaluate(() => window.scrollTo(0, 160));
+  await expect(collapse).toBeVisible();
+
+  await body.fill("");
+  await page.locator(".j-topbar h1").click();
+  await page.evaluate(() => window.scrollTo(0, 24));
+  await page.evaluate(() => window.scrollTo(0, 96));
+  await expect(expand).toBeVisible();
+
+  await expand.click();
+  await body.fill("A preserved draft");
+  await format.click();
+  await collapse.click();
+  await expect(expand).toBeFocused();
+  await expand.click();
+  await expect(collapse).toBeFocused();
+  await expect(body).toHaveValue("A preserved draft");
+  await expect(format).toHaveAttribute("aria-expanded", "true");
+
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await collapse.click();
+  expect(
+    await page
+      .locator(".j-home-composer")
+      .evaluate((element) => element.getAnimations({ subtree: true }).length),
+  ).toBe(0);
+
+  await expand.click();
+  await body.fill("");
+  await page.locator(".j-topbar h1").click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(() => window.scrollTo(0, 24));
+  await page.evaluate(() => window.scrollTo(0, 96));
+  await expect(expand).toBeVisible();
+  expect(
+    await page
+      .locator(".j-home-chrome")
+      .evaluate((element) => getComputedStyle(element).position),
+  ).toBe("static");
+});
+
+test("Home collapse eligibility follows non-body edits and create outcomes", async ({
+  page,
+  firstNav,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const me = await signInAsNewUser(page);
+  await seedPostsViaTool(me, HOME_POST_SELF_COUNT, "Home Eligibility Post");
+  await goto(page, "/app", { timeout: firstNav });
+
+  const body = page.locator(SEL.postBody);
+  const summary = page.locator(SEL.postSummary);
+  const expand = page.getByRole("button", { name: "Expand composer" });
+  const collapse = page.getByRole("button", { name: "Collapse composer" });
+
+  await summary.fill("Unsaved summary");
+  await page.locator(".j-topbar h1").click();
+  await page.evaluate(() => window.scrollTo(0, 96));
+  await expect(collapse).toBeVisible();
+
+  await summary.fill("");
+  await page.locator(".j-topbar h1").click();
+  await page.evaluate(() => window.scrollTo(0, 24));
+  await page.evaluate(() => window.scrollTo(0, 96));
+  await expect(expand).toBeVisible();
+
+  await expand.click();
+  await body.fill("Successful reset");
+  await click(page, SEL.publishButton("false"));
+  await expect(page.locator(".j-composer p.success")).toContainText(
+    "Draft saved!",
+  );
+  await page.locator(".j-topbar h1").click();
+  await page.evaluate(() => window.scrollTo(0, 24));
+  await page.evaluate(() => window.scrollTo(0, 96));
+  await expect(expand).toBeVisible();
+
+  await navigateInApp(page, () => click(page, 'a[href="/drafts"]'), {
+    url: "/drafts",
+    ready: '.j-topbar h1:has-text("Drafts")',
+  });
+  await navigateInApp(page, () => click(page, 'a[href="/app"]'), {
+    url: "/app",
+    ready: ".j-composer",
+  });
+  await failServerFn(page, "posts/create");
+  await body.fill("Failed create remains dirty");
+  await click(page, SEL.publishButton("false"));
+  await expect(page.locator(".j-composer p.error")).toBeVisible();
+  await page.locator(".j-topbar h1").click();
+  await page.evaluate(() => window.scrollTo(0, 24));
+  await page.evaluate(() => window.scrollTo(0, 160));
+  await expect(collapse).toBeVisible();
+});
+
 test("Home uses one responsive page scroll for its composer and Posts", async ({
   page,
   firstNav,
@@ -1574,12 +1732,18 @@ test("Home uses one responsive page scroll for its composer and Posts", async ({
   await goto(page, "/app", { timeout: firstNav });
 
   const topbar = page.locator(".j-topbar");
+  const homeComposer = page.locator(".j-home-composer");
   const composer = page.locator(".j-composer");
   const timeline = page
     .locator(".j-scroll")
     .filter({ has: page.locator('[data-jaunder-part="post-list"]') });
   const order = page.locator('[data-jaunder-part="timeline-order"]');
   await expect(page.locator("article.j-post")).toHaveCount(TIMELINE_PAGE_SIZE);
+  await page.fill(
+    SEL.postBody,
+    "Keep the composer expanded while checking page scroll",
+  );
+  await page.locator(".j-topbar h1").click();
 
   const expectDocumentOwnsScroll = async () => {
     const overflow = await page.evaluate(() => {
@@ -1616,7 +1780,10 @@ test("Home uses one responsive page scroll for its composer and Posts", async ({
     .toBeGreaterThan(200);
   const pinnedTopbar = (await topbar.boundingBox())!;
   expect(pinnedTopbar.y).toBeCloseTo(0, 0);
-  expect((await composer.boundingBox())!.y).toBeCloseTo(pinnedTopbar.height, 0);
+  expect((await homeComposer.boundingBox())!.y).toBeCloseTo(
+    pinnedTopbar.height,
+    0,
+  );
   expect((await order.boundingBox())!.y).toBeLessThan(desktopOrderTop - 200);
 
   // An expanded field yields stickiness to the document rather than trapping tall
@@ -1661,12 +1828,12 @@ test("Home uses one responsive page scroll for its composer and Posts", async ({
   await page.setViewportSize({ width: 390, height: 844 });
   await page.evaluate(() => window.scrollTo(0, 0));
   await expectDocumentOwnsScroll();
-  const mobileComposerTop = (await composer.boundingBox())!.y;
+  const mobileComposerTop = (await homeComposer.boundingBox())!.y;
   await page.keyboard.press("PageDown");
   await expect
     .poll(() => page.evaluate(() => window.scrollY))
     .toBeGreaterThan(200);
-  expect((await composer.boundingBox())!.y).toBeLessThan(
+  expect((await homeComposer.boundingBox())!.y).toBeLessThan(
     mobileComposerTop - 200,
   );
 

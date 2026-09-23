@@ -40,6 +40,7 @@ mod page_state;
 // so the payload is host-tested and so each composer shape can be its own
 // `#[component]` over one prop rather than seven (#301, ADR-0070 §6).
 mod compose_state;
+mod composer_collapse;
 mod composer_disclosure;
 mod composer_media;
 mod composer_presentation;
@@ -63,7 +64,14 @@ pub use page_state::{
 
 // Same reason again: the composer and editor state seams are consumed by the
 // wasm-only component.
-pub use compose_state::{ComposeState, PublicationIntent, publication_from_local, submit_gate};
+pub use compose_state::{
+    ComposeState, CreationComposerSnapshot, PublicationIntent, publication_from_local, submit_gate,
+};
+pub use composer_collapse::{
+    HomeComposerScrollDecision, HomeComposerToggleAction, HomeComposerTogglePresentation,
+    home_composer_armed_after_expansion, home_composer_scroll_decision,
+    home_composer_toggle_presentation,
+};
 pub use composer_disclosure::{
     ComposerControl, ComposerDisclosureState, audience_disclosure_value, publish_disclosure_value,
     record_media_upload, slug_disclosure_value,
