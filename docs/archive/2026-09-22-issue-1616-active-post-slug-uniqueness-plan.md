@@ -5,7 +5,7 @@
 > storage dialects, persistent identity, write concurrency, and a public route.
 
 Authoritative specification:
-`docs/superpowers/specs/2026-09-22-issue-1616-active-post-slug-uniqueness.md`.
+`2026-09-22-issue-1616-active-post-slug-uniqueness-spec.md`.
 
 ## Scope
 
@@ -72,8 +72,9 @@ Out:
     changing Post ID Member identity. Migration-updated representations and
     feeds expose repaired canonical links. Emacs continues to join by Post ID
     and retains `duplicate-target-slug` as a corruption detector.
-  - Verification: ETag tests distinguish otherwise-identical Members by slug and
-    reject a pre-repair validator; AtomPub/feed tests prove repaired links and
+  - Verification: ETag tests distinguish otherwise-identical Members by slug,
+    revalidate a pre-repair conditional GET to the repaired representation, and
+    reject a stale write validator; AtomPub/feed tests prove repaired links and
     fresh cache output; an inventory regression proves representative repaired
     Members become ordinary matches while genuine duplicate target slugs still
     conflict.
