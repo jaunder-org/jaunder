@@ -54,6 +54,7 @@ async function expectPostActionsTextAlignment(page: Page, post: Locator) {
     boxFor(control),
     boxFor(trigger),
   ]);
+  const coordinateRoundingTolerance = 1;
   for (const box of geometry) {
     expect(box.width).toBe(72);
     expect(box.height).toBe(32);
@@ -61,10 +62,18 @@ async function expectPostActionsTextAlignment(page: Page, post: Locator) {
     expect(box.right).toBe(geometry[0].right);
     expect(box.top).toBe(geometry[0].top);
     expect(box.bottom).toBe(geometry[0].bottom);
-    expect(box.left).toBeGreaterThanOrEqual(headerBox.left);
-    expect(box.right).toBeLessThanOrEqual(headerBox.right);
-    expect(box.top).toBeGreaterThanOrEqual(headerBox.top);
-    expect(box.bottom).toBeLessThanOrEqual(headerBox.bottom);
+    expect(box.left).toBeGreaterThanOrEqual(
+      headerBox.left - coordinateRoundingTolerance,
+    );
+    expect(box.right).toBeLessThanOrEqual(
+      headerBox.right + coordinateRoundingTolerance,
+    );
+    expect(box.top).toBeGreaterThanOrEqual(
+      headerBox.top - coordinateRoundingTolerance,
+    );
+    expect(box.bottom).toBeLessThanOrEqual(
+      headerBox.bottom + coordinateRoundingTolerance,
+    );
   }
   const viewport = await page.evaluate(() => ({
     clientWidth: document.documentElement.clientWidth,
