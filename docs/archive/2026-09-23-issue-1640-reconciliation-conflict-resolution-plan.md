@@ -6,7 +6,7 @@
 > boundaries that must remain independently reviewable.
 
 Authoritative contract:
-[approved spec](../specs/2026-09-23-issue-1640-reconciliation-conflict-resolution.md).
+[approved spec](2026-09-23-issue-1640-reconciliation-conflict-resolution-spec.md).
 
 ## Scope
 

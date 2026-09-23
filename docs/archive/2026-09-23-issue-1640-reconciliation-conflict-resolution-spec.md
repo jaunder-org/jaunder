@@ -34,7 +34,7 @@ instead of silently overwriting either side.
   trust, or existing conditional server safeguards.
 - Keep-remote stages and validates the complete current Member and any Local
   Media Copies, then applies the matched-Post pull contract in
-  [ADR-0200](../../adr/0200-revalidated-matched-post-pull.md): final local and
+  [ADR-0200](../adr/0200-revalidated-matched-post-pull.md): final local and
   remote revalidation, modified-buffer and destination checks, atomic
   replacement, and recoverable canonical-slug rename. A clean visiting buffer
   follows the installed file; a modified one is never silently reverted.
@@ -60,8 +60,8 @@ instead of silently overwriting either side.
   write-back or rename is **partial success**, not a failure claiming both Posts
   unchanged; report the committed side and recovery steps, never attempt an
   automatic rollback. These recoverability boundaries extend
-  [ADR-0047](../../adr/0047-emacs-publish-orchestration.md) and
-  [ADR-0200](../../adr/0200-revalidated-matched-post-pull.md).
+  [ADR-0047](../adr/0047-emacs-publish-orchestration.md) and
+  [ADR-0200](../adr/0200-revalidated-matched-post-pull.md).
 
 ## Acceptance
 
