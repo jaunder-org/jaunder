@@ -128,6 +128,92 @@ test("authenticated user can create a post through the UI", async ({
   );
 });
 
+test("published Org source blocks are distinct and readable on narrow screens", async ({
+  registeredPage,
+  tracedContext,
+}, testInfo) => {
+  const page = await registeredPage("/posts/new");
+  const summary = await composePost(page, {
+    body: "#+TITLE: Code sample\n\nIntro paragraph.\n\n#+begin_src emacs-lisp\n;; source line\n(use-package consult\n  :after (project)\n  :bind (([remap switch-to-buffer] . consult-buffer)))\n#+end_src\n\nOutro paragraph.",
+    format: "org",
+    audience: "public",
+    publish: true,
+  });
+  await followPermalink(page, summary);
+  const permalink = new URL(page.url()).pathname;
+  const body = page.locator(".j-post-body");
+  await expect(body).toContainText("Intro paragraph.");
+  await expect(body).toContainText("Outro paragraph.");
+  const code = body.locator("pre");
+  await expect(code).toContainText("(use-package consult");
+  const style = await code.evaluate((element) => {
+    const css = getComputedStyle(element);
+    return {
+      background: css.backgroundColor,
+      overflowX: css.overflowX,
+      padding: css.padding,
+    };
+  });
+  // A plain <pre> preserves whitespace but is otherwise indistinguishable from prose.
+  expect(style.background).not.toBe("rgba(0, 0, 0, 0)");
+  expect(style.padding).not.toBe("0px");
+  expect(style.overflowX).toBe("auto");
+  await page.setViewportSize({ width: 390, height: 844 });
+  const geometry = await code.evaluate((element) => ({
+    codeWidth: element.getBoundingClientRect().width,
+    postWidth: element.closest(".j-post-body")!.getBoundingClientRect().width,
+    scrollWidth: element.scrollWidth,
+    viewport: document.documentElement.clientWidth,
+    pageWidth: document.documentElement.scrollWidth,
+  }));
+  expect(geometry.codeWidth).toBeLessThanOrEqual(geometry.postWidth);
+  expect(geometry.scrollWidth).toBeGreaterThan(geometry.codeWidth);
+  expect(geometry.pageWidth).toBeLessThanOrEqual(geometry.viewport);
+
+  await navigateInApp(page, () => click(page, '.j-nav a[href="/app"]'), {
+    url: "/app",
+    ready: '.j-topbar h1:has-text("Home")',
+  });
+  const homeCode = page.locator('article.j-post:has-text("Code sample") pre');
+  await expect(homeCode).toContainText("(use-package consult");
+  expect(
+    await homeCode.evaluate(
+      (element) => getComputedStyle(element).backgroundColor,
+    ),
+  ).not.toBe("rgba(0, 0, 0, 0)");
+
+  const anonymous = await tracedContext();
+  try {
+    const publicPage = await anonymous.newPage();
+    await goto(publicPage, permalink, {
+      timeout: slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000),
+    });
+    const publicCode = publicPage.locator(".j-post-body pre");
+    await expect(publicCode).toContainText("(use-package consult");
+    expect(
+      await publicCode.evaluate(
+        (element) => getComputedStyle(element).backgroundColor,
+      ),
+    ).not.toBe("rgba(0, 0, 0, 0)");
+    await navigateInApp(
+      publicPage,
+      () => click(publicPage, '.j-nav a[href="/"]'),
+      { url: "/", ready: '.j-topbar h1:has-text("Jaunder")' },
+    );
+    const localCode = publicPage.locator(
+      'article.j-post:has-text("Code sample") pre',
+    );
+    await expect(localCode).toContainText("(use-package consult");
+    expect(
+      await localCode.evaluate(
+        (element) => getComputedStyle(element).backgroundColor,
+      ),
+    ).not.toBe("rgba(0, 0, 0, 0)");
+  } finally {
+    await anonymous.close();
+  }
+});
+
 test("published Markdown shortcodes render responsive provider embeds", async ({
   registeredPage,
 }) => {

@@ -104,6 +104,55 @@ async fn create_post_persists_rendered_published_post(#[case] backend: Backend) 
 
 #[apply(backends)]
 #[tokio::test]
+async fn published_org_post_preserves_source_block_as_safe_code(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let source = "#+TITLE: Code sample\n\n#+begin_src rust\nfn main() {\n    println!(\"<script>alert(1)</script>\");\n}\n#+end_src\n";
+    let (status, body) = create_post_json(
+        app,
+        PostInputs {
+            publish: Some(true),
+            ..PostInputs::new(parse_post_body(source), PostFormat::Org)
+        },
+        Some(&session.cookie()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let created = confirmed_created_post(&body);
+    let record = env
+        .posts()
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
+        .await
+        .unwrap()
+        .expect("published Post must be visible");
+    let html = record.rendered_html.as_ref();
+    assert_eq!(
+        record.body,
+        "#+begin_src rust\nfn main() {\n    println!(\"<script>alert(1)</script>\");\n}\n#+end_src\n"
+    );
+    assert!(html.contains("<pre><code"), "source block missing: {html}");
+    assert!(html.contains("    println!"), "indentation missing: {html}");
+    assert!(
+        html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"),
+        "escaping missing: {html}"
+    );
+    assert!(
+        !html.contains("<script>"),
+        "executable code escaped incorrectly: {html}"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn create_post_retries_slug_conflicts_for_same_user(#[case] backend: Backend) {
     let env = backend.setup().await;
     let app = make_app!(&env, &env.base);
