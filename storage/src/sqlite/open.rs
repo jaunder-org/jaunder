@@ -54,6 +54,7 @@ pub(crate) async fn open_sqlite_database_with_pool(
     sqlx::migrate!("./migrations/sqlite").run(&pool).await?;
     let instance_id = instance_identity::ensure(&pool).await?;
     media::backfill_post_media_references(&pool).await?;
+    crate::posts::search::backfill_post_search_projections(&pool).await?;
     Ok((StorageFactory::sqlite(pool.clone()), pool, instance_id))
 }
 

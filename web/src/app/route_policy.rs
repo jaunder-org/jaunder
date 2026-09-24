@@ -136,6 +136,7 @@ const APPROVED_PRIVATE_ROUTES: &[(&str, &str)] = &[
     ("Passkeys", "/passkeys"),
     ("PostEdit", "/posts/:post_id/edit"),
     ("PostHistory", "/posts/:post_id/history"),
+    ("PostsManage", "/posts/manage"),
     ("PostsNew", "/posts/new"),
     ("Profile", "/profile"),
     ("ProfileEmail", "/profile/email"),
@@ -198,6 +199,7 @@ macro_rules! app_routes {
             (AdminSmtp, Private, "/admin/smtp", (leptos_router::StaticSegment("admin"), leptos_router::StaticSegment("smtp")), $crate::smtp::SmtpSettingsPage)
             (AdminWebsub, Private, "/admin/websub", (leptos_router::StaticSegment("admin"), leptos_router::StaticSegment("websub")), $crate::websub::WebsubPage)
             (PostsNew, Private, "/posts/new", (leptos_router::StaticSegment("posts"), leptos_router::StaticSegment("new")), $crate::posts::CreatePostPage)
+            (PostsManage, Private, "/posts/manage", (leptos_router::StaticSegment("posts"), leptos_router::StaticSegment("manage")), $crate::posts::ManagePostsPage)
             (Drafts, Private, "/drafts", leptos_router::StaticSegment("drafts"), $crate::posts::DraftsPage)
             (Scheduled, Private, "/scheduled", leptos_router::StaticSegment("scheduled"), $crate::posts::ScheduledPage)
             (Media, Private, "/media", leptos_router::StaticSegment("media"), $crate::media::MediaPage)
@@ -238,7 +240,7 @@ mod tests {
     fn route_catalog_conforms_to_the_approved_private_inventory() {
         assert_eq!(
             route_catalog().len(),
-            35,
+            36,
             "every declared route is classified"
         );
         assert!(private_inventory_conforms(route_catalog()));

@@ -5,11 +5,12 @@ use std::collections::BTreeSet;
 use futures_util::TryStreamExt;
 
 use async_trait::async_trait;
-use sqlx::{AssertSqlSafe, Database, Decode, Encode, Executor, Pool, Result, Type};
+use sqlx::{AssertSqlSafe, Database, Decode, Encode, Executor, Pool, QueryBuilder, Result, Type};
 
 use crate::InstanceId;
 use crate::backend::Backend;
 use crate::media_ownership::ProvenLocalMediaRefs;
+use crate::posts::BulkPostMutationEvidence;
 use crate::posts::cursors::{
     CollectionCursor, DraftPostCursor, PostRevisionCursor, PublishedPageRequest,
     ScheduledPostCursor,
@@ -17,6 +18,12 @@ use crate::posts::cursors::{
 use crate::posts::errors::{CreatePostError, ListByTagError, TaggingError, UpdatePostError};
 use crate::posts::lifecycle;
 use crate::posts::lifecycle::{DecodeRawRow, RevisionDetailRow, RevisionMetadataRow};
+use crate::posts::management::{
+    BulkPostMutationError, BulkPostOperation, BulkSelectionTarget, ManagedPostRow,
+    ManagementSelectionSnapshot, PostManagementAudienceFilter, PostManagementPage,
+    PostManagementRequest, PostManagementStateFilter, PostSelectionIntent,
+    ResolvePostSelectionError, StoredPostSearchPattern,
+};
 use crate::posts::media;
 use crate::posts::media::{
     MediaReferenceEvidence, MediaReferenceSnapshot, PersistedMediaReference, PersistedMediaSubject,
@@ -28,11 +35,12 @@ use crate::posts::models::{
     PostRevisionRecord, PostRevisionTag, UpdatePostInput,
 };
 use crate::posts::public_presentation::{CONTENT_LICENSE_COLUMN, PublicPresentationPostRecord};
+use crate::posts::search::{PostMutationVersion, PostSearchBackfillCandidate};
 use crate::posts::syndication::{self, FeedAffectingPostTags, GoLivePost};
 use crate::posts::tags;
 use crate::posts::tags::{PostTag, TagRecord};
 use crate::posts::visibility;
-use crate::sql::{Exists, QueryStorageExt, RowCount};
+use crate::sql::{Exists, QueryBuilderStorageExt, QueryStorageExt, RowCount};
 use crate::write_scope::WriteTransaction;
 use common::idempotency_key::IdempotencyKey;
 use common::ids::{AudienceId, ChannelId, PostId, RevisionId, UserId};
@@ -218,6 +226,30 @@ pub trait PostStorage: Send + Sync {
         post_id: PostId,
         revision_id: RevisionId,
     ) -> Result<Option<PostRevisionDetail>>;
+
+    /// Lists one bounded owner-only management page with all filters applied in storage.
+    async fn list_managed_posts(
+        &self,
+        user_id: UserId,
+        request: &PostManagementRequest,
+    ) -> Result<PostManagementPage>;
+
+    /// Resolves explicit IDs or every currently matching row into an immutable snapshot.
+    async fn resolve_post_selection(
+        &self,
+        user_id: UserId,
+        intent: &PostSelectionIntent,
+    ) -> std::result::Result<ManagementSelectionSnapshot, ResolvePostSelectionError>;
+
+    /// Applies one exact snapshot in the caller's write transaction.
+    async fn bulk_mutate_posts(
+        &self,
+        transaction: &mut WriteTransaction,
+        user_id: UserId,
+        snapshot: &ManagementSelectionSnapshot,
+        operation: &BulkPostOperation,
+        now: UtcInstant,
+    ) -> std::result::Result<BulkPostMutationEvidence, BulkPostMutationError>;
 
     /// Fetches a post by its public permalink components, applying the
     /// viewer-resolution filter. See ADR-0020.
@@ -561,6 +593,12 @@ pub trait PostDialect: Backend {
     /// `tags_subquery_pins_slug_ordering_on_both_dialects`.
     const TAGS_SUBQUERY: &'static str;
 
+    /// Correlated JSON aggregate of complete audience targets for one management row.
+    const MANAGED_AUDIENCES_SUBQUERY: &'static str;
+
+    /// Backend suffix that establishes the bulk snapshot writer lock.
+    const BULK_LOCK_SUFFIX: &'static str;
+
     /// Predicate matching a post's canonical UTC permalink date —
     /// `COALESCE(published_at, created_at)` — against the bound `YYYY-MM-DD`
     /// string (`$3`), in this backend's date dialect.
@@ -693,6 +731,15 @@ pub trait PostDialect: Backend {
         now: UtcInstant,
     ) -> Result<Option<PostMutation>, sqlx::Error>;
 
+    /// Applies one exact bulk snapshot through fixed-count set-based writes.
+    async fn bulk_mutate_posts(
+        transaction: &mut WriteTransaction,
+        user_id: UserId,
+        snapshot: &ManagementSelectionSnapshot,
+        operation: &BulkPostOperation,
+        now: UtcInstant,
+    ) -> std::result::Result<BulkPostMutationEvidence, BulkPostMutationError>;
+
     /// Reverts a live owner's publication state, returning locked old/new
     /// mutation evidence. A draft is returned unchanged.
     async fn unpublish_post(
@@ -713,6 +760,19 @@ pub trait PostDialect: Backend {
         user_id: UserId,
         desired: &[TagLabel],
     ) -> Result<(), TaggingError>;
+    /// Reads one bounded legacy batch after `cursor` for search derivation.
+    async fn list_post_search_backfill_candidates(
+        pool: &Pool<Self>,
+        cursor: Option<PostId>,
+        limit: RowLimit,
+    ) -> Result<Vec<(PostId, Option<PostTitle>, Slug, PostMutationVersion)>>;
+
+    /// Applies one search-projection batch only where the observed mutation version is current.
+    async fn apply_post_search_backfill(
+        pool: &Pool<Self>,
+        candidates: &[PostSearchBackfillCandidate],
+    ) -> Result<()>;
+
     /// Atomically installs references re-derived outside the writer lock.
     ///
     /// The backend rejects the batch if an authoritative HTML snapshot changed after
@@ -756,11 +816,104 @@ impl<DB: Database> PostStore<DB> {
     }
 }
 
+fn push_management_audience_target<DB>(
+    query: &mut QueryBuilder<DB>,
+    kind: TargetKind,
+    audience_id: Option<AudienceId>,
+) where
+    DB: Database,
+    for<'q> TargetKind: Encode<'q, DB> + Type<DB>,
+    for<'q> AudienceId: Encode<'q, DB> + Type<DB>,
+{
+    query
+        .push(" AND EXISTS (SELECT 1 FROM post_audiences pa JOIN target_kinds tk ON tk.kind_id = pa.target_kind_id WHERE pa.post_id = p.post_id AND tk.name = ")
+        .push_storage_bind(kind);
+    if let Some(audience_id) = audience_id {
+        query
+            .push(" AND pa.audience_id = ")
+            .push_storage_bind(audience_id);
+    } else {
+        query.push(" AND pa.audience_id IS NULL");
+    }
+    query.push(")");
+}
+
+fn push_management_predicates<DB>(
+    query: &mut QueryBuilder<DB>,
+    user_id: UserId,
+    request: &PostManagementRequest,
+    include_cursor: bool,
+) where
+    DB: Database,
+    for<'q> UserId: Encode<'q, DB> + Type<DB>,
+    for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
+    for<'q> PostId: Encode<'q, DB> + Type<DB>,
+    for<'q> TargetKind: Encode<'q, DB> + Type<DB>,
+    for<'q> AudienceId: Encode<'q, DB> + Type<DB>,
+    for<'q> StoredPostSearchPattern: Encode<'q, DB> + Type<DB>,
+{
+    query
+        .push("p.user_id = ")
+        .push_storage_bind(user_id)
+        .push(" AND p.deleted_at IS NULL");
+    match request.state {
+        PostManagementStateFilter::All => {}
+        PostManagementStateFilter::Draft => {
+            query.push(" AND p.published_at IS NULL");
+        }
+        PostManagementStateFilter::Scheduled => {
+            query
+                .push(" AND p.published_at > ")
+                .push_storage_bind(request.now);
+        }
+        PostManagementStateFilter::Published => {
+            query
+                .push(" AND p.published_at IS NOT NULL AND p.published_at <= ")
+                .push_storage_bind(request.now);
+        }
+    }
+    match request.audience {
+        PostManagementAudienceFilter::All => {}
+        PostManagementAudienceFilter::Private => {
+            query.push(
+                " AND NOT EXISTS (SELECT 1 FROM post_audiences pa WHERE pa.post_id = p.post_id)",
+            );
+        }
+        PostManagementAudienceFilter::Public => {
+            push_management_audience_target(query, TargetKind::Public, None);
+        }
+        PostManagementAudienceFilter::Subscribers => {
+            push_management_audience_target(query, TargetKind::Subscribers, None);
+        }
+        PostManagementAudienceFilter::Named(audience_id) => {
+            push_management_audience_target(query, TargetKind::Named, Some(audience_id));
+        }
+    }
+    if let Some(search) = request.search.as_ref() {
+        query
+            .push(" AND p.search_text LIKE ")
+            .push_storage_bind(StoredPostSearchPattern::from_search(search))
+            .push(" ESCAPE '\\'");
+    }
+    if include_cursor && let Some(cursor) = request.cursor {
+        query
+            .push(" AND (p.updated_at < ")
+            .push_storage_bind(cursor.updated_at)
+            .push(" OR (p.updated_at = ")
+            .push_storage_bind(cursor.updated_at)
+            .push(" AND p.post_id < ")
+            .push_storage_bind(cursor.post_id)
+            .push("))");
+    }
+}
+
 #[async_trait]
 impl<DB> PostStorage for PostStore<DB>
 where
     DB: PostDialect,
     PostRecord: for<'r> sqlx::FromRow<'r, DB::Row>,
+    ManagedPostRow: for<'r> sqlx::FromRow<'r, DB::Row>,
+    (PostId, PostMutationVersion): for<'r> sqlx::FromRow<'r, DB::Row>,
     (Username,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (Exists,): for<'r> sqlx::FromRow<'r, DB::Row>,
     PostTag: for<'r> sqlx::FromRow<'r, DB::Row>,
@@ -849,6 +1002,7 @@ where
     // the create paths, mirroring the `Option<&PostTitle>` bound above.
     for<'q> Option<&'q PostSummary>: Encode<'q, DB> + Type<DB>,
     for<'q> Option<AudienceId>: Encode<'q, DB> + Type<DB>,
+    for<'q> StoredPostSearchPattern: Encode<'q, DB> + Type<DB>,
     // `RowLimit` binds as itself via the ADR-0071 sqlx bridge (delegates to `i64`) —
     // every listing's `LIMIT` placeholder (#696).
     for<'q> RowLimit: Encode<'q, DB> + Type<DB>,
@@ -1289,6 +1443,120 @@ where
     ) -> Result<Vec<PostId>> {
         DB::list_posts_referencing_media(&self.pool, user_id, media, current_instance_id, evidence)
             .await
+    }
+
+    #[tracing::instrument(name = "storage.posts.list_managed", skip(self, request))]
+    async fn list_managed_posts(
+        &self,
+        user_id: UserId,
+        request: &PostManagementRequest,
+    ) -> Result<PostManagementPage> {
+        let sql = format!(
+            "SELECT p.post_id, p.mutation_version, p.title, p.slug, p.rendered_html,
+                    p.summary, p.updated_at, p.published_at, {audiences} AS audiences
+             FROM posts p WHERE ",
+            audiences = DB::MANAGED_AUDIENCES_SUBQUERY,
+        );
+        let mut query = QueryBuilder::<DB>::new(sql);
+        push_management_predicates(&mut query, user_id, request, true);
+        query
+            .push(" ORDER BY p.updated_at DESC, p.post_id DESC LIMIT ")
+            .push_storage_bind(request.page_size.fetch_limit());
+        let mut rows = query
+            .build_query_as::<ManagedPostRow>()
+            .fetch_all(&self.pool)
+            .await?;
+        let has_more = request.page_size.has_more(rows.len());
+        rows.truncate(request.page_size.page_len());
+        let next_cursor = has_more.then(|| {
+            rows.last().map(|row| CollectionCursor {
+                updated_at: row.updated_at,
+                post_id: row.post_id,
+            })
+        });
+        Ok(PostManagementPage {
+            posts: rows
+                .into_iter()
+                .map(|row| row.into_record(request.now))
+                .collect(),
+            next_cursor: next_cursor.flatten(),
+        })
+    }
+
+    #[tracing::instrument(name = "storage.posts.resolve_selection", skip(self, intent))]
+    async fn resolve_post_selection(
+        &self,
+        user_id: UserId,
+        intent: &PostSelectionIntent,
+    ) -> std::result::Result<ManagementSelectionSnapshot, ResolvePostSelectionError> {
+        let rows = match intent {
+            PostSelectionIntent::Explicit(post_ids) => {
+                let post_ids = post_ids.iter().copied().collect::<BTreeSet<_>>();
+                if post_ids.is_empty() {
+                    return Ok(ManagementSelectionSnapshot {
+                        targets: Vec::new(),
+                    });
+                }
+                let post_ids = post_ids.into_iter().collect::<Vec<_>>();
+                let mut rows = Vec::with_capacity(post_ids.len());
+                for post_ids in post_ids.chunks(crate::sql::SET_OPERATION_BIND_BATCH) {
+                    let mut query = QueryBuilder::<DB>::new(
+                        "SELECT p.post_id, p.mutation_version FROM posts p WHERE p.user_id = ",
+                    );
+                    query
+                        .push_storage_bind(user_id)
+                        .push(" AND p.deleted_at IS NULL AND p.post_id IN (");
+                    {
+                        let mut separated = query.separated(", ");
+                        for post_id in post_ids {
+                            separated.push_storage_bind(*post_id);
+                        }
+                    }
+                    query.push(") ORDER BY p.post_id");
+                    rows.extend(
+                        query
+                            .build_query_as::<(PostId, PostMutationVersion)>()
+                            .fetch_all(&self.pool)
+                            .await?,
+                    );
+                }
+                if rows.len() != post_ids.len() {
+                    return Err(ResolvePostSelectionError::Unavailable);
+                }
+                rows
+            }
+            PostSelectionIntent::AllMatching(request) => {
+                let mut query = QueryBuilder::<DB>::new(
+                    "SELECT p.post_id, p.mutation_version FROM posts p WHERE ",
+                );
+                push_management_predicates(&mut query, user_id, request, false);
+                query.push(" ORDER BY p.post_id");
+                query
+                    .build_query_as::<(PostId, PostMutationVersion)>()
+                    .fetch_all(&self.pool)
+                    .await?
+            }
+        };
+        Ok(ManagementSelectionSnapshot {
+            targets: rows
+                .into_iter()
+                .map(|(post_id, mutation_version)| BulkSelectionTarget {
+                    post_id,
+                    mutation_version,
+                })
+                .collect(),
+        })
+    }
+
+    async fn bulk_mutate_posts(
+        &self,
+        transaction: &mut WriteTransaction,
+        user_id: UserId,
+        snapshot: &ManagementSelectionSnapshot,
+        operation: &BulkPostOperation,
+        now: UtcInstant,
+    ) -> std::result::Result<BulkPostMutationEvidence, BulkPostMutationError> {
+        DB::bulk_mutate_posts(transaction, user_id, snapshot, operation, now).await
     }
 
     #[tracing::instrument(
@@ -2229,23 +2497,194 @@ mod tests {
     use super::*;
     use crate::posts::media::PersistedMediaSubjectKind;
     use crate::posts::models::PostBookkeepingExpectation;
+    use crate::posts::search::{PostMutationVersion, StoredPostSearchText};
     use crate::test_support::{
-        Backend, MEDIA_TEST_SHA256, RawPostRevision, SeedFeedCache, SeedRawPost, SeedUser,
+        Backend, MEDIA_TEST_SHA256, RawPostRevision, SeedFeedCache, SeedRawPost, SeedUser, TestEnv,
         UpdateRawPost, backends, create_draft_via_service, create_post_via_service,
         create_posts_confirmed, fp, media_ref_for, media_row_exists, media_url_for, seed_media,
         seed_users, set_post_tags_confirmed, update_post_body_via_service,
     };
 
+    use common::audience::AudienceName;
     use common::render::PostFormat;
     use common::test_support::{
-        parse_etag, parse_post_body, parse_post_summary, parse_post_title, parse_row_limit,
-        parse_slug, parse_tag_label, parse_utc_instant,
+        parse_audience_name, parse_etag, parse_post_body, parse_post_summary, parse_post_title,
+        parse_row_limit, parse_slug, parse_tag_label, parse_utc_instant,
     };
     use common::time::UtcInstant;
     use rstest::*;
     use rstest_reuse::*;
-    use std::{sync::Arc, time::Duration};
+    use std::{collections::HashSet, sync::Arc, time::Duration};
     use tokio::sync::Barrier;
+
+    async fn management_projection(
+        env: &TestEnv,
+        post_id: PostId,
+    ) -> (String, PostMutationVersion) {
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            let (search_text, version) =
+                sqlx::query_as::<_, (StoredPostSearchText, PostMutationVersion)>(
+                    "SELECT search_text, mutation_version FROM posts WHERE post_id = $1",
+                )
+                .bind_storage(post_id)
+                .fetch_one(pool)
+                .await
+                .expect("management projection loads");
+            (search_text.as_str().to_owned(), version)
+        })
+    }
+
+    async fn create_audience_confirmed(
+        env: &TestEnv,
+        author_user_id: UserId,
+        name: &AudienceName,
+    ) -> AudienceId {
+        let audiences = Arc::clone(&env.audiences());
+        let name = name.clone();
+        crate::test_support::confirmed_for(
+            env.write_scope()
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        audiences
+                            .create_audience(transaction, author_user_id, &name)
+                            .await
+                    })
+                })
+                .await
+                .expect("audience creation succeeds"),
+            "management audience fixture",
+        )
+    }
+
+    async fn seed_management_post(env: &TestEnv, post: SeedRawPost) -> PostId {
+        post.seed(Arc::clone(&env.posts()), env.write_scope().clone())
+            .await
+            .post_id
+    }
+
+    struct ManagementCorpus {
+        owner: UserId,
+        other: PostId,
+        draft: PostId,
+        scheduled: PostId,
+        published_private: PostId,
+        published_named: PostId,
+        deleted: PostId,
+        named_audience: AudienceId,
+    }
+
+    async fn seed_management_corpus(env: &TestEnv) -> ManagementCorpus {
+        let [owner, other_user] =
+            seed_users::<2>(Arc::clone(&env.users()), env.write_scope().clone()).await;
+        let named_audience =
+            create_audience_confirmed(env, owner, &parse_audience_name("Review Circle")).await;
+        let draft = seed_management_post(
+            env,
+            SeedRawPost::new(owner)
+                .slug("alpha-draft")
+                .title("Alpha\u{a0}Draft")
+                .body(parse_post_body(&format!(
+                    "<img src=\"{}\">",
+                    media_url_for("bulk-management.png")
+                )))
+                .draft(),
+        )
+        .await;
+        let scheduled = seed_management_post(
+            env,
+            SeedRawPost::new(owner)
+                .slug("scheduled-post")
+                .title("Scheduled")
+                .published_at(parse_utc_instant("2099-01-01T00:00:00Z"))
+                .audiences(vec![AudienceTarget::Subscribers]),
+        )
+        .await;
+        let published_private = seed_management_post(
+            env,
+            SeedRawPost::new(owner)
+                .slug("private-post")
+                .title("Private")
+                .published_at(parse_utc_instant("2020-01-01T00:00:00Z"))
+                .audiences(Vec::new()),
+        )
+        .await;
+        let published_named = seed_management_post(
+            env,
+            SeedRawPost::new(owner)
+                .slug("named-post")
+                .title("Named")
+                .published_at(parse_utc_instant("2020-01-02T00:00:00Z"))
+                .audiences(vec![AudienceTarget::Named(named_audience)]),
+        )
+        .await;
+        let other =
+            seed_management_post(env, SeedRawPost::new(other_user).slug("foreign-post")).await;
+        let deleted = seed_management_post(env, SeedRawPost::new(owner).slug("deleted-post")).await;
+        soft_delete_post_confirmed(
+            Arc::clone(&env.posts()),
+            env.write_scope().clone(),
+            deleted,
+            owner,
+        )
+        .await;
+        ManagementCorpus {
+            owner,
+            other,
+            draft,
+            scheduled,
+            published_private,
+            published_named,
+            deleted,
+            named_audience,
+        }
+    }
+
+    fn management_request(
+        state: PostManagementStateFilter,
+        audience: PostManagementAudienceFilter,
+        search: &str,
+        cursor: Option<CollectionCursor>,
+        page_size: u32,
+    ) -> PostManagementRequest {
+        PostManagementRequest::new(
+            state,
+            audience,
+            search,
+            cursor,
+            page_size.to_string().parse().expect("valid page size"),
+            parse_utc_instant("2026-09-23T12:00:00Z"),
+        )
+    }
+
+    async fn bulk_mutate_confirmed(
+        env: &TestEnv,
+        user_id: UserId,
+        snapshot: ManagementSelectionSnapshot,
+        operation: BulkPostOperation,
+    ) -> std::result::Result<BulkPostMutationEvidence, BulkPostMutationError> {
+        let posts = Arc::clone(&env.posts());
+        let outcome = env
+            .write_scope()
+            .run(move |transaction| {
+                Box::pin(async move {
+                    posts
+                        .bulk_mutate_posts(
+                            transaction,
+                            user_id,
+                            &snapshot,
+                            &operation,
+                            parse_utc_instant("2026-09-23T12:00:00Z"),
+                        )
+                        .await
+                })
+            })
+            .await
+            .map_err(|error| match error {
+                crate::WriteScopeError::Operation(error) => error,
+                crate::WriteScopeError::Begin(error) => BulkPostMutationError::Db(error), // cov:ignore: test backends cannot induce transaction-begin failure
+            })?;
+        Ok(crate::test_support::confirmed_for(outcome, "bulk mutation"))
+    }
 
     async fn update_post_scoped(
         posts: Arc<dyn PostStorage>,
@@ -3456,6 +3895,546 @@ mod tests {
             "rows were rewritten; set_post_tags must leave unchanged tags physically untouched"
         );
     }
+    #[apply(backends)]
+    #[tokio::test]
+    async fn manage_posts_is_owner_scoped_state_filtered_and_keyset_paginated(
+        #[case] backend: Backend,
+    ) {
+        // The page boundary must be storage-bounded and stable even when timestamps tie;
+        // Deleted and foreign Posts never enter the owner's management result.
+        let env = backend.setup().await;
+        let corpus = seed_management_corpus(&env).await;
+        let request = management_request(
+            PostManagementStateFilter::All,
+            PostManagementAudienceFilter::All,
+            "",
+            None,
+            2,
+        );
+        let first = env
+            .posts()
+            .list_managed_posts(corpus.owner, &request)
+            .await
+            .unwrap();
+        assert_eq!(first.posts.len(), 2);
+        let cursor = first.next_cursor.expect("four rows have a second page");
+        let second = env
+            .posts()
+            .list_managed_posts(
+                corpus.owner,
+                &management_request(
+                    PostManagementStateFilter::All,
+                    PostManagementAudienceFilter::All,
+                    "",
+                    Some(cursor),
+                    2,
+                ),
+            )
+            .await
+            .unwrap();
+        assert!(second.next_cursor.is_none());
+        let mut ids = first
+            .posts
+            .into_iter()
+            .chain(second.posts)
+            .map(|post| post.post_id)
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        let mut expected = vec![
+            corpus.draft,
+            corpus.scheduled,
+            corpus.published_private,
+            corpus.published_named,
+        ];
+        expected.sort_unstable();
+        assert_eq!(ids, expected);
+        assert!(!ids.contains(&corpus.other));
+        assert!(!ids.contains(&corpus.deleted));
+
+        for (state, expected_ids) in [
+            (PostManagementStateFilter::Draft, vec![corpus.draft]),
+            (PostManagementStateFilter::Scheduled, vec![corpus.scheduled]),
+            (
+                PostManagementStateFilter::Published,
+                vec![corpus.published_private, corpus.published_named],
+            ),
+        ] {
+            let page = env
+                .posts()
+                .list_managed_posts(
+                    corpus.owner,
+                    &management_request(state, PostManagementAudienceFilter::All, "", None, 10),
+                )
+                .await
+                .unwrap();
+            let mut found = page
+                .posts
+                .into_iter()
+                .map(|post| post.post_id)
+                .collect::<Vec<_>>();
+            found.sort_unstable();
+            let mut expected_ids = expected_ids;
+            expected_ids.sort_unstable();
+            assert_eq!(found, expected_ids);
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn manage_posts_filters_complete_audiences_and_normalized_literal_search(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let corpus = seed_management_corpus(&env).await;
+        for (audience, expected) in [
+            (PostManagementAudienceFilter::Public, corpus.draft),
+            (PostManagementAudienceFilter::Subscribers, corpus.scheduled),
+            (
+                PostManagementAudienceFilter::Private,
+                corpus.published_private,
+            ),
+            (
+                PostManagementAudienceFilter::Named(corpus.named_audience),
+                corpus.published_named,
+            ),
+        ] {
+            let page = env
+                .posts()
+                .list_managed_posts(
+                    corpus.owner,
+                    &management_request(PostManagementStateFilter::All, audience, "", None, 10),
+                )
+                .await
+                .unwrap();
+            assert_eq!(page.posts.len(), 1);
+            assert_eq!(page.posts[0].post_id, expected);
+        }
+        let named = env
+            .posts()
+            .list_managed_posts(
+                corpus.owner,
+                &management_request(
+                    PostManagementStateFilter::All,
+                    PostManagementAudienceFilter::Named(corpus.named_audience),
+                    "named-post",
+                    None,
+                    10,
+                ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            named.posts[0].audiences,
+            vec![AudienceTarget::Named(corpus.named_audience)]
+        );
+        let normalized = env
+            .posts()
+            .list_managed_posts(
+                corpus.owner,
+                &management_request(
+                    PostManagementStateFilter::All,
+                    PostManagementAudienceFilter::All,
+                    "  ALPHA\tDRAFT  ",
+                    None,
+                    10,
+                ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(normalized.posts[0].post_id, corpus.draft);
+        let literal_wildcard = env
+            .posts()
+            .list_managed_posts(
+                corpus.owner,
+                &management_request(
+                    PostManagementStateFilter::All,
+                    PostManagementAudienceFilter::All,
+                    "%_",
+                    None,
+                    10,
+                ),
+            )
+            .await
+            .unwrap();
+        assert!(literal_wildcard.posts.is_empty());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn management_selection_resolves_exact_owner_scoped_snapshots(#[case] backend: Backend) {
+        // Explicit targets may span pages, while all-matching captures exactly the rows
+        // present now. Missing, foreign, and Deleted IDs reject instead of narrowing.
+        let env = backend.setup().await;
+        let corpus = seed_management_corpus(&env).await;
+        let explicit = env
+            .posts()
+            .resolve_post_selection(
+                corpus.owner,
+                &PostSelectionIntent::Explicit(vec![
+                    corpus.published_named,
+                    corpus.draft,
+                    corpus.draft,
+                ]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(explicit.selected_count(), 2);
+        assert!(explicit.targets[0].post_id < explicit.targets[1].post_id);
+
+        let published_filter = management_request(
+            PostManagementStateFilter::Published,
+            PostManagementAudienceFilter::All,
+            "",
+            None,
+            1,
+        );
+        let snapshot = env
+            .posts()
+            .resolve_post_selection(
+                corpus.owner,
+                &PostSelectionIntent::AllMatching(published_filter),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            snapshot.selected_count(),
+            2,
+            "page size cannot cap a snapshot"
+        );
+        assert_eq!(
+            snapshot
+                .targets
+                .iter()
+                .map(|target| target.post_id)
+                .collect::<Vec<_>>(),
+            vec![corpus.published_private, corpus.published_named]
+        );
+
+        for unavailable in [corpus.other, corpus.deleted, PostId::from(999_999)] {
+            let error = env
+                .posts()
+                .resolve_post_selection(
+                    corpus.owner,
+                    &PostSelectionIntent::Explicit(vec![corpus.draft, unavailable]),
+                )
+                .await
+                .unwrap_err();
+            assert!(matches!(error, ResolvePostSelectionError::Unavailable));
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn empty_bulk_snapshot_is_a_no_op(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let [owner] = seed_users::<1>(Arc::clone(&env.users()), env.write_scope().clone()).await;
+        let evidence = bulk_mutate_confirmed(
+            &env,
+            owner,
+            ManagementSelectionSnapshot {
+                targets: Vec::new(),
+            },
+            BulkPostOperation::Delete,
+        )
+        .await
+        .unwrap();
+        assert_eq!(evidence.result.selected_count, 0);
+        assert_eq!(evidence.result.changed_count, 0);
+        assert!(evidence.feed_paths.is_empty());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn bulk_audience_change_is_atomic_set_based_and_skips_noops(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let corpus = seed_management_corpus(&env).await;
+        set_post_tags_confirmed(
+            &env.write_scope(),
+            Arc::clone(&env.posts()),
+            corpus.draft,
+            corpus.owner,
+            &[parse_tag_label("bulk-tag")],
+        )
+        .await
+        .unwrap();
+        let snapshot = env
+            .posts()
+            .resolve_post_selection(
+                corpus.owner,
+                &PostSelectionIntent::Explicit(vec![corpus.draft, corpus.scheduled]),
+            )
+            .await
+            .unwrap();
+        let evidence = bulk_mutate_confirmed(
+            &env,
+            corpus.owner,
+            snapshot,
+            BulkPostOperation::ChangeAudience(vec![AudienceTarget::Subscribers]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(evidence.result.selected_count, 2);
+        assert_eq!(evidence.result.changed_count, 1);
+
+        let page = env
+            .posts()
+            .list_managed_posts(
+                corpus.owner,
+                &management_request(
+                    PostManagementStateFilter::All,
+                    PostManagementAudienceFilter::Subscribers,
+                    "",
+                    None,
+                    10,
+                ),
+            )
+            .await
+            .unwrap();
+        let found = page
+            .posts
+            .into_iter()
+            .map(|post| post.post_id)
+            .collect::<HashSet<_>>();
+        assert_eq!(found, HashSet::from([corpus.draft, corpus.scheduled]));
+
+        let history = env
+            .posts()
+            .list_post_revision_history(corpus.owner, corpus.draft, None, "10".parse().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(history.revisions.len(), 2);
+        let detail = env
+            .posts()
+            .get_post_revision_detail(corpus.owner, corpus.draft, history.revisions[0].revision_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(detail.revision.audiences, vec![AudienceTarget::Public]);
+        assert_eq!(detail.revision.tags.len(), 1);
+        assert_eq!(detail.revision.tags[0].tag.as_ref(), "bulk-tag");
+
+        let scheduled_history = env
+            .posts()
+            .list_post_revision_history(corpus.owner, corpus.scheduled, None, "10".parse().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(scheduled_history.revisions.is_empty());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn stale_bulk_snapshot_rolls_back_every_target(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let corpus = seed_management_corpus(&env).await;
+        let snapshot = env
+            .posts()
+            .resolve_post_selection(
+                corpus.owner,
+                &PostSelectionIntent::Explicit(vec![corpus.draft, corpus.published_private]),
+            )
+            .await
+            .unwrap();
+        set_post_tags_confirmed(
+            &env.write_scope(),
+            Arc::clone(&env.posts()),
+            corpus.draft,
+            corpus.owner,
+            &[parse_tag_label("changed")],
+        )
+        .await
+        .unwrap();
+
+        let error = bulk_mutate_confirmed(
+            &env,
+            corpus.owner,
+            snapshot,
+            BulkPostOperation::ChangeAudience(vec![AudienceTarget::Subscribers]),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(error, BulkPostMutationError::SnapshotConflict));
+
+        let private = env
+            .posts()
+            .list_managed_posts(
+                corpus.owner,
+                &management_request(
+                    PostManagementStateFilter::All,
+                    PostManagementAudienceFilter::Private,
+                    "",
+                    None,
+                    10,
+                ),
+            )
+            .await
+            .unwrap();
+        assert!(
+            private
+                .posts
+                .iter()
+                .any(|post| post.post_id == corpus.published_private)
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn bulk_delete_preserves_deleted_history(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let corpus = seed_management_corpus(&env).await;
+        let snapshot = env
+            .posts()
+            .resolve_post_selection(
+                corpus.owner,
+                &PostSelectionIntent::Explicit(vec![corpus.draft, corpus.published_private]),
+            )
+            .await
+            .unwrap();
+        let evidence =
+            bulk_mutate_confirmed(&env, corpus.owner, snapshot, BulkPostOperation::Delete)
+                .await
+                .unwrap();
+        assert_eq!(evidence.result.selected_count, 2);
+        assert_eq!(evidence.result.changed_count, 2);
+
+        let active = env
+            .posts()
+            .resolve_post_selection(
+                corpus.owner,
+                &PostSelectionIntent::Explicit(vec![corpus.draft]),
+            )
+            .await;
+        assert!(matches!(
+            active,
+            Err(ResolvePostSelectionError::Unavailable)
+        ));
+        let history = env
+            .posts()
+            .list_post_revision_history(
+                corpus.owner,
+                corpus.published_private,
+                None,
+                "10".parse().unwrap(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(history.revisions.len(), 1);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn uncapped_bulk_delete_partitions_backend_bind_batches(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let [owner] = seed_users::<1>(Arc::clone(&env.users()), env.write_scope().clone()).await;
+        let inputs = (0..=crate::sql::SET_OPERATION_BIND_BATCH)
+            .map(|index| {
+                SeedRawPost::new(owner)
+                    .slug(format!("bulk-bind-{index}"))
+                    .build()
+            })
+            .collect();
+        let ids =
+            create_posts_confirmed(env.posts().clone(), env.write_scope().clone(), inputs).await;
+        let snapshot = env
+            .posts()
+            .resolve_post_selection(owner, &PostSelectionIntent::Explicit(ids.clone()))
+            .await
+            .unwrap();
+        assert_eq!(snapshot.targets.len(), ids.len());
+
+        let evidence = bulk_mutate_confirmed(&env, owner, snapshot, BulkPostOperation::Delete)
+            .await
+            .unwrap();
+        assert_eq!(evidence.result.selected_count, ids.len());
+        assert_eq!(evidence.result.changed_count, ids.len());
+        assert!(matches!(
+            env.posts()
+                .resolve_post_selection(owner, &PostSelectionIntent::Explicit(vec![ids[0]]))
+                .await,
+            Err(ResolvePostSelectionError::Unavailable)
+        ));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn post_management_projection_tracks_meaningful_mutations(#[case] backend: Backend) {
+        // Exact snapshots rely on this token moving for every durable Post mutation while
+        // semantic no-ops retain the same token and search projection.
+        let env = backend.setup().await;
+        let [user] = seed_users::<1>(Arc::clone(&env.users()), env.write_scope().clone()).await;
+        let post_id = SeedRawPost::new(user)
+            .slug("first-slug")
+            .title("Straße  Post")
+            .draft()
+            .seed(Arc::clone(&env.posts()), env.write_scope().clone())
+            .await
+            .post_id;
+        assert_eq!(
+            management_projection(&env, post_id).await,
+            (
+                "strasse post first-slug".to_owned(),
+                PostMutationVersion::initial()
+            )
+        );
+
+        let edit = || {
+            UpdateRawPost::new("changed-slug")
+                .title("SECOND\tTITLE")
+                .unpublish()
+                .build()
+        };
+        update_post_confirmed(
+            Arc::clone(&env.posts()),
+            env.write_scope().clone(),
+            post_id,
+            user,
+            edit(),
+        )
+        .await;
+        let (search_text, version) = management_projection(&env, post_id).await;
+        assert_eq!(search_text, "second title changed-slug");
+        assert_eq!(version.value(), 2);
+
+        update_post_confirmed(
+            Arc::clone(&env.posts()),
+            env.write_scope().clone(),
+            post_id,
+            user,
+            edit(),
+        )
+        .await;
+        assert_eq!(management_projection(&env, post_id).await.1.value(), 2);
+
+        publish_post_confirmed(
+            Arc::clone(&env.posts()),
+            env.write_scope().clone(),
+            post_id,
+            user,
+        )
+        .await;
+        assert_eq!(management_projection(&env, post_id).await.1.value(), 3);
+        set_post_tags_confirmed(
+            &env.write_scope(),
+            Arc::clone(&env.posts()),
+            post_id,
+            user,
+            &[parse_tag_label("rust")],
+        )
+        .await
+        .expect("tag mutation succeeds");
+        assert_eq!(management_projection(&env, post_id).await.1.value(), 4);
+        soft_delete_post_confirmed(
+            Arc::clone(&env.posts()),
+            env.write_scope().clone(),
+            post_id,
+            user,
+        )
+        .await;
+        assert_eq!(management_projection(&env, post_id).await.1.value(), 5);
+    }
+
     #[apply(backends)]
     #[tokio::test]
     async fn update_post_semantic_no_op_keeps_timestamp_and_revision_count(

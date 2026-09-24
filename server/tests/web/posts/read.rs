@@ -8,7 +8,10 @@ use web::posts::{AuthoredPostSnapshot, PostInputs};
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{confirmed_created_post, create_post_json, create_user_and_session, make_app};
+use crate::helpers::{
+    confirmed_created_post, create_post_json, create_user_and_session, make_app,
+    set_public_default_audience,
+};
 use storage::test_support::{Backend, backends};
 
 use super::fixtures::get_post_form;
@@ -17,6 +20,9 @@ use super::fixtures::get_post_form;
 #[tokio::test]
 async fn get_post_returns_published_post(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let session = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -80,6 +86,9 @@ async fn get_post_returns_published_post(#[case] backend: Backend) {
 #[tokio::test]
 async fn get_post_rejects_invalid_username(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
 
     let (status, body) =
@@ -93,6 +102,9 @@ async fn get_post_rejects_invalid_username(#[case] backend: Backend) {
 #[tokio::test]
 async fn get_post_rejects_invalid_slug(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
 
     let (status, body) =
@@ -106,6 +118,9 @@ async fn get_post_rejects_invalid_slug(#[case] backend: Backend) {
 #[tokio::test]
 async fn get_post_returns_not_found_for_missing_post(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
 
     let (status, body) = get_post_form(app.clone(), "author", 2024, 1, 1, "missing", None).await;
@@ -118,6 +133,9 @@ async fn get_post_returns_not_found_for_missing_post(#[case] backend: Backend) {
 #[tokio::test]
 async fn get_post_carries_tags(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let session = create_user_and_session(
         std::sync::Arc::clone(&env.users()),

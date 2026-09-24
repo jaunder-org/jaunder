@@ -14,9 +14,10 @@ mod component;
 mod page_state;
 
 pub use api::{
-    Data, Get, GetContentLicense, GetDefaultPostFormat, SetContentLicense, SetDefaultPostFormat,
-    Update, get, get_content_license, get_default_post_format, set_content_license,
-    set_default_post_format, update,
+    Data, DefaultAudiencePreference, Get, GetContentLicense, GetDefaultAudience,
+    GetDefaultPostFormat, SetContentLicense, SetDefaultAudience, SetDefaultPostFormat, Update, get,
+    get_content_license, get_default_audience, get_default_post_format, set_content_license,
+    set_default_audience, set_default_post_format, update,
 };
 #[cfg(target_arch = "wasm32")]
 pub use component::ProfilePage;

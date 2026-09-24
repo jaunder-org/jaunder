@@ -41,6 +41,6 @@ pub use session::{
     SeededSession, assert_no_email, assert_one_absolute_link_email, create_operator_and_session,
     create_session_for, create_user_and_session, session_cookie, token_from_set_cookie,
 };
-pub use site_config::{delete_site_config, set_site_config};
+pub use site_config::{delete_site_config, set_public_default_audience, set_site_config};
 // The capturing WebSub client used by `feed_worker.rs`.
 pub use websub_capturing::CapturingWebSubClient;

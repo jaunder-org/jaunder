@@ -14,6 +14,8 @@ Matrix: `matrix:docs/coverage/csr-e2e-matrix.md#administration`
 | Endpoint                                          | Status  | Surface                                                                                            |
 | ------------------------------------------------- | ------- | -------------------------------------------------------------------------------------------------- |
 | `endpoint:/api/site/get_identity`                 | Covered | Seeds the site title, optional Site Tagline, and base-URL form on the site-settings page.          |
+| `endpoint:/api/site/get_default_audience`         | Covered | Seeds the operator-only Site Default Audience control.                                             |
+| `endpoint:/api/site/update_default_audience`      | Covered | Independently persists the Site Default Audience for future Posts.                                 |
 | `endpoint:/api/site/update_identity`              | Covered | Atomically persists the operator's title, optional Site Tagline, and base-URL aggregate.           |
 | `endpoint:/api/site/get_media_uploads_enabled`    | Covered | Independently loads the site-wide Media Upload Capability for its dedicated admin card.            |
 | `endpoint:/api/site/update_media_uploads_enabled` | Covered | Independently persists the Media Upload Capability without writing site identity settings.         |
@@ -44,13 +46,14 @@ re-reads only the backup-destination predicate. Rollback-confirmed failures do
 not revalidate either warning.
 
 The routes themselves stay narrow. `/admin/site` owns the Local title, optional
-Site Tagline, canonical base URL, and the independently persisted Media Upload
-Capability. One Site Settings save validates all three identity values before
-dispatching their atomic aggregate mutation; a blank tagline clears it.
-`/admin/backups` owns storage destination, schedule, retention, and backup mode;
-`/admin/smtp` owns persisted outbound relay and paired credential intent; and
-`/admin/websub` owns the publisher hub plus regeneration and publication
-dead-letter recovery.
+Site Tagline, canonical base URL, Site Default Audience, and the independently
+persisted Media Upload Capability. The Site Default Audience is only a fallback
+for future Posts without an explicit Audience Selection or User override. One
+Site Settings save validates all three identity values before dispatching their
+atomic aggregate mutation; a blank tagline clears it. `/admin/backups` owns
+storage destination, schedule, retention, and backup mode; `/admin/smtp` owns
+persisted outbound relay and paired credential intent; and `/admin/websub` owns
+the publisher hub plus regeneration and publication dead-letter recovery.
 
 For Passkeys, the canonical base URL is a credential-binding WebAuthn origin:
 its exact origin is checked by the browser and its hostname is the RP ID.

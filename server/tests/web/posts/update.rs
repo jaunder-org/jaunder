@@ -13,7 +13,7 @@ use rstest_reuse::*;
 
 use crate::helpers::{
     confirmed_created_post, confirmed_mutation, create_post_json, create_user_and_session,
-    make_app, post_form, post_json, update_post_json,
+    make_app, post_form, post_json, set_public_default_audience, update_post_json,
 };
 use storage::test_support::{Backend, backends, backends_matrix};
 
@@ -40,6 +40,9 @@ async fn unpublish_post_form(
 #[tokio::test]
 async fn update_post_updates_draft_content_and_slug(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let cookie = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -103,6 +106,9 @@ async fn update_post_updates_draft_content_and_slug(#[case] backend: Backend) {
 #[tokio::test]
 async fn update_post_freezes_slug_when_published(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let cookie = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -151,6 +157,9 @@ async fn update_post_freezes_slug_when_published(#[case] backend: Backend) {
 #[tokio::test]
 async fn update_post_publishes_draft(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let cookie = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -195,6 +204,9 @@ async fn update_post_publishes_draft(#[case] backend: Backend) {
 #[tokio::test]
 async fn update_post_rejects_non_author(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let author_cookie = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -255,6 +267,9 @@ async fn update_post_rejects(
     #[case] expected: &str,
 ) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let cookie = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -300,6 +315,9 @@ async fn update_post_rejects(
 #[tokio::test]
 async fn update_post_returns_not_found_for_missing_post(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let cookie = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -328,6 +346,9 @@ async fn update_post_returns_not_found_for_missing_post(#[case] backend: Backend
 #[tokio::test]
 async fn update_post_returns_not_found_for_deleted_post(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let session = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -385,6 +406,9 @@ async fn update_post_returns_not_found_for_deleted_post(#[case] backend: Backend
 #[tokio::test]
 async fn publish_post_publishes_draft_and_returns_permalink(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let session = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -433,6 +457,9 @@ async fn publish_post_publishes_draft_and_returns_permalink(#[case] backend: Bac
 #[tokio::test]
 async fn publish_post_rejects_non_author(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let author_cookie = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -471,6 +498,9 @@ async fn publish_post_rejects_non_author(#[case] backend: Backend) {
 #[tokio::test]
 async fn publish_post_returns_not_found_for_missing_or_deleted_posts(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let session = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -535,6 +565,9 @@ async fn delete_post_form(
 #[tokio::test]
 async fn delete_post_soft_deletes_post(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let cookie = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -575,6 +608,9 @@ async fn delete_post_soft_deletes_post(#[case] backend: Backend) {
 #[tokio::test]
 async fn delete_post_rejects_non_author(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let author_cookie = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -613,6 +649,9 @@ async fn delete_post_rejects_non_author(#[case] backend: Backend) {
 #[tokio::test]
 async fn delete_post_rejects_unauthenticated(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let cookie = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -643,6 +682,9 @@ async fn delete_post_rejects_unauthenticated(#[case] backend: Backend) {
 #[tokio::test]
 async fn delete_post_returns_not_found_for_already_deleted_post(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let cookie = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -678,6 +720,9 @@ async fn deleted_post_excluded_from_timelines_and_returns_404_at_permalink(
     #[case] backend: Backend,
 ) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let session = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -746,6 +791,9 @@ async fn deleted_post_excluded_from_timelines_and_returns_404_at_permalink(
 #[tokio::test]
 async fn unpublish_post_reverts_published_post_to_draft(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let session = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -808,6 +856,9 @@ async fn unpublish_post_reverts_published_post_to_draft(#[case] backend: Backend
 #[tokio::test]
 async fn unpublish_post_returns_the_draft_permalink(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let cookie = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -875,6 +926,9 @@ async fn unpublish_post_returns_the_draft_permalink(#[case] backend: Backend) {
 #[tokio::test]
 async fn unpublish_post_rejects_non_author(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let author_cookie = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -970,6 +1024,9 @@ async fn update_post_rejects_over_limit_tags_without_mutating_post_or_tags(
     #[case] backend: Backend,
 ) {
     let (env, cookie) = login_and_env(backend).await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let original_body = "# Original Title\n\noriginal body";
     let (status, body) = create_post_json(
@@ -1099,6 +1156,9 @@ async fn update_org_header_applies_tags_and_rejects_mismatched_bookkeeping(
     #[case] backend: Backend,
 ) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let session = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -1206,6 +1266,9 @@ async fn update_org_header_applies_tags_and_rejects_mismatched_bookkeeping(
 #[tokio::test]
 async fn update_org_uses_header_lifecycle_when_publish_is_omitted(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let cookie = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -1249,6 +1312,9 @@ async fn update_org_uses_header_lifecycle_when_publish_is_omitted(#[case] backen
 #[tokio::test]
 async fn update_org_without_any_lifecycle_unpublishes_post(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let cookie = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -1292,6 +1358,9 @@ async fn update_org_without_any_lifecycle_unpublishes_post(#[case] backend: Back
 #[tokio::test]
 async fn update_non_org_requires_publish_presence(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let cookie = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -1332,6 +1401,9 @@ async fn update_non_org_requires_publish_presence(#[case] backend: Backend) {
 #[tokio::test]
 async fn update_org_current_sync_succeeds_and_stale_sync_preserves_post(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let session = create_user_and_session(
         std::sync::Arc::clone(&env.users()),

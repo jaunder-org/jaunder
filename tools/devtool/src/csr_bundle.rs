@@ -20,15 +20,16 @@ const IN_JS: &str = "csr.js";
 const IN_WASM: &str = "csr_bg.wasm";
 const EXPERIMENT_SHAPE_SECTION_NAME: &str = "jaunder.shape";
 
-/// The `wasm-opt` optimisation level, pinned by measurement after Theme Studio
-/// gained paginated owned-Media presentation controls
-/// (#836, #1052, #1272, #1341, #1455, #1549):
+/// The `wasm-opt` optimisation level, pinned by measurement after Manage Posts
+/// added paginated filtering, cross-page selection, confirmation, and bulk
+/// audience controls
+/// (#836, #1052, #1272, #1341, #1455, #1549, #1625):
 ///
-/// | level        | raw bytes |
-/// | ------------ | --------- |
-/// | `-O2`        | 3 931 151 |
-/// | `-Os`        | 3 875 781 |
-/// | **`-Oz`**    | **3 709 037** |
+/// | level        | raw bytes     |
+/// | ------------ | ------------- |
+/// | `-O2`        | 4 252 496     |
+/// | `-Os`        | 4 191 207     |
+/// | **`-Oz`**    | **4 009 656** |
 ///
 /// Size is the objective, not speed: firefox spends ~88 ms compiling each MiB of
 /// this file (#818), while the Rust-side mount path it produces measures

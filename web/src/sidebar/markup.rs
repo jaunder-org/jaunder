@@ -19,7 +19,7 @@ pub(super) struct NavItem {
     pub(super) requires_operator: bool,
 }
 
-pub(super) static NAV_ITEMS: LazyLock<[NavItem; 20]> = LazyLock::new(|| {
+pub(super) static NAV_ITEMS: LazyLock<[NavItem; 21]> = LazyLock::new(|| {
     [
         NavItem {
             key: "local",
@@ -68,6 +68,14 @@ pub(super) static NAV_ITEMS: LazyLock<[NavItem; 20]> = LazyLock::new(|| {
             label: "Bookmarks",
             icon_path: Icons::BOOKMARK,
             href: None,
+            requires_auth: true,
+            requires_operator: false,
+        },
+        NavItem {
+            key: "manage-posts",
+            label: "Manage Posts",
+            icon_path: Icons::EDIT,
+            href: Some(root_relative_url("/posts/manage")),
             requires_auth: true,
             requires_operator: false,
         },
@@ -377,6 +385,7 @@ mod tests {
                 ("local", "/"),
                 ("home", "/app"),
                 ("compose", "/posts/new"),
+                ("manage-posts", "/posts/manage"),
                 ("drafts", "/drafts"),
                 ("scheduled", "/scheduled"),
                 ("history", "/history"),

@@ -1,12 +1,13 @@
 //! Per-user preference storage.
 
-use crate::WriteTransaction;
 use crate::backend::Backend;
 use crate::posts::models::PostFormat;
 use crate::sql::QueryStorageExt;
+use crate::{SiteConfigStorage, WriteTransaction};
 use async_trait::async_trait;
 use common::content_license::ContentLicense;
 use common::ids::UserId;
+use common::visibility::DefaultAudience;
 use sqlx::{Database, Encode, Executor, Pool, Result, Type};
 
 use host::config_key::UserConfigKey;
@@ -91,6 +92,78 @@ pub async fn get_default_post_format(
         .as_deref()
         .and_then(|s| s.parse::<PostFormat>().ok())
         .unwrap_or(PostFormat::Markdown))
+}
+
+/// Returns a user's optional audience override.
+///
+/// Absence means the Site Default Audience remains authoritative. A malformed
+/// stored value is a decode error rather than silent inheritance, because the
+/// inherited site value may be broader than the user's intended preference.
+///
+/// # Errors
+///
+/// Returns a storage error when the preference cannot be read or contains an
+/// invalid stored value.
+pub async fn get_user_default_audience(
+    config: &dyn UserConfigStorage,
+    user_id: UserId,
+) -> Result<Option<DefaultAudience>> {
+    config
+        .get(user_id, UserConfigKey::DefaultAudience)
+        .await?
+        .map(|value| {
+            value
+                .parse()
+                .map_err(|error| sqlx::Error::Decode(Box::new(error)))
+        })
+        .transpose()
+}
+
+/// Resolves the audience used when a new Post supplies no explicit selection.
+///
+/// # Errors
+///
+/// Returns a storage error when either default cannot be read or when the User
+/// Default Audience contains an invalid stored value.
+pub async fn get_effective_default_audience(
+    user_config: &dyn UserConfigStorage,
+    site_config: &dyn SiteConfigStorage,
+    user_id: UserId,
+) -> Result<DefaultAudience> {
+    match get_user_default_audience(user_config, user_id).await? {
+        Some(audience) => Ok(audience),
+        None => site_config.get_default_audience().await,
+    }
+}
+
+/// Sets or clears a user's audience override.
+///
+/// # Errors
+///
+/// Returns a storage error when the preference cannot be persisted.
+pub async fn set_user_default_audience(
+    config: &dyn UserConfigStorage,
+    transaction: &mut WriteTransaction,
+    user_id: UserId,
+    audience: Option<DefaultAudience>,
+) -> Result<()> {
+    match audience {
+        Some(audience) => {
+            config
+                .set(
+                    transaction,
+                    user_id,
+                    UserConfigKey::DefaultAudience,
+                    audience.as_ref(),
+                )
+                .await
+        }
+        None => {
+            config
+                .delete(transaction, user_id, UserConfigKey::DefaultAudience)
+                .await
+        }
+    }
 }
 
 /// Sets a user's default post format preference.
@@ -269,7 +342,7 @@ where
 mod tests {
     use super::*;
     use crate::test_support::{Backend, SeedUser, backends};
-    use common::MutationOutcome;
+    use common::{MutationOutcome, visibility::DefaultAudience};
     use rstest::*;
     use rstest_reuse::*;
     use strum::VariantArray as _;
@@ -288,6 +361,138 @@ mod tests {
         let config = &*env.user_config();
         let result = get_default_post_format(config, user_id).await.unwrap();
         assert_eq!(result, PostFormat::Markdown);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn user_default_audience_absence_inherits_site_default(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let site_config = std::sync::Arc::clone(&env.site_config());
+        let site_config_for_write = std::sync::Arc::clone(&site_config);
+        env.write_scope()
+            .run(move |transaction| {
+                Box::pin(async move {
+                    site_config_for_write
+                        .set_default_audience(transaction, &DefaultAudience::Subscribers)
+                        .await
+                })
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            get_user_default_audience(env.user_config().as_ref(), user_id)
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            get_effective_default_audience(
+                env.user_config().as_ref(),
+                site_config.as_ref(),
+                user_id,
+            )
+            .await
+            .unwrap(),
+            DefaultAudience::Subscribers
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn user_default_audience_overrides_and_can_return_to_site_default(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let config = std::sync::Arc::clone(&env.user_config());
+        let config_for_write = std::sync::Arc::clone(&config);
+        env.write_scope()
+            .run(move |transaction| {
+                Box::pin(async move {
+                    set_user_default_audience(
+                        config_for_write.as_ref(),
+                        transaction,
+                        user_id,
+                        Some(DefaultAudience::Public),
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            get_effective_default_audience(config.as_ref(), env.site_config().as_ref(), user_id,)
+                .await
+                .unwrap(),
+            DefaultAudience::Public
+        );
+
+        let config_for_write = std::sync::Arc::clone(&config);
+        env.write_scope()
+            .run(move |transaction| {
+                Box::pin(async move {
+                    set_user_default_audience(config_for_write.as_ref(), transaction, user_id, None)
+                        .await
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            get_user_default_audience(config.as_ref(), user_id)
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn malformed_user_default_audience_rejects_resolution(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(
+                std::sync::Arc::clone(&env.users()),
+                env.write_scope().clone(),
+            )
+            .await
+            .user_id;
+        let config = std::sync::Arc::clone(&env.user_config());
+        let config_for_write = std::sync::Arc::clone(&config);
+        env.write_scope()
+            .run(move |transaction| {
+                Box::pin(async move {
+                    config_for_write
+                        .set(
+                            transaction,
+                            user_id,
+                            UserConfigKey::DefaultAudience,
+                            "friends",
+                        )
+                        .await
+                })
+            })
+            .await
+            .unwrap();
+
+        assert!(
+            get_effective_default_audience(config.as_ref(), env.site_config().as_ref(), user_id,)
+                .await
+                .is_err()
+        );
     }
 
     #[apply(backends)]

@@ -19,7 +19,7 @@ use rstest_reuse::*;
 
 use crate::helpers::{
     confirmed_created_post, create_post_json, create_session_for, create_user_and_session,
-    make_app, post_form, post_json,
+    make_app, post_form, post_json, set_public_default_audience,
 };
 use storage::test_support::{Backend, SeedRawPost, SeedUser, backends, backends_matrix};
 
@@ -79,6 +79,9 @@ async fn list_home_timeline_in_order(
 #[tokio::test]
 async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let author_cookie = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -180,6 +183,9 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] 
 #[tokio::test]
 async fn list_drafts_surfaces_scheduled_with_marker_excludes_live(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let author = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -237,6 +243,9 @@ async fn list_scheduled_returns_current_user_future_posts_ordered_by_schedule(
     #[case] backend: Backend,
 ) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let author = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -438,6 +447,9 @@ async fn list_rejects_invalid_cursor_inputs(
     #[case] bad_time_body: serde_json::Value,
 ) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let cookie = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -462,6 +474,9 @@ async fn list_rejects_invalid_cursor_inputs(
 #[tokio::test]
 async fn timeline_rejects_a_cursor_from_the_opposite_order(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let author = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -561,6 +576,9 @@ async fn timeline_rejects_a_cursor_from_the_opposite_order(#[case] backend: Back
 #[tokio::test]
 async fn list_user_posts_returns_published_posts_with_cursor_pagination(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let author = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -647,6 +665,9 @@ async fn list_user_posts_returns_published_posts_with_cursor_pagination(#[case] 
 #[tokio::test]
 async fn list_user_posts_rejects_invalid_username(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
 
     let (status, body) = list_user_posts(app.clone(), "Invalid Name", None, 50, None).await;
@@ -666,6 +687,9 @@ async fn list_by_user_takes_a_nested_json_cursor_and_no_longer_the_flat_pair(
     #[case] backend: Backend,
 ) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let author = SeedUser::new()
         .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
@@ -714,6 +738,9 @@ async fn list_by_user_takes_a_nested_json_cursor_and_no_longer_the_flat_pair(
 #[tokio::test]
 async fn timeline_page_two_uses_the_cursor_the_first_page_returned(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let author = SeedUser::new()
         .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
@@ -752,6 +779,9 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
     #[case] backend: Backend,
 ) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let author = SeedUser::new()
         .seed(std::sync::Arc::clone(&env.users()), env.write_scope())
@@ -871,6 +901,9 @@ async fn list_home_timeline_returns_authenticated_users_published_posts_only(
     #[case] backend: Backend,
 ) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let author = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -989,6 +1022,9 @@ async fn list_home_timeline_returns_authenticated_users_published_posts_only(
 #[tokio::test]
 async fn list_user_posts_carries_tags_per_post(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let session = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -1052,6 +1088,9 @@ async fn list_user_posts_for_unknown_user_keeps_empty_profile_with_site_theme(
     #[case] backend: Backend,
 ) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
 
     let (status, body) = list_user_posts(app.clone(), "nobody", None, 50, None).await;
@@ -1069,6 +1108,9 @@ async fn list_user_posts_for_unknown_user_keeps_empty_profile_with_site_theme(
 #[tokio::test]
 async fn list_posts_by_tag_returns_matching_posts_from_all_users(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
 
     // Two authors each post twice; only some posts get the target tag.
@@ -1148,6 +1190,9 @@ async fn list_posts_by_tag_returns_matching_posts_from_all_users(#[case] backend
 #[tokio::test]
 async fn list_posts_by_tag_returns_empty_for_unknown_tag(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
 
     let (status, body) = list_posts_by_tag(app.clone(), "rust", None).await;
@@ -1164,6 +1209,9 @@ async fn list_posts_by_tag_returns_empty_for_unknown_tag(#[case] backend: Backen
 #[tokio::test]
 async fn list_user_posts_by_tag_scopes_to_user(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let author = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -1215,6 +1263,9 @@ async fn list_user_posts_by_tag_scopes_to_user(#[case] backend: Backend) {
 #[tokio::test]
 async fn list_user_posts_by_tag_unknown_user_returns_not_found(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
 
     let (status, body) = list_user_posts_by_tag(app.clone(), "nobody", "rust", None).await;

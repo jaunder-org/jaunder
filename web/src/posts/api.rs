@@ -29,6 +29,10 @@ use common::{
 
 use common::seed::{AuthoredPost, Page, PageCursor, PublicPresentation};
 
+use super::manage::{
+    BulkManageOperation, BulkManageResult, ManageAudienceFilter, ManagePostsCursor,
+    ManagePostsPage, ManagePublicationState, ManageSelectionIntent, ManagementSelectionSnapshot,
+};
 use crate::error::WebResult;
 
 // The audience-picker DTO and its converters live in `common::visibility` (beside
@@ -62,9 +66,26 @@ use {
         self, AudienceStorage, CurrentPostRevisionSummary, FeedEventStorage, MediaContentLocks,
         PerformUpdateError, PostBookkeepingExpectation, PostCreation, PostLifecycle, PostRecord,
         PostRevisionDetail, PostRevisionMetadata, PostStorage, PostUpdate, PublishUpdate,
-        SiteConfigStorage, ThemeStorage, WriteScope,
+        SiteConfigStorage, ThemeStorage, UserConfigStorage, WriteScope,
     },
 };
+
+/// Resolves omitted audience input once, at the authenticated Post boundary.
+#[cfg(feature = "server")]
+async fn effective_default_audience_targets(
+    user_id: common::ids::UserId,
+) -> Result<Vec<AudienceTarget>, InternalError> {
+    let user_config = expect_context::<Arc<dyn UserConfigStorage>>();
+    let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
+    let default = storage::get_effective_default_audience(
+        user_config.as_ref(),
+        site_config.as_ref(),
+        user_id,
+    )
+    .await
+    .map_err(InternalError::storage)?;
+    Ok(vec![default.into()])
+}
 
 /// Builds structured lifecycle only when the transport explicitly supplied a
 /// publication control. Omission lets an Org header lifecycle take effect.
@@ -227,24 +248,35 @@ fn revision_detail(detail: PostRevisionDetail) -> RevisionHistoryDetail {
     }
 }
 #[cfg(feature = "server")]
+pub(super) fn compact_fallback_label(
+    summary: Option<PostSummary>,
+    rendered_html: &common::render::RenderedHtml,
+    slug: &Slug,
+) -> UnpublishedPostLabel {
+    // Textless rendered HTML falls back to identity, not a forged `PostSummary`
+    // made from the slug.
+    summary
+        .or_else(|| host::render::summarize_rendered_html(rendered_html))
+        .map_or_else(
+            || UnpublishedPostLabel::Slug(slug.clone()),
+            |summary| {
+                let normalized = normalize_summary_whitespace(&summary);
+                let text = truncate_at_first_sentence_or_word_boundary(
+                    &normalized,
+                    MAX_COMPACT_SUMMARY_CHARS,
+                );
+                let Ok(summary) = text.parse() else {
+                    unreachable!("a bounded effective summary remains a valid PostSummary");
+                };
+                UnpublishedPostLabel::Summary(summary)
+            },
+        )
+}
+
+#[cfg(feature = "server")]
 fn unpublished_post_from_record(post: PostRecord) -> UnpublishedPost {
-    // A titleless management row can use the same effective projection as a
-    // permalink, but textless rendered HTML must fall back to identity, not a
-    // forged `PostSummary` made from the slug.
-    let fallback_label = server::effective_summary(&post).map_or_else(
-        || UnpublishedPostLabel::Slug(post.slug.clone()),
-        |summary| {
-            // Management rows retain their compact 100-scalar label budget even
-            // when the effective permalink description is longer.
-            let normalized = normalize_summary_whitespace(&summary);
-            let text =
-                truncate_at_first_sentence_or_word_boundary(&normalized, MAX_COMPACT_SUMMARY_CHARS);
-            let Ok(summary) = text.parse() else {
-                unreachable!("a bounded effective summary remains a valid PostSummary");
-            };
-            UnpublishedPostLabel::Summary(summary)
-        },
-    );
+    let fallback_label =
+        compact_fallback_label(post.summary.clone(), &post.rendered_html, &post.slug);
     let permalink = post.permalink();
     UnpublishedPost {
         post: SavedPost {
@@ -507,6 +539,35 @@ pub async fn get_revision_history_detail(
     Ok(revision_detail(detail))
 }
 
+/// Lists one bounded, fully storage-filtered Manage Posts page.
+#[macros::server(input = Json, skip_all)]
+pub async fn list_managed_posts(
+    state: ManagePublicationState,
+    audience: ManageAudienceFilter,
+    search: String,
+    cursor: Option<ManagePostsCursor>,
+    limit: Option<PageSize>,
+) -> WebResult<ManagePostsPage> {
+    super::manage::list_managed_posts_impl(state, audience, search, cursor, limit).await
+}
+
+/// Resolves the current management selection into exact immutable targets.
+#[macros::server(input = Json, skip_all)]
+pub async fn resolve_management_selection(
+    intent: ManageSelectionIntent,
+) -> WebResult<ManagementSelectionSnapshot> {
+    super::manage::resolve_management_selection_impl(intent).await
+}
+
+/// Applies one exact management snapshot atomically.
+#[macros::server(input = Json, skip_all)]
+pub async fn execute_management_operation(
+    snapshot: ManagementSelectionSnapshot,
+    operation: BulkManageOperation,
+) -> WebResult<MutationOutcome<BulkManageResult>> {
+    super::manage::execute_management_operation_impl(snapshot, operation).await
+}
+
 /// The author-supplied content of a post — the shared RPC input contract for
 /// both [`create`] and [`update`], which differ only in whether a `post_id`
 /// names an existing post. Bundling nests the JSON wire under the parameter
@@ -592,7 +653,7 @@ pub async fn create(post: PostInputs) -> WebResult<MutationOutcome<ClassifiedSav
         let metadata = normalized.metadata;
         let audiences = match metadata.audiences {
             Presence::Present(audiences) => audiences,
-            Presence::Absent => visibility::audience_targets_or_public(None),
+            Presence::Absent => effective_default_audience_targets(auth.user_id).await?,
         };
         validate_org_audiences(&audiences, auth.user_id).await?;
         let published_at = match metadata.lifecycle {
@@ -632,7 +693,10 @@ pub async fn create(post: PostInputs) -> WebResult<MutationOutcome<ClassifiedSav
             body,
             None,
             summary,
-            structured_audiences.unwrap_or_else(|| visibility::audience_targets_or_public(None)),
+            match structured_audiences {
+                Some(audiences) => audiences,
+                None => effective_default_audience_targets(auth.user_id).await?,
+            },
             published_at,
             PostBookkeepingExpectation::default(),
             structured_tags.unwrap_or_default(),
@@ -941,16 +1005,12 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<MutationOutc
     Ok(outcome)
 }
 
-/// Returns the audience-picker selection for a new post: the site-wide
-/// default audience. Used to initialize the editor on the create page.
+/// Returns the Effective Default Audience for a new Post's picker.
 #[macros::server]
 pub async fn get_default_audience_selection() -> WebResult<AudienceSelection> {
-    let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
-    auth::require_auth().await?;
-    let default: AudienceTarget = site_config.get_default_audience().await?.into();
-    Ok(visibility::targets_to_audience_selection(
-        std::slice::from_ref(&default),
-    ))
+    let auth = auth::require_auth().await?;
+    let targets = effective_default_audience_targets(auth.user_id).await?;
+    Ok(visibility::targets_to_audience_selection(&targets))
 }
 
 /// Returns the audience-picker selection for an existing post (its current
@@ -967,7 +1027,7 @@ pub async fn get_audience_selection(post_id: PostId) -> WebResult<AudienceSelect
         .await?
         .ok_or_else(server::not_found_error)?;
     if post.deleted_at.is_some() || post.user_id != auth.user_id {
-        return Err(server::not_found_error());
+        return Err(server::not_found_error()); // cov:ignore: storage viewer filtering rejects these rows before this defensive check
     }
 
     let targets = posts.get_post_audiences(post_id).await?;
@@ -2168,7 +2228,11 @@ mod server_tests {
             publish_at: None,
             tags,
             summary: None,
-            audience: None,
+            audience: Some(common::visibility::AudienceSelection {
+                public: true,
+                subscribers: false,
+                named: vec![],
+            }),
         }
     }
 

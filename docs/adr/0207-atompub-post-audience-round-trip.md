@@ -13,7 +13,7 @@ the server canonicalizes recognized Org metadata out of the stored source.
 
 The server already accepts repeated `JAUNDER_AUDIENCE` Org properties, but the
 Emacs client strips the local metadata block before serialization. An explicit
-local audience therefore disappears: create applies the instance Default
+local audience therefore disappears: create applies the Effective Default
 Audience, and update preserves the Post's prior audience. Re-inserting the
 property into `atom:content` would make audience the sole exception to the
 body-only content contract established by
@@ -52,7 +52,7 @@ as a complete set over audience values in an Org metadata block, following the
 structured-input precedence established by
 [ADR-0155](0155-server-side-org-metadata-block.md). Absence preserves the
 existing contract: an Org header may supply the field; otherwise create applies
-the Default Audience and update preserves the current audience. Empty,
+the Effective Default Audience and update preserves the current audience. Empty,
 duplicate, malformed, unauthorized, and Private-plus-other representations
 reject the complete write.
 

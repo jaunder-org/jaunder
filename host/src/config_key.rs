@@ -250,6 +250,7 @@ macro_rules! user_config_keys {
 
 user_config_keys! {
     DefaultPostFormat => "posts.default_format" : PostFormat, bad: "hieroglyphs";
+    DefaultAudience => "posts.default_audience" : DefaultAudience, bad: "everyone";
     ContentLicense => "content.license" : ContentLicense, bad: "MIT";
 }
 
@@ -407,9 +408,11 @@ mod tests {
                 .validate("hieroglyphs")
                 .is_err()
         );
+        assert!(UserConfigKey::DefaultAudience.validate("public").is_ok());
+        assert!(UserConfigKey::DefaultAudience.validate("everyone").is_err());
         assert!(UserConfigKey::ContentLicense.validate("CC-BY-4.0").is_ok());
         assert!(UserConfigKey::ContentLicense.validate("MIT").is_err());
-        assert_eq!(UserConfigKey::VARIANTS.len(), 2);
+        assert_eq!(UserConfigKey::VARIANTS.len(), 3);
         for key in UserConfigKey::VARIANTS {
             let dotted = key.as_ref();
             let bad = key.known_bad_example();

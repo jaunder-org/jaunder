@@ -1,5 +1,8 @@
 //! Shared SQL-string helpers used by both dialects' assembled (non-placeholder) SQL.
 
+/// Conservative cross-backend bind batch for logically uncapped set operations.
+pub(crate) const SET_OPERATION_BIND_BATCH: usize = 250;
+
 use std::fmt::Display;
 
 use crate::backup::{
@@ -20,8 +23,10 @@ use crate::passkeys::{
 };
 use crate::posts::{
     lifecycle::IdempotencyAdvisoryLockKey,
+    management::StoredPostSearchPattern,
     media::{MediaAdvisoryLockKey, MediaReferenceSnapshotLimit, PersistedMediaSubjectKind},
     models::{PermalinkDateText, PostPublicationClear},
+    search::{PostMutationVersion, StoredPostSearchText},
     tags::TagSlugPrefixPattern,
 };
 use crate::publisher::PublisherGeneration;
@@ -217,6 +222,7 @@ approve_storage_binds!(
     TagSlugPrefixPattern,
     PersistedMediaSubjectKind,
     PostId,
+    PostMutationVersion,
     PostPublicationClear,
     PostTitle,
     RevisionId,
@@ -271,6 +277,8 @@ approve_storage_binds!(
     StoredFeedSemanticFingerprint,
     StoredFeedDiagnostic,
     PublisherGeneration,
+    StoredPostSearchPattern,
+    StoredPostSearchText,
     StoredSessionLabel,
     StoredSiteConfigKey,
     StoredSiteConfigValue,

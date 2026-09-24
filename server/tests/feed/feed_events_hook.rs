@@ -106,6 +106,7 @@ async fn create_published_post_enqueues_expected_feeds(
     #[case] expected_rows: usize,
 ) {
     let env = backend.setup().await;
+    use_public_default(env.site_config(), env.write_scope()).await;
     let app = make_app!(&env, &env.base);
 
     let session = create_user_and_session(
@@ -141,6 +142,7 @@ async fn create_published_post_enqueues_expected_feeds(
 #[tokio::test]
 async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backend) {
     let env = backend.setup().await;
+    use_public_default(env.site_config(), env.write_scope()).await;
     let app = make_app!(&env, &env.base);
 
     let session = create_user_and_session(
@@ -198,6 +200,7 @@ async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backe
 #[tokio::test]
 async fn unpublish_enqueues_site_and_user_and_tag_feeds(#[case] backend: Backend) {
     let env = backend.setup().await;
+    use_public_default(env.site_config(), env.write_scope()).await;
     let app = make_app!(&env, &env.base);
 
     let session = create_user_and_session(
@@ -251,6 +254,7 @@ async fn unpublish_enqueues_site_and_user_and_tag_feeds(#[case] backend: Backend
 #[tokio::test]
 async fn delete_published_post_enqueues_feeds(#[case] backend: Backend) {
     let env = backend.setup().await;
+    use_public_default(env.site_config(), env.write_scope()).await;
     let app = make_app!(&env, &env.base);
 
     let session = create_user_and_session(

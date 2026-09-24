@@ -84,6 +84,7 @@ const AUDITED_TRAITS: &[(&str, &[&str])] = &[
             "soft_delete_post",
             "unpublish_post",
             "set_post_tags",
+            "bulk_mutate_posts",
         ],
     ),
     (

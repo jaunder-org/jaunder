@@ -25,6 +25,7 @@ sha2.workspace = true
 serde_json = "1.0.151"
 # tinyvec 1.13.2 compiles with its alloc-only feature on Rust 1.98.1.
 tinyvec = "=1.13.2"
+unicode-casefold.workspace = true
 unicode-normalization = "0.1.25"
 unicode-segmentation = "1.13.3"
 

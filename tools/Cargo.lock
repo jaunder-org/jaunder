@@ -529,6 +529,7 @@ dependencies = [
  "strum 0.28.0",
  "thiserror 2.0.20",
  "tinyvec",
+ "unicode-casefold",
  "unicode-normalization",
  "unicode-segmentation",
  "url",

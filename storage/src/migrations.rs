@@ -6,13 +6,19 @@ mod tests {
     use std::borrow::Cow;
 
     use crate::DbConnectOptions;
+    use crate::posts::PostDialect;
     use crate::posts::media;
+    use crate::posts::search::{
+        PostMutationVersion, PostSearchBackfillCandidate, StoredPostSearchText,
+        backfill_post_search_projections,
+    };
     use crate::sql::{QueryStorageExt, RowCount};
     use crate::subscriptions::CorruptSubscriberRef;
     use crate::test_support::{
         Backend, CloseablePool, PostgresDbGuard, PostgresTestConfig, backends, sqlite_url,
         unique_postgres_url,
     };
+    use common::ids::PostId;
     use common::visibility::SubscriberRef;
 
     use rstest::*;
@@ -112,6 +118,32 @@ mod tests {
                     media::backfill_post_media_references(pool)
                         .await
                         .expect("startup backfill succeeds");
+                }
+            }
+        }
+
+        async fn backfill_post_search_projections(&self) {
+            match &self.pool {
+                CloseablePool::Sqlite(pool) => backfill_post_search_projections(pool)
+                    .await
+                    .expect("startup search backfill succeeds"),
+                CloseablePool::Postgres(pool) => backfill_post_search_projections(pool)
+                    .await
+                    .expect("startup search backfill succeeds"),
+            }
+        }
+
+        async fn apply_post_search_candidates(&self, candidates: &[PostSearchBackfillCandidate]) {
+            match &self.pool {
+                CloseablePool::Sqlite(pool) => {
+                    <sqlx::Sqlite as PostDialect>::apply_post_search_backfill(pool, candidates)
+                        .await
+                        .expect("SQLite search batch applies");
+                }
+                CloseablePool::Postgres(pool) => {
+                    <sqlx::Postgres as PostDialect>::apply_post_search_backfill(pool, candidates)
+                        .await
+                        .expect("PostgreSQL search batch applies");
                 }
             }
         }
@@ -264,7 +296,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            41
+            42
         );
         assert_eq!(
             db.pool
@@ -840,6 +872,91 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
+    async fn migration_0042_backfills_search_projection_and_rejects_stale_candidates(
+        #[case] backend: Backend,
+    ) {
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(41).await.unwrap();
+        let (insert_user, insert_post) = match &db.pool {
+            CloseablePool::Sqlite(_) => (
+                "INSERT INTO users (user_id, username, password_hash, created_at)
+                 VALUES (604, 'search-backfill-author', 'hash', CURRENT_TIMESTAMP)",
+                "INSERT INTO posts
+                 (post_id, user_id, title, rendered_title, slug, body, format, rendered_html,
+                  created_at, updated_at)
+                 VALUES (605, 604, 'Old Title', 'Old Title', 'legacy-slug', 'body', 'markdown',
+                         '<p>body</p>', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            ),
+            CloseablePool::Postgres(_) => (
+                "INSERT INTO users (user_id, username, password_hash, created_at)
+                 OVERRIDING SYSTEM VALUE
+                 VALUES (604, 'search-backfill-author', 'hash', CURRENT_TIMESTAMP)",
+                "INSERT INTO posts
+                 (post_id, user_id, title, rendered_title, slug, body, format, rendered_html,
+                  created_at, updated_at)
+                 OVERRIDING SYSTEM VALUE
+                 VALUES (605, 604, 'Old Title', 'Old Title', 'legacy-slug', 'body', 'markdown',
+                         '<p>body</p>', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            ),
+        };
+        db.pool.execute(insert_user).await.unwrap();
+        db.pool.execute(insert_post).await.unwrap();
+
+        db.migrate_current().await.unwrap();
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM posts
+                     WHERE post_id = 605 AND search_text IS NULL AND mutation_version = 1",
+                )
+                .await
+                .unwrap(),
+            1,
+            "migration leaves derivation to bounded startup work"
+        );
+
+        let stale = PostSearchBackfillCandidate {
+            post_id: PostId::from(605),
+            mutation_version: PostMutationVersion::initial(),
+            search_text: StoredPostSearchText::from("old title legacy-slug".to_owned()),
+        };
+        db.pool
+            .execute(
+                "UPDATE posts SET title = 'New Title', rendered_title = 'New Title',
+                 mutation_version = 2 WHERE post_id = 605",
+            )
+            .await
+            .unwrap();
+        db.apply_post_search_candidates(&[stale]).await;
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM posts WHERE post_id = 605 AND search_text IS NULL"
+                )
+                .await
+                .unwrap(),
+            1,
+            "a stale derivation cannot overwrite newer Post state"
+        );
+
+        db.backfill_post_search_projections().await;
+        db.backfill_post_search_projections().await;
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM posts
+                     WHERE post_id = 605 AND search_text = 'new title legacy-slug'
+                       AND mutation_version = 2",
+                )
+                .await
+                .unwrap(),
+            1,
+            "startup backfill is idempotent and derives the current normalized value"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
     async fn migration_0034_removes_legacy_theme_rows_after_0033_backfill(
         #[case] backend: Backend,
     ) {
@@ -906,7 +1023,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            41,
+            42,
         );
     }
 
@@ -1378,7 +1495,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            41
+            42
         );
         assert_eq!(
             db.pool

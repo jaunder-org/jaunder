@@ -8,6 +8,7 @@ use common::registration::RegistrationPolicy;
 use common::test_support::{
     parse_bio, parse_display_name, parse_email, parse_invite_ttl_hours, parse_session_label,
 };
+use common::visibility::DefaultAudience;
 use jiff::ToSpan;
 use server_fn::ServerFn;
 use storage::{EmailVerified, ProfileUpdate};
@@ -162,6 +163,65 @@ async fn update_profile_persists_changes(#[case] backend: Backend) {
         "display_name not persisted: {body}"
     );
     assert!(body.contains("My bio"), "bio not persisted: {body}");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn user_default_audience_requires_authentication_and_round_trips(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let (status, _) = post_form(
+        app.clone(),
+        <web::profile::SetDefaultAudience as ServerFn>::PATH,
+        "audience=subscribers",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+
+    let session = create_user_and_session(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let cookie = session.cookie();
+    let (status, body) = post_form(
+        app.clone(),
+        <web::profile::SetDefaultAudience as ServerFn>::PATH,
+        "audience=subscribers",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let (status, body) = post_form(
+        app.clone(),
+        <web::profile::GetDefaultAudience as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let preference: web::profile::DefaultAudiencePreference =
+        serde_json::from_str(&body).expect("default audience preference");
+    assert_eq!(preference.audience, Some(DefaultAudience::Subscribers));
+    assert_eq!(preference.site_audience, DefaultAudience::Private);
+
+    let (status, body) = post_form(
+        app,
+        <web::profile::SetDefaultAudience as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        storage::get_user_default_audience(env.user_config().as_ref(), session.user_id)
+            .await
+            .unwrap(),
+        None
+    );
 }
 
 #[apply(backends)]

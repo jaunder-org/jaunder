@@ -530,7 +530,11 @@ pub async fn collection_post(
     let published_at = create_published_at(&lifecycle, is_draft, request_clock);
     let audiences = match audience_input {
         Presence::Present(audiences) => audiences,
-        Presence::Absent => vec![site_config.get_default_audience().await?.into()],
+        Presence::Absent => vec![
+            storage::get_effective_default_audience(user_config, site_config, auth_user.user_id)
+                .await?
+                .into(),
+        ],
     };
     let idempotency_key = idempotency_key_from_headers(&headers);
 

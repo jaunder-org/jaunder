@@ -12,7 +12,7 @@ use host::{
     metrics,
     retention::Domain,
 };
-use sqlx::{Database, Pool};
+use sqlx::{Database, Pool, QueryBuilder};
 use std::str::FromStr;
 #[cfg(test)]
 use std::sync::Arc;
@@ -23,7 +23,11 @@ use tokio::sync::{Notify, RwLock};
 
 #[cfg(test)]
 use crate::WriteScope;
-use crate::{WriteTransaction, backend::Backend, sql::QueryStorageExt};
+use crate::{
+    WriteTransaction,
+    backend::Backend,
+    sql::{QueryBuilderStorageExt, QueryStorageExt, SET_OPERATION_BIND_BATCH},
+};
 
 /// A nonnegative retry count stored on a feed event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, macros::NumNewtype)]
@@ -638,11 +642,12 @@ where
         feed_paths: &[FeedPath],
     ) -> Result<(), FeedEventError> {
         let connection = DB::write_connection(transaction)?;
-        for feed_path in feed_paths {
-            sqlx::query(INSERT_FEED_EVENT)
-                .bind_storage(feed_path)
-                .execute(&mut *connection)
-                .await?;
+        for feed_paths in feed_paths.chunks(SET_OPERATION_BIND_BATCH) {
+            let mut query = QueryBuilder::<DB>::new("INSERT INTO feed_events (feed_url) ");
+            query.push_values(feed_paths, |mut row, feed_path| {
+                row.push_storage_bind(feed_path);
+            });
+            query.build().execute(&mut *connection).await?;
         }
         Ok(())
     }

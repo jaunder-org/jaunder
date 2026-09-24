@@ -7,6 +7,7 @@ use crate::posts::{
     lifecycle::{self, PostBookkeepingRow},
     media::{self, MediaReferenceEvidence, PostMediaReferenceBackfill},
     models::PostPublicationClear,
+    search::{PostMutationVersion, PostSearchBackfillCandidate, StoredPostSearchText},
     tags::{self, PostTag, PostTagDiff},
     visibility,
 };
@@ -17,6 +18,9 @@ use crate::{
 };
 use common::idempotency_key::IdempotencyKey;
 use common::ids::{PostId, TagId, UserId};
+use common::pagination::RowLimit;
+use common::post_title::PostTitle;
+use common::slug::Slug;
 use common::tag::TagLabel;
 use common::time::UtcInstant;
 type MediaRefRow = (
@@ -73,9 +77,12 @@ async fn apply_post_update(
     conn: &mut sqlx::SqliteConnection,
     post_id: PostId,
     input: &UpdatePostInput,
+    search_slug: &Slug,
     tag_diff: PostTagDiff<'_>,
 ) -> Result<(), UpdatePostError> {
     let now = input.request_clock;
+    let search_text: StoredPostSearchText =
+        common::post_search::post_search_projection(input.rendered.title(), search_slug).into();
     lifecycle::capture_complete_post_revision::<Sqlite>(conn, post_id, now).await?;
     let publication_clear = PostPublicationClear::for_update(input.publish);
     let explicit_published_at = match input.publish {
@@ -86,11 +93,13 @@ async fn apply_post_update(
         "UPDATE posts SET title = $1, slug = CASE WHEN published_at IS NULL THEN $2 ELSE slug END,
          body = $4, format = $5, rendered_html = $6, rendered_title = $3,
          published_at = CASE WHEN $7 THEN NULL WHEN $8 IS NOT NULL THEN $9 ELSE COALESCE(published_at, $10) END,
-         updated_at = $11, summary = $12 WHERE post_id = $13",
+         updated_at = $11, summary = $12, search_text = $13,
+         mutation_version = mutation_version + 1 WHERE post_id = $14",
     )
     .bind_storage(input.rendered.title()).bind_storage(&input.slug).bind_storage(input.rendered.rendered_title()).bind_storage(input.rendered.body()).bind_storage(input.rendered.format())
     .bind_storage(input.rendered.rendered_html()).bind_storage(publication_clear).bind_storage(explicit_published_at)
-    .bind_storage(explicit_published_at).bind_storage(now).bind_storage(now).bind_storage(input.summary.as_ref()).bind_storage(post_id)
+    .bind_storage(explicit_published_at).bind_storage(now).bind_storage(now).bind_storage(input.summary.as_ref())
+    .bind_storage(search_text).bind_storage(post_id)
     .execute(&mut *conn)
     .await
     .map_err(|error| match error {
@@ -130,6 +139,10 @@ impl PostDialect for Sqlite {
     /// `COLLATE` is needed here. See [`PostDialect::TAGS_SUBQUERY`] for why the
     /// Postgres twin does need one, and keep the two in sync.
     const TAGS_SUBQUERY: &'static str = "COALESCE((SELECT json_group_array(json_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display) ORDER BY t.tag_slug) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]')";
+
+    const MANAGED_AUDIENCES_SUBQUERY: &'static str = "COALESCE((SELECT json_group_array(json_object('target_kind', tk.name, 'audience_id', pa.audience_id) ORDER BY tk.name, pa.audience_id) FROM post_audiences pa JOIN target_kinds tk ON tk.kind_id = pa.target_kind_id WHERE pa.post_id = p.post_id), '[]')";
+
+    const BULK_LOCK_SUFFIX: &'static str = "";
 
     const PERMALINK_DATE_CLAUSE: &'static str = "date(COALESCE(p.published_at, p.created_at)) = $3";
 
@@ -279,7 +292,12 @@ impl PostDialect for Sqlite {
                 changed: false,
             });
         }
-        apply_post_update(conn, post_id, input, tag_diff).await?;
+        let search_slug = if existing.published_at.is_none() {
+            &input.slug
+        } else {
+            &existing.slug
+        };
+        apply_post_update(conn, post_id, input, search_slug, tag_diff).await?;
         let record = fetch_post(conn, post_id).await?;
         Ok(PostMutation {
             record,
@@ -317,6 +335,20 @@ impl PostDialect for Sqlite {
             user_id,
             lifecycle::PostLifecycleChange::SoftDelete,
             now,
+        )
+        .await
+    }
+
+    async fn bulk_mutate_posts(
+        transaction: &mut WriteTransaction,
+        user_id: UserId,
+        snapshot: &crate::ManagementSelectionSnapshot,
+        operation: &crate::BulkPostOperation,
+        now: UtcInstant,
+    ) -> Result<crate::BulkPostMutationEvidence, crate::BulkPostMutationError> {
+        let connection = sqlite_connection(transaction)?;
+        crate::posts::bulk::apply_bulk_post_operation::<Sqlite>(
+            connection, user_id, snapshot, operation, now,
         )
         .await
     }
@@ -363,12 +395,8 @@ impl PostDialect for Sqlite {
         if diff.to_add.is_empty() && diff.to_remove.is_empty() {
             return Ok(());
         }
-        lifecycle::capture_complete_post_revision::<Sqlite>(
-            &mut *connection,
-            post_id,
-            UtcInstant::now(),
-        )
-        .await?;
+        let now = UtcInstant::now();
+        lifecycle::capture_complete_post_revision::<Sqlite>(&mut *connection, post_id, now).await?;
         for label in diff.to_add {
             let tag_id = sqlx::query_scalar::<_, TagId>(tags::UPSERT_TAG_RETURNING_ID)
                 .bind_storage(label.slug())
@@ -388,6 +416,69 @@ impl PostDialect for Sqlite {
                 .execute(&mut *connection)
                 .await?;
         }
+        sqlx::query(
+            "UPDATE posts SET updated_at = $1, mutation_version = mutation_version + 1
+             WHERE post_id = $2",
+        )
+        .bind_storage(now)
+        .bind_storage(post_id)
+        .execute(&mut *connection)
+        .await?;
+        Ok(())
+    }
+
+    async fn list_post_search_backfill_candidates(
+        pool: &Pool<Self>,
+        cursor: Option<PostId>,
+        limit: RowLimit,
+    ) -> sqlx::Result<Vec<(PostId, Option<PostTitle>, Slug, PostMutationVersion)>> {
+        if let Some(cursor) = cursor {
+            sqlx::query_as(
+                "SELECT post_id, title, slug, mutation_version FROM posts
+                 WHERE search_text IS NULL AND post_id > $1 ORDER BY post_id LIMIT $2",
+            )
+            .bind_storage(cursor)
+            .bind_storage(limit)
+            .fetch_all(pool)
+            .await
+        } else {
+            sqlx::query_as(
+                "SELECT post_id, title, slug, mutation_version FROM posts
+                 WHERE search_text IS NULL ORDER BY post_id LIMIT $1",
+            )
+            .bind_storage(limit)
+            .fetch_all(pool)
+            .await
+        }
+    }
+
+    async fn apply_post_search_backfill(
+        pool: &Pool<Self>,
+        candidates: &[PostSearchBackfillCandidate],
+    ) -> sqlx::Result<()> {
+        if candidates.is_empty() {
+            return Ok(());
+        }
+        let mut query = QueryBuilder::<Sqlite>::new(
+            "WITH backfill(post_id, mutation_version, search_text) AS (",
+        );
+        query.push_values(candidates, |mut values, candidate| {
+            values
+                .push_storage_bind(candidate.post_id)
+                .push_storage_bind(candidate.mutation_version)
+                .push_storage_bind(candidate.search_text.clone());
+        });
+        query.push(
+            ") UPDATE posts SET search_text = (
+                 SELECT b.search_text FROM backfill b WHERE b.post_id = posts.post_id
+             )
+             WHERE search_text IS NULL AND EXISTS (
+                 SELECT 1 FROM backfill b
+                 WHERE b.post_id = posts.post_id
+                   AND b.mutation_version = posts.mutation_version
+             )",
+        );
+        query.build().execute(pool).await?;
         Ok(())
     }
 
