@@ -722,6 +722,20 @@ Body";
     }
 
     #[test]
+    fn repeated_org_titles_reject_even_with_a_structured_title() {
+        let result = normalize_org(
+            "#+TITLE: First\n#+TITLE: Second\nBody",
+            OrgStructuredMetadata {
+                title: Presence::Present("Structured".parse().unwrap()),
+                ..OrgStructuredMetadata::default()
+            },
+            OrgOperation::Create,
+            clock(),
+        );
+        assert!(matches!(result, Err(OrgMetadataError::Invalid(_))));
+    }
+
+    #[test]
     fn structured_presence_wins_without_an_explicit_clear_state() {
         let normalized = normalize_org(
             "#+TITLE: Header\n#+DESCRIPTION: Header summary\n#+KEYWORDS: rust\nBody",

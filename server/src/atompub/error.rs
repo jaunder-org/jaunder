@@ -236,6 +236,12 @@ impl From<common::post_body::InvalidPostBody> for HandlerError {
     }
 }
 
+impl From<super::mapping::InvalidPostFields> for HandlerError {
+    fn from(_: super::mapping::InvalidPostFields) -> Self {
+        HandlerError::BadRequest
+    }
+}
+
 impl From<storage::PerformCreationError> for HandlerError {
     fn from(err: storage::PerformCreationError) -> Self {
         match err {

@@ -271,13 +271,13 @@ async fn update_post_rejects(
         .await
         .unwrap();
     let app = make_app!(&env, &env.base);
-    let cookie = create_user_and_session(
+    let session = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
         std::sync::Arc::clone(&env.sessions()),
         env.write_scope(),
     )
-    .await
-    .cookie();
+    .await;
+    let cookie = session.cookie();
 
     let (status, body) = create_post_json(
         app.clone(),
@@ -309,6 +309,87 @@ async fn update_post_rejects(
 
     assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
     assert!(body.contains(expected), "body: {body}");
+    let retained = env
+        .posts()
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::local(session.user_id),
+        )
+        .await
+        .expect("read after rejected update")
+        .expect("previous Post remains");
+    assert_eq!(retained.body, "original\n");
+    assert_eq!(retained.title, None);
+}
+
+#[apply(backends_matrix)]
+#[case::derived_markdown(
+    "# First\u{2028}Second\nBody",
+    "markdown",
+    "post title must be non-empty and contain no line breaks"
+)]
+#[case::repeated_org_header(
+    "#+TITLE: First\n#+TITLE: Second\nBody",
+    "org",
+    "invalid Org metadata: invalid TITLE"
+)]
+#[tokio::test]
+async fn invalid_post_title_update_reports_validation_without_mutating_post(
+    backend: Backend,
+    #[case] source: &str,
+    #[case] format: &str,
+    #[case] expected: &str,
+) {
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let cookie = session.cookie();
+    let (status, body) = create_post_json(
+        app.clone(),
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(parse_post_body("Original body"), PostFormat::Markdown)
+        },
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created = confirmed_created_post(&body);
+    let (status, body) = post_json(
+        app,
+        <web::posts::Update as ServerFn>::PATH,
+        serde_json::json!({
+            "post_id": created.post_id,
+            "post": {"body": source, "format": format, "publish": false}
+        }),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    let error: serde_json::Value = serde_json::from_str(&body).expect("validation JSON");
+    assert_eq!(
+        error
+            .pointer("/validation/message")
+            .and_then(|v| v.as_str()),
+        Some(expected)
+    );
+    let retained = env
+        .posts()
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::local(session.user_id),
+        )
+        .await
+        .expect("read after rejection")
+        .expect("original Post remains");
+    assert_eq!(retained.body, "Original body\n");
+    assert_eq!(retained.title, None);
+    assert_eq!(retained.format, PostFormat::Markdown);
 }
 
 #[apply(backends)]

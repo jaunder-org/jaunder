@@ -36,7 +36,7 @@ necessary compatibility.
     Task 2. Project the draft title ADR and glossary into `docs/ARCHITECTURE.md`
     and `CONTEXT.md` in this slice.
 
-- [ ] **2. Reject malformed titles at web, Org, and AtomPub ingress.**
+- [x] **2. Reject malformed titles at web, Org, and AtomPub ingress.**
   - Contract: use Task 1's already-compiled service error projections;
     distinguish invalid explicit AtomPub title from absence rather than using
     `.ok()`. Blank AtomPub `<title>` without any separator still means absent.
