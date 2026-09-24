@@ -341,10 +341,7 @@ async function verifySeededManifest(
           },
         );
         expect(audience.status()).toBe(200);
-        expect(await audience.json()).toEqual({
-          base: post.visibility,
-          named: [],
-        });
+        expect(await audience.json()).toEqual(audienceForWire(post.visibility));
         if (post.publishedAt === null) {
           expect(entry!).toMatch(/<app:draft>yes<\/app:draft>/i);
         } else {
