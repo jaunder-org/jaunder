@@ -1,0 +1,15 @@
+[package]
+name = "highlight-probe"
+version = "0.0.0"
+edition = "2024"
+
+[workspace]
+
+[dependencies]
+tree-sitter = "0.27.0"
+tree-sitter-highlight = "0.27.0"
+tree-sitter-elisp = "1.7.2"
+tree-sitter-haskell = "0.23.1"
+html-escape = "0.2.15"
+orgize = "0.10.0-alpha.10"
+pulldown-cmark = "0.13.4"
