@@ -8,6 +8,7 @@
 
 use std::env;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -53,11 +54,25 @@ fn rejects_test_helper(diagnostic: &str) -> bool {
         && (diagnostic.contains("could not find") || diagnostic.contains("gated"))
 }
 
-fn manifest(common: &Path) -> String {
+fn manifest(common: &Path, patches: &str) -> String {
     format!(
-        "[package]\nname = \"rendered-html-boundary-fixture\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\ncommon = {{ path = {common:?}, default-features = false }}\n",
+        "[package]\nname = \"rendered-html-boundary-fixture\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\ncommon = {{ path = {common:?}, default-features = false }}\n\n{patches}",
         common = common.display().to_string(),
     )
+}
+
+fn root_registry_patches(root: &Path) -> io::Result<String> {
+    let workspace = fs::read_to_string(root.join("Cargo.toml"))?;
+    let (_, following) = workspace.split_once("[patch.crates-io]\n").ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "workspace registry patches are missing",
+        )
+    })?;
+    let entries = following
+        .split_once("\n[")
+        .map_or(following, |(table, _)| table);
+    Ok(format!("[patch.crates-io]\n{}\n", entries.trim_end()))
 }
 
 fn cargo_command(manifest: &Path, target: &Path, cargo_home: &Path) -> Command {
@@ -95,7 +110,10 @@ fn prepare_fixture(root: &Path, temporary: &Path) -> std::io::Result<(PathBuf, P
     let manifest_path = temporary.join("Cargo.toml");
     let source_path = temporary.join("src/lib.rs");
     fs::create_dir(temporary.join("src"))?;
-    fs::write(&manifest_path, manifest(&root.join("common")))?;
+    fs::write(
+        &manifest_path,
+        manifest(&root.join("common"), &root_registry_patches(root)?),
+    )?;
     // Keep downstream feature resolution independent while anchoring transitive
     // versions to the repository's reviewed dependency graph.
     fs::copy(root.join("Cargo.lock"), temporary.join("Cargo.lock"))?;
@@ -187,7 +205,7 @@ mod tests {
 
     #[test]
     fn standalone_manifest_disables_default_features() {
-        let rendered = manifest(Path::new("/repo/common"));
+        let rendered = manifest(Path::new("/repo/common"), "[patch.crates-io]\n");
         assert!(rendered.contains("default-features = false"));
         assert!(rendered.contains("path = \"/repo/common\""));
         assert!(!rendered.contains("tinyvec"));
@@ -199,6 +217,11 @@ mod tests {
         fs::create_dir(root.path().join("common")).expect("common directory");
         fs::write(root.path().join("Cargo.lock"), "reviewed dependency graph")
             .expect("root lockfile");
+        fs::write(
+            root.path().join("Cargo.toml"),
+            "[package]\nname = \"root\"\n[patch.crates-io]\norgize = { git = \"https://github.com/jaunder-org/orgize\", rev = \"pinned\" }\n[workspace.lints]\n",
+        )
+        .expect("root manifest");
         let fixture = tempfile::tempdir().expect("fixture");
 
         let (manifest_path, source_path) =
@@ -209,11 +232,10 @@ mod tests {
             "reviewed dependency graph"
         );
         assert!(source_path.parent().expect("source parent").is_dir());
-        assert!(
-            fs::read_to_string(manifest_path)
-                .expect("fixture manifest")
-                .contains(root.path().join("common").to_string_lossy().as_ref())
-        );
+        let manifest = fs::read_to_string(manifest_path).expect("fixture manifest");
+        assert!(manifest.contains(root.path().join("common").to_string_lossy().as_ref()));
+        assert!(manifest.contains("[patch.crates-io]\norgize = { git ="));
+        assert!(!manifest.contains("[workspace.lints]"));
     }
 
     #[test]
