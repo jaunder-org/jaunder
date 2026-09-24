@@ -778,6 +778,36 @@ mod tests {
     }
 
     #[test]
+    fn switching_without_a_projected_header_preserves_author_source() {
+        Owner::new().with(|| {
+            let state = ComposeState::new();
+            state.format.set(PostFormat::Org);
+            state.body.set_value("#+TITLE: Authored\n\nOrg content");
+
+            state.switch_format(PostFormat::Markdown);
+
+            assert_eq!(state.body.value(), "#+TITLE: Authored\n\nOrg content");
+        });
+    }
+
+    #[test]
+    fn switching_after_deleting_the_title_keeps_the_remaining_body() {
+        Owner::new().with(|| {
+            let state = ComposeState::new();
+            let mut fetched = crate::posts::render::test_fixtures::sample_post();
+            fetched.format = PostFormat::Org;
+            fetched.title = Some("Title".parse().unwrap());
+            fetched.body = "Org content".parse().unwrap();
+            state.seed_from(&fetched).unwrap();
+            state.body.set_value("Org content");
+
+            state.switch_format(PostFormat::Markdown);
+
+            assert_eq!(state.body.value(), "Org content");
+        });
+    }
+
+    #[test]
     fn tag_interactions_make_even_an_empty_collection_explicit() {
         Owner::new().with(|| {
             let state = ComposeState::new();
