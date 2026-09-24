@@ -133,18 +133,18 @@ fn preserved_non_org_title(
     old_title: Option<&PostTitle>,
     format: PostFormat,
     body: &PostBody,
-) -> Option<PostTitle> {
+) -> Result<Option<PostTitle>, common::post_title::InvalidPostTitle> {
     if format == PostFormat::Org || old_format == PostFormat::Org {
-        return None;
+        return Ok(None);
     }
-    let old_heading = common::render::derive_post_naming(None, old_body, &old_format).0;
-    let new_heading = common::render::derive_post_naming(None, body, &format).0;
+    let old_heading = common::render::derive_post_naming(None, old_body, &old_format)?.0;
+    let new_heading = common::render::derive_post_naming(None, body, &format)?.0;
     if old_heading != new_heading && (old_heading.is_some() || new_heading.is_some()) {
-        return None;
+        return Ok(None);
     }
-    (old_title != old_heading.as_ref())
+    Ok((old_title != old_heading.as_ref())
         .then(|| old_title.cloned())
-        .flatten()
+        .flatten())
 }
 
 #[cfg(feature = "server")]
@@ -940,7 +940,7 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<MutationOutc
             )
             .await?
             .filter(|existing| existing.user_id == auth.user_id && existing.deleted_at.is_none())
-            .and_then(|existing| {
+            .map(|existing| {
                 preserved_non_org_title(
                     existing.format,
                     &existing.body,
@@ -949,6 +949,9 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<MutationOutc
                     &body,
                 )
             })
+            .transpose()
+            .map_err(|error| InternalError::validation(error.to_string()))?
+            .flatten()
     };
 
     let (body, title, summary, audiences, publish, expectations, new_tags) = if format
@@ -1475,7 +1478,14 @@ mod tests {
 
     #[test]
     fn separately_supplied_titles_survive_only_unchanged_non_org_headings() {
-        use super::{PostFormat, preserved_non_org_title};
+        use super::{PostBody, PostFormat, PostTitle, preserved_non_org_title as try_preserve};
+        let preserved_non_org_title = |old_format: PostFormat,
+                                       old_body: &PostBody,
+                                       old_title: Option<&PostTitle>,
+                                       format: PostFormat,
+                                       body: &PostBody| {
+            try_preserve(old_format, old_body, old_title, format, body).unwrap()
+        };
         let title = "External title".parse().unwrap();
         let plain = parse_post_body("Plain content");
         let edited = parse_post_body("Edited content");
@@ -1544,7 +1554,15 @@ mod tests {
             Some(title.clone()),
             "non-Org format switches retain separate titles without a new heading"
         );
-        let derived: super::PostTitle = "New heading".parse().unwrap();
+    }
+
+    #[test]
+    fn derived_titles_follow_heading_changes_and_invalid_headings_fail() {
+        use super::{PostFormat, PostTitle, preserved_non_org_title};
+        let derived: PostTitle = "New heading".parse().unwrap();
+        let heading = parse_post_body("# New heading\n\nEdited content");
+        let edited = parse_post_body("Edited content");
+        let changed_heading = parse_post_body("# Changed heading\n\nEdited content");
         assert_eq!(
             preserved_non_org_title(
                 PostFormat::Markdown,
@@ -1552,7 +1570,8 @@ mod tests {
                 Some(&derived),
                 PostFormat::Markdown,
                 &edited
-            ),
+            )
+            .unwrap(),
             None,
             "deleting an authored heading still clears its derived title"
         );
@@ -1563,9 +1582,22 @@ mod tests {
                 Some(&derived),
                 PostFormat::Markdown,
                 &changed_heading
-            ),
+            )
+            .unwrap(),
             None,
             "a matching separate title changes with its first heading too"
+        );
+        let invalid_heading = parse_post_body("# First\u{0085}Second\nBody");
+        assert!(
+            preserved_non_org_title(
+                PostFormat::Markdown,
+                &edited,
+                Some(&derived),
+                PostFormat::Markdown,
+                &invalid_heading
+            )
+            .is_err(),
+            "invalid titles must not silently fall back to the old one"
         );
     }
 
