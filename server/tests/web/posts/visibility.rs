@@ -15,7 +15,8 @@ use rstest_reuse::*;
 
 use crate::helpers::{
     confirmed_created_post, create_post_json, create_session_for, create_user_and_session,
-    make_app, post_form, post_json, post_json_with_credentials, update_post_json,
+    make_app, post_form, post_json, post_json_with_credentials, set_public_default_audience,
+    update_post_json,
 };
 use storage::test_support::{
     Backend, SeedRawPost, SeedUser, SeededPost, backends, backends_matrix,
@@ -160,6 +161,9 @@ async fn unauthenticated_requests(
 #[tokio::test]
 async fn endpoint_rejects_unauthenticated(backend: Backend, #[case] endpoint: UnauthEndpoint) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
 
     for (status, body) in unauthenticated_requests(app.clone(), endpoint).await {
@@ -172,6 +176,9 @@ async fn endpoint_rejects_unauthenticated(backend: Backend, #[case] endpoint: Un
 #[tokio::test]
 async fn get_post_returns_draft_to_author_only(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let author = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -270,6 +277,9 @@ async fn get_post_returns_draft_to_author_only(#[case] backend: Backend) {
 #[tokio::test]
 async fn get_post_preview_shows_draft_to_author_only(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let author_cookie = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -328,6 +338,9 @@ async fn get_post_preview_shows_draft_to_author_only(#[case] backend: Backend) {
 #[tokio::test]
 async fn get_post_hides_drafts_from_guests(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let author = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -379,6 +392,9 @@ async fn get_post_returns_scheduled_post_at_canonical_permalink_to_author(
     #[case] backend: Backend,
 ) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let author = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -503,6 +519,9 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
     use common::visibility::AudienceTarget;
 
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
 
     let author = SeedUser::new()
@@ -655,6 +674,9 @@ async fn single_post_permalink_hides_subscribers_post_from_anonymous(#[case] bac
     use common::visibility::AudienceTarget;
 
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let author = SeedUser::new()
         .seed(std::sync::Arc::clone(&env.users()), env.write_scope())

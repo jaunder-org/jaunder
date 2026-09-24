@@ -81,7 +81,7 @@ async fn default_audience_selection_rejects_unauthenticated(#[case] backend: Bac
 
 #[apply(backends)]
 #[tokio::test]
-async fn post_audience_selection_returns_public_for_new_post(#[case] backend: Backend) {
+async fn post_audience_selection_returns_private_for_new_post(#[case] backend: Backend) {
     let env = backend.setup().await;
     let app = make_app!(&env, &env.base);
     let cookie = author_with_cookie(env.users(), env.sessions(), env.write_scope()).await;
@@ -108,9 +108,8 @@ async fn post_audience_selection_returns_public_for_new_post(#[case] backend: Ba
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let selection: AudienceSelection = serde_json::from_str(&body).unwrap();
-    // A post created with no audience field defaults to Public.
-    assert!(selection.public);
-    assert!(!selection.subscribers);
+    // With no configured defaults, an omitted audience resolves to Private.
+    assert_eq!(selection.base, AudienceBase::Private);
     assert!(selection.named.is_empty());
 }
 

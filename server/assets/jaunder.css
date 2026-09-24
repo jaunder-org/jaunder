@@ -2186,6 +2186,124 @@
   }
 }
 
+/* ─── Manage Posts ─── */
+.j-manage-page {
+  display: grid;
+  gap: 14px;
+  max-width: 980px;
+  margin: 0 auto;
+}
+
+.j-manage-filters,
+.j-manage-toolbar,
+.j-manage-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px;
+  padding: 14px;
+  border: 1px var(--border-style) var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.j-manage-filters .j-form-field {
+  flex: 1 1 180px;
+  margin: 0;
+}
+
+.j-manage-toolbar {
+  align-items: center;
+}
+
+.j-manage-toolbar strong {
+  margin-right: auto;
+}
+
+.j-manage-list {
+  display: grid;
+  gap: 1px;
+  padding: 0;
+  margin: 0;
+  overflow: hidden;
+  border: 1px var(--border-style) var(--line);
+  border-radius: var(--radius);
+  background: var(--line);
+  list-style: none;
+}
+
+.j-manage-post {
+  display: grid;
+  grid-template-columns: minmax(220px, 2fr) auto minmax(120px, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 10px 12px;
+  background: var(--surface);
+  font-size: 13px;
+}
+
+.j-manage-select {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 9px;
+}
+
+.j-manage-title,
+.j-manage-audience {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.j-manage-post time,
+.j-manage-audience {
+  color: var(--muted);
+}
+
+.j-manage-actions {
+  white-space: nowrap;
+}
+
+.j-manage-confirm {
+  position: sticky;
+  bottom: 16px;
+  z-index: 4;
+  align-items: stretch;
+  flex-direction: column;
+  box-shadow: var(--shadow);
+}
+
+.j-manage-confirm h2,
+.j-manage-confirm p {
+  margin: 0;
+}
+
+.j-manage-page > .success {
+  color: var(--ink);
+}
+
+@media (max-width: 720px) {
+  .j-manage-page {
+    padding: 12px 14px;
+  }
+
+  .j-manage-post {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .j-manage-post time,
+  .j-manage-audience,
+  .j-manage-actions {
+    grid-column: 1 / -1;
+  }
+
+  .j-manage-toolbar .j-btn {
+    flex: 1 1 9rem;
+  }
+}
+
 /* ─── Post Revision history ─── */
 .j-history-table-wrap {
   overflow-x: auto;

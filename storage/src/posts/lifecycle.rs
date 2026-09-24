@@ -11,6 +11,7 @@ use crate::posts::models::{
     PublishUpdate, RenderedHtml, RenderedPostTitle, UpdatePostInput,
     validate_rendered_title_presence,
 };
+use crate::posts::search::StoredPostSearchText;
 use crate::posts::store::PostDialect;
 use crate::posts::tags;
 use crate::posts::visibility;
@@ -20,6 +21,7 @@ use common::idempotency_key::IdempotencyKey;
 use common::ids::{AudienceId, PostId, RevisionId, UserId};
 use common::pagination::{PageSize, RowLimit};
 use common::post_body::PostBody;
+use common::post_search::post_search_projection;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
 use common::render::PostFormat;
@@ -98,7 +100,8 @@ where
         match change {
             PostLifecycleChange::Publish => {
                 sqlx::query(
-                    "UPDATE posts SET published_at = $1, updated_at = $1 WHERE post_id = $2",
+                    "UPDATE posts SET published_at = $1, updated_at = $1,
+                     mutation_version = mutation_version + 1 WHERE post_id = $2",
                 )
                 .bind_storage(now)
                 .bind_storage(post_id)
@@ -106,15 +109,19 @@ where
                 .await?;
             }
             PostLifecycleChange::SoftDelete => {
-                sqlx::query("UPDATE posts SET deleted_at = $1 WHERE post_id = $2")
-                    .bind_storage(now)
-                    .bind_storage(post_id)
-                    .execute(&mut *connection)
-                    .await?;
+                sqlx::query(
+                    "UPDATE posts SET deleted_at = $1, mutation_version = mutation_version + 1
+                     WHERE post_id = $2",
+                )
+                .bind_storage(now)
+                .bind_storage(post_id)
+                .execute(&mut *connection)
+                .await?;
             }
             PostLifecycleChange::Unpublish => {
                 sqlx::query(
-                    "UPDATE posts SET published_at = NULL, updated_at = $1 WHERE post_id = $2",
+                    "UPDATE posts SET published_at = NULL, updated_at = $1,
+                     mutation_version = mutation_version + 1 WHERE post_id = $2",
                 )
                 .bind_storage(now)
                 .bind_storage(post_id)
@@ -528,9 +535,11 @@ where
         return Err(CreatePostError::IdempotencyConflict(post_id));
     }
 
+    let search_text: StoredPostSearchText =
+        post_search_projection(input.rendered.title(), &input.slug).into();
     let post_id = sqlx::query_scalar::<_, PostId>(
-        "INSERT INTO posts (user_id, title, rendered_title, slug, body, format, rendered_html, created_at, updated_at, published_at, summary)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        "INSERT INTO posts (user_id, title, rendered_title, slug, search_text, body, format, rendered_html, created_at, updated_at, published_at, summary)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
          RETURNING post_id",
     )
     .bind_storage(input.user_id)
@@ -539,6 +548,7 @@ where
     .bind_storage(input.rendered.title())
     .bind_storage(input.rendered.rendered_title())
     .bind_storage(&input.slug)
+    .bind_storage(search_text)
     .bind_storage(input.rendered.body())
     .bind_storage(input.rendered.format())
     .bind_storage(input.rendered.rendered_html())

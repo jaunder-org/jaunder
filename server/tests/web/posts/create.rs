@@ -13,7 +13,7 @@ use rstest_reuse::*;
 
 use crate::helpers::{
     confirmed_created_post, create_post_json, create_user_and_session, make_app, post_form,
-    post_json,
+    post_json, set_public_default_audience,
 };
 use storage::test_support::{Backend, backends, backends_matrix, confirmed_for};
 
@@ -38,6 +38,9 @@ async fn create_audience_confirmed(
 #[tokio::test]
 async fn create_post_persists_rendered_published_post(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let session = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -209,6 +212,9 @@ async fn create_post_retries_slug_conflicts_for_same_user(#[case] backend: Backe
 #[tokio::test]
 async fn create_post_accepts_slug_override_and_saves_draft(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let session = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -263,6 +269,9 @@ async fn create_post_accepts_slug_override_and_saves_draft(#[case] backend: Back
 #[tokio::test]
 async fn create_post_accepts_titleless_body(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let cookie = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -305,6 +314,9 @@ async fn create_post_accepts_titleless_body(#[case] backend: Backend) {
 #[tokio::test]
 async fn create_post_extracts_markdown_heading_title(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let cookie = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -411,6 +423,9 @@ async fn create_post_rejects(
 #[tokio::test]
 async fn create_post_with_future_publish_at_is_scheduled(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let cookie = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -475,6 +490,9 @@ async fn create_post_with_future_publish_at_is_scheduled(#[case] backend: Backen
 #[tokio::test]
 async fn create_post_publish_without_publish_at_is_live_now(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let cookie = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -540,6 +558,9 @@ async fn create_post_publish_without_publish_at_is_live_now(#[case] backend: Bac
 #[tokio::test]
 async fn create_post_applies_tags_from_param(#[case] backend: Backend) {
     let (env, cookie) = login_and_env(backend).await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
 
     let (status, body) = create_post_json(

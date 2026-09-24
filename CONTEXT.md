@@ -147,6 +147,12 @@ Post, readable only by its owner. Distinct from an AtomPub **Entry** and from
 inbound `ajr_entry_versions`. _Avoid_: edit event (a no-op write creates no
 revision), backup (revisions are included in backups but are not backups).
 
+**Management Selection Snapshot**: The exact, owner-scoped set of Post IDs and
+mutation versions confirmed for one Manage Posts bulk operation. It does not
+re-run filters during execution, absorb later matching Posts, or silently drop a
+stale, Deleted, missing, or foreign target. _Avoid_: saved filter (the snapshot
+is immutable mutation intent, not a reusable query).
+
 **App Password**: A named, individually-revocable credential a user mints for a
 non-browser client (e.g. MarsEdit) to authenticate against machine-facing APIs.
 It is not the user's login password; it is an opaque token presented as the

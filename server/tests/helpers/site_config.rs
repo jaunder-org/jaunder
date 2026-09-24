@@ -3,6 +3,28 @@ use std::sync::Arc;
 use host::config_key::SiteConfigKey;
 use storage::{SiteConfigStorage, WriteScope};
 
+/// Configures the legacy public default for tests whose subject requires public Posts.
+pub async fn set_public_default_audience(
+    site_config: Arc<dyn SiteConfigStorage>,
+    write_scope: WriteScope,
+) -> anyhow::Result<()> {
+    storage::test_support::confirmed(
+        write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    site_config
+                        .set_default_audience(
+                            transaction,
+                            &common::visibility::DefaultAudience::Public,
+                        )
+                        .await
+                })
+            })
+            .await?,
+    );
+    Ok(())
+}
+
 /// Persists a site-config fixture through the same caller-owned write boundary as production.
 pub async fn set_site_config(
     site_config: Arc<dyn SiteConfigStorage>,

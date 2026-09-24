@@ -29,6 +29,10 @@ use common::{
 
 use common::seed::{AuthoredPost, Page, PageCursor, PublicPresentation};
 
+use super::manage::{
+    BulkManageOperation, BulkManageResult, BulkSelectionSnapshot, ManageAudienceFilter,
+    ManagePostsCursor, ManagePostsPage, ManagePublicationState, ManageSelectionIntent,
+};
 use crate::error::WebResult;
 
 // The audience-picker DTO and its converters live in `common::visibility` (beside
@@ -244,24 +248,35 @@ fn revision_detail(detail: PostRevisionDetail) -> RevisionHistoryDetail {
     }
 }
 #[cfg(feature = "server")]
+pub(super) fn compact_fallback_label(
+    summary: Option<PostSummary>,
+    rendered_html: &common::render::RenderedHtml,
+    slug: &Slug,
+) -> UnpublishedPostLabel {
+    // Textless rendered HTML falls back to identity, not a forged `PostSummary`
+    // made from the slug.
+    summary
+        .or_else(|| host::render::summarize_rendered_html(rendered_html))
+        .map_or_else(
+            || UnpublishedPostLabel::Slug(slug.clone()),
+            |summary| {
+                let normalized = normalize_summary_whitespace(&summary);
+                let text = truncate_at_first_sentence_or_word_boundary(
+                    &normalized,
+                    MAX_COMPACT_SUMMARY_CHARS,
+                );
+                let Ok(summary) = text.parse() else {
+                    unreachable!("a bounded effective summary remains a valid PostSummary");
+                };
+                UnpublishedPostLabel::Summary(summary)
+            },
+        )
+}
+
+#[cfg(feature = "server")]
 fn unpublished_post_from_record(post: PostRecord) -> UnpublishedPost {
-    // A titleless management row can use the same effective projection as a
-    // permalink, but textless rendered HTML must fall back to identity, not a
-    // forged `PostSummary` made from the slug.
-    let fallback_label = server::effective_summary(&post).map_or_else(
-        || UnpublishedPostLabel::Slug(post.slug.clone()),
-        |summary| {
-            // Management rows retain their compact 100-scalar label budget even
-            // when the effective permalink description is longer.
-            let normalized = normalize_summary_whitespace(&summary);
-            let text =
-                truncate_at_first_sentence_or_word_boundary(&normalized, MAX_COMPACT_SUMMARY_CHARS);
-            let Ok(summary) = text.parse() else {
-                unreachable!("a bounded effective summary remains a valid PostSummary");
-            };
-            UnpublishedPostLabel::Summary(summary)
-        },
-    );
+    let fallback_label =
+        compact_fallback_label(post.summary.clone(), &post.rendered_html, &post.slug);
     let permalink = post.permalink();
     UnpublishedPost {
         post: SavedPost {
@@ -522,6 +537,35 @@ pub async fn get_revision_history_detail(
         .await?
         .ok_or_else(server::not_found_error)?;
     Ok(revision_detail(detail))
+}
+
+/// Lists one bounded, fully storage-filtered Manage Posts page.
+#[macros::server(input = Json, skip_all)]
+pub async fn list_managed_posts(
+    state: ManagePublicationState,
+    audience: ManageAudienceFilter,
+    search: String,
+    cursor: Option<ManagePostsCursor>,
+    limit: Option<PageSize>,
+) -> WebResult<ManagePostsPage> {
+    super::manage::list_managed_posts_impl(state, audience, search, cursor, limit).await
+}
+
+/// Resolves the current management selection into exact immutable targets.
+#[macros::server(input = Json, skip_all)]
+pub async fn resolve_management_selection(
+    intent: ManageSelectionIntent,
+) -> WebResult<BulkSelectionSnapshot> {
+    super::manage::resolve_management_selection_impl(intent).await
+}
+
+/// Applies one exact management snapshot atomically.
+#[macros::server(input = Json, skip_all)]
+pub async fn execute_management_operation(
+    snapshot: BulkSelectionSnapshot,
+    operation: BulkManageOperation,
+) -> WebResult<MutationOutcome<BulkManageResult>> {
+    super::manage::execute_management_operation_impl(snapshot, operation).await
 }
 
 /// The author-supplied content of a post — the shared RPC input contract for
@@ -2184,7 +2228,10 @@ mod server_tests {
             publish_at: None,
             tags,
             summary: None,
-            audience: None,
+            audience: Some(common::visibility::AudienceSelection {
+                base: common::visibility::AudienceBase::Public,
+                named: vec![],
+            }),
         }
     }
 

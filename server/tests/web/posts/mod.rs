@@ -5,6 +5,7 @@ mod create;
 mod fixtures;
 mod history;
 mod listing;
+mod manage;
 mod read;
 mod update;
 mod visibility;

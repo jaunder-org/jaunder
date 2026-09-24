@@ -9,7 +9,7 @@ use web::posts::{PostInputs, PostRevisionHistory, RevisionHistoryPage};
 
 use crate::helpers::{
     confirmed_created_post, create_post_json, create_user_and_session, make_app, post_json,
-    update_post_json,
+    set_public_default_audience, update_post_json,
 };
 
 async fn list_history(app: Router, cookie: Option<&str>) -> (StatusCode, String) {
@@ -68,6 +68,9 @@ async fn get_revision_detail(
 #[tokio::test]
 async fn revision_history_endpoints_hide_anonymous_access(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
 
     let (status, body) = list_history(app.clone(), None).await;
@@ -95,6 +98,9 @@ async fn revision_history_endpoints_hide_anonymous_access(#[case] backend: Backe
 #[tokio::test]
 async fn revision_history_http_exposes_page_current_and_detail_fields(#[case] backend: Backend) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let session = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -177,6 +183,9 @@ async fn revision_history_http_hides_foreign_missing_and_mismatched_resources(
     #[case] backend: Backend,
 ) {
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let owner = create_user_and_session(
         std::sync::Arc::clone(&env.users()),

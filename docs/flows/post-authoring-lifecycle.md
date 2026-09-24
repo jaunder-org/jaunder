@@ -5,6 +5,7 @@ Matrix: `matrix:docs/coverage/csr-e2e-matrix.md#post-authoring-lifecycle`
 ## Routes
 
 - `route:/posts/new`
+- `route:/posts/manage`
 - `route:/drafts`
 - `route:/scheduled`
 - `route:/posts/:post_id/edit`
@@ -28,11 +29,19 @@ Matrix: `matrix:docs/coverage/csr-e2e-matrix.md#post-authoring-lifecycle`
 - `endpoint:/api/posts/list_history`
 - `endpoint:/api/posts/get_post_history`
 - `endpoint:/api/posts/get_revision_history_detail`
+- `endpoint:/api/posts/list_managed_posts`
+- `endpoint:/api/posts/resolve_management_selection`
+- `endpoint:/api/posts/execute_management_operation`
 
 `/posts/new` waits for the shared session reconcile before it paints the full
 composer. The page seeds its audience picker from the site default, lets the
 author save a draft or publish immediately, and keeps the route in place after a
 successful create by showing the saved slug and a permalink link.
+
+`/posts/manage` is the owner-only compact management workspace. It applies
+state, audience, and normalized title/slug filters in storage, retains exact
+selections across bounded pages, and confirms atomic Audience replacement or
+deletion against immutable Post IDs and mutation versions.
 
 `/drafts` is the mixed unpublished-post queue. It re-reads after publish and
 delete mutations, shows both drafts and scheduled posts, and exposes the edit,
@@ -93,6 +102,14 @@ sequenceDiagram
     Browser->>Posts: list_scheduled
     Posts->>Store: list future-scheduled posts
     Store-->>Posts: unpublished page
+
+    Browser->>Posts: list_managed_posts(filters, cursor)
+    Posts->>Store: query one bounded owner-only page
+    Browser->>Posts: resolve_management_selection(intent)
+    Posts->>Store: snapshot exact Post IDs + mutation versions
+    Browser->>Posts: execute_management_operation(snapshot, operation)
+    Posts->>Store: validate, revise, and mutate exact targets atomically
+    Posts->>Feed: enqueue affected feed/tag rebuilds in the same transaction
 
     Browser->>Posts: get_preview(post_id)
     Posts->>Store: load editable post

@@ -53,7 +53,7 @@ Out:
     `cargo xtask test-local` filters for `user_config`, `web::profile`,
     `web::site`, `web::posts::create`, and `atompub` before the commit boundary.
 
-- [ ] Task 2: Deliver the Manage Posts read model and stable selection snapshots
+- [x] Task 2: Deliver the Manage Posts read model and stable selection snapshots
   - Contract: introduce a management request carrying publication-state,
     audience-target, normalized title/slug text, cursor, and page size. Each
     backend applies every filter in storage and returns one bounded
@@ -85,7 +85,7 @@ Out:
     parity. HTTP tests prove owner scoping, cross-page explicit selection,
     all-matching resolution, and exclusion of Deleted Posts.
 
-- [ ] Task 3: Compose atomic bulk Post mutations inside one write scope
+- [x] Task 3: Compose atomic bulk Post mutations inside one write scope
   - Contract: a storage-owned bulk service accepts the authenticated User,
     `BulkSelectionSnapshot`, operation, and one request clock. One set-based
     validation/lock call consumes the complete canonically ordered snapshot and
@@ -110,7 +110,7 @@ Out:
     failure. Run the focused storage/Post lifecycle lane before the commit
     boundary.
 
-- [ ] Task 4: Build the compact Manage Posts interaction on the shared contracts
+- [x] Task 4: Build the compact Manage Posts interaction on the shared contracts
   - Contract: register private route `/posts/manage`, add authenticated
     navigation, and split host-testable filter/selection/confirmation state from
     wasm-only components. Reuse the Audience picker for complete replacement; do
@@ -132,7 +132,7 @@ Out:
     target/scope, visible compact fields, keyboard-operable controls, actionable
     failures, and no horizontal page overflow at both viewports.
 
-- [ ] Task 5: Prove the complete browser flow and reconcile documentation
+- [x] Task 5: Prove the complete browser flow and reconcile documentation
   - Contract: add focused Playwright coverage for operator and User defaults,
     inherited-value display, compact filtering, cross-page selection, snapshot
     conflict, full Audience replacement/no-op, Delete safeguards, pending state,

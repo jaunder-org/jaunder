@@ -42,9 +42,12 @@ static REGISTRATIONS: LazyLock<()> = LazyLock::new(|| {
     server_fn::axum::register_explicit::<web::timeline::ListByTag>();
     server_fn::axum::register_explicit::<web::timeline::ListByUserAndTag>();
     server_fn::axum::register_explicit::<web::posts::Delete>();
+    server_fn::axum::register_explicit::<web::posts::ExecuteManagementOperation>();
     server_fn::axum::register_explicit::<web::posts::Unpublish>();
     server_fn::axum::register_explicit::<web::posts::GetDefaultAudienceSelection>();
     server_fn::axum::register_explicit::<web::posts::GetAudienceSelection>();
+    server_fn::axum::register_explicit::<web::posts::ListManagedPosts>();
+    server_fn::axum::register_explicit::<web::posts::ResolveManagementSelection>();
     server_fn::axum::register_explicit::<web::site::GetDefaultAudience>();
     server_fn::axum::register_explicit::<web::site::GetIdentity>();
     server_fn::axum::register_explicit::<web::site::GetMediaUploadsEnabled>();
@@ -118,4 +121,4 @@ pub fn ensure_server_fns_registered() {
 /// fn in `web/src`; this constant tracks the list; and
 /// `server_fn_wire::every_server_fn_path_is_api_vertical_ident_and_distinct`
 /// checks itself against the constant. Each link is short enough to keep honest.
-pub const REGISTERED_SERVER_FN_COUNT: usize = 99;
+pub const REGISTERED_SERVER_FN_COUNT: usize = 102;

@@ -8,6 +8,8 @@
 //! external call sites and the server-fn registrar depend on.
 
 mod api;
+mod manage;
+mod manage_state;
 
 #[cfg(feature = "server")]
 mod server;
@@ -19,6 +21,8 @@ mod component;
 
 #[cfg(target_arch = "wasm32")]
 mod history_component;
+#[cfg(target_arch = "wasm32")]
+mod manage_component;
 
 // The pure post-render twins (host-compiled leaf, ADR-0070): plain-string HTML
 // builders shared by the projector (`crate::app::render`) and the reactive
@@ -95,13 +99,24 @@ pub use render::edit_post_url;
 // registrar keep the stable `crate::posts::…` paths despite living in `api.rs`.
 pub use api::{
     AuthoredPostSnapshot, ClassifiedSavedPost, Create, CreatePublication, CurrentPostHistory,
-    Delete, Get, GetAudienceSelection, GetDefaultAudienceSelection, GetPostHistory, GetPreview,
-    GetRevisionHistoryDetail, ListDrafts, ListHistory, ListScheduled, PostInputs,
-    PostRevisionHistory, Publish, RevisionHistoryCursor, RevisionHistoryMetadata,
+    Delete, ExecuteManagementOperation, Get, GetAudienceSelection, GetDefaultAudienceSelection,
+    GetPostHistory, GetPreview, GetRevisionHistoryDetail, ListDrafts, ListHistory,
+    ListManagedPosts, ListScheduled, PostInputs, PostRevisionHistory, Publish,
+    ResolveManagementSelection, RevisionHistoryCursor, RevisionHistoryMetadata,
     RevisionHistoryPage, RevisionLifecycle, SavedPost, Unpublish, UnpublishedPost,
-    UnpublishedPostLabel, Update, create, delete, get, get_audience_selection,
-    get_default_audience_selection, get_post_history, get_preview, get_revision_history_detail,
-    list_drafts, list_history, list_scheduled, publish, unpublish, update,
+    UnpublishedPostLabel, Update, create, delete, execute_management_operation, get,
+    get_audience_selection, get_default_audience_selection, get_post_history, get_preview,
+    get_revision_history_detail, list_drafts, list_history, list_managed_posts, list_scheduled,
+    publish, resolve_management_selection, unpublish, update,
+};
+pub use manage::{
+    BulkManageOperation, BulkManageResult, BulkSelectionSnapshot, BulkSelectionTarget,
+    ManageAudienceFilter, ManagePostsCursor, ManagePostsPage, ManagePublicationState,
+    ManageSelectionIntent, ManagedAudienceTarget, ManagedPost, ManagedPostLifecycle,
+};
+pub use manage_state::{
+    ManageConfirmationKind, ManagePageState, ManageSelectionState, bulk_result_message,
+    delete_count_matches, delete_requires_count,
 };
 
 // Re-exported for the `server` crate's public projector, which maps the fetched
@@ -125,3 +140,5 @@ pub use component::{
 };
 #[cfg(target_arch = "wasm32")]
 pub use history_component::{HistoryPage, PostHistoryPage, RevisionHistoryDetailPage};
+#[cfg(target_arch = "wasm32")]
+pub use manage_component::ManagePostsPage;

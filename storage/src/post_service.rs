@@ -10,6 +10,7 @@ use std::sync::Arc;
 use thiserror::Error;
 
 use crate::{
+    BulkPostMutationError, BulkPostMutationResult, BulkPostOperation, BulkSelectionSnapshot,
     CreatePostError, CreatePostInput, CreatedPost, FeedEventStorage, MediaContentLocks,
     PostBookkeepingExpectation, PostFormat, PostMediaOwnership, PostMutation, PostRecord,
     PostStorage, PublishUpdate, UpdatePostError, UpdatePostInput, WriteScope, WriteScopeError,
@@ -641,6 +642,47 @@ pub async fn perform_post_update_with_media_ownership(
         })
         .await
         .map_err(map_post_update_scope_error)
+}
+
+/// Applies one exact owner snapshot and atomically queues its earned feed invalidations.
+///
+/// # Errors
+///
+/// Returns a snapshot conflict when any target changed or became unavailable, and a
+/// storage failure when either the set-based mutation or feed enqueue fails.
+pub async fn perform_bulk_post_mutation(
+    write_scope: &WriteScope,
+    storage: Arc<dyn PostStorage>,
+    feed_events: Arc<dyn FeedEventStorage>,
+    user_id: UserId,
+    snapshot: BulkSelectionSnapshot,
+    operation: BulkPostOperation,
+    now: UtcInstant,
+) -> Result<MutationOutcome<BulkPostMutationResult>, BulkPostMutationError> {
+    write_scope
+        .run(move |transaction| {
+            let storage = Arc::clone(&storage);
+            let feed_events = Arc::clone(&feed_events);
+            Box::pin(async move {
+                let evidence = storage
+                    .bulk_mutate_posts(transaction, user_id, &snapshot, &operation, now)
+                    .await?;
+                if !evidence.feed_paths.is_empty() {
+                    feed_events
+                        .enqueue_many(transaction, &evidence.feed_paths)
+                        .await
+                        .map_err(|error| match error {
+                            crate::FeedEventError::Db(error) => BulkPostMutationError::Db(error),
+                        })?;
+                }
+                Ok(evidence.result)
+            })
+        })
+        .await
+        .map_err(|error| match error {
+            WriteScopeError::Operation(error) => error,
+            WriteScopeError::Begin(error) => BulkPostMutationError::Db(error),
+        })
 }
 
 /// Publishes an owned Post and atomically queues only its earned public feed
@@ -1644,6 +1686,66 @@ mod tests {
             retained.published_at.is_some(),
             "failed enqueue rolls back the unpublish"
         );
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[apply(backends)]
+    #[tokio::test]
+    async fn bulk_feed_enqueue_failure_rolls_back_every_post(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user = SeedUser::new()
+            .seed(Arc::clone(&env.users()), env.write_scope().clone())
+            .await;
+        let first = SeedPost::new(user.user_id)
+            .seed(
+                Arc::clone(&env.posts()),
+                Arc::clone(&env.feed_events()),
+                env.write_scope().clone(),
+            )
+            .await;
+        let second = SeedPost::new(user.user_id)
+            .seed(
+                Arc::clone(&env.posts()),
+                Arc::clone(&env.feed_events()),
+                env.write_scope().clone(),
+            )
+            .await;
+        let snapshot = env
+            .posts()
+            .resolve_post_selection(
+                user.user_id,
+                &crate::PostSelectionIntent::Explicit(vec![first.post_id, second.post_id]),
+            )
+            .await
+            .unwrap();
+        let mut feed_events = MockFeedEventStorage::new();
+        feed_events
+            .expect_enqueue_many()
+            .times(1)
+            .returning(|_, _| Err(crate::FeedEventError::Db(sqlx::Error::RowNotFound)));
+
+        let error = perform_bulk_post_mutation(
+            &env.write_scope(),
+            Arc::clone(&env.posts()) as Arc<dyn PostStorage>,
+            Arc::new(feed_events),
+            user.user_id,
+            snapshot,
+            BulkPostOperation::Delete,
+            UtcInstant::now(),
+        )
+        .await
+        .expect_err("feed enqueue failure aborts the bulk delete");
+        assert!(matches!(error, BulkPostMutationError::Db(_)));
+
+        let retained = env
+            .posts()
+            .resolve_post_selection(
+                user.user_id,
+                &crate::PostSelectionIntent::Explicit(vec![first.post_id, second.post_id]),
+            )
+            .await
+            .expect("both Posts remain active");
+        assert_eq!(retained.selected_count(), 2);
     }
 
     #[cfg(feature = "test-utils")]

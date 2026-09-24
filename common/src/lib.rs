@@ -33,6 +33,7 @@ pub mod permalink_route;
 pub mod pg_identifier;
 pub mod pg_role_password;
 pub mod post_body;
+pub mod post_search;
 pub mod post_summary;
 pub mod post_title;
 pub mod registration;
