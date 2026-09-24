@@ -102,6 +102,97 @@ async fn update_post_updates_draft_content_and_slug(#[case] backend: Backend) {
     );
 }
 
+// An AtomPub client can supply a title separately from Markdown/HTML source.
+// Editing that source in the web UI must not erase the separate title or add
+// a heading to the canonical body.
+#[apply(backends)]
+#[tokio::test]
+async fn web_update_preserves_separately_supplied_non_org_title(#[case] backend: Backend) {
+    use common::visibility::AudienceTarget;
+    use storage::{PostBookkeepingExpectation, PostUpdate, PublishUpdate, perform_post_update};
+
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
+    let title = "Supplied separately".parse().unwrap();
+
+    for format in [PostFormat::Markdown, PostFormat::Html] {
+        let (status, body) = create_post_json(
+            app.clone(),
+            PostInputs {
+                publish: Some(false),
+                ..PostInputs::new(parse_post_body("Original body"), format)
+            },
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "create body: {body}");
+        let post_id = confirmed_created_post(&body).post_id;
+        let record = env
+            .posts()
+            .get_post_by_id(post_id, &common::visibility::ViewerIdentity::Anonymous)
+            .await
+            .unwrap()
+            .unwrap();
+        perform_post_update(
+            &env.write_scope(),
+            &env.media_content_locks(),
+            env.posts(),
+            env.feed_events(),
+            PostUpdate {
+                post_id,
+                editor_user_id: record.user_id,
+                body: parse_post_body("Original body"),
+                title: Some(&title),
+                format,
+                slug_override: Some(&record.slug),
+                publish: PublishUpdate::Unpublish,
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+                tags: None,
+                request_clock: common::time::UtcInstant::now(),
+                expectations: PostBookkeepingExpectation::default(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let (status, body) = update_post_json(
+            app.clone(),
+            post_id,
+            PostInputs {
+                publish: Some(false),
+                slug_override: Some(record.slug.clone()),
+                ..PostInputs::new(parse_post_body("Edited body"), format)
+            },
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "update body: {body}");
+        let record = env
+            .posts()
+            .get_post_by_id(post_id, &common::visibility::ViewerIdentity::Anonymous)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.title.as_deref(), Some("Supplied separately"));
+        assert_eq!(
+            record.body.as_ref(),
+            if format == PostFormat::Markdown {
+                "Edited body\n"
+            } else {
+                "Edited body"
+            }
+        );
+    }
+}
+
 #[apply(backends)]
 #[tokio::test]
 async fn update_post_freezes_slug_when_published(#[case] backend: Backend) {

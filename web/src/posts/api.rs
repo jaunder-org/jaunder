@@ -121,6 +121,29 @@ fn normalize_web_org(
         .map_err(|error| InternalError::validation(error.to_string()))
 }
 
+/// Preserve titles supplied outside Markdown/HTML source on an ordinary web edit.
+/// A new Markdown heading or a format change takes precedence; an existing
+/// heading with a different separately supplied title does not.
+#[cfg(any(feature = "server", test))]
+fn preserved_non_org_title(
+    old_format: PostFormat,
+    old_body: &PostBody,
+    old_title: Option<&PostTitle>,
+    format: PostFormat,
+    body: &PostBody,
+) -> Option<PostTitle> {
+    if format == PostFormat::Org || format != old_format {
+        return None;
+    }
+    let old_heading = common::render::derive_post_naming(None, old_body, &old_format).0;
+    let new_heading = common::render::derive_post_naming(None, body, &format).0;
+    // An explicit AtomPub title can coexist with a different Markdown heading.
+    // Only an unsourced title with a newly added heading yields to that heading.
+    (old_title != old_heading.as_ref() && (old_heading.is_some() || new_heading.is_none()))
+        .then(|| old_title.cloned())
+        .flatten()
+}
+
 #[cfg(feature = "server")]
 async fn validate_org_audiences(
     targets: &[AudienceTarget],
@@ -902,6 +925,30 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<MutationOutc
         .as_ref()
         .map(|selection| visibility::audience_targets_or_public(Some(selection)));
 
+    // A separately supplied title has no editable source in the Markdown/HTML
+    // body. Re-read it for a headingless same-format web save; authored headings
+    // and format switches still decide their own titles.
+    let preserved_title = if format == PostFormat::Org {
+        None
+    } else {
+        posts
+            .get_post_by_id(
+                post_id,
+                &common::visibility::ViewerIdentity::local(auth.user_id),
+            )
+            .await?
+            .filter(|existing| existing.user_id == auth.user_id && existing.deleted_at.is_none())
+            .and_then(|existing| {
+                preserved_non_org_title(
+                    existing.format,
+                    &existing.body,
+                    existing.title.as_ref(),
+                    format,
+                    &body,
+                )
+            })
+    };
+
     let (body, title, summary, audiences, publish, expectations, new_tags) = if format
         == PostFormat::Org
     {
@@ -950,7 +997,7 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<MutationOutc
             .ok_or_else(|| InternalError::validation("missing required structured lifecycle"))?;
         (
             body,
-            None,
+            preserved_title,
             summary,
             structured_audiences.unwrap_or_else(|| visibility::audience_targets_or_public(None)),
             if publish {
@@ -1421,6 +1468,63 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<Page<UnpublishedPost>>(&json).unwrap(),
             page
+        );
+    }
+
+    #[test]
+    fn separately_supplied_titles_survive_same_format_edits_without_new_headings() {
+        use super::{PostFormat, preserved_non_org_title};
+        let title = "External title".parse().unwrap();
+        let plain = parse_post_body("Plain content");
+        let edited = parse_post_body("Edited content");
+        let heading = parse_post_body("# New heading\n\nEdited content");
+        for format in [PostFormat::Markdown, PostFormat::Html] {
+            assert_eq!(
+                preserved_non_org_title(format, &plain, Some(&title), format, &edited),
+                Some(title.clone())
+            );
+            assert_eq!(
+                preserved_non_org_title(format, &plain, None, format, &edited),
+                None
+            );
+            assert_eq!(
+                preserved_non_org_title(format, &plain, Some(&title), PostFormat::Org, &edited),
+                None
+            );
+        }
+        assert_eq!(
+            preserved_non_org_title(
+                PostFormat::Markdown,
+                &plain,
+                Some(&title),
+                PostFormat::Markdown,
+                &heading
+            ),
+            None,
+            "a newly authored heading takes ownership of the title"
+        );
+        assert_eq!(
+            preserved_non_org_title(
+                PostFormat::Markdown,
+                &heading,
+                Some(&title),
+                PostFormat::Markdown,
+                &edited
+            ),
+            Some(title.clone()),
+            "a different AtomPub title outranks an authored Markdown heading"
+        );
+        let derived: super::PostTitle = "New heading".parse().unwrap();
+        assert_eq!(
+            preserved_non_org_title(
+                PostFormat::Markdown,
+                &heading,
+                Some(&derived),
+                PostFormat::Markdown,
+                &edited
+            ),
+            None,
+            "deleting an authored heading must still clear its derived title"
         );
     }
 

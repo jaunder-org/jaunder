@@ -35,6 +35,7 @@ import {
   selectComposerAudience,
 } from "./posts";
 import { navigateInApp } from "./navigate";
+import { mintAppPassword } from "./sessions";
 import { allowSecondBoot } from "./bootBudget";
 import { expectVisual, expectVisualRegion } from "./visual";
 import { expectAccessible } from "./accessibility";
@@ -761,6 +762,34 @@ test("editing an Org Post preserves, changes, and removes its title", async ({
   await expect(page.locator("article .j-post-title")).toHaveCount(0);
   await openEditor(page);
   await expect(body).toHaveValue("Org body\n");
+});
+
+test("editing an AtomPub-titled Markdown Post preserves its separate title and body", async ({
+  page,
+  request,
+}) => {
+  const username = await signInAsNewUser(page);
+  const token = await mintAppPassword(page, "Separate Markdown title");
+  const created = await request.post(`${BASE_URL}/atompub/${username}/posts`, {
+    headers: {
+      authorization: `Basic ${Buffer.from(`${username}:${token}`).toString("base64")}`,
+      "content-type": "application/atom+xml",
+    },
+    data: '<entry xmlns="http://www.w3.org/2005/Atom" xmlns:app="http://www.w3.org/2007/app"><title>Separate Markdown title</title><content type="text/markdown">Original plain body</content><app:control><app:draft>yes</app:draft></app:control></entry>',
+  });
+  expect(created.status()).toBe(201);
+
+  await openPostFromDrafts(page, "Separate Markdown title");
+  await expect(page.locator(SEL.postBody)).toHaveValue("Original plain body\n");
+  await page.fill(SEL.postBody, "Edited plain body");
+  await click(page, SEL.publishButton("false"));
+  await expectFlash(page, "Draft saved.");
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  await expect(page.locator("article .j-post-title")).toHaveText(
+    "Separate Markdown title",
+  );
+  await openEditor(page);
+  await expect(page.locator(SEL.postBody)).toHaveValue("Edited plain body\n");
 });
 
 test("an ordinary titled Org edit retains structured metadata and its schedule", async ({
