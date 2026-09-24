@@ -112,6 +112,9 @@ async fn web_update_preserves_separately_supplied_non_org_title(#[case] backend:
     use storage::{PostBookkeepingExpectation, PostUpdate, PublishUpdate, perform_post_update};
 
     let env = backend.setup().await;
+    set_public_default_audience(env.site_config(), env.write_scope())
+        .await
+        .unwrap();
     let app = make_app!(&env, &env.base);
     let cookie = create_user_and_session(
         Arc::clone(&env.users()),
