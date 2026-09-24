@@ -394,3 +394,27 @@ where
         feed_paths: feed_paths(&locked, &changed, operation, now),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_audiences_orders_deduplicates_and_omits_private() {
+        let named = AudienceId::from(7);
+        assert_eq!(
+            canonical_audiences(&[
+                AudienceTarget::Named(named),
+                AudienceTarget::Private,
+                AudienceTarget::Subscribers,
+                AudienceTarget::Public,
+                AudienceTarget::Named(named),
+            ]),
+            vec![
+                (TargetKind::Public, None),
+                (TargetKind::Subscribers, None),
+                (TargetKind::Named, Some(named)),
+            ]
+        );
+    }
+}

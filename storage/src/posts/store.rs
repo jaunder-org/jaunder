@@ -2583,6 +2583,10 @@ mod tests {
             SeedRawPost::new(owner)
                 .slug("alpha-draft")
                 .title("Alpha\u{a0}Draft")
+                .body(parse_post_body(&format!(
+                    "<img src=\"{}\">",
+                    media_url_for("bulk-management.png")
+                )))
                 .draft(),
         )
         .await;
@@ -2677,7 +2681,7 @@ mod tests {
             .await
             .map_err(|error| match error {
                 crate::WriteScopeError::Operation(error) => error,
-                crate::WriteScopeError::Begin(error) => BulkPostMutationError::Db(error),
+                crate::WriteScopeError::Begin(error) => BulkPostMutationError::Db(error), // cov:ignore: test backends cannot induce transaction-begin failure
             })?;
         Ok(crate::test_support::confirmed_for(outcome, "bulk mutation"))
     }
@@ -4117,6 +4121,26 @@ mod tests {
                 .unwrap_err();
             assert!(matches!(error, ResolvePostSelectionError::Unavailable));
         }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn empty_bulk_snapshot_is_a_no_op(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let [owner] = seed_users::<1>(Arc::clone(&env.users()), env.write_scope().clone()).await;
+        let evidence = bulk_mutate_confirmed(
+            &env,
+            owner,
+            ManagementSelectionSnapshot {
+                targets: Vec::new(),
+            },
+            BulkPostOperation::Delete,
+        )
+        .await
+        .unwrap();
+        assert_eq!(evidence.result.selected_count, 0);
+        assert_eq!(evidence.result.changed_count, 0);
+        assert!(evidence.feed_paths.is_empty());
     }
 
     #[apply(backends)]

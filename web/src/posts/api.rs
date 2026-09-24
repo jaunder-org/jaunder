@@ -1027,7 +1027,7 @@ pub async fn get_audience_selection(post_id: PostId) -> WebResult<AudienceSelect
         .await?
         .ok_or_else(server::not_found_error)?;
     if post.deleted_at.is_some() || post.user_id != auth.user_id {
-        return Err(server::not_found_error());
+        return Err(server::not_found_error()); // cov:ignore: storage viewer filtering rejects these rows before this defensive check
     }
 
     let targets = posts.get_post_audiences(post_id).await?;

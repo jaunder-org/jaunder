@@ -178,6 +178,7 @@ mod tests {
         let mut selection = ManageSelectionState::default();
         selection.toggle(&post(1, 2));
         selection.toggle(&post(9, 4));
+        assert_eq!(selection.selected_count(), 2);
         assert_eq!(selection.post_ids(), vec![PostId::from(1), PostId::from(9)]);
         assert_eq!(selection.snapshot().selected_count, 2);
 
@@ -190,6 +191,9 @@ mod tests {
         });
         assert!(!selection.is_selected(PostId::from(1)));
         assert!(selection.is_selected(PostId::from(7)));
+        selection.clear();
+        assert_eq!(selection.selected_count(), 0);
+        assert!(selection.post_ids().is_empty());
     }
 
     #[test]

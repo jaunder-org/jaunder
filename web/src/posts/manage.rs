@@ -378,3 +378,134 @@ pub(super) async fn execute_management_operation_impl(
         changed_count: result.changed_count,
     }))
 }
+
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    use super::*;
+    use common::test_support::{parse_post_title, parse_slug, parse_utc_instant, rendered_html};
+    use common::visibility::AudienceTarget;
+
+    #[test]
+    fn management_filter_conversions_cover_every_variant() {
+        assert_eq!(
+            storage_state(ManagePublicationState::All),
+            storage::PostManagementStateFilter::All
+        );
+        assert_eq!(
+            storage_state(ManagePublicationState::Draft),
+            storage::PostManagementStateFilter::Draft
+        );
+        assert_eq!(
+            storage_state(ManagePublicationState::Scheduled),
+            storage::PostManagementStateFilter::Scheduled
+        );
+        assert_eq!(
+            storage_state(ManagePublicationState::Published),
+            storage::PostManagementStateFilter::Published
+        );
+        assert_eq!(
+            storage_audience(ManageAudienceFilter::All),
+            storage::PostManagementAudienceFilter::All
+        );
+        assert_eq!(
+            storage_audience(ManageAudienceFilter::Public),
+            storage::PostManagementAudienceFilter::Public
+        );
+        assert_eq!(
+            storage_audience(ManageAudienceFilter::Subscribers),
+            storage::PostManagementAudienceFilter::Subscribers
+        );
+        assert_eq!(
+            storage_audience(ManageAudienceFilter::Private),
+            storage::PostManagementAudienceFilter::Private
+        );
+        let named = AudienceId::from(7);
+        assert_eq!(
+            storage_audience(ManageAudienceFilter::Named(named)),
+            storage::PostManagementAudienceFilter::Named(named)
+        );
+    }
+
+    #[test]
+    fn storage_request_maps_cursor_and_managed_post_maps_lifecycle_and_audiences() {
+        let now = parse_utc_instant("2026-09-23T12:00:00Z");
+        let cursor = ManagePostsCursor {
+            updated_at: now,
+            post_id: PostId::from(3),
+        };
+        let request = storage_request(
+            ManagePublicationState::Published,
+            ManageAudienceFilter::Public,
+            " query ",
+            Some(cursor),
+            PageSize::default(),
+            now,
+        );
+        assert!(request.cursor.is_some());
+
+        let named = AudienceId::from(8);
+        let record = |lifecycle| ManagedPostRecord {
+            post_id: PostId::from(4),
+            mutation_version: storage::PostMutationVersion::initial(),
+            title: Some(parse_post_title("Managed")),
+            slug: parse_slug("managed"),
+            rendered_html: rendered_html("<p>managed</p>"),
+            summary: None,
+            lifecycle,
+            audiences: vec![
+                AudienceTarget::Public,
+                AudienceTarget::Subscribers,
+                AudienceTarget::Named(named),
+                AudienceTarget::Private,
+            ],
+            updated_at: now,
+        };
+        let draft = managed_post(record(storage::PostLifecycle::Draft));
+        assert_eq!(draft.lifecycle, ManagedPostLifecycle::Draft);
+        assert_eq!(
+            draft.audiences,
+            vec![
+                ManagedAudienceTarget::Public,
+                ManagedAudienceTarget::Subscribers,
+                ManagedAudienceTarget::Named(named),
+            ]
+        );
+        assert_eq!(
+            managed_post(record(storage::PostLifecycle::Scheduled)).lifecycle,
+            ManagedPostLifecycle::Scheduled
+        );
+        assert_eq!(
+            managed_post(record(storage::PostLifecycle::Published)).lifecycle,
+            ManagedPostLifecycle::Published
+        );
+    }
+
+    #[test]
+    fn storage_snapshot_requires_exact_ordered_positive_versions() {
+        let target = |post_id, mutation_version| BulkSelectionTarget {
+            post_id: PostId::from(post_id),
+            mutation_version,
+        };
+        assert!(
+            storage_snapshot(ManagementSelectionSnapshot {
+                selected_count: 2,
+                targets: vec![target(1, 1), target(2, 2)],
+            })
+            .is_ok()
+        );
+        assert!(
+            storage_snapshot(ManagementSelectionSnapshot {
+                selected_count: 1,
+                targets: vec![target(2, 1), target(1, 1)],
+            })
+            .is_err()
+        );
+        assert!(
+            storage_snapshot(ManagementSelectionSnapshot {
+                selected_count: 1,
+                targets: vec![target(1, 0)],
+            })
+            .is_err()
+        );
+    }
+}

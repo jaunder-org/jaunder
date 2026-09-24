@@ -681,7 +681,7 @@ pub async fn perform_bulk_post_mutation(
         .await
         .map_err(|error| match error {
             WriteScopeError::Operation(error) => error,
-            WriteScopeError::Begin(error) => BulkPostMutationError::Db(error),
+            WriteScopeError::Begin(error) => BulkPostMutationError::Db(error), // cov:ignore: test backends cannot induce transaction-begin failure
         })
 }
 

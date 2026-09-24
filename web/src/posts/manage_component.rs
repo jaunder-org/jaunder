@@ -355,26 +355,41 @@ fn ManagePostList(signals: ManagePageState) -> impl IntoView {
     }
 }
 
+fn confirmation_operation(
+    kind: ManageConfirmationKind,
+    selected_count: usize,
+    delete_count: &str,
+    audience: common::visibility::AudienceSelection,
+) -> Option<BulkManageOperation> {
+    if kind == ManageConfirmationKind::Delete && !delete_count_matches(selected_count, delete_count)
+    {
+        return None;
+    }
+    Some(match kind {
+        ManageConfirmationKind::Audience => BulkManageOperation::ChangeAudience { audience },
+        ManageConfirmationKind::Delete => BulkManageOperation::Delete {
+            confirmed_count: delete_count.trim().parse().ok(),
+        },
+    })
+}
+
 fn execute_confirmation(signals: ManagePageState) {
+    // crap:allow: reactive server-function outcomes are exercised by manage-posts E2E
     let Some((kind, snapshot)) = signals.confirmation.get() else {
         return;
     };
-    if kind == ManageConfirmationKind::Delete
-        && !delete_count_matches(snapshot.selected_count, &signals.delete_count.get())
-    {
+    let Some(operation) = confirmation_operation(
+        kind,
+        snapshot.selected_count,
+        &signals.delete_count.get(),
+        signals.replacement.get(),
+    ) else {
         return;
-    }
-    let operation = match kind {
-        ManageConfirmationKind::Audience => BulkManageOperation::ChangeAudience {
-            audience: signals.replacement.get(),
-        },
-        ManageConfirmationKind::Delete => BulkManageOperation::Delete {
-            confirmed_count: signals.delete_count.get().parse().ok(),
-        },
     };
     signals.pending.set(true);
     signals.error.set(None);
     signals.success.set(None);
+    // cov:ignore-start: asynchronous browser orchestration is covered by manage-posts E2E
     spawn_local(async move {
         match super::execute_management_operation(snapshot, operation).await {
             Ok(common::MutationOutcome::Confirmed(result)) => {
@@ -390,6 +405,7 @@ fn execute_confirmation(signals: ManagePageState) {
         }
         signals.pending.set(false);
     });
+    // cov:ignore-stop
 }
 
 #[component]
@@ -527,5 +543,74 @@ pub fn ManagePostsPage() -> impl IntoView {
                 <ManageConfirmation signals=signals />
             </main>
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::visibility::AudienceSelection;
+
+    #[test]
+    fn audience_filter_values_cover_builtins_named_and_invalid_input() {
+        assert_eq!(audience_from_value("public"), ManageAudienceFilter::Public);
+        assert_eq!(
+            audience_from_value("subscribers"),
+            ManageAudienceFilter::Subscribers
+        );
+        assert_eq!(
+            audience_from_value("private"),
+            ManageAudienceFilter::Private
+        );
+        assert_eq!(
+            audience_from_value("named:7"),
+            ManageAudienceFilter::Named(common::ids::AudienceId::from(7))
+        );
+        assert_eq!(audience_from_value("named:nope"), ManageAudienceFilter::All);
+        assert_eq!(audience_from_value("unknown"), ManageAudienceFilter::All);
+    }
+
+    #[test]
+    fn confirmation_operation_enforces_delete_count_and_preserves_audience() {
+        let audience = AudienceSelection {
+            public: true,
+            subscribers: false,
+            named: Vec::new(),
+        };
+        assert_eq!(
+            confirmation_operation(ManageConfirmationKind::Audience, 20, "", audience.clone()),
+            Some(BulkManageOperation::ChangeAudience { audience })
+        );
+        assert_eq!(
+            confirmation_operation(
+                ManageConfirmationKind::Delete,
+                10,
+                "9",
+                AudienceSelection::default(),
+            ),
+            None
+        );
+        assert_eq!(
+            confirmation_operation(
+                ManageConfirmationKind::Delete,
+                10,
+                " 10 ",
+                AudienceSelection::default(),
+            ),
+            Some(BulkManageOperation::Delete {
+                confirmed_count: Some(10),
+            })
+        );
+        assert_eq!(
+            confirmation_operation(
+                ManageConfirmationKind::Delete,
+                2,
+                "",
+                AudienceSelection::default(),
+            ),
+            Some(BulkManageOperation::Delete {
+                confirmed_count: None,
+            })
+        );
     }
 }

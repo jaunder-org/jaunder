@@ -293,3 +293,36 @@ where
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn serialized_audiences_round_trip_valid_rows_and_ignore_invalid_pairs() {
+        let parsed = SerializedPostAudiences::from_str(
+            r#"[{"target_kind":"public","audience_id":null},{"target_kind":"subscribers","audience_id":null},{"target_kind":"named","audience_id":7},{"target_kind":"public","audience_id":8},{"target_kind":"named","audience_id":null}]"#,
+        )
+        .unwrap();
+        assert_eq!(
+            parsed.into_targets(),
+            vec![
+                AudienceTarget::Public,
+                AudienceTarget::Subscribers,
+                AudienceTarget::Named(AudienceId::from(7)),
+            ]
+        );
+    }
+
+    #[test]
+    fn parsed_audiences_display_as_storage_json() {
+        let parsed = ParsedPostAudiences(vec![PostAudienceJson {
+            target_kind: TargetKind::Named,
+            audience_id: Some(AudienceId::from(9)),
+        }]);
+        assert_eq!(
+            parsed.to_string(),
+            r#"[{"target_kind":"named","audience_id":9}]"#
+        );
+    }
+}
