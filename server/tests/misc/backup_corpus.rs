@@ -1600,6 +1600,7 @@ mod writer_tests {
         "passkey_credentials",
         "passkey_user_handles",
         "password_resets",
+        "pending_code_migrations",
         "post_audiences",
         "post_media",
         "post_permalink_aliases",
@@ -1862,7 +1863,15 @@ mod writer_tests {
         );
 
         let rows = parse_ndjson_tables(&paths);
+        assert_writer_drained_queue(&rows);
         assert_writer_roles(&rows, ids);
+    }
+
+    fn assert_writer_drained_queue(rows: &BTreeMap<String, Vec<Value>>) {
+        assert!(
+            table_rows(rows, "pending_code_migrations").is_empty(),
+            "backup format compatibility: a newly initialized writer must export its drained queue"
+        );
     }
 
     fn read_manifest(export: &Path) -> Value {
