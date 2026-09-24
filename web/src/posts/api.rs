@@ -2366,6 +2366,7 @@ mod server_tests {
     #[tokio::test]
     async fn update_writes_every_tag_in_one_batched_call() {
         let mut posts = MockPostStorage::new();
+        posts.expect_get_post_by_id().returning(|_, _| Ok(None));
         posts
             .expect_update_post_with_proven_local_media()
             .withf(|_transaction, _id, _user, input, _local_media| {
@@ -2388,6 +2389,7 @@ mod server_tests {
     #[tokio::test]
     async fn update_with_tags_unset_defers_preservation_to_storage() {
         let mut posts = MockPostStorage::new();
+        posts.expect_get_post_by_id().returning(|_, _| Ok(None));
         posts
             .expect_update_post_with_proven_local_media()
             .withf(|_transaction, _id, _user, input, _local_media| input.tags.is_none())
