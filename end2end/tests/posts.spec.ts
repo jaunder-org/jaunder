@@ -763,6 +763,60 @@ test("editing an Org Post preserves, changes, and removes its title", async ({
   await expect(body).toHaveValue("Org body\n");
 });
 
+test("an ordinary titled Org edit retains structured metadata and its schedule", async ({
+  registeredPage,
+}) => {
+  const scheduledAt = "2999-01-01T09:00";
+  const title = "Scheduled Org title";
+  const slug = "scheduled-org-title-metadata";
+  const summary = "Structured summary survives editing";
+  const page = await registeredPage("/posts/new");
+  await openComposerControl(page, "Format");
+  await click(page, SEL.formatButton("Org"));
+  await page.fill(
+    SEL.postBody,
+    `#+TITLE: ${title}\n#+KEYWORDS: orgscheduled\n\nOrg content`,
+  );
+  await page.fill(SEL.postSummary, summary);
+  await openComposerControl(page, "Slug");
+  await page.fill(SEL.postSlug, slug);
+  await openComposerControl(page, "Audience");
+  await page.selectOption("#audience-base", "private");
+  await applyPublicationTime(page, scheduledAt);
+  await click(page, SEL.publishButton("true"));
+  await waitForSelector(page, SEL.saveSummary);
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  await openEditor(page);
+
+  const assertStructuredState = async () => {
+    await expect(page.locator(SEL.postBody)).toHaveValue(
+      `#+TITLE: ${title}\nOrg content\n`,
+    );
+    await expect(page.locator(SEL.postSummary)).toHaveValue(summary);
+    await expect(
+      page.locator('.j-tag-chip-label:has-text("#orgscheduled")'),
+    ).toBeVisible();
+    await openComposerControl(page, "Format");
+    await expect(page.locator(SEL.formatButton("Org"))).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await openComposerControl(page, "Audience");
+    await expect(page.locator("#audience-base")).toHaveValue("private");
+    await openComposerControl(page, "Publish");
+    await page.getByRole("button", { name: "Edit publication time" }).click();
+    await expect(page.locator(SEL.publishAt)).toHaveValue(scheduledAt);
+    await expect(page.locator(SEL.publishButton("true"))).toHaveText("Save");
+  };
+
+  await assertStructuredState();
+  await click(page, SEL.publishButton("true"));
+  await page.waitForURL((url) => !url.pathname.endsWith("/edit"));
+  expect(new URL(page.url()).pathname).toContain(slug);
+  await openEditor(page);
+  await assertStructuredState();
+});
+
 test("switching an Org editor to Markdown does not leak its reconstructed title", async ({
   registeredPage,
 }) => {
@@ -780,19 +834,19 @@ test("switching an Org editor to Markdown does not leak its reconstructed title"
 
   await page.fill(
     SEL.postBody,
-    "New first line\n#+TITLE: Org title\nOrg body\n",
+    "Example: #+TITLE: Org title\n#+TITLE: Org title\nOrg body\n",
   );
   await openComposerControl(page, "Format");
   await click(page, SEL.formatButton("Markdown"));
   await expect(page.locator(SEL.postBody)).toHaveValue(
-    "New first line\nOrg body\n",
+    "Example: #+TITLE: Org title\nOrg body\n",
   );
   await click(page, SEL.publishButton("false"));
   await expectFlash(page, "Draft saved.");
   await followPermalink(page, page.locator(SEL.saveSummary));
   await openEditor(page);
   await expect(page.locator(SEL.postBody)).toHaveValue(
-    "New first line\nOrg body\n",
+    "Example: #+TITLE: Org title\nOrg body\n",
   );
   await openComposerControl(page, "Format");
   await expect(page.locator(SEL.formatButton("Markdown"))).toHaveAttribute(

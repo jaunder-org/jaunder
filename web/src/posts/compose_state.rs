@@ -250,9 +250,17 @@ impl ComposeState {
             && let Some(title) = self.seeded_org_title.get()
         {
             let source = self.body.value();
-            // Remove only the exact editor projection; a changed directive is
-            // author input, while an unchanged one can move within the textarea.
-            self.body.set_value(&source.replacen(&title, "", 1));
+            // A title's bytes inside authored prose are not the projected header.
+            // Match the complete projection only at a line boundary, even if
+            // the author has inserted text ahead of it in the textarea.
+            if let Some((start, _)) = source
+                .match_indices(&title)
+                .find(|(start, _)| *start == 0 || source.as_bytes()[start - 1] == b'\n')
+            {
+                let mut body = source;
+                body.replace_range(start..start + title.len(), "");
+                self.body.set_value(&body);
+            }
             self.seeded_org_title.set(None);
         }
         self.format.set(format);
@@ -674,11 +682,11 @@ mod tests {
             state.seed_from(&fetched).unwrap();
             state
                 .body
-                .set_value("New first line\n#+TITLE: Title\nOrg content");
+                .set_value("Example: #+TITLE: Title\n#+TITLE: Title\nOrg content");
 
             state.switch_format(PostFormat::Markdown);
 
-            assert_eq!(state.body.value(), "New first line\nOrg content");
+            assert_eq!(state.body.value(), "Example: #+TITLE: Title\nOrg content");
         });
     }
 
