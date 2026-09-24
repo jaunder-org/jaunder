@@ -28,11 +28,11 @@ use crate::scheduled_worker::ScheduledWorkerGuard;
 #[cfg(test)]
 use host::config_key::SiteConfigKey;
 use storage::{
-    AudienceStorage, DbConnectOptions, DbPoolObserver, EmailVerificationStorage, FeedCacheStorage,
-    FeedEventStorage, InstanceId, InviteStorage, MediaContentLocks, MediaManager, MediaStorage,
-    PasswordResetStorage, PostMediaOwnership, PostStorage, PublisherStorage, SessionStorage,
-    SiteConfigStorage, StorageRuntimeConfig, SubscriptionStorage, ThemeAssetManager, ThemeManager,
-    ThemeStorage, UserConfigStorage, UserStorage, WriteScope,
+    AudienceStorage, DatabaseLockGuard, DbConnectOptions, DbPoolObserver, EmailVerificationStorage,
+    FeedCacheStorage, FeedEventStorage, InstanceId, InviteStorage, MediaContentLocks, MediaManager,
+    MediaStorage, PasswordResetStorage, PostMediaOwnership, PostStorage, PublisherStorage,
+    SessionStorage, SiteConfigStorage, StorageRuntimeConfig, SubscriptionStorage,
+    ThemeAssetManager, ThemeManager, ThemeStorage, UserConfigStorage, UserStorage, WriteScope,
 };
 
 /// Focused storage handles minted once by the serve composition root.
@@ -249,6 +249,7 @@ async fn open_server_database(
     runtime: &StorageRuntimeConfig,
     prod: bool,
 ) -> anyhow::Result<StartupDatabase> {
+    let _database_lock = DatabaseLockGuard::acquire(&storage.storage_path).await?;
     open_server_database_with(storage, runtime, prod, &RealStartupDatabaseOperations).await
 }
 

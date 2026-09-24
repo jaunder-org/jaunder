@@ -40,7 +40,7 @@ predates it.
   - Verification: fork tests for nested inline prose and literal source
     preservation; focused Jaunder host body/title tests; pin/flake/lockfile
     agreement; no altered Markdown/HTML export caused by dependency wiring.
-- [ ] **2. Define one migration-phase exclusion boundary across command paths.**
+- [x] **2. Define one migration-phase exclusion boundary across command paths.**
       Acquire one exclusive `<storage>/database.lock` before SQLx+queue draining
       for every production server/CLI DB open and release before ordinary work;
       keep `runtime.lock` as the server-lifetime upload/duplicate-serve guard. A

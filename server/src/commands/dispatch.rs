@@ -6,7 +6,7 @@ use common::{
     tagged_url::HubUrl, username::Username,
 };
 use host::{config_key::SiteConfigKey, password::Password};
-use storage::{BackupRestoreOutcome, FeedWindowMutation, StorageFactory};
+use storage::{BackupRestoreOutcome, DatabaseLockGuard, FeedWindowMutation, StorageFactory};
 
 use crate::{
     cli::{
@@ -46,11 +46,13 @@ pub(crate) fn resolve_trusted_proxies(
 
 async fn open_existing_storage(storage: &StorageArgs) -> anyhow::Result<StorageFactory> {
     let runtime = support::storage_runtime_config(&storage.db)?;
+    let _database_lock = DatabaseLockGuard::acquire(&storage.storage_path).await?;
     Ok(storage::open_existing_database(&storage.db, &runtime).await?)
 }
 
 async fn open_account_storage(storage: &StorageArgs) -> anyhow::Result<StorageFactory> {
     let runtime = support::storage_runtime_config(&storage.db)?;
+    let _database_lock = DatabaseLockGuard::acquire(&storage.storage_path).await?;
     storage::open_existing_database(&storage.db, &runtime)
         .await
         .context(support::INIT_FIRST_CONTEXT)
