@@ -286,24 +286,24 @@ let
   };
 
   # Supply each exact-revision Cargo git patch from its pinned flake checkout
-  # so product builds resolve both fork sources without sandbox network access.
+  # for the product and tools workspaces without sandbox network access.
+  vendorPinnedFork = prefix: ps: drv:
+    let
+      p = builtins.head ps;
+    in
+    if p.name == "atom_syndication" || p.name == "orgize" then
+      pkgs.runCommandLocal "${prefix}-fork-vendor-${p.name}-${p.version}" { } ''
+        dst="$out/${p.name}-${p.version}"
+        mkdir -p "$dst"
+        cp -a ${if p.name == "orgize" then orgize-fork else atom-fork}/. "$dst/"
+        chmod -R u+w "$dst"
+        echo '{"files":{},"package":null}' > "$dst/.cargo-checksum.json"
+      ''
+    else
+      drv;
   cargoVendorDir = craneLib.vendorCargoDeps {
     inherit src;
-    overrideVendorGitCheckout =
-      ps: drv:
-      let
-        p = builtins.head ps;
-      in
-      if p.name == "atom_syndication" || p.name == "orgize" then
-        pkgs.runCommandLocal "fork-vendor-${p.name}-${p.version}" { } ''
-          dst="$out/${p.name}-${p.version}"
-          mkdir -p "$dst"
-          cp -a ${if p.name == "orgize" then orgize-fork else atom-fork}/. "$dst/"
-          chmod -R u+w "$dst"
-          echo '{"files":{},"package":null}' > "$dst/.cargo-checksum.json"
-        ''
-      else
-        drv;
+    overrideVendorGitCheckout = vendorPinnedFork "product";
   };
 
   commonArgs = {
@@ -513,21 +513,7 @@ let
     ];
   };
   toolsVendorArgs = {
-    overrideVendorGitCheckout =
-      ps: drv:
-      let
-        p = builtins.head ps;
-      in
-      if p.name == "atom_syndication" || p.name == "orgize" then
-        pkgs.runCommandLocal "tools-fork-vendor-${p.name}-${p.version}" { } ''
-          dst="$out/${p.name}-${p.version}"
-          mkdir -p "$dst"
-          cp -a ${if p.name == "orgize" then orgize-fork else atom-fork}/. "$dst/"
-          chmod -R u+w "$dst"
-          echo '{"files":{},"package":null}' > "$dst/.cargo-checksum.json"
-        ''
-      else
-        drv;
+    overrideVendorGitCheckout = vendorPinnedFork "tools";
   };
   toolsCargoVendorDir = craneLib.vendorCargoDeps (toolsBaseArgs // toolsVendorArgs);
   toolsArgs = toolsBaseArgs // {

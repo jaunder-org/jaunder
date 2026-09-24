@@ -3533,7 +3533,7 @@ checksum = "8c04f5d74368e4d0dfe06c45c8627c81bd7c317d52762d118fb9b3076f6420fd"
 [[package]]
 name = "orgize"
 version = "0.10.0-alpha.10"
-source = "git+https://github.com/jaunder-org/orgize?rev=f8b7e0bb90c2b8be7869d81ea2febd723bc7013d#f8b7e0bb90c2b8be7869d81ea2febd723bc7013d"
+source = "git+https://github.com/jaunder-org/orgize?rev=e7380a157f56035d1c06f8658b0bea2dba34e319#e7380a157f56035d1c06f8658b0bea2dba34e319"
 dependencies = [
  "bytecount",
  "cfg-if",
