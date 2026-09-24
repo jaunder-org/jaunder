@@ -68,9 +68,10 @@ pub struct ComposeState {
     /// fill the absence; changing tags makes even an empty collection explicit.
     tags_supplied: RwSignal<bool>,
     pub audience: RwSignal<AudienceSelection>,
-    /// Only an existing editor with a seeded Org title has a synthetic header
-    /// to remove when switching formats; new-composer source belongs to its author.
-    seeded_org_title: RwSignal<bool>,
+    /// Canonical source before injecting an editor-only Org title. The source
+    /// anchors a moved projection without mistaking an authored body directive
+    /// for the projection after the author deletes it.
+    seeded_org_body: RwSignal<Option<String>>,
 }
 
 /// Comparable values that determine whether a creation composer has unsaved input.
@@ -185,7 +186,7 @@ impl ComposeState {
                 public: true,
                 ..AudienceSelection::default()
             }),
-            seeded_org_title: RwSignal::new(false),
+            seeded_org_body: RwSignal::new(None),
         }
     }
 
@@ -266,7 +267,8 @@ impl ComposeState {
         // Set through the validated field API so value and validity stay consistent (#860, #907).
         self.body.set_value(&body);
         self.format.set(fetched.format);
-        self.seeded_org_title.set(title.is_some());
+        self.seeded_org_body
+            .set(title.map(|_| fetched.body.to_string()));
         self.summary_field
             .set_value(fetched.post.summary.as_deref().unwrap_or_default());
         self.tags.set(fetched.post.tags.clone());
@@ -276,17 +278,18 @@ impl ComposeState {
 
     /// Change format without carrying an editor-projected Org title into other source formats.
     pub fn switch_format(&self, format: PostFormat) {
-        if self.format.get() == PostFormat::Org
-            && format != PostFormat::Org
-            && self.seeded_org_title.get()
-        {
-            let source = self.body.value();
-            if let Some(range) = editor_title_range(&source) {
-                let mut body = source;
-                body.replace_range(range, "");
-                self.body.set_value(&body);
+        if self.format.get() == PostFormat::Org && format != PostFormat::Org {
+            if let Some(authored_body) = self.seeded_org_body.get() {
+                let source = self.body.value();
+                if let Some(range) = editor_title_range(&source)
+                    && (range.start == 0 || source[range.end..].starts_with(&authored_body))
+                {
+                    let mut body = source;
+                    body.replace_range(range, "");
+                    self.body.set_value(&body);
+                }
             }
-            self.seeded_org_title.set(false);
+            self.seeded_org_body.set(None);
         }
         self.format.set(format);
     }
@@ -302,7 +305,7 @@ impl ComposeState {
         self.publish_at.set(String::new());
         self.tags.set(Vec::new());
         self.tags_supplied.set(false);
-        self.seeded_org_title.set(false);
+        self.seeded_org_body.set(None);
     }
 }
 
@@ -774,6 +777,28 @@ mod tests {
             state.switch_format(PostFormat::Markdown);
 
             assert_eq!(state.body.value(), "Intro\n#+TITLE: Old\n\nTail");
+        });
+    }
+
+    #[test]
+    fn switching_after_deleting_projection_keeps_authored_later_title_line() {
+        Owner::new().with(|| {
+            let state = ComposeState::new();
+            let mut fetched = crate::posts::render::test_fixtures::sample_post();
+            fetched.format = PostFormat::Org;
+            fetched.title = Some("Old".parse().unwrap());
+            fetched.body = "Intro\n#+TITLE: Authored\n\nTail".parse().unwrap();
+            state.seed_from(&fetched).unwrap();
+            state
+                .body
+                .set_value("Intro\n#+TITLE: Edited authored\n\nTail");
+
+            state.switch_format(PostFormat::Markdown);
+
+            assert_eq!(
+                state.body.value(),
+                "Intro\n#+TITLE: Edited authored\n\nTail"
+            );
         });
     }
 

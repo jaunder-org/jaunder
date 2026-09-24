@@ -764,6 +764,32 @@ test("editing an Org Post preserves, changes, and removes its title", async ({
   await expect(body).toHaveValue("Org body\n");
 });
 
+test("removing an Org editor projection then switching format keeps authored directives", async ({
+  registeredPage,
+}) => {
+  const page = await registeredPage("/posts/new");
+  const summary = await composePost(page, {
+    body: "#+TITLE: Synthetic\n\nIntro\n#+TITLE: Authored\n\nTail",
+    format: "org",
+    publish: false,
+  });
+  await followPermalink(page, summary);
+  await openEditor(page);
+  await page.fill(SEL.postBody, "Intro\n#+TITLE: Edited authored\n\nTail");
+  await openComposerControl(page, "Format");
+  await click(page, SEL.formatButton("Markdown"));
+  await expect(page.locator(SEL.postBody)).toHaveValue(
+    "Intro\n#+TITLE: Edited authored\n\nTail",
+  );
+  await click(page, SEL.publishButton("false"));
+  await expectFlash(page, "Draft saved.");
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  await openEditor(page);
+  await expect(page.locator(SEL.postBody)).toHaveValue(
+    "Intro\n#+TITLE: Edited authored\n\nTail\n",
+  );
+});
+
 test("editing an AtomPub-titled Markdown Post preserves its separate title and body", async ({
   page,
   request,
@@ -790,6 +816,38 @@ test("editing an AtomPub-titled Markdown Post preserves its separate title and b
   );
   await openEditor(page);
   await expect(page.locator(SEL.postBody)).toHaveValue("Edited plain body\n");
+});
+
+test("editing an AtomPub-titled HTML Post preserves its separate title and body", async ({
+  page,
+  request,
+}) => {
+  const username = await signInAsNewUser(page);
+  const token = await mintAppPassword(page, "Separate HTML title");
+  const created = await request.post(`${BASE_URL}/atompub/${username}/posts`, {
+    headers: {
+      authorization: `Basic ${Buffer.from(`${username}:${token}`).toString("base64")}`,
+      "content-type": "application/atom+xml",
+    },
+    data: '<entry xmlns="http://www.w3.org/2005/Atom" xmlns:app="http://www.w3.org/2007/app"><title>Separate HTML title</title><content type="html">&lt;p&gt;Original HTML body&lt;/p&gt;</content><app:control><app:draft>yes</app:draft></app:control></entry>',
+  });
+  expect(created.status()).toBe(201);
+
+  await openPostFromDrafts(page, "Separate HTML title");
+  await expect(page.locator(SEL.postBody)).toHaveValue(
+    "<p>Original HTML body</p>",
+  );
+  await page.fill(SEL.postBody, "<p>Edited HTML body</p>");
+  await click(page, SEL.publishButton("false"));
+  await expectFlash(page, "Draft saved.");
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  await expect(page.locator("article .j-post-title")).toHaveText(
+    "Separate HTML title",
+  );
+  await openEditor(page);
+  await expect(page.locator(SEL.postBody)).toHaveValue(
+    "<p>Edited HTML body</p>",
+  );
 });
 
 test("an ordinary titled Org edit retains structured metadata and its schedule", async ({

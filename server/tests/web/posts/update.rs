@@ -190,6 +190,33 @@ async fn web_update_preserves_separately_supplied_non_org_title(#[case] backend:
                 "Edited body"
             }
         );
+
+        let (status, body) = update_post_json(
+            app.clone(),
+            post_id,
+            PostInputs {
+                publish: Some(false),
+                slug_override: Some(record.slug.clone()),
+                ..PostInputs::new(
+                    parse_post_body("# New heading\n\nFurther edited body"),
+                    PostFormat::Markdown,
+                )
+            },
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "second update body: {body}");
+        let record = env
+            .posts()
+            .get_post_by_id(post_id, &common::visibility::ViewerIdentity::Anonymous)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.title.as_deref(), Some("Supplied separately"));
+        assert_eq!(
+            record.body.as_ref(),
+            "# New heading\n\nFurther edited body\n"
+        );
     }
 }
 

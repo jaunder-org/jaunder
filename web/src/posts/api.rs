@@ -121,25 +121,22 @@ fn normalize_web_org(
         .map_err(|error| InternalError::validation(error.to_string()))
 }
 
-/// Preserve titles supplied outside Markdown/HTML source on an ordinary web edit.
-/// A new Markdown heading or a format change takes precedence; an existing
-/// heading with a different separately supplied title does not.
+/// Preserve a separately supplied title across non-Org web edits even when
+/// the new source also has a heading: explicit titles outrank derived headings.
+/// Matching Markdown headings have no stored provenance, so treat them as
+/// source-derived to keep ordinary heading edits and removal working.
 #[cfg(any(feature = "server", test))]
 fn preserved_non_org_title(
     old_format: PostFormat,
     old_body: &PostBody,
     old_title: Option<&PostTitle>,
     format: PostFormat,
-    body: &PostBody,
 ) -> Option<PostTitle> {
-    if format == PostFormat::Org || format != old_format {
+    if format == PostFormat::Org || old_format == PostFormat::Org {
         return None;
     }
     let old_heading = common::render::derive_post_naming(None, old_body, &old_format).0;
-    let new_heading = common::render::derive_post_naming(None, body, &format).0;
-    // An explicit AtomPub title can coexist with a different Markdown heading.
-    // Only an unsourced title with a newly added heading yields to that heading.
-    (old_title != old_heading.as_ref() && (old_heading.is_some() || new_heading.is_none()))
+    (old_title != old_heading.as_ref())
         .then(|| old_title.cloned())
         .flatten()
 }
@@ -944,7 +941,6 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<MutationOutc
                     &existing.body,
                     existing.title.as_ref(),
                     format,
-                    &body,
                 )
             })
     };
@@ -1472,23 +1468,23 @@ mod tests {
     }
 
     #[test]
-    fn separately_supplied_titles_survive_same_format_edits_without_new_headings() {
+    fn separately_supplied_titles_survive_non_org_edits() {
         use super::{PostFormat, preserved_non_org_title};
         let title = "External title".parse().unwrap();
         let plain = parse_post_body("Plain content");
-        let edited = parse_post_body("Edited content");
         let heading = parse_post_body("# New heading\n\nEdited content");
         for format in [PostFormat::Markdown, PostFormat::Html] {
             assert_eq!(
-                preserved_non_org_title(format, &plain, Some(&title), format, &edited),
+                preserved_non_org_title(format, &plain, Some(&title), format),
                 Some(title.clone())
             );
+            assert_eq!(preserved_non_org_title(format, &plain, None, format), None);
             assert_eq!(
-                preserved_non_org_title(format, &plain, None, format, &edited),
+                preserved_non_org_title(format, &plain, Some(&title), PostFormat::Org),
                 None
             );
             assert_eq!(
-                preserved_non_org_title(format, &plain, Some(&title), PostFormat::Org, &edited),
+                preserved_non_org_title(PostFormat::Org, &plain, Some(&title), format),
                 None
             );
         }
@@ -1497,22 +1493,25 @@ mod tests {
                 PostFormat::Markdown,
                 &plain,
                 Some(&title),
-                PostFormat::Markdown,
-                &heading
+                PostFormat::Markdown
             ),
-            None,
-            "a newly authored heading takes ownership of the title"
+            Some(title.clone()),
+            "an external title outranks a newly authored heading"
         );
         assert_eq!(
             preserved_non_org_title(
                 PostFormat::Markdown,
                 &heading,
                 Some(&title),
-                PostFormat::Markdown,
-                &edited
+                PostFormat::Markdown
             ),
             Some(title.clone()),
             "a different AtomPub title outranks an authored Markdown heading"
+        );
+        assert_eq!(
+            preserved_non_org_title(PostFormat::Markdown, &plain, Some(&title), PostFormat::Html),
+            Some(title.clone()),
+            "non-Org format switches retain separate titles"
         );
         let derived: super::PostTitle = "New heading".parse().unwrap();
         assert_eq!(
@@ -1520,8 +1519,7 @@ mod tests {
                 PostFormat::Markdown,
                 &heading,
                 Some(&derived),
-                PostFormat::Markdown,
-                &edited
+                PostFormat::Markdown
             ),
             None,
             "deleting an authored heading must still clear its derived title"
