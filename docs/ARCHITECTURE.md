@@ -2871,11 +2871,10 @@ boundaries as the rest of pull.
 synchronizer. Its persistent report supports arbitrary marks or a contiguous
 active-region selection and explicit, confirmed batch push, pull, and
 remote-delete commands. Operations run deterministically and sequentially;
-unsafe rows are retained as blocked results rather than becoming an overwrite or
-conflict-resolution escape hatch. The buffer refreshes from a new inventory
-after completion or cancellation while retaining the ordered terminal results
-from the last batch, so completed work and independent failures remain visible
-and safe to retry.
+unsafe rows are retained as blocked results rather than becoming an overwrite.
+The buffer refreshes from a new inventory after completion or cancellation while
+retaining the ordered terminal results from the last batch, so completed work
+and independent failures remain visible and safe to retry.
 
 A selected matched `server-ahead` Post may be pulled only after revalidating its
 report-snapshotted local path/SHA-256 and remote strong ETag
@@ -2893,6 +2892,34 @@ local file only after the server's `204`, while a server-only deletion has no
 local-file effect. Completed batch mutations are never rolled back; cancellation
 is honored only between Posts, and rerunning the refreshed report retries only
 the work that remains.
+
+#### Explicit conflict resolution
+
+A uniquely matched `conflict` admits explicit, confirmed keep-local and
+keep-remote ordered batches, or one-Post two-way Ediff merge
+([revalidated conflict choices](adr/drafts/emacs-reconciliation-conflict-resolution.md)).
+Each path checks the reviewed local path, bytes and identity, a clean visiting
+buffer, and the fresh Member identity and strong ETag; no later ETag is silently
+adopted. Keep-local prepares authored content without a local Post metadata
+write, then sends a conditional PUT with the reviewed `If-Match`. Keep-remote
+stages the Member and Media and reuses the matched-pull final checks and atomic
+replacement/rename. Two-way Ediff compares read-only local and staged remote
+snapshots; its C merge output is the separate editable scratch result, so Ediff
+copy actions and direct edits land on that result. Client-owned identity, slug
+and synchronization metadata come from the reviewed local Post. Exiting Ediff
+cannot publish: explicit completion rechecks both sides and sends conditionally
+before installing the merge locally. Initial staging failure creates no scratch;
+cancellation or a blocked/unknown/partial finish retains existing edited scratch
+until explicitly discarded.
+
+A rejected PUT preserves both Posts, whereas a lost response reports an
+**unknown remote outcome** without retrying or checkpointing the local Post. A
+confirmed remote commit followed by failed local installation, write-back or
+rename is **partial success**, never a claim of two-sided preservation. Verified
+Local Media Copies and uploaded Media may persist despite a blocked Post action.
+The report refreshes after operations and retains ordered terminal results even
+if a fresh-inventory refresh fails; no committed Post is automatically rolled
+back.
 
 #### Local Media Copies
 

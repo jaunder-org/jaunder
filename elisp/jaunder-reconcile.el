@@ -10,6 +10,8 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'ediff)
+(require 'org)
 (require 'dom)
 (require 'url-parse)
 (require 'jaunder-atom)
@@ -24,6 +26,7 @@
 (declare-function jaunder--pull-destination-exists-p "jaunder-pull")
 (declare-function jaunder--pull-member "jaunder-pull")
 (declare-function jaunder--pull-stage-member "jaunder-pull")
+(declare-function jaunder--pull-response-identity "jaunder-pull")
 (declare-function jaunder-pull-result-status "jaunder-pull")
 (declare-function jaunder-pull-result-id "jaunder-pull")
 (declare-function jaunder-pull-result-slug "jaunder-pull")
@@ -59,12 +62,57 @@
 (defvar-local jaunder-reconcile-last-batch-results nil
   "Ordered terminal results from the most recent batch in this buffer.")
 
+(cl-defstruct (jaunder-reconcile-merge-session
+               (:constructor jaunder--make-reconcile-merge-session))
+  "One conflict's review evidence and independently editable scratch result."
+  row report-buffer path scratch local-view remote-view ediff-active ediff-ready)
+
+(defvar-local jaunder-reconcile-merge-session nil
+  "The owned conflict merge session of the current scratch buffer.")
+
+(defvar-local jaunder-reconcile-merge-last-result nil
+  "Last explicit completion result, also retained on the merge scratch.")
+
+(defvar-local jaunder-reconcile-merge-allow-kill nil
+  "Non-nil only during an explicit, confirmed scratch cleanup.")
+
+(defun jaunder--reconcile-merge-confirm-kill ()
+  "Require an explicit discard before any ordinary scratch-buffer kill."
+  (or jaunder-reconcile-merge-allow-kill
+      (not jaunder-reconcile-merge-session)
+      (y-or-n-p "Discard the reconciliation merge scratch permanently? ")))
+
+(defun jaunder--reconcile-merge-on-kill ()
+  "Close orphaned snapshots when a confirmed kill discards inactive scratch."
+  (when (and jaunder-reconcile-merge-session
+             (not (jaunder-reconcile-merge-session-ediff-active
+                   jaunder-reconcile-merge-session)))
+    (jaunder--reconcile-merge-close-views jaunder-reconcile-merge-session)))
+
+(define-derived-mode jaunder-reconcile-merge-mode org-mode "Jaunder-Merge"
+  "Edit authored content for a reviewed two-way conflict merge.
+Ediff quit does not publish; `C-c C-c' explicitly completes, `C-c C-k'
+retains the scratch, and `C-c C-d' explicitly discards it.  Client-managed
+JAUNDER metadata is restored from the reviewed local Post on completion."
+  (define-key jaunder-reconcile-merge-mode-map (kbd "C-c C-c")
+              #'jaunder-reconcile-merge-finish)
+  (define-key jaunder-reconcile-merge-mode-map (kbd "C-c C-k")
+              #'jaunder-reconcile-merge-cancel)
+  (define-key jaunder-reconcile-merge-mode-map (kbd "C-c C-d")
+              #'jaunder-reconcile-merge-discard)
+  (add-hook 'kill-buffer-query-functions
+            #'jaunder--reconcile-merge-confirm-kill nil t)
+  (add-hook 'kill-buffer-hook #'jaunder--reconcile-merge-on-kill nil t))
+
 (define-derived-mode jaunder-reconcile-report-mode special-mode "Jaunder-Reconcile"
   "Major mode for selecting rows in a Jaunder reconciliation report."
   (setq-local truncate-lines t)
   (define-key jaunder-reconcile-report-mode-map "m" #'jaunder-reconcile-toggle-mark)
   (define-key jaunder-reconcile-report-mode-map "p" #'jaunder-reconcile-push-selected)
   (define-key jaunder-reconcile-report-mode-map "f" #'jaunder-reconcile-pull-selected)
+  (define-key jaunder-reconcile-report-mode-map "l" #'jaunder-reconcile-keep-local-selected)
+  (define-key jaunder-reconcile-report-mode-map "r" #'jaunder-reconcile-keep-remote-selected)
+  (define-key jaunder-reconcile-report-mode-map "e" #'jaunder-reconcile-merge-selected)
   (define-key jaunder-reconcile-report-mode-map "g" #'jaunder-reconcile-refresh)
   (define-key jaunder-reconcile-report-mode-map "D" #'jaunder-reconcile-delete-selected))
 
@@ -184,6 +232,21 @@ An active region selects only its rows, including when it touches none."
         (insert-file-contents-literally path)
         (secure-hash 'sha256 (current-buffer)))
     (error nil)))
+
+(defun jaunder--reconcile-visiting-buffer-matches-bytes-p (buffer sha256)
+  "Return non-nil if clean visiting BUFFER encodes to reviewed SHA256.
+A clean buffer can still be stale after an external disk replacement.  Encode
+with its file coding system before comparing with the literal on-disk digest;
+an unknown encoding fails closed rather than publishing stale content."
+  (with-current-buffer buffer
+    (condition-case nil
+        (equal (secure-hash
+                'sha256
+                (encode-coding-string
+                 (buffer-substring-no-properties (point-min) (point-max))
+                 (or buffer-file-coding-system 'utf-8-unix)))
+               sha256)
+      (error nil))))
 
 (defun jaunder--classify-match (match outcome stored-etag synced-at mtime &optional persisted-local-ahead)
   "Classify MATCH using Member OUTCOME and its saved local synchronization state.
@@ -478,6 +541,19 @@ hide otherwise valid synchronization markers."
    "report ready" "report refresh failed"
    (lambda () (jaunder--reconcile-refresh-buffer (current-buffer)))))
 
+(defun jaunder--reconcile-show-results-and-refresh (buffer)
+  "Show BUFFER's terminal results before a fallible fresh inventory refresh.
+A failed refresh must not erase the ordered recovery evidence.  The stale
+report remains visibly reviewable, and the User must refresh before retrying."
+  (with-current-buffer buffer
+    (jaunder--render-reconcile-report jaunder-reconcile-report buffer))
+  (condition-case err
+      (jaunder--reconcile-refresh-buffer buffer)
+    (error
+     (message "Jaunder reconcile: refresh failed; Last batch retained: %s"
+              (error-message-string err))
+     'refresh-failed)))
+
 (defun jaunder--reconcile-execute-batch (buffer rows action operation &optional cancelled-p)
   "Run OPERATION for ROWS sequentially, retaining every terminal result in BUFFER.
 CANCELLED-P is checked only between completed items.  OPERATION receives one
@@ -512,8 +588,10 @@ row and returns a result plist; its independent errors become failed results."
                       (and cancelled-p (funcall cancelled-p)) quit-flag)
               (setq cancelled t))))))
     (when cancelled (setq quit-flag nil))
-    (jaunder--reconcile-refresh-buffer buffer)
-    (if cancelled 'cancelled 'completed)))
+    (let ((refresh (jaunder--reconcile-show-results-and-refresh buffer)))
+      (if (eq refresh 'refresh-failed)
+          'refresh-failed
+        (if cancelled 'cancelled 'completed)))))
 
 (defun jaunder--reconcile-row-post-id (row)
   "Return ROW's remote Post ID, when it has an unambiguous Member."
@@ -702,6 +780,9 @@ Return a plist suitable for a terminal result; no DELETE is sent here."
       'local-bytes-changed)
      ((and (buffer-live-p buffer) (buffer-modified-p buffer)) 'local-buffer-modified)
      ((and (buffer-live-p buffer)
+           (not (jaunder--reconcile-visiting-buffer-matches-bytes-p
+                 buffer expected-hash))) 'local-buffer-stale)
+     ((and (buffer-live-p buffer)
            (not (equal (jaunder--canonical-post-id
                         (with-current-buffer buffer
                           (jaunder--buffer-property "JAUNDER_ID"))) id)))
@@ -776,6 +857,61 @@ than an exception flattened into a generic pull failure."
              :detail (format "fresh inventory has duplicate remote Post ID %s" id)))
       (error (list :reason 'fresh-inventory-failed
                    :detail (error-message-string err))))))
+
+(defun jaunder--reconcile-conflict-preflight (row)
+  "Return fresh evidence for reviewed conflict ROW, or a blocked result.
+No server or local Post mutation is authorized by the preview ETag alone."
+  (let* ((member (jaunder-reconcile-row-member row))
+         (local (jaunder-reconcile-row-local row))
+         (reviewed (jaunder-reconcile-row-remote-etag row)))
+    (cond
+     ((not (eq (jaunder-reconcile-row-state row) 'conflict))
+      (jaunder--reconcile-blocked row 'conflict-ineligible))
+     ((not (and local member))
+      (jaunder--reconcile-blocked row 'matched-identity-changed))
+     ((not (jaunder--strong-etag-p reviewed))
+      (jaunder--reconcile-blocked row 'reviewed-etag-invalid))
+     (t
+      (let ((local-reason
+             (jaunder--reconcile-pull-preflight
+              row (list :slug (jaunder-inventory-member-slug member)))))
+        (if local-reason
+            (jaunder--reconcile-blocked row local-reason)
+          (let ((match (jaunder--reconcile-pull-unique-match row)))
+            (if (not (plist-get match :ok))
+                (jaunder--reconcile-blocked row (plist-get match :reason)
+                                            (plist-get match :detail))
+              (condition-case err
+                  (let* ((response (jaunder--http-request
+                                    "GET" (jaunder-inventory-member-edit-uri member)))
+                         (status (plist-get response :status))
+                         (etag (jaunder--response-header response "ETag")))
+                    (cond
+                     ((not (and (integerp status) (<= 200 status 299)))
+                      (jaunder--reconcile-blocked row 'member-http-error status))
+                     ((not (jaunder--strong-etag-p etag))
+                      (jaunder--reconcile-blocked row 'current-etag-invalid))
+                     ((not (equal reviewed etag))
+                      (jaunder--reconcile-blocked row 'etag-stale))
+                     (t
+                      (let* ((body (plist-get response :body))
+                             (identity
+                              (condition-case nil
+                                  (jaunder--pull-response-identity body)
+                                (error nil)))
+                             (edit-uris
+                              (and identity
+                                   (cdr (assq 'edit-uris
+                                              (jaunder--harvest-response-fields body))))))
+                        (if (and (equal identity
+                                        (cons (jaunder-inventory-member-id member)
+                                              (jaunder-inventory-member-slug member)))
+                                 (equal edit-uris
+                                        (list (jaunder-inventory-member-edit-uri member))))
+                            (list :ok t :etag etag :http-status status)
+                          (jaunder--reconcile-blocked row 'member-identity-changed))))))
+                (error (jaunder--reconcile-blocked
+                        row 'member-transport-error (error-message-string err))))))))))))
 
 (defun jaunder--reconcile-replace-pulled-file (path destination bytes)
   "Atomically replace PATH then rename to DESTINATION, reporting committed state."
@@ -956,6 +1092,476 @@ remote strong-ETag revalidation, one local preflight, then replacement."
        (lambda ()
          (jaunder--reconcile-execute-batch buffer rows 'pull
                                            #'jaunder--reconcile-pull-row))))))
+
+(defun jaunder--reconcile-keep-local-send (row path xml &optional merged-bytes audience-capable)
+  "Send reviewed XML for ROW, then checkpoint PATH only on confirmed commit.
+When MERGED-BYTES is present, atomically install that authored result before
+server-confirmed metadata write-back.  AUDIENCE-CAPABLE is the service evidence
+bound during preparation; never install a Post before the PUT."
+  (let* ((etag (jaunder-reconcile-row-remote-etag row))
+         (response
+          (condition-case err
+              (list :value (jaunder--send-reviewed-update
+                            (jaunder-inventory-member-edit-uri
+                             (jaunder-reconcile-row-member row)) etag xml))
+            (error (list :error err))))
+         (lost (plist-get response :error))
+         (received (plist-get response :value))
+         (status (plist-get received :status)))
+    (cond
+     (lost
+      (list :outcome 'unknown :post-id (jaunder--reconcile-row-post-id row)
+            :slug (jaunder--reconcile-row-slug row) :etag etag
+            :local-effect 'unchanged :reason 'remote-outcome-unknown
+            :detail (format "PUT response lost; reconcile before retrying: %s"
+                            (error-message-string lost))))
+     ((eq status 412)
+      (append (jaunder--reconcile-blocked row 'etag-stale)
+              (list :etag etag :http-status status)))
+     ((not (memq status '(200 201)))
+      (list :outcome 'failed :post-id (jaunder--reconcile-row-post-id row)
+            :slug (jaunder--reconcile-row-slug row) :etag etag
+            :http-status status :local-effect 'unchanged :reason 'publish-http-error))
+     (t
+      (let ((drift (jaunder--reconcile-pull-preflight
+                    row (list :slug (jaunder--reconcile-row-slug row)))))
+        (if drift
+            (list :outcome 'partial :post-id (jaunder--reconcile-row-post-id row)
+                  :slug (jaunder--reconcile-row-slug row)
+                  :etag (jaunder--response-header received "ETag")
+                  :http-status status :local-effect 'unchanged
+                  :reason 'local-changed-after-commit
+                  :detail (format "Remote PUT committed; %s; reconcile before retrying" drift))
+          (let ((checkpoint
+                 (condition-case err
+                     (progn
+                       (when merged-bytes
+                         (jaunder--reconcile-replace-pulled-file
+                          path path merged-bytes))
+                       (list :value
+                             (jaunder--reconcile-call-with-source-buffer
+                              path
+                              (lambda ()
+                                ;; Record timezone only after confirmed commitment.
+                                (jaunder--ensure-date-tz)
+                                (let ((slug (jaunder--write-back
+                                             received nil nil t audience-capable)))
+                                  (list :slug slug :path (jaunder--rename-to-slug slug)))))))
+                   (error (list :error err)))))
+            (if (plist-get checkpoint :error)
+                (list :outcome 'partial :post-id (jaunder--reconcile-row-post-id row)
+                      :slug (jaunder--reconcile-row-slug row)
+                      :etag (jaunder--response-header received "ETag")
+                      :http-status status :local-effect 'checkpoint-uncertain
+                      :reason 'local-write-back-failed
+                      :detail (format "Remote PUT committed; inspect local Post before retrying: %s"
+                                      (error-message-string (plist-get checkpoint :error))))
+              (let ((installed (plist-get checkpoint :value)))
+                (list :outcome 'success :post-id (jaunder--reconcile-row-post-id row)
+                      :slug (plist-get installed :slug)
+                      :etag (jaunder--response-header received "ETag")
+                      :http-status status
+                      :local-effect (if (equal path (plist-get installed :path))
+                                        'updated 'renamed)))))))))))
+
+(defun jaunder--reconcile-keep-local-row (row)
+  "Publish reviewed ROW locally authored content without any pre-PUT Post write."
+  (let ((initial (jaunder--reconcile-conflict-preflight row)))
+    (if (not (plist-get initial :ok))
+        initial
+      (let* ((path (jaunder-inventory-local-path (jaunder-reconcile-row-local row)))
+             (prepared
+              (condition-case err
+                  (jaunder--reconcile-call-with-source-buffer
+                   path #'jaunder--prepare-reviewed-update)
+                (error (list :error err)))))
+        (if (plist-get prepared :error)
+            (list :outcome 'failed :post-id (jaunder--reconcile-row-post-id row)
+                  :slug (jaunder--reconcile-row-slug row) :local-effect 'unchanged
+                  :reason 'publish-preparation-failed
+                  :detail (error-message-string (plist-get prepared :error)))
+          (let ((final (jaunder--reconcile-conflict-preflight row)))
+            (if (not (plist-get final :ok))
+                final
+              (jaunder--reconcile-keep-local-send
+               row path (plist-get prepared :xml) nil
+               (plist-get prepared :audience-capable)))))))))
+
+(defun jaunder-reconcile-keep-local-selected ()
+  "Publish reviewed local content for selected conflicts after confirmation."
+  (interactive)
+  (let ((rows (jaunder-reconcile-selected-rows))
+        (buffer (current-buffer)))
+    (unless rows (user-error "No reconciliation rows selected"))
+    (when (jaunder--reconcile-confirm
+           "Keep local for %d selected Post(s)? " (length rows))
+      (jaunder--call-with-blog
+       (jaunder-reconcile-report-root jaunder-reconcile-report)
+       (lambda ()
+         (jaunder--reconcile-execute-batch
+          buffer rows 'keep-local #'jaunder--reconcile-keep-local-row))))))
+
+(defun jaunder--reconcile-merge-scratch-name (row root)
+  "Name the independent scratch for ROW and ROOT without cross-blog collision."
+  (format "*Jaunder Merge Result %s %s*"
+          (jaunder--reconcile-row-post-id row)
+          (substring (secure-hash 'sha256 root) 0 8)))
+
+(defun jaunder--reconcile-stage-matches-review-p (row staged)
+  "Return non-nil when STAGED Member bytes and identity match reviewed ROW."
+  (let ((member (jaunder-reconcile-row-member row)))
+    (and (equal (plist-get staged :id) (jaunder-inventory-member-id member))
+         (equal (plist-get staged :slug) (jaunder-inventory-member-slug member))
+         (equal (plist-get staged :etag) (jaunder-reconcile-row-remote-etag row))
+         (stringp (plist-get staged :bytes)))))
+
+(defun jaunder--reconcile-merge-stage (row)
+  "Return reviewed staged remote data for ROW, or a terminal blocked result.
+Do not create an editable result until both before/after-staging guards pass."
+  (let ((initial (jaunder--reconcile-conflict-preflight row)))
+    (if (not (plist-get initial :ok))
+        initial
+      (condition-case err
+          (let* ((root (jaunder-reconcile-report-root jaunder-reconcile-report))
+                 (member (jaunder-reconcile-row-member row))
+                 (jaunder--pull-link-inventory
+                  (jaunder-reconcile-report-inventory jaunder-reconcile-report))
+                 (staged (jaunder--pull-stage-member root member)))
+            (cond
+             ((not (jaunder--reconcile-stage-matches-review-p row staged))
+              (jaunder--reconcile-blocked row 'staged-identity-changed))
+             (t
+              (let ((final (jaunder--reconcile-conflict-preflight row)))
+                (if (plist-get final :ok)
+                    (list :staged staged)
+                  final)))))
+        (jaunder-pull-stage-identity-changed
+         (jaunder--reconcile-blocked row 'staged-identity-changed))
+        (error
+         (list :outcome 'failed :post-id (jaunder--reconcile-row-post-id row)
+               :slug (jaunder--reconcile-row-slug row) :local-effect 'unchanged
+               :reason 'merge-staging-failed :detail (error-message-string err)))))))
+
+(defun jaunder--reconcile-merge-record (session-or-row report-buffer value)
+  "Record VALUE for SESSION-OR-ROW in REPORT-BUFFER and refresh the report."
+  (let ((row (if (jaunder-reconcile-merge-session-p session-or-row)
+                 (jaunder-reconcile-merge-session-row session-or-row)
+               session-or-row)))
+    (with-current-buffer report-buffer
+      (setq-local jaunder-reconcile-last-batch-results
+                  (list (jaunder--reconcile-terminal-result 'merge row value)))
+      (jaunder--reconcile-show-results-and-refresh report-buffer))))
+
+(defun jaunder--reconcile-merge-snapshot (name bytes)
+  "Create a read-only Org snapshot named NAME of reviewed literal BYTES."
+  (let ((buffer (generate-new-buffer name))
+        complete)
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (org-mode)
+            (insert bytes)
+            (set-buffer-modified-p nil)
+            (setq buffer-read-only t))
+          (setq complete t)
+          buffer)
+      (unless complete (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(defconst jaunder--reconcile-merge-owned-properties
+  '("JAUNDER_ID" "JAUNDER_SLUG" "JAUNDER_SYNCED" "JAUNDER_SYNCED_AT"
+    "JAUNDER_LOCAL_AHEAD" "JAUNDER_DATE_TZ" "JAUNDER_DATE_UTC"
+    "JAUNDER_FORMAT" "JAUNDER_CREATE_KEY" "JAUNDER_CREATE_DIGEST"
+    "JAUNDER_CREATE_ATTEMPT_AT")
+  "Client-managed local Post metadata never taken from an editable merge scratch.")
+
+(defun jaunder--reconcile-merge-authorized-bytes (session)
+  "Return SESSION scratch with authored fields and reviewed local owned metadata.
+Strip every client-managed JAUNDER property from the editable leading header,
+then restore the supported keys from the reviewed local Post.  In particular,
+editing an identity or sync marker in scratch cannot change the sent Post."
+  (let ((owned
+         (with-temp-buffer
+           (insert-file-contents-literally (jaunder-reconcile-merge-session-path session))
+           (org-mode)
+           (mapcar (lambda (key) (cons key (jaunder--buffer-property key)))
+                   jaunder--reconcile-merge-owned-properties))))
+    (with-temp-buffer
+      (insert (with-current-buffer (jaunder-reconcile-merge-session-scratch session)
+                (buffer-substring-no-properties (point-min) (point-max))))
+      (org-mode)
+      (let ((case-fold-search t))
+        (goto-char (point-min))
+        (while (re-search-forward
+                "^[ \t]*#\\+PROPERTY:[ \t]+\\(JAUNDER_[[:alnum:]_]+\\)\\(?:[ \t].*\\)?\\(?:\n\\|\\'\\)"
+                (jaunder--body-start) t)
+          (unless (member (upcase (match-string 1))
+                          '("JAUNDER_STATUS" "JAUNDER_AUDIENCE"))
+            (replace-match ""))))
+      (dolist (property owned)
+        (when (cdr property)
+          (jaunder--set-property (car property) (cdr property))))
+      (buffer-string))))
+
+(defun jaunder--reconcile-merge-prepared-update (path bytes)
+  "Prepare authorized Org BYTES and service evidence without writing PATH."
+  (let ((default-directory (file-name-directory path)))
+    (with-temp-buffer
+      (insert bytes)
+      (org-mode)
+      ;; Only the transient preparation buffer sees PATH for relative Media
+      ;; and Local Post Link resolution.  It never visits or saves PATH.
+      (setq-local buffer-file-name path)
+      (jaunder--prepare-reviewed-update))))
+
+(defun jaunder--reconcile-merge-close-views (session)
+  "Release SESSION's read-only Ediff snapshots after Ediff has finished."
+  (setf (jaunder-reconcile-merge-session-ediff-active session) nil)
+  (dolist (buffer (list (jaunder-reconcile-merge-session-local-view session)
+                        (jaunder-reconcile-merge-session-remote-view session)))
+    (when (buffer-live-p buffer) (kill-buffer buffer))))
+
+(defun jaunder--reconcile-merge-cleanup (session)
+  "Retire SESSION scratch, leaving any active Ediff snapshots until quit."
+  (unless (jaunder-reconcile-merge-session-ediff-active session)
+    (jaunder--reconcile-merge-close-views session))
+  (let ((scratch (jaunder-reconcile-merge-session-scratch session)))
+    (when (buffer-live-p scratch)
+      (with-current-buffer scratch
+        (setq-local jaunder-reconcile-merge-allow-kill t)
+        (set-buffer-modified-p nil))
+      (kill-buffer scratch))))
+
+(defun jaunder-reconcile-merge-discard ()
+  "Discard this merge scratch only after an explicit User confirmation."
+  (interactive)
+  (let ((session jaunder-reconcile-merge-session))
+    (unless session
+      (user-error "This buffer is not a reconciliation merge result"))
+    (when (y-or-n-p "Discard the editable merge result permanently? ")
+      (jaunder--reconcile-merge-cleanup session))))
+
+(defun jaunder-reconcile-merge-finish ()
+  "Explicitly publish this scratch after revalidating the reviewed conflict.
+Never infer approval from exiting Ediff.  Preserve scratch after a blocked,
+unknown, failed, or partial result; only confirmed success retires it."
+  (interactive)
+  (let* ((session jaunder-reconcile-merge-session)
+         (row (and session (jaunder-reconcile-merge-session-row session)))
+         (report-buffer (and session (jaunder-reconcile-merge-session-report-buffer session))))
+    (unless (and row (buffer-live-p report-buffer))
+      (user-error "This merge has no live reconciliation report; retain its scratch"))
+    (unless (jaunder-reconcile-merge-session-ediff-ready session)
+      (user-error "Ediff did not open; this scratch cannot be published"))
+    (when (y-or-n-p
+           (format "Publish merged Post %s against reviewed ETag %s? "
+                   (jaunder--reconcile-row-post-id row)
+                   (jaunder-reconcile-row-remote-etag row)))
+      (let* ((path (jaunder-reconcile-merge-session-path session))
+             (reviewed-text (buffer-substring-no-properties (point-min) (point-max)))
+             (result
+              (with-current-buffer report-buffer
+                (jaunder--call-with-blog
+                 (jaunder-reconcile-report-root jaunder-reconcile-report)
+                 (lambda ()
+                   (let ((initial (jaunder--reconcile-conflict-preflight row)))
+                     (if (not (plist-get initial :ok))
+                         initial
+                       (let ((prepared
+                              (condition-case err
+                                  (let* ((bytes (jaunder--reconcile-merge-authorized-bytes
+                                                 session))
+                                         (update (jaunder--reconcile-merge-prepared-update
+                                                  path bytes)))
+                                    (list :bytes bytes :xml (plist-get update :xml)
+                                          :audience-capable
+                                          (plist-get update :audience-capable)))
+                                (error (list :error err)))))
+                         (if (plist-get prepared :error)
+                             (list :outcome 'failed
+                                   :post-id (jaunder--reconcile-row-post-id row)
+                                   :slug (jaunder--reconcile-row-slug row)
+                                   :local-effect 'unchanged
+                                   :reason 'merge-preparation-failed
+                                   :detail (error-message-string
+                                            (plist-get prepared :error)))
+                           (let ((final (jaunder--reconcile-conflict-preflight row)))
+                             (if (not (plist-get final :ok))
+                                 final
+                               (jaunder--reconcile-keep-local-send
+                                row path (plist-get prepared :xml)
+                                (plist-get prepared :bytes)
+                                (plist-get prepared :audience-capable)))))))))))))
+        (setq-local jaunder-reconcile-merge-last-result result)
+        (jaunder--reconcile-merge-record session report-buffer result)
+        (if (eq (plist-get result :outcome) 'success)
+            (if (equal reviewed-text (buffer-substring-no-properties
+                                      (point-min) (point-max)))
+                (jaunder--reconcile-merge-cleanup session)
+              (message "Remote merge committed; scratch changed during send and was retained"))
+          (message "Merge %s: %s; scratch retained for fresh review"
+                   (plist-get result :outcome) (plist-get result :reason)))
+        result))))
+
+(defun jaunder-reconcile-merge-cancel ()
+  "Retain the editable scratch; leaving Ediff never publishes it."
+  (interactive)
+  (unless jaunder-reconcile-merge-session
+    (user-error "This buffer is not a reconciliation merge result"))
+  (message (if (jaunder-reconcile-merge-session-ediff-ready
+                jaunder-reconcile-merge-session)
+               "Merge cancelled; %s retained for later completion or explicit discard"
+             "Ediff failed; %s retained for inspection or explicit discard; start a fresh merge")
+           (buffer-name)))
+
+(defun jaunder--reconcile-merge-bind-ediff-result (session name)
+  "Make Ediff's actual merge output the editable scratch for SESSION.
+Called from Ediff's control-buffer startup hook after its two-way merge output
+is initialized.  Ediff's copy commands and direct Org edits then write the
+same buffer; no local Post file is associated with that buffer."
+  (let ((result ediff-buffer-C)
+        complete)
+    (unless (and (buffer-live-p result) (not (buffer-file-name result)))
+      (error "Ediff did not provide a non-file-visiting merge output"))
+    (unwind-protect
+        (progn
+          (with-current-buffer result
+            (rename-buffer name)
+            (jaunder-reconcile-merge-mode)
+            (setq-local jaunder-reconcile-merge-session session))
+          (setf (jaunder-reconcile-merge-session-scratch session) result)
+          ;; Never let a user-wide Ediff autostore preference save or retire
+          ;; this result on quit; only explicit finish may publish.
+          (setq-local ediff-autostore-merges nil)
+          (add-hook 'ediff-quit-hook
+                    (lambda () (jaunder--reconcile-merge-close-views session)) nil t)
+          (setq complete t))
+      (unless complete
+        (setf (jaunder-reconcile-merge-session-scratch session) nil)
+        (when (buffer-live-p result)
+          (with-current-buffer result
+            (setq-local jaunder-reconcile-merge-allow-kill t)
+            (set-buffer-modified-p nil))
+          (kill-buffer result))))))
+
+(defun jaunder-reconcile-merge-selected ()
+  "Stage exactly one reviewed conflict and open a two-way Ediff merge.
+Ediff's actual merge output is the independent editable Org scratch; copy
+operations write there, never to either Post.  `C-c C-c' explicitly finishes."
+  (interactive)
+  (let* ((rows (jaunder-reconcile-selected-rows))
+         (report-buffer (current-buffer))
+         (root (jaunder-reconcile-report-root jaunder-reconcile-report)))
+    (unless (= (length rows) 1)
+      (user-error "Select exactly one conflict row for Ediff"))
+    (let* ((row (car rows))
+           (name (jaunder--reconcile-merge-scratch-name row root)))
+      (when (get-buffer name)
+        (user-error "Merge scratch %s already exists; finish or discard it first" name))
+      (jaunder--call-with-blog
+       root
+       (lambda ()
+         (let ((review (jaunder--reconcile-merge-stage row)))
+           (if (plist-get review :outcome)
+               (progn
+                 (jaunder--reconcile-merge-record row report-buffer review)
+                 nil)
+             (let* ((path (jaunder-inventory-local-path
+                           (jaunder-reconcile-row-local row)))
+                    (session (jaunder--make-reconcile-merge-session
+                              :row row :report-buffer report-buffer :path path))
+                    (setup-error
+                     (condition-case err
+                         (progn
+                           (setf (jaunder-reconcile-merge-session-local-view session)
+                                 (jaunder--reconcile-merge-snapshot
+                                  " *Jaunder Merge Local*"
+                                  (with-temp-buffer
+                                    (insert-file-contents-literally path)
+                                    (buffer-string))))
+                           (setf (jaunder-reconcile-merge-session-remote-view session)
+                                 (jaunder--reconcile-merge-snapshot
+                                  " *Jaunder Merge Remote*"
+                                  (plist-get (plist-get review :staged) :bytes)))
+                           (setf (jaunder-reconcile-merge-session-ediff-active session) t)
+                           (ediff-merge-buffers
+                            (jaunder-reconcile-merge-session-local-view session)
+                            (jaunder-reconcile-merge-session-remote-view session)
+                            (list (lambda ()
+                                    (jaunder--reconcile-merge-bind-ediff-result
+                                     session name))))
+                           (unless (buffer-live-p
+                                    (jaunder-reconcile-merge-session-scratch session))
+                             (error "Ediff did not expose its merge output"))
+                           (setf (jaunder-reconcile-merge-session-ediff-ready session) t)
+                           nil)
+                       (error
+                        (setf (jaunder-reconcile-merge-session-ediff-active session) nil)
+                        err))))
+               (if setup-error
+                   (let ((result (list :outcome 'failed
+                                       :post-id (jaunder--reconcile-row-post-id row)
+                                       :slug (jaunder--reconcile-row-slug row)
+                                       :local-effect 'unchanged
+                                       :reason 'ediff-unavailable
+                                       :detail (error-message-string setup-error))))
+                     (jaunder--reconcile-merge-close-views session)
+                     (jaunder--reconcile-merge-record session report-buffer result)
+                     ;; If Ediff had already created C, retain that work for
+                     ;; inspection but never allow a failed session to publish.
+                     (when (buffer-live-p (jaunder-reconcile-merge-session-scratch session))
+                       (display-buffer (jaunder-reconcile-merge-session-scratch session)))
+                     (message "Merge could not open: %s" (error-message-string setup-error))
+                     nil)
+                 (display-buffer (jaunder-reconcile-merge-session-scratch session))
+                 (message "Two-way Ediff merge opened; edit %s, then C-c C-c to complete"
+                          name)
+                 (jaunder-reconcile-merge-session-scratch session))))))))))
+
+(defun jaunder--reconcile-keep-remote-row (row)
+  "Install ROW's reviewed remote Post, or return a structured blocked result."
+  (let ((initial (jaunder--reconcile-conflict-preflight row)))
+    (if (not (plist-get initial :ok))
+        initial
+      (condition-case err
+          (let* ((root (jaunder-reconcile-report-root jaunder-reconcile-report))
+                 (member (jaunder-reconcile-row-member row))
+                 (path (jaunder-inventory-local-path (jaunder-reconcile-row-local row)))
+                 (jaunder--pull-link-inventory
+                  (jaunder-reconcile-report-inventory jaunder-reconcile-report))
+                 (staged (jaunder--pull-stage-member root member)))
+            (if (not (jaunder--reconcile-stage-matches-review-p row staged))
+                (jaunder--reconcile-blocked row 'staged-identity-changed)
+              (let ((final (jaunder--reconcile-conflict-preflight row)))
+                (if (not (plist-get final :ok))
+                    final
+                  (let ((installed (jaunder--reconcile-pull-install-staged
+                                    row staged final path)))
+                    (when (and (eq (plist-get installed :outcome) 'failed)
+                               (eq (plist-get installed :local-effect)
+                                   'replaced-at-old-path))
+                      ;; The Post was atomically replaced; only its canonical
+                      ;; rename failed.  The old path remains recoverable.
+                      (setq installed (plist-put installed :outcome 'partial)))
+                    installed)))))
+        (jaunder-pull-stage-identity-changed
+         (jaunder--reconcile-blocked row 'staged-identity-changed))
+        (error (list :outcome 'failed :post-id (jaunder--reconcile-row-post-id row)
+                     :slug (jaunder--reconcile-row-slug row) :local-effect 'unchanged
+                     :reason 'pull-failed :detail (error-message-string err)))))))
+
+(defun jaunder-reconcile-keep-remote-selected ()
+  "Accept the reviewed remote Post for selected conflicts after confirmation."
+  (interactive)
+  (let ((rows (jaunder-reconcile-selected-rows))
+        (buffer (current-buffer)))
+    (unless rows (user-error "No reconciliation rows selected"))
+    (when (jaunder--reconcile-confirm
+           "Keep remote for %d selected Post(s)? " (length rows))
+      (jaunder--call-with-blog
+       (jaunder-reconcile-report-root jaunder-reconcile-report)
+       (lambda ()
+         (jaunder--reconcile-execute-batch
+          buffer rows 'keep-remote #'jaunder--reconcile-keep-remote-row))))))
 
 (defun jaunder-reconcile-delete-selected ()
   "Explicitly soft-delete selected remote Posts after reviewing fresh ETags."

@@ -118,14 +118,14 @@ server, previously synchronized Posts therefore show one expected ETag mismatch:
 2. For an unchanged `server-ahead` Post, mark it and press `f` to fetch the
    remote representation. This installs explicit canonical audience properties
    and the new ETag.
-3. For a conflict, first copy the local file outside the managed blog root. Then
-   fetch the remote Post to capture its current content, audience, and ETag;
-   reapply the intended local edits from the preserved copy; and publish
-   normally so the update remains conditional on that fetched ETag.
+3. For a true `conflict`, review both versions and explicitly choose `l` to keep
+   the local authored Post, `r` to keep the remote Post, or `e` for a
+   single-Post two-way Ediff merge. Consider a backup before discarding authored
+   work. After any blocked or uncertain outcome, refresh and review again.
 
 Do not resolve a conflict by deleting `JAUNDER_SYNCED`, guessing which side
-wins, or blindly replacing the remote audience. Reconciliation deliberately
-requires an explicit review when both local and remote state may have changed.
+wins, or blindly replacing the remote audience. Reconciliation requires an
+explicit review when both local and remote state may have changed.
 
 ### AtomPub ETags behind an encoding proxy
 
@@ -211,27 +211,63 @@ keeps display order, so every selected batch has a predictable order.
 
 Use `g` to refresh the report from current local and remote state, `p` to push
 selected local drafts or safely local-ahead Posts, `f` to fetch selected
-server-only or safely server-ahead Posts, and `D` to delete selected remote
-Posts. Refresh keeps marks for rows that remain, removes marks for rows that do
-not, restores point when its row remains, and retains the ordered **Last batch**
-summary. Each transfer command shows its selected count and asks once before its
-first mutation. Delete has a distinct `SOFT-DELETE` confirmation that shows
-fresh reviewed ETags. It creates Jaunder's retained deletion tombstone rather
-than physically erasing the remote Post; a matched local file is removed only
-after the server confirms deletion, while deleting a server-only Post has no
+server-only or safely server-ahead Posts, `l` to keep the local authored version
+of a true conflict, `r` to keep its remote version, `e` to merge exactly one
+conflict through two-way Ediff, and `D` to delete selected remote Posts. Refresh
+keeps marks for rows that remain, removes marks for rows that do not, restores
+point when its row remains, and retains the ordered **Last batch** summary. Each
+transfer command shows its selected count and asks once before its first
+mutation. Delete has a distinct `SOFT-DELETE` confirmation that shows fresh
+reviewed ETags. It creates Jaunder's retained deletion tombstone rather than
+physically erasing the remote Post; a matched local file is removed only after
+the server confirms deletion, while deleting a server-only Post has no
 local-file effect.
 
-A selection does not bypass safety checks. Unchanged Posts are no-ops, while
-conflicts, duplicate identities, stale ETags, changed local files, occupied
-paths, and rows unsafe for the chosen direction are reported as blocked. Each
-Post is independent: a failure does not undo earlier successes or prevent a
-later eligible Post from running. The executor can be cancelled only between
-Posts, so already completed work remains durable and untouched Posts remain
-unchanged.
+A selection does not bypass safety checks. Unchanged Posts are no-ops; a true
+`conflict` is a uniquely matched Post whose local source and remote Member both
+changed since synchronization. Ordinary `p` and `f` do not resolve it. `l` and
+`r` run selected conflict rows in display order after one direction-specific
+confirmation. For each row they recheck the reviewed local path, bytes, ID and
+clean visiting buffer, plus the fresh remote Member identity and strong ETag.
+`l` conditionally publishes with that reviewed `If-Match` without writing local
+Post metadata before the PUT. `r` stages Member and Local Media Copies before
+its final checks and atomic replacement. Other states, duplicate identities,
+stale ETags, occupied paths, and changed local files are blocked rather than
+being adopted as a new baseline. A failure in one row does not undo earlier
+successes or stop later eligible Posts; cancellation takes effect only between
+Posts.
 
-After a batch completes or is cancelled, the report rebuilds its inventory and
-classification while retaining an ordered **Last batch** summary. Use that
-refreshed report to review the local and remote effects and retry only the rows
-that remain eligible or whose actionable failure has been resolved. Retried
-creates reuse their recorded create intent until their server-confirmed Post ID
-is written locally, so an interrupted create does not create a duplicate.
+For `e`, select exactly one conflict row. Two-way Ediff compares read-only
+snapshots of the actual local and staged remote Post; **Ediff's merge output**
+is the independent editable Org scratch. Copy either side's hunks through Ediff
+or edit its authored fields (title, body, summary, tags, audiences, date and
+publication state) directly. There is no saved common content ancestor.
+Identity, slug and sync markers in scratch are ignored and restored from the
+reviewed local Post. Exiting Ediff **never** publishes. In the scratch,
+`C-c C-c` explicitly confirms completion after fresh local and remote checks;
+`C-c C-k` cancels but retains the scratch; `C-c C-d` discards it only after
+confirmation. Killing the scratch buffer also asks before discarding it. An
+initial staging or Ediff setup failure opens no finishable scratch. If Ediff
+fails after creating its C result, that result remains available for inspection
+or explicit discard but cannot be published; reopen a fresh reconciliation
+report and merge session after fixing Ediff. Once a two-way result is open,
+edits survive cancellation, blocked completion, an unknown remote outcome, or a
+partial commit so they can be inspected later.
+
+A rejected conditional PUT changes neither Post. Uploaded Media or verified
+Local Media Copies may persist even if a later Post action blocks. If a PUT
+response is lost, **remote outcome unknown** means the remote Post may have
+committed; the local Post is not checkpointed and the request is not retried
+automatically. Refresh and inspect both sides before another choice. A confirmed
+remote commit followed by failed local installation, write-back or rename is
+**partial success**: inspect the local path and remote Member, then reconcile;
+do not assume either side rolled back. For `r`, an atomic replacement followed
+by a failed rename leaves the ID-bearing updated Post at its old path.
+
+After an operation the report rebuilds its inventory and classification while
+retaining an ordered **Last batch** summary. If that refresh fails, the old
+report and terminal results remain visible; use `g` to refresh before deciding
+anything else. Use the refreshed report to review local and remote effects and
+retry only rows whose actionable failure has been resolved. Retried creates
+reuse their recorded create intent until their server-confirmed Post ID is
+written locally, so an interrupted create does not create a duplicate.
