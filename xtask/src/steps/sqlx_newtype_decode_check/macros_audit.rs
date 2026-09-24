@@ -21,7 +21,7 @@ pub(super) const BRIDGE_DERIVES: &[&str] = &["StrNewtype", "IdNewtype", "NumNewt
 /// Enumerated separately because the *approval* rule differs, not just the spelling. The
 /// bridge is **opt-in** here — `#[text_enum(…)]` without `sqlx` emits no `Decode`, and
 /// several enums are declared exactly that way (`Channel`, `SubscriptionStatus`,
-/// `TargetKind`, `AudienceBase` are FK-normalized and bind a `&'static str` instead). So a
+/// `TargetKind` are FK-normalized and bind a `&'static str` instead). So a
 /// type carrying this attribute is approved **only when the `sqlx` flag is present**.
 ///
 /// Worth noting the asymmetry: for the derives, "does it emit a bridge?" is *not* a static

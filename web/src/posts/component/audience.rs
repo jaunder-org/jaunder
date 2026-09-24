@@ -2,7 +2,7 @@ use leptos::prelude::*;
 
 use crate::audiences;
 use crate::posts::NamedAudienceState;
-use common::visibility::{AudienceBase, AudienceSelection};
+use common::visibility::AudienceSelection;
 
 /// Start the named-audience load and project every resource outcome into the
 /// explicit host-tested state consumed by both the picker and its submit gate.
@@ -17,16 +17,12 @@ pub(super) fn load_named_audiences() -> RwSignal<NamedAudienceState> {
 
 /// Per-post visibility control for the editor.
 ///
-/// Drives a shared `selection` signal: a mutually-exclusive base
-/// (Public / Private / Subscribers) plus a checkbox per named audience the
-/// author owns (union semantics — e.g. Public + a named audience). `Private`
-/// is author-only and the storage layer drops any named selection for it
-/// (see `audience_selection_to_targets`); the named checkboxes are disabled
-/// while Private is chosen to make that explicit.
+/// Every checked built-in or named target is retained, even when Public
+/// currently dominates visibility. No checked targets means Private.
 #[component]
 pub fn AudiencePicker(selection: RwSignal<AudienceSelection>) -> impl IntoView {
     let named = load_named_audiences();
-    view! { <AudiencePickerWithState selection=selection named=named /> }
+    view! { <AudiencePickerWithState selection=selection named=named on_user_change=None /> }
 }
 
 /// The picker view over a load state shared with its owning action gate.
@@ -34,47 +30,61 @@ pub fn AudiencePicker(selection: RwSignal<AudienceSelection>) -> impl IntoView {
 pub(super) fn AudiencePickerWithState(
     selection: RwSignal<AudienceSelection>,
     named: RwSignal<NamedAudienceState>,
+    on_user_change: Option<Callback<()>>,
 ) -> impl IntoView {
-    let change_base = move |ev| {
-        if let Ok(base) = AudienceBase::try_from(event_target_value(&ev).as_str()) {
-            selection.update(|current| current.base = base);
-        }
+    let is_private = move || {
+        selection
+            .with(|current| !current.public && !current.subscribers && current.named.is_empty())
     };
-
     view! {
-        <fieldset class="j-form-field j-composer-group">
-            <legend class="j-form-label">"Audience"</legend>
-            <select
-                id="audience-base"
-                class="j-form-input"
-                aria-label="Audience"
-                on:change=change_base
-            >
-                <For
-                    // Each base variant is paired with its caption here, so the
-                    // values and visible order cannot drift apart.
-                    each=|| {
-                        [
-                            (AudienceBase::Public, "Public"),
-                            (AudienceBase::Subscribers, "Subscribers"),
-                            (AudienceBase::Private, "Private (only me)"),
-                        ]
-                    }
-                    key=|(base, _)| *base
-                    children=move |(base, label)| {
-                        view! {
-                            <option
-                                value=base.to_string()
-                                selected=move || selection.get().base == base
-                            >
-                                {label}
-                            </option>
-                        }
+        <fieldset class="j-form-field j-composer-group j-audience-picker" aria-label="Share with">
+            <legend class="j-form-label">"Share with"</legend>
+            <Show when=is_private>
+                <p class="j-form-help">"Private — only you can see this Post."</p>
+            </Show>
+            <label class="j-audience-choice" for="audience-public">
+                <input
+                    id="audience-public"
+                    type="checkbox"
+                    prop:checked=move || selection.get().public
+                    on:change=move |ev| {
+                        selection.update(|sel| sel.public = event_target_checked(&ev));
+                        notify_user_change(on_user_change);
                     }
                 />
-            </select>
-            <NamedAudienceOptions named=named selection=selection />
+                "Public"
+            </label>
+            <label class="j-audience-choice" for="audience-subscribers">
+                <input
+                    id="audience-subscribers"
+                    type="checkbox"
+                    prop:checked=move || selection.get().subscribers
+                    on:change=move |ev| {
+                        selection.update(|sel| sel.subscribers = event_target_checked(&ev));
+                        notify_user_change(on_user_change);
+                    }
+                />
+                "Subscribers"
+            </label>
+            <NamedAudienceOptions named=named selection=selection on_user_change />
+            <button
+                class="j-audience-clear"
+                type="button"
+                on:click=move |_| {
+                    selection.set(AudienceSelection::default());
+                    notify_user_change(on_user_change);
+                }
+            >
+                "Clear all"
+            </button>
         </fieldset>
+    }
+}
+
+/// Record an intentional picker interaction, independent of its resulting value.
+fn notify_user_change(on_user_change: Option<Callback<()>>) {
+    if let Some(notify) = on_user_change {
+        notify.run(());
     }
 }
 
@@ -83,6 +93,7 @@ pub(super) fn AudiencePickerWithState(
 fn NamedAudienceOptions(
     named: RwSignal<NamedAudienceState>,
     selection: RwSignal<AudienceSelection>,
+    on_user_change: Option<Callback<()>>,
 ) -> impl IntoView {
     view! {
         <Show
@@ -92,7 +103,13 @@ fn NamedAudienceOptions(
                     <Show
                         when=move || named.with(|state| matches!(state, NamedAudienceState::Failed))
                         fallback=move || {
-                            view! { <ReadyNamedAudienceOptions named=named selection=selection /> }
+                            view! {
+                                <ReadyNamedAudienceOptions
+                                    named=named
+                                    selection=selection
+                                    on_user_change
+                                />
+                            }
                         }
                     >
                         <p class="error">"Could not load named audiences."</p>
@@ -110,6 +127,7 @@ fn NamedAudienceOptions(
 fn ReadyNamedAudienceOptions(
     named: RwSignal<NamedAudienceState>,
     selection: RwSignal<AudienceSelection>,
+    on_user_change: Option<Callback<()>>,
 ) -> impl IntoView {
     view! {
         <Show
@@ -124,7 +142,7 @@ fn ReadyNamedAudienceOptions(
                     })
             }
             fallback=move || {
-                view! { <NamedAudienceRows named=named selection=selection /> }
+                view! { <NamedAudienceRows named=named selection=selection on_user_change /> }
             }
         >
             <p class="j-sub">"No named audiences."</p>
@@ -137,6 +155,7 @@ fn ReadyNamedAudienceOptions(
 fn NamedAudienceRows(
     named: RwSignal<NamedAudienceState>,
     selection: RwSignal<AudienceSelection>,
+    on_user_change: Option<Callback<()>>,
 ) -> impl IntoView {
     let audiences = move || {
         named.with(|state| match state {
@@ -146,35 +165,30 @@ fn NamedAudienceRows(
     };
 
     view! {
-        <div class="j-audience-named">
-            <span class="j-form-label">"Also share with"</span>
-            <For
-                each=audiences
-                key=|audience| audience.audience_id
-                children=move |audience| audience_checkbox(audience, selection)
-            />
-        </div>
+        <For
+            each=audiences
+            key=|audience| audience.audience_id
+            children=move |audience| audience_checkbox(audience, selection, on_user_change)
+        />
     }
 }
 
 /// One named-audience checkbox row for [`AudiencePicker`]. Toggling it
-/// adds/removes the audience id in the shared selection. Disabled while the
-/// base is `Private`, since Private cannot combine with named audiences.
+/// adds/removes the audience id in the shared selection.
 fn audience_checkbox(
     audience: audiences::Summary,
     selection: RwSignal<AudienceSelection>,
+    on_user_change: Option<Callback<()>>,
 ) -> impl IntoView {
     let id = audience.audience_id;
     let input_id = format!("audience-named-{id}");
     let checked = move || selection.get().named.contains(&id);
-    let disabled = move || selection.get().base == AudienceBase::Private;
     view! {
-        <label style="display:block" for=input_id.clone()>
+        <label class="j-audience-choice" for=input_id.clone()>
             <input
                 id=input_id.clone()
                 type="checkbox"
                 prop:checked=checked
-                disabled=disabled
                 on:change=move |ev| {
                     let on = event_target_checked(&ev);
                     selection
@@ -184,6 +198,7 @@ fn audience_checkbox(
                                 sel.named.push(id);
                             }
                         });
+                    notify_user_change(on_user_change);
                 }
             />
             " "

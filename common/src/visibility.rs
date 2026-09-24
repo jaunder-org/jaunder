@@ -11,8 +11,8 @@ use crate::ids::{AudienceId, ChannelId, UserId};
 // Every string-backed enum here is a closed string enum (`#[text_enum]`, ADR-0075 as
 // amended by #746): the attribute injects strum's `AsRefStr`/`Display`/`EnumString`/
 // `IntoStaticStr` with the wire token as the snake_case variant name, and generates the
-// named parse error plus the serde bridge. `AudienceBase` is wire-facing; the three
-// below are FK-normalized — storage binds their token as a typed `&'static str` into a
+// named parse error plus the serde bridge. The three below are FK-normalized —
+// storage binds their token as a typed `&'static str` into a
 // lookup column.
 //
 // `TargetKind` additionally takes `sqlx` (#728). FK-normalization is a fact about the
@@ -56,23 +56,6 @@ pub enum TargetKind {
     Public,
     Subscribers,
     Named,
-}
-
-// The mutually-exclusive built-in audience base chosen in the editor / API — the
-// typed form of the audience-picker's `base`. Composes with named audiences by
-// union except for `Private` (author-only), which is the safe, non-widening
-// `Default`. #499.
-#[macros::text_enum(
-    error = InvalidAudienceBase,
-    message = "audience must be \"private\", \"public\", or \"subscribers\""
-)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
-#[strum(serialize_all = "snake_case")]
-pub enum AudienceBase {
-    #[default]
-    Private,
-    Public,
-    Subscribers,
 }
 
 /// The stored `subscriptions.subscriber_ref` value.
@@ -229,39 +212,27 @@ impl From<DefaultAudience> for AudienceTarget {
     }
 }
 
-/// The audience-picker selection as it crosses the server-fn boundary.
+/// The complete audience-picker selection as it crosses the web server-fn boundary.
 ///
-/// `base` is the mutually-exclusive built-in ([`AudienceBase::Public`],
-/// [`AudienceBase::Private`], or [`AudienceBase::Subscribers`]); `named` is the
-/// set of selected named-audience ids. The two compose by UNION except for
-/// [`AudienceBase::Private`], which is author-only and cannot combine with
-/// anything — a `Private` base discards `named`.
+/// Built-in and Named targets compose by union. No selected targets is Private;
+/// its empty target set cannot be combined with anything else. Reject the old
+/// `base` wire shape rather than silently treating it as an empty selection.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
 pub struct AudienceSelection {
-    pub base: AudienceBase,
+    pub public: bool,
+    pub subscribers: bool,
     pub named: Vec<AudienceId>,
 }
 
-/// Translates an [`AudienceSelection`] into the `Vec<AudienceTarget>` the
-/// storage layer persists.
-///
-/// - [`AudienceBase::Public`] / [`AudienceBase::Subscribers`] → the built-in
-///   target, in union with one `Named(id)` per selected named audience.
-/// - [`AudienceBase::Private`] → an empty vec (author-only); the named set is
-///   ignored, since `Private` cannot combine with other targets.
+/// Translates every checked target into the set persisted by storage.
 #[must_use]
 pub fn audience_selection_to_targets(selection: &AudienceSelection) -> Vec<AudienceTarget> {
-    let base = match selection.base {
-        AudienceBase::Public => Some(AudienceTarget::Public),
-        AudienceBase::Subscribers => Some(AudienceTarget::Subscribers),
-        // Private is author-only: no built-in target, and named is dropped below.
-        AudienceBase::Private => None,
-    };
-    let Some(base) = base else {
-        // Private/author-only: no rows, named selection ignored.
-        return Vec::new();
-    };
-    std::iter::once(base)
+    selection
+        .public
+        .then_some(AudienceTarget::Public)
+        .into_iter()
+        .chain(selection.subscribers.then_some(AudienceTarget::Subscribers))
         .chain(selection.named.iter().copied().map(AudienceTarget::Named))
         .collect()
 }
@@ -281,23 +252,19 @@ pub fn audience_targets_or_public(selection: Option<&AudienceSelection>) -> Vec<
 /// [`AudienceSelection`] (the inverse of [`audience_selection_to_targets`],
 /// for pre-selecting the editor).
 ///
-/// The built-in base is [`AudienceBase::Public`]/[`AudienceBase::Subscribers`]
-/// when that target is present, otherwise [`AudienceBase::Private`] (covering
-/// both an explicit `Private` and an empty targeting). Every `Named(id)` becomes
-/// an entry in `named`.
+/// An explicit Private target and an empty target set both yield no selections.
 #[must_use]
 pub fn targets_to_audience_selection(targets: &[AudienceTarget]) -> AudienceSelection {
-    let mut base = AudienceBase::Private;
-    let mut named = Vec::new();
+    let mut selection = AudienceSelection::default();
     for target in targets {
         match target {
-            AudienceTarget::Public => base = AudienceBase::Public,
-            AudienceTarget::Subscribers => base = AudienceBase::Subscribers,
-            AudienceTarget::Named(id) => named.push(*id),
+            AudienceTarget::Public => selection.public = true,
+            AudienceTarget::Subscribers => selection.subscribers = true,
+            AudienceTarget::Named(id) => selection.named.push(*id),
             AudienceTarget::Private => {}
         }
     }
-    AudienceSelection { base, named }
+    selection
 }
 
 /// Admission seam: decides the initial status of a new subscription. Layer A
@@ -411,14 +378,6 @@ mod tests {
         ] {
             assert_eq!(k.to_string(), k.as_ref());
         }
-        for b in [
-            AudienceBase::Public,
-            AudienceBase::Subscribers,
-            AudienceBase::Private,
-        ] {
-            assert_eq!(b.to_string(), b.as_ref());
-            assert_eq!(AudienceBase::try_from(b.as_ref()), Ok(b));
-        }
     }
 
     #[test]
@@ -466,53 +425,6 @@ mod tests {
             err.to_string(),
             "subscription status must be \"active\", \"pending\", or \"blocked\""
         );
-    }
-
-    #[test]
-    fn audience_base_serializes_to_lowercase_literal() {
-        assert_eq!(
-            serde_json::to_string(&AudienceBase::Public).unwrap(),
-            "\"public\""
-        );
-        assert_eq!(
-            serde_json::to_string(&AudienceBase::Subscribers).unwrap(),
-            "\"subscribers\""
-        );
-        assert_eq!(
-            serde_json::to_string(&AudienceBase::Private).unwrap(),
-            "\"private\""
-        );
-    }
-
-    #[test]
-    fn audience_base_deserializes_from_literal() {
-        for v in [
-            AudienceBase::Public,
-            AudienceBase::Subscribers,
-            AudienceBase::Private,
-        ] {
-            let json = serde_json::to_string(&v).unwrap();
-            assert_eq!(serde_json::from_str::<AudienceBase>(&json).unwrap(), v);
-        }
-    }
-
-    #[test]
-    fn audience_base_deserialize_rejects_unknown() {
-        assert!(serde_json::from_str::<AudienceBase>("\"bogus\"").is_err());
-    }
-
-    #[test]
-    fn audience_base_rejects_unknown_with_named_error() {
-        let err = "bogus".parse::<AudienceBase>().unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "audience must be \"private\", \"public\", or \"subscribers\""
-        );
-    }
-
-    #[test]
-    fn audience_base_default_is_private() {
-        assert_eq!(AudienceBase::default(), AudienceBase::Private);
     }
 
     #[test]
@@ -624,101 +536,62 @@ mod tests {
         );
     }
 
-    fn selection(base: AudienceBase, named: &[AudienceId]) -> AudienceSelection {
+    fn selection(public: bool, subscribers: bool, named: &[AudienceId]) -> AudienceSelection {
         AudienceSelection {
-            base,
+            public,
+            subscribers,
             named: named.to_vec(),
         }
     }
 
     #[test]
-    fn public_selection_maps_to_public_target() {
+    fn selected_targets_union_without_losing_dominated_targets() {
+        let selected = selection(true, true, &[AudienceId::from(5), AudienceId::from(9)]);
+        let targets = vec![
+            AudienceTarget::Public,
+            AudienceTarget::Subscribers,
+            AudienceTarget::Named(AudienceId::from(5)),
+            AudienceTarget::Named(AudienceId::from(9)),
+        ];
+        assert_eq!(audience_selection_to_targets(&selected), targets);
+        assert_eq!(targets_to_audience_selection(&targets), selected);
+    }
+
+    #[test]
+    fn named_only_and_private_round_trip_without_a_built_in_target() {
+        let named = selection(false, false, &[AudienceId::from(5)]);
         assert_eq!(
-            audience_selection_to_targets(&selection(AudienceBase::Public, &[])),
-            vec![AudienceTarget::Public]
+            audience_selection_to_targets(&named),
+            vec![AudienceTarget::Named(AudienceId::from(5))]
         );
-    }
-
-    #[test]
-    fn subscribers_selection_maps_to_subscribers_target() {
         assert_eq!(
-            audience_selection_to_targets(&selection(AudienceBase::Subscribers, &[])),
-            vec![AudienceTarget::Subscribers]
+            targets_to_audience_selection(&audience_selection_to_targets(&named)),
+            named
         );
-    }
-
-    #[test]
-    fn public_plus_named_unions() {
+        assert!(audience_selection_to_targets(&AudienceSelection::default()).is_empty());
         assert_eq!(
-            audience_selection_to_targets(&selection(
-                AudienceBase::Public,
-                &[AudienceId::from(5), AudienceId::from(9)]
-            )),
-            vec![
-                AudienceTarget::Public,
-                AudienceTarget::Named(AudienceId::from(5)),
-                AudienceTarget::Named(AudienceId::from(9)),
-            ]
+            targets_to_audience_selection(&[]),
+            AudienceSelection::default()
+        );
+        assert_eq!(
+            targets_to_audience_selection(&[AudienceTarget::Private]),
+            AudienceSelection::default()
         );
     }
 
     #[test]
-    fn private_selection_is_empty_and_ignores_named() {
-        // Private cannot combine with anything; named ids are dropped.
-        assert!(
-            audience_selection_to_targets(&selection(
-                AudienceBase::Private,
-                &[AudienceId::from(5)]
-            ))
-            .is_empty()
-        );
-    }
-
-    #[test]
-    fn absent_selection_defaults_to_public() {
+    fn absent_web_selection_still_defaults_to_public_but_explicit_empty_is_private() {
         assert_eq!(
             audience_targets_or_public(None),
             vec![AudienceTarget::Public]
         );
-        // A present selection is translated normally.
-        assert_eq!(
-            audience_targets_or_public(Some(&selection(AudienceBase::Subscribers, &[]))),
-            vec![AudienceTarget::Subscribers]
-        );
+        assert!(audience_targets_or_public(Some(&AudienceSelection::default())).is_empty());
     }
 
     #[test]
-    fn targets_round_trip_through_selection() {
-        // Edit round-trip: persisted targets -> selection -> targets.
-        let targets = vec![
-            AudienceTarget::Subscribers,
-            AudienceTarget::Named(AudienceId::from(3)),
-        ];
-        let sel = targets_to_audience_selection(&targets);
-        assert_eq!(
-            sel,
-            selection(AudienceBase::Subscribers, &[AudienceId::from(3)])
+    fn obsolete_mutually_exclusive_wire_shape_is_rejected_not_treated_as_private() {
+        assert!(
+            serde_json::from_str::<AudienceSelection>(r#"{"base":"public","named":[]}"#).is_err()
         );
-        assert_eq!(audience_selection_to_targets(&sel), targets);
-
-        // Public round-trips through the picker.
-        let sel = targets_to_audience_selection(&[AudienceTarget::Public]);
-        assert_eq!(sel, selection(AudienceBase::Public, &[]));
-        assert_eq!(
-            audience_selection_to_targets(&sel),
-            vec![AudienceTarget::Public]
-        );
-
-        // An explicit Private element yields a private selection.
-        assert_eq!(
-            targets_to_audience_selection(&[AudienceTarget::Private]),
-            selection(AudienceBase::Private, &[])
-        );
-
-        // No rows (private) round-trips to a private selection and back to empty.
-        let empty: Vec<AudienceTarget> = Vec::new();
-        let sel = targets_to_audience_selection(&empty);
-        assert_eq!(sel, selection(AudienceBase::Private, &[]));
-        assert!(audience_selection_to_targets(&sel).is_empty());
     }
 }

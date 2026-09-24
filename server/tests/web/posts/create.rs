@@ -2,7 +2,7 @@ use axum::http::StatusCode;
 use common::tag::MAX_TAGS_PER_POST;
 use common::test_support::{parse_post_body, parse_row_limit, parse_slug, parse_tag_label};
 use common::time::UtcInstant;
-use common::visibility::{AudienceBase, AudienceSelection};
+use common::visibility::AudienceSelection;
 use jiff::ToSpan;
 use server_fn::ServerFn;
 use storage::{AudienceStorage, PostFormat, WriteScope};
@@ -592,7 +592,8 @@ async fn create_org_header_merges_structured_metadata_and_stores_canonical_body(
         tags: Some(Vec::new()),
         summary: Some(common::test_support::parse_post_summary("Structured summary")),
         audience: Some(AudienceSelection {
-            base: AudienceBase::Private,
+            public: false,
+            subscribers: false,
             named: Vec::new(),
         }),
         ..PostInputs::new(
@@ -628,7 +629,8 @@ async fn create_org_header_merges_structured_metadata_and_stores_canonical_body(
     .await;
     assert_eq!(status, StatusCode::OK, "audience body: {body}");
     let audience: common::visibility::AudienceSelection = serde_json::from_str(&body).unwrap();
-    assert_eq!(audience.base, common::visibility::AudienceBase::Private);
+    assert!(!audience.public);
+    assert!(!audience.subscribers);
     assert!(audience.named.is_empty());
     assert!(record.published_at.is_none());
 }

@@ -53,6 +53,47 @@ use crate::posts::{
     RevisionHistoryPage, RevisionLifecycle, SavedPost, UnpublishedPost,
 };
 
+/// Whether a new Post's site Default Audience has resolved without erasing edits.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InitialAudienceState {
+    #[default]
+    Loading,
+    EditedWhileLoading,
+    Ready,
+    Failed,
+}
+
+impl InitialAudienceState {
+    /// Record an explicit picker change even if it returns to the placeholder.
+    #[must_use]
+    pub const fn edited(self) -> Self {
+        match self {
+            Self::Loading => Self::EditedWhileLoading,
+            state => state,
+        }
+    }
+
+    /// The resolved default seeds the picker only if the author never edited it.
+    #[must_use]
+    pub const fn settle(self, succeeded: bool) -> (Self, bool) {
+        if succeeded {
+            (Self::Ready, matches!(self, Self::Loading))
+        } else {
+            (Self::Failed, false)
+        }
+    }
+
+    #[must_use]
+    pub const fn can_submit(self) -> bool {
+        matches!(self, Self::Ready)
+    }
+
+    #[must_use]
+    pub const fn failed(self) -> bool {
+        matches!(self, Self::Failed)
+    }
+}
+
 /// Resolution state for the named audiences offered by the post editor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NamedAudienceState {
@@ -2099,9 +2140,24 @@ mod tests {
     }
 
     #[test]
+    fn late_default_does_not_overwrite_an_explicit_author_choice() {
+        let initial = InitialAudienceState::default();
+        assert!(!initial.can_submit());
+        let edited = initial.edited();
+        assert_eq!(edited.settle(true), (InitialAudienceState::Ready, false));
+        assert!(edited.settle(true).0.can_submit());
+        assert_eq!(initial.settle(true), (InitialAudienceState::Ready, true));
+        let failed = edited.settle(false).0;
+        assert!(failed.failed());
+        assert!(!failed.can_submit());
+        assert!(!failed.edited().can_submit());
+    }
+
+    #[test]
     fn audience_picker_loading_and_failed_states_cannot_submit() {
         let selection = AudienceSelection {
-            base: common::visibility::AudienceBase::Subscribers,
+            public: false,
+            subscribers: true,
             named: vec![common::ids::AudienceId::from(7)],
         };
         let loading = NamedAudienceState::resolve(None);
@@ -2116,7 +2172,8 @@ mod tests {
     #[test]
     fn audience_picker_ready_empty_is_a_real_loaded_state() {
         let selection = AudienceSelection {
-            base: common::visibility::AudienceBase::Subscribers,
+            public: false,
+            subscribers: true,
             named: Vec::new(),
         };
         let state = NamedAudienceState::resolve(Some(Ok(Vec::new())));
@@ -2137,7 +2194,8 @@ mod tests {
             name: "Confidants".parse().unwrap(),
         }];
         let selection = AudienceSelection {
-            base: common::visibility::AudienceBase::Subscribers,
+            public: false,
+            subscribers: true,
             named: vec![audience_id],
         };
         let state = NamedAudienceState::resolve(Some(Ok(audiences.clone())));

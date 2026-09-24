@@ -59,6 +59,16 @@ type ClassifiedSavedPost = {
  *  the current no-tag call sites). The fields are nested under a `post` wrapper
  *  (#299): the endpoint takes a single typed input struct, and the wire key is
  *  the parameter's name. */
+export function audienceForWire(
+  audience: "public" | "subscribers" | "private",
+) {
+  return {
+    public: audience === "public",
+    subscribers: audience === "subscribers",
+    named: [],
+  };
+}
+
 export async function createPostViaApi(
   page: Page,
   opts: {
@@ -82,7 +92,9 @@ export async function createPostViaApi(
           ...(opts.publishAt ? { publish_at: opts.publishAt } : {}),
           ...(opts.tags ? { tags: opts.tags } : {}),
           ...(opts.audience
-            ? { audience: { base: opts.audience, named: [] } }
+            ? {
+                audience: audienceForWire(opts.audience),
+              }
             : {}),
         },
       },
@@ -125,7 +137,7 @@ export async function openComposerFromSidebar(page: Page): Promise<void> {
 /** Open one of the compact secondary-control disclosures in the mounted composer. */
 export async function openComposerControl(
   page: Page,
-  label: "Media" | "Format" | "Slug" | "Publish" | "Audience",
+  label: "Media" | "Format" | "Slug" | "Publish" | "Share with",
 ): Promise<void> {
   const trigger = page.locator(".j-composer-control-summary").filter({
     has: page.getByText(label, { exact: true }),
@@ -135,6 +147,18 @@ export async function openComposerControl(
     await trigger.click();
   }
   await expect(trigger).toHaveAttribute("aria-expanded", "true");
+}
+
+/** Choose one built-in target or Private in the shared composer picker. */
+export async function selectComposerAudience(
+  page: Page,
+  audience: "public" | "subscribers" | "private",
+): Promise<void> {
+  await openComposerControl(page, "Share with");
+  await click(page, ".j-audience-clear");
+  if (audience !== "private") {
+    await page.locator(`#audience-${audience}`).check();
+  }
 }
 
 /** Compose and submit a post through the `/posts/new` UI: fill the body (and the
@@ -174,8 +198,7 @@ export async function composePost(
       await page.fill(SEL.postSlug, opts.slug);
     }
     if (opts.audience !== undefined) {
-      await openComposerControl(page, "Audience");
-      await page.selectOption("#audience-base", opts.audience);
+      await selectComposerAudience(page, opts.audience);
     }
     await click(page, SEL.publishButton(opts.publish ? "true" : "false"));
     await waitForSelector(page, SEL.saveSummary);

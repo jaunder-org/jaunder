@@ -32,7 +32,7 @@ use common::seed::{AuthoredPost, Page, PageCursor, PublicPresentation};
 use crate::error::WebResult;
 
 // The audience-picker DTO and its converters live in `common::visibility` (beside
-// `AudienceBase`/`AudienceTarget`); the server fn bodies below use these two to
+// `AudienceSelection`/`AudienceTarget`); the server fn bodies below use these two to
 // translate the wire `AudienceSelection` to/from the domain `AudienceTarget`s. The
 // calls are server-only (inside the macro-supplied boundary), so the import is
 // gated to match.
@@ -2238,7 +2238,7 @@ mod server_tests {
     #[tokio::test]
     async fn update_org_keeps_structured_audience_and_summary() {
         use common::test_support::parse_post_summary;
-        use common::visibility::{AudienceBase, AudienceSelection, AudienceTarget};
+        use common::visibility::{AudienceSelection, AudienceTarget};
 
         let mut posts = MockPostStorage::new();
         posts
@@ -2262,7 +2262,8 @@ mod server_tests {
                 tags: None,
                 summary: Some(parse_post_summary("structured summary")),
                 audience: Some(AudienceSelection {
-                    base: AudienceBase::Subscribers,
+                    public: false,
+                    subscribers: true,
                     named: vec![],
                 }),
             },

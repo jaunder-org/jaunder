@@ -430,18 +430,17 @@ pub fn PostCreateForm(
         });
     }
 
-    let default_audience = Resource::new(|| (), |()| posts::get_default_audience_selection());
-    // The site-wide default audience resolves asynchronously; the composer must
-    // render immediately (no Suspense), so seed the editable `audience` signal
-    // once the Resource resolves, over the Public placeholder `ComposeState::new`
-    // sets. The author can then edit the selection via `AudiencePicker`.
-    support::on_settled_ok(
-        move || default_audience.get(),
-        move |default| {
-            state.audience.set(default.clone());
-            baseline.set(baseline.get_untracked().with_audience(default));
-        },
-    );
+    let initial_audience = RwSignal::new(posts::InitialAudienceState::default());
+    // The composer must paint and accept edits while this request is pending.
+    // A tracked Resource would suspend the containing page until it settles.
+    leptos::task::spawn_local(async move {
+        settle_default_audience(
+            posts::get_default_audience_selection().await,
+            initial_audience,
+            state,
+            baseline,
+        );
+    });
 
     // Revalidate parent state after either outcome, but reserve success UI and
     // form reset for a confirmed create.
@@ -469,12 +468,30 @@ pub fn PostCreateForm(
             slug_field=slug_field
             schedule=schedule
             create_action=create_action
+            initial_audience
             rows=rows
             placeholder=placeholder
             layout_class=presentation.layout_class
             textarea_class=presentation.textarea_class
             on_input=on_input
         />
+    }
+}
+
+/// Apply the host-tested initialization decision to the editor and its dirty baseline.
+fn settle_default_audience(
+    result: Result<common::visibility::AudienceSelection, WebError>,
+    initial_audience: RwSignal<posts::InitialAudienceState>,
+    state: ComposeState,
+    baseline: RwSignal<posts::CreationComposerSnapshot>,
+) {
+    let (next, should_seed) = initial_audience.get_untracked().settle(result.is_ok());
+    initial_audience.set(next);
+    if let Ok(default) = result {
+        if should_seed {
+            state.audience.set(default.clone());
+        }
+        baseline.set(baseline.get_untracked().with_audience(default));
     }
 }
 
@@ -486,6 +503,7 @@ fn CreationComposer(
     slug_field: Field<Slug>,
     schedule: CreationSchedule,
     create_action: ServerAction<Create>,
+    initial_audience: RwSignal<posts::InitialAudienceState>,
     rows: u32,
     placeholder: &'static str,
     layout_class: &'static str,
@@ -496,7 +514,8 @@ fn CreationComposer(
     let (submit_disabled, dispatch) = posts::submit_gate(
         state.body,
         Signal::derive(move || {
-            !slug_field.is_valid()
+            !initial_audience.get().can_submit()
+                || !slug_field.is_valid()
                 || !state.summary_field.is_valid()
                 || schedule.is_editing()
                 || state.audience.with(|selection| {
@@ -505,9 +524,11 @@ fn CreationComposer(
         }),
         Callback::new(move |(body, publish): (PostBody, bool)| {
             let publication = posts::publication_from_local(publish, &state.publish_at.get());
-            if state.audience.with(|selection| {
-                named.with(|state| state.selection_for_submit(selection).is_some())
-            }) {
+            if initial_audience.get_untracked().can_submit()
+                && state.audience.with(|selection| {
+                    named.with(|state| state.selection_for_submit(selection).is_some())
+                })
+            {
                 create_action.dispatch(Create {
                     post: state.inputs(body, publication, slug_field.parsed()),
                 });
@@ -515,6 +536,9 @@ fn CreationComposer(
         }),
     );
     view! {
+        <Show when=move || initial_audience.get().failed()>
+            <p class="error">"Could not load the Default Audience. Reload before saving a Post."</p>
+        </Show>
         <div class=layout_class>
             <div class="j-compose-body">
                 <ComposerCore
@@ -540,6 +564,9 @@ fn CreationComposer(
                     schedule_error=Signal::derive(|| None::<InvalidSchedule>)
                     creation_schedule=Some(schedule)
                     named=named
+                    on_audience_edit=Callback::new(move |()| {
+                        initial_audience.update(|status| *status = status.edited());
+                    })
                 />
             </aside>
         </div>
@@ -939,6 +966,7 @@ pub(super) fn ComposerControlRail(
     schedule_error: Signal<Option<InvalidSchedule>>,
     creation_schedule: Option<CreationSchedule>,
     named: RwSignal<NamedAudienceState>,
+    #[prop(optional)] on_audience_edit: Option<Callback<()>>,
 ) -> impl IntoView {
     use strum::EnumMessage;
 
@@ -973,6 +1001,7 @@ pub(super) fn ComposerControlRail(
                 creation_schedule
                 named
                 disclosures
+                on_audience_edit
             />
         </div>
     }
@@ -989,6 +1018,7 @@ pub(super) fn ComposeOptions(
     creation_schedule: Option<CreationSchedule>,
     named: RwSignal<NamedAudienceState>,
     disclosures: posts::ComposerDisclosureState,
+    on_audience_edit: Option<Callback<()>>,
 ) -> impl IntoView {
     let slug_value = Signal::derive(move || posts::slug_disclosure_value(&slug_field.value()));
     let publish_value = Signal::derive(move || {
@@ -996,9 +1026,8 @@ pub(super) fn ComposeOptions(
             publication_time.map_or_else(|| state.publish_at.get(), |edit| edit.value.get());
         posts::publish_disclosure_value(&value)
     });
-    let audience_value = Signal::derive(move || {
-        posts::audience_disclosure_value(state.audience.get().base).to_owned()
-    });
+    let audience_value =
+        Signal::derive(move || posts::audience_disclosure_value(&state.audience.get()));
     view! {
         <div class="j-compose-options">
             {matches!(publication, LoadedPublication::Draft)
@@ -1055,12 +1084,17 @@ pub(super) fn ComposeOptions(
             </ComposerDisclosure>
             <ComposerDisclosure
                 control=posts::ComposerControl::Audience
-                label="Audience"
+                label="Share with"
                 value=audience_value
                 disclosures=disclosures
                 body_id="composer-audience-control"
+                wide=true
             >
-                <AudiencePickerWithState selection=state.audience named=named />
+                <AudiencePickerWithState
+                    selection=state.audience
+                    named=named
+                    on_user_change=on_audience_edit
+                />
             </ComposerDisclosure>
         </div>
     }

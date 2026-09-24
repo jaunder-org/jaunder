@@ -23,7 +23,12 @@ import {
   type SandboxSeedManifest,
   type SeedRecord,
 } from "./seed";
-import { composePost, followPermalink, openComposerFromSidebar } from "./posts";
+import {
+  audienceForWire,
+  composePost,
+  followPermalink,
+  openComposerFromSidebar,
+} from "./posts";
 import { mintAppPassword } from "./sessions";
 import { SEL } from "./selectors";
 
@@ -144,7 +149,9 @@ async function createLegacyPostViaApi(
           publish: true,
           ...(opts.publishAt ? { publish_at: opts.publishAt } : {}),
           ...(opts.audience
-            ? { audience: { base: opts.audience, named: [] } }
+            ? {
+                audience: audienceForWire(opts.audience),
+              }
             : {}),
         },
       },
@@ -334,10 +341,7 @@ async function verifySeededManifest(
           },
         );
         expect(audience.status()).toBe(200);
-        expect(await audience.json()).toEqual({
-          base: post.visibility,
-          named: [],
-        });
+        expect(await audience.json()).toEqual(audienceForWire(post.visibility));
         if (post.publishedAt === null) {
           expect(entry!).toMatch(/<app:draft>yes<\/app:draft>/i);
         } else {

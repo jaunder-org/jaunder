@@ -32,6 +32,7 @@ import {
   openComposerControl,
   openComposerFromSidebar,
   openPostActions,
+  selectComposerAudience,
 } from "./posts";
 import { navigateInApp } from "./navigate";
 import { allowSecondBoot } from "./bootBudget";
@@ -115,7 +116,7 @@ test("authenticated user can create a post through the UI", async ({
   // #58: a fresh author has a successfully loaded, genuinely empty named-audience
   // list. The empty-state copy proves that Ready([]), rather than Loading or Failed,
   // is what authorizes this ordinary publish flow.
-  await openComposerControl(page, "Audience");
+  await openComposerControl(page, "Share with");
   await expect(page.getByText("No named audiences.")).toBeVisible();
   await page.fill(SEL.postBody, "# Playwright Post\n\n**browser**");
   await expect(page.locator(SEL.publishButton("true"))).toBeEnabled();
@@ -336,7 +337,7 @@ test("composer keeps filled body actions before a container-responsive controls 
       "FormatMarkdown",
       "Slugauto",
       "PublishNow",
-      "AudiencePrivate",
+      "Share withPrivate",
     ]);
     expect(
       await disclosures
@@ -430,7 +431,7 @@ test("composer keeps filled body actions before a container-responsive controls 
     name: /Format Markdown/,
   });
   const audienceDisclosure = grid.getByRole("button", {
-    name: /Audience Private/,
+    name: /Share with Private/,
   });
   await formatDisclosure.click();
   await expect(formatDisclosure).toHaveAttribute("aria-expanded", "true");
@@ -438,7 +439,7 @@ test("composer keeps filled body actions before a container-responsive controls 
   await audienceDisclosure.click();
   await expect(formatDisclosure).toHaveAttribute("aria-expanded", "false");
   await expect(audienceDisclosure).toHaveAttribute("aria-expanded", "true");
-  await expect(grid.getByLabel("Audience", { exact: true })).toBeVisible();
+  await expect(grid.getByLabel("Share with", { exact: true })).toBeVisible();
 
   const summary = grid.locator('textarea[name="summary"]');
   await summary.focus();
@@ -531,9 +532,18 @@ test("loaded edit controls remain coherent in wide and mobile layouts", async ({
   await expect(
     grid.locator('.j-tag-chip-label:has-text("#layout")'),
   ).toBeVisible();
-  await expect(grid.getByLabel("Audience", { exact: true })).toHaveValue(
-    "private",
-  );
+  const audienceSummary = grid
+    .locator(".j-composer-control-summary")
+    .filter({ hasText: "Share with" });
+  await expect(audienceSummary).toContainText("Private");
+  await audienceSummary.click();
+  const audienceChoices = grid.getByRole("group", { name: "Share with" });
+  await expect(
+    audienceChoices.getByRole("checkbox", { name: "Public" }),
+  ).not.toBeChecked();
+  await expect(
+    audienceChoices.getByRole("checkbox", { name: "Subscribers" }),
+  ).not.toBeChecked();
   await expect(grid.locator('input[name="slug_override"]')).toHaveValue(
     "populated-edit-layout",
   );
@@ -838,6 +848,115 @@ test("failed named-audience load shows an error and gates compose actions", asyn
   await expect(page.locator(SEL.publishButton("true"))).toBeDisabled();
 });
 
+test("failed Named-audience load cannot overwrite an existing Named-only Post", async ({
+  registeredPage,
+}) => {
+  const page = await registeredPage("/audiences");
+  await page.fill('input[name="name"]', "Confidants");
+  await click(page, 'button:has-text("Create")');
+  await expect(
+    page.locator(".j-audience-item", { hasText: "Confidants" }),
+  ).toBeVisible();
+
+  await openComposerFromSidebar(page);
+  await openComposerControl(page, "Share with");
+  await page.getByRole("checkbox", { name: "Confidants" }).check();
+  await page.fill(SEL.postBody, "# Named load failure\n\nKeep this audience");
+  await click(page, SEL.publishButton("false"));
+  await waitForSelector(page, SEL.saveSummary);
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  const permalinkPath = new URL(page.url()).pathname;
+
+  const editor = await page.context().newPage();
+  try {
+    await failServerFn(editor, "audiences/list_mine");
+    await goto(editor, permalinkPath);
+    await openEditor(editor);
+    await openComposerControl(editor, "Share with");
+    await expect(
+      editor.getByText("Could not load named audiences."),
+    ).toBeVisible();
+    await expect(editor.locator(SEL.publishButton("false"))).toBeDisabled();
+    await expect(editor.locator(SEL.publishButton("true"))).toBeDisabled();
+    await expect(editor.locator(SEL.saveSummary)).toHaveCount(0);
+  } finally {
+    await editor.close();
+  }
+
+  await openEditor(page);
+  await openComposerControl(page, "Share with");
+  await expect(
+    page.getByRole("checkbox", { name: "Confidants" }),
+  ).toBeChecked();
+  await expect(
+    page.getByRole("checkbox", { name: "Public" }),
+  ).not.toBeChecked();
+  await expect(
+    page
+      .locator(".j-composer-control-summary")
+      .filter({ hasText: "Share with" }),
+  ).toContainText("1 audience");
+});
+
+test("failed Default Audience load prevents creating with a placeholder selection", async ({
+  page,
+}) => {
+  await signInAsNewUser(page);
+  await failServerFn(page, "posts/get_default_audience_selection");
+  await goto(page, "/posts/new");
+  await expect(
+    page.getByText("Could not load the Default Audience.", { exact: false }),
+  ).toBeVisible();
+  await page.fill(SEL.postBody, "# Default failed\n\nMust not publish");
+  await expect(page.locator(SEL.publishButton("false"))).toBeDisabled();
+  await expect(page.locator(SEL.publishButton("true"))).toBeDisabled();
+  await expect(page.locator(SEL.saveSummary)).toHaveCount(0);
+});
+
+test("late Default Audience load keeps the author's intervening choice", async ({
+  page,
+}) => {
+  await signInAsNewUser(page);
+  const release = await stallServerFn(
+    page,
+    "posts/get_default_audience_selection",
+  );
+  await goto(page, "/posts/new");
+  await page.fill(SEL.postBody, "# Delayed default\n\nChosen Subscribers");
+  await selectComposerAudience(page, "subscribers");
+  await expect(page.locator(SEL.publishButton("false"))).toBeDisabled();
+  release();
+  await expect(page.locator(SEL.publishButton("false"))).toBeEnabled();
+  await expect(page.locator("#audience-subscribers")).toBeChecked();
+  await expect(page.locator("#audience-public")).not.toBeChecked();
+  await expect(
+    page
+      .locator(".j-composer-control-summary")
+      .filter({ hasText: "Share with" }),
+  ).toContainText("Subscribers");
+});
+
+test("failed current audience load never shows a saveable Public editor", async ({
+  page,
+}) => {
+  await signInAsNewUser(page);
+  const saved = await createPostViaApi(page, {
+    body: "# Current audience failure\n\nMust remain unchanged",
+    publish: false,
+    audience: "private",
+  });
+  const editor = await page.context().newPage();
+  try {
+    await failServerFn(editor, "posts/get_audience_selection");
+    await goto(editor, `/posts/${saved.post_id}/edit`);
+    await expect(editor.locator("main p.error")).toBeVisible();
+    await expect(editor.locator(SEL.postBody)).toHaveCount(0);
+    await expect(editor.locator(SEL.publishButton("false"))).toHaveCount(0);
+  } finally {
+    await editor.close();
+  }
+});
+
 test("authenticated user can create a post with a summary", async ({
   registeredPage,
 }) => {
@@ -1029,11 +1148,14 @@ test("full composer: narrow layout stays reachable and format round-trips", asyn
   await expect(tags).toBeVisible();
   await expect(tags).toHaveAttribute("placeholder", "Add tag…");
 
-  await openComposerControl(page, "Audience");
-  const audience = page.getByRole("group", { name: "Audience" });
+  await openComposerControl(page, "Share with");
+  const audience = page.getByRole("group", { name: "Share with" });
   await expect(audience).toBeVisible();
   await expect(
-    audience.getByRole("combobox", { name: "Audience" }),
+    audience.getByRole("checkbox", { name: "Public" }),
+  ).toBeVisible();
+  await expect(
+    audience.getByRole("checkbox", { name: "Subscribers" }),
   ).toBeVisible();
 
   await openComposerControl(page, "Format");
@@ -1169,11 +1291,11 @@ test("edit page: format control prefills accessibly and round-trips a change", a
   await expect(page.getByLabel("Summary", { exact: true })).toBeVisible();
   await expect(page.getByText("Tags", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Tags", { exact: true })).toBeVisible();
-  await openComposerControl(page, "Audience");
+  await openComposerControl(page, "Share with");
   await expect(
     page
-      .getByRole("group", { name: "Audience" })
-      .getByRole("combobox", { name: "Audience" }),
+      .getByRole("group", { name: "Share with" })
+      .getByRole("checkbox", { name: "Public" }),
   ).toBeVisible();
 
   await openComposerControl(page, "Format");
@@ -1204,62 +1326,116 @@ test("edit page: format control prefills accessibly and round-trips a change", a
   await expectRenderedFormat(page, "markdown");
 });
 
-test("edit page pre-selects the post's current audience", async ({
+test("Post audience picker preserves union targets and Private across save and reopen", async ({
   registeredPage,
 }) => {
   test.slow();
-  // Characterization test (#643): opening the editor must render the post's
-  // stored base audience and named-audience checkbox selection. Pins the seed
-  // behavior before it is refactored from a post-mount Effect into the Suspense
-  // block; must pass on the current (unrefactored) code too. The picker renders
-  // only for unpublished posts, so this targets a draft.
-
-  // A named audience must exist for its checkbox to appear in the picker.
   const page = await registeredPage("/audiences");
-  await page.fill('input[name="name"]', "Confidants");
-  await click(page, 'button:has-text("Create")');
-  await expect(
-    page.locator(".j-audience-item", { hasText: "Confidants" }),
-  ).toBeVisible();
+  for (const name of ["Confidants", "Family"]) {
+    await page.fill('input[name="name"]', name);
+    await click(page, 'button:has-text("Create")');
+    await expect(
+      page.locator(".j-audience-item", { hasText: name }),
+    ).toBeVisible();
+  }
 
-  // Reach the full composer through the authenticated sidebar rather than
-  // taking a second document load after managing the audience.
   await openComposerFromSidebar(page);
-  await openComposerControl(page, "Audience");
-  const audience = page.getByRole("group", { name: "Audience" });
-  await expect(
-    audience.getByText("Choose who can see", { exact: false }),
-  ).toHaveCount(0);
-  await expect(
-    audience.getByText("Also share with", { exact: true }),
-  ).toBeVisible();
-  const audienceBase = audience.getByRole("combobox", { name: "Audience" });
+  await openComposerControl(page, "Share with");
+  const audience = page.getByRole("group", { name: "Share with" });
+  const trigger = page
+    .locator(".j-composer-control-summary")
+    .filter({ hasText: "Share with" });
+  const publicChoice = audience.getByRole("checkbox", { name: "Public" });
+  const subscribers = audience.getByRole("checkbox", { name: "Subscribers" });
   const confidants = audience.getByRole("checkbox", { name: "Confidants" });
-  await expect(audienceBase).toBeVisible();
-  await expect(audienceBase).toHaveValue("private");
-  await expect(confidants).toBeDisabled();
-
-  await audienceBase.selectOption("subscribers");
-  await expect(confidants).toBeEnabled();
+  const family = audience.getByRole("checkbox", { name: "Family" });
+  await expect(audience.getByRole("checkbox")).toHaveCount(4);
+  await expect(audience.getByText("Also share with")).toHaveCount(0);
+  await trigger.focus();
+  await trigger.press("Enter");
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+  await trigger.press("Enter");
+  await expect(trigger).toHaveAttribute("aria-expanded", "true");
+  await page.keyboard.press("Tab");
+  await expect(publicChoice).toBeFocused();
+  await expect(trigger).toContainText("Private");
+  await expect(
+    audience.getByText("Private — only you can see this Post."),
+  ).toBeVisible();
+  await publicChoice.check();
+  await subscribers.check();
   await confidants.check();
+  await family.check();
+  await expect(trigger).toContainText("Public");
   await page.fill(SEL.postBody, "# Targeted Draft\n\nbody for targeted draft");
-  await expect(page.locator(SEL.publishButton("false"))).toBeEnabled();
   await click(page, SEL.publishButton("false"));
   await waitForSelector(page, SEL.saveSummary);
 
-  // Reach the draft's edit page through the shared in-app navigation hops.
+  // Each hop reloads the persisted target set rather than trusting picker state.
   await followPermalink(page, page.locator(SEL.saveSummary));
   await openEditor(page);
-  await openComposerControl(page, "Audience");
-  const editedAudience = page.getByRole("group", { name: "Audience" });
-  const editedAudienceBase = editedAudience.getByRole("combobox", {
-    name: "Audience",
-  });
-  await expect(editedAudienceBase).toHaveValue("subscribers");
+  await openComposerControl(page, "Share with");
+  const edited = page.getByRole("group", { name: "Share with" });
+  await expect(edited.getByRole("checkbox", { name: "Public" })).toBeChecked();
   await expect(
-    editedAudience.getByRole("checkbox", { name: "Confidants" }),
+    edited.getByRole("checkbox", { name: "Subscribers" }),
   ).toBeChecked();
-  await expect(page.locator(SEL.publishButton("false"))).toBeEnabled();
+  await expect(
+    edited.getByRole("checkbox", { name: "Confidants" }),
+  ).toBeChecked();
+  await expect(edited.getByRole("checkbox", { name: "Family" })).toBeChecked();
+  await edited.getByRole("checkbox", { name: "Public" }).uncheck();
+  await expect(trigger).toContainText("Subscribers");
+  await edited.getByRole("checkbox", { name: "Public" }).check();
+  await expect(
+    edited.getByRole("checkbox", { name: "Confidants" }),
+  ).toBeChecked();
+  await edited.getByRole("checkbox", { name: "Public" }).uncheck();
+  await click(page, SEL.publishButton("false"));
+  await waitForSelector(page, SEL.saveSummary);
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  await openEditor(page);
+  await openComposerControl(page, "Share with");
+  const narrower = page.getByRole("group", { name: "Share with" });
+  await expect(
+    narrower.getByRole("checkbox", { name: "Public" }),
+  ).not.toBeChecked();
+  await expect(
+    narrower.getByRole("checkbox", { name: "Subscribers" }),
+  ).toBeChecked();
+  await expect(
+    narrower.getByRole("checkbox", { name: "Confidants" }),
+  ).toBeChecked();
+  await expect(
+    narrower.getByRole("checkbox", { name: "Family" }),
+  ).toBeChecked();
+  await narrower.getByRole("checkbox", { name: "Subscribers" }).uncheck();
+  await expect(trigger).toContainText("2 audiences");
+  await narrower.getByRole("checkbox", { name: "Family" }).uncheck();
+  await expect(trigger).toContainText("1 audience");
+  await click(page, SEL.publishButton("false"));
+  await waitForSelector(page, SEL.saveSummary);
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  await openEditor(page);
+  await openComposerControl(page, "Share with");
+  await expect(
+    page.getByRole("checkbox", { name: "Confidants" }),
+  ).toBeChecked();
+  await click(page, ".j-audience-clear");
+  await expect(trigger).toContainText("Private");
+  await click(page, SEL.publishButton("false"));
+  await waitForSelector(page, SEL.saveSummary);
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  await openEditor(page);
+  await openComposerControl(page, "Share with");
+  const privatePicker = page.getByRole("group", { name: "Share with" });
+  await expect(
+    privatePicker.getByRole("checkbox", { name: "Confidants" }),
+  ).not.toBeChecked();
+  await expect(
+    privatePicker.getByRole("checkbox", { name: "Public" }),
+  ).not.toBeChecked();
+  await expect(trigger).toContainText("Private");
 });
 
 test("editing an invalid or nonexistent post shows not-found", async ({

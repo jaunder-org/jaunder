@@ -263,12 +263,8 @@ pub fn EditPostPage() -> impl IntoView {
     let post = Resource::new(post_id_param, |post_id| {
         posts::with_post_id(post_id, posts::get_preview)
     });
-    // Seeded into the editable `audience` picker inside the `Suspense` block below
-    // (awaited alongside `post`, not via a standalone Effect, since the page
-    // already suspends on `post`). On a fetch error the Public default survives
-    // (the `Ok`-only guard mirrors the dissolved post-resolve Effect). The intent
-    // comment lives here, outside `view!`, because leptosfmt relocates comments
-    // inside the macro.
+    // Await the complete selection alongside the Post. A failed audience fetch
+    // must not render an editor seeded with the Public placeholder.
     let current_audience = Resource::new(post_id_param, |post_id| {
         posts::with_post_id(post_id, posts::get_audience_selection)
     });
@@ -291,8 +287,11 @@ pub fn EditPostPage() -> impl IntoView {
                             loaded_publication,
                             state.publish_at,
                         );
-                        if let Ok(selection) = current_audience.await {
-                            state.audience.set(selection);
+                        match current_audience.await {
+                            Ok(selection) => state.audience.set(selection),
+                            Err(err) => {
+                                return view! { <p class="error">{err.to_string()}</p> }.into_any();
+                            }
                         }
                         let post_id = fetched.post.post.post_id;
                         // The slug is not part of the bundle (the compact shape has
