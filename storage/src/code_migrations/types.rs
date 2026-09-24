@@ -25,3 +25,14 @@ impl FromStr for CodeMigrationOperation {
         Ok(Self(value.to_owned()))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::CodeMigrationOperation;
+
+    #[test]
+    fn persisted_operation_requires_a_nonempty_name() {
+        assert!("".parse::<CodeMigrationOperation>().is_err());
+        assert!("future_operation".parse::<CodeMigrationOperation>().is_ok());
+    }
+}

@@ -464,10 +464,16 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        let Err(error) = open_existing_storage(&storage).await else {
-            panic!("pending offline work must refuse a live server")
-        };
+        let error = open_existing_storage(&storage)
+            .await
+            .err()
+            .expect("pending offline work must refuse a live server");
         assert!(format!("{error:#}").contains("stopping the live server"));
+        let account_error = open_account_storage(&storage)
+            .await
+            .err()
+            .expect("pending account command must refuse a live server");
+        assert!(format!("{account_error:#}").contains("stopping the live server"));
         let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pending_code_migrations")
             .fetch_one(&pool)
             .await

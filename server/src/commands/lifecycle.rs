@@ -1551,16 +1551,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn open_server_database_carries_pool_observer() {
+    async fn open_server_database_drains_pending_work_and_carries_pool_observer() {
         let temp = TempDir::new().expect("temp dir");
         let storage = sqlite_storage_args(&temp);
         storage::open_database(&storage.db, &StorageRuntimeConfig::default())
             .await
             .expect("open db");
+        let storage::DbConnectOptions::Sqlite(options) = &storage.db else {
+            unreachable!("fixture uses SQLite")
+        };
+        let pool = sqlx::SqlitePool::connect_with(options.clone())
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO pending_code_migrations (operation) VALUES ('backfill_post_media_references')")
+            .execute(&pool)
+            .await
+            .unwrap();
 
         let database = open_server_database(&storage, &StorageRuntimeConfig::default(), false)
             .await
             .expect("open server database");
+        let pending: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pending_code_migrations")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(pending, 0, "server drains pending work before serving");
         let snapshot = database.pool_observer.snapshot();
 
         assert!(snapshot.max >= 1);

@@ -50,12 +50,13 @@ mod tests {
                 .open(std::path::Path::new(&path).join("database.lock"))
                 .unwrap();
             let expected_free = std::env::var(EXPECT_FREE).unwrap() == "true";
-            match file.try_lock() {
-                Ok(()) => assert!(expected_free, "child acquired an occupied lock"),
-                Err(std::fs::TryLockError::WouldBlock) => {
-                    assert!(!expected_free, "child could not acquire a released lock");
-                }
-                Err(error) => panic!("unexpected lock error: {error}"),
+            if expected_free {
+                file.try_lock().expect("child must acquire a released lock");
+            } else {
+                assert!(
+                    matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock)),
+                    "child must see an occupied lock"
+                );
             }
             return;
         }
@@ -69,18 +70,14 @@ mod tests {
             .block_on(DatabaseLockGuard::acquire(dir.path()))
             .unwrap();
         let assert_child = |expected_free: bool| {
-            let output = std::process::Command::new(std::env::current_exe().unwrap())
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
                 .arg("--exact")
                 .arg("database_lock::tests::database_lock_is_exclusive_across_processes")
                 .env(CHILD_PATH, dir.path())
                 .env(EXPECT_FREE, expected_free.to_string())
-                .output()
+                .status()
                 .unwrap();
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stdout)
-            );
+            assert!(status.success(), "child lock assertion failed");
         };
         assert_child(false);
         drop(guard);

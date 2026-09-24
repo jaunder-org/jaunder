@@ -405,7 +405,7 @@ mod tests {
             "a later SQLx migration can enqueue the same operation again"
         );
         let error = db
-            .drain_pending(&|| Err(sqlx::Error::Protocol("should not authorize".to_owned())))
+            .drain_pending(&|| unreachable!("a drained queue must not request authorization"))
             .await;
         assert!(error.is_ok(), "no pending row needs no authorization");
     }
