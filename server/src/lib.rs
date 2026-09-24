@@ -111,7 +111,13 @@ where
             routing::get(handlers::feed_user_tag),
         );
 
-    crate::projector::register(app, public_projector).fallback(site::serve_site)
+    crate::projector::register(app, public_projector)
+        .fallback(site::serve_site)
+        // Wrap even unmatched /atompub/* paths; RSD and every other application
+        // response retain their independent cache and encoding policies.
+        .layer(axum::middleware::from_fn(
+            crate::atompub::prevent_atompub_transformation,
+        ))
 }
 
 /// Completes a fully composed application router with the common page,

@@ -17,4 +17,5 @@ pub use error::HandlerError;
 // at the narrowing seam; application handlers consume it within this module.
 pub(crate) use guards::require_user_match;
 pub use guards::required_base_url;
+pub(crate) use router::prevent_atompub_transformation;
 pub use router::router;

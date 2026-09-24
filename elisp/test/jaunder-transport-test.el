@@ -86,6 +86,22 @@
       ;; files. Atom source and Media both require byte-preserving transport.
       (should (eq (plist-get captured :body-type) 'binary)))))
 
+(ert-deftest jaunder-http-request-asks-for-identity-encoding ()
+  "Every AtomPub method must receive a validator the server can use unchanged."
+  (let ((jaunder--active-blog '(:base-url "https://blog" :username "alice")))
+    (cl-letf (((symbol-function 'jaunder--auth-secret) (lambda () "secret"))
+              ((symbol-function 'plz)
+               (lambda (_verb _url &rest args)
+                 (let ((headers (plist-get args :headers)))
+                   (should (equal (cdr (assoc "Accept-Encoding" headers)) "identity"))
+                   (should (= (length (seq-filter
+                                       (lambda (header) (equal (car header) "Accept-Encoding"))
+                                       headers))
+                              1)))
+                 (make-plz-response :status 200 :headers nil :body ""))))
+      (dolist (method '("POST" "GET" "PUT" "DELETE"))
+        (jaunder--http-request method "https://blog/atompub/alice/posts/1")))))
+
 (ert-deftest jaunder-curl-header-value-escapes-quotes-and-backslashes ()
   ;; plz 0.9.1 wraps each header value in double quotes inside a curl --config
   ;; file without escaping it, so a raw quote (a strong ETag echoed as If-Match)

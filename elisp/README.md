@@ -127,6 +127,18 @@ Do not resolve a conflict by deleting `JAUNDER_SYNCED`, guessing which side
 wins, or blindly replacing the remote audience. Reconciliation deliberately
 requires an explicit review when both local and remote state may have changed.
 
+### AtomPub ETags behind an encoding proxy
+
+The client asks for `Accept-Encoding: identity` on its AtomPub requests, and
+Jaunder marks these responses `Cache-Control: no-transform`. A reverse proxy
+must honor that directive or exclude `/atompub/*` from encoding. In particular,
+Caddy's `encode zstd gzip` can append `-zstd` to a strong Post ETag; that coded
+validator is not a valid `If-Match` for Jaunder's canonical Post. The client
+does not remove suffixes from ETags or silently repair older `JAUNDER_SYNCED`
+markers: a failed conditional write still requires explicit reconciliation
+rather than guessing which side changed. See the
+[operator encoding guidance](../docs/DESIGN.md#atompub-encoding-and-conditional-writes).
+
 ### Live integration tests
 
 The `*-integration.el` runner boots one real `jaunder` server for the full
