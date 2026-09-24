@@ -512,7 +512,11 @@ rows.
 The source and rendered forms feed deliberately separate serialization surfaces
 — Syndication Feeds consume presentation projections, while the AtomPub
 Collection preserves native source — detailed in the Protocols section
-([ADR-0015](adr/0015-atompub-serialization-surfaces.md)).
+([ADR-0015](adr/0015-atompub-serialization-surfaces.md)). Org prose export uses
+a focused `v0.10` `orgize` fork for Emacs-compatible `---`, `--`, and `...`
+typography; code, verbatim, link destinations, and authored source remain
+literal
+([Org export fork](adr/drafts/orgize-v010-special-string-export-fork.md)).
 
 **Content rights follow the User's current publication-wide setting.** Every
 User has one closed Content License: All Rights Reserved by default, CC0, or one
@@ -4122,8 +4126,9 @@ correction itself (`:76-83`, #412).
 
 **Dependency patching.** The workspace carries temporary exact-revision git
 `[patch.crates-io]` entries for lettre
-([ADR-0119](adr/0119-lettre-fork-pinned-by-rev.md)) and the Passkey
-`webauthn-rs`/`webauthn-rs-core` pair
+([ADR-0119](adr/0119-lettre-fork-pinned-by-rev.md)), Org export's `orgize`
+([Org export fork](adr/drafts/orgize-v010-special-string-export-fork.md)), and
+the Passkey `webauthn-rs`/`webauthn-rs-core` pair
 ([Passkeys are additive cookie-Session credentials](adr/0194-passkeys-are-additive-cookie-session-credentials.md)).
 The latter pins `jaunder-org/webauthn-rs` branch `feature/passkey-policy-apis`
 at `6d0acc73fbf4436b1ed853fa5c8a219dac304a8e`, preserving upstream defaults

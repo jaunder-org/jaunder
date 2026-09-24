@@ -4,6 +4,7 @@
   fenix,
   crane,
   atom-fork,
+  orgize-fork,
 }:
 let
   # One explicit screenshot font universe for host baseline generation and
@@ -284,9 +285,8 @@ let
       );
   };
 
-  # The #813 draft ADR pins atom_syndication's namespace-aware upstream
-  # revision. Substitute its flake checkout during vendoring so product
-  # builds resolve the Cargo git patch without sandbox network access.
+  # Supply each exact-revision Cargo git patch from its pinned flake checkout
+  # so product builds resolve both fork sources without sandbox network access.
   cargoVendorDir = craneLib.vendorCargoDeps {
     inherit src;
     overrideVendorGitCheckout =
@@ -294,11 +294,11 @@ let
       let
         p = builtins.head ps;
       in
-      if p.name == "atom_syndication" then
-        pkgs.runCommandLocal "atom-fork-vendor-${p.name}-${p.version}" { } ''
+      if p.name == "atom_syndication" || p.name == "orgize" then
+        pkgs.runCommandLocal "fork-vendor-${p.name}-${p.version}" { } ''
           dst="$out/${p.name}-${p.version}"
           mkdir -p "$dst"
-          cp -a ${atom-fork}/. "$dst/"
+          cp -a ${if p.name == "orgize" then orgize-fork else atom-fork}/. "$dst/"
           chmod -R u+w "$dst"
           echo '{"files":{},"package":null}' > "$dst/.cargo-checksum.json"
         ''
@@ -518,11 +518,11 @@ let
       let
         p = builtins.head ps;
       in
-      if p.name == "atom_syndication" then
-        pkgs.runCommandLocal "tools-atom-fork-vendor-${p.name}-${p.version}" { } ''
+      if p.name == "atom_syndication" || p.name == "orgize" then
+        pkgs.runCommandLocal "tools-fork-vendor-${p.name}-${p.version}" { } ''
           dst="$out/${p.name}-${p.version}"
           mkdir -p "$dst"
-          cp -a ${atom-fork}/. "$dst/"
+          cp -a ${if p.name == "orgize" then orgize-fork else atom-fork}/. "$dst/"
           chmod -R u+w "$dst"
           echo '{"files":{},"package":null}' > "$dst/.cargo-checksum.json"
         ''
