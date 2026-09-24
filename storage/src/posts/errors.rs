@@ -27,6 +27,9 @@ pub enum CreatePostError {
     /// was selected under the same transaction that rejected this duplicate.
     #[error("idempotency key already used for this user")]
     IdempotencyConflict(PostId),
+    /// Rendering failed before the Post was written.
+    #[error(transparent)]
+    Render(#[from] host::render::HighlightError),
     /// An unexpected database error occurred.
     #[error(transparent)]
     Internal(#[from] sqlx::Error),
@@ -50,6 +53,9 @@ pub enum UpdatePostError {
     /// The non-authoritative current-content validator is stale.
     #[error("post content has changed")]
     StaleContent,
+    /// Rendering failed before the Post was written.
+    #[error(transparent)]
+    Render(#[from] host::render::HighlightError),
     /// An unexpected database error occurred.
     #[error(transparent)]
     Internal(#[from] sqlx::Error),
@@ -70,6 +76,7 @@ impl From<UpdatePostError> for host::error::InternalError {
             | UpdatePostError::StaleContent => {
                 InternalError::validation_source(error.to_string(), error)
             }
+            UpdatePostError::Render(e) => InternalError::server(e),
             UpdatePostError::Internal(e) => InternalError::storage(e),
         }
     }

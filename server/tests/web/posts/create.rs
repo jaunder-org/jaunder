@@ -149,7 +149,10 @@ async fn published_org_post_preserves_source_block_as_safe_code(#[case] backend:
         "#+begin_src rust\nfn main() {\n    println!(\"<script>alert(1)</script>\");\n}\n#+end_src\n"
     );
     assert!(html.contains("<pre><code"), "source block missing: {html}");
-    assert!(html.contains("    println!"), "indentation missing: {html}");
+    assert!(
+        html.contains("\n    <span class=\"j-syn-"),
+        "indentation missing before highlighted code: {html}"
+    );
     assert!(
         html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"),
         "escaping missing: {html}"
@@ -158,6 +161,57 @@ async fn published_org_post_preserves_source_block_as_safe_code(#[case] backend:
         !html.contains("<script>"),
         "executable code escaped incorrectly: {html}"
     );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn labeled_org_and_markdown_posts_preserve_source_and_highlight(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    for (format, label, code) in [
+        (PostFormat::Org, "emacs-lisp", "(message \"hi\")"),
+        (PostFormat::Org, "haskell", "foo :: Int\nfoo = 1"),
+        (PostFormat::Markdown, "elisp", "(message \"hi\")"),
+        (PostFormat::Markdown, "hs", "foo :: Int\nfoo = 1"),
+    ] {
+        let source = match format {
+            PostFormat::Org => format!("#+begin_src {label}\n{code}\n#+end_src\n"),
+            PostFormat::Markdown => format!("```{label}\n{code}\n```\n"),
+            PostFormat::Html => unreachable!(),
+        };
+        let (status, body) = create_post_json(
+            app.clone(),
+            PostInputs {
+                publish: Some(true),
+                ..PostInputs::new(parse_post_body(&source), format)
+            },
+            Some(&session.cookie()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{format:?}/{label}: {body}");
+        let created = confirmed_created_post(&body);
+        let post = env
+            .posts()
+            .get_post_by_id(
+                created.post_id,
+                &common::visibility::ViewerIdentity::Anonymous,
+            )
+            .await
+            .unwrap()
+            .expect("published Post is visible");
+        assert_eq!(post.body, source.as_str(), "{format:?}/{label}");
+        assert!(
+            post.rendered_html.contains("class=\"j-syn-"),
+            "{format:?}/{label}: {}",
+            post.rendered_html
+        );
+    }
 }
 
 #[apply(backends)]

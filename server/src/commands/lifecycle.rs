@@ -849,6 +849,12 @@ async fn prepare_server_with_trusted_proxies(
         instance_id,
         pool_observer,
     } = open_server_database(storage, &runtime, prod).await?;
+    // Presentations created by an older server must be refreshed before any
+    // router or Syndication Feed worker can expose their cached HTML.
+    factory
+        .refresh_current_post_projections()
+        .await
+        .context("current Post projection refresh failed")?;
     let dependencies = ServeStorage::from_factory(&factory);
     reconcile_theme_assets(
         Arc::clone(&dependencies.themes),
@@ -1695,6 +1701,97 @@ mod tests {
             prepared.workers.backup.is_some(),
             "configured backup must start"
         );
+        shutdown_prepared_server(prepared).await;
+    }
+
+    #[tokio::test]
+    async fn invalid_refresh_checkpoint_prevents_server_startup() {
+        let temp = TempDir::new().expect("temp dir");
+        let storage = sqlite_storage_args(&temp);
+        storage::open_database(&storage.db, &StorageRuntimeConfig::default())
+            .await
+            .expect("open db");
+        let DbConnectOptions::Sqlite(options) = &storage.db else {
+            unreachable!("SQLite test storage")
+        };
+        let pool = sqlx::SqlitePool::connect_with(options.clone())
+            .await
+            .expect("connect to seeded db");
+        sqlx::query("UPDATE post_projection_refresh_progress SET version = 99 WHERE id = 1")
+            .execute(&pool)
+            .await
+            .expect("invalid checkpoint fixture");
+        let telemetry = test_telemetry(None);
+        let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
+        let error = prepare_server(&storage, bind, false, &telemetry, false, None)
+            .await
+            .err()
+            .expect("unsupported refresh version must abort startup");
+        assert!(
+            error
+                .to_string()
+                .contains("current Post projection refresh failed"),
+            "{error}"
+        );
+        let (version, cursor, complete): (i32, i64, bool) = sqlx::query_as(
+            "SELECT version, cursor_post_id, completed FROM post_projection_refresh_progress WHERE id = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("unchanged checkpoint");
+        assert_eq!((version, cursor, complete), (99, 0, false));
+    }
+
+    #[tokio::test]
+    async fn prepare_server_refreshes_existing_post_projection_before_serving() {
+        use common::test_support::parse_post_body;
+        use storage::test_support::{SeedRawPost, SeedUser};
+
+        let temp = TempDir::new().expect("temp dir");
+        let storage = sqlite_storage_args(&temp);
+        let factory = storage::open_database(&storage.db, &StorageRuntimeConfig::default())
+            .await
+            .expect("open db");
+        let owner = SeedUser::new()
+            .seed(factory.users(), factory.write_scope())
+            .await
+            .user_id;
+        let post = SeedRawPost::new(owner)
+            .body(parse_post_body("```rust\nfn main() {}\n```"))
+            .seed(factory.posts(), factory.write_scope())
+            .await;
+        let DbConnectOptions::Sqlite(options) = &storage.db else {
+            unreachable!("SQLite test storage")
+        };
+        let pool = sqlx::SqlitePool::connect_with(options.clone())
+            .await
+            .expect("connect to seeded db");
+        sqlx::query(
+            "UPDATE posts SET rendered_html = '<p>old presentation</p>' WHERE post_id = $1",
+        )
+        .bind(i64::from(post.post_id))
+        .execute(&pool)
+        .await
+        .expect("stale Post fixture");
+        let telemetry = test_telemetry(None);
+        let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
+        let prepared = prepare_server(&storage, bind, false, &telemetry, false, None)
+            .await
+            .expect("startup refresh");
+        let rendered: String =
+            sqlx::query_scalar("SELECT rendered_html FROM posts WHERE post_id = $1")
+                .bind(i64::from(post.post_id))
+                .fetch_one(&pool)
+                .await
+                .expect("read refreshed Post");
+        let completed: bool = sqlx::query_scalar(
+            "SELECT completed FROM post_projection_refresh_progress WHERE id = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("read checkpoint");
+        assert!(rendered.contains("j-syn-"), "{rendered}");
+        assert!(completed);
         shutdown_prepared_server(prepared).await;
     }
 

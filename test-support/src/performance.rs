@@ -476,7 +476,7 @@ fn build_post_input(
         tags,
         idempotency_key: None,
         expectations: PostBookkeepingExpectation::default(),
-    }))
+    })?)
 }
 
 fn post_published_at(
@@ -671,7 +671,7 @@ async fn apply_post_revisions(
     let mut body = existing.body;
     for revision in 0..target.revisions {
         body = revised_body(body, revision)?;
-        let rendered = host::render::render_post(existing.title.clone(), body, existing.format);
+        let rendered = host::render::render_post(existing.title.clone(), body, existing.format)?;
         let input = storage::UpdatePostInput {
             slug: existing.slug.clone(),
             rendered,

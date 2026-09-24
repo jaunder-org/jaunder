@@ -446,7 +446,8 @@ where
 ///
 /// Re-admitting `class` without narrowing its values would let attacker-supplied
 /// markup borrow application CSS. Only `language-*` tokens survive on `<pre>` and
-/// `<code>`; expanding this policy is a security decision.
+/// `<code>`; the ten closed `j-syn-*` token classes survive on `<span>`. CSS must
+/// scope those tokens to Post-body code since the filter cannot inspect ancestry.
 #[cfg(feature = "sanitize")]
 static SANITIZER: std::sync::LazyLock<ammonia::Builder<'static>> = std::sync::LazyLock::new(|| {
     let mut builder = ammonia::Builder::default();
@@ -457,15 +458,31 @@ static SANITIZER: std::sync::LazyLock<ammonia::Builder<'static>> = std::sync::La
     builder.add_tag_attributes("track", ["src", "kind", "srclang", "label", "default"]);
     builder.add_tag_attributes("code", ["class"]);
     builder.add_tag_attributes("pre", ["class"]);
-    builder.attribute_filter(|_element, attribute, value| {
+    builder.add_tag_attributes("span", ["class"]);
+    builder.attribute_filter(|element, attribute, value| {
         if attribute != "class" {
             return Some(value.into());
         }
-        // Only reachable for `pre`/`code`: ammonia runs this filter solely for
-        // allowlisted tag/attribute pairs, and `class` is permitted nowhere else.
+        // Ammonia only calls the filter for allowlisted tag/attribute pairs.
         let kept = value
             .split_whitespace()
-            .filter(|token| token.starts_with("language-"))
+            .filter(|token| match element {
+                "pre" | "code" => token.starts_with("language-"),
+                "span" => matches!(
+                    *token,
+                    "j-syn-comment"
+                        | "j-syn-keyword"
+                        | "j-syn-string"
+                        | "j-syn-number"
+                        | "j-syn-function"
+                        | "j-syn-type"
+                        | "j-syn-variable"
+                        | "j-syn-constant"
+                        | "j-syn-operator"
+                        | "j-syn-punctuation"
+                ),
+                _ => false,
+            })
             .collect::<Vec<_>>()
             .join(" ");
         (!kept.is_empty()).then_some(kept.into())
@@ -1147,6 +1164,40 @@ mod tests {
         let no_language = sanitize(r#"<code class="j-anon-only">x</code>"#);
         assert!(!no_language.contains("j-anon-only"), "{no_language}");
         assert!(!no_language.contains("class"), "{no_language}");
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn sanitizer_admits_only_closed_semantic_token_classes_on_spans() {
+        let categories = [
+            "comment",
+            "keyword",
+            "string",
+            "number",
+            "function",
+            "type",
+            "variable",
+            "constant",
+            "operator",
+            "punctuation",
+        ];
+        for category in categories {
+            let html = sanitize(&format!(
+                r#"<pre><code><span class="j-syn-{category} other" style="color:red" onclick="alert(1)">x</span></code></pre>"#
+            ));
+            assert!(
+                html.contains(&format!(r#"class="j-syn-{category}""#)),
+                "{html}"
+            );
+            assert!(!html.contains("other"), "{html}");
+            assert!(!html.contains("style="), "{html}");
+            assert!(!html.contains("onclick="), "{html}");
+        }
+        let html = sanitize(
+            r#"<span class="j-syn-unknown j-syn-function.builtin language-rust j-syn-type-extra">x</span><p class="j-syn-string">y</p>"#,
+        );
+        assert!(!html.contains("class="), "{html}");
+        assert!(!html.contains("<script"), "{html}");
     }
 
     #[test]

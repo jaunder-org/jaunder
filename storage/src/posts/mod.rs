@@ -8,6 +8,7 @@ pub(crate) mod management;
 pub(crate) mod media;
 pub(crate) mod models;
 pub(crate) mod public_presentation;
+pub(crate) mod refresh;
 pub(crate) mod search;
 pub(crate) mod store;
 pub(crate) mod syndication;
@@ -39,6 +40,7 @@ pub use models::{
     PostRevisionTag, PublishUpdate, RenderedHtml, UpdatePostInput,
 };
 pub use public_presentation::PublicPresentationPostRecord;
+pub use refresh::PostProjectionRefreshError;
 pub use search::PostMutationVersion;
 #[cfg(any(test, feature = "test-utils"))]
 pub use store::MockPostStorage;

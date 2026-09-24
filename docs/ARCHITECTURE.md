@@ -638,7 +638,18 @@ Post source, raw author iframes, malformed forms, and unknown providers remain
 sanitized or literal. Fixed provider players are external presentation
 resources, not Media references. The stored native source and AtomPub Member
 stay unchanged, while the canonical rendered HTML serves web and Syndication
-Feed surfaces.
+Feed surfaces. Host rendering additionally recognizes bounded, explicitly
+labeled Org source blocks and Markdown fences using only host-side
+`tree-sitter-highlight` with a broad, statically linked pinned grammar/query
+catalog. Emacs Lisp and Haskell are among its regression languages. Tree-sitter
+query captures map to ten closed semantic `j-syn-*` span classes inside code
+while the decoded exporter text, native source and AtomPub Member remain
+unchanged. `common::render::sanitize` admits those fixed span classes alongside
+its existing `language-*` code classes; the CSS scopes token colors to Post-body
+`pre code`, since the attribute filter cannot inspect ancestry. The 64 KiB
+block, 16-attempt and 128 KiB per-Post limits bound parsing. Unexpected
+highlighter failures propagate as typed render errors
+([host code-block highlighting and projection refresh](adr/drafts/host-code-block-highlighting-and-projection-refresh.md)).
 
 `RenderedHtml`'s field is crate-private: ordinary application crates have no raw
 constructor, conversion, blanket `Deserialize`, or trusted-string rebuild door.
@@ -844,14 +855,22 @@ summary, immutable creation time, prior modification time, and
 publication/deletion timestamps; child values are copied rather than linked to
 mutable tag or audience lookup rows. A semantic no-op writes neither a Revision
 nor an updated timestamp. Creation is revision-free because it has no prior
-state ([ADR-0136](adr/0136-local-post-lifecycle.md)). Media referenced by an
-owner's retained current Post or revision participates in the ordinary reference
-guard, including Deleted Posts; web force is the explicit override and may
-knowingly delete the final Media Record, breaking retained history. This does
-not make foreign/unknown/legacy global safety overridable, and qualifying
-cross-user references use independent records rather than pinning the owner's
-record. A Media Record survives removal of its references and Post deletion
-until explicit owner deletion
+state ([ADR-0136](adr/0136-local-post-lifecycle.md)). The bounded, checkpointed
+highlighting refresh is a distinct **presentation-only** transition over current
+active Org and Markdown projections: changed HTML, derived Media references and
+affected public-feed events commit together after a CAS on current
+source/format/rendered bytes and active status. It preserves timestamps, AtomPub
+Member content ETags, native source and every historical Post Revision; Deleted
+and HTML-format Posts are skipped. It resumes before the new server accepts
+traffic, and old-version writers must be drained first
+([host code-block highlighting and projection refresh](adr/drafts/host-code-block-highlighting-and-projection-refresh.md)).
+Media referenced by an owner's retained current Post or revision participates in
+the ordinary reference guard, including Deleted Posts; web force is the explicit
+override and may knowingly delete the final Media Record, breaking retained
+history. This does not make foreign/unknown/legacy global safety overridable,
+and qualifying cross-user references use independent records rather than pinning
+the owner's record. A Media Record survives removal of its references and Post
+deletion until explicit owner deletion
 ([per-user Media Record policy](adr/0183-per-user-media-records-from-local-post-references.md)).
 
 Revision records have no product mutators: only top-level Post mutation and
@@ -1643,11 +1662,15 @@ authority; discovery remains ordinary repository links rather than a registry
 
 Public markup exposes a versioned semantic Style Contract shared by built-in and
 custom themes; accessible source order and exact concept hooks are stable while
-incidental wrappers are not. Custom CSS is scoped inside an unthemeable
-paint-containment/low-stacking boundary. The root then places the dedicated
-`#j-trusted-post-actions` sibling after that theme surface and before the
-warning-only `#j-trusted-chrome` sibling; minimal Portal transport mounts
-authenticated Post controls into the former, outside the Style Contract.
+incidental wrappers are not. Ten scoped `j-syn-*` token hooks and matching
+`--j-syn-*` CSS variables add code colors to Style Contract v1 without changing
+old Theme Packages; Home uses its own Jaunder styling
+([host code-block highlighting and projection refresh](adr/drafts/host-code-block-highlighting-and-projection-refresh.md)).
+Custom CSS is scoped inside an unthemeable paint-containment/low-stacking
+boundary. The root then places the dedicated `#j-trusted-post-actions` sibling
+after that theme surface and before the warning-only `#j-trusted-chrome`
+sibling; minimal Portal transport mounts authenticated Post controls into the
+former, outside the Style Contract.
 
 One compact Actions button appears over a protected, in-flow slot in the header
 of the Post it controls. The viewer-independent slot reserves the button

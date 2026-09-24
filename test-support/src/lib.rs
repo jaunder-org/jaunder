@@ -1165,7 +1165,7 @@ async fn seed_sandbox_posts(
                                 fixture.author
                             )
                         })?;
-                    inputs.push(render_post_input(sandbox_post_content(&fixture, user_id)?));
+                    inputs.push(render_post_input(sandbox_post_content(&fixture, user_id)?)?);
                 }
                 Ok::<_, anyhow::Error>(posts.create_posts(transaction, &inputs).await?)
             })
@@ -1577,6 +1577,7 @@ mod sandbox_profile_tests {
                 let rendered = render_post_input(
                     sandbox_post_content(post, user.user_id).expect("curated Post input"),
                 )
+                .expect("curated Post rendering")
                 .rendered;
                 assert!(rendered.rendered_html().contains(&format!("src=\"{url}\"")));
             }

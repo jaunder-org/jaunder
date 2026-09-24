@@ -630,6 +630,10 @@ pub trait PostDialect: Backend {
     /// its `BEGIN IMMEDIATE` writer lock.
     const LIFECYCLE_STATE_SQL: &'static str;
 
+    /// Locks the single versioned projection-refresh checkpoint (`PostgreSQL`),
+    /// or reads it under `SQLite`'s already-held `BEGIN IMMEDIATE` writer lock.
+    const PROJECTION_REFRESH_PROGRESS_SQL: &'static str;
+
     /// Returns the complete post projection used as lifecycle mutation evidence.
     async fn fetch_lifecycle_post(
         conn: &mut Self::Connection,
@@ -7185,7 +7189,8 @@ mod tests {
                     None,
                     untitled_body.clone(),
                     PostFormat::Markdown,
-                ),
+                )
+                .unwrap(),
                 published_at: None,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],

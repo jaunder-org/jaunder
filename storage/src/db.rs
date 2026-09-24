@@ -563,6 +563,7 @@ pub(crate) const MIGRATION_SEEDED_TABLES: &[&str] = &[
     "instance_identity",
     "publisher_state",
     "theme_site_quota",
+    "post_projection_refresh_progress",
 ];
 
 /// Returns `true` if the database holds no user data — every table except the

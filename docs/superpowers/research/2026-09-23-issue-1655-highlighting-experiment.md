@@ -4,8 +4,10 @@
 KiB pathological blocks and authorized a production attempt without a
 Tree-sitter CLI or alternative-library profiling comparison. The measurements
 below remain the historical evidence for the failed **original** +25 ms overhead
-limit, not the revised production verdict. The new attempt still needs
-integrated safety/fidelity and final binary-size proof.
+limit, not the revised production verdict. The owner subsequently removed the
+agent-proposed 5 MiB binary-growth cap and broadened the requirement from two
+languages to a comprehensive built-in catalog. The new attempt still needs
+integrated safety/fidelity and a reported (not gated) final binary size.
 
 The original approved
 [spec](../specs/2026-09-23-issue-1655-org-syntax-highlighting.md) and
@@ -101,7 +103,7 @@ for a revised design decision; no partial feature is shipping.
   uses inline styles, incompatible with the approved class-only sanitizer/theme
   contract without replacing the renderer. Direct Tree-sitter is the
   lower-complexity initial candidate, **conditional on integrated safety,
-  fidelity, performance and size results**.
+  fidelity and performance results**.
 
 ## Integrated trial and verdict
 
@@ -147,12 +149,13 @@ than an unapproved smaller cutoff.
 
 The temporary integrated stripped server was **44,105,984 bytes**, SHA-256
 `ab66a47bdacd6f7682eeee4ea36bcc91221a85fbff1410c74bd8c3b9a42b9567`: **+4,600,512
-bytes (4.387 MiB)** over the unchanged binary, inside the 5 MiB limit with just
-642,368 bytes of headroom _before_ refresh code. The host-only closure
-introduced `tree-sitter-highlight` 0.27.0, `tree-sitter-elisp` 1.7.2,
-`tree-sitter-haskell` 0.23.1 and their Tree-sitter dependencies; the isolated
-probe lockfile pins the experimental dependencies. This size is **not a final
-production-size pass**, because the production refresh was never built.
+bytes (4.387 MiB)** over the unchanged binary. There was never an approved 5 MiB
+binary-size cap; earlier descriptions of one were mistaken. Size is reported as
+diagnostic evidence only. The host-only closure introduced
+`tree-sitter-highlight` 0.27.0, `tree-sitter-elisp` 1.7.2, `tree-sitter-haskell`
+0.23.1 and their Tree-sitter dependencies; the isolated probe lockfile pins the
+experimental dependencies. This size is **not a final production-size pass**,
+because the production refresh was never built.
 
 Before changing CSS, a local named sandbox captured uncolored permalink
 screenshots for all four fixtures plus narrow and Home views under Studio.
@@ -166,6 +169,81 @@ Package exist because the feature did not meet the latency gate.
 The trial production patch was intentionally reverted rather than checked in;
 its raw integrated timing samples cannot be rerun from this report alone. The
 retained source-and-query probe can rerun candidate/fidelity checks, and the
-retained benchmark reproduces the unmodified baseline. The newly authorized
-production attempt must re-establish paired integrated measurements against the
-revised criterion and satisfy the other gates before shipping.
+retained benchmark reproduces the unmodified baseline. The owner considers the
+representative Tree-sitter timings sufficient; broad coverage, safety, source
+fidelity, and the normal repository gates still need proof before shipping.
+
+## Rejected syntect catalog trial (not an approved implementation)
+
+This unshipped trial was implemented without first consulting the owner about
+changing engines. The owner rejected it and requires **tree-sitter-highlight
+only**. The measurements below are retained as historical evidence, not as a
+reason to reintroduce syntect or as a production go verdict. The owner
+subsequently directed a broad Tree-sitter-only catalog without another
+performance approval gate.
+
+Pinned two-face 0.5.2+bat-0.26.1's bat-derived assets expose **220 syntaxes**,
+versus 75 in syntect 5.3.0's default set. The host candidate retains direct
+Tree-sitter for Emacs Lisp and Haskell and maps bundled syntect lexer scopes
+into the same ten closed token classes for the others. An executable catalog
+test verified that every bundled syntax has a reachable extension or single-word
+name alias, and that markup-looking code survives decoded unchanged.
+Org/Markdown smoke tests cover all 220; fourteen mainstream labels additionally
+produced styled tokens in both formats. Bundled regex syntaxes fall back for
+entire blocks containing a line over 16 KiB. Bincode 1.3 decodes pinned embedded
+assets, never author input; cargo-deny records a narrow maintenance-only
+advisory exception. The full bat application crate was rejected because it
+brings an LGPL-only terminal-color dependency into the host closure.
+
+A candidate-only 64 KiB full production-render measurement with 30 fresh-process
+cold and 100 warm samples per pair
+(`cargo run --release -p host --example code_block_bench -- --catalog`) yielded
+warm nearest-rank p95 (milliseconds):
+
+| Format   |  Rust | TypeScript | Python |   Zig |
+| -------- | ----: | ---------: | -----: | ----: |
+| Org      | 291.1 |      552.8 |  262.8 | 189.6 |
+| Markdown | 315.8 |      588.8 |  313.0 | 197.7 |
+
+The same unshipped candidate's four required Tree-sitter regression pairs were
+measured with the same 30-cold/100-warm harness; warm full-render nearest-rank
+p95 at 64 KiB was **45.44 ms** Org/Emacs Lisp, **231.36 ms** Org/Haskell,
+**64.07 ms** Markdown/Emacs Lisp, and **180.79 ms** Markdown/Haskell. All eight
+sampled 64 KiB pairs were below the one-second warm-p95 criterion. The syntect
+trial is rejected regardless of these timings. These are historical local
+results, not a Tree-sitter-only broad catalog, final refresh, browser, full
+security, binary-size, or release verdict.
+
+## Tree-sitter-only bundled catalog candidate
+
+The replacement host candidate statically links 40 pinned mainstream grammar
+variants plus the original Emacs Lisp and Haskell regressions. It uses only
+`tree-sitter-highlight` for rendering, with pinned Tree-sitter highlight queries
+from the grammar crates or `syntastica-queries` (query data, **not** its
+highlighter). No network download, dynamic grammar loader, or browser parser is
+used. `host/src/code_highlight.rs` is the authoritative grammar/alias inventory:
+ASM, Bash, C, C#, CMake, Containerfile/Dockerfile, C++, CSS, Dart, diff, Elixir,
+Fish, Gleam, Go, HTML, Java, JavaScript, JSON, Julia, Kotlin, Lua, Make,
+Markdown, Nix, OCaml, PHP, Python, CodeQL, R, Ruby, Rust, Scala, SQL, Swift,
+TOML, TypeScript, TSX, XML, YAML, and Zig, plus Emacs Lisp and Haskell. A host
+test initializes all 40 bundled grammars/queries, exercises each in Org and
+Markdown, and checks decoded code-text fidelity; a second test checks semantic
+token output for fifteen representative languages in both formats. Those focused
+tests pass locally. The full `cargo xtask check` gate passed (57/57 steps,
+including dual-backend tests, cargo-deny and Clippy). A focused Chromium
+`e2e-local posts.spec.ts:248` run passed all four new format/language/browser
+surface cases, and the existing Org/Emacs Lisp narrow-viewport case passed
+separately. Comparable permalink/Home before-and-after images are retained at
+`/tmp/pi-playwright/milestone-22-11/issue-1655/`; the restored existing Posts
+show semantic tokens without changing decoded source text. This is still an
+unshipped candidate, not a merge verdict.
+
+## Tree-sitter-only binary-size diagnostic
+
+Under the same devShell release build and strip commands used for the unchanged
+baseline, the 42-variant candidate's stripped `jaunder` server is **96,257,056
+bytes**, SHA-256
+`c6164606ccc5df77ffcea3096eda2702108a7ff275db1c47d32d9a7882ea2c6e`. That is
+**56,751,584 bytes** larger than the unchanged 39,505,472-byte baseline. This is
+a visibility report, **not** an acceptance limit; the owner explicitly rejected
+the invented 5 MiB binary-growth cap.

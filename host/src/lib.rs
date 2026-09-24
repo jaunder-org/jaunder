@@ -18,6 +18,7 @@
 pub mod atompub;
 pub mod auth;
 pub mod capture;
+mod code_highlight;
 pub mod config_key;
 pub mod error;
 pub mod etag;

@@ -108,6 +108,7 @@ fn map_create_post_attempt_error(
             Err(PerformCreationError::IdempotencyConflict(post_id))
         }
         CreatePostError::BookkeepingMismatch => Err(PerformCreationError::BookkeepingMismatch),
+        CreatePostError::Render(error) => Err(PerformCreationError::Render(error)),
         CreatePostError::Internal(error) => Err(PerformCreationError::Storage(error)),
     }
 }
@@ -120,7 +121,7 @@ fn is_currently_public(record: &PostRecord, has_public_audience: bool, now: UtcI
             .is_some_and(|published_at| published_at <= now)
 }
 
-fn affected_post_feed_paths(
+pub(crate) fn affected_post_feed_paths(
     previous: Option<(&PostRecord, bool)>,
     current: (&PostRecord, bool),
     now: UtcInstant,
@@ -184,7 +185,7 @@ pub async fn create_rendered_post(
     content: RenderedPostContent,
     now: UtcInstant,
 ) -> Result<MutationOutcome<PostRecord>, CreatePostError> {
-    let input = render_post_input(content);
+    let input = render_post_input(content)?;
     let _media_locks = content_locks
         .acquire(
             input
@@ -242,7 +243,7 @@ pub async fn create_rendered_post_with_media_ownership(
     content: RenderedPostContent,
     now: UtcInstant,
 ) -> Result<MutationOutcome<PostRecord>, CreatePostError> {
-    let input = render_post_input(content);
+    let input = render_post_input(content)?;
     let local_media = ownership
         .resolve(input.rendered.media())
         .await
@@ -295,8 +296,12 @@ pub async fn create_rendered_post_with_media_ownership(
 /// Renders `body` per `format` and assembles the [`CreatePostInput`] without
 /// writing it. Shared by [`create_rendered_post`] (write one) and the batch
 /// seeders (collect many), so the render-and-assemble recipe lives in one place.
-#[must_use]
-pub fn render_post_input(content: RenderedPostContent) -> CreatePostInput {
+///
+/// # Errors
+/// Returns a typed highlighting error if the source cannot be rendered safely.
+pub fn render_post_input(
+    content: RenderedPostContent,
+) -> Result<CreatePostInput, host::render::HighlightError> {
     let RenderedPostContent {
         user_id,
         title,
@@ -310,8 +315,8 @@ pub fn render_post_input(content: RenderedPostContent) -> CreatePostInput {
         idempotency_key,
         expectations,
     } = content;
-    let rendered = host::render::render_post(title, body, format);
-    CreatePostInput {
+    let rendered = host::render::render_post(title, body, format)?;
+    Ok(CreatePostInput {
         user_id,
         slug,
         rendered,
@@ -321,7 +326,7 @@ pub fn render_post_input(content: RenderedPostContent) -> CreatePostInput {
         tags,
         expectations,
         idempotency_key,
-    }
+    })
 }
 
 /// The single definition of "a timeline-visible seeded post", as data: a public,
@@ -334,6 +339,9 @@ pub fn render_post_input(content: RenderedPostContent) -> CreatePostInput {
 /// normal `storage` build never compiles it, yet the `test-support` binary
 /// reaches it via the lightweight `seed-posts` feature (no
 /// `tempfile`/`rstest_reuse`).
+///
+/// # Panics
+/// Panics when a test fixture's Post body fails to render.
 #[cfg(any(test, feature = "seed-posts"))]
 #[must_use]
 pub fn seed_post_input(
@@ -355,6 +363,7 @@ pub fn seed_post_input(
         idempotency_key: None,
         expectations: PostBookkeepingExpectation::default(),
     })
+    .unwrap_or_else(|error| panic!("fixture Post rendering failed: {error}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -382,6 +391,8 @@ pub enum PerformUpdateError {
     BookkeepingMismatch,
     #[error("post content has changed")]
     StaleContent,
+    #[error(transparent)]
+    Render(#[from] host::render::HighlightError),
     #[error("storage error: {0}")]
     Storage(#[source] sqlx::Error),
 }
@@ -394,6 +405,7 @@ impl From<UpdatePostError> for PerformUpdateError {
             UpdatePostError::SlugConflict => Self::SlugConflict,
             UpdatePostError::BookkeepingMismatch => Self::BookkeepingMismatch,
             UpdatePostError::StaleContent => Self::StaleContent,
+            UpdatePostError::Render(e) => Self::Render(e),
             UpdatePostError::Internal(e) => Self::Storage(e),
         }
     }
@@ -418,6 +430,7 @@ impl From<PerformUpdateError> for host::error::InternalError {
             PerformUpdateError::NotFound | PerformUpdateError::Unauthorized => {
                 InternalError::not_found("Post")
             }
+            PerformUpdateError::Render(e) => InternalError::server(e),
             PerformUpdateError::Storage(e) => InternalError::storage(e),
         }
     }
@@ -500,7 +513,8 @@ pub async fn perform_post_update(
         None => derived_slug,
     };
 
-    let rendered = host::render::render_post(title, body, format);
+    let rendered =
+        host::render::render_post(title, body, format).map_err(PerformUpdateError::Render)?;
     let input = UpdatePostInput {
         slug,
         rendered,
@@ -585,7 +599,8 @@ pub async fn perform_post_update_with_media_ownership(
     let body = common::render::canonicalize_body(&body, &format)
         .map_err(|_| PerformUpdateError::EmptyPost)?;
     let slug = slug_override.cloned().unwrap_or(derived_slug);
-    let rendered = host::render::render_post(title, body, format);
+    let rendered =
+        host::render::render_post(title, body, format).map_err(PerformUpdateError::Render)?;
     let local_media = ownership
         .resolve(rendered.media())
         .await
@@ -809,6 +824,8 @@ pub enum PerformCreationError {
     IdempotencyConflict(PostId),
     #[error("post bookkeeping does not match the stored post")]
     BookkeepingMismatch,
+    #[error(transparent)]
+    Render(#[from] host::render::HighlightError),
     #[error("storage error: {0}")]
     Storage(#[source] sqlx::Error),
 }
@@ -841,6 +858,7 @@ impl From<PerformCreationError> for host::error::InternalError {
             PerformCreationError::CreatedNotFound => {
                 InternalError::server_message("created post not found")
             }
+            PerformCreationError::Render(e) => InternalError::server(e),
             PerformCreationError::Storage(e) => InternalError::storage(e),
         }
     }

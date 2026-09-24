@@ -2,9 +2,9 @@
 
 ## Outcome
 
-Evaluate Tree-sitter highlighting on Emacs Lisp and Haskell in both Org source
-blocks and explicitly labeled Markdown fenced code blocks. If the evidence
-clears the safety, quality, and resource gates below, ship production
+Ship broad language highlighting, including Emacs Lisp and Haskell, in both Org
+source blocks and explicitly labeled Markdown fenced code blocks. If the
+evidence clears the safety, quality, and resource gates below, ship production
 highlighting for both formats and languages in this issue. The result must
 appear in existing and new published Posts on the public permalink, Local, and
 Home; public Syndication Feeds continue to carry safe rendered HTML. Additional
@@ -13,24 +13,28 @@ policy for each new grammar.
 
 ## Load-bearing decisions
 
-- The first two languages are **Emacs Lisp and Haskell**, because both occur on
-  the observed production consumer. Normalize labels by ASCII case-folding;
-  accept exactly `emacs-lisp`/`elisp` and `haskell`/`hs` initially. Org
+- Emacs Lisp and Haskell are required regression languages because both occur on
+  the observed production consumer, **not the extent of language support**. Ship
+  a broad, pinned built-in catalog of programming and common markup/data
+  languages with a reviewable alias inventory. Normalize labels by ASCII
+  case-folding, including `emacs-lisp`/`elisp` and `haskell`/`hs`. Org
   `#+begin_src` labels and Markdown **fenced** code-block info labels use the
   same bounded registry of aliases, grammars and queries. A Markdown fence is
   eligible only when its explicit first info-string word is a supported label;
   indented or unlabeled blocks, inline code, and author-supplied raw HTML are
-  never highlighter input. Unknown labels stay escaped, uncolored code; later
-  grammars add registry entries and tests, never new HTML privileges. Compare
-  direct `tree-sitter-highlight` and Syntastica against both languages and
-  authoring formats before choosing a library.
-- Tree-sitter query _capture categories_, not raw parse-tree node names, map to
-  the closed cross-language set `comment`, `keyword`, `string`, `number`,
-  `function`, `type`, `variable`, `constant`, `operator`, and `punctuation`.
-  Match a named capture or its explicitly configured dotted subcategory to one
-  category; unknown captures render without a token hook. Highlighted fragments
-  are `<span class="j-syn-<category>">` inside `<pre><code>`; each category has
-  a built-in `--j-syn-<category>` CSS default. These stable hooks are an
+  never highlighter input. Unknown labels stay escaped, uncolored code; catalog
+  additions require registry entries and tests, never new HTML privileges. Use
+  **tree-sitter-highlight only**, with pinned grammars and compatible highlight
+  queries for each included language; no syntect, TextMate lexer, runtime
+  downloads, or author-provided plugins. Ship a reviewable inventory of each
+  included grammar, compatible query and supported label/alias.
+- Tree-sitter query captures, not raw parse-tree node names or arbitrary
+  authored classes, map to the closed cross-language set `comment`, `keyword`,
+  `string`, `number`, `function`, `type`, `variable`, `constant`, `operator`,
+  and `punctuation`. Match a named capture to one category; unknown captures
+  render without a token hook. Highlighted fragments are
+  `<span class="j-syn-<category>">` inside `<pre><code>`; each category has a
+  built-in `--j-syn-<category>` CSS default. These stable hooks are an
   **additive Style Contract v1 extension**: old Theme Packages remain valid,
   while public themes may override variables/selectors without replacing markup.
   Home continues using Jaunder's own styling; it never loads a custom public
@@ -82,7 +86,7 @@ policy for each new grammar.
   export's decoded block `<code>` text (not escaped/tokenized HTML). Visit
   blocks in document order; apply the same limits per Post across all eligible
   blocks. Only recognized-language blocks with payload at most 64 KiB may
-  attempt parsing; at most 16 attempts and 128 KiB of attempted payload are
+  attempt parsing. At most 16 attempts and 128 KiB of attempted payload are
   allowed per Post. Each attempt consumes both its byte count and one slot even
   if parsing falls back, so malformed blocks cannot cause unbounded repeated
   work. Unknown languages, individually oversized blocks, and blocks that would
@@ -93,29 +97,25 @@ policy for each new grammar.
   renderer to return a typed error for unexpected grammar/query initialization,
   ABI, or infrastructure failures; propagate it through every web/AtomPub write,
   preview and refresh caller rather than panicking or returning a success-shaped
-  plain-code fallback. A failed refresh must not advance its checkpoint. Compare
-  paired baseline/highlighted render times on fixed 1 KiB, 8 KiB, and 64 KiB
-  fixtures in the pinned devShell with 30 cold and 100 warm samples for **each
-  format and language pair**, reporting median and p95; compare stripped release
-  server binary bytes and dependency closure. Go to production only if both
-  languages look useful in **both formats** on the real samples, all
-  security/fidelity proofs pass, the full highlighted 64 KiB render stays below
-  1 second warm p95 for each format/language pair, and the release binary grows
-  by no more than 5 MiB. The owner accepted this revised pathological-case
-  latency criterion after the original +25 ms overhead limit failed; still
-  report the measured overhead and 1/8 KiB distributions. Otherwise stop with
-  evidence and ask for a revised budget/scope rather than quietly shipping a
-  partial feature.
+  plain-code fallback. A failed refresh must not advance its checkpoint. The
+  owner considers the paired Tree-sitter measurements sufficient and does not
+  require another latency threshold or language-by-language performance
+  decision. Smoke-test every bundled grammar and query in both formats; keep the
+  resource limits above for safety. Report stripped release server size and
+  dependency closure for visibility, **not as a size gate**: the previously
+  mentioned 5 MiB binary-growth limit was an agent mistake, never a user
+  requirement. Go to production only if broad coverage and safety/fidelity
+  proofs pass; do not ship partial format or catalog support.
 
 ## Acceptance
 
 - A reproducible comparison records real Emacs Lisp/Haskell samples under **Org
   and Markdown**, malformed and markup-looking code, unknown and missing labels,
   exact per-block and cumulative UTF-8-byte/count boundaries (including mixed
-  eligible, failed-parser, unknown and oversized blocks in order), measured
-  distributions and binary/dependency delta by the stated method, and chosen
-  library/query rationale. A failed threshold documents the result instead of
-  silently expanding scope or shipping only one format/language.
+  eligible, failed-parser, unknown and oversized blocks in order), and the
+  built-in Tree-sitter grammar/query/alias inventory. Report binary/dependency
+  size for visibility; do not reduce format or language support to meet a size
+  or latency target.
 - HTML `<code>` decoded text equals the same unhighlighted **Org or Markdown**
   export, scalar for scalar, for supported and fallback paths, including
   leading/trailing blank lines, tabs, `<`, `&`, quotes, invalid syntax, and
@@ -166,9 +166,9 @@ policy for each new grammar.
   client-side highlighter, or retroactive rewriting of Post history. The Post
   source and AtomPub Member remain native Org or Markdown; Feeds remain rendered
   HTML, not an editing transport.
-- Only Emacs Lisp and Haskell are promised at first. The scalable
-  registry/vocabulary is a design for later additions, not a commitment to ship
-  all Tree-sitter languages now.
+- A broad pinned language catalog ships in this issue. No highlighter can
+  literally parse every language; record the exact supported labels and aliases
+  and preserve escaped plain-code fallback for every unsupported label.
 - The experiment alone is not a license to bypass the spec, security, or merge
   approval gates. If it fails, retain only reproducible decision evidence;
   production changes and their ADR are conditional on success.

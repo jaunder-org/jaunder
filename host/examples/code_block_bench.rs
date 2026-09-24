@@ -31,7 +31,7 @@ fn fixture(format: PostFormat, language: &str, size: usize) -> Result<PostBody, 
 fn render_once(format: PostFormat, language: &str, size: usize) -> Result<u128, Box<dyn Error>> {
     let body = fixture(format, language, size)?;
     let start = Instant::now();
-    black_box(host::render::render(black_box(&body), black_box(&format)));
+    black_box(host::render::render(black_box(&body), black_box(&format))?);
     Ok(start.elapsed().as_nanos())
 }
 

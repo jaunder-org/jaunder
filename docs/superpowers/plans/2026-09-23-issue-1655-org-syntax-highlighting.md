@@ -9,16 +9,16 @@
 
 ## Scope
 
-In: evidence-driven choice of highlighter for Emacs Lisp and Haskell, safe host
-rendering, additive public semantic token hooks, presentation-only refresh of
-current active Org and Markdown Post projections, public Syndication Feed
-coherence, browser proof, and the conditional proposed ADR/architecture
+In: a broad pinned built-in language catalog including Emacs Lisp and Haskell,
+safe host rendering, additive public semantic token hooks, presentation-only
+refresh of current active Org and Markdown Post projections, public Syndication
+Feed coherence, browser proof, and the conditional proposed ADR/architecture
 projection.
 
-Out: other grammars, Markdown indented/unlabeled fences and inline code,
-highlighting author-supplied raw HTML, client-side/WASM highlighting, arbitrary
-authored CSS/style admission, edits to native source or historical Post
-Revisions, an unbounded rewrite of legacy content.
+Out: runtime grammar downloads or author plugins, Markdown indented/unlabeled
+fences and inline code, highlighting author-supplied raw HTML, client-side/WASM
+highlighting, arbitrary authored CSS/style admission, edits to native source or
+historical Post Revisions, an unbounded rewrite of legacy content.
 
 ## Task outline
 
@@ -30,11 +30,12 @@ Revisions, an unbounded rewrite of legacy content.
       binary and paired baseline timings through both current production render
       seams under the pinned devShell. Candidate cost estimates are **not** the
       final go/no verdict: only the integrated seam can measure that (Task 4).
-      If either grammar cannot highlight useful source safely, stop and request
-      a design revision before touching the sanitizer.
-  - Contract for later tasks: candidate host-only highlighter, bounded grammar
-    registry, capture-to-category mapping, fixed fixture corpus and preserved
-    baseline artifacts under identical build/measurement settings.
+      If the catalog cannot highlight useful source safely, stop and request a
+      design revision before touching the sanitizer.
+  - Contract for later tasks: candidate host-only highlighter, broad pinned
+    catalog, bounded alias registry, capture-to-category mapping, fixed fixture
+    corpus and preserved baseline artifacts under identical build/measurement
+    settings.
   - Verification: rerunnable fixture/harness tests and the recorded baseline
     command/results; no production Post render change.
 - [ ] **2. Establish the sanitized semantic-token contract.** Add exactly the
@@ -54,13 +55,15 @@ Revisions, an unbounded rewrite of legacy content.
 - [ ] **3. Render eligible blocks through the shared host Post projection.**
       Insert the chosen highlighter at both the Org source-block and Markdown
       fenced-code exporter boundaries without altering either authored body or
-      AtomPub Members. Implement explicit aliases, first-info-word matching for
-      Markdown fences, and UTF-8-byte accounting over the exporter's decoded
-      `<code>` text plus per-Post attempt accounting; keep Markdown
-      indented/unlabeled code, inline code and raw authored HTML unhighlighted.
-      Preserve valid Post Shortcodes outside code and shortcode-looking text
-      inside it in both formats. Unknown, failed, and over-limit eligible blocks
-      remain escaped plain code.
+      AtomPub Members. Use only tree-sitter-highlight with pinned grammars and
+      compatible highlight queries. Ship a broad built-in catalog with a
+      reviewable alias inventory; no runtime grammar downloads. Implement
+      supported aliases, first-info-word matching for Markdown fences, and
+      UTF-8-byte accounting over the exporter's decoded `<code>` text plus
+      per-Post attempt accounting; keep Markdown indented/unlabeled code, inline
+      code and raw authored HTML unhighlighted. Preserve valid Post Shortcodes
+      outside code and shortcode-looking text inside it in both formats.
+      Unknown, failed, and over-limit eligible blocks remain escaped plain code.
   - Contract: the decoded `<code>` text from every highlighted/fallback result
     equals the same unhighlighted exporter for that format, scalar-for-scalar;
     no supported capture escapes the ten-category vocabulary. Change
@@ -70,31 +73,29 @@ Revisions, an unbounded rewrite of legacy content.
     create/update, preview, and maintenance caller. Only expected malformed
     author source may degrade to escaped plain code. Do not log an unexpected
     failure and return a success-shaped fallback.
-  - Verification: focused host unit tests for all four language/format pairs,
-    Markdown first-info-word/mixed-case/trailing-word eligibility, with
-    supported aliases in later words or embedded in larger tokens remaining
-    unhighlighted, plus indented/unlabeled/inline/raw-HTML exclusions, mixed
-    shortcode/code documents, aliases, order-sensitive cumulative limits,
-    malformed/HTML-looking text, sanitizer round-trip, and injected unexpected
-    query/registry error propagation; backend-parity web/AtomPub create/update
-    and web preview tests for both formats' native-source fidelity and typed
-    errors without a partial write.
-- [ ] **4. Measure integrated cost and decide go/no-go.** Run the approved
-      30-cold/100-warm paired timings for each of the four language/format pairs
-      through both integrated production export/highlight/sanitize paths. Build
-      the stripped release server under the Task 1 baseline flags. Record actual
-      binary and dependency closure deltas, both formats' visual and source
-      fidelity, sanitizer proofs, and the revised spec's sub-second full warm
-      p95 at 64 KiB / 5 MiB verdict. The original +25 ms overhead gate failed
-      and its production trial was reverted; the owner subsequently accepted
-      sub-second pathological rendering and authorized another production
-      attempt. **If a remaining gate fails, stop and request revised
-      authorization rather than retaining a partial one-language or one-format
+  - Verification: focused host unit tests for all four regression
+    language/format pairs, catalog smoke tests covering every approved grammar
+    in both formats, Markdown first-info-word/mixed-case/trailing-word
+    eligibility, with supported aliases in later words or embedded in larger
+    tokens remaining unhighlighted, plus indented/unlabeled/inline/raw-HTML
+    exclusions, mixed shortcode/code documents, aliases, order-sensitive
+    cumulative limits, malformed/HTML-looking text, sanitizer round-trip, and
+    injected unexpected query/registry error propagation; backend-parity
+    web/AtomPub create/update and web preview tests for both formats'
+    native-source fidelity and typed errors without a partial write.
+- [ ] **4. Verify integrated safety and broad coverage.** Smoke-test every
+      bundled Tree-sitter grammar/query in both exporters, verify representative
+      colored tokens, source fidelity, sanitizer constraints and the bounded
+      resource behavior. The owner accepted the representative Tree-sitter
+      latency evidence as sufficient; no new performance threshold gates this
+      implementation. Record stripped release server and dependency closure
+      sizes for visibility only. **If a safety, fidelity, or coverage gate
+      fails, fix it rather than retaining a partial one-language or one-format
       feature.**
-  - Contract: measured integrated result, not the isolated prototype estimate,
-    authorizes Tasks 5–6.
-  - Verification: reproducible baseline/modified commands, raw timings and
-    release artifact hashes/sizes for the identical build environment.
+  - Contract: validated Tree-sitter-only renderer and broad pinned inventory
+    authorize Tasks 5–6.
+  - Verification: catalog smoke tests, source-fidelity fixtures, security tests
+    and release size report; no new performance approval step.
 - [ ] **5. Refresh existing current projections without an author revision.**
       SQL migrations in both backends create/seed a versioned refresh-progress
       row only; they do not render HTML. After migrations and before the new
@@ -147,7 +148,7 @@ Revisions, an unbounded rewrite of legacy content.
 
 - No generic `RenderedHtml` trust door or read-time sanitizing; the `common`
   sanitizer still rejects arbitrary authored styling and executable markup. The
-  browser WASM closure does not gain Tree-sitter.
+  browser WASM closure does not gain the host highlighter or catalog.
 - A refresh must not substitute for an author mutation: no new Revision,
   timestamp bump, or AtomPub content-ETag change; CAS includes
   `deleted_at IS NULL` at write time, with feed membership derived from locked
