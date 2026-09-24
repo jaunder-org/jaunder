@@ -126,6 +126,16 @@ fn config(
     Ok(configuration)
 }
 
+#[cfg(any(test, feature = "test-support"))]
+tokio::task_local! {
+    static INVALID_QUERY_FOR_TEST: ();
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) async fn with_invalid_query_for_test<F: std::future::Future>(future: F) -> F::Output {
+    INVALID_QUERY_FOR_TEST.scope((), future).await
+}
+
 static ELISP: LazyLock<Result<HighlightConfiguration, HighlightError>> = LazyLock::new(|| {
     config(
         tree_sitter_elisp::LANGUAGE.into(),
@@ -474,6 +484,18 @@ impl HighlightBudget {
         }
         self.attempts += 1;
         self.attempted_bytes += code.len();
+        // Test-only, task-scoped query corruption proves callers propagate an
+        // initialization failure without changing the pinned production registry.
+        #[cfg(any(test, feature = "test-support"))]
+        if INVALID_QUERY_FOR_TEST.try_with(|()| ()).is_ok() {
+            config(
+                tree_sitter_elisp::LANGUAGE.into(),
+                "injected-invalid-query",
+                "(this_node_cannot_exist) @keyword",
+                "",
+                "",
+            )?;
+        }
         let (language, configuration) = if let Some((language, configuration)) = direct {
             (language, configuration.as_ref())
         } else {

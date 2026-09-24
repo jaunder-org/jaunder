@@ -311,8 +311,14 @@ client-validation mapping
   selection is uncapped and remains one atomic transaction, while each set-based
   statement partitions bind inputs into fixed-size batches
   ([uncapped exact Post management mutations](adr/0213-uncapped-exact-post-management-mutations.md)).
-  ADR-0022's Argon2-inside-the-claim-window remains the other documented
-  exception.
+  ADR-0022's Argon2-inside-the-claim-window remains another documented
+  exception. The bounded, one-time Post projection refresh is a **startup-only**
+  exception: after old-version writers are drained and before traffic or Feed
+  workers, SQLite holds `BEGIN IMMEDIATE` while rendering and CAS-updating at
+  most 100 Posts with their Media references, affected Feed events, and
+  checkpoint in one transaction. Per-Post parse limits and commits between
+  batches bound its lock hold; no request path or recurring worker inherits
+  this exception ([host code-block highlighting and projection refresh](adr/drafts/host-code-block-highlighting-and-projection-refresh.md)).
 - **Slug-ordered tag locks.** A transaction that will touch several `tags` rows
   sorts them by slug before acquiring any lock, so every transaction takes the
   row locks in one global order and concurrent `set_post_tags` reconciles cannot

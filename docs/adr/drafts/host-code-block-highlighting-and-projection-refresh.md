@@ -44,20 +44,33 @@ variable defaults and allow public Theme Packages to override these additive
 Style Contract v1 hooks; Home remains Jaunder-styled. This amends ADR-0079's
 narrower class allowlist without weakening its `RenderedHtml` safety guarantee.
 
-Once the renderer passes integrated safety, fidelity, and latency checks,
-refresh _current active Org and Markdown Post projections_ with a bounded,
-durable checkpoint before accepting traffic or starting Syndication Feed
-workers. One transaction locks/rechecks progress and at most 100 ascending Post
-IDs, CAS-checks current source, format, prior rendered bytes and active state,
-and atomically replaces changed rendered HTML, Media references, affected
-public-feed events and its checkpoint. A stale author edit is rerendered once or
-fails visibly; a Deleted Post is skipped. Resumption and concurrent startup must
-not skip or double-apply a row. Old-version writers are drained before a rolling
-deployment refresh. The transition changes presentation only: preserve authored
-source, Post identity, timestamps, AtomPub Member content ETag, and immutable
-Post Revisions. This narrow exception to ADR-0079's no-backfill choice and
-ADR-0136's revision-on-meaningful-change rule does not authorize arbitrary
-history rewriting.
+Once the renderer passes integrated safety and fidelity checks, refresh _current
+active Org and Markdown Post projections_ with a bounded, durable checkpoint
+before accepting traffic or starting Syndication Feed workers. One transaction
+locks/rechecks progress and at most 100 ascending Post IDs, CAS-checks current
+source, format, prior rendered bytes and active state, and atomically replaces
+changed rendered HTML, Media references, affected public-feed events and its
+checkpoint. A stale author edit is rerendered once or fails visibly; a Deleted
+Post is skipped. Resumption and concurrent startup must not skip or double-apply
+a row. Old-version writers are drained before a rolling deployment refresh. The
+transition changes presentation only: preserve authored source, Post identity,
+timestamps, AtomPub Member content ETag, and immutable Post Revisions. This
+narrow exception to ADR-0079's no-backfill choice and ADR-0136's
+revision-on-meaningful-change rule does not authorize arbitrary history
+rewriting.
+
+This one-time **startup-only** transition deliberately narrows ADR-0092's SQLite
+write-lock occupancy rule: with old-version writers drained and before this
+server accepts traffic, a batch renders at most 100 Posts and issues per-Post
+CAS/Media writes while one `BEGIN IMMEDIATE` transaction holds the SQLite write
+lock. Rendering inside the write transaction is necessary here to keep each
+Post's current source, rendered HTML, Media references, affected Feed events,
+and the checkpoint consistent under concurrent startup; the per-Post parser
+budget and 100-Post batch cap bound the hold, while commits release the lock
+between batches. This does **not** exempt request-path writes, recurring
+workers, or later maintenance jobs from ADR-0092's batched-call and no-CPU
+rules. Startup fails instead of serving a partially refreshed projection when a
+batch cannot commit. Old-version writers must be fenced as stated above.
 
 ## Consequences
 

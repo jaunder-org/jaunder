@@ -37,6 +37,44 @@ async fn create_audience_confirmed(
 
 #[apply(backends)]
 #[tokio::test]
+async fn invalid_highlight_query_rejects_web_creation_without_persisting_a_post(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let cookie = session.cookie();
+    for (format, source) in [
+        (
+            PostFormat::Org,
+            "#+begin_src elisp\n(message \"hi\")\n#+end_src",
+        ),
+        (PostFormat::Markdown, "```elisp\n(message \"hi\")\n```"),
+    ] {
+        let (status, body) = host::test_support::with_invalid_highlight_query(create_post_json(
+            app.clone(),
+            PostInputs::new(parse_post_body(source), format),
+            Some(&cookie),
+        ))
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    }
+    let count: i64 = storage::with_closeable_pool!(env.base.pool(), pool, {
+        sqlx::query_scalar("SELECT count(*) FROM posts")
+            .fetch_one(pool)
+            .await
+            .expect("Post count")
+    });
+    assert_eq!(count, 0, "a failed render must not commit a Post");
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn create_post_persists_rendered_published_post(#[case] backend: Backend) {
     let env = backend.setup().await;
     set_public_default_audience(env.site_config(), env.write_scope())

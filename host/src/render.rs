@@ -1304,29 +1304,102 @@ mod tests {
 
     #[test]
     fn highlight_budget_counts_exported_bytes_and_attempts_in_order() {
-        let block = "(message \"hi\")\n".repeat(5000);
-        let exact = &block[..65_535];
-        let oversized = &block[..65_536];
-        let body = parse_post_body(&format!(
-            "```elisp\n{exact}\n```\n\n```elisp\n{oversized}\n```\n\n```elisp\n(message \"later\")\n```"
-        ));
-        let html = render(&body, PostFormat::Markdown);
-        let blocks: Vec<_> = html.split("<code").skip(1).collect();
-        assert_eq!(blocks.len(), 3, "{html}");
-        assert!(blocks[0].contains("class=\"j-syn-"));
-        assert!(!blocks[1].contains("class=\"j-syn-"));
-        assert!(blocks[2].contains("class=\"j-syn-"));
-
-        let source = "```elisp\n(message \"hi\")\n```\n\n".repeat(17);
-        let html = render(&parse_post_body(&source), PostFormat::Markdown);
-        let blocks: Vec<_> = html.split("<code").skip(1).collect();
-        assert_eq!(blocks.len(), 17);
-        assert!(
-            blocks[..16]
+        fn source(format: PostFormat, blocks: &[(&str, &str)]) -> String {
+            blocks
                 .iter()
-                .all(|code| code.contains("class=\"j-syn-"))
-        );
-        assert!(!blocks[16].contains("class=\"j-syn-"));
+                .map(|(label, code)| match format {
+                    PostFormat::Org => format!("#+begin_src {label}\n{code}\n#+end_src"),
+                    PostFormat::Markdown => format!("```{label}\n{code}\n```"),
+                    PostFormat::Html => unreachable!(),
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        }
+
+        fn highlighted_blocks(source: &str, format: PostFormat) -> Vec<bool> {
+            render(&parse_post_body(source), format)
+                .split("<code")
+                .skip(1)
+                .map(|code| {
+                    code.split("</code>")
+                        .next()
+                        .unwrap()
+                        .contains("class=\"j-syn-")
+                })
+                .collect()
+        }
+
+        let block = "(message \"hi\")\n".repeat(5000);
+        let exact = &block[..65_535]; // Exporter appends one LF: exactly 64 KiB.
+        let oversized = &block[..65_536]; // Exported block is 64 KiB + 1.
+        for format in [PostFormat::Org, PostFormat::Markdown] {
+            let mixed = source(
+                format,
+                &[
+                    ("unknown", "first"),
+                    ("elisp", exact),
+                    ("elisp", oversized),
+                    ("elisp", "(message \"fits after rejected block\")"),
+                ],
+            );
+            assert_eq!(
+                highlighted_blocks(&mixed, format),
+                [false, true, false, true],
+                "{format:?}: oversized and unknown blocks must not spend budget"
+            );
+
+            let cumulative = source(
+                format,
+                &[
+                    ("unknown", "first"),
+                    ("elisp", exact),
+                    ("elisp", oversized),
+                    ("elisp", exact), // Exactly 128 KiB attempted for this Post.
+                    ("elisp", "(message \"over cumulative budget\")"),
+                ],
+            );
+            assert_eq!(
+                highlighted_blocks(&cumulative, format),
+                [false, true, false, true, false],
+                "{format:?}: exactly 128 KiB fits but no later attempted bytes do"
+            );
+
+            let counted = source(format, &[("elisp", "(message \"hi\")"); 17]);
+            let highlighted = highlighted_blocks(&counted, format);
+            assert_eq!(highlighted.len(), 17);
+            assert!(
+                highlighted[..16].iter().all(|&colored| colored),
+                "{format:?}"
+            );
+            assert!(!highlighted[16], "{format:?}: seventeenth attempt rejected");
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_highlight_query_fails_preview_render_with_typed_cause() {
+        for (format, source) in [
+            (
+                PostFormat::Org,
+                "#+begin_src elisp\n(message \"hi\")\n#+end_src",
+            ),
+            (PostFormat::Markdown, "```elisp\n(message \"hi\")\n```"),
+        ] {
+            let error = crate::test_support::with_invalid_highlight_query(async {
+                super::render(&parse_post_body(source), &format)
+                    .expect_err("invalid query must fail")
+            })
+            .await;
+            assert!(
+                matches!(
+                    error,
+                    HighlightError::Initialization {
+                        language: "injected-invalid-query",
+                        ..
+                    }
+                ),
+                "{format:?}: {error}"
+            );
+        }
     }
 
     #[test]

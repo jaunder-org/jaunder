@@ -34,6 +34,26 @@ pub(crate) struct RefreshBatchLimit(i64);
 const VERSION: RefreshVersion = RefreshVersion(1);
 const BATCH_SIZE: u8 = 100;
 
+#[cfg(test)]
+tokio::task_local! {
+    static PAUSE_BEFORE_CANDIDATES: std::cell::RefCell<Option<(
+        tokio::sync::oneshot::Sender<()>,
+        tokio::sync::oneshot::Receiver<()>,
+    )>>;
+}
+
+#[cfg(test)]
+async fn pause_before_candidate_lock_for_test() {
+    let pause = PAUSE_BEFORE_CANDIDATES
+        .try_with(|slot| slot.borrow_mut().take())
+        .ok()
+        .flatten();
+    if let Some((paused, resume)) = pause {
+        let _ = paused.send(());
+        let _ = resume.await;
+    }
+}
+
 /// A host-side presentation refresh failure. Nothing in the current batch was
 /// checkpointed if this came from a write callback.
 #[derive(Debug, thiserror::Error)]
@@ -93,6 +113,12 @@ where
 {
     let mut unconfirmed = 0;
     loop {
+        // SQLite obtains BEGIN IMMEDIATE before the callback, so pause just
+        // before it; PostgreSQL pauses after locking the checkpoint row below.
+        #[cfg(test)]
+        if !DB::PROJECTION_REFRESH_PROGRESS_SQL.contains("FOR UPDATE") {
+            pause_before_candidate_lock_for_test().await;
+        }
         let events = Arc::clone(&feed_events);
         let outcome = scope
             .run(|transaction| Box::pin(batch::<DB>(transaction, events)))
@@ -160,6 +186,13 @@ where
             completed: true,
             changed: 0,
         });
+    }
+
+    // PostgreSQL already holds the progress-row lock but has not selected or
+    // locked candidates. Author lifecycle writes can finish during this pause.
+    #[cfg(test)]
+    if DB::PROJECTION_REFRESH_PROGRESS_SQL.contains("FOR UPDATE") {
+        pause_before_candidate_lock_for_test().await;
     }
 
     let candidates = sqlx::query_scalar::<DB, PostId>(
@@ -498,6 +531,76 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
+    async fn invalid_highlight_query_rolls_back_projection_and_cursor_then_resumes(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let owner = SeedUser::new()
+            .seed(Arc::clone(&env.users()), env.write_scope().clone())
+            .await
+            .user_id;
+        let post = SeedRawPost::new(owner)
+            .body(parse_post_body("```elisp\n(message \"hi\")\n```"))
+            .seed(env.posts(), env.write_scope().clone())
+            .await;
+        env.base
+            .pool()
+            .execute("UPDATE posts SET rendered_html = '<p>old presentation</p>'")
+            .await
+            .expect("stale fixture");
+
+        let error = host::test_support::with_invalid_highlight_query(
+            factory(&env).refresh_current_post_projections(),
+        )
+        .await
+        .expect_err("invalid query must abort startup refresh");
+        assert!(
+            matches!(
+                error,
+                PostProjectionRefreshError::Render(host::render::HighlightError::Initialization {
+                    language: "injected-invalid-query",
+                    ..
+                })
+            ),
+            "{error}"
+        );
+        let (html, cursor, completed): (String, i64, bool) = crate::with_closeable_pool!(
+            env.base.pool(),
+            pool,
+            {
+                let html = sqlx::query_scalar("SELECT rendered_html FROM posts WHERE post_id = $1")
+                    .bind_storage(post.post_id)
+                    .fetch_one(pool)
+                    .await
+                    .expect("rolled-back Post");
+                let (cursor, completed) = sqlx::query_as(
+                    "SELECT cursor_post_id, completed FROM post_projection_refresh_progress WHERE id = 1",
+                )
+                .fetch_one(pool)
+                .await
+                .expect("progress");
+                (html, cursor, completed)
+            }
+        );
+        assert_eq!(html, "<p>old presentation</p>");
+        assert_eq!(cursor, 0);
+        assert!(!completed);
+
+        factory(&env)
+            .refresh_current_post_projections()
+            .await
+            .expect("resume after invalid query");
+        let current = env
+            .posts()
+            .get_post_by_id(post.post_id, &ViewerIdentity::Local { user_id: owner })
+            .await
+            .expect("lookup")
+            .expect("Post exists");
+        assert!(current.rendered_html.as_ref().contains("j-syn-"));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
     async fn failed_feed_enqueue_rolls_back_projection_and_cursor_then_resumes(
         #[case] backend: Backend,
     ) {
@@ -641,6 +744,123 @@ mod tests {
         });
         assert!(complete);
         assert_eq!(events, 6);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn overlapping_author_edit_and_soft_delete_win_before_refresh_candidate_locks(
+        #[case] backend: Backend,
+    ) {
+        use crate::post_service::{PostUpdate, perform_post_update, soft_delete_post};
+        use crate::{PostBookkeepingExpectation, PublishUpdate};
+        use common::visibility::AudienceTarget;
+
+        let env = backend.setup().await;
+        let owner = SeedUser::new()
+            .seed(Arc::clone(&env.users()), env.write_scope().clone())
+            .await
+            .user_id;
+        let edit = SeedRawPost::new(owner)
+            .body(parse_post_body("```rust\nfn old() {}\n```"))
+            .seed(env.posts(), env.write_scope().clone())
+            .await;
+        let deleted = SeedRawPost::new(owner)
+            .body(parse_post_body("```rust\nfn deleted() {}\n```"))
+            .seed(env.posts(), env.write_scope().clone())
+            .await;
+        env.base
+            .pool()
+            .execute("UPDATE posts SET rendered_html = '<p>old presentation</p>'")
+            .await
+            .expect("stale fixtures");
+
+        let (paused, started) = tokio::sync::oneshot::channel();
+        let (resume, release) = tokio::sync::oneshot::channel();
+        let refresh_factory = factory(&env);
+        let refresh = PAUSE_BEFORE_CANDIDATES.scope(
+            std::cell::RefCell::new(Some((paused, release))),
+            refresh_factory.refresh_current_post_projections(),
+        );
+        let author = async {
+            started
+                .await
+                .expect("refresh reached the candidate-lock boundary");
+            // These are real lifecycle services, not direct SQL row edits. They
+            // overlap the pending refresh future and commit before it can lock
+            // either current Post. SQLite pauses before BEGIN IMMEDIATE;
+            // PostgreSQL pauses after locking progress, before candidates.
+            perform_post_update(
+                &env.write_scope(),
+                &env.media_content_locks(),
+                env.posts(),
+                env.feed_events(),
+                PostUpdate {
+                    post_id: edit.post_id,
+                    editor_user_id: owner,
+                    body: parse_post_body("#+begin_src elisp\n(message \"edited\")\n#+end_src"),
+                    title: None,
+                    format: PostFormat::Org,
+                    slug_override: None,
+                    publish: PublishUpdate::Publish { at: None },
+                    summary: None,
+                    audiences: vec![AudienceTarget::Public],
+                    tags: None,
+                    request_clock: UtcInstant::now(),
+                    expectations: PostBookkeepingExpectation::default(),
+                },
+            )
+            .await
+            .expect("concurrent author edit commits");
+            soft_delete_post(
+                &env.write_scope(),
+                env.posts(),
+                env.feed_events(),
+                deleted.post_id,
+                owner,
+                UtcInstant::now(),
+            )
+            .await
+            .expect("concurrent deletion commits");
+            let deleted_revisions = env.count_post_revisions(deleted.post_id).await.unwrap();
+            resume.send(()).expect("refresh still waiting");
+            deleted_revisions
+        };
+        let (result, deleted_revisions) = tokio::join!(refresh, author);
+        result.expect("refresh after overlapping author operations");
+
+        let current = env
+            .posts()
+            .get_post_by_id(edit.post_id, &ViewerIdentity::Local { user_id: owner })
+            .await
+            .expect("lookup")
+            .expect("edited Post exists");
+        assert_eq!(current.format, PostFormat::Org);
+        assert!(current.body.as_ref().contains("(message \"edited\")"));
+        assert!(current.rendered_html.as_ref().contains("j-syn-"));
+        assert_eq!(env.count_post_revisions(edit.post_id).await.unwrap(), 1);
+        assert_eq!(
+            env.count_post_revisions(deleted.post_id).await.unwrap(),
+            deleted_revisions,
+            "refresh must not create a revision of the Deleted Post"
+        );
+        let (deleted_count, deleted_html): (i64, String) =
+            crate::with_closeable_pool!(env.base.pool(), pool, {
+                let count = sqlx::query_scalar(
+                    "SELECT count(*) FROM posts WHERE post_id = $1 AND deleted_at IS NOT NULL",
+                )
+                .bind_storage(deleted.post_id)
+                .fetch_one(pool)
+                .await
+                .expect("deleted state");
+                let html = sqlx::query_scalar("SELECT rendered_html FROM posts WHERE post_id = $1")
+                    .bind_storage(deleted.post_id)
+                    .fetch_one(pool)
+                    .await
+                    .expect("deleted projection");
+                (count, html)
+            });
+        assert_eq!(deleted_count, 1);
+        assert_eq!(deleted_html, "<p>old presentation</p>");
     }
 
     #[apply(backends)]

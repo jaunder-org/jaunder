@@ -70,6 +70,7 @@ tree-sitter-typescript = "=0.23.2"
 tree-sitter-xml = "=0.7.0"
 tree-sitter-yaml = "=0.7.1"
 tree-sitter-zig = "=1.1.2"
+tokio = { workspace = true, optional = true }
 tracing-log.workspace = true
 tracing-subscriber.workspace = true
 serde.workspace = true
@@ -107,7 +108,7 @@ default = ["sqlx"]
 sqlx = []
 test-utils = ["cheap-kdf"]
 cheap-kdf = []
-test-support = ["common/test-support"]
+test-support = ["common/test-support", "dep:tokio"]
 
 [lints]
 workspace = true
