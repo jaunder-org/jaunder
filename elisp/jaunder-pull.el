@@ -14,6 +14,7 @@
 (require 'url-parse)
 (require 'xml)
 (require 'jaunder-atom)
+(require 'jaunder-org)
 (require 'jaunder-datetime)
 (require 'jaunder-config)
 (require 'jaunder-reconcile)
@@ -202,6 +203,8 @@ This function performs no network or filesystem I/O."
                       ((equal draft-value "no") nil)
                       (t (jaunder--pull-error "app:draft must be yes or no"))))
          status date-line date-tz date-utc)
+    (when (jaunder--title-has-line-separator-p title)
+      (jaunder--pull-error "Member title must be one line"))
     (unless id
       (jaunder--pull-error "Member edit URI must end in a decimal Post ID"))
     (unless (jaunder--safe-pull-slug-p slug)

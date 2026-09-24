@@ -49,7 +49,7 @@ necessary compatibility.
     Post. Capture comparable before/after composer error-state screenshots if
     presentation changes. Preserve existing rendered `<br>` behavior.
 
-- [ ] **3. Fail safely at Emacs publish and pull boundaries.**
+- [x] **3. Fail safely at Emacs publish and pull boundaries.**
   - Contract: validate local TITLE source as the very first publish preflight,
     before Service Document fetch, any link or Media work, intent/checkpoint
     mutation, or write-back. Validate a pulled Member title before constructing

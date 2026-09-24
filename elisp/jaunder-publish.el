@@ -477,6 +477,9 @@ safe retry."
   (interactive)
   (let ((file (or (buffer-file-name)
                   (error "jaunder: buffer is not visiting a file"))))
+    ;; Reject local TITLE source before blog resolution, service discovery,
+    ;; links, Media, or create-intent checkpoint work.
+    (jaunder--org-title (org-collect-keywords '("TITLE")))
     (jaunder--call-with-blog
      file
      (lambda ()

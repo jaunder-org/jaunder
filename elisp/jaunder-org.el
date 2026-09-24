@@ -170,6 +170,25 @@ and native Post source remain unchanged."
   "Return the #+KEY: value in the current buffer, or nil."
   (cadr (assoc key (org-collect-keywords (list key)))))
 
+(defconst jaunder--title-line-separators
+  '(?\n ?\r ?\x0b ?\x0c ?\x85 ?\u2028 ?\u2029)
+  "Characters forbidden in an authored Post title's source line.")
+
+(defun jaunder--title-has-line-separator-p (title)
+  "Return non-nil when TITLE contains an authored line separator."
+  (and title
+       (cl-some (lambda (character)
+                  (memq character jaunder--title-line-separators))
+                (string-to-list title))))
+
+(defun jaunder--org-title (keywords)
+  "Read and validate the authored TITLE from Org KEYWORDS, or return nil."
+  (let* ((values (cdr (assoc "TITLE" keywords)))
+         (raw (and values (mapconcat #'identity values "\n"))))
+    (when (jaunder--title-has-line-separator-p raw)
+      (error "jaunder: Post title must be one line"))
+    (and raw (not (string= (string-trim raw) "")) raw)))
+
 (defun jaunder--canonical-post-id (value)
   "Return VALUE as a canonical decimal Post ID, or nil when malformed.
 The local Org metadata boundary owns this normalization so every command gives
@@ -188,9 +207,7 @@ later by the media unit."
   (let* ((kws (org-collect-keywords
                '("TITLE" "DATE" "DESCRIPTION" "PROPERTY")))
          (props (jaunder--collect-properties kws))
-         (title-values (cdr (assoc "TITLE" kws)))
-         (raw-title (and title-values (mapconcat #'identity title-values "\n")))
-         (title (and raw-title (not (string= (string-trim raw-title) "")) raw-title))
+         (title (jaunder--org-title kws))
          (categories
           (jaunder--split-keywords (jaunder--category-keyword-values)))
          (descriptions (cdr (assoc "DESCRIPTION" kws)))
