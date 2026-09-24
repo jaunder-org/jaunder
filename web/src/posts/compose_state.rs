@@ -68,9 +68,9 @@ pub struct ComposeState {
     /// fill the absence; changing tags makes even an empty collection explicit.
     tags_supplied: RwSignal<bool>,
     pub audience: RwSignal<AudienceSelection>,
-    /// The editor's exact projected header, removable even when the author has
-    /// inserted body text ahead of it; new-composer source has no projection.
-    seeded_org_title: RwSignal<Option<String>>,
+    /// Only an existing editor with a seeded Org title has a synthetic header
+    /// to remove when switching formats; new-composer source belongs to its author.
+    seeded_org_title: RwSignal<bool>,
 }
 
 /// Comparable values that determine whether a creation composer has unsaved input.
@@ -135,6 +135,37 @@ fn org_editor_title(title: &PostTitle) -> Result<String, OrgEditorSeedError> {
     Ok(format!("#+TITLE: {}\n", lines.join("\n#+TITLE: ")))
 }
 
+fn is_title_line(line: &str) -> bool {
+    line.trim_start()
+        .get(..8)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("#+TITLE:"))
+}
+
+/// Find the editor's first title block, including its blank separator. Match
+/// whole directive lines rather than substrings in authored prose; the current
+/// directives may have been edited since seeding, so old bytes are not an anchor.
+fn editor_title_range(source: &str) -> Option<std::ops::Range<usize>> {
+    let mut start = 0;
+    for line in source.split_inclusive('\n') {
+        if is_title_line(line) {
+            break;
+        }
+        start += line.len();
+    }
+    if start == source.len() {
+        return None;
+    }
+    let mut header_end = start;
+    for line in source[start..].split_inclusive('\n') {
+        if !is_title_line(line) {
+            break;
+        }
+        header_end += line.len();
+    }
+    let end = header_end + usize::from(source[header_end..].starts_with('\n'));
+    Some(start..end)
+}
+
 impl ComposeState {
     /// A composer at its initial state.
     ///
@@ -154,7 +185,7 @@ impl ComposeState {
                 public: true,
                 ..AudienceSelection::default()
             }),
-            seeded_org_title: RwSignal::new(None),
+            seeded_org_title: RwSignal::new(false),
         }
     }
 
@@ -230,12 +261,12 @@ impl ComposeState {
         };
         let body = title.as_ref().map_or_else(
             || fetched.body.to_string(),
-            |title| format!("{title}{}", fetched.body),
+            |title| format!("{title}\n{}", fetched.body),
         );
         // Set through the validated field API so value and validity stay consistent (#860, #907).
         self.body.set_value(&body);
         self.format.set(fetched.format);
-        self.seeded_org_title.set(title);
+        self.seeded_org_title.set(title.is_some());
         self.summary_field
             .set_value(fetched.post.summary.as_deref().unwrap_or_default());
         self.tags.set(fetched.post.tags.clone());
@@ -247,21 +278,15 @@ impl ComposeState {
     pub fn switch_format(&self, format: PostFormat) {
         if self.format.get() == PostFormat::Org
             && format != PostFormat::Org
-            && let Some(title) = self.seeded_org_title.get()
+            && self.seeded_org_title.get()
         {
             let source = self.body.value();
-            // A title's bytes inside authored prose are not the projected header.
-            // Match the complete projection only at a line boundary, even if
-            // the author has inserted text ahead of it in the textarea.
-            if let Some((start, _)) = source
-                .match_indices(&title)
-                .find(|(start, _)| *start == 0 || source.as_bytes()[start - 1] == b'\n')
-            {
+            if let Some(range) = editor_title_range(&source) {
                 let mut body = source;
-                body.replace_range(start..start + title.len(), "");
+                body.replace_range(range, "");
                 self.body.set_value(&body);
             }
-            self.seeded_org_title.set(None);
+            self.seeded_org_title.set(false);
         }
         self.format.set(format);
     }
@@ -277,7 +302,7 @@ impl ComposeState {
         self.publish_at.set(String::new());
         self.tags.set(Vec::new());
         self.tags_supplied.set(false);
-        self.seeded_org_title.set(None);
+        self.seeded_org_title.set(false);
     }
 }
 
@@ -627,7 +652,7 @@ mod tests {
 
             assert_eq!(
                 state.body.value(),
-                "#+TITLE: First line\n#+TITLE: Second line\n#+AUTHOR: Kept\n\nOrg content"
+                "#+TITLE: First line\n#+TITLE: Second line\n\n#+AUTHOR: Kept\n\nOrg content"
             );
             assert_eq!(fetched.body.as_ref(), "#+AUTHOR: Kept\n\nOrg content");
             assert_eq!(state.format.get(), PostFormat::Org);
@@ -663,6 +688,7 @@ mod tests {
             fetched.title = Some("Title".parse().unwrap());
             fetched.body = "Org content".parse().unwrap();
             state.seed_from(&fetched).unwrap();
+            assert_eq!(state.body.value(), "#+TITLE: Title\n\nOrg content");
 
             state.switch_format(PostFormat::Markdown);
 
@@ -682,11 +708,72 @@ mod tests {
             state.seed_from(&fetched).unwrap();
             state
                 .body
-                .set_value("Example: #+TITLE: Title\n#+TITLE: Title\nOrg content");
+                .set_value("Example: #+TITLE: Title\n#+TITLE: Title\n\nOrg content");
 
             state.switch_format(PostFormat::Markdown);
 
             assert_eq!(state.body.value(), "Example: #+TITLE: Title\nOrg content");
+        });
+    }
+
+    #[test]
+    fn switching_formats_also_removes_a_title_whose_blank_separator_was_deleted() {
+        Owner::new().with(|| {
+            let state = ComposeState::new();
+            let mut fetched = crate::posts::render::test_fixtures::sample_post();
+            fetched.format = PostFormat::Org;
+            fetched.title = Some("Title".parse().unwrap());
+            fetched.body = "Org content".parse().unwrap();
+            state.seed_from(&fetched).unwrap();
+            state.body.set_value("#+TITLE: Title\nOrg content");
+
+            state.switch_format(PostFormat::Markdown);
+
+            assert_eq!(state.body.value(), "Org content");
+        });
+    }
+
+    #[test]
+    fn switching_formats_removes_edited_single_and_multiline_title_headers() {
+        Owner::new().with(|| {
+            for (old_title, edited_source) in [
+                ("Old", "#+TITLE: New\n\nOrg content"),
+                (
+                    "Old first\nOld second",
+                    "#+TITLE: New first\n#+TITLE: New second\n\nOrg content",
+                ),
+            ] {
+                let state = ComposeState::new();
+                let mut fetched = crate::posts::render::test_fixtures::sample_post();
+                fetched.format = PostFormat::Org;
+                fetched.title = Some(old_title.parse().unwrap());
+                fetched.body = "Org content".parse().unwrap();
+                state.seed_from(&fetched).unwrap();
+                state.body.set_value(edited_source);
+
+                state.switch_format(PostFormat::Markdown);
+
+                assert_eq!(state.body.value(), "Org content");
+            }
+        });
+    }
+
+    #[test]
+    fn switching_formats_keeps_an_authored_title_line_matching_the_old_title() {
+        Owner::new().with(|| {
+            let state = ComposeState::new();
+            let mut fetched = crate::posts::render::test_fixtures::sample_post();
+            fetched.format = PostFormat::Org;
+            fetched.title = Some("Old".parse().unwrap());
+            fetched.body = "Intro\n#+TITLE: Old\n\nTail".parse().unwrap();
+            state.seed_from(&fetched).unwrap();
+            state
+                .body
+                .set_value("#+TITLE: New\n\nIntro\n#+TITLE: Old\n\nTail");
+
+            state.switch_format(PostFormat::Markdown);
+
+            assert_eq!(state.body.value(), "Intro\n#+TITLE: Old\n\nTail");
         });
     }
 
