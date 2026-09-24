@@ -220,6 +220,20 @@ pub fn PostPage() -> impl IntoView {
     .into_any()
 }
 
+/// Do not render an editable form if its title cannot round-trip through Org
+/// source: submitting the canonical body alone would clear that title.
+fn seed_editor_post(
+    state: ComposeState,
+    fetched: posts::AuthoredPostSnapshot,
+) -> Result<posts::AuthoredPostSnapshot, WebError> {
+    state.seed_from(&fetched.post).map_err(|_| {
+        WebError::validation(
+            "This Post title cannot be represented as Org title lines. Edit it with a protocol client until title policy is resolved.",
+        )
+    })?;
+    Ok(fetched)
+}
+
 #[component]
 pub fn EditPostPage() -> impl IntoView {
     let params = use_params_map();
@@ -275,9 +289,8 @@ pub fn EditPostPage() -> impl IntoView {
             view! { <p class="j-loading">"Loading\u{2026}"</p> }
         }>
             {move || Suspend::new(async move {
-                match post.await {
+                match post.await.and_then(|fetched| seed_editor_post(state, fetched)) {
                     Ok(fetched) => {
-                        state.seed_from(&fetched.post);
                         slug_field.set_value(fetched.post.post.slug.as_ref());
                         let loaded_publication = posts::loaded_publication(
                             fetched.post.post.published_at,

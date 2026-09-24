@@ -665,9 +665,8 @@ test("Post headers use the current display name with a handle-only fallback", as
 });
 
 // #77: the full leading Org metadata block is normalized at the write boundary,
-// while the form's explicit lifecycle remains authoritative. This follows the
-// saved post back into its editor so the assertion covers the stored canonical
-// source, rather than just a successful request.
+// while the form's explicit lifecycle remains authoritative. The editor
+// reconstructs the saved title, but does not duplicate other recognized headers.
 test("Org header metadata round-trips through the composer as canonical source", async ({
   registeredPage,
 }) => {
@@ -709,15 +708,97 @@ Canonical Org body`,
   ).toBeVisible();
 
   const canonicalBody = page.locator(SEL.postBody);
-  await expect(canonicalBody).toHaveValue(
-    new RegExp(`^${unknownDirective.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
-  );
+  await expect(canonicalBody).toHaveValue(new RegExp(`^#\\+TITLE: ${title}`));
   const canonicalSource = await canonicalBody.inputValue();
-  expect(canonicalSource).not.toContain("#+TITLE:");
+  expect(canonicalSource).toContain(unknownDirective);
   expect(canonicalSource).not.toContain("#+DESCRIPTION:");
   expect(canonicalSource).not.toContain("#+KEYWORDS:");
   expect(canonicalSource).not.toContain("#+PROPERTY: JAUNDER_STATUS");
   expect(canonicalSource).toContain("Canonical Org body");
+});
+
+test("editing an Org Post preserves, changes, and removes its title", async ({
+  registeredPage,
+}) => {
+  const page = await registeredPage("/posts/new");
+  const summary = await composePost(page, {
+    body: "#+TITLE: First line\n#+TITLE: Second line\n\nOrg body",
+    format: "org",
+    publish: false,
+  });
+  await followPermalink(page, summary);
+  await openEditor(page);
+  const body = page.locator(SEL.postBody);
+  const original = "#+TITLE: First line\n#+TITLE: Second line\nOrg body\n";
+  await expect(body).toHaveValue(original);
+
+  await click(page, SEL.publishButton("false"));
+  await expectFlash(page, "Draft saved.");
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  await expect(page.locator("article .j-post-title")).toContainText(
+    "First line",
+  );
+  await expect(page.locator("article .j-post-title")).toContainText(
+    "Second line",
+  );
+  await openEditor(page);
+  await expect(body).toHaveValue(original);
+
+  await page.fill(SEL.postBody, "#+TITLE: Changed title\nOrg body");
+  await click(page, SEL.publishButton("false"));
+  await expectFlash(page, "Draft saved.");
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  await expect(page.locator("article .j-post-title")).toHaveText(
+    "Changed title",
+  );
+  await openEditor(page);
+  await expect(body).toHaveValue("#+TITLE: Changed title\nOrg body\n");
+
+  await page.fill(SEL.postBody, "Org body");
+  await click(page, SEL.publishButton("false"));
+  await expectFlash(page, "Draft saved.");
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  await expect(page.locator("article .j-post-title")).toHaveCount(0);
+  await openEditor(page);
+  await expect(body).toHaveValue("Org body\n");
+});
+
+test("switching an Org editor to Markdown does not leak its reconstructed title", async ({
+  registeredPage,
+}) => {
+  const page = await registeredPage("/posts/new");
+  const summary = await composePost(page, {
+    body: "#+TITLE: Org title\n\nOrg body",
+    format: "org",
+    publish: false,
+  });
+  await followPermalink(page, summary);
+  await openEditor(page);
+  await expect(page.locator(SEL.postBody)).toHaveValue(
+    "#+TITLE: Org title\nOrg body\n",
+  );
+
+  await page.fill(
+    SEL.postBody,
+    "New first line\n#+TITLE: Org title\nOrg body\n",
+  );
+  await openComposerControl(page, "Format");
+  await click(page, SEL.formatButton("Markdown"));
+  await expect(page.locator(SEL.postBody)).toHaveValue(
+    "New first line\nOrg body\n",
+  );
+  await click(page, SEL.publishButton("false"));
+  await expectFlash(page, "Draft saved.");
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  await openEditor(page);
+  await expect(page.locator(SEL.postBody)).toHaveValue(
+    "New first line\nOrg body\n",
+  );
+  await openComposerControl(page, "Format");
+  await expect(page.locator(SEL.formatButton("Markdown"))).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
 });
 
 // #77: editor updates apply the same Org normalization and precedence as the
@@ -781,7 +862,7 @@ ${acceptedBody}`,
   const canonicalSource = await canonicalBody.inputValue();
   expect(canonicalSource).toContain(unknownDirective);
   expect(canonicalSource).toContain(acceptedBody);
-  expect(canonicalSource).not.toContain("#+TITLE:");
+  expect(canonicalSource).toContain(`#+TITLE: ${acceptedTitle}`);
   expect(canonicalSource).not.toContain("#+DESCRIPTION:");
   expect(canonicalSource).not.toContain("#+KEYWORDS:");
   expect(canonicalSource).not.toContain("#+PROPERTY: JAUNDER_STATUS");
