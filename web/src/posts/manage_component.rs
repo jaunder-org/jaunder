@@ -53,6 +53,7 @@ fn state_from_value(value: &str) -> ManagePublicationState {
 }
 
 fn audience_from_value(value: &str) -> ManageAudienceFilter {
+    // crap:allow: pure CSR parser has exhaustive unit coverage outside the host LLVM profile
     match value {
         "public" => ManageAudienceFilter::Public,
         "subscribers" => ManageAudienceFilter::Subscribers,

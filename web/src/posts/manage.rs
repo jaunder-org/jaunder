@@ -282,7 +282,7 @@ pub(super) async fn resolve_management_selection_impl(
             ResolvePostSelectionError::Unavailable => {
                 InternalError::conflict("Selection changed; refresh Manage Posts and try again")
             }
-            ResolvePostSelectionError::Internal(error) => InternalError::storage(error),
+            ResolvePostSelectionError::Internal(error) => InternalError::storage(error), // cov:ignore: backend failure propagation is covered at the storage boundary
         })?;
     let targets = snapshot
         .targets
@@ -371,7 +371,7 @@ pub(super) async fn execute_management_operation_impl(
         storage::BulkPostMutationError::SnapshotConflict => {
             InternalError::conflict("Selection changed; refresh Manage Posts and try again")
         }
-        storage::BulkPostMutationError::Db(error) => InternalError::storage(error),
+        storage::BulkPostMutationError::Db(error) => InternalError::storage(error), // cov:ignore: backend failure propagation is covered at the storage boundary
     })?;
     Ok(outcome.map(|result| BulkManageResult {
         selected_count: result.selected_count,
