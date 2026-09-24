@@ -337,7 +337,7 @@ test("composer keeps filled body actions before a container-responsive controls 
       "FormatMarkdown",
       "Slugauto",
       "PublishNow",
-      "AudiencePrivate",
+      "Share withPrivate",
     ]);
     expect(
       await disclosures
