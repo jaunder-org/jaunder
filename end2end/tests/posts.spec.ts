@@ -780,8 +780,7 @@ test("an ordinary titled Org edit retains structured metadata and its schedule",
   await page.fill(SEL.postSummary, summary);
   await openComposerControl(page, "Slug");
   await page.fill(SEL.postSlug, slug);
-  await openComposerControl(page, "Audience");
-  await page.selectOption("#audience-base", "private");
+  await selectComposerAudience(page, "private");
   await applyPublicationTime(page, scheduledAt);
   await click(page, SEL.publishButton("true"));
   await waitForSelector(page, SEL.saveSummary);
@@ -801,8 +800,17 @@ test("an ordinary titled Org edit retains structured metadata and its schedule",
       "aria-pressed",
       "true",
     );
-    await openComposerControl(page, "Audience");
-    await expect(page.locator("#audience-base")).toHaveValue("private");
+    await openComposerControl(page, "Share with");
+    const audience = page.getByRole("group", { name: "Share with" });
+    await expect(
+      audience.getByRole("checkbox", { name: "Public" }),
+    ).not.toBeChecked();
+    await expect(
+      audience.getByRole("checkbox", { name: "Subscribers" }),
+    ).not.toBeChecked();
+    await expect(
+      audience.getByText("Private — only you can see this Post."),
+    ).toBeVisible();
     await openComposerControl(page, "Publish");
     await page.getByRole("button", { name: "Edit publication time" }).click();
     await expect(page.locator(SEL.publishAt)).toHaveValue(scheduledAt);
