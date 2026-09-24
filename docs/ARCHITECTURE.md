@@ -427,7 +427,7 @@ retaining compression for other content. The Emacs Protocol Client requests
 identity encoding as a separate safeguard and never strips proxy suffixes or
 relaxes conditional matching. Public Syndication Feeds have an independent
 representation and compression policy
-([AtomPub conditional ETag delivery](adr/drafts/atompub-conditional-etag-delivery.md)).
+([AtomPub conditional ETag delivery](adr/0210-atompub-conditional-etag-delivery.md)).
 
 ### Testing (summary)
 

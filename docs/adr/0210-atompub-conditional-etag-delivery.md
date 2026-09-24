@@ -1,6 +1,6 @@
-# ADR-DRAFT: Preserve AtomPub Post validators across response encoders
+# ADR-0210: Preserve AtomPub Post validators across response encoders
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-23
 - Issue: [#1641](https://github.com/jaunder-org/jaunder/issues/1641)
 
@@ -14,10 +14,10 @@ compressed response. The Emacs Protocol Client stores the resulting wire ETag in
 because Jaunder compares against its canonical unsuffixed validator. Caddy does
 not rewrite `If-Match` for upstream writes. AtomPub is a distinct,
 round-trippable editing surface rather than a public Syndication Feed
-([separate serialization surfaces](../0015-atompub-serialization-surfaces.md)).
+([separate serialization surfaces](0015-atompub-serialization-surfaces.md)).
 
 The reverse proxy belongs outside Jaunder, including in the single-host NixOS
-stack ([deployment stack](../0196-single-host-nixos-deployment-stack.md)), and
+stack ([deployment stack](0196-single-host-nixos-deployment-stack.md)), and
 operators may add their own encoding directives. Repairing only the supplied
 Caddy configuration would leave other installations vulnerable; accepting an
 intermediary's private suffix at the server would weaken conditional-write
@@ -38,7 +38,7 @@ authenticated AtomPub transport as a further safeguard. It continues to store
 and replay the strong ETag it receives without suffix stripping. Jaunder's
 comparison with the canonical ETag and its `412` response for genuinely stale
 `If-Match` remain unchanged. The transport continues to use `plz`/curl
-([Emacs HTTP transport](../0038-emacs-http-transport-plz-not-url-el.md)).
+([Emacs HTTP transport](0038-emacs-http-transport-plz-not-url-el.md)).
 
 ## Consequences
 

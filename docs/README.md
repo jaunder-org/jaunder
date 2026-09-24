@@ -237,6 +237,7 @@ convention). See the Status column below for each ADR's current status.
 | [0207](adr/0207-atompub-post-audience-round-trip.md)                   | AtomPub Post Audience Round-Trip                                                                             | accepted   |
 | [0208](adr/0208-active-post-slug-uniqueness.md)                        | Active Post slug uniqueness and historical permalink aliases                                                 | accepted   |
 | [0209](adr/0209-atompub-collection-member-etags.md)                    | Publish Member ETags in AtomPub Collection Entries                                                           | accepted   |
+| [0210](adr/0210-atompub-conditional-etag-delivery.md)                  | Preserve AtomPub Post validators across response encoders                                                    | accepted   |
 
 <!-- adr-table:end -->
 

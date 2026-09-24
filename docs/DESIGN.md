@@ -75,7 +75,7 @@ proxy-specific ETag suffix. The opt-in live regression
 `412`, then isolates the server header and proxy path exception, and finally
 tests both advertised encodings and an Emacs `local-ahead` push against the
 combined configuration. This is the
-[AtomPub validator delivery decision](adr/drafts/atompub-conditional-etag-delivery.md).
+[AtomPub validator delivery decision](adr/0210-atompub-conditional-etag-delivery.md).
 
 ### Trusted reverse proxies
 
