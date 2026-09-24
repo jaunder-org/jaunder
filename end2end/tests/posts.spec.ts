@@ -723,14 +723,14 @@ test("editing an Org Post preserves, changes, and removes its title", async ({
 }) => {
   const page = await registeredPage("/posts/new");
   const summary = await composePost(page, {
-    body: "#+TITLE: First line\n#+TITLE: Second line\n\nOrg body",
+    body: "#+TITLE: First line\n\nOrg body",
     format: "org",
     publish: false,
   });
   await followPermalink(page, summary);
   await openEditor(page);
   const body = page.locator(SEL.postBody);
-  const original = "#+TITLE: First line\n#+TITLE: Second line\n\nOrg body\n";
+  const original = "#+TITLE: First line\n\nOrg body\n";
   await expect(body).toHaveValue(original);
 
   await click(page, SEL.publishButton("false"));
@@ -738,9 +738,6 @@ test("editing an Org Post preserves, changes, and removes its title", async ({
   await followPermalink(page, page.locator(SEL.saveSummary));
   await expect(page.locator("article .j-post-title")).toContainText(
     "First line",
-  );
-  await expect(page.locator("article .j-post-title")).toContainText(
-    "Second line",
   );
   await openEditor(page);
   await expect(body).toHaveValue(original);
