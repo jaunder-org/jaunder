@@ -215,7 +215,7 @@ async fn web_update_preserves_separately_supplied_non_org_title(#[case] backend:
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(record.title.as_deref(), Some("Supplied separately"));
+        assert_eq!(record.title.as_deref(), Some("New heading"));
         assert_eq!(
             record.body.as_ref(),
             "# New heading\n\nFurther edited body\n"

@@ -816,6 +816,24 @@ test("editing an AtomPub-titled Markdown Post preserves its separate title and b
   );
   await openEditor(page);
   await expect(page.locator(SEL.postBody)).toHaveValue("Edited plain body\n");
+  await page.fill(SEL.postBody, "# Web form title\n\nEdited plain body");
+  await click(page, SEL.publishButton("false"));
+  await expectFlash(page, "Draft saved.");
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  await expect(page.locator("article .j-post-title")).toHaveText(
+    "Web form title",
+  );
+  await openEditor(page);
+  await page.fill(
+    SEL.postBody,
+    "# Revised web form title\n\nEdited plain body",
+  );
+  await click(page, SEL.publishButton("false"));
+  await expectFlash(page, "Draft saved.");
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  await expect(page.locator("article .j-post-title")).toHaveText(
+    "Revised web form title",
+  );
 });
 
 test("editing an AtomPub-titled HTML Post preserves its separate title and body", async ({
