@@ -118,22 +118,9 @@ impl CreationComposerSnapshot {
     }
 }
 
-/// The editor cannot safely submit an Org Post whose title cannot round-trip
-/// through nonblank `#+TITLE:` directives.
-#[derive(Debug, PartialEq, Eq)]
-pub enum OrgEditorSeedError {
-    UnrepresentableTitle,
-}
-
-fn org_editor_title(title: &PostTitle) -> Result<String, OrgEditorSeedError> {
-    let lines: Vec<_> = title.as_ref().split('\n').collect();
-    if lines
-        .iter()
-        .any(|line| line.is_empty() || line.trim() != *line || line.contains('\r'))
-    {
-        return Err(OrgEditorSeedError::UnrepresentableTitle);
-    }
-    Ok(format!("#+TITLE: {}\n", lines.join("\n#+TITLE: ")))
+// PostTitle is validated as one nonblank, line-break-free source line (#1662).
+fn org_editor_title(title: &PostTitle) -> String {
+    format!("#+TITLE: {title}\n")
 }
 
 fn is_title_line(line: &str) -> bool {
@@ -249,14 +236,11 @@ impl ComposeState {
     /// `ComposeOptions`, so the editor sets it at the call site rather than handing
     /// the field in here to be written once.
     ///
-    /// # Errors
-    ///
-    /// Refuses an Org title that cannot round-trip through nonblank title lines.
-    pub fn seed_from(&self, fetched: &AuthoredPost) -> Result<(), OrgEditorSeedError> {
+    pub fn seed_from(&self, fetched: &AuthoredPost) {
         // The header exists only in the editable projection; persistence still owns
         // the canonical metadata-free body (ADR-0024/0155).
         let title = if fetched.format == PostFormat::Org {
-            fetched.title.as_ref().map(org_editor_title).transpose()?
+            fetched.title.as_ref().map(org_editor_title)
         } else {
             None
         };
@@ -273,7 +257,6 @@ impl ComposeState {
             .set_value(fetched.post.summary.as_deref().unwrap_or_default());
         self.tags.set(fetched.post.tags.clone());
         self.tags_supplied.set(false);
-        Ok(())
     }
 
     /// Change format without carrying an editor-projected Org title into other source formats.
@@ -363,8 +346,8 @@ pub fn submit_gate(
 #[cfg(test)]
 mod tests {
     use super::{
-        ComposeState, CreationComposerSnapshot, OrgEditorSeedError, PublicationIntent,
-        publication_from_local, submit_gate,
+        ComposeState, CreationComposerSnapshot, PublicationIntent, publication_from_local,
+        submit_gate,
     };
     use crate::forms::Field;
     use common::post_body::PostBody;
@@ -464,9 +447,7 @@ mod tests {
             let state = ComposeState::new();
             assert!(!state.body.is_valid(), "a pristine composer is invalid");
 
-            state
-                .seed_from(&crate::posts::render::test_fixtures::sample_post())
-                .unwrap();
+            state.seed_from(&crate::posts::render::test_fixtures::sample_post());
 
             assert_eq!(state.body.value(), "raw");
             assert!(state.body.is_valid(), "a seeded body is valid");
@@ -620,7 +601,7 @@ mod tests {
             let state = ComposeState::new();
             let fetched = crate::posts::render::test_fixtures::sample_post();
 
-            state.seed_from(&fetched).unwrap();
+            state.seed_from(&fetched);
 
             assert_eq!(state.body.value(), "raw");
             assert_eq!(state.format.get(), PostFormat::Markdown);
@@ -648,14 +629,14 @@ mod tests {
             let state = ComposeState::new();
             let mut fetched = crate::posts::render::test_fixtures::sample_post();
             fetched.format = PostFormat::Org;
-            fetched.title = Some("First line\nSecond line".parse().unwrap());
+            fetched.title = Some("First line".parse().unwrap());
             fetched.body = "#+AUTHOR: Kept\n\nOrg content".parse().unwrap();
 
-            state.seed_from(&fetched).unwrap();
+            state.seed_from(&fetched);
 
             assert_eq!(
                 state.body.value(),
-                "#+TITLE: First line\n#+TITLE: Second line\n\n#+AUTHOR: Kept\n\nOrg content"
+                "#+TITLE: First line\n\n#+AUTHOR: Kept\n\nOrg content"
             );
             assert_eq!(fetched.body.as_ref(), "#+AUTHOR: Kept\n\nOrg content");
             assert_eq!(state.format.get(), PostFormat::Org);
@@ -663,21 +644,14 @@ mod tests {
     }
 
     #[test]
-    fn org_editor_keeps_titleless_source_and_refuses_unrepresentable_title() {
+    fn org_editor_keeps_titleless_source() {
         Owner::new().with(|| {
             let state = ComposeState::new();
             let mut fetched = crate::posts::render::test_fixtures::sample_post();
             fetched.format = PostFormat::Org;
             fetched.title = None;
             fetched.body = "Org content".parse().unwrap();
-            state.seed_from(&fetched).unwrap();
-            assert_eq!(state.body.value(), "Org content");
-
-            fetched.title = Some("Line one\n\nLine three".parse().unwrap());
-            assert_eq!(
-                state.seed_from(&fetched),
-                Err(OrgEditorSeedError::UnrepresentableTitle)
-            );
+            state.seed_from(&fetched);
             assert_eq!(state.body.value(), "Org content");
         });
     }
@@ -690,7 +664,7 @@ mod tests {
             fetched.format = PostFormat::Org;
             fetched.title = Some("Title".parse().unwrap());
             fetched.body = "Org content".parse().unwrap();
-            state.seed_from(&fetched).unwrap();
+            state.seed_from(&fetched);
             assert_eq!(state.body.value(), "#+TITLE: Title\n\nOrg content");
 
             state.switch_format(PostFormat::Markdown);
@@ -708,7 +682,7 @@ mod tests {
             fetched.format = PostFormat::Org;
             fetched.title = Some("Title".parse().unwrap());
             fetched.body = "Org content".parse().unwrap();
-            state.seed_from(&fetched).unwrap();
+            state.seed_from(&fetched);
             state
                 .body
                 .set_value("Example: #+TITLE: Title\n#+TITLE: Title\n\nOrg content");
@@ -727,7 +701,7 @@ mod tests {
             fetched.format = PostFormat::Org;
             fetched.title = Some("Title".parse().unwrap());
             fetched.body = "Org content".parse().unwrap();
-            state.seed_from(&fetched).unwrap();
+            state.seed_from(&fetched);
             state.body.set_value("#+TITLE: Title\nOrg content");
 
             state.switch_format(PostFormat::Markdown);
@@ -739,19 +713,16 @@ mod tests {
     #[test]
     fn switching_formats_removes_edited_single_and_multiline_title_headers() {
         Owner::new().with(|| {
-            for (old_title, edited_source) in [
-                ("Old", "#+TITLE: New\n\nOrg content"),
-                (
-                    "Old first\nOld second",
-                    "#+TITLE: New first\n#+TITLE: New second\n\nOrg content",
-                ),
+            for edited_source in [
+                "#+TITLE: New\n\nOrg content",
+                "#+TITLE: New first\n#+TITLE: New second\n\nOrg content",
             ] {
                 let state = ComposeState::new();
                 let mut fetched = crate::posts::render::test_fixtures::sample_post();
                 fetched.format = PostFormat::Org;
-                fetched.title = Some(old_title.parse().unwrap());
+                fetched.title = Some("Old".parse().unwrap());
                 fetched.body = "Org content".parse().unwrap();
-                state.seed_from(&fetched).unwrap();
+                state.seed_from(&fetched);
                 state.body.set_value(edited_source);
 
                 state.switch_format(PostFormat::Markdown);
@@ -769,7 +740,7 @@ mod tests {
             fetched.format = PostFormat::Org;
             fetched.title = Some("Old".parse().unwrap());
             fetched.body = "Intro\n#+TITLE: Old\n\nTail".parse().unwrap();
-            state.seed_from(&fetched).unwrap();
+            state.seed_from(&fetched);
             state
                 .body
                 .set_value("#+TITLE: New\n\nIntro\n#+TITLE: Old\n\nTail");
@@ -788,7 +759,7 @@ mod tests {
             fetched.format = PostFormat::Org;
             fetched.title = Some("Old".parse().unwrap());
             fetched.body = "Intro\n#+TITLE: Authored\n\nTail".parse().unwrap();
-            state.seed_from(&fetched).unwrap();
+            state.seed_from(&fetched);
             state
                 .body
                 .set_value("Intro\n#+TITLE: Edited authored\n\nTail");
@@ -834,7 +805,7 @@ mod tests {
             fetched.format = PostFormat::Org;
             fetched.title = Some("Title".parse().unwrap());
             fetched.body = "Org content".parse().unwrap();
-            state.seed_from(&fetched).unwrap();
+            state.seed_from(&fetched);
             state.body.set_value("Org content");
 
             state.switch_format(PostFormat::Markdown);
