@@ -73,7 +73,7 @@ test("Manage Posts selects across pages and applies atomic bulk operations", asy
   const dialog = page.getByRole("dialog");
   await expect(dialog).toContainText("exactly 2 Posts");
   await expect(dialog).toContainText("complete Audience Selection");
-  await dialog.getByLabel("Audience").selectOption("subscribers");
+  await dialog.getByRole("checkbox", { name: "Subscribers" }).check();
   const confirm = dialog.getByRole("button", { name: "Confirm" });
   await confirm.click();
   await expect.poll(() => executionRequests).toBe(1);
@@ -95,7 +95,7 @@ test("Manage Posts selects across pages and applies atomic bulk operations", asy
   await page.getByRole("button", { name: "Select all matching" }).click();
   await expect(page.getByText("2 selected", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Change audience" }).click();
-  await dialog.getByLabel("Audience").selectOption("subscribers");
+  await dialog.getByRole("checkbox", { name: "Subscribers" }).check();
   await dialog.getByRole("button", { name: "Confirm" }).click();
   await expect(page.getByRole("status")).toHaveText(
     "Selected 2 Posts; changed 0.",
