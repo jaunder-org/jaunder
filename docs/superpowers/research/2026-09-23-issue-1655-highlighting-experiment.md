@@ -1,8 +1,16 @@
-# #1655 highlighting experiment — no-go at the approved latency gate
+# #1655 highlighting experiment — no-go at the original latency gate
 
-The approved [spec](../specs/2026-09-23-issue-1655-org-syntax-highlighting.md)
-and [outline](../plans/2026-09-23-issue-1655-org-syntax-highlighting.md) require
-at most 25 ms additional warm p95 at 64 KiB in **each** Org/Markdown × Emacs
+**Subsequent decision:** The owner accepted full warm p95 below 1 second for 64
+KiB pathological blocks and authorized a production attempt without a
+Tree-sitter CLI or alternative-library profiling comparison. The measurements
+below remain the historical evidence for the failed **original** +25 ms overhead
+limit, not the revised production verdict. The new attempt still needs
+integrated safety/fidelity and final binary-size proof.
+
+The original approved
+[spec](../specs/2026-09-23-issue-1655-org-syntax-highlighting.md) and
+[outline](../plans/2026-09-23-issue-1655-org-syntax-highlighting.md) required at
+most 25 ms additional warm p95 at 64 KiB in **each** Org/Markdown × Emacs
 Lisp/Haskell pair. Direct Tree-sitter missed this gate in all four pairs. The
 conditional production renderer, sanitizer, CSS, error-propagation, ADR draft
 and architecture edits were **reverted**, without attempting the existing-Post
@@ -158,6 +166,6 @@ Package exist because the feature did not meet the latency gate.
 The trial production patch was intentionally reverted rather than checked in;
 its raw integrated timing samples cannot be rerun from this report alone. The
 retained source-and-query probe can rerun candidate/fidelity checks, and the
-retained benchmark reproduces the unmodified baseline. A new production attempt
-must re-establish paired integrated measurements and obtain approval of a
-revised outline before shipping.
+retained benchmark reproduces the unmodified baseline. The newly authorized
+production attempt must re-establish paired integrated measurements against the
+revised criterion and satisfy the other gates before shipping.

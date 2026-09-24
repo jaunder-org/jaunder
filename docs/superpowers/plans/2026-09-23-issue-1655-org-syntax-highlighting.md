@@ -22,7 +22,7 @@ Revisions, an unbounded rewrite of legacy content.
 
 ## Task outline
 
-- [ ] **1. Compare candidate viability and capture an unchanged baseline.** Use
+- [x] **1. Compare candidate viability and capture an unchanged baseline.** Use
       the same real Emacs Lisp/Haskell and adversarial fixtures under both Org
       and Markdown, including malformed and 64 KiB blocks; record highlight
       quality, parser/query/alias compatibility and exact-text fidelity with a
@@ -84,10 +84,13 @@ Revisions, an unbounded rewrite of legacy content.
       through both integrated production export/highlight/sanitize paths. Build
       the stripped release server under the Task 1 baseline flags. Record actual
       binary and dependency closure deltas, both formats' visual and source
-      fidelity, sanitizer proofs, and the spec's 25 ms p95 / 5 MiB verdict. **If
-      a gate fails, stop and request revised authorization: retain only the
-      experiment report/harness and revert the conditional production changes,
-      not a partial one-language or one-format feature.**
+      fidelity, sanitizer proofs, and the revised spec's sub-second full warm
+      p95 at 64 KiB / 5 MiB verdict. The original +25 ms overhead gate failed
+      and its production trial was reverted; the owner subsequently accepted
+      sub-second pathological rendering and authorized another production
+      attempt. **If a remaining gate fails, stop and request revised
+      authorization rather than retaining a partial one-language or one-format
+      feature.**
   - Contract: measured integrated result, not the isolated prototype estimate,
     authorizes Tasks 5–6.
   - Verification: reproducible baseline/modified commands, raw timings and

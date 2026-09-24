@@ -99,10 +99,13 @@ policy for each new grammar.
   format and language pair**, reporting median and p95; compare stripped release
   server binary bytes and dependency closure. Go to production only if both
   languages look useful in **both formats** on the real samples, all
-  security/fidelity proofs pass, warm p95 adds at most 25 ms on the 64 KiB
-  fixture per block, and the release binary grows by no more than 5 MiB.
-  Otherwise stop with evidence and ask for a revised budget/scope rather than
-  quietly shipping a partial feature.
+  security/fidelity proofs pass, the full highlighted 64 KiB render stays below
+  1 second warm p95 for each format/language pair, and the release binary grows
+  by no more than 5 MiB. The owner accepted this revised pathological-case
+  latency criterion after the original +25 ms overhead limit failed; still
+  report the measured overhead and 1/8 KiB distributions. Otherwise stop with
+  evidence and ask for a revised budget/scope rather than quietly shipping a
+  partial feature.
 
 ## Acceptance
 
