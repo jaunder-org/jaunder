@@ -27,7 +27,7 @@ use super::{audience, support};
 /// (renderer-internal, #445), so it is filtered out. Adding a format is a one-attribute change
 /// on `PostFormat`, not new markup here.
 #[component]
-fn FormatToggle(format: RwSignal<PostFormat>) -> impl IntoView {
+fn FormatToggle(format: RwSignal<PostFormat>, on_change: Callback<PostFormat>) -> impl IntoView {
     use strum::{EnumMessage, VariantArray};
     view! {
         <fieldset class="j-form-field j-composer-group">
@@ -47,7 +47,7 @@ fn FormatToggle(format: RwSignal<PostFormat>) -> impl IntoView {
                                 aria-pressed=move || {
                                     if format.get() == f { "true" } else { "false" }
                                 }
-                                on:click=move |_| format.set(f)
+                                on:click=move |_| on_change.run(f)
                             >
                                 {label}
                             </button>
@@ -98,7 +98,12 @@ pub fn ComposerFields(
             class=textarea_class
             on_input=on_input
         />
-        {show_seg.then(move || view! { <FormatToggle format=format /> })}
+        {show_seg
+            .then(move || {
+                view! {
+                    <FormatToggle format=format on_change=Callback::new(move |f| format.set(f)) />
+                }
+            })}
     }
 }
 
@@ -990,7 +995,10 @@ pub(super) fn ComposerControlRail(
                 disclosures=disclosures
                 body_id="composer-format-control"
             >
-                <FormatToggle format=state.format />
+                <FormatToggle
+                    format=state.format
+                    on_change=Callback::new(move |format| state.switch_format(format))
+                />
             </ComposerDisclosure>
             <ComposeOptions
                 state

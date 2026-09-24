@@ -275,9 +275,8 @@ pub fn EditPostPage() -> impl IntoView {
             view! { <p class="j-loading">"Loading\u{2026}"</p> }
         }>
             {move || Suspend::new(async move {
-                match post.await {
+                match post.await.inspect(|fetched| state.seed_from(&fetched.post)) {
                     Ok(fetched) => {
-                        state.seed_from(&fetched.post);
                         slug_field.set_value(fetched.post.post.slug.as_ref());
                         let loaded_publication = posts::loaded_publication(
                             fetched.post.post.published_at,

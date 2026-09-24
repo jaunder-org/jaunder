@@ -35,6 +35,7 @@ import {
   selectComposerAudience,
 } from "./posts";
 import { navigateInApp } from "./navigate";
+import { mintAppPassword } from "./sessions";
 import { allowSecondBoot } from "./bootBudget";
 import { expectVisual, expectVisualRegion } from "./visual";
 import { expectAccessible } from "./accessibility";
@@ -665,9 +666,8 @@ test("Post headers use the current display name with a handle-only fallback", as
 });
 
 // #77: the full leading Org metadata block is normalized at the write boundary,
-// while the form's explicit lifecycle remains authoritative. This follows the
-// saved post back into its editor so the assertion covers the stored canonical
-// source, rather than just a successful request.
+// while the form's explicit lifecycle remains authoritative. The editor
+// reconstructs the saved title, but does not duplicate other recognized headers.
 test("Org header metadata round-trips through the composer as canonical source", async ({
   registeredPage,
 }) => {
@@ -709,15 +709,260 @@ Canonical Org body`,
   ).toBeVisible();
 
   const canonicalBody = page.locator(SEL.postBody);
-  await expect(canonicalBody).toHaveValue(
-    new RegExp(`^${unknownDirective.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
-  );
+  await expect(canonicalBody).toHaveValue(new RegExp(`^#\\+TITLE: ${title}`));
   const canonicalSource = await canonicalBody.inputValue();
-  expect(canonicalSource).not.toContain("#+TITLE:");
+  expect(canonicalSource).toContain(unknownDirective);
   expect(canonicalSource).not.toContain("#+DESCRIPTION:");
   expect(canonicalSource).not.toContain("#+KEYWORDS:");
   expect(canonicalSource).not.toContain("#+PROPERTY: JAUNDER_STATUS");
   expect(canonicalSource).toContain("Canonical Org body");
+});
+
+test("editing an Org Post preserves, changes, and removes its title", async ({
+  registeredPage,
+}) => {
+  const page = await registeredPage("/posts/new");
+  const summary = await composePost(page, {
+    body: "#+TITLE: First line\n\nOrg body",
+    format: "org",
+    publish: false,
+  });
+  await followPermalink(page, summary);
+  await openEditor(page);
+  const body = page.locator(SEL.postBody);
+  const original = "#+TITLE: First line\n\nOrg body\n";
+  await expect(body).toHaveValue(original);
+
+  await click(page, SEL.publishButton("false"));
+  await expectFlash(page, "Draft saved.");
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  await expect(page.locator("article .j-post-title")).toContainText(
+    "First line",
+  );
+  await openEditor(page);
+  await expect(body).toHaveValue(original);
+
+  await page.fill(SEL.postBody, "#+TITLE: Changed title\nOrg body");
+  await click(page, SEL.publishButton("false"));
+  await expectFlash(page, "Draft saved.");
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  await expect(page.locator("article .j-post-title")).toHaveText(
+    "Changed title",
+  );
+  await openEditor(page);
+  await expect(body).toHaveValue("#+TITLE: Changed title\n\nOrg body\n");
+
+  await page.fill(SEL.postBody, "Org body");
+  await click(page, SEL.publishButton("false"));
+  await expectFlash(page, "Draft saved.");
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  await expect(page.locator("article .j-post-title")).toHaveCount(0);
+  await openEditor(page);
+  await expect(body).toHaveValue("Org body\n");
+});
+
+test("removing an Org editor projection then switching format keeps authored directives", async ({
+  registeredPage,
+}) => {
+  const page = await registeredPage("/posts/new");
+  const summary = await composePost(page, {
+    body: "#+TITLE: Synthetic\n\nIntro\n#+TITLE: Authored\n\nTail",
+    format: "org",
+    publish: false,
+  });
+  await followPermalink(page, summary);
+  await openEditor(page);
+  await page.fill(SEL.postBody, "Intro\n#+TITLE: Edited authored\n\nTail");
+  await openComposerControl(page, "Format");
+  await click(page, SEL.formatButton("Markdown"));
+  await expect(page.locator(SEL.postBody)).toHaveValue(
+    "Intro\n#+TITLE: Edited authored\n\nTail",
+  );
+  await click(page, SEL.publishButton("false"));
+  await expectFlash(page, "Draft saved.");
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  await openEditor(page);
+  await expect(page.locator(SEL.postBody)).toHaveValue(
+    "Intro\n#+TITLE: Edited authored\n\nTail\n",
+  );
+});
+
+test("editing an AtomPub-titled Markdown Post preserves its separate title and body", async ({
+  page,
+  request,
+}) => {
+  const username = await signInAsNewUser(page);
+  const token = await mintAppPassword(page, "Separate Markdown title");
+  const created = await request.post(`${BASE_URL}/atompub/${username}/posts`, {
+    headers: {
+      authorization: `Basic ${Buffer.from(`${username}:${token}`).toString("base64")}`,
+      "content-type": "application/atom+xml",
+    },
+    data: '<entry xmlns="http://www.w3.org/2005/Atom" xmlns:app="http://www.w3.org/2007/app"><title>Separate Markdown title</title><content type="text/markdown">Original plain body</content><app:control><app:draft>yes</app:draft></app:control></entry>',
+  });
+  expect(created.status()).toBe(201);
+
+  await openPostFromDrafts(page, "Separate Markdown title");
+  await expect(page.locator(SEL.postBody)).toHaveValue("Original plain body\n");
+  await page.fill(SEL.postBody, "Edited plain body");
+  await click(page, SEL.publishButton("false"));
+  await expectFlash(page, "Draft saved.");
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  await expect(page.locator("article .j-post-title")).toHaveText(
+    "Separate Markdown title",
+  );
+  await openEditor(page);
+  await expect(page.locator(SEL.postBody)).toHaveValue("Edited plain body\n");
+  await page.fill(SEL.postBody, "# Web form title\n\nEdited plain body");
+  await click(page, SEL.publishButton("false"));
+  await expectFlash(page, "Draft saved.");
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  await expect(page.locator("article .j-post-title")).toHaveText(
+    "Web form title",
+  );
+  await openEditor(page);
+  await page.fill(
+    SEL.postBody,
+    "# Revised web form title\n\nEdited plain body",
+  );
+  await click(page, SEL.publishButton("false"));
+  await expectFlash(page, "Draft saved.");
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  await expect(page.locator("article .j-post-title")).toHaveText(
+    "Revised web form title",
+  );
+});
+
+test("editing an AtomPub-titled HTML Post preserves its separate title and body", async ({
+  page,
+  request,
+}) => {
+  const username = await signInAsNewUser(page);
+  const token = await mintAppPassword(page, "Separate HTML title");
+  const created = await request.post(`${BASE_URL}/atompub/${username}/posts`, {
+    headers: {
+      authorization: `Basic ${Buffer.from(`${username}:${token}`).toString("base64")}`,
+      "content-type": "application/atom+xml",
+    },
+    data: '<entry xmlns="http://www.w3.org/2005/Atom" xmlns:app="http://www.w3.org/2007/app"><title>Separate HTML title</title><content type="html">&lt;p&gt;Original HTML body&lt;/p&gt;</content><app:control><app:draft>yes</app:draft></app:control></entry>',
+  });
+  expect(created.status()).toBe(201);
+
+  await openPostFromDrafts(page, "Separate HTML title");
+  await expect(page.locator(SEL.postBody)).toHaveValue(
+    "<p>Original HTML body</p>",
+  );
+  await page.fill(SEL.postBody, "<p>Edited HTML body</p>");
+  await click(page, SEL.publishButton("false"));
+  await expectFlash(page, "Draft saved.");
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  await expect(page.locator("article .j-post-title")).toHaveText(
+    "Separate HTML title",
+  );
+  await openEditor(page);
+  await expect(page.locator(SEL.postBody)).toHaveValue(
+    "<p>Edited HTML body</p>",
+  );
+});
+
+test("an ordinary titled Org edit retains structured metadata and its schedule", async ({
+  registeredPage,
+}) => {
+  const scheduledAt = "2999-01-01T09:00";
+  const title = "Scheduled Org title";
+  const slug = "scheduled-org-title-metadata";
+  const summary = "Structured summary survives editing";
+  const page = await registeredPage("/posts/new");
+  await openComposerControl(page, "Format");
+  await click(page, SEL.formatButton("Org"));
+  await page.fill(
+    SEL.postBody,
+    `#+TITLE: ${title}\n#+KEYWORDS: orgscheduled\n\nOrg content`,
+  );
+  await page.fill(SEL.postSummary, summary);
+  await openComposerControl(page, "Slug");
+  await page.fill(SEL.postSlug, slug);
+  await selectComposerAudience(page, "private");
+  await applyPublicationTime(page, scheduledAt);
+  await click(page, SEL.publishButton("true"));
+  await waitForSelector(page, SEL.saveSummary);
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  await openEditor(page);
+
+  const assertStructuredState = async () => {
+    await expect(page.locator(SEL.postBody)).toHaveValue(
+      `#+TITLE: ${title}\n\nOrg content\n`,
+    );
+    await expect(page.locator(SEL.postSummary)).toHaveValue(summary);
+    await expect(
+      page.locator('.j-tag-chip-label:has-text("#orgscheduled")'),
+    ).toBeVisible();
+    await openComposerControl(page, "Format");
+    await expect(page.locator(SEL.formatButton("Org"))).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await openComposerControl(page, "Share with");
+    const audience = page.getByRole("group", { name: "Share with" });
+    await expect(
+      audience.getByRole("checkbox", { name: "Public" }),
+    ).not.toBeChecked();
+    await expect(
+      audience.getByRole("checkbox", { name: "Subscribers" }),
+    ).not.toBeChecked();
+    await expect(
+      audience.getByText("Private — only you can see this Post."),
+    ).toBeVisible();
+    await openComposerControl(page, "Publish");
+    await page.getByRole("button", { name: "Edit publication time" }).click();
+    await expect(page.locator(SEL.publishAt)).toHaveValue(scheduledAt);
+    await expect(page.locator(SEL.publishButton("true"))).toHaveText("Save");
+  };
+
+  await assertStructuredState();
+  await click(page, SEL.publishButton("true"));
+  await page.waitForURL((url) => !url.pathname.endsWith("/edit"));
+  expect(new URL(page.url()).pathname).toContain(slug);
+  await openEditor(page);
+  await assertStructuredState();
+});
+
+test("switching an Org editor to Markdown does not leak its reconstructed title", async ({
+  registeredPage,
+}) => {
+  const page = await registeredPage("/posts/new");
+  const summary = await composePost(page, {
+    body: "#+TITLE: Org title\n\nIntro\n#+TITLE: Org title\n\nTail",
+    format: "org",
+    publish: false,
+  });
+  await followPermalink(page, summary);
+  await openEditor(page);
+  await expect(page.locator(SEL.postBody)).toHaveValue(
+    "#+TITLE: Org title\n\nIntro\n#+TITLE: Org title\n\nTail\n",
+  );
+
+  await page.fill(
+    SEL.postBody,
+    "Example: #+TITLE: Org title\n#+TITLE: Edited Org title\n\nIntro\n#+TITLE: Org title\n\nTail\n",
+  );
+  await openComposerControl(page, "Format");
+  await click(page, SEL.formatButton("Markdown"));
+  await expect(page.locator(SEL.postBody)).toHaveValue(
+    "Example: #+TITLE: Org title\nIntro\n#+TITLE: Org title\n\nTail\n",
+  );
+  await click(page, SEL.publishButton("false"));
+  await expectFlash(page, "Draft saved.");
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  await openEditor(page);
+  await expect(page.locator(SEL.postBody)).toHaveValue(
+    "Example: #+TITLE: Org title\nIntro\n#+TITLE: Org title\n\nTail\n",
+  );
+  await openComposerControl(page, "Format");
+  await expect(page.locator(SEL.formatButton("Markdown"))).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
 });
 
 // #77: editor updates apply the same Org normalization and precedence as the
@@ -781,7 +1026,7 @@ ${acceptedBody}`,
   const canonicalSource = await canonicalBody.inputValue();
   expect(canonicalSource).toContain(unknownDirective);
   expect(canonicalSource).toContain(acceptedBody);
-  expect(canonicalSource).not.toContain("#+TITLE:");
+  expect(canonicalSource).toContain(`#+TITLE: ${acceptedTitle}`);
   expect(canonicalSource).not.toContain("#+DESCRIPTION:");
   expect(canonicalSource).not.toContain("#+KEYWORDS:");
   expect(canonicalSource).not.toContain("#+PROPERTY: JAUNDER_STATUS");
