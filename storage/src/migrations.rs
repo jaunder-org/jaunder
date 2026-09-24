@@ -8,7 +8,6 @@ mod tests {
     use crate::DbConnectOptions;
     use crate::code_migrations;
     use crate::posts::PostDialect;
-    use crate::posts::media;
     use crate::posts::search::{
         PostMutationVersion, PostSearchBackfillCandidate, StoredPostSearchText,
         backfill_post_search_projections,
@@ -297,7 +296,7 @@ mod tests {
         db.migrate_to(26).await.unwrap();
         db.seed_legacy_post_media().await;
 
-        db.migrate_to(43).await.unwrap();
+        db.migrate_to(44).await.unwrap();
         db.drain_pending_code_migrations().await;
 
         assert_eq!(
@@ -353,7 +352,7 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         let db = MigrationDatabase::new(backend).await;
-        db.migrate_to(43).await.unwrap();
+        db.migrate_to(44).await.unwrap();
         db.pool
             .execute("INSERT INTO pending_code_migrations (operation) VALUES ('not_registered')")
             .await
@@ -419,7 +418,7 @@ mod tests {
         let db = MigrationDatabase::new(backend).await;
         db.migrate_to(26).await.unwrap();
         db.seed_legacy_post_media().await;
-        db.migrate_to(43).await.unwrap();
+        db.migrate_to(44).await.unwrap();
         let legacy_before = db
             .pool
             .scalar_i64("SELECT COUNT(*) FROM post_media WHERE reference_kind = 'legacy'")
@@ -489,7 +488,7 @@ mod tests {
     #[tokio::test]
     async fn sqlx_failure_returns_no_opened_storage_or_rust_operation(#[case] backend: Backend) {
         let db = MigrationDatabase::new(backend).await;
-        db.migrate_to(42).await.unwrap();
+        db.migrate_to(43).await.unwrap();
         match backend {
             Backend::Sqlite => {
                 db.pool
@@ -529,7 +528,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            42
+            43
         );
         assert_eq!(
             db.pool
@@ -558,7 +557,7 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn migration_0044_runs_media_repair_before_render_rebuild(#[case] backend: Backend) {
+    async fn migration_0045_runs_media_repair_before_render_rebuild(#[case] backend: Backend) {
         let db = MigrationDatabase::new(backend).await;
         db.migrate_to(26).await.unwrap();
         db.seed_legacy_post_media().await;
@@ -594,13 +593,13 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn migration_0044_rebuilds_only_changed_current_derivatives_and_public_feeds(
+    async fn migration_0045_rebuilds_only_changed_current_derivatives_and_public_feeds(
         #[case] backend: Backend,
     ) {
         use common::render::PostFormat;
 
         let db = MigrationDatabase::new(backend).await;
-        db.migrate_to(43).await.unwrap();
+        db.migrate_to(44).await.unwrap();
         db.drain_pending_code_migrations().await;
         let user = match backend {
             Backend::Sqlite => {
@@ -780,12 +779,12 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn migration_0044_reconciles_current_media_and_rolls_back_failed_attempt(
+    async fn migration_0045_reconciles_current_media_and_rolls_back_failed_attempt(
         #[case] backend: Backend,
     ) {
         const HASH: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
         let db = MigrationDatabase::new(backend).await;
-        db.migrate_to(43).await.unwrap();
+        db.migrate_to(44).await.unwrap();
         db.drain_pending_code_migrations().await;
         let user = match backend {
             Backend::Sqlite => {
@@ -1617,7 +1616,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            44,
+            45,
         );
     }
 
@@ -2089,7 +2088,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            44
+            45
         );
         assert_eq!(
             db.pool
