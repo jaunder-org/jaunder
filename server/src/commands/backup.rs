@@ -267,6 +267,106 @@ mod tests {
             .unwrap();
     }
 
+    // guard:low-level-db — pause a pending migration under the same directory
+    // lock that CLI export must acquire for its database snapshot.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn export_waits_for_pending_rebuild_and_captures_committed_data() {
+        let temp = tempfile::TempDir::new().expect("storage directory");
+        let storage_path = temp.path().join("storage");
+        let storage = StorageArgs {
+            db: format!("sqlite:{}", storage_path.join("jaunder.db").display())
+                .parse()
+                .expect("SQLite database URL"),
+            storage_path,
+        };
+        super::super::storage_bootstrap::cmd_init(&storage, false)
+            .await
+            .expect("initialize storage");
+        let storage::DbConnectOptions::Sqlite(options) = &storage.db else {
+            unreachable!("fixture uses SQLite")
+        };
+        let pool = sqlx::SqlitePool::connect_with(options.clone())
+            .await
+            .expect("connect to initialized SQLite database");
+        sqlx::query(
+            "INSERT INTO users (username, password_hash, created_at)
+             VALUES ('snapshot-author', 'hash', CURRENT_TIMESTAMP)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO posts (user_id, slug, body, format, rendered_html, created_at, updated_at)
+             SELECT user_id, 'snapshot-post', 'A---B...', 'org', '<p>A---B...</p>',
+                    CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+             FROM users WHERE username = 'snapshot-author'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO pending_code_migrations (operation) VALUES ('rebuild_rendered_posts')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let (entered_tx, entered_rx) = oneshot::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+        let entered = Mutex::new(Some(entered_tx));
+        let resume = Mutex::new(resume_rx);
+        let migrating = storage.clone();
+        let migration = tokio::spawn(async move {
+            let _lock = DatabaseLockGuard::acquire(&migrating.storage_path)
+                .await
+                .expect("migration directory lock");
+            storage::open_existing_database_authorizing_drain(
+                &migrating.db,
+                &StorageRuntimeConfig::default(),
+                &|| {
+                    entered.lock().unwrap().take().unwrap().send(()).unwrap();
+                    resume.lock().unwrap().recv().unwrap();
+                    Ok(())
+                },
+            )
+            .await
+            .expect("drain after resume");
+        });
+        tokio::time::timeout(Duration::from_secs(30), entered_rx)
+            .await
+            .expect("migration reaches pending operation")
+            .unwrap();
+        let backup_path = temp.path().join("post-migration-backup");
+        let exporting = storage.clone();
+        let mut export = tokio::spawn(async move {
+            cmd_backup(&exporting, BackupMode::Directory, Some(backup_path.clone()))
+                .await
+                .expect("export after migration")
+        });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), &mut export)
+                .await
+                .is_err(),
+            "export cannot snapshot while migration owns database.lock"
+        );
+        resume_tx.send(()).expect("release migration");
+        migration.await.expect("migration task");
+        let exported_path = tokio::time::timeout(Duration::from_secs(30), export)
+            .await
+            .expect("export resumes after migration")
+            .expect("export task");
+        assert_eq!(
+            std::fs::read_to_string(exported_path.join("db/pending_code_migrations.ndjson"))
+                .unwrap(),
+            "",
+            "completed operation and queue deletion are captured together"
+        );
+        let posts = std::fs::read_to_string(exported_path.join("db/posts.ndjson")).unwrap();
+        assert!(
+            posts.contains("A—B…"),
+            "backup contains rebuilt data: {posts}"
+        );
+    }
+
     // guard:no-backend — runtime-lock refusal precedes every database read.
     #[tokio::test]
     async fn restore_refuses_a_live_same_directory_server_before_target_preflight() {

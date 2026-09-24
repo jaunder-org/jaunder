@@ -23,7 +23,7 @@ use host::{
     feed::FeedEventPhase,
     password::Password,
 };
-use jaunder::cli::{Cli, Commands, DeadLetterAction, StorageArgs, WebsubAction};
+use jaunder::cli::{Cli, Commands, DeadLetterAction, SiteConfigAction, StorageArgs, WebsubAction};
 use jaunder::commands::{
     CommandOutput, ServeCapturePaths, app_password_create, cmd_backup, cmd_init, cmd_restore,
     cmd_serve, prepare_server,
@@ -956,6 +956,7 @@ async fn cmd_backup_covers_every_table_or_deliberately_excludes_it(#[case] backe
             "passkey_credentials",
             "passkey_user_handles",
             "password_resets",
+            "pending_code_migrations",
             "post_audiences",
             "post_media",
             "post_permalink_aliases",
@@ -1018,8 +1019,206 @@ async fn cmd_backup_covers_every_table_or_deliberately_excludes_it(#[case] backe
         }
     };
     assert_eq!(
-        live_table_count, 47,
+        live_table_count, 48,
         "a table was added or removed — update the golden set and denylist deliberately"
+    );
+}
+
+async fn seed_pending_render_rebuild(database: &storage::DbConnectOptions) {
+    const QUERIES: [&str; 3] = [
+        "INSERT INTO users (username, password_hash, created_at) VALUES ('portable-author', 'hash', CURRENT_TIMESTAMP)",
+        "INSERT INTO posts (user_id, slug, body, format, rendered_html, created_at, updated_at)
+         SELECT user_id, 'portable-org', 'A---B...', 'org', '<p>A---B...</p>', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+         FROM users WHERE username = 'portable-author'",
+        "INSERT INTO pending_code_migrations (operation) VALUES ('rebuild_rendered_posts')",
+    ];
+    match database {
+        storage::DbConnectOptions::Sqlite(options) => {
+            let pool = SqlitePoolOptions::new()
+                .connect_with(options.clone())
+                .await
+                .unwrap();
+            for statement in QUERIES {
+                sqlx::query(statement).execute(&pool).await.unwrap();
+            }
+        }
+        storage::DbConnectOptions::Postgres { options, .. } => {
+            let pool = PgPoolOptions::new()
+                .connect_with(options.clone())
+                .await
+                .unwrap();
+            for statement in QUERIES {
+                sqlx::query(statement).execute(&pool).await.unwrap();
+            }
+        }
+    }
+}
+
+async fn reject_pending_delete(database: &storage::DbConnectOptions) {
+    match database {
+        storage::DbConnectOptions::Sqlite(options) => {
+            let pool = SqlitePoolOptions::new()
+                .connect_with(options.clone())
+                .await
+                .unwrap();
+            sqlx::query(
+                "CREATE TRIGGER fail_pending_delete BEFORE DELETE ON pending_code_migrations
+                 BEGIN SELECT RAISE(ABORT, 'injected offline rollback'); END",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        storage::DbConnectOptions::Postgres { options, .. } => {
+            let pool = PgPoolOptions::new()
+                .connect_with(options.clone())
+                .await
+                .unwrap();
+            sqlx::query(
+                "CREATE FUNCTION fail_pending_delete() RETURNS trigger LANGUAGE plpgsql AS $$
+                 BEGIN RAISE EXCEPTION 'injected offline rollback'; END; $$",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+            sqlx::query(
+                "CREATE TRIGGER fail_pending_delete BEFORE DELETE ON pending_code_migrations
+                 FOR EACH ROW EXECUTE FUNCTION fail_pending_delete()",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+    }
+}
+
+async fn allow_pending_delete(database: &storage::DbConnectOptions) {
+    match database {
+        storage::DbConnectOptions::Sqlite(options) => {
+            let pool = SqlitePoolOptions::new()
+                .connect_with(options.clone())
+                .await
+                .unwrap();
+            sqlx::query("DROP TRIGGER fail_pending_delete")
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        storage::DbConnectOptions::Postgres { options, .. } => {
+            let pool = PgPoolOptions::new()
+                .connect_with(options.clone())
+                .await
+                .unwrap();
+            sqlx::query("DROP TRIGGER fail_pending_delete ON pending_code_migrations")
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+    }
+}
+
+async fn pending_rebuild_and_rendered_html(database: &storage::DbConnectOptions) -> (i64, String) {
+    const QUERY: &str = "SELECT (SELECT COUNT(*) FROM pending_code_migrations),
+        (SELECT rendered_html FROM posts WHERE slug = 'portable-org')";
+    match database {
+        storage::DbConnectOptions::Sqlite(options) => {
+            let pool = SqlitePoolOptions::new()
+                .connect_with(options.clone())
+                .await
+                .unwrap();
+            sqlx::query_as(QUERY).fetch_one(&pool).await.unwrap()
+        }
+        storage::DbConnectOptions::Postgres { options, .. } => {
+            let pool = PgPoolOptions::new()
+                .connect_with(options.clone())
+                .await
+                .unwrap();
+            sqlx::query_as(QUERY).fetch_one(&pool).await.unwrap()
+        }
+    }
+}
+
+// Pending work is portable backup data. Exercise the public CLI command seams
+// in both cross-backend directions at the exact current schema version.
+#[apply(backends)]
+#[tokio::test]
+async fn cli_backup_restores_pending_rebuild_across_backends_before_next_open(
+    #[case] source_backend: Backend,
+) {
+    let target_backend = match source_backend {
+        Backend::Sqlite => Backend::Postgres,
+        Backend::Postgres => Backend::Sqlite,
+    };
+    let source = InitializedCommandEnv::new(source_backend).await;
+    seed_pending_render_rebuild(&source.args.db).await;
+    assert_eq!(
+        pending_rebuild_and_rendered_html(&source.args.db).await,
+        (1, "<p>A---B...</p>".to_owned())
+    );
+    let pre_attempt = source.base.path().join("pending-before-attempt");
+    cmd_backup(
+        &source.args,
+        BackupMode::Directory,
+        Some(pre_attempt.clone()),
+    )
+    .await
+    .expect("export before an attempt preserves pending work");
+    reject_pending_delete(&source.args.db).await;
+    let Err(error) = execute_command(Commands::SiteConfig {
+        action: SiteConfigAction::List {
+            storage: source.args.clone(),
+        },
+    })
+    .await
+    else {
+        panic!("a failed offline rebuild prevents ordinary CLI use");
+    };
+    assert!(format!("{error:#}").contains("injected offline rollback"));
+    assert_eq!(
+        pending_rebuild_and_rendered_html(&source.args.db).await,
+        (1, "<p>A---B...</p>".to_owned()),
+        "failed rebuild rolls back with the queue row"
+    );
+    allow_pending_delete(&source.args.db).await;
+    let backup_path = source.base.path().join("pending-after-rollback");
+    cmd_backup(
+        &source.args,
+        BackupMode::Directory,
+        Some(backup_path.clone()),
+    )
+    .await
+    .expect("export must preserve pending work without draining it");
+    let source_after_export = pending_rebuild_and_rendered_html(&source.args.db).await;
+    assert_eq!(source_after_export.0, 1);
+    for table in ["pending_code_migrations", "posts"] {
+        let filename = format!("db/{table}.ndjson");
+        assert_eq!(
+            std::fs::read_to_string(pre_attempt.join(&filename)).unwrap(),
+            std::fs::read_to_string(backup_path.join(&filename)).unwrap(),
+            "a failed attempt leaves a portable pending row and unchanged data"
+        );
+    }
+    let target = InitializedCommandEnv::new(target_backend).await;
+    cmd_restore(&target.args, &backup_path)
+        .await
+        .expect("exact-schema cross-backend restore retains pending queue row");
+    assert_eq!(
+        pending_rebuild_and_rendered_html(&target.args.db).await,
+        source_after_export,
+        "restore keeps both pending operation and old rendering"
+    );
+    execute_command(Commands::SiteConfig {
+        action: SiteConfigAction::List {
+            storage: target.args.clone(),
+        },
+    })
+    .await
+    .expect("ordinary CLI open drains the restored queue before use");
+    let (remaining, rendered) = pending_rebuild_and_rendered_html(&target.args.db).await;
+    assert_eq!(remaining, 0);
+    assert!(
+        rendered.contains("A—B…"),
+        "restored Post is rebuilt: {rendered}"
     );
 }
 
