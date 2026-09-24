@@ -97,7 +97,7 @@ Out:
     every materially changed target, apply Change Audience or soft deletion
     set-wise, and enqueue all required feed/WebSub evidence through batched
     storage inside one atomic transaction. This is the narrow ADR-0092 exception
-    recorded by `docs/adr/drafts/uncapped-exact-post-management-mutations.md`.
+    recorded by `docs/adr/0213-uncapped-exact-post-management-mutations.md`.
     Change Audience validates one complete selection before the write scope and
     excludes equal target sets from every write; Delete retains ordinary Deleted
     Post semantics.

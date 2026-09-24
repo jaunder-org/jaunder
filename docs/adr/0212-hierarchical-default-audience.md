@@ -1,6 +1,6 @@
-# ADR-DRAFT: Hierarchical Default Audience
+# ADR-0212: Hierarchical Default Audience
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-23
 - Issue: [#1625](https://github.com/jaunder-org/jaunder/issues/1625)
 
@@ -59,10 +59,9 @@ User owns only their User Default Audience through Profile; operator status does
 not grant a separate mechanism for rewriting another User's preference.
 
 This decision refines the default used by
-[ADR-0020](../0020-content-visibility-and-subscription-model.md) without
-changing its Audience union or visibility-resolution rules. AtomPub audience
-omission in
-[AtomPub Post Audience Round-Trip](../0207-atompub-post-audience-round-trip.md)
+[ADR-0020](0020-content-visibility-and-subscription-model.md) without changing
+its Audience union or visibility-resolution rules. AtomPub audience omission in
+[AtomPub Post Audience Round-Trip](0207-atompub-post-audience-round-trip.md)
 resolves through the Effective Default Audience.
 
 ## Consequences

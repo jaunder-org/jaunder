@@ -238,6 +238,9 @@ convention). See the Status column below for each ADR's current status.
 | [0208](adr/0208-active-post-slug-uniqueness.md)                        | Active Post slug uniqueness and historical permalink aliases                                                 | accepted   |
 | [0209](adr/0209-atompub-collection-member-etags.md)                    | Publish Member ETags in AtomPub Collection Entries                                                           | accepted   |
 | [0210](adr/0210-atompub-conditional-etag-delivery.md)                  | Preserve AtomPub Post validators across response encoders                                                    | accepted   |
+| [0211](adr/0211-emacs-reconciliation-conflict-resolution.md)           | Resolve Emacs Post Conflicts with Explicit, Revalidated Choices                                              | accepted   |
+| [0212](adr/0212-hierarchical-default-audience.md)                      | Hierarchical Default Audience                                                                                | accepted   |
+| [0213](adr/0213-uncapped-exact-post-management-mutations.md)           | Uncapped exact Post management mutations                                                                     | accepted   |
 
 <!-- adr-table:end -->
 

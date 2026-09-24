@@ -11,7 +11,7 @@ operations apply predictably across an explicitly confirmed Post selection.
 
 - Jaunder distinguishes **Site Default Audience**, **User Default Audience**,
   and **Effective Default Audience** as defined in `CONTEXT.md` and
-  `docs/adr/drafts/hierarchical-default-audience.md`.
+  `docs/adr/0212-hierarchical-default-audience.md`.
 - The operator controls the Site Default Audience from Site Configuration. A
   User controls only their own optional User Default Audience from Profile.
   Operators do not set another User's override.
@@ -76,7 +76,7 @@ operations apply predictably across an explicitly confirmed Post selection.
   expected to remain bounded enough for a synchronous transaction, and the UI
   prevents duplicate submission while one is pending. This is the narrow
   exception to ADR-0092 recorded by
-  `docs/adr/drafts/uncapped-exact-post-management-mutations.md`; SQL bind inputs
+  `docs/adr/0213-uncapped-exact-post-management-mutations.md`; SQL bind inputs
   remain partitioned into fixed-size set-based batches inside the one atomic
   transaction.
 

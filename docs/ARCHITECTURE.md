@@ -292,7 +292,7 @@ client-validation mapping
   Posts mutations are the narrow product-driven exception: the confirmed logical
   selection is uncapped and remains one atomic transaction, while each set-based
   statement partitions bind inputs into fixed-size batches
-  ([uncapped exact Post management mutations](adr/drafts/uncapped-exact-post-management-mutations.md)).
+  ([uncapped exact Post management mutations](adr/0213-uncapped-exact-post-management-mutations.md)).
   ADR-0022's Argon2-inside-the-claim-window remains the other documented
   exception.
 - **Slug-ordered tag locks.** A transaction that will touch several `tags` rows
@@ -794,7 +794,7 @@ no audience is explicit. Neither stored default admits a per-author `Named`
 target, whose independent lifecycle could silently invalidate or change a
 default, and neither mutates existing Posts. The resolved value widens to
 `AudienceTarget` only at per-Post boundaries
-([hierarchical Default Audience](adr/drafts/hierarchical-default-audience.md)).
+([hierarchical Default Audience](adr/0212-hierarchical-default-audience.md)).
 
 **Local Post lifecycle.** A Post row is durable canonical identity and latest
 state. Storage treats every meaningful top-level content, tag, audience, media,
@@ -2488,7 +2488,7 @@ current site value rather than copying it, while a malformed user value rejects
 resolution rather than inheriting a potentially broader site value. Post
 creation resolves the User value over the Site value at the boundary, while
 explicit input wins and existing Posts remain unchanged
-([hierarchical Default Audience](adr/drafts/hierarchical-default-audience.md)).
+([hierarchical Default Audience](adr/0212-hierarchical-default-audience.md)).
 The stored tokens and parser come from the closed-enum convention rather than a
 config-specific matcher
 ([ADR-0091](adr/0091-text-enum-closed-string-enum-convention.md)).
@@ -2914,7 +2914,7 @@ the work that remains.
 
 A uniquely matched `conflict` admits explicit, confirmed keep-local and
 keep-remote ordered batches, or one-Post two-way Ediff merge
-([revalidated conflict choices](adr/drafts/emacs-reconciliation-conflict-resolution.md)).
+([revalidated conflict choices](adr/0211-emacs-reconciliation-conflict-resolution.md)).
 Each path checks the reviewed local path, bytes and identity, a clean visiting
 buffer, and the fresh Member identity and strong ETag; no later ETag is silently
 adopted. Keep-local prepares authored content without a local Post metadata
