@@ -264,7 +264,7 @@ returned."
     (let ((case-fold-search t)
           value)
       (while (and (not value)
-                  (looking-at-p "^[ \t]*#\\+[[:alnum:]_]+:"))
+                  (looking-at-p org-keyword-regexp))
         (when (looking-at
                (format "^[ \t]*#\\+PROPERTY:[ \t]+%s\\(?:[ \t]+\\(.*\\)\\)?$"
                        (regexp-quote key)))

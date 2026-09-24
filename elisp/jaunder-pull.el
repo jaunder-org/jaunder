@@ -170,12 +170,13 @@ KIND is `text' or `xhtml'."
 
 (cl-defstruct (jaunder-pulled-member (:constructor jaunder--make-pulled-member))
   "Validated Member data shared by rendering and pull localization."
-  org-prefix org format body)
+  org-prefix org format body audience-omitted)
 
-(defun jaunder--parse-pulled-member (entry-xml etag captured-at zone)
+(defun jaunder--parse-pulled-member (entry-xml etag captured-at zone &optional audience-capable)
   "Parse Member ENTRY-XML once into exact Org bytes and native source fields.
 ETAG, CAPTURED-AT, and ZONE have the same validation and projection semantics
-as `jaunder--atom->org'.  This function performs no network or filesystem I/O."
+as `jaunder--atom->org'.  AUDIENCE-CAPABLE is the current service verdict.
+This function performs no network or filesystem I/O."
   (unless (jaunder--strong-etag-p etag)
     (jaunder--pull-error "Member response must carry a strong quoted ETag"))
   (unless (and (stringp zone) (not (string-empty-p zone)))
@@ -188,7 +189,7 @@ as `jaunder--atom->org'.  This function performs no network or filesystem I/O."
          (summary (jaunder--pull-at-most-one fields 'summaries "summary"))
          (audiences
           (condition-case err
-              (jaunder--canonical-audiences (cdr (assq 'audiences fields)))
+              (jaunder--synchronized-response-audiences fields audience-capable)
             (error (jaunder--pull-error (error-message-string err)))))
          (draft-value (jaunder--pull-at-most-one fields 'drafts "app:draft"))
          (published (jaunder--pull-at-most-one fields 'published-values "published"))
@@ -246,12 +247,13 @@ as `jaunder--atom->org'.  This function performs no network or filesystem I/O."
          :org-prefix org-prefix
          :org (concat org-prefix body)
          :format format
-         :body body)))))
+         :body body
+         :audience-omitted (null audiences))))))
 
-(defun jaunder--atom->org (entry-xml etag captured-at zone)
-  "Map Member ENTRY-XML to exact Org bytes using ETAG, CAPTURED-AT, and ZONE."
+(defun jaunder--atom->org (entry-xml etag captured-at zone &optional audience-capable)
+  "Map Member ENTRY-XML to Org using ETAG, CAPTURED-AT, ZONE, and service evidence."
   (jaunder-pulled-member-org
-   (jaunder--parse-pulled-member entry-xml etag captured-at zone)))
+   (jaunder--parse-pulled-member entry-xml etag captured-at zone audience-capable)))
 
 (defun jaunder--render-pulled-member (member body)
   "Render MEMBER's exact Org header bytes with replacement native BODY."
@@ -334,7 +336,10 @@ mutated.  The caller owns the final destination safety check and installation.
 standalone server-only pulls acquire equivalent complete evidence themselves."
   (unless (jaunder-inventory-member-p member)
     (jaunder--pull-error "pull input must be a D1 inventory Member"))
-  (let ((response (jaunder--http-request "GET" (jaunder-inventory-member-edit-uri member))))
+  (let* ((audience-capable
+          (jaunder--require-synchronization-audience-evidence
+           (jaunder--active-base-url) nil))
+         (response (jaunder--http-request "GET" (jaunder-inventory-member-edit-uri member))))
     (unless (and (integerp (plist-get response :status))
                  (<= 200 (plist-get response :status) 299))
       (jaunder--pull-error "Member GET returned non-2xx status"))
@@ -351,7 +356,8 @@ standalone server-only pulls acquire equivalent complete evidence themselves."
       (let* ((captured-at (current-time))
              (pulled-member
               (jaunder--parse-pulled-member entry-xml etag captured-at
-                                            (jaunder--current-zone-name)))
+                                            (jaunder--current-zone-name)
+                                            audience-capable))
              (source-body (jaunder-pulled-member-body pulled-member))
              (inventory (and (equal (jaunder-pulled-member-format pulled-member) "org")
                              (let ((case-fold-search t))
@@ -371,6 +377,7 @@ standalone server-only pulls acquire equivalent complete evidence themselves."
         ;; Copies are durable safe partial work; the Post remains the final claim.
         (jaunder--pull-media-materialize root instance-id plan)
         (list :etag etag :id (car identity) :slug (cdr identity)
+              :audience-omitted (jaunder-pulled-member-audience-omitted pulled-member)
               :synced-at (format-time-string "%Y-%m-%dT%H:%M:%SZ" captured-at t)
               :bytes (jaunder--render-pulled-member
                       pulled-member (jaunder--pull-media-apply-plan plan)))))))

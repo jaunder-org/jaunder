@@ -90,20 +90,24 @@ A no-op when already so named; on collision appends `-N'.  Returns the path."
         (message-log-max nil))
     (save-buffer)))
 
-(defun jaunder--write-back (response created &optional create-intent-matches conditional-update)
+(defun jaunder--write-back (response created &optional create-intent-matches conditional-update audience-capable)
   "Persist server-assigned values from RESPONSE into the current buffer.
 RESPONSE is a `jaunder--http-request' plist.  A CREATED response must provide
 an ID, canonical slug, and strong ETag.  Those server identity fields,
 JAUNDER_SYNCED_AT, and a changed-create local-ahead marker are checkpointed in
 one save before a later save clears the durable create intent.  An update leaves
 JAUNDER_ID unchanged; its successful conditional write clears local-ahead.
-Returns the slug.
+AUDIENCE-CAPABLE is this operation's service evidence.  A complete confirmed
+audience replaces local headers except on changed-create recovery; legacy
+omission leaves them untouched.  Returns the slug.
 
 Precondition for the publish-now `#+DATE:' render: the buffer's JAUNDER_DATE_TZ
 must already be recorded (the command calls `jaunder--ensure-date-tz' before the
 send); absent it, the render falls back to the local zone via
 `jaunder--resolve-zone'."
   (let* ((fields (jaunder--harvest-response-fields (plist-get response :body)))
+         (audiences (jaunder--synchronized-response-audiences
+                     fields audience-capable))
          (slug (cdr (assq 'slug fields)))
          (published (cdr (assq 'published fields)))
          (etag (jaunder--response-header response "ETag"))
@@ -142,6 +146,10 @@ send); absent it, the render falls back to the local zone via
         ;; "publish now": no author #+DATE: — render it from the server time.
         (unless (jaunder--buffer-keyword "DATE")
           (jaunder--set-keyword "DATE" (jaunder--utc->org-date utc tz)))))
+    ;; A changed replay checkpoints remote identity without discarding an
+    ;; authored local audience edit that still needs a conditional update.
+    (when (and audiences (not (eq create-intent-matches 'changed)))
+      (jaunder--replace-audience-properties audiences))
     ;; This is the create identity checkpoint.  It deliberately precedes the
     ;; intent cleanup below so an interruption retains a conditional baseline.
     (jaunder--save-buffer-silently)
@@ -443,7 +451,8 @@ safe retry."
               (tz (jaunder--buffer-property "JAUNDER_DATE_TZ"))
               (id (jaunder--buffer-property "JAUNDER_ID"))
               (synced (jaunder--buffer-property "JAUNDER_SYNCED"))
-              (entry (jaunder--org->atom)))
+              (entry (jaunder--org->atom))
+              audience-capable)
          (when force-draft (jaunder--force-draft entry))
          ;; Validate BEFORE any buffer write, so a rejected publish leaves the
          ;; on-disk file pristine.
@@ -452,11 +461,12 @@ safe retry."
          ;; unconditional PUT.  Its intent remains durable for safe recovery.
          (when (and id (not (jaunder--strong-etag-p synced)))
            (error "jaunder: JAUNDER_ID requires a strong JAUNDER_SYNCED ETag"))
-         ;; Explicit audience metadata relies on the round-trip protocol.  Prove
-         ;; capability before Local Post Link localization, Media upload, or any
-         ;; Post mutation.
-         (jaunder--require-audience-capability
-          (jaunder--active-base-url) (jaunder-entry-audiences entry))
+         ;; All synchronization needs valid service evidence.  Prove audience
+         ;; capability before Local Post Link localization, Media upload, or
+         ;; any Post mutation.
+         (setq audience-capable
+               (jaunder--require-synchronization-audience-evidence
+                (jaunder--active-base-url) (jaunder-entry-audiences entry)))
          ;; Claim and validate Local Post Links before any upload or Post
          ;; mutation.  Like media localization, this changes only the sent body.
          (setf (jaunder-entry-body entry)
@@ -493,7 +503,7 @@ safe retry."
            (let* ((source-path (buffer-file-name))
                   (slug (jaunder--write-back resp (null id)
                                              (plist-get intent :matches)
-                                             (and id synced)))
+                                             (and id synced) audience-capable))
                   (destination (if slug (jaunder--rename-to-slug slug) source-path)))
              (if (equal source-path destination)
                  (message "jaunder: published %s" (or slug ""))

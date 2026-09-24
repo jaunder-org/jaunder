@@ -997,13 +997,14 @@ Jaunder wire extensions ride the namespace `https://jaunder.org/ns/atompub`.
 Every Entry carries the read-only `j:slug` — drafts and scheduled included,
 incoming values ignored — and the Service Document advertises the version-1
 format, slug, audience, and `member-etag` capabilities
-([ADR-0023](adr/0023-atompub-jaunder-wire-extensions.md)). Authenticated
-Collection Entries additionally carry read-only `j:etag`, the exact strong
-validator of their Member resource computed from Post content and its complete
-audience set, rather than the Collection page's validator. The service document
-advertises `member-etag`; extension-aware consumers can classify Posts without
-one Member request per match and fall back to Member reads for absent or invalid
-metadata
+([ADR-0023](adr/0023-atompub-jaunder-wire-extensions.md)). It binds the `atom`
+prefix to the Atom namespace for its workspace/collection titles and categories,
+so its existing markup is namespace-valid. Authenticated Collection Entries
+additionally carry read-only `j:etag`, the exact strong validator of their
+Member resource computed from Post content and its complete audience set, rather
+than the Collection page's validator. The service document advertises
+`member-etag`; extension-aware consumers can classify Posts without one Member
+request per match and fall back to Member reads for absent or invalid metadata
 ([Collection Member ETags](adr/0209-atompub-collection-member-etags.md)).
 
 Repeated text-valued `j:audience` elements carry the complete target set as
@@ -2683,10 +2684,18 @@ client-side, so the server stays authoritative about URL layout
 ([ADR-0045](adr/0045-emacs-media-content-src.md)).
 
 The response reader harvests the complete repeated `j:audience` set. The Org
-mapper carries repeated local `JAUNDER_AUDIENCE` properties into the Entry IR;
-pull synthesizes them in canonical order, and reconciliation treats audience as
-mutable Post state
-([AtomPub Post audience round-trip](adr/0207-atompub-post-audience-round-trip.md)).
+mapper carries repeated local `JAUNDER_AUDIENCE` properties into the Entry IR.
+After a successful create, draft save, or conditional update, publish writes the
+returned complete audience into the local Org header in canonical order;
+server-only pull and selected server-ahead refresh synthesize the same ordered
+properties from the Member. Reconciliation treats audience as mutable Post
+state. A changed durable-create replay checkpoints the remote identity and
+validator but leaves unsent local audience edits (including omission)
+local-ahead until a conditional update; an unchanged replay can reflect the
+returned set
+([AtomPub Post audience round-trip](adr/0207-atompub-post-audience-round-trip.md),
+[durable AtomPub create intent](adr/0199-durable-atompub-create-intent.md),
+[Emacs publish orchestration](adr/0047-emacs-publish-orchestration.md)).
 
 A body-level relative Org `file` link whose filesystem path ends in `.org` is a
 **Local Post Link candidate** and is claimed before media. It becomes a **Local
@@ -2716,15 +2725,22 @@ the deterministic map `jpg`/`jpeg` → `image/jpeg`, `png` → `image/png`, `gif
 
 The client also probes the AtomPub service document for the
 `<j:extension features="…">` capability list that
-[ADR-0023](adr/0023-atompub-jaunder-wire-extensions.md) defines; the probe is
-cached per base URL and, when `format-media-type` is absent, emits one
-suppressible warning per session per blog rather than blocking the publish
-(`elisp/jaunder-service.el`). An explicit local audience is stricter: a
-foreign-namespace extension, unsupported or missing version, or missing
-`audience` feature fails before any Local Post Link, Media, or Post mutation
-because an older Atom processor may ignore the foreign element and publish with
-unintended visibility
-([AtomPub Post audience round-trip](adr/0207-atompub-post-audience-round-trip.md)).
+[ADR-0023](adr/0023-atompub-jaunder-wire-extensions.md) defines. The optional
+`format-media-type` warning caches a successful feature probe per base URL and
+emits one suppressible warning per session per blog when the feature is absent
+(`elisp/jaunder-service.el`). Separately, **each publish or pull** requires
+fresh valid Service Document evidence, including an AtomPub Service root and
+workspace. It binds the exact Jaunder-namespace, version-1 `audience`
+advertisement to that operation; unavailable or malformed evidence stops before
+Post mutation or local pull replacement. An explicit local audience requires
+that advertisement before Local Post Link or Media work because an older Atom
+processor may ignore the foreign element and publish with unintended visibility.
+An advertising server must return the complete audience; omission is invalid
+before synchronization is checkpointed. A valid legacy document without the
+feature permits an omitted response audience and leaves local headers unchanged,
+including on a selected server-ahead refresh
+([AtomPub Post audience round-trip](adr/0207-atompub-post-audience-round-trip.md),
+[Emacs publish orchestration](adr/0047-emacs-publish-orchestration.md)).
 
 ### Publish orchestration
 

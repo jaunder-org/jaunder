@@ -134,6 +134,27 @@ touched."
              limit t)
         (replace-match "")))))
 
+(defun jaunder--replace-audience-properties (audiences)
+  "Replace all local audience properties with canonical AUDIENCES in the header.
+Only a complete server-confirmed set reaches this helper; unrelated headers
+and native Post source remain unchanged."
+  (save-excursion
+    (goto-char (point-min))
+    (let ((case-fold-search t)
+          (limit (copy-marker (jaunder--body-start))))
+      (while (re-search-forward
+              "^[ \t]*#\\+PROPERTY:[ \t]+JAUNDER_AUDIENCE\\(?:[ \t].*\\)?\n?"
+              limit t)
+        (replace-match ""))
+      (set-marker limit nil))
+    (goto-char (point-min))
+    (while (looking-at-p org-keyword-regexp)
+      (forward-line 1))
+    (insert (mapconcat (lambda (audience)
+                         (format "#+PROPERTY: JAUNDER_AUDIENCE %s" audience))
+                       audiences "\n")
+            "\n")))
+
 (defun jaunder--set-keyword (keyword value)
   "Set the file-level #+KEYWORD: to VALUE (idempotent replace or insert)."
   (jaunder--set-keyword-line

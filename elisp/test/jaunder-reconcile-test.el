@@ -12,6 +12,13 @@
 (require 'cl-lib)
 (require 'jaunder)
 
+(defun jaunder-reconcile-test--legacy-service-document (&rest _)
+  "Return valid legacy capability evidence for independent reconcile tests."
+  (jaunder--parse-service-document
+   (concat "<service xmlns=\"http://www.w3.org/2007/app\""
+           " xmlns:atom=\"http://www.w3.org/2005/Atom\">"
+           "<workspace><atom:title>Blog</atom:title></workspace></service>")))
+
 (defun jaunder-reconcile-test--entry (id slug &optional href)
   "Return a minimal Collection Entry XML for ID, SLUG, and optional HREF."
   (format (concat "<entry><link rel=\"edit\" href=\"%s\"/>"
@@ -1649,7 +1656,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
                              (list source-member target-member)))
                  (jaunder-reconcile-report
                   (jaunder--make-reconcile-report :root root :inventory inventory)))
-            (cl-letf (((symbol-function 'jaunder--http-request)
+            (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                       #'jaunder-reconcile-test--legacy-service-document)
+                      ((symbol-function 'jaunder--http-request)
                        (lambda (&rest _)
                          (push 'get calls)
                          (if (cdr calls)
@@ -1680,6 +1689,63 @@ The current filename supplies the local slug evidence used by matched-pull tests
                      (insert-file-contents source-path)
                      (buffer-string)))))
       (delete-directory root t))))
+
+(ert-deftest jaunder-reconcile-legacy-refresh-preserves-local-audience-lines ()
+  (let ((path (make-temp-file "jaunder-legacy-audience-" nil ".org"))
+        (staged (concat "#+TITLE: Remote\n#+PROPERTY: JAUNDER_STATUS published\n"
+                        "#+PROPERTY: JAUNDER_ID 42\n\nRemote body.\n")))
+    (unwind-protect
+        (progn
+          (with-temp-file path
+            (insert (concat "#+TITLE: Local\n"
+                            "#+FOO-BAR: valid directive\n"
+                            "#+PROPERTY: JAUNDER_AUDIENCE named:17\n"
+                            "#+PROPERTY: JAUNDER_ID 42\n"
+                            "#+PROPERTY: JAUNDER_SLUG remote\n"
+                            "#+PROPERTY: JAUNDER_AUDIENCE public\n\n"
+                            "Local body.\n#+PROPERTY: JAUNDER_AUDIENCE body-text\n")))
+          (should (equal (jaunder--read-local-properties path) '("42" "remote")))
+          (should
+           (equal (jaunder--reconcile-preserve-legacy-audience path staged)
+                  (concat "#+TITLE: Remote\n#+PROPERTY: JAUNDER_STATUS published\n"
+                          "#+PROPERTY: JAUNDER_AUDIENCE named:17\n"
+                          "#+PROPERTY: JAUNDER_AUDIENCE public\n"
+                          "#+PROPERTY: JAUNDER_ID 42\n\nRemote body.\n")))
+          (should-error
+           (jaunder--reconcile-preserve-legacy-audience
+            path "#+TITLE: Invalid staged Post\n\nRemote body.\n")))
+      (should (string-match-p
+               "Local body"
+               (with-temp-buffer (insert-file-contents path) (buffer-string))))
+      (delete-file path))))
+
+(ert-deftest jaunder-reconcile-legacy-staged-install-retains-audience ()
+  (let* ((path (make-temp-file "jaunder-legacy-install-" nil ".org"))
+         (staged (list :slug "remote" :id "42" :etag "\"remote\""
+                       :audience-omitted t :synced-at "2026-08-25T00:00:00Z"
+                       :bytes (concat "#+TITLE: Remote\n"
+                                      "#+PROPERTY: JAUNDER_STATUS published\n"
+                                      "#+PROPERTY: JAUNDER_ID 42\n\nRemote body.\n"))))
+    (unwind-protect
+        (progn
+          (with-temp-file path
+            (insert (concat "#+TITLE: Local\n"
+                            "#+PROPERTY: JAUNDER_AUDIENCE subscribers\n"
+                            "#+PROPERTY: JAUNDER_ID 42\n\nLocal body.\n")))
+          (cl-letf (((symbol-function 'jaunder--reconcile-pull-preflight)
+                     (lambda (&rest _) nil))
+                    ((symbol-function 'jaunder--reconcile-pull-destination)
+                     (lambda (&rest _) path)))
+            (should (eq (plist-get
+                         (jaunder--reconcile-pull-install-staged
+                          nil staged '(:http-status 200) path)
+                         :outcome) 'success)))
+          (should (equal (with-temp-buffer (insert-file-contents path) (buffer-string))
+                         (concat "#+TITLE: Remote\n"
+                                 "#+PROPERTY: JAUNDER_STATUS published\n"
+                                 "#+PROPERTY: JAUNDER_AUDIENCE subscribers\n"
+                                 "#+PROPERTY: JAUNDER_ID 42\n\nRemote body.\n"))))
+      (delete-file path))))
 
 (ert-deftest jaunder-reconcile-pull-stale-etag-blocks-before-local-replacement ()
   "A changed staged ETag leaves the reviewed matched file untouched."
@@ -1943,7 +2009,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
         (progn
           (with-temp-file path (insert before))
           (setq row (jaunder-reconcile-test--matched-pull-row path "old"))
-          (cl-letf (((symbol-function 'jaunder--http-request)
+          (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                     #'jaunder-reconcile-test--legacy-service-document)
+                    ((symbol-function 'jaunder--http-request)
                      (lambda (method url &rest _)
                        (should (equal method "GET"))
                        (should (equal url "https://example.test/atompub/alice/posts/7"))
@@ -2022,6 +2090,46 @@ The current filename supplies the local slug evidence used by matched-pull tests
                           'matched-identity-changed))))
 	(when (buffer-live-p buffer) (kill-buffer buffer))
 	(delete-file path)))))
+
+(ert-deftest jaunder-reconcile-server-ahead-service-failure-preserves-local-file ()
+  "Unavailable or malformed capability evidence blocks selected refresh."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-refresh-evidence-" t)))
+         (path (expand-file-name "post.org" root))
+         (jaunder-blogs
+          (list (cons root '(:base-url "https://example.test" :username "alice"))))
+         (row (jaunder--make-reconcile-row
+               :state 'server-ahead :key "post:7" :remote-etag "\"reviewed\""
+               :local (jaunder-reconcile-test--local path "7")
+               :member (jaunder-reconcile-test--member "7" "post")))
+         (jaunder-reconcile-report (jaunder--make-reconcile-report :root root))
+         (member-gets 0))
+    (unwind-protect
+        (progn
+          (with-temp-file path
+            (insert (concat "#+TITLE: Local\n#+PROPERTY: JAUNDER_ID 7\n"
+                            "#+PROPERTY: JAUNDER_SLUG post\n"
+                            "#+PROPERTY: JAUNDER_AUDIENCE public\n\nLocal body.\n")))
+          (let ((before (with-temp-buffer (insert-file-contents path) (buffer-string))))
+            (jaunder--call-with-blog
+             root
+             (lambda ()
+               (dolist (service-body
+                        '(nil "<service xmlns=\"http://www.w3.org/2007/app\"/>"))
+                 (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                            (lambda (_base)
+                              (if service-body
+                                  (jaunder--parse-service-document service-body)
+                                'unknown)))
+                           ((symbol-function 'jaunder--http-request)
+                            (lambda (&rest _) (cl-incf member-gets))))
+                   (let ((result (jaunder--reconcile-pull-server-ahead-row row)))
+                     (should (eq (plist-get result :reason) 'pull-failed))
+                     (should (eq (plist-get result :local-effect) 'unchanged)))
+                   (should (= member-gets 0))
+                   (should (equal (with-temp-buffer
+                                    (insert-file-contents path) (buffer-string))
+                                  before))))))))
+      (delete-directory root t))))
 
 (ert-deftest jaunder-reconcile-pull-blocks-invalid-review-and-surfaces-stage-failures ()
   "A server-ahead pull preserves row identity for invalid reviews and exceptions."

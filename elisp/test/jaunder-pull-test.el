@@ -108,6 +108,22 @@
               "#\\+PROPERTY: JAUNDER_AUDIENCE named:17\n")
       (jaunder-pull-test--org xml)))))
 
+(ert-deftest jaunder-atom->org-requires-audience-on-advertised-server ()
+  (let ((xml (jaunder-pull-test--entry
+              "<title>Audience</title>"
+              "<published>2026-08-24T10:00:00Z</published>"
+              "<link rel=\"edit\" href=\"https://h/atompub/alice/posts/9\"/>"
+              "<j:slug>audience-post</j:slug>"
+              "<content type=\"text/org\">Body</content>")))
+    (should-error
+     (jaunder--atom->org xml "\"etag\""
+                         (date-to-time "2026-08-25T00:00:00Z") "UTC" t))
+    (should-not (string-match-p
+                 "JAUNDER_AUDIENCE"
+                 (jaunder--atom->org xml "\"etag\""
+                                     (date-to-time "2026-08-25T00:00:00Z")
+                                     "UTC" nil)))))
+
 (ert-deftest jaunder-atom->org-rejects-malformed-audiences ()
   (dolist (audiences
            '(("public" "public")
@@ -298,7 +314,9 @@
         (progn
           (write-region "#+PROPERTY: JAUNDER_ID 7\n#+PROPERTY: JAUNDER_SLUG target\n\nBody"
                         nil target nil 'silent)
-          (cl-letf (((symbol-function 'jaunder--http-request)
+          (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                     #'jaunder-pull-test--legacy-service-document)
+                    ((symbol-function 'jaunder--http-request)
                      (lambda (&rest _)
                        (list :status 200
                              :headers '(("etag" . "\"sha256-test\"")
@@ -349,7 +367,9 @@
                         '(:base-url "https://h" :username "alice"))))
            trace)
       (unwind-protect
-          (cl-letf (((symbol-function 'jaunder--http-request)
+          (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                     #'jaunder-pull-test--legacy-service-document)
+                    ((symbol-function 'jaunder--http-request)
                      (lambda (&rest _)
                        (list :status 200
                              :headers '(("etag" . "\"sha256-test\"")
@@ -417,7 +437,9 @@
          (attempt 0)
          (member-gets 0))
     (unwind-protect
-        (cl-letf (((symbol-function 'jaunder--http-request)
+        (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                   #'jaunder-pull-test--legacy-service-document)
+                  ((symbol-function 'jaunder--http-request)
                    (lambda (&rest _)
                      (setq member-gets (1+ member-gets))
                      (list :status 200
@@ -466,7 +488,9 @@
          (member-gets 0)
          observed)
     (unwind-protect
-        (cl-letf (((symbol-function 'jaunder--http-request)
+        (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                   #'jaunder-pull-test--legacy-service-document)
+                  ((symbol-function 'jaunder--http-request)
                    (lambda (&rest _)
                      (setq member-gets (1+ member-gets))
                      (list :status 200
@@ -484,6 +508,23 @@
           (should-not (file-exists-p path))
           (should-not (directory-files-recursively root "\\.jaunder-media-" nil)))
       (delete-directory root t))))
+
+(defun jaunder-pull-test--legacy-service-document (&rest _)
+  "Return valid legacy capability evidence for independent pull-path tests."
+  (jaunder--parse-service-document
+   (concat "<service xmlns=\"http://www.w3.org/2007/app\""
+           " xmlns:atom=\"http://www.w3.org/2005/Atom\">"
+           "<workspace><atom:title>Blog</atom:title></workspace></service>")))
+
+(defun jaunder-pull-test--audience-service-document (&rest _)
+  "Return valid audience-capable service evidence."
+  (jaunder--parse-service-document
+   (concat "<service xmlns=\"http://www.w3.org/2007/app\""
+           " xmlns:j=\"https://jaunder.org/ns/atompub\""
+           " xmlns:atom=\"http://www.w3.org/2005/Atom\">"
+           "<workspace><atom:title>Blog</atom:title>"
+           "<j:extension version=\"1\" features=\"audience\"/>"
+           "</workspace></service>")))
 
 (defun jaunder-pull-test--member (&optional id slug)
   "Return a D1 Member fixture with optional ID and SLUG."
@@ -528,6 +569,47 @@
                              "winner")))))
       (delete-directory root t))))
 
+(ert-deftest jaunder-pull-requires-service-evidence-before-member-get ()
+  "No local Post is installed when the server's audience support is unknown."
+  (let* ((root (make-temp-file "jaunder-pull-evidence-" t))
+         (path (expand-file-name "untitled-note.org" root))
+         (jaunder-blogs (list (cons (file-name-as-directory root)
+                                    '(:base-url "https://h" :username "alice"))))
+         (member-gets 0))
+    (unwind-protect
+        (dolist (body '(nil "<service xmlns=\"http://www.w3.org/2007/app\"/>"))
+          (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                     (lambda (_base)
+                       (if body (jaunder--parse-service-document body) 'unknown)))
+                    ((symbol-function 'jaunder--http-request)
+                     (lambda (&rest _) (cl-incf member-gets))))
+            (should-error (jaunder--pull-member root (jaunder-pull-test--member)))
+            (should (= member-gets 0))
+            (should-not (file-exists-p path))))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-pull-rejects-advertised-audience-omission-before-install ()
+  (let* ((root (make-temp-file "jaunder-pull-incomplete-" t))
+         (path (expand-file-name "untitled-note.org" root))
+         (jaunder-blogs (list (cons (file-name-as-directory root)
+                                    '(:base-url "https://h" :username "alice"))))
+         (media-operations 0))
+    (unwind-protect
+        (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                   #'jaunder-pull-test--audience-service-document)
+                  ((symbol-function 'jaunder--http-request)
+                   (lambda (&rest _)
+                     (list :status 200
+                           :headers '(("etag" . "\"sha256-test\"")
+                                      ("x-jaunder-instance" . "12345678-1234-1234-1234-123456789abc"))
+                           :body (jaunder-pull-test--response-entry))))
+                  ((symbol-function 'jaunder--pull-media-materialize)
+                   (lambda (&rest _) (cl-incf media-operations))))
+          (should-error (jaunder--pull-member root (jaunder-pull-test--member)))
+          (should (= media-operations 0))
+          (should-not (file-exists-p path)))
+      (delete-directory root t))))
+
 (ert-deftest jaunder-pull-member-gets-d1-uri-and-installs-exact-file ()
   ;; The D3-facing seam resolves the configured blog, GETs the D1 edit URI, and
   ;; returns one exact pulled path without leaking its same-directory temp file.
@@ -538,7 +620,9 @@
                       '(:base-url "https://h" :username "alice"))))
          requested)
     (unwind-protect
-        (cl-letf (((symbol-function 'jaunder--http-request)
+        (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                   #'jaunder-pull-test--legacy-service-document)
+                  ((symbol-function 'jaunder--http-request)
                    (lambda (method url &rest _)
                      (setq requested
                            (list method url (jaunder--active-base-url)
@@ -596,7 +680,9 @@
             (list (cons (file-name-as-directory root)
                         '(:base-url "https://h" :username "alice")))))
       (unwind-protect
-          (cl-letf (((symbol-function 'jaunder--http-request)
+          (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                     #'jaunder-pull-test--legacy-service-document)
+                    ((symbol-function 'jaunder--http-request)
                      (lambda (&rest _)
                        (list :status 200
                              :headers '(("etag" . "\"sha256-test\"")
@@ -619,7 +705,9 @@
            (real-write (symbol-function 'write-region))
            (real-link (symbol-function 'add-name-to-file)))
       (unwind-protect
-          (cl-letf (((symbol-function 'jaunder--http-request)
+          (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                     #'jaunder-pull-test--legacy-service-document)
+                    ((symbol-function 'jaunder--http-request)
                      (lambda (&rest _)
                        (pcase failure
                          ('http '(:status 503 :headers nil :body "no"))
@@ -659,7 +747,9 @@
                       '(:base-url "https://h" :username "alice"))))
          (real-write (symbol-function 'write-region)))
     (unwind-protect
-        (cl-letf (((symbol-function 'jaunder--http-request)
+        (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                   #'jaunder-pull-test--legacy-service-document)
+                  ((symbol-function 'jaunder--http-request)
                    (lambda (&rest _)
                      (list :status 200
                            :headers '(("etag" . "\"sha256-test\"")

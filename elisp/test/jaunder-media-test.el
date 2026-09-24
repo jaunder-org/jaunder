@@ -281,7 +281,14 @@ Lets the warning tests assert on emitted warnings without touching the real
                         nil source nil 'silent)
           (with-current-buffer (find-file-noselect source)
             (unwind-protect
-                (cl-letf (((symbol-function 'jaunder--upload-media)
+                (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                           (lambda (&rest _)
+                             (jaunder--parse-service-document
+                              (concat "<service xmlns=\"http://www.w3.org/2007/app\""
+                                      " xmlns:atom=\"http://www.w3.org/2005/Atom\">"
+                                      "<workspace><atom:title>Blog</atom:title>"
+                                      "</workspace></service>"))))
+                          ((symbol-function 'jaunder--upload-media)
                            (lambda (&rest _) (setq uploaded t)))
                           ((symbol-function 'jaunder--http-request)
                            (lambda (&rest _) (setq requested t))))

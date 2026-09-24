@@ -81,8 +81,10 @@ Accepted values are `public`, `subscribers`, `private`, and `named:<id>`, where
 `<id>` is a positive canonical decimal integer (no sign, zero, or leading
 zeros). `public`, `subscribers`, and any number of distinct Named audiences
 compose as a union. `private` is the empty target set and must appear alone.
-Jaunder writes pulled properties in canonical order: Public, Subscribers, then
-Named IDs ascending.
+Jaunder writes server-confirmed properties after a successful create, draft
+save, conditional update, or pull, in canonical order: Public, Subscribers, then
+Named IDs ascending. This includes a server-selected non-Public Default Audience
+when the local create omitted `JAUNDER_AUDIENCE`.
 
 Omitting every `JAUNDER_AUDIENCE` property is intentional compatibility
 behavior, not Private: create uses the server's Default Audience and update
@@ -90,10 +92,22 @@ preserves the Post's current audience. Use an explicit `private` property when
 that is the intended target set. Named audiences currently require their raw
 numeric IDs; the Emacs client has no discovery or friendly-name picker.
 
-Before publishing an explicit audience, the client requires the Service Document
-to advertise the `audience` feature on the exact Jaunder extension namespace at
-version `1`. It fails before Local Post Link localization, Media upload, or Post
-mutation when that evidence is absent or malformed.
+Every publish or pull requires a valid Service Document for that operation.
+Explicit audience properties require the `audience` feature on the exact Jaunder
+extension namespace at version `1`. Missing or malformed service evidence stops
+synchronization before Post mutation or local pull replacement. An advertising
+server must return the complete audience in its Member Entry; a missing value is
+an error, not an invitation to guess. A valid legacy server without audience
+support may omit that value; in that case existing local audience headers remain
+untouched (including on a selected server-ahead refresh). On server-only pull,
+there are no local headers to retain.
+
+An uncertain create retains its durable request intent. If an edit changed the
+request before a recovered create response arrives, the client checkpoints the
+server's identity and ETag but preserves the unsent local audience edit—even
+when the author omitted an audience while changing only the body. It remains
+local-ahead until an explicit conditional update succeeds; failures and ETag
+conflicts never rewrite the local audience.
 
 ### One-time ETag rebaseline after upgrading
 

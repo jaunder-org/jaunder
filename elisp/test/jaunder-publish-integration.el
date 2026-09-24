@@ -37,15 +37,28 @@
       (should id)
       (should slug)
       (should synced)
+      (should (equal (jaunder--buffer-property "JAUNDER_AUDIENCE") "private"))
+      (let ((post-path (buffer-file-name)))
+        (should (string-match-p
+                 "^#\\+PROPERTY: JAUNDER_AUDIENCE private$"
+                 (with-temp-buffer
+                   (insert-file-contents post-path)
+                   (buffer-string)))))
       (let* ((member (jaunder--http-request "GET" (jaunder--member-url id)))
              (fields (jaunder--harvest-response-fields (plist-get member :body))))
         (should (equal (cdr (assq 'audiences fields)) '("private"))))
       (should (equal (file-name-nondirectory (buffer-file-name))
                      (concat slug ".org")))
-      ;; Re-publish updates the same post (id unchanged), not a duplicate.
+      ;; A headerless update does not guess a scope: the confirmed existing
+      ;; private audience is restored, and this remains the same Post.
+      (jaunder--remove-property "JAUNDER_AUDIENCE")
       (goto-char (point-max)) (insert "More.\n") (save-buffer)
       (jaunder-publish)
-      (should (equal (jaunder--buffer-property "JAUNDER_ID") id))))))
+      (should (equal (jaunder--buffer-property "JAUNDER_ID") id))
+      (should (equal (jaunder--buffer-property "JAUNDER_AUDIENCE") "private"))
+      (let* ((member (jaunder--http-request "GET" (jaunder--member-url id)))
+             (fields (jaunder--harvest-response-fields (plist-get member :body))))
+        (should (equal (cdr (assq 'audiences fields)) '("private"))))))))
 
 (ert-deftest jaunder-publish-round-trips-explicit-audience-unions ()
   (jaunder-test--with-live-server
@@ -71,7 +84,14 @@
              (union-fields
               (jaunder--harvest-response-fields (plist-get union :body))))
         (should (equal (cdr (assq 'audiences union-fields))
-                       '("public" "subscribers"))))))))
+                       '("public" "subscribers")))
+        (should (string-match-p
+                 (regexp-quote
+                  (concat "#+PROPERTY: JAUNDER_AUDIENCE public\n"
+                          "#+PROPERTY: JAUNDER_AUDIENCE subscribers\n"))
+                 (buffer-string)))
+        (should (= (how-many "^#\\+PROPERTY: JAUNDER_AUDIENCE"
+                             (point-min) (jaunder--body-start)) 2)))))))
 
 (ert-deftest jaunder-publish-uploads-pdf-and-sends-harvested-media-url ()
   (jaunder-test--with-live-server
@@ -112,6 +132,7 @@
     ;; Corrupt the stored ETag → the next PUT must 412 and leave the file intact.
     (jaunder--set-property "JAUNDER_SYNCED" "\"stale\"") (save-buffer)
     (let ((before (buffer-string)))
+      (should (equal (jaunder--buffer-property "JAUNDER_AUDIENCE") "private"))
       (should-error (jaunder-publish))
       (should (equal (buffer-string) before))))))
 
@@ -148,7 +169,16 @@
     "#+TITLE: D\n#+DATE: [2026-07-01 Wed 09:00]\n#+PROPERTY: JAUNDER_STATUS published\n\nDraft body.\n"
     ;; Force-draft even though status=published; must succeed and get an id.
     (jaunder-save-draft)
-    (should (jaunder--buffer-property "JAUNDER_ID")))))
+    (let* ((id (jaunder--buffer-property "JAUNDER_ID"))
+           (path (buffer-file-name))
+           (member (jaunder--http-request "GET" (jaunder--member-url id)))
+           (fields (jaunder--harvest-response-fields (plist-get member :body))))
+      (should id)
+      (should (equal (jaunder--buffer-property "JAUNDER_AUDIENCE") "private"))
+      (should (string-match-p
+               "^#\\+PROPERTY: JAUNDER_AUDIENCE private$"
+               (with-temp-buffer (insert-file-contents path) (buffer-string))))
+      (should (equal (cdr (assq 'audiences fields)) '("private")))))))
 
 (provide 'jaunder-publish-integration)
 ;;; jaunder-publish-integration.el ends here
