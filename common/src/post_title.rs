@@ -3,7 +3,8 @@ use std::str::FromStr;
 use macros::StrNewtype;
 use thiserror::Error;
 
-/// A post's title: outer whitespace trimmed, non-empty. Case and internal whitespace
+/// A Post's authored title: outer non-line-breaking whitespace trimmed, non-empty,
+/// and one logical source line. Case and internal non-line-breaking whitespace
 /// are preserved (a title is human prose, not an identifier).
 ///
 /// Constructed via [`FromStr`] — the single validating chokepoint, so a blank title is
@@ -28,13 +29,23 @@ pub struct PostTitle(String);
 
 /// Error returned when a string cannot be parsed as a [`PostTitle`].
 #[derive(Debug, Error)]
-#[error("post title must be non-empty")]
+#[error("post title must be non-empty and contain no line breaks")]
 pub struct InvalidPostTitle;
 
 impl FromStr for PostTitle {
     type Err = InvalidPostTitle;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // Check before trimming: even an edge line break is authored source,
+        // not surrounding whitespace we may silently discard.
+        if s.chars().any(|c| {
+            matches!(
+                c,
+                '\n' | '\r' | '\u{000B}' | '\u{000C}' | '\u{0085}' | '\u{2028}' | '\u{2029}'
+            )
+        }) {
+            return Err(InvalidPostTitle);
+        }
         let trimmed = s.trim();
         if trimmed.is_empty() {
             return Err(InvalidPostTitle);
@@ -55,6 +66,30 @@ mod tests {
         );
         // Unicode is preserved as-is (no lowercasing/normalization).
         assert_eq!("Москва".parse::<PostTitle>().unwrap(), "Москва");
+        assert_eq!(
+            " \tHello\t World\t ".parse::<PostTitle>().unwrap(),
+            "Hello\t World"
+        );
+        assert_eq!(
+            "Hello<br>World".parse::<PostTitle>().unwrap(),
+            "Hello<br>World"
+        );
+    }
+
+    #[test]
+    fn post_title_rejects_authored_line_separators_at_every_position() {
+        for separator in [
+            '\n', '\r', '\u{000B}', '\u{000C}', '\u{0085}', '\u{2028}', '\u{2029}',
+        ] {
+            for source in [
+                format!("{separator}Hello"),
+                format!("Hel{separator}lo"),
+                format!("Hello{separator}"),
+                separator.to_string(),
+            ] {
+                assert!(source.parse::<PostTitle>().is_err(), "accepted {source:?}");
+            }
+        }
     }
 
     #[test]

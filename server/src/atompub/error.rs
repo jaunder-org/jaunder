@@ -240,6 +240,7 @@ impl From<storage::PerformCreationError> for HandlerError {
     fn from(err: storage::PerformCreationError) -> Self {
         match err {
             storage::PerformCreationError::EmptyPost
+            | storage::PerformCreationError::InvalidTitle(_)
             | storage::PerformCreationError::InvalidSlug(_)
             | storage::PerformCreationError::BookkeepingMismatch => HandlerError::BadRequest,
             // Exhausted/CreatedNotFound/Storage are all internal failures.
@@ -252,6 +253,7 @@ impl From<storage::PerformUpdateError> for HandlerError {
     fn from(err: storage::PerformUpdateError) -> Self {
         match err {
             storage::PerformUpdateError::EmptyPost
+            | storage::PerformUpdateError::InvalidTitle(_)
             | storage::PerformUpdateError::BookkeepingMismatch => HandlerError::BadRequest,
             storage::PerformUpdateError::SlugConflict => HandlerError::Status(StatusCode::CONFLICT),
             storage::PerformUpdateError::StaleContent => HandlerError::PreconditionFailed,

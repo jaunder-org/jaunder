@@ -85,6 +85,14 @@ permalink; a Deleted Post releases that public identity while retaining its
 internal Post ID. _Avoid_: Article, entry (reserve "Entry" for the AtomPub wire
 object), note.
 
+**Post Title**: The optional authored title of a Post, distinct from its
+Rendered Title. When present it is non-blank and one logical source line: any
+authored line separator, even at the edges, is invalid. Surrounding
+non-line-breaking whitespace is trimmed; internal non-line-breaking whitespace
+and case are preserved. Inline formatting such as HTML `<br>` is source markup,
+not an authored line separator. _Avoid_: treating visual wrapping or rendered
+markup as an authored newline, silently flattening an invalid title.
+
 **Historical Post Permalink Alias**: A durable redirect source recorded when
 remediation changes a Post's formerly canonical User-qualified date-and-slug
 path. It points by Post ID so its destination follows the Post's current

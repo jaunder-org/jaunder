@@ -572,7 +572,9 @@ fn canonical_body(
         body.to_owned()
     };
     let body: PostBody = source.parse().map_err(|_| OrgMetadataError::MetadataOnly)?;
-    let heading_title = render::derive_post_naming(None, &body, &PostFormat::Org).0;
+    let heading_title = render::derive_post_naming(None, &body, &PostFormat::Org)
+        .map_err(|_| OrgMetadataError::Invalid("invalid Post title".into()))?
+        .0;
     render::canonicalize_body(&body, &PostFormat::Org)
         .map(|body| (body, heading_title))
         .map_err(|_| OrgMetadataError::MetadataOnly)
@@ -693,15 +695,16 @@ Body";
     }
 
     #[test]
-    fn composes_repeated_text_and_keywords_with_tag_identity_order_and_cap() {
+    fn composes_repeated_descriptions_and_keywords_with_tag_identity_order_and_cap() {
         let normalized = normalize(
-            "#+TITLE: First\n#+TITLE: Second\n#+DESCRIPTION: One\n#+DESCRIPTION: Two\n#+KEYWORDS: Rust, , Emacs\n#+KEYWORDS: rust, Lisp\nBody",
+            "#+TITLE: First\n#+DESCRIPTION: One\n#+DESCRIPTION: Two\n#+KEYWORDS: Rust, , Emacs\n#+KEYWORDS: rust, Lisp\nBody",
         );
 
         assert_eq!(
             normalized.metadata.title,
-            Presence::Present("First\nSecond".parse().unwrap())
+            Presence::Present("First".parse().unwrap())
         );
+        invalid("#+TITLE: First\n#+TITLE: Second\nBody");
         assert_eq!(
             normalized.metadata.summary,
             Presence::Present("One\nTwo".parse().unwrap())
