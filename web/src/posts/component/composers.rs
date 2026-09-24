@@ -1084,7 +1084,7 @@ pub(super) fn ComposeOptions(
             </ComposerDisclosure>
             <ComposerDisclosure
                 control=posts::ComposerControl::Audience
-                label="Audience"
+                label="Share with"
                 value=audience_value
                 disclosures=disclosures
                 body_id="composer-audience-control"

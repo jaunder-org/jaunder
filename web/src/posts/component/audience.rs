@@ -37,8 +37,8 @@ pub(super) fn AudiencePickerWithState(
             .with(|current| !current.public && !current.subscribers && current.named.is_empty())
     };
     view! {
-        <fieldset class="j-form-field j-composer-group j-audience-picker" aria-label="Audience">
-            <legend class="j-form-label">"Audience"</legend>
+        <fieldset class="j-form-field j-composer-group j-audience-picker" aria-label="Share with">
+            <legend class="j-form-label">"Share with"</legend>
             <Show when=is_private>
                 <p class="j-form-help">"Private — only you can see this Post."</p>
             </Show>
@@ -165,14 +165,11 @@ fn NamedAudienceRows(
     };
 
     view! {
-        <div class="j-audience-named">
-            <span class="j-form-label">"Also share with"</span>
-            <For
-                each=audiences
-                key=|audience| audience.audience_id
-                children=move |audience| audience_checkbox(audience, selection, on_user_change)
-            />
-        </div>
+        <For
+            each=audiences
+            key=|audience| audience.audience_id
+            children=move |audience| audience_checkbox(audience, selection, on_user_change)
+        />
     }
 }
 

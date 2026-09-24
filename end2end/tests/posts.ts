@@ -137,7 +137,7 @@ export async function openComposerFromSidebar(page: Page): Promise<void> {
 /** Open one of the compact secondary-control disclosures in the mounted composer. */
 export async function openComposerControl(
   page: Page,
-  label: "Media" | "Format" | "Slug" | "Publish" | "Audience",
+  label: "Media" | "Format" | "Slug" | "Publish" | "Share with",
 ): Promise<void> {
   const trigger = page.locator(".j-composer-control-summary").filter({
     has: page.getByText(label, { exact: true }),
@@ -154,7 +154,7 @@ export async function selectComposerAudience(
   page: Page,
   audience: "public" | "subscribers" | "private",
 ): Promise<void> {
-  await openComposerControl(page, "Audience");
+  await openComposerControl(page, "Share with");
   await click(page, ".j-audience-clear");
   if (audience !== "private") {
     await page.locator(`#audience-${audience}`).check();
