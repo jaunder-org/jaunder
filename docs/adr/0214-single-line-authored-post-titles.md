@@ -1,6 +1,6 @@
-# ADR-DRAFT: Authored Post Titles Are One Logical Line
+# ADR-0214: Authored Post Titles Are One Logical Line
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-24
 - Issue: [#1662](https://github.com/jaunder-org/jaunder/issues/1662)
 
@@ -16,9 +16,9 @@ cannot be expressed losslessly by all supported authoring and edit paths.
 
 A browser may visually wrap long text; that is not an authored line break. The
 Rendered Title contract deliberately retains an inline `<br>` from HTML source
-([ADR-0204](../0204-persist-inline-rendered-post-titles.md)); deciding whether
-to allow that markup is a separate presentation question. The owner confirms
-there are no affected production titles to migrate.
+([ADR-0204](0204-persist-inline-rendered-post-titles.md)); deciding whether to
+allow that markup is a separate presentation question. The owner confirms there
+are no affected production titles to migrate.
 
 ## Decision
 
@@ -41,9 +41,9 @@ request, not an absent field; repeated Org `#+TITLE:` headers that compose a
 multiline title are invalid even when another structured title is supplied. The
 Emacs Protocol Client rejects a multiline title before any network request or
 Media upload. A failed write retains the prior Post and local authoring source.
-This narrows [ADR-0155](../0155-server-side-org-metadata-block.md)'s
-repeated-title composition to the valid one-line case without changing its
-structured-presence or atomic-acceptance rules.
+This narrows [ADR-0155](0155-server-side-org-metadata-block.md)'s repeated-title
+composition to the valid one-line case without changing its structured-presence
+or atomic-acceptance rules.
 
 This is a source-value invariant, not a ban on line wrapping or rendered `<br>`.
 No production-data backfill or compatibility read path is introduced.
