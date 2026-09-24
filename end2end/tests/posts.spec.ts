@@ -842,6 +842,21 @@ test("composer rejects line-breaking heading and repeated Org titles without sav
   await expect(page).toHaveURL(composerUrl);
   await expect(page.locator(SEL.saveSummary)).toHaveCount(0);
 
+  await openComposerControl(page, "Format");
+  await click(page, SEL.formatButton("Org"));
+  await page.fill(
+    SEL.postBody,
+    "#+TITLE: First\n#+TITLE: Second\n\nRejected new Org body",
+  );
+  await click(page, SEL.publishButton("false"));
+  await expect(page.locator(SEL.error)).toHaveText(
+    "invalid Org metadata: invalid TITLE",
+  );
+  await expect(page).toHaveURL(composerUrl);
+  await expect(page.locator(SEL.saveSummary)).toHaveCount(0);
+
+  await openComposerControl(page, "Format");
+  await click(page, SEL.formatButton("Markdown"));
   await page.fill(SEL.postBody, "# Accepted browser title\n\nOriginal body");
   await click(page, SEL.publishButton("false"));
   await expectFlash(page, "Draft saved.");
