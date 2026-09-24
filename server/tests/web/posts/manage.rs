@@ -2,7 +2,7 @@ use axum::{Router, http::StatusCode};
 use common::ids::PostId;
 use common::render::PostFormat;
 use common::test_support::parse_post_body;
-use common::visibility::{AudienceBase, AudienceSelection};
+use common::visibility::AudienceSelection;
 use rstest::*;
 use rstest_reuse::*;
 use server_fn::ServerFn;
@@ -23,7 +23,8 @@ async fn create_draft(app: Router, cookie: &str, title: &str) -> PostId {
         PostInputs {
             publish: Some(false),
             audience: Some(AudienceSelection {
-                base: AudienceBase::Public,
+                public: true,
+                subscribers: false,
                 named: Vec::new(),
             }),
             ..PostInputs::new(
@@ -196,7 +197,8 @@ async fn bulk_management_http_preserves_noops_conflicts_and_atomic_delete(
         initial.clone(),
         BulkManageOperation::ChangeAudience {
             audience: AudienceSelection {
-                base: AudienceBase::Subscribers,
+                public: false,
+                subscribers: true,
                 named: Vec::new(),
             },
         },
@@ -224,7 +226,8 @@ async fn bulk_management_http_preserves_noops_conflicts_and_atomic_delete(
         current.clone(),
         BulkManageOperation::ChangeAudience {
             audience: AudienceSelection {
-                base: AudienceBase::Subscribers,
+                public: false,
+                subscribers: true,
                 named: Vec::new(),
             },
         },

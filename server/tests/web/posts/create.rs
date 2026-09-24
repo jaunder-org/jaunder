@@ -2,7 +2,7 @@ use axum::http::StatusCode;
 use common::tag::MAX_TAGS_PER_POST;
 use common::test_support::{parse_post_body, parse_row_limit, parse_slug, parse_tag_label};
 use common::time::UtcInstant;
-use common::visibility::{AudienceBase, AudienceSelection, AudienceTarget, DefaultAudience};
+use common::visibility::{AudienceSelection, AudienceTarget, DefaultAudience};
 use jiff::ToSpan;
 use server_fn::ServerFn;
 use storage::{AudienceStorage, PostFormat, WriteScope};
@@ -121,6 +121,11 @@ async fn published_org_post_preserves_source_block_as_safe_code(#[case] backend:
         app,
         PostInputs {
             publish: Some(true),
+            audience: Some(AudienceSelection {
+                public: true,
+                subscribers: false,
+                named: Vec::new(),
+            }),
             ..PostInputs::new(parse_post_body(source), PostFormat::Org)
         },
         Some(&session.cookie()),
@@ -656,7 +661,8 @@ async fn create_post_resolves_explicit_then_user_then_site_default_audience(
         create(
             "Uses explicit audience",
             Some(AudienceSelection {
-                base: AudienceBase::Public,
+                public: true,
+                subscribers: false,
                 named: Vec::new(),
             }),
         ),
@@ -751,7 +757,8 @@ async fn create_post_rejects_malformed_user_default_only_when_a_default_is_neede
         PostInputs {
             publish: Some(false),
             audience: Some(AudienceSelection {
-                base: AudienceBase::Public,
+                public: true,
+                subscribers: false,
                 named: Vec::new(),
             }),
             ..PostInputs::new(

@@ -296,7 +296,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            41
+            42
         );
         assert_eq!(
             db.pool
@@ -1023,7 +1023,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            41,
+            42,
         );
     }
 
@@ -1495,7 +1495,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            41
+            42
         );
         assert_eq!(
             db.pool

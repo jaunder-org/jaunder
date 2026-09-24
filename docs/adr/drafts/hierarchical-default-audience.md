@@ -62,7 +62,7 @@ This decision refines the default used by
 [ADR-0020](../0020-content-visibility-and-subscription-model.md) without
 changing its Audience union or visibility-resolution rules. AtomPub audience
 omission in
-[AtomPub Post Audience Round-Trip](../drafts/atompub-post-audience-round-trip.md)
+[AtomPub Post Audience Round-Trip](../0207-atompub-post-audience-round-trip.md)
 resolves through the Effective Default Audience.
 
 ## Consequences

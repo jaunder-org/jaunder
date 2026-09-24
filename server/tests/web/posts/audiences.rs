@@ -109,7 +109,8 @@ async fn post_audience_selection_returns_private_for_new_post(#[case] backend: B
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let selection: AudienceSelection = serde_json::from_str(&body).unwrap();
     // With no configured defaults, an omitted audience resolves to Private.
-    assert_eq!(selection.base, AudienceBase::Private);
+    assert!(!selection.public);
+    assert!(!selection.subscribers);
     assert!(selection.named.is_empty());
 }
 

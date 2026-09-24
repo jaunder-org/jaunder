@@ -94,11 +94,7 @@ export async function createPostViaApi(
           publish: opts.publish ?? true,
           ...(opts.publishAt ? { publish_at: opts.publishAt } : {}),
           ...(opts.tags ? { tags: opts.tags } : {}),
-          ...(opts.audience
-            ? {
-                audience: audienceForWire(opts.audience),
-              }
-            : {}),
+          audience: audienceForWire(opts.audience ?? "public"),
         },
       },
     }),

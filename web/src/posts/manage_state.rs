@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use common::ids::PostId;
-use common::visibility::{AudienceBase, AudienceSelection};
+use common::visibility::AudienceSelection;
 use leptos::prelude::RwSignal;
 
 use super::{
@@ -57,10 +57,7 @@ impl Default for ManagePageState {
             success: RwSignal::new(None),
             delete_count: RwSignal::new(String::new()),
             named_audiences: RwSignal::new(Vec::new()),
-            replacement: RwSignal::new(AudienceSelection {
-                base: AudienceBase::Private,
-                named: Vec::new(),
-            }),
+            replacement: RwSignal::new(AudienceSelection::default()),
         }
     }
 }

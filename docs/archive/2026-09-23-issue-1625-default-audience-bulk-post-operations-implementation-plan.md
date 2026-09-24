@@ -60,7 +60,7 @@ Out:
     `updated_at DESC, post_id DESC` keyset page with its complete Audience
     Selections; no ordinary page request loads or scans an unbounded result into
     host memory.
-  - Contract: paired migration `0041` adds a nullable normalized Post search
+  - Contract: paired migration `0042` adds a nullable normalized Post search
     projection. A shared Rust derivation case-folds title plus slug after
     Unicode whitespace normalization; create/update maintain it atomically.
     Startup completes legacy NULL rows before serving requests by reading

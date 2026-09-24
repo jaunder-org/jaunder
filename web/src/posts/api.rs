@@ -2229,7 +2229,8 @@ mod server_tests {
             tags,
             summary: None,
             audience: Some(common::visibility::AudienceSelection {
-                base: common::visibility::AudienceBase::Public,
+                public: true,
+                subscribers: false,
                 named: vec![],
             }),
         }
