@@ -6,6 +6,7 @@ mod tests {
     use std::borrow::Cow;
 
     use crate::DbConnectOptions;
+    use crate::code_migrations;
     use crate::posts::PostDialect;
     use crate::posts::media;
     use crate::posts::search::{
@@ -44,6 +45,7 @@ mod tests {
     }
 
     struct MigrationDatabase {
+        options: DbConnectOptions,
         pool: CloseablePool,
         _sqlite: Option<TempDir>,
         _postgres: Option<PostgresDbGuard>,
@@ -63,6 +65,7 @@ mod tests {
                             .await
                             .unwrap();
                     Self {
+                        options,
                         pool: CloseablePool::Sqlite(pool),
                         _sqlite: Some(base),
                         _postgres: None,
@@ -80,6 +83,7 @@ mod tests {
                     };
                     let pool = PgPool::connect_with(pg_options.clone()).await.unwrap();
                     Self {
+                        options,
                         pool: CloseablePool::Postgres(pool),
                         _sqlite: None,
                         _postgres: Some(guard),
@@ -107,17 +111,22 @@ mod tests {
             }
         }
 
-        async fn backfill_post_media_references(&self) {
+        async fn drain_pending_code_migrations(&self) {
+            self.drain_pending(&|| Ok(()))
+                .await
+                .expect("offline migration succeeds");
+        }
+
+        async fn drain_pending(
+            &self,
+            authorize: &(dyn Fn() -> sqlx::Result<()> + Sync),
+        ) -> sqlx::Result<()> {
             match &self.pool {
                 CloseablePool::Sqlite(pool) => {
-                    media::backfill_post_media_references(pool)
-                        .await
-                        .expect("startup backfill succeeds");
+                    code_migrations::drain_pending(pool, authorize).await
                 }
                 CloseablePool::Postgres(pool) => {
-                    media::backfill_post_media_references(pool)
-                        .await
-                        .expect("startup backfill succeeds");
+                    code_migrations::drain_pending(pool, authorize).await
                 }
             }
         }
@@ -281,7 +290,7 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn migration_0027_backfills_legacy_post_media_origins_from_rendered_html(
+    async fn migration_0044_backfills_legacy_post_media_origins_from_rendered_html(
         #[case] backend: Backend,
     ) {
         let db = MigrationDatabase::new(backend).await;
@@ -289,14 +298,21 @@ mod tests {
         db.seed_legacy_post_media().await;
 
         db.migrate_current().await.unwrap();
-        db.backfill_post_media_references().await;
+        db.drain_pending_code_migrations().await;
 
         assert_eq!(
             db.pool
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            42
+            44
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM pending_code_migrations")
+                .await
+                .unwrap(),
+            0
         );
         assert_eq!(
             db.pool
@@ -326,6 +342,217 @@ mod tests {
                 .count(),
             2,
             "absolute and scheme-relative spellings remain distinct exact rows"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn pending_code_migrations_are_ordered_reusable_and_reject_unknown_operations(
+        #[case] backend: Backend,
+    ) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_current().await.unwrap();
+        db.pool
+            .execute("INSERT INTO pending_code_migrations (operation) VALUES ('not_registered')")
+            .await
+            .unwrap();
+        db.pool
+            .execute("INSERT INTO pending_code_migrations (operation) VALUES ('backfill_post_media_references')")
+            .await
+            .unwrap();
+        let authorized = AtomicUsize::new(0);
+        let error = db
+            .drain_pending(&|| {
+                authorized.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+            .await
+            .expect_err("unknown operation stops before the following operation");
+        assert!(error.to_string().contains("not_registered"));
+        assert_eq!(authorized.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM pending_code_migrations")
+                .await
+                .unwrap(),
+            2,
+            "the earlier migration committed and the unknown row remains"
+        );
+        db.pool
+            .execute("DELETE FROM pending_code_migrations WHERE operation = 'not_registered'")
+            .await
+            .unwrap();
+        db.drain_pending_code_migrations().await;
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM pending_code_migrations")
+                .await
+                .unwrap(),
+            0
+        );
+        db.pool
+            .execute("INSERT INTO pending_code_migrations (operation) VALUES ('backfill_post_media_references')")
+            .await
+            .unwrap();
+        db.drain_pending_code_migrations().await;
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM pending_code_migrations")
+                .await
+                .unwrap(),
+            0,
+            "a later SQLx migration can enqueue the same operation again"
+        );
+        let error = db
+            .drain_pending(&|| Err(sqlx::Error::Protocol("should not authorize".to_owned())))
+            .await;
+        assert!(error.is_ok(), "no pending row needs no authorization");
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn pending_code_migration_rolls_back_work_if_queue_delete_fails(
+        #[case] backend: Backend,
+    ) {
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(26).await.unwrap();
+        db.seed_legacy_post_media().await;
+        db.migrate_current().await.unwrap();
+        let legacy_before = db
+            .pool
+            .scalar_i64("SELECT COUNT(*) FROM post_media WHERE reference_kind = 'legacy'")
+            .await
+            .unwrap();
+        match backend {
+            Backend::Sqlite => {
+                db.pool.execute(
+                    "CREATE TRIGGER reject_queue_delete BEFORE DELETE ON pending_code_migrations
+                     BEGIN SELECT RAISE(ABORT, 'injected queue delete failure'); END",
+                ).await.unwrap();
+            }
+            Backend::Postgres => {
+                db.pool.execute(
+                    "CREATE FUNCTION reject_queue_delete() RETURNS trigger LANGUAGE plpgsql AS $$
+                     BEGIN RAISE EXCEPTION 'injected queue delete failure'; END; $$",
+                ).await.unwrap();
+                db.pool.execute(
+                    "CREATE TRIGGER reject_queue_delete BEFORE DELETE ON pending_code_migrations
+                     FOR EACH ROW EXECUTE FUNCTION reject_queue_delete()",
+                ).await.unwrap();
+            }
+        }
+        let error = db
+            .drain_pending(&|| Ok(()))
+            .await
+            .expect_err("injected delete fails");
+        assert!(error.to_string().contains("injected queue delete failure"));
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM pending_code_migrations")
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM post_media WHERE reference_kind = 'legacy'")
+                .await
+                .unwrap(),
+            legacy_before,
+            "the derived changes roll back with the pending row"
+        );
+        let drop_trigger = match backend {
+            Backend::Sqlite => "DROP TRIGGER reject_queue_delete",
+            Backend::Postgres => "DROP TRIGGER reject_queue_delete ON pending_code_migrations",
+        };
+        db.pool.execute(drop_trigger).await.unwrap();
+        db.drain_pending_code_migrations().await;
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM pending_code_migrations")
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM post_media WHERE reference_kind = 'legacy'")
+                .await
+                .unwrap(),
+            0
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn sqlx_failure_returns_no_opened_storage_or_rust_operation(#[case] backend: Backend) {
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(42).await.unwrap();
+        match backend {
+            Backend::Sqlite => {
+                db.pool
+                    .execute(
+                        "CREATE TRIGGER reject_enqueue BEFORE INSERT ON pending_code_migrations
+                     BEGIN SELECT RAISE(ABORT, 'injected SQLx failure'); END",
+                    )
+                    .await
+                    .unwrap();
+            }
+            Backend::Postgres => {
+                db.pool
+                    .execute(
+                        "CREATE FUNCTION reject_enqueue() RETURNS trigger LANGUAGE plpgsql AS $$
+                     BEGIN RAISE EXCEPTION 'injected SQLx failure'; END; $$",
+                    )
+                    .await
+                    .unwrap();
+                db.pool
+                    .execute(
+                        "CREATE TRIGGER reject_enqueue BEFORE INSERT ON pending_code_migrations
+                     FOR EACH ROW EXECUTE FUNCTION reject_enqueue()",
+                    )
+                    .await
+                    .unwrap();
+            }
+        }
+        let open =
+            crate::open_existing_database(&db.options, &crate::StorageRuntimeConfig::default())
+                .await;
+        assert!(
+            open.is_err(),
+            "SQLx failure must prevent handing out a storage factory"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
+                .await
+                .unwrap(),
+            42
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM pending_code_migrations")
+                .await
+                .unwrap(),
+            0,
+            "the failing SQLx migration did not enqueue any Rust work"
+        );
+        let drop_trigger = match backend {
+            Backend::Sqlite => "DROP TRIGGER reject_enqueue",
+            Backend::Postgres => "DROP TRIGGER reject_enqueue ON pending_code_migrations",
+        };
+        db.pool.execute(drop_trigger).await.unwrap();
+        crate::open_existing_database(&db.options, &crate::StorageRuntimeConfig::default())
+            .await
+            .expect("next open completes SQLx and drains Rust work");
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM pending_code_migrations")
+                .await
+                .unwrap(),
+            0
         );
     }
 
@@ -1023,7 +1250,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            42,
+            44,
         );
     }
 
@@ -1495,7 +1722,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            42
+            44
         );
         assert_eq!(
             db.pool

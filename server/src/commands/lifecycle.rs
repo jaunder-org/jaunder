@@ -131,7 +131,12 @@ impl StartupDatabaseOperations for RealStartupDatabaseOperations {
         options: &storage::DbConnectOptions,
         runtime: &StorageRuntimeConfig,
     ) -> sqlx::Result<StartupDatabase> {
-        let opened = storage::open_existing_database_with_observer(options, runtime).await?;
+        let opened = storage::open_existing_database_with_observer_authorizing_drain(
+            options,
+            runtime,
+            &|| Ok(()),
+        )
+        .await?;
         Ok(StartupDatabase {
             factory: opened.factory,
             instance_id: opened.instance_id,
@@ -149,7 +154,7 @@ impl StartupDatabaseOperations for RealStartupDatabaseOperations {
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(error.into()),
         }
-        storage::open_database(&storage.db, runtime).await?;
+        storage::open_database_authorizing_drain(&storage.db, runtime, &|| Ok(())).await?;
         Ok(())
     }
 

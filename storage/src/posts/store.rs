@@ -27,7 +27,6 @@ use crate::posts::management::{
 use crate::posts::media;
 use crate::posts::media::{
     MediaReferenceEvidence, MediaReferenceSnapshot, PersistedMediaReference, PersistedMediaSubject,
-    PostMediaReferenceBackfill,
 };
 use crate::posts::models::{
     CreatePostInput, CreatedPost, CurrentPostRevisionSummary, POST_RECORD_COLUMNS, PermalinkDate,
@@ -771,15 +770,6 @@ pub trait PostDialect: Backend {
     async fn apply_post_search_backfill(
         pool: &Pool<Self>,
         candidates: &[PostSearchBackfillCandidate],
-    ) -> Result<()>;
-
-    /// Atomically installs references re-derived outside the writer lock.
-    ///
-    /// The backend rejects the batch if an authoritative HTML snapshot changed after
-    /// derivation, so startup fails safely and a later open derives a fresh batch.
-    async fn apply_post_media_reference_backfill(
-        pool: &Pool<Self>,
-        candidates: &[PostMediaReferenceBackfill],
     ) -> Result<()>;
 
     /// Inserts a deduplicated `post_media` batch in one statement.

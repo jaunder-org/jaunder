@@ -9,6 +9,7 @@ use crate::backup::{
     CatalogColumnName, CatalogTableName, RestoreBinary, RestoreBoolean, RestoreInteger,
     RestoreJson, RestoreReal, RestoreText,
 };
+use crate::code_migrations::types::CodeMigrationQueueId;
 use crate::feed_cache::{
     FeedCacheGeneratedAt, FeedCacheRepresentationModifiedAt, StoredFeedBody,
     StoredFeedSemanticFingerprint,
@@ -198,6 +199,7 @@ approve_storage_binds!(
     Bio,
     ByteSize,
     ChannelId,
+    CodeMigrationQueueId,
     ContentHash,
     ContentType,
     DefaultAudience,

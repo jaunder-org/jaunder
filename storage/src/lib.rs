@@ -14,6 +14,7 @@ pub mod account_mutations;
 mod audiences;
 mod backend;
 mod backup;
+mod code_migrations;
 mod database_lock;
 mod db;
 mod email;

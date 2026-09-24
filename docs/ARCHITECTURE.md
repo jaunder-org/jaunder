@@ -154,9 +154,22 @@ by URL scheme: `DbConnectOptions` (`storage/src/db.rs`) parses `sqlite:` vs
 `postgres://` and `open_database`/`open_existing_database` dispatch accordingly.
 Each backend has its own migration tree under
 `storage/migrations/{sqlite,postgres}`; the two trees carry identical numbered
-filenames (currently `0001`–`0041`), and maintaining that parity — same
+filenames (currently `0001`–`0044`), and maintaining that parity — same
 migrations, same behavior — is the accepted cost of the pluggable strategy
 ([ADR-0001](adr/0001-storage-backends.md)).
+
+SQLx migrations can also enqueue offline Rust operations in
+`pending_code_migrations`. On open, `storage/src/code_migrations/` drains these
+rows in queue-ID order, one transaction per row containing both the operation
+and its deletion; a failed or unknown operation prevents startup and leaves the
+row for retry. The media-reference repair now runs only when enqueued. A later
+migration may reuse an operation name. The storage-directory `database.lock`
+spans SQLx plus the queue drain on command paths for both backends; a CLI with
+pending work additionally refuses a live same-directory server's `runtime.lock`,
+while an ordinary CLI open without pending work remains allowed. Offline queue
+transactions alone may perform unbounded rendering inside SQLite's write lock;
+request-time work still follows ADR-0092's bounded occupancy rule
+([Offline code migrations](adr/drafts/offline-code-migration-queue.md)).
 
 ### Crate layout and the generic store pattern
 
@@ -331,9 +344,11 @@ change; server contract tests pin the exact set. Consequently the complete
 `post_revisions` scalar rows, their immutable
 `post_revision_tags`/`post_revision_audiences` children, and revision-qualified
 `post_media` rows and durable `post_permalink_aliases` travel with every
-whole-store backup, without revision- or alias-specific export paths; typed
-restore validation covers their domain fields
-([ADR-0136](adr/0136-local-post-lifecycle.md),
+whole-store backup, without revision- or alias-specific export paths. Pending
+`pending_code_migrations` rows travel as data too: an exact-schema restore
+preserves their retry obligation until the next database open, instead of
+marking them complete on import. Typed restore validation covers the domain
+fields ([ADR-0136](adr/0136-local-post-lifecycle.md),
 [ADR-0064](adr/0064-backup-target-auto-derivation.md)).
 
 **Compatibility is explicit and independent of package chronology.** The
@@ -371,7 +386,11 @@ cascade with FKs off, but keeps the split anyway so the two restore shapes stay
 identical ([ADR-0115](adr/0115-clear-then-load-restore.md)). Restore refuses any
 target that is not empty (every table except migration/identity bootstrap
 tables; `storage::database_is_empty`, enforced by `ensure_restore_target_empty`
-in `server/src/commands/backup.rs`) — there is no force-overwrite mode
+in `server/src/commands/backup.rs`) — there is no force-overwrite mode. The
+server's backup command holds `database.lock` through its snapshot. Restore
+refuses a live same-directory server and holds that lock continuously from the
+emptiness check through database, Theme, and Media placement and validation
+([Offline code migrations](adr/drafts/offline-code-migration-queue.md))
 ([ADR-0064](adr/0064-backup-target-auto-derivation.md)). Failure is
 backend-uniform: a constraint-violating restore returns
 `BackupError::ConstraintViolation` and leaves the target unmodified on both

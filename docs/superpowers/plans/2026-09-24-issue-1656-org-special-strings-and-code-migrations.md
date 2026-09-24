@@ -60,11 +60,11 @@ predates it.
     serve before Media is complete; startup/rollback/error paths release locks.
     The pending-queue refusal and sandbox live-command check follow in Task 3
     once the queue exists.
-- [ ] **3. Enqueue and drain offline Rust work with SQLx on both backends.** Add
-      matching SQL migrations for the queue and two enqueues (media repair
-      before rebuild); normal SQL migrations remain unchanged. Implement a
-      closed operation dispatcher, monotonically ordered queue rows with
-      diagnostic timestamp, and one transaction per row wrapping work + row
+- [x] **3. Enqueue and drain offline Rust work with SQLx on both backends.** Add
+      matching SQL migrations for the queue and media-repair enqueue; Task 4
+      adds the later rebuild enqueue. Normal SQL migrations remain unchanged.
+      Implement a closed operation dispatcher, monotonically ordered queue rows
+      with diagnostic timestamp, and one transaction per row wrapping work + row
       deletion. Move the current startup media-reference backfill to its queued
       operation and remove its unconditional open-time call. Keep each Rust
       operation in a semantically named source file and share mechanics rather
@@ -84,14 +84,14 @@ predates it.
     offline queue and narrow ADR-0092 exception in a numberless ADR plus
     `docs/ARCHITECTURE.md`.
 - [ ] **4. Rebuild current Post derivatives and dependent public projections.**
-      The reusable `rebuild_rendered_posts` operation recomputes bodies and
-      titles of every current Post format from canonical source, writing only
-      changes, including retained Deleted Posts. Reconcile current-Post Media
-      references if output changes while retaining revision references and Media
-      Record ownership. Invalidate stale Syndication Feed caches and queue
-      affected public-feed/WebSub work atomically; never manufacture a Post
-      Revision or edit timestamp. Preserve existing per-Post lookup/media
-      semantics rather than routing through a user edit.
+      The later SQLx migration enqueues `rebuild_rendered_posts`; that operation
+      recomputes bodies and titles of every current Post format from canonical
+      source, writing only changes, including retained Deleted Posts. Reconcile
+      current-Post Media references if output changes while retaining revision
+      references and Media Record ownership. Invalidate stale Syndication Feed
+      caches and queue affected public-feed/WebSub work atomically; never
+      manufacture a Post Revision or edit timestamp. Preserve existing per-Post
+      lookup/media semantics rather than routing through a user edit.
   - Contract: offline single transaction per queue item; no intermediate
     visibility, no persistent completed-work history, no replacement of stored
     source/revision snapshots. The handler name is reusable in a later SQLx

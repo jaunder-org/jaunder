@@ -3,10 +3,9 @@
 use std::collections::BTreeSet;
 
 use sha2::{Digest, Sha256};
-use sqlx::{Database, Encode, Executor, Pool, QueryBuilder, Result, Type};
+use sqlx::{Database, Encode, Executor, QueryBuilder, Result, Type};
 
 use crate::InstanceId;
-use crate::posts::models::RenderedHtml;
 use crate::posts::store::PostDialect;
 use crate::sql::{QueryBuilderStorageExt, QueryStorageExt};
 use common::ids::{PostId, RevisionId, UserId};
@@ -240,17 +239,6 @@ impl MediaReferenceEvidence {
     }
 }
 
-/// A rendered-HTML snapshot and the references derived from it before a backfill write.
-///
-/// This keeps HTML extraction out of the backend's writer lock. The dialect re-reads the
-/// snapshot while holding its write discipline before it installs these rows.
-#[derive(Debug)]
-pub struct PostMediaReferenceBackfill {
-    pub(crate) post_id: PostId,
-    pub(crate) rendered_html: String,
-    pub(crate) references: Vec<MediaReference>,
-}
-
 /// Appends a dynamic evidence relation for one ownership decision.
 pub(crate) fn push_media_reference_evidence_cte<'a, DB>(
     query: &mut QueryBuilder<DB>,
@@ -472,38 +460,6 @@ pub(crate) fn media_lock_set(references: &[MediaReference]) -> BTreeSet<MediaRef
         .collect()
 }
 
-pub(crate) async fn backfill_post_media_references<DB>(pool: &Pool<DB>) -> Result<()>
-where
-    DB: PostDialect,
-    (PostId, RenderedHtml): for<'r> sqlx::FromRow<'r, DB::Row>,
-    for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
-    DB::Arguments: sqlx::IntoArguments<DB>,
-{
-    let posts: Vec<(PostId, RenderedHtml)> = sqlx::query_as(
-        "SELECT p.post_id, p.rendered_html
-         FROM posts p
-         WHERE EXISTS (
-             SELECT 1 FROM post_media pm
-             WHERE pm.post_id = p.post_id AND pm.reference_kind = 'legacy'
-         )
-         ORDER BY p.post_id",
-    )
-    .fetch_all(pool)
-    .await?;
-    let candidates: Vec<PostMediaReferenceBackfill> = posts
-        .into_iter()
-        .map(|(post_id, rendered_html)| PostMediaReferenceBackfill {
-            references: host::render::extract_media_refs(rendered_html.as_ref()),
-            post_id,
-            rendered_html: rendered_html.to_string(),
-        })
-        .collect();
-    if candidates.is_empty() {
-        return Ok(());
-    }
-    DB::apply_post_media_reference_backfill(pool, &candidates).await
-}
-
 pub(crate) async fn replace_post_media<DB>(
     conn: &mut DB::Connection,
     post_id: PostId,
@@ -528,7 +484,7 @@ where
 
 pub(crate) async fn replace_legacy_post_media<DB>(
     conn: &mut DB::Connection,
-    candidates: &[PostMediaReferenceBackfill],
+    candidates: &[(PostId, Vec<MediaReference>)],
 ) -> Result<()>
 where
     DB: PostDialect,
@@ -554,7 +510,7 @@ where
         media_reference_rows(
             candidates
                 .iter()
-                .map(|candidate| (candidate.post_id, candidate.references.as_slice())),
+                .map(|(post_id, references)| (*post_id, references.as_slice())),
         ),
     )
     .await

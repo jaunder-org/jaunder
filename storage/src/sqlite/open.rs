@@ -7,8 +7,8 @@ use sqlx::{
 };
 
 use crate::backup::CatalogTableName;
+use crate::code_migrations;
 use crate::db::StorageRuntimeConfig;
-use crate::posts::media;
 use crate::sql::Exists;
 use crate::{StorageFactory, instance_identity};
 
@@ -25,13 +25,14 @@ pub(crate) fn resolved_sqlite_options(
 
 #[tracing::instrument(
     name = "storage.sqlite.open_database",
-    skip(options, runtime),
+    skip(options, runtime, authorize_drain),
     fields(create_if_missing)
 )]
 pub(crate) async fn open_sqlite_database_with_pool(
     options: &SqliteConnectOptions,
     create_if_missing: bool,
     runtime: &StorageRuntimeConfig,
+    authorize_drain: &(dyn Fn() -> sqlx::Result<()> + Sync),
 ) -> sqlx::Result<(StorageFactory, SqlitePool, crate::InstanceId)> {
     let mut options = resolved_sqlite_options(options, runtime);
     if create_if_missing {
@@ -53,7 +54,7 @@ pub(crate) async fn open_sqlite_database_with_pool(
 
     sqlx::migrate!("./migrations/sqlite").run(&pool).await?;
     let instance_id = instance_identity::ensure(&pool).await?;
-    media::backfill_post_media_references(&pool).await?;
+    code_migrations::drain_pending(&pool, authorize_drain).await?;
     crate::posts::search::backfill_post_search_projections(&pool).await?;
     Ok((StorageFactory::sqlite(pool.clone()), pool, instance_id))
 }
