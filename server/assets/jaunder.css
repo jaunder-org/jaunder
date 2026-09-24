@@ -1032,6 +1032,11 @@
   font-family: var(--font-mono);
 }
 
+.j-post-body img {
+  max-width: 100%;
+  height: auto;
+}
+
 .j-provider-embed {
   margin: 1rem 0;
   max-width: 100%;

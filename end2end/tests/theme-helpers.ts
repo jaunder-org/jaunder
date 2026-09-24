@@ -77,8 +77,9 @@ function appendBytes(form: URLSearchParams, prefix: string, bytes: Uint8Array) {
 export async function publishTheme(
   page: Page,
   themePackage = conformanceThemePackage(),
+  scope: "author" | "site" = "author",
 ): Promise<number> {
-  const form = new URLSearchParams({ scope: "author", name: "Conformance" });
+  const form = new URLSearchParams({ scope, name: "Conformance" });
   appendBytes(
     form,
     "draft[manifest]",
@@ -108,7 +109,7 @@ export async function publishTheme(
   );
 
   const mutation = new URLSearchParams({
-    scope: "author",
+    scope,
     theme_id: String(theme.id),
   });
   const response = await page.request.post(
@@ -130,10 +131,11 @@ export async function publishTheme(
 export async function publishAndSelectTheme(
   page: Page,
   themePackage = conformanceThemePackage(),
+  scope: "author" | "site" = "author",
 ): Promise<number> {
-  const themeId = await publishTheme(page, themePackage);
+  const themeId = await publishTheme(page, themePackage, scope);
   const mutation = new URLSearchParams({
-    scope: "author",
+    scope,
     "selection[kind]": "custom",
     "selection[value]": String(themeId),
   });
