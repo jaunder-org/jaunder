@@ -4,7 +4,7 @@
 > independent slice). This outline is warranted by the AtomPub public
 > write-contract change and fallible shared title derivation across storage and
 > server boundaries. The approved
-> [spec](../specs/2026-09-24-issue-1662-single-line-post-titles.md) is
+> [spec](2026-09-24-issue-1662-single-line-post-titles-spec.md) is
 > authoritative.
 
 ## Scope
