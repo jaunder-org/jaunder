@@ -1093,10 +1093,11 @@ remote strong-ETag revalidation, one local preflight, then replacement."
          (jaunder--reconcile-execute-batch buffer rows 'pull
                                            #'jaunder--reconcile-pull-row))))))
 
-(defun jaunder--reconcile-keep-local-send (row path xml &optional merged-bytes)
+(defun jaunder--reconcile-keep-local-send (row path xml &optional merged-bytes audience-capable)
   "Send reviewed XML for ROW, then checkpoint PATH only on confirmed commit.
 When MERGED-BYTES is present, atomically install that authored result before
-server-confirmed metadata write-back.  Never install it before the PUT."
+server-confirmed metadata write-back.  AUDIENCE-CAPABLE is the service evidence
+bound during preparation; never install a Post before the PUT."
   (let* ((etag (jaunder-reconcile-row-remote-etag row))
          (response
           (condition-case err
@@ -1143,7 +1144,8 @@ server-confirmed metadata write-back.  Never install it before the PUT."
                               (lambda ()
                                 ;; Record timezone only after confirmed commitment.
                                 (jaunder--ensure-date-tz)
-                                (let ((slug (jaunder--write-back received nil nil t)))
+                                (let ((slug (jaunder--write-back
+                                             received nil nil t audience-capable)))
                                   (list :slug slug :path (jaunder--rename-to-slug slug)))))))
                    (error (list :error err)))))
             (if (plist-get checkpoint :error)
@@ -1170,8 +1172,8 @@ server-confirmed metadata write-back.  Never install it before the PUT."
       (let* ((path (jaunder-inventory-local-path (jaunder-reconcile-row-local row)))
              (prepared
               (condition-case err
-                  (list :xml (jaunder--reconcile-call-with-source-buffer
-                              path #'jaunder--prepare-reviewed-update))
+                  (jaunder--reconcile-call-with-source-buffer
+                   path #'jaunder--prepare-reviewed-update)
                 (error (list :error err)))))
         (if (plist-get prepared :error)
             (list :outcome 'failed :post-id (jaunder--reconcile-row-post-id row)
@@ -1181,7 +1183,9 @@ server-confirmed metadata write-back.  Never install it before the PUT."
           (let ((final (jaunder--reconcile-conflict-preflight row)))
             (if (not (plist-get final :ok))
                 final
-              (jaunder--reconcile-keep-local-send row path (plist-get prepared :xml)))))))))
+              (jaunder--reconcile-keep-local-send
+               row path (plist-get prepared :xml) nil
+               (plist-get prepared :audience-capable)))))))))
 
 (defun jaunder-reconcile-keep-local-selected ()
   "Publish reviewed local content for selected conflicts after confirmation."
@@ -1298,8 +1302,8 @@ editing an identity or sync marker in scratch cannot change the sent Post."
           (jaunder--set-property (car property) (cdr property))))
       (buffer-string))))
 
-(defun jaunder--reconcile-merge-prepared-xml (path bytes)
-  "Prepare the authorized Org BYTES for PATH without writing that local Post."
+(defun jaunder--reconcile-merge-prepared-update (path bytes)
+  "Prepare authorized Org BYTES and service evidence without writing PATH."
   (let ((default-directory (file-name-directory path)))
     (with-temp-buffer
       (insert bytes)
@@ -1366,9 +1370,11 @@ unknown, failed, or partial result; only confirmed success retires it."
                               (condition-case err
                                   (let* ((bytes (jaunder--reconcile-merge-authorized-bytes
                                                  session))
-                                         (xml (jaunder--reconcile-merge-prepared-xml
-                                               path bytes)))
-                                    (list :bytes bytes :xml xml))
+                                         (update (jaunder--reconcile-merge-prepared-update
+                                                  path bytes)))
+                                    (list :bytes bytes :xml (plist-get update :xml)
+                                          :audience-capable
+                                          (plist-get update :audience-capable)))
                                 (error (list :error err)))))
                          (if (plist-get prepared :error)
                              (list :outcome 'failed
@@ -1383,7 +1389,8 @@ unknown, failed, or partial result; only confirmed success retires it."
                                  final
                                (jaunder--reconcile-keep-local-send
                                 row path (plist-get prepared :xml)
-                                (plist-get prepared :bytes)))))))))))))
+                                (plist-get prepared :bytes)
+                                (plist-get prepared :audience-capable)))))))))))))
         (setq-local jaunder-reconcile-merge-last-result result)
         (jaunder--reconcile-merge-record session report-buffer result)
         (if (eq (plist-get result :outcome) 'success)

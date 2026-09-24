@@ -430,7 +430,7 @@ have committed after a response-less request."
                      'changed))))
 
 (defun jaunder--prepare-reviewed-update ()
-  "Return publishable XML for an existing Post without changing its local file.
+  "Return publishable XML and audience evidence without changing the local Post.
 This is the conflict-resolution preparation path: validation, audience and
 Local Post Link checks, and Media localization run as for ordinary publishing,
 but no timezone, synchronization, or create-intent metadata is written before
@@ -438,19 +438,22 @@ its conditional PUT.  Uploaded Media can survive a later blocked Post write."
   (let* ((status (jaunder--buffer-property "JAUNDER_STATUS"))
          (date-raw (jaunder--buffer-keyword "DATE"))
          (tz (jaunder--buffer-property "JAUNDER_DATE_TZ"))
-         (entry (jaunder--org->atom)))
+         (entry (jaunder--org->atom))
+         audience-capable)
     (unless (jaunder--buffer-property "JAUNDER_ID")
       (error "jaunder: conflict resolution requires an existing Post ID"))
     (jaunder--validate-publish entry status date-raw tz)
-    (jaunder--require-audience-capability
-     (jaunder--active-base-url) (jaunder-entry-audiences entry))
+    (setq audience-capable
+          (jaunder--require-synchronization-audience-evidence
+           (jaunder--active-base-url) (jaunder-entry-audiences entry)))
     (setf (jaunder-entry-body entry)
           (jaunder--localize-post-links (jaunder-entry-body entry)))
     (jaunder--warn-zone-mismatch tz)
     (jaunder--warn-missing-format-media-type (jaunder--active-base-url))
     (setf (jaunder-entry-body entry)
           (jaunder--localize-media (jaunder-entry-body entry)))
-    (jaunder--atom-entry->xml entry)))
+    (list :xml (jaunder--atom-entry->xml entry)
+          :audience-capable audience-capable)))
 
 (defun jaunder--send-reviewed-update (edit-uri etag xml)
   "PUT XML at reviewed EDIT-URI conditionally on strong ETAG."

@@ -57,6 +57,32 @@ Lets the warning tests assert on emitted warnings without touching the real
       (should-error (jaunder--send-reviewed-update
                      "https://example.test/edit/7" "W/\"old\"" "<entry/>")))))
 
+(ert-deftest jaunder-reviewed-update-binds-current-audience-evidence-before-sending ()
+  "Conflict preparation refuses unknown service evidence and carries valid scope."
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+PROPERTY: JAUNDER_ID 7\n\nBody\n")
+    (let ((document 'unknown))
+      (cl-letf (((symbol-function 'jaunder--org->atom)
+                 (lambda () (jaunder--make-entry :body "Body")))
+                ((symbol-function 'jaunder--validate-publish) (lambda (&rest _) nil))
+                ((symbol-function 'jaunder--active-base-url)
+                 (lambda () "https://example.test"))
+                ((symbol-function 'jaunder--fetch-service-document)
+                 (lambda (_) document))
+                ((symbol-function 'jaunder--localize-post-links) #'identity)
+                ((symbol-function 'jaunder--localize-media) #'identity)
+                ((symbol-function 'jaunder--warn-zone-mismatch) (lambda (&rest _) nil))
+                ((symbol-function 'jaunder--warn-missing-format-media-type)
+                 (lambda (&rest _) nil))
+                ((symbol-function 'jaunder--atom-entry->xml)
+                 (lambda (_) "<entry/>")))
+        (should-error (jaunder--prepare-reviewed-update))
+        (setq document (jaunder-publish-test--audience-service-document))
+        (let ((prepared (jaunder--prepare-reviewed-update)))
+          (should (equal (plist-get prepared :xml) "<entry/>"))
+          (should (plist-get prepared :audience-capable)))))))
+
 ;;; publish validation + Location->id + force-draft
 
 (ert-deftest jaunder-validate-publish-rejects-empty-body ()

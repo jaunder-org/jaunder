@@ -328,7 +328,7 @@ When DRAFT is non-nil, create a draft Member."
    (let* ((root (file-name-as-directory (make-temp-file "jaunder-conflict-local-" t)))
           (jaunder-blogs (list (cons root (list :base-url jaunder-test-base-url
                                                 :username jaunder-test-username))))
-          id path local)
+          id path local initial-audience)
      (unwind-protect
          (jaunder--call-with-blog
           root
@@ -343,6 +343,11 @@ When DRAFT is non-nil, create a draft Member."
               (setq path (jaunder-pull-result-path pulled)
                     local (find-file-noselect path)))
             (with-current-buffer local
+              (setq initial-audience (jaunder--buffer-property "JAUNDER_AUDIENCE"))
+              (should initial-audience)
+              ;; Omission on an update preserves the remote audience; only a
+              ;; confirmed response may materialize it back into Org.
+              (jaunder--remove-property "JAUNDER_AUDIENCE")
               (goto-char (point-max)) (insert "Author's local choice.\n")
               (save-buffer))
             (set-file-times path (time-add (current-time) (seconds-to-time 5)))
@@ -401,6 +406,8 @@ When DRAFT is non-nil, create a draft Member."
                                        "GET" (jaunder--member-url id)) :body)))
                   (with-current-buffer local
                     (should-not (buffer-modified-p))
+                    (should (equal (jaunder--buffer-property "JAUNDER_AUDIENCE")
+                                   initial-audience))
                     (should (jaunder--strong-etag-p
                              (jaunder--buffer-property "JAUNDER_SYNCED")))))))))
        (when (buffer-live-p local)
