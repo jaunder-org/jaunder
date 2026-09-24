@@ -4,7 +4,7 @@
 > independent task. This outline is required by a dependency fork, dual-backend
 > schema/data migration, and cross-process startup/restore exclusion. The
 > approved
-> [spec](../specs/2026-09-24-issue-1656-org-special-strings-and-code-migrations.md)
+> [spec](2026-09-24-issue-1656-org-special-strings-and-code-migrations-spec.md)
 > is authoritative.
 
 ## Scope
@@ -103,7 +103,7 @@ predates it.
     unchanged Posts, with byte-identical historical revisions; focused
     web/Atom/RSS/JSON Feed assertions including validator freshness and WebSub
     work.
-- [ ] **5. Prove recovery, presentation, and final integration.** Include the
+- [x] **5. Prove recovery, presentation, and final integration.** Include the
       queue table as portable backup data, test CLI/server-level pending-row
       export/import in both directions between SQLite and PostgreSQL at exactly
       matching schema versions, and verify restoration drains before serving.
