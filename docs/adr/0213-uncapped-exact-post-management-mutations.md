@@ -1,6 +1,6 @@
-# ADR-DRAFT: Uncapped exact Post management mutations
+# ADR-0213: Uncapped exact Post management mutations
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-24
 - Issue: [#1625](https://github.com/jaunder-org/jaunder/issues/1625)
 
@@ -13,8 +13,8 @@ every confirmed match; silently truncating at a page or cap would misrepresent
 the destructive scope. A hard cap without inverse selection would also leave no
 way to express “all except these few Posts.”
 
-[ADR-0092](../0092-sqlite-bounded-write-lock-occupancy.md) requires batches on
-the SQLite path to be capped by construction. The synchronous, atomic,
+[ADR-0092](0092-sqlite-bounded-write-lock-occupancy.md) requires batches on the
+SQLite path to be capped by construction. The synchronous, atomic,
 all-or-nothing, uncapped product contract for this operation conflicts with that
 general rule: write-lock occupancy necessarily grows with the exact confirmed
 selection. Database bind limits are a separate implementation constraint and

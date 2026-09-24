@@ -1,6 +1,6 @@
-# ADR-DRAFT: Resolve Emacs Post Conflicts with Explicit, Revalidated Choices
+# ADR-0211: Resolve Emacs Post Conflicts with Explicit, Revalidated Choices
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-23
 - Issue: [#1640](https://github.com/jaunder-org/jaunder/issues/1640)
 
@@ -13,13 +13,13 @@ fetch the remote Post, decide which authored content to keep, and manually
 preserve identity and synchronization metadata. This is error-prone even though
 the Protocol Client holds the reviewed local digest and remote strong ETag.
 
-[ADR-0200](../0200-revalidated-matched-post-pull.md) authorizes staged,
-revalidated local replacement only for a `server-ahead` Post;
-[ADR-0047](../0047-emacs-publish-orchestration.md) makes a conditional publish
-safe to retry after server success but local write-back failure. Neither
-provides a way for the User to explicitly resolve a true conflict. A last sync
-ETag is not a saved content ancestor, and network loss after a PUT may conceal a
-remote commit.
+[ADR-0200](0200-revalidated-matched-post-pull.md) authorizes staged, revalidated
+local replacement only for a `server-ahead` Post;
+[ADR-0047](0047-emacs-publish-orchestration.md) makes a conditional publish safe
+to retry after server success but local write-back failure. Neither provides a
+way for the User to explicitly resolve a true conflict. A last sync ETag is not
+a saved content ancestor, and network loss after a PUT may conceal a remote
+commit.
 
 ## Decision
 
