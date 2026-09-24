@@ -2,12 +2,17 @@
 
 use sqlx::{Encode, Executor, FromRow, Pool, Type};
 
-use super::media_references;
 use super::types::{CodeMigrationOperation, CodeMigrationQueueId};
+use super::{media_references, rendered_posts};
 use crate::posts::models::RenderedHtml;
 use crate::sql::QueryStorageExt;
 use crate::{PostDialect, helpers};
 use common::ids::PostId;
+use common::render::RenderedPostTitle;
+use common::tag::Tag;
+use common::time::UtcInstant;
+use common::username::Username;
+use host::feed::FeedPath;
 
 /// `SQLite` starts an immediate writer; `PostgreSQL`'s regular transaction is
 /// sufficient under the same-directory offline lock and runtime exclusion.
@@ -34,6 +39,16 @@ where
     for<'r> (CodeMigrationQueueId, CodeMigrationOperation): FromRow<'r, DB::Row>,
     for<'q> CodeMigrationQueueId: Encode<'q, DB> + Type<DB>,
     (PostId, RenderedHtml): for<'r> FromRow<'r, DB::Row>,
+    rendered_posts::CurrentPostRendering: for<'r> FromRow<'r, DB::Row>,
+    for<'r> (Username,): FromRow<'r, DB::Row>,
+    for<'r> Tag: sqlx::Decode<'r, DB> + Type<DB>,
+    for<'q> PostId: Encode<'q, DB> + Type<DB>,
+    for<'q> RenderedHtml: Encode<'q, DB> + Type<DB>,
+    for<'q> Option<&'q RenderedPostTitle>: Encode<'q, DB> + Type<DB>,
+    for<'q> FeedPath: Encode<'q, DB> + Type<DB>,
+    for<'q> &'q FeedPath: Encode<'q, DB> + Type<DB>,
+    for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
+    usize: sqlx::ColumnIndex<DB::Row>,
     for<'q> i64: Encode<'q, DB> + Type<DB>,
     String: Type<DB>,
     for<'q> String: Encode<'q, DB>,
@@ -57,6 +72,9 @@ where
             match operation.as_ref() {
                 "backfill_post_media_references" => {
                     media_references::backfill_post_media_references::<DB>(&mut *conn).await?;
+                }
+                "rebuild_rendered_posts" => {
+                    rendered_posts::rebuild_rendered_posts::<DB>(&mut *conn).await?;
                 }
                 other => {
                     return Err(sqlx::Error::Protocol(format!(

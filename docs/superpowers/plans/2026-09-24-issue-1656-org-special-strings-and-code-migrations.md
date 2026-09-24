@@ -83,7 +83,7 @@ predates it.
     operate. Direct `open_database` fixture semantics stay aligned. Record the
     offline queue and narrow ADR-0092 exception in a numberless ADR plus
     `docs/ARCHITECTURE.md`.
-- [ ] **4. Rebuild current Post derivatives and dependent public projections.**
+- [x] **4. Rebuild current Post derivatives and dependent public projections.**
       The later SQLx migration enqueues `rebuild_rendered_posts`; that operation
       recomputes bodies and titles of every current Post format from canonical
       source, writing only changes, including retained Deleted Posts. Reconcile

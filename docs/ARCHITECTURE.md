@@ -162,13 +162,18 @@ SQLx migrations can also enqueue offline Rust operations in
 `pending_code_migrations`. On open, `storage/src/code_migrations/` drains these
 rows in queue-ID order, one transaction per row containing both the operation
 and its deletion; a failed or unknown operation prevents startup and leaves the
-row for retry. The media-reference repair now runs only when enqueued. A later
-migration may reuse an operation name. The storage-directory `database.lock`
-spans SQLx plus the queue drain on command paths for both backends; a CLI with
-pending work additionally refuses a live same-directory server's `runtime.lock`,
-while an ordinary CLI open without pending work remains allowed. Offline queue
-transactions alone may perform unbounded rendering inside SQLite's write lock;
-request-time work still follows ADR-0092's bounded occupancy rule
+row for retry. The Media-reference repair now runs only when enqueued; the
+subsequent `rebuild_rendered_posts` operation recomputes only changed current
+Post HTML and Rendered Titles (including retained Deleted Posts), reconciles
+changed current-Post Media references, and invalidates/enqueues affected public
+Syndication Feeds without changing authored content, edit times, or historical
+Post Revisions. A later migration may reuse an operation name. The
+storage-directory `database.lock` spans SQLx plus the queue drain on command
+paths for both backends; a CLI with pending work additionally refuses a live
+same-directory server's `runtime.lock`, while an ordinary CLI open without
+pending work remains allowed. Offline queue transactions alone may perform
+unbounded rendering inside SQLite's write lock; request-time work still follows
+ADR-0092's bounded occupancy rule
 ([Offline code migrations](adr/drafts/offline-code-migration-queue.md)).
 
 ### Crate layout and the generic store pattern

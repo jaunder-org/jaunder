@@ -28,8 +28,7 @@ where
          FROM posts p
          WHERE EXISTS (
              SELECT 1 FROM post_media pm
-             WHERE pm.post_id = p.post_id AND pm.subject_kind = 'current'
-               AND pm.revision_id = 0 AND pm.reference_kind = 'legacy'
+             WHERE pm.post_id = p.post_id AND pm.reference_kind = 'legacy'
          )
          ORDER BY p.post_id",
     )

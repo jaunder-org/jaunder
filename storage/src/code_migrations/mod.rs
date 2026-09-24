@@ -2,6 +2,7 @@
 
 mod drain;
 mod media_references;
+mod rendered_posts;
 pub(crate) mod types;
 
 pub(crate) use drain::drain_pending;

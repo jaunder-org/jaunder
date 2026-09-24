@@ -282,6 +282,67 @@ async fn regenerated_feed_uses_the_repaired_current_slug(#[case] backend: Backen
     assert!(!body.contains("/pre-repair-feed-slug"), "feed body: {body}");
 }
 
+#[apply(backends)]
+#[tokio::test]
+async fn existing_org_post_rebuild_refreshes_rss_atom_json_feed_and_validator(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let user = SeedUser::new()
+        .seed(Arc::clone(&env.users()), env.write_scope())
+        .await;
+    let post = SeedRawPost::new(user.user_id)
+        .format(PostFormat::Org)
+        .title("A---B...")
+        .body(parse_post_body("A---B..."))
+        .published_at(fixed_instant(1))
+        .seed(Arc::clone(&env.posts()), env.write_scope())
+        .await;
+    storage::with_closeable_pool!(env.base.pool(), pool, {
+        sqlx::query(
+            "UPDATE posts SET rendered_html = '<p>A---B...</p>', rendered_title = 'A---B...'
+             WHERE post_id = $1",
+        )
+        .bind_storage(post.post_id)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO pending_code_migrations (operation) VALUES ('rebuild_rendered_posts')",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    });
+    let paths = [fp("/feed.rss"), fp("/feed.atom"), fp("/feed.json")];
+    let mut previous = Vec::new();
+    for path in &paths {
+        let row = render_feed(env.publisher(), env.posts(), path.clone()).await;
+        assert!(row.representation().body().contains("A---B..."));
+        previous.push(row);
+    }
+    let options = match backend {
+        Backend::Sqlite => storage::test_support::sqlite_url(&env.base),
+        Backend::Postgres => storage::test_support::recorded_postgres_url(&env.base)
+            .parse()
+            .expect("recorded PostgreSQL URL"),
+    };
+    storage::open_existing_database(&options, &storage::StorageRuntimeConfig::default())
+        .await
+        .expect("reopening drains the queued rebuild before returning storage");
+    for (path, before) in paths.into_iter().zip(previous) {
+        let after = render_feed(env.publisher(), env.posts(), path).await;
+        assert!(after.representation().body().contains("A—B…"));
+        assert!(!after.representation().body().contains("A---B..."));
+        assert_ne!(
+            before.semantic_fingerprint(),
+            after.semantic_fingerprint(),
+            "a changed body or title changes the feed validator's semantic identity"
+        );
+        assert_ne!(before.etag, after.etag);
+    }
+}
+
 #[apply(backends_matrix)]
 #[case::markdown_youtube(
     PostFormat::Markdown,
