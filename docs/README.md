@@ -241,6 +241,7 @@ convention). See the Status column below for each ADR's current status.
 | [0211](adr/0211-emacs-reconciliation-conflict-resolution.md)           | Resolve Emacs Post Conflicts with Explicit, Revalidated Choices                                              | accepted   |
 | [0212](adr/0212-hierarchical-default-audience.md)                      | Hierarchical Default Audience                                                                                | accepted   |
 | [0213](adr/0213-uncapped-exact-post-management-mutations.md)           | Uncapped exact Post management mutations                                                                     | accepted   |
+| [0214](adr/0214-single-line-authored-post-titles.md)                   | Authored Post Titles Are One Logical Line                                                                    | accepted   |
 
 <!-- adr-table:end -->
 

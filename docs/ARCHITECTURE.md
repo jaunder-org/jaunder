@@ -504,7 +504,7 @@ rule; invalid explicit or heading-derived titles reject the whole write rather
 than becoming untitled. The Emacs Protocol Client rejects locally before network
 or Media work. This does not forbid visual wrapping or source markup that
 produces a rendered `<br>`
-([single-line authored Post Titles](adr/drafts/single-line-authored-post-titles.md)).
+([single-line authored Post Titles](adr/0214-single-line-authored-post-titles.md)).
 A dedicated narrow `ammonia` policy retains only its safe inline tags without
 attributes and removes active or embedded content; it does not synthesize image
 alternatives or block-wrapper spacing. A source with no surviving visible text
