@@ -7,7 +7,7 @@ use crate::post_summary;
 use std::fmt;
 
 use crate::post_body::{InvalidPostBody, PostBody};
-use crate::post_title::PostTitle;
+use crate::post_title::{InvalidPostTitle, PostTitle};
 use crate::slug::{self, Slug};
 
 /// The format/markup language used to author a post body.
@@ -646,39 +646,41 @@ impl PartialEq<&str> for RenderedHtml {
 
 /// Derives a post's public title and its slug.
 ///
-/// Total: a body with no non-blank line is unrepresentable ([`PostBody`], #811),
-/// so the slug source can always be found and there is no nothing-to-store case
-/// left to report.
+/// A body with no non-blank line is unrepresentable ([`PostBody`], #811), so
+/// the slug source can always be found. A heading-derived title with an authored
+/// line break fails rather than silently producing an untitled Post.
 ///
 /// The body is stored by the caller — this function never mutates it, and the
 /// caller derives naming from the *original* body before canonicalizing, because
 /// Org's title source is stripped by canonicalization.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns [`InvalidPostTitle`] when a derived heading is not a valid Post Title.
 pub fn derive_post_naming(
     explicit_title: Option<&PostTitle>,
     body: &PostBody,
     format: &PostFormat,
-) -> (Option<PostTitle>, Slug) {
+) -> Result<(Option<PostTitle>, Slug), InvalidPostTitle> {
     let trimmed = body.trim();
 
-    // An explicit title wins outright, so the body is only parsed for one when
-    // there is none — hence `or_else`, not `or`.
-    let title = explicit_title.cloned().or_else(|| {
+    // An explicit title wins outright, so body title candidates are only parsed
+    // when the caller supplied none.
+    let title = if let Some(title) = explicit_title {
+        Some(title.clone())
+    } else {
         let extracted = match format {
             PostFormat::Markdown => extract_markdown_title(trimmed).map(|(title, _)| title),
             PostFormat::Org => extract_org_title(trimmed).map(|(title, _)| title),
             PostFormat::Html => None,
         };
+        extracted
+            .map(|title| title.parse::<PostTitle>())
+            .transpose()?
+    };
 
-        // Extracted titles are non-blank by construction — both extractors reject
-        // empty-after-trim — but the compiler cannot see that. So a failed parse
-        // falls through to the untitled path rather than panicking on an invariant we
-        // believe but cannot prove here (#830).
-        extracted.and_then(|title| title.parse::<PostTitle>().ok())
-    });
-
-    // A titled post seeds its slug from the title; an untitled one — including one
-    // whose extracted title failed that parse — from the body's first non-blank line.
+    // A titled post seeds its slug from the title; an untitled one uses the
+    // body's first non-blank line.
     let seed = match title.as_ref() {
         Some(title) => title.to_string(),
         None => first_meaningful_line(body),
@@ -692,7 +694,7 @@ pub fn derive_post_naming(
         unreachable!("slugify_title's output always re-parses as a Slug")
     };
 
-    (title, slug)
+    Ok((title, slug))
 }
 
 /// The body's first non-blank line, trimmed and capped at 100 characters.
@@ -1281,6 +1283,18 @@ mod tests {
             &crate::test_support::parse_post_body(body),
             &format,
         )
+        .expect("valid title candidate")
+    }
+
+    #[test]
+    fn derived_title_with_line_separator_cannot_become_untitled() {
+        for (source, format) in [
+            ("# First\u{2028}Second\nBody", PostFormat::Markdown),
+            ("* First\u{0085}Second\nBody", PostFormat::Org),
+        ] {
+            let body = crate::test_support::parse_post_body(source);
+            assert!(derive_post_naming(None, &body, &format).is_err());
+        }
     }
 
     #[test]

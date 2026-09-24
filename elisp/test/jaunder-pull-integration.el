@@ -139,6 +139,52 @@
                                                                            bytes)))))))))
        (delete-directory root t)))))
 
+(ert-deftest jaunder-pull-round-trips-a-single-line-published-title ()
+  "A valid authored title survives live publish and pull unchanged."
+  (jaunder-test--with-live-server
+   (let* ((source-root (make-temp-file "jaunder-title-publish-" t))
+          (pull-root (make-temp-file "jaunder-title-pull-" t))
+          (path (expand-file-name "draft.org" source-root))
+          (title "One line  with spaces")
+          (jaunder-blogs
+           (mapcar (lambda (root)
+                     (cons (file-name-as-directory root)
+                           (list :base-url jaunder-test-base-url
+                                 :username jaunder-test-username)))
+                   (list source-root pull-root)))
+          buffer)
+     (unwind-protect
+         (progn
+           (with-temp-file path
+             (insert (format "#+TITLE: %s\n#+PROPERTY: JAUNDER_STATUS draft\n\nBody\n"
+                             title)))
+           (setq buffer (find-file-noselect path))
+           (let ((id (with-current-buffer buffer
+                       (jaunder-publish)
+                       (jaunder--buffer-property "JAUNDER_ID"))))
+             (should id)
+             (jaunder--call-with-blog
+              pull-root
+              (lambda ()
+                (let* ((member (cl-find id
+                                        (jaunder-inventory-server-only
+                                         (jaunder--inventory-for-root pull-root))
+                                        :key #'jaunder-inventory-member-id
+                                        :test #'equal))
+                       (result (progn (should member)
+                                      (jaunder--pull-member pull-root member))))
+                  (should (eq (jaunder-pull-result-status result) 'pulled))
+                  (with-temp-buffer
+                    (insert-file-contents (jaunder-pull-result-path result))
+                    (org-mode)
+                    (should (equal (jaunder-entry-title (jaunder--org->atom))
+                                   title))))))))
+       (when (buffer-live-p buffer)
+         (with-current-buffer buffer (set-buffer-modified-p nil))
+         (kill-buffer buffer))
+       (delete-directory source-root t)
+       (delete-directory pull-root t)))))
+
 (ert-deftest jaunder-pull-localizes-media-retries-reuses-and-republishes ()
   "One verified public download serves retries and separate pulled Posts."
   (jaunder-test--with-live-server

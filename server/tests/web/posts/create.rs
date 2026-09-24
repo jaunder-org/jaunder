@@ -1,4 +1,5 @@
 use axum::http::StatusCode;
+use common::seed::Page;
 use common::tag::MAX_TAGS_PER_POST;
 use common::test_support::{parse_post_body, parse_row_limit, parse_slug, parse_tag_label};
 use common::time::UtcInstant;
@@ -6,7 +7,7 @@ use common::visibility::{AudienceSelection, AudienceTarget, DefaultAudience};
 use jiff::ToSpan;
 use server_fn::ServerFn;
 use storage::{AudienceStorage, PostFormat, WriteScope};
-use web::posts::PostInputs;
+use web::posts::{PostInputs, UnpublishedPost};
 
 use rstest::*;
 use rstest_reuse::*;
@@ -17,7 +18,7 @@ use crate::helpers::{
 };
 use storage::test_support::{Backend, backends, backends_matrix, confirmed_for};
 
-use super::fixtures::login_and_env;
+use super::fixtures::{list_drafts, login_and_env};
 
 async fn create_audience_confirmed(
     audiences: std::sync::Arc<dyn AudienceStorage>,
@@ -420,6 +421,57 @@ async fn create_post_rejects(
 
     assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
     assert!(body.contains(expected), "body: {body}");
+}
+
+#[apply(backends_matrix)]
+#[case::derived_markdown(
+    "# First\u{2028}Second\nBody",
+    "markdown",
+    "post title must be non-empty and contain no line breaks"
+)]
+#[case::repeated_org_header(
+    "#+TITLE: First\n#+TITLE: Second\nBody",
+    "org",
+    "invalid Org metadata: invalid TITLE"
+)]
+#[tokio::test]
+async fn invalid_post_title_create_reports_validation_without_a_saved_post(
+    backend: Backend,
+    #[case] source: &str,
+    #[case] format: &str,
+    #[case] expected: &str,
+) {
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let cookie = session.cookie();
+    let (status, body) = post_json(
+        app.clone(),
+        <web::posts::Create as ServerFn>::PATH,
+        serde_json::json!({"post": {"body": source, "format": format, "publish": false}}),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    let error: serde_json::Value = serde_json::from_str(&body).expect("validation JSON");
+    assert_eq!(
+        error
+            .pointer("/validation/message")
+            .and_then(|v| v.as_str()),
+        Some(expected)
+    );
+    let (status, body) = list_drafts(app, None, 10, Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK, "list drafts: {body}");
+    let drafts: Page<UnpublishedPost> = serde_json::from_str(&body).expect("draft page");
+    assert!(
+        drafts.posts.is_empty(),
+        "invalid title must not persist a Post"
+    );
 }
 
 // A future `publish_at` on create schedules the post: storage records the exact

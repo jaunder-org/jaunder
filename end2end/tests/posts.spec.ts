@@ -829,6 +829,59 @@ test("metadata-only Org composer input reports validation without saving", async
   await expect(page.locator(SEL.saveSummary)).toHaveCount(0);
 });
 
+test("composer rejects line-breaking heading and repeated Org titles without saving", async ({
+  registeredPage,
+}) => {
+  const page = await registeredPage("/posts/new");
+  const composerUrl = page.url();
+  await page.fill(SEL.postBody, "# First\u2028Second\n\nRejected body");
+  await click(page, SEL.publishButton("false"));
+  await expect(page.locator(SEL.error)).toHaveText(
+    "post title must be non-empty and contain no line breaks",
+  );
+  await expect(page).toHaveURL(composerUrl);
+  await expect(page.locator(SEL.saveSummary)).toHaveCount(0);
+
+  await openComposerControl(page, "Format");
+  await click(page, SEL.formatButton("Org"));
+  await page.fill(
+    SEL.postBody,
+    "#+TITLE: First\n#+TITLE: Second\n\nRejected new Org body",
+  );
+  await click(page, SEL.publishButton("false"));
+  await expect(page.locator(SEL.error)).toHaveText(
+    "invalid Org metadata: invalid TITLE",
+  );
+  await expect(page).toHaveURL(composerUrl);
+  await expect(page.locator(SEL.saveSummary)).toHaveCount(0);
+
+  await openComposerControl(page, "Format");
+  await click(page, SEL.formatButton("Markdown"));
+  await page.fill(SEL.postBody, "# Accepted browser title\n\nOriginal body");
+  await click(page, SEL.publishButton("false"));
+  await expectFlash(page, "Draft saved.");
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  await openEditor(page);
+  const editorUrl = page.url();
+  await openComposerControl(page, "Format");
+  await click(page, SEL.formatButton("Org"));
+  await page.fill(
+    SEL.postBody,
+    "#+TITLE: First\n#+TITLE: Second\n\nRejected editor body",
+  );
+  await click(page, SEL.publishButton("false"));
+  await expect(page.locator(SEL.error)).toHaveText(
+    "invalid Org metadata: invalid TITLE",
+  );
+  await expect(page).toHaveURL(editorUrl);
+
+  await openPostFromDrafts(page, "Accepted browser title");
+  await expect(page.locator(SEL.postBody)).toHaveValue(/Original body/);
+  await expect(page.locator(SEL.postBody)).not.toHaveValue(
+    /Rejected editor body/,
+  );
+});
+
 // #58: list_mine failure used to collapse into [], making the picker look
 // successfully empty and leaving Publish enabled. Intercept the real server-fn
 // request before the composer mounts so the browser exercises the Failed arm.

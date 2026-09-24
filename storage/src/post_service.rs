@@ -21,7 +21,7 @@ use common::ids::{PostId, UserId};
 use common::mutation::MutationOutcome;
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
-use common::post_title::PostTitle;
+use common::post_title::{InvalidPostTitle, PostTitle};
 use common::slug::{InvalidSlug, Slug};
 use common::time::UtcInstant;
 use common::visibility::AudienceTarget;
@@ -364,6 +364,9 @@ pub fn seed_post_input(
 /// Errors that can occur during a high-level post update.
 #[derive(Debug, Error)]
 pub enum PerformUpdateError {
+    /// An authored heading would produce an invalid Post Title.
+    #[error(transparent)]
+    InvalidTitle(#[from] InvalidPostTitle),
     /// Reachable only through canonicalization (#811): a blank body cannot be
     /// built at all any more, so the sole way to arrive here is a body that
     /// *becomes* blank — an Org post whose title source is its entire content.
@@ -406,6 +409,7 @@ impl From<PerformUpdateError> for host::error::InternalError {
         use host::error::InternalError;
         match error {
             PerformUpdateError::EmptyPost
+            | PerformUpdateError::InvalidTitle(_)
             | PerformUpdateError::SlugConflict
             | PerformUpdateError::BookkeepingMismatch
             | PerformUpdateError::StaleContent => {
@@ -480,7 +484,7 @@ pub async fn perform_post_update(
         request_clock,
         expectations,
     } = input;
-    let (title, derived_slug) = common::render::derive_post_naming(title, &body, &format);
+    let (title, derived_slug) = common::render::derive_post_naming(title, &body, &format)?;
 
     // Derive the naming from the *original* body above, then canonicalize what gets
     // stored. Web and AtomPub thus converge on one stored body. A title-only Org post
@@ -577,7 +581,7 @@ pub async fn perform_post_update_with_media_ownership(
         request_clock,
         expectations,
     } = input;
-    let (title, derived_slug) = common::render::derive_post_naming(title, &body, &format);
+    let (title, derived_slug) = common::render::derive_post_naming(title, &body, &format)?;
     let body = common::render::canonicalize_body(&body, &format)
         .map_err(|_| PerformUpdateError::EmptyPost)?;
     let slug = slug_override.cloned().unwrap_or(derived_slug);
@@ -785,6 +789,9 @@ pub async fn soft_delete_post(
 /// Errors that can occur during high-level post creation.
 #[derive(Debug, Error)]
 pub enum PerformCreationError {
+    /// An authored heading would produce an invalid Post Title.
+    #[error(transparent)]
+    InvalidTitle(#[from] InvalidPostTitle),
     /// Reachable only through canonicalization (#811): a blank body cannot be
     /// built at all any more, so the sole way to arrive here is a body that
     /// *becomes* blank — an Org post whose title source is its entire content.
@@ -814,7 +821,9 @@ impl From<PerformCreationError> for host::error::InternalError {
         use host::error::InternalError;
         match error {
             // Single-sourced from the variant's `#[error]` so the public message
-            PerformCreationError::EmptyPost | PerformCreationError::BookkeepingMismatch => {
+            PerformCreationError::EmptyPost
+            | PerformCreationError::InvalidTitle(_)
+            | PerformCreationError::BookkeepingMismatch => {
                 InternalError::validation(error.to_string())
             }
             PerformCreationError::InvalidSlug(_) => {
@@ -948,7 +957,7 @@ pub async fn perform_post_creation_at(
         idempotency_key,
         expectations,
     } = input;
-    let (title, derived_slug) = common::render::derive_post_naming(title, &body, &format);
+    let (title, derived_slug) = common::render::derive_post_naming(title, &body, &format)?;
 
     // Derive the naming from the *original* body above, then canonicalize what gets
     // stored. Web and AtomPub thus converge on one stored body. A title-only Org post
@@ -1032,7 +1041,7 @@ pub async fn perform_post_creation_with_media_ownership(
         idempotency_key,
         expectations,
     } = input;
-    let (title, derived_slug) = common::render::derive_post_naming(title, &body, &format);
+    let (title, derived_slug) = common::render::derive_post_naming(title, &body, &format)?;
     let body = common::render::canonicalize_body(&body, &format)
         .map_err(|_| PerformCreationError::EmptyPost)?;
     let slug_seed = slug_override.cloned().unwrap_or(derived_slug);
@@ -1234,6 +1243,107 @@ mod tests {
         assert_eq!(record.body, "Hello, world!\n");
         assert_eq!(record.format, PostFormat::Markdown);
         assert!(record.rendered_html.contains("<p>Hello, world!</p>"));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn invalid_derived_post_title_rejects_create_and_update_without_writing(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(Arc::clone(&env.users()), env.write_scope().clone())
+            .await
+            .user_id;
+        let storage = Arc::clone(&env.posts());
+
+        for (format, invalid, valid, slug) in [
+            (
+                PostFormat::Markdown,
+                "# First\u{2028}Second\nChanged body",
+                "# Valid Markdown\nOriginal body",
+                parse_slug("one-line-markdown"),
+            ),
+            (
+                PostFormat::Org,
+                "* First\u{0085}Second\nChanged body",
+                "* Valid Org\nOriginal body",
+                parse_slug("one-line-org"),
+            ),
+        ] {
+            let attempt = |body: &str| PostCreation {
+                user_id,
+                body: parse_post_body(body),
+                title: None,
+                format,
+                slug_override: Some(&slug),
+                published_at: None,
+                max_attempts: 1,
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+                tags: Vec::new(),
+                idempotency_key: None,
+                expectations: PostBookkeepingExpectation::default(),
+            };
+            let rejected = perform_post_creation(
+                &env.write_scope(),
+                &env.media_content_locks(),
+                Arc::clone(&storage),
+                Arc::clone(&env.feed_events()),
+                attempt(invalid),
+            )
+            .await
+            .expect_err("invalid derived title must reject create");
+            assert!(matches!(rejected, PerformCreationError::InvalidTitle(_)));
+
+            let created = perform_post_creation(
+                &env.write_scope(),
+                &env.media_content_locks(),
+                Arc::clone(&storage),
+                Arc::clone(&env.feed_events()),
+                attempt(valid),
+            )
+            .await
+            .expect("valid title can use the exact slug after rejected create");
+            let created = confirmed(created);
+            assert_eq!(created.slug, slug);
+
+            let rejected = perform_post_update(
+                &env.write_scope(),
+                &env.media_content_locks(),
+                Arc::clone(&storage),
+                Arc::clone(&env.feed_events()),
+                PostUpdate {
+                    post_id: created.post_id,
+                    editor_user_id: user_id,
+                    body: parse_post_body(invalid),
+                    title: None,
+                    format,
+                    slug_override: None,
+                    publish: PublishUpdate::Publish { at: None },
+                    summary: None,
+                    audiences: vec![AudienceTarget::Public],
+                    tags: Some(Vec::new()),
+                    request_clock: UtcInstant::now(),
+                    expectations: PostBookkeepingExpectation::default(),
+                },
+            )
+            .await
+            .expect_err("invalid derived title must reject update");
+            assert!(matches!(rejected, PerformUpdateError::InvalidTitle(_)));
+            let retained = storage
+                .get_post_by_id(
+                    created.post_id,
+                    &common::visibility::ViewerIdentity::local(user_id),
+                )
+                .await
+                .expect("read after rejection")
+                .expect("previous Post remains");
+            assert_eq!(retained.title, created.title);
+            assert_eq!(retained.body, created.body);
+            assert_eq!(retained.slug, created.slug);
+            assert_eq!(retained.published_at, created.published_at);
+        }
     }
 
     #[apply(backends)]

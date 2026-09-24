@@ -30,13 +30,23 @@
   (should (null (jaunder-entry-title
                  (jaunder-test--entry "#+TITLE:\n\nBody\n")))))
 
-(ert-deftest jaunder-org->atom-repeated-titles-join-with-newlines ()
-  ;; Pulled multiline titles become repeated #+TITLE lines and must publish back
-  ;; as the original Atom title, rather than silently retaining only the first.
-  (should (equal (jaunder-entry-title
-                  (jaunder-test--entry
-                   "#+TITLE: First line\n#+TITLE: Second line\n\nBody\n"))
-                 "First line\nSecond line")))
+(ert-deftest jaunder-org->atom-rejects-repeated-titles ()
+  (should-error (jaunder-test--entry
+                 "#+TITLE: First line\n#+TITLE: Second line\n\nBody\n")))
+
+(ert-deftest jaunder-title-separator-table ()
+  (dolist (separator '(?\n ?\r ?\x0b ?\x0c ?\x85 ?\u2028 ?\u2029))
+    (dolist (title (list (concat (string separator) "Title")
+                         (concat "Ti" (string separator) "tle")
+                         (concat "Title" (string separator))
+                         (string separator)))
+      (should (jaunder--title-has-line-separator-p title))))
+  (should-not (jaunder--title-has-line-separator-p "One line  with\tspace"))
+  (should-not (jaunder--title-has-line-separator-p nil)))
+
+(ert-deftest jaunder-org->atom-rejects-title-with-edge-separator ()
+  (should-error (jaunder-test--entry "#+TITLE: \u2028Title\n\nBody\n"))
+  (should-error (jaunder-test--entry "#+TITLE: Title\u2029\n\nBody\n")))
 
 (ert-deftest jaunder-org->atom-keywords-split-multiline-flatten ()
   (should (equal (jaunder-entry-categories

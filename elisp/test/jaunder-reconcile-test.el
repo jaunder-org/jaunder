@@ -2929,6 +2929,54 @@ The current filename supplies the local slug evidence used by matched-pull tests
                                  "#+PROPERTY: JAUNDER_ID 42\n\nRemote body.\n"))))
       (delete-file path))))
 
+(ert-deftest jaunder-reconcile-pull-malformed-remote-title-preserves-matched-post ()
+  "A malformed Member title fails before Media work or local replacement."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-title-pull-" t)))
+         (path (expand-file-name "old.org" root))
+         (before (jaunder-reconcile-test--pulled-bytes "7" "old" "\"old\""))
+         (jaunder-blogs (list (cons root '(:base-url "https://example.test"
+                                                     :username "alice"))))
+         (jaunder-reconcile-report (jaunder--make-reconcile-report :root root))
+         row)
+    (unwind-protect
+        (progn
+          (with-temp-file path (insert before))
+          (setq row (jaunder-reconcile-test--matched-pull-row path "old"))
+          (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                     #'jaunder-reconcile-test--legacy-service-document)
+                    ((symbol-function 'jaunder--http-request)
+                     (lambda (&rest _)
+                       (list :status 200
+                             :headers '(("etag" . "\"new\"")
+                                        ("x-jaunder-instance" . "12345678-1234-1234-1234-123456789abc"))
+                             :body (concat
+                                    "<entry xmlns=\"http://www.w3.org/2005/Atom\""
+                                    " xmlns:j=\"https://jaunder.org/ns/atompub\""
+                                    " xmlns:app=\"http://www.w3.org/2007/app\">"
+                                    "<title>Remote\u2028Title</title>"
+                                    "<link rel=\"edit\" href=\"https://example.test/atompub/alice/posts/7\"/>"
+                                    "<j:slug>old</j:slug>"
+                                    "<content type=\"text/org\">Remote body</content>"
+                                    "<app:control><app:draft>yes</app:draft></app:control>"
+                                    "</entry>"))))
+                    ((symbol-function 'jaunder--pull-media-materialize)
+                     (lambda (&rest _) (error "must not materialize Media")))
+                    ((symbol-function 'jaunder--reconcile-replace-pulled-file)
+                     (lambda (&rest _) (error "must not replace Post"))))
+            (let ((result (jaunder--call-with-blog
+                           root (lambda ()
+                                  (jaunder--reconcile-pull-server-ahead-row row)))))
+              (should (eq (plist-get result :outcome) 'failed))
+              (should (eq (plist-get result :reason) 'pull-failed))
+              (should (eq (plist-get result :local-effect) 'unchanged))
+              (should (string-match-p "Member title must be one line"
+                                      (plist-get result :detail))))
+            (should (equal (with-temp-buffer
+                             (insert-file-contents-literally path)
+                             (buffer-string))
+                           before))))
+      (delete-directory root t))))
+
 (ert-deftest jaunder-reconcile-pull-stale-etag-blocks-before-local-replacement ()
   "A changed staged ETag leaves the reviewed matched file untouched."
   (let* ((root (file-name-as-directory (make-temp-file "jaunder-pull-stale-" t)))

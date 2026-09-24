@@ -227,11 +227,8 @@ impl From<common::org::OrgMetadataError> for HandlerError {
     }
 }
 
-impl From<common::post_body::InvalidPostBody> for HandlerError {
-    /// An entry whose content is nothing but blank lines describes no post, so it is
-    /// the client's error — the same `400` the service layer's `EmptyPost` earns
-    /// below, just detected a layer earlier now that the body is typed (#811).
-    fn from(_: common::post_body::InvalidPostBody) -> Self {
+impl From<super::mapping::InvalidPostFields> for HandlerError {
+    fn from(_: super::mapping::InvalidPostFields) -> Self {
         HandlerError::BadRequest
     }
 }
@@ -240,6 +237,7 @@ impl From<storage::PerformCreationError> for HandlerError {
     fn from(err: storage::PerformCreationError) -> Self {
         match err {
             storage::PerformCreationError::EmptyPost
+            | storage::PerformCreationError::InvalidTitle(_)
             | storage::PerformCreationError::InvalidSlug(_)
             | storage::PerformCreationError::BookkeepingMismatch => HandlerError::BadRequest,
             // Exhausted/CreatedNotFound/Storage are all internal failures.
@@ -252,6 +250,7 @@ impl From<storage::PerformUpdateError> for HandlerError {
     fn from(err: storage::PerformUpdateError) -> Self {
         match err {
             storage::PerformUpdateError::EmptyPost
+            | storage::PerformUpdateError::InvalidTitle(_)
             | storage::PerformUpdateError::BookkeepingMismatch => HandlerError::BadRequest,
             storage::PerformUpdateError::SlugConflict => HandlerError::Status(StatusCode::CONFLICT),
             storage::PerformUpdateError::StaleContent => HandlerError::PreconditionFailed,

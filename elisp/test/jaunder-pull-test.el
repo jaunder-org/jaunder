@@ -27,6 +27,16 @@
   (jaunder--atom->org xml (or etag "\"sha256-test\"")
                       jaunder-pull-test--captured-at (or zone "UTC")))
 
+(ert-deftest jaunder-atom->org-rejects-remote-title-line-breaks ()
+  (dolist (title (list "First\nSecond" "\u2028Edge" "Edge\u2029" (string #x85)))
+    (let ((xml (jaunder-pull-test--entry
+                (format "<title>%s</title>" title)
+                "<link rel=\"edit\" href=\"https://h/atompub/alice/posts/42\"/>"
+                "<j:slug>untitled-note</j:slug>"
+                "<content type=\"text/org\">Body</content>"
+                "<app:control><app:draft>yes</app:draft></app:control>")))
+      (should-error (jaunder-pull-test--org xml)))))
+
 (ert-deftest jaunder-atom->org-draft-untitled-exact-bytes ()
   ;; Empty Atom title means no local title, while draft native source and sync
   ;; metadata keep their fixed order without date fields.
@@ -48,10 +58,10 @@
               "\nBody\nhttps://h/media/x.png")))))
 
 (ert-deftest jaunder-atom->org-scheduled-multiline-metadata-is-reversible ()
-  ;; Multiline wire metadata becomes repeated headers in deterministic order and
-  ;; the title publishes back as the same LF-delimited value.
+  ;; Multiline summary metadata becomes repeated headers in deterministic order;
+  ;; the valid single-line title remains reversible.
   (let* ((xml (jaunder-pull-test--entry
-               "<title>Line one\nLine two</title>"
+               "<title>One line</title>"
                "<category term=\"alpha\"/><category term=\"beta\"/>"
                "<summary>First\nSecond</summary>"
                "<published>2026-08-26T13:00:00+02:00</published>"
@@ -61,7 +71,7 @@
          (org (jaunder-pull-test--org xml)))
     (should
      (equal org
-            (concat "#+TITLE: Line one\n#+TITLE: Line two\n"
+            (concat "#+TITLE: One line\n"
                     "#+DATE: [2026-08-26 Wed 11:00]\n"
                     "#+KEYWORDS: alpha, beta\n"
                     "#+DESCRIPTION: First\n#+DESCRIPTION: Second\n"
@@ -80,7 +90,7 @@
       (insert org)
       (org-mode)
       (let ((entry (jaunder--org->atom)))
-        (should (equal (jaunder-entry-title entry) "Line one\nLine two"))
+        (should (equal (jaunder-entry-title entry) "One line"))
         (should (equal (jaunder-entry-categories entry) '("alpha" "beta")))
         (should (equal (jaunder-entry-summary entry) "First\nSecond"))
         (should-not (jaunder-entry-draft entry))

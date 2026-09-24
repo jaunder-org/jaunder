@@ -97,6 +97,77 @@ async fn create_post_returns_201_and_is_retrievable(#[case] backend: Backend) {
     );
 }
 
+#[apply(backends)]
+#[tokio::test]
+async fn invalid_authored_titles_reject_atompub_create_and_update_without_mutation(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, &env.base);
+    let created = app
+        .clone()
+        .oneshot(atompub_post_xml(
+            &session,
+            "posts",
+            &entry_xml("Original", "text", "Original body"),
+        ))
+        .await
+        .expect("create a valid Post");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let post_id = PostId::from(location_post_id(&created));
+    let viewer = ViewerIdentity::local(session.user_id);
+    let before = env
+        .posts()
+        .get_post_by_id(post_id, &viewer)
+        .await
+        .expect("read original Post")
+        .expect("original Post exists");
+
+    for invalid in [
+        entry_xml("First\nSecond", "text", "Changed body"),
+        entry_xml("\u{2028}", "text", "Changed body"),
+        entry_xml(
+            "Structured title",
+            "text/org",
+            "#+TITLE: First\n#+TITLE: Second\nChanged body",
+        ),
+    ] {
+        let rejected_create = app
+            .clone()
+            .oneshot(atompub_post_xml(&session, "posts", &invalid))
+            .await
+            .expect("reject invalid title on create");
+        assert_eq!(rejected_create.status(), StatusCode::BAD_REQUEST);
+
+        let rejected_update = app
+            .clone()
+            .oneshot(atompub_put_xml(
+                &session,
+                &format!("posts/{post_id}"),
+                &invalid,
+            ))
+            .await
+            .expect("reject invalid title on update");
+        assert_eq!(rejected_update.status(), StatusCode::BAD_REQUEST);
+        let after = env
+            .posts()
+            .get_post_by_id(post_id, &viewer)
+            .await
+            .expect("read retained Post")
+            .expect("original Post remains");
+        assert_eq!(after.title, before.title);
+        assert_eq!(after.body, before.body);
+        assert_eq!(after.slug, before.slug);
+        assert_eq!(after.updated_at, before.updated_at);
+    }
+}
+
 #[apply(backends_matrix)]
 #[case::markdown_to_org(
     "{{< youtube dQw4w9WgXcQ >}}",

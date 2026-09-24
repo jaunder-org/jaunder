@@ -495,19 +495,28 @@ A post stores its **source**: a `PostBody` in an author-chosen `PostFormat`
 (`Markdown` | `Org` | `Html`, `common/src/render.rs:35`), from which a
 module-qualified `host::render` free function derives the stored
 `rendered_html`. A titled Post also stores a sanitized, inline-only Rendered
-Title derived atomically from its authored `PostTitle` and format. A dedicated
-narrow `ammonia` policy retains only its safe inline tags without attributes and
-removes active or embedded content; it does not synthesize image alternatives or
-block-wrapper spacing. A source with no surviving visible text retains an empty
-persisted fragment and presents no web, RSS, or JSON Feed title rather than
-leaking authored markup. Host ammonia validates persisted bytes before typed
-database reads; invalid restored bytes remain diagnostic source data but fail
-those reads before any unescaped sink. Server-authored DTO bytes are trusted by
-CSR exactly like `RenderedHtml`, so browser clients do not ship a title parser.
-Current Posts and full Post Revisions retain these rendered bytes so title and
-body share parser-version and historical-snapshot semantics. Migration 0039 adds
-nullable columns only; with no production instances it does not repair legacy
-rows.
+Title derived atomically from its authored `PostTitle` and format. The authored
+Post Title is one logical source line: the shared value boundary rejects every
+line separator, including those at its edges, while ordinary surrounding
+whitespace is trimmed and internal non-line-breaking whitespace is preserved.
+Web and AtomPub writes and server-side Org header ingestion enforce the same
+rule; invalid explicit or heading-derived titles reject the whole write rather
+than becoming untitled. The Emacs Protocol Client rejects locally before network
+or Media work. This does not forbid visual wrapping or source markup that
+produces a rendered `<br>`
+([single-line authored Post Titles](adr/drafts/single-line-authored-post-titles.md)).
+A dedicated narrow `ammonia` policy retains only its safe inline tags without
+attributes and removes active or embedded content; it does not synthesize image
+alternatives or block-wrapper spacing. A source with no surviving visible text
+retains an empty persisted fragment and presents no web, RSS, or JSON Feed title
+rather than leaking authored markup. Host ammonia validates persisted bytes
+before typed database reads; invalid restored bytes remain diagnostic source
+data but fail those reads before any unescaped sink. Server-authored DTO bytes
+are trusted by CSR exactly like `RenderedHtml`, so browser clients do not ship a
+title parser. Current Posts and full Post Revisions retain these rendered bytes
+so title and body share parser-version and historical-snapshot semantics.
+Migration 0039 adds nullable columns only; with no production instances it does
+not repair legacy rows.
 ([persisted Rendered Title decision](adr/0204-persist-inline-rendered-post-titles.md)).
 The source and rendered forms feed deliberately separate serialization surfaces
 — Syndication Feeds consume presentation projections, while the AtomPub

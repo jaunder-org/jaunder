@@ -8,7 +8,7 @@
 use common::org::{Presence, PublicationState};
 use common::post_body::{InvalidPostBody, PostBody};
 use common::post_summary::PostSummary;
-use common::post_title::PostTitle;
+use common::post_title::{InvalidPostTitle, PostTitle};
 use common::tag::TagLabel;
 use common::tagged_url::{self, BaseUrl, EditUriUrl, Permalink};
 use common::time::UtcInstant;
@@ -16,6 +16,17 @@ use common::visibility::AudienceTarget;
 use host::atompub::{self, Category, Content, Entry, Link, Text};
 use std::str::FromStr;
 use storage::{PostFormat, PostRecord};
+
+/// Invalid entry fields that must reject the entire `AtomPub` write.
+#[derive(Debug, thiserror::Error)]
+pub(super) enum InvalidPostFields {
+    #[error(transparent)]
+    Body(#[from] InvalidPostBody),
+    #[error(transparent)]
+    Title(#[from] InvalidPostTitle),
+    #[error("published timestamp is outside the supported range")]
+    PublishedTime,
+}
 
 /// The post-shaped data carried by an incoming `AtomPub` `Entry`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,22 +99,19 @@ fn classify_published(published: UtcInstant, request_clock: UtcInstant) -> Publi
 /// `text/markdown`→Markdown, `html`/`xhtml`/`text/html`→Html, and bare `text`
 /// (or absent/unknown) falls back to the user's `default_format`.
 ///
-/// The body is the **one** field lenient ingest cannot apply to: an unusable
-/// summary or category is dropped and the entry still names a post, but an entry
-/// with no usable content names nothing. So this is the mapping's sole user-input
-/// failure mode, and the handlers turn it into a `400`.
+/// An unusable summary or category is still dropped on ingest, but an invalid
+/// authored title or body rejects the complete write rather than becoming
+/// absent. The handler maps these failures to `400`.
 ///
 /// # Errors
 ///
-/// Returns [`InvalidPostBody`] when the entry's content has no non-blank line —
-/// including an entry that carries no content element at all (#811) — or when
-/// Atom's Chrono-backed published timestamp cannot cross the RFC 3339 adapter
-/// into Jiff's supported range.
-pub fn entry_to_post_fields(
+/// Returns [`InvalidPostFields`] when content has no non-blank line, the authored
+/// title has a line break, or Atom's published time is outside Jiff's range.
+pub(super) fn entry_to_post_fields(
     entry: &Entry,
     default_format: PostFormat,
     request_clock: UtcInstant,
-) -> Result<PostFields, InvalidPostBody> {
+) -> Result<PostFields, InvalidPostFields> {
     let (ctype, value) = entry
         .content()
         .and_then(|c| c.value().map(|v| (c.content_type(), v)))
@@ -112,22 +120,21 @@ pub fn entry_to_post_fields(
     let format = wire_to_format(ctype, default_format);
 
     let body: PostBody = value.parse()?;
-    // A blank `<title>` means the client supplied no title: `PostTitle`'s `FromStr`
-    // rejects it and `ok()` turns that into absence, so the presence policy is the
-    // type's rule rather than a hand-rolled emptiness check beside it (#830).
-    let title = entry.title().as_str().parse::<PostTitle>().ok();
+    // Only genuinely blank, non-line-breaking source means no title; invalid
+    // authored source must not silently become an untitled Post.
+    let title = PostTitle::parse_optional(entry.title().as_str())?;
     // The entry's `<summary>` becomes a validated `PostSummary`. Like the invalid
     // `<category>` term below, an over-cap/blank summary is silently dropped rather
     // than failing the whole entry (lenient ingest, R5) — `entry_to_post_fields`
-    // stays infallible.
+    // remains lenient for that field.
     let summary = entry
         .summary()
         .and_then(|t| t.as_str().parse::<PostSummary>().ok());
     // atom `<category term>` values are arbitrary RFC-4287 protocol strings (the
     // atom `Entry` model holds them as `String`, not our domain tag) — this is the
     // boundary where a conforming term becomes a `TagLabel`. `entry_to_post_fields`
-    // is infallible, so an invalid term is silently skipped here: dropping a
-    // malformed term keeps one bad category from failing the whole entry (R5).
+    // skips invalid terms: dropping a malformed term keeps one bad category
+    // from failing the whole entry (R5).
     let categories = entry
         .categories()
         .iter()
@@ -140,7 +147,7 @@ pub fn entry_to_post_fields(
         .published()
         .map(|published| UtcInstant::from_str(&published.to_rfc3339()))
         .transpose()
-        .map_err(|_| InvalidPostBody)?;
+        .map_err(|_| InvalidPostFields::PublishedTime)?;
     let lifecycle = match atompub::draft_marker(entry) {
         Some(true) => Presence::Present(PublicationState::Draft),
         Some(false) => Presence::Present(classify_published(
@@ -708,6 +715,20 @@ mod tests {
     }
 
     #[test]
+    fn entry_to_post_fields_rejects_multiline_title_instead_of_dropping_it() {
+        for title in ["First\nSecond", "\nFirst", "First\n", "\u{2028}"] {
+            let xml = format!(
+                "<entry xmlns=\"http://www.w3.org/2005/Atom\"><title>{title}</title><id>id</id><updated>2026-05-31T00:00:00Z</updated><content type=\"text\">body</content></entry>"
+            );
+            let entry = xml.parse::<Entry>().expect("parse entry");
+            assert!(
+                entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::now()).is_err(),
+                "accepted {title:?}"
+            );
+        }
+    }
+
+    #[test]
     fn entry_to_post_fields_absent_title_is_none() {
         let xml = r#"<?xml version="1.0"?>
 <entry xmlns="http://www.w3.org/2005/Atom">
@@ -721,6 +742,15 @@ mod tests {
             .expect("valid body");
 
         assert_eq!(fields.title, None);
+        for blank in ["", " \t "] {
+            let xml = format!(
+                "<entry xmlns=\"http://www.w3.org/2005/Atom\"><title>{blank}</title><id>id</id><updated>2026-05-31T00:00:00Z</updated><content type=\"text\">body</content></entry>"
+            );
+            let entry = xml.parse::<Entry>().expect("parse blank title");
+            let fields = entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::now())
+                .expect("blank title means absent");
+            assert_eq!(fields.title, None);
+        }
     }
 
     // -----------------------------------------------------------------------

@@ -48,7 +48,7 @@ mod tests {
     fn projection_uses_unicode_case_folding_and_collapsed_whitespace() {
         // The persisted value and inbound query must agree on Unicode case folding and
         // whitespace so both database backends can use byte-identical substring matching.
-        let title: PostTitle = "  Straße\u{a0}\nPost  ".parse().unwrap();
+        let title: PostTitle = "  Straße\u{a0}\u{2003}Post  ".parse().unwrap();
         let slug: Slug = "fallback-slug".parse().unwrap();
 
         assert_eq!(
@@ -56,7 +56,7 @@ mod tests {
             "strasse post fallback-slug"
         );
         assert_eq!(
-            normalize_post_search_query(" STRASSE\tPOST "),
+            normalize_post_search_query(" STRASSE\tPOST\n"),
             "strasse post"
         );
     }

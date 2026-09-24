@@ -95,6 +95,38 @@ Lets the warning tests assert on emitted warnings without touching the real
     ;; A far-future date passes.
     (should-not (jaunder--validate-publish e "scheduled" "[2999-01-01 Tue 00:00]" nil))))
 
+(ert-deftest jaunder-publish-rejects-title-before-network-media-or-intent ()
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-title-" t)))
+         (path (expand-file-name "post.org" root))
+         (jaunder-blogs (list (cons root '(:base-url "https://blog" :username "alice"))))
+         (effects 0))
+    (unwind-protect
+        (dolist (source '("#+TITLE: First\n#+TITLE: Second\n\nBody\n"
+                          "#+TITLE: \u2028Edge\n\nBody\n"))
+          (with-temp-file path (insert source))
+          (with-temp-buffer
+            (org-mode)
+            (insert source)
+            (set-visited-file-name path nil t)
+            (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                       (lambda (&rest _) (cl-incf effects) (error "service called")))
+                      ((symbol-function 'jaunder--http-request)
+                       (lambda (&rest _) (cl-incf effects) (error "HTTP called")))
+                      ((symbol-function 'jaunder--localize-post-links)
+                       (lambda (&rest _) (cl-incf effects) (error "links called")))
+                      ((symbol-function 'jaunder--localize-media)
+                       (lambda (&rest _) (cl-incf effects) (error "media called")))
+                      ((symbol-function 'jaunder--create-intent)
+                       (lambda (&rest _) (cl-incf effects) (error "intent called"))))
+              (should-error (jaunder-publish))
+              (should (= effects 0))
+              (should (equal (buffer-string) source))
+              (should (equal (with-temp-buffer
+                               (insert-file-contents path)
+                               (buffer-string))
+                             source)))))
+      (delete-directory root t))))
+
 (ert-deftest jaunder-publish-requires-audience-capability-before-mutation ()
   (let* ((root (file-name-as-directory (make-temp-file "jaunder-audience-cap-" t)))
          (path (expand-file-name "post.org" root))
