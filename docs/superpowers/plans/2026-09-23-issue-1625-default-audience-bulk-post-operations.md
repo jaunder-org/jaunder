@@ -73,10 +73,10 @@ Out:
     meaningful Post mutation.
   - Contract: selection intent is either explicit Post IDs or all matching one
     management filter. Confirmation resolves either intent server-side into a
-    `BulkSelectionSnapshot`: exact owner-scoped `(PostId, mutation version)`
-    targets in canonical Post-ID order plus selected count. The browser carries
-    that exact snapshot into execution; later matching or unrelated Posts do not
-    join or invalidate it.
+    `ManagementSelectionSnapshot`: exact owner-scoped
+    `(PostId, mutation version)` targets in canonical Post-ID order plus
+    selected count. The browser carries that exact snapshot into execution;
+    later matching or unrelated Posts do not join or invalidate it.
   - Verification: migration/startup tests prove legacy backfill, idempotence,
     stale-candidate rejection, and projection maintenance on create/update.
     Query tests pin all three publication states,
@@ -87,24 +87,26 @@ Out:
 
 - [x] Task 3: Compose atomic bulk Post mutations inside one write scope
   - Contract: a storage-owned bulk service accepts the authenticated User,
-    `BulkSelectionSnapshot`, operation, and one request clock. One set-based
-    validation/lock call consumes the complete canonically ordered snapshot and
-    rejects any owner/active/version mismatch before mutation; all work then
-    remains in the same `WriteScope` transaction or rolls back.
+    `ManagementSelectionSnapshot`, operation, and one request clock. One
+    set-based validation/lock call consumes the complete canonically ordered
+    snapshot and rejects any owner/active/version mismatch before mutation; all
+    work then remains in the same `WriteScope` transaction or rolls back.
   - Contract: add bulk-aware, backend-parity storage primitives rather than
-    looping ordinary per-Post writers. A fixed set of batched statements
-    captures one complete revision plus audience/tag/media children for every
-    materially changed target, applies Change Audience or soft deletion
-    set-wise, and enqueues all required feed/WebSub evidence through batched
-    storage. Change Audience validates one complete selection before the write
-    scope and excludes equal target sets from every write; Delete retains
-    ordinary Deleted Post semantics.
+    looping ordinary per-Post writers. Fixed-size, backend-safe statement
+    batches capture one complete revision plus audience/tag/media children for
+    every materially changed target, apply Change Audience or soft deletion
+    set-wise, and enqueue all required feed/WebSub evidence through batched
+    storage inside one atomic transaction. This is the narrow ADR-0092 exception
+    recorded by `docs/adr/drafts/uncapped-exact-post-management-mutations.md`.
+    Change Audience validates one complete selection before the write scope and
+    excludes equal target sets from every write; Delete retains ordinary Deleted
+    Post semantics.
   - Contract: return selected and materially changed counts only after commit.
     Missing, deleted, unauthorized, stale, or failed targets abort the complete
     transaction; no metrics or success invalidation may claim a rolled-back
     mutation.
   - Verification: dual-backend integration tests prove deterministic lock order,
-    target-count-independent batched write calls, multi-target success, mixed
+    bounded set-based statement batches, multi-target success, mixed
     changed/no-op counts, complete revisions and audience children, feed-event
     parity, and rollback for stale, missing, unauthorized, and induced mid-batch
     failure. Run the focused storage/Post lifecycle lane before the commit

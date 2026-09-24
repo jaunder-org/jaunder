@@ -288,8 +288,13 @@ client-validation mapping
   inside the mutation's existing `WriteScope`; the feed worker calls it in
   `ENQUEUE_CHUNK`-bounded transactions (`server/src/feed/worker.rs:108`), so
   batch size is capped by construction
-  ([ADR-0092](adr/0092-sqlite-bounded-write-lock-occupancy.md)). ADR-0022's
-  Argon2-inside-the-claim-window is the one documented exception.
+  ([ADR-0092](adr/0092-sqlite-bounded-write-lock-occupancy.md)). Exact Manage
+  Posts mutations are the narrow product-driven exception: the confirmed logical
+  selection is uncapped and remains one atomic transaction, while each set-based
+  statement partitions bind inputs into fixed-size batches
+  ([uncapped exact Post management mutations](adr/drafts/uncapped-exact-post-management-mutations.md)).
+  ADR-0022's Argon2-inside-the-claim-window remains the other documented
+  exception.
 - **Slug-ordered tag locks.** A transaction that will touch several `tags` rows
   sorts them by slug before acquiring any lock, so every transaction takes the
   row locks in one global order and concurrent `set_post_tags` reconciles cannot

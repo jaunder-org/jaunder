@@ -55,14 +55,37 @@ test("Manage Posts selects across pages and applies atomic bulk operations", asy
   await page.locator(ROW).first().getByRole("checkbox").check();
   await expect(page.getByText("2 selected", { exact: true })).toBeVisible();
 
+  let executionRequests = 0;
+  let releaseExecution = () => {};
+  const executionGate = new Promise<void>((resolve) => {
+    releaseExecution = resolve;
+  });
+  const delayedExecution = async (route: import("@playwright/test").Route) => {
+    executionRequests += 1;
+    await executionGate;
+    await route.continue();
+  };
+  await page.route(
+    "**/api/posts/execute_management_operation",
+    delayedExecution,
+  );
   await page.getByRole("button", { name: "Change audience" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toContainText("exactly 2 Posts");
   await expect(dialog).toContainText("complete Audience Selection");
   await dialog.getByLabel("Audience").selectOption("subscribers");
-  await dialog.getByRole("button", { name: "Confirm" }).click();
+  const confirm = dialog.getByRole("button", { name: "Confirm" });
+  await confirm.click();
+  await expect.poll(() => executionRequests).toBe(1);
+  await expect(page.getByRole("button", { name: "Delete" })).toBeDisabled();
+  releaseExecution();
   await expect(page.getByRole("status")).toHaveText(
     "Selected 2 Posts; changed 2.",
+  );
+  expect(executionRequests).toBe(1);
+  await page.unroute(
+    "**/api/posts/execute_management_operation",
+    delayedExecution,
   );
   const audienceFilter = page
     .locator(".j-manage-filters")

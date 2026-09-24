@@ -19,10 +19,10 @@ use crate::posts::errors::{CreatePostError, ListByTagError, TaggingError, Update
 use crate::posts::lifecycle;
 use crate::posts::lifecycle::{DecodeRawRow, RevisionDetailRow, RevisionMetadataRow};
 use crate::posts::management::{
-    BulkPostMutationError, BulkPostOperation, BulkSelectionSnapshot, BulkSelectionTarget,
-    ManagedPostRow, PostManagementAudienceFilter, PostManagementPage, PostManagementRequest,
-    PostManagementStateFilter, PostSelectionIntent, ResolvePostSelectionError,
-    StoredPostSearchPattern,
+    BulkPostMutationError, BulkPostOperation, BulkSelectionTarget, ManagedPostRow,
+    ManagementSelectionSnapshot, PostManagementAudienceFilter, PostManagementPage,
+    PostManagementRequest, PostManagementStateFilter, PostSelectionIntent,
+    ResolvePostSelectionError, StoredPostSearchPattern,
 };
 use crate::posts::media;
 use crate::posts::media::{
@@ -239,14 +239,14 @@ pub trait PostStorage: Send + Sync {
         &self,
         user_id: UserId,
         intent: &PostSelectionIntent,
-    ) -> std::result::Result<BulkSelectionSnapshot, ResolvePostSelectionError>;
+    ) -> std::result::Result<ManagementSelectionSnapshot, ResolvePostSelectionError>;
 
     /// Applies one exact snapshot in the caller's write transaction.
     async fn bulk_mutate_posts(
         &self,
         transaction: &mut WriteTransaction,
         user_id: UserId,
-        snapshot: &BulkSelectionSnapshot,
+        snapshot: &ManagementSelectionSnapshot,
         operation: &BulkPostOperation,
         now: UtcInstant,
     ) -> std::result::Result<BulkPostMutationEvidence, BulkPostMutationError>;
@@ -735,7 +735,7 @@ pub trait PostDialect: Backend {
     async fn bulk_mutate_posts(
         transaction: &mut WriteTransaction,
         user_id: UserId,
-        snapshot: &BulkSelectionSnapshot,
+        snapshot: &ManagementSelectionSnapshot,
         operation: &BulkPostOperation,
         now: UtcInstant,
     ) -> std::result::Result<BulkPostMutationEvidence, BulkPostMutationError>;
@@ -1488,32 +1488,38 @@ where
         &self,
         user_id: UserId,
         intent: &PostSelectionIntent,
-    ) -> std::result::Result<BulkSelectionSnapshot, ResolvePostSelectionError> {
+    ) -> std::result::Result<ManagementSelectionSnapshot, ResolvePostSelectionError> {
         let rows = match intent {
             PostSelectionIntent::Explicit(post_ids) => {
                 let post_ids = post_ids.iter().copied().collect::<BTreeSet<_>>();
                 if post_ids.is_empty() {
-                    return Ok(BulkSelectionSnapshot {
+                    return Ok(ManagementSelectionSnapshot {
                         targets: Vec::new(),
                     });
                 }
-                let mut query = QueryBuilder::<DB>::new(
-                    "SELECT p.post_id, p.mutation_version FROM posts p WHERE p.user_id = ",
-                );
-                query
-                    .push_storage_bind(user_id)
-                    .push(" AND p.deleted_at IS NULL AND p.post_id IN (");
-                {
-                    let mut separated = query.separated(", ");
-                    for post_id in &post_ids {
-                        separated.push_storage_bind(*post_id);
+                let post_ids = post_ids.into_iter().collect::<Vec<_>>();
+                let mut rows = Vec::with_capacity(post_ids.len());
+                for post_ids in post_ids.chunks(crate::sql::SET_OPERATION_BIND_BATCH) {
+                    let mut query = QueryBuilder::<DB>::new(
+                        "SELECT p.post_id, p.mutation_version FROM posts p WHERE p.user_id = ",
+                    );
+                    query
+                        .push_storage_bind(user_id)
+                        .push(" AND p.deleted_at IS NULL AND p.post_id IN (");
+                    {
+                        let mut separated = query.separated(", ");
+                        for post_id in post_ids {
+                            separated.push_storage_bind(*post_id);
+                        }
                     }
+                    query.push(") ORDER BY p.post_id");
+                    rows.extend(
+                        query
+                            .build_query_as::<(PostId, PostMutationVersion)>()
+                            .fetch_all(&self.pool)
+                            .await?,
+                    );
                 }
-                query.push(") ORDER BY p.post_id");
-                let rows = query
-                    .build_query_as::<(PostId, PostMutationVersion)>()
-                    .fetch_all(&self.pool)
-                    .await?;
                 if rows.len() != post_ids.len() {
                     return Err(ResolvePostSelectionError::Unavailable);
                 }
@@ -1531,7 +1537,7 @@ where
                     .await?
             }
         };
-        Ok(BulkSelectionSnapshot {
+        Ok(ManagementSelectionSnapshot {
             targets: rows
                 .into_iter()
                 .map(|(post_id, mutation_version)| BulkSelectionTarget {
@@ -1546,7 +1552,7 @@ where
         &self,
         transaction: &mut WriteTransaction,
         user_id: UserId,
-        snapshot: &BulkSelectionSnapshot,
+        snapshot: &ManagementSelectionSnapshot,
         operation: &BulkPostOperation,
         now: UtcInstant,
     ) -> std::result::Result<BulkPostMutationEvidence, BulkPostMutationError> {
@@ -2649,7 +2655,7 @@ mod tests {
     async fn bulk_mutate_confirmed(
         env: &TestEnv,
         user_id: UserId,
-        snapshot: BulkSelectionSnapshot,
+        snapshot: ManagementSelectionSnapshot,
         operation: BulkPostOperation,
     ) -> std::result::Result<BulkPostMutationEvidence, BulkPostMutationError> {
         let posts = Arc::clone(&env.posts());
@@ -4291,6 +4297,40 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(history.revisions.len(), 1);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn uncapped_bulk_delete_partitions_backend_bind_batches(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let [owner] = seed_users::<1>(Arc::clone(&env.users()), env.write_scope().clone()).await;
+        let inputs = (0..=crate::sql::SET_OPERATION_BIND_BATCH)
+            .map(|index| {
+                SeedRawPost::new(owner)
+                    .slug(format!("bulk-bind-{index}"))
+                    .build()
+            })
+            .collect();
+        let ids =
+            create_posts_confirmed(env.posts().clone(), env.write_scope().clone(), inputs).await;
+        let snapshot = env
+            .posts()
+            .resolve_post_selection(owner, &PostSelectionIntent::Explicit(ids.clone()))
+            .await
+            .unwrap();
+        assert_eq!(snapshot.targets.len(), ids.len());
+
+        let evidence = bulk_mutate_confirmed(&env, owner, snapshot, BulkPostOperation::Delete)
+            .await
+            .unwrap();
+        assert_eq!(evidence.result.selected_count, ids.len());
+        assert_eq!(evidence.result.changed_count, ids.len());
+        assert!(matches!(
+            env.posts()
+                .resolve_post_selection(owner, &PostSelectionIntent::Explicit(vec![ids[0]]))
+                .await,
+            Err(ResolvePostSelectionError::Unavailable)
+        ));
     }
 
     #[apply(backends)]

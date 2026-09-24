@@ -1,5 +1,8 @@
 //! Shared SQL-string helpers used by both dialects' assembled (non-placeholder) SQL.
 
+/// Conservative cross-backend bind batch for logically uncapped set operations.
+pub(crate) const SET_OPERATION_BIND_BATCH: usize = 250;
+
 use std::fmt::Display;
 
 use crate::backup::{

@@ -110,9 +110,9 @@ pub use api::{
     publish, resolve_management_selection, unpublish, update,
 };
 pub use manage::{
-    BulkManageOperation, BulkManageResult, BulkSelectionSnapshot, BulkSelectionTarget,
-    ManageAudienceFilter, ManagePostsCursor, ManagePostsPage, ManagePublicationState,
-    ManageSelectionIntent, ManagedAudienceTarget, ManagedPost, ManagedPostLifecycle,
+    BulkManageOperation, BulkManageResult, BulkSelectionTarget, ManageAudienceFilter,
+    ManagePostsCursor, ManagePostsPage, ManagePublicationState, ManageSelectionIntent,
+    ManagedAudienceTarget, ManagedPost, ManagedPostLifecycle, ManagementSelectionSnapshot,
 };
 pub use manage_state::{
     ManageConfirmationKind, ManagePageState, ManageSelectionState, bulk_result_message,

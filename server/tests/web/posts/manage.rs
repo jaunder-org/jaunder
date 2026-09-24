@@ -8,8 +8,8 @@ use rstest_reuse::*;
 use server_fn::ServerFn;
 use storage::test_support::{Backend, backends};
 use web::posts::{
-    BulkManageOperation, BulkManageResult, BulkSelectionSnapshot, ManageAudienceFilter,
-    ManagePostsPage, ManagePublicationState, ManageSelectionIntent, PostInputs,
+    BulkManageOperation, BulkManageResult, ManageAudienceFilter, ManagePostsPage,
+    ManagePublicationState, ManageSelectionIntent, ManagementSelectionSnapshot, PostInputs,
 };
 
 use crate::helpers::{
@@ -68,7 +68,7 @@ async fn resolve(app: Router, cookie: &str, intent: ManageSelectionIntent) -> (S
 async fn execute(
     app: Router,
     cookie: Option<&str>,
-    snapshot: BulkSelectionSnapshot,
+    snapshot: ManagementSelectionSnapshot,
     operation: BulkManageOperation,
 ) -> (StatusCode, String) {
     post_json(
@@ -126,7 +126,7 @@ async fn manage_posts_http_is_owner_scoped_bounded_and_snapshots_all_matches(
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let explicit: BulkSelectionSnapshot = serde_json::from_str(&body).unwrap();
+    let explicit: ManagementSelectionSnapshot = serde_json::from_str(&body).unwrap();
     assert_eq!(explicit.selected_count, 2, "explicit IDs span list pages");
 
     let (status, body) = resolve(
@@ -140,7 +140,7 @@ async fn manage_posts_http_is_owner_scoped_bounded_and_snapshots_all_matches(
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let snapshot: BulkSelectionSnapshot = serde_json::from_str(&body).unwrap();
+    let snapshot: ManagementSelectionSnapshot = serde_json::from_str(&body).unwrap();
     assert_eq!(snapshot.selected_count, 2);
     assert_eq!(
         snapshot
@@ -188,7 +188,7 @@ async fn bulk_management_http_preserves_noops_conflicts_and_atomic_delete(
         },
     )
     .await;
-    let initial: BulkSelectionSnapshot = serde_json::from_str(&body).unwrap();
+    let initial: ManagementSelectionSnapshot = serde_json::from_str(&body).unwrap();
 
     let (status, body) = execute(
         app.clone(),
@@ -217,7 +217,7 @@ async fn bulk_management_http_preserves_noops_conflicts_and_atomic_delete(
         },
     )
     .await;
-    let current: BulkSelectionSnapshot = serde_json::from_str(&body).unwrap();
+    let current: ManagementSelectionSnapshot = serde_json::from_str(&body).unwrap();
     let (status, body) = execute(
         app.clone(),
         Some(&cookie),
@@ -239,7 +239,9 @@ async fn bulk_management_http_preserves_noops_conflicts_and_atomic_delete(
         app.clone(),
         Some(&cookie),
         initial,
-        BulkManageOperation::Delete,
+        BulkManageOperation::Delete {
+            confirmed_count: None,
+        },
     )
     .await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
@@ -252,14 +254,16 @@ async fn bulk_management_http_preserves_noops_conflicts_and_atomic_delete(
         },
     )
     .await;
-    let still_active: BulkSelectionSnapshot = serde_json::from_str(&body).unwrap();
+    let still_active: ManagementSelectionSnapshot = serde_json::from_str(&body).unwrap();
     assert_eq!(still_active.selected_count, 2, "conflict deletes nothing");
 
     let (status, body) = execute(
         app.clone(),
         Some(&cookie),
         current,
-        BulkManageOperation::Delete,
+        BulkManageOperation::Delete {
+            confirmed_count: None,
+        },
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
@@ -269,6 +273,56 @@ async fn bulk_management_http_preserves_noops_conflicts_and_atomic_delete(
     let (_, body) = list_managed(app, Some(&cookie), 10).await;
     let page: ManagePostsPage = serde_json::from_str(&body).unwrap();
     assert!(page.posts.is_empty());
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn bulk_delete_requires_exact_server_side_count_for_ten_or_more(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let owner = create_user_and_session(env.users(), env.sessions(), env.write_scope()).await;
+    let cookie = owner.cookie();
+    let mut post_ids = Vec::new();
+    for index in 0..10 {
+        post_ids.push(create_draft(app.clone(), &cookie, &format!("Count {index}")).await);
+    }
+    let (_, body) = resolve(
+        app.clone(),
+        &cookie,
+        ManageSelectionIntent::Explicit { post_ids },
+    )
+    .await;
+    let snapshot: ManagementSelectionSnapshot = serde_json::from_str(&body).unwrap();
+
+    let (status, body) = execute(
+        app.clone(),
+        Some(&cookie),
+        snapshot.clone(),
+        BulkManageOperation::Delete {
+            confirmed_count: None,
+        },
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert!(body.contains("exact selected Post count"), "body: {body}");
+    let (_, body) = list_managed(app.clone(), Some(&cookie), 20).await;
+    let page: ManagePostsPage = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        page.posts.len(),
+        10,
+        "rejected confirmation deletes nothing"
+    );
+
+    let (status, body) = execute(
+        app,
+        Some(&cookie),
+        snapshot,
+        BulkManageOperation::Delete {
+            confirmed_count: Some(10),
+        },
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
 }
 
 #[apply(backends)]
@@ -284,11 +338,13 @@ async fn manage_posts_http_requires_authentication(#[case] backend: Backend) {
     let (status, body) = execute(
         app,
         None,
-        BulkSelectionSnapshot {
+        ManagementSelectionSnapshot {
             targets: Vec::new(),
             selected_count: 0,
         },
-        BulkManageOperation::Delete,
+        BulkManageOperation::Delete {
+            confirmed_count: None,
+        },
     )
     .await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");

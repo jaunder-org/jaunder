@@ -342,7 +342,7 @@ impl PostDialect for Sqlite {
     async fn bulk_mutate_posts(
         transaction: &mut WriteTransaction,
         user_id: UserId,
-        snapshot: &crate::BulkSelectionSnapshot,
+        snapshot: &crate::ManagementSelectionSnapshot,
         operation: &crate::BulkPostOperation,
         now: UtcInstant,
     ) -> Result<crate::BulkPostMutationEvidence, crate::BulkPostMutationError> {

@@ -103,11 +103,11 @@ pub struct BulkSelectionTarget {
 
 /// Exact canonically ordered targets resolved at confirmation time.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BulkSelectionSnapshot {
+pub struct ManagementSelectionSnapshot {
     pub targets: Vec<BulkSelectionTarget>,
 }
 
-impl BulkSelectionSnapshot {
+impl ManagementSelectionSnapshot {
     #[must_use]
     pub fn selected_count(&self) -> usize {
         self.targets.len()

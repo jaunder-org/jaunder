@@ -30,8 +30,8 @@ use common::{
 use common::seed::{AuthoredPost, Page, PageCursor, PublicPresentation};
 
 use super::manage::{
-    BulkManageOperation, BulkManageResult, BulkSelectionSnapshot, ManageAudienceFilter,
-    ManagePostsCursor, ManagePostsPage, ManagePublicationState, ManageSelectionIntent,
+    BulkManageOperation, BulkManageResult, ManageAudienceFilter, ManagePostsCursor,
+    ManagePostsPage, ManagePublicationState, ManageSelectionIntent, ManagementSelectionSnapshot,
 };
 use crate::error::WebResult;
 
@@ -555,14 +555,14 @@ pub async fn list_managed_posts(
 #[macros::server(input = Json, skip_all)]
 pub async fn resolve_management_selection(
     intent: ManageSelectionIntent,
-) -> WebResult<BulkSelectionSnapshot> {
+) -> WebResult<ManagementSelectionSnapshot> {
     super::manage::resolve_management_selection_impl(intent).await
 }
 
 /// Applies one exact management snapshot atomically.
 #[macros::server(input = Json, skip_all)]
 pub async fn execute_management_operation(
-    snapshot: BulkSelectionSnapshot,
+    snapshot: ManagementSelectionSnapshot,
     operation: BulkManageOperation,
 ) -> WebResult<MutationOutcome<BulkManageResult>> {
     super::manage::execute_management_operation_impl(snapshot, operation).await

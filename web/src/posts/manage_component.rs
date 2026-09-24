@@ -368,7 +368,9 @@ fn execute_confirmation(signals: ManagePageState) {
         ManageConfirmationKind::Audience => BulkManageOperation::ChangeAudience {
             audience: signals.replacement.get(),
         },
-        ManageConfirmationKind::Delete => BulkManageOperation::Delete,
+        ManageConfirmationKind::Delete => BulkManageOperation::Delete {
+            confirmed_count: signals.delete_count.get().parse().ok(),
+        },
     };
     signals.pending.set(true);
     signals.error.set(None);

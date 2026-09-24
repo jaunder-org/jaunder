@@ -10,8 +10,8 @@ use std::sync::Arc;
 use thiserror::Error;
 
 use crate::{
-    BulkPostMutationError, BulkPostMutationResult, BulkPostOperation, BulkSelectionSnapshot,
-    CreatePostError, CreatePostInput, CreatedPost, FeedEventStorage, MediaContentLocks,
+    BulkPostMutationError, BulkPostMutationResult, BulkPostOperation, CreatePostError,
+    CreatePostInput, CreatedPost, FeedEventStorage, ManagementSelectionSnapshot, MediaContentLocks,
     PostBookkeepingExpectation, PostFormat, PostMediaOwnership, PostMutation, PostRecord,
     PostStorage, PublishUpdate, UpdatePostError, UpdatePostInput, WriteScope, WriteScopeError,
     WriteTransaction,
@@ -655,7 +655,7 @@ pub async fn perform_bulk_post_mutation(
     storage: Arc<dyn PostStorage>,
     feed_events: Arc<dyn FeedEventStorage>,
     user_id: UserId,
-    snapshot: BulkSelectionSnapshot,
+    snapshot: ManagementSelectionSnapshot,
     operation: BulkPostOperation,
     now: UtcInstant,
 ) -> Result<MutationOutcome<BulkPostMutationResult>, BulkPostMutationError> {

@@ -307,13 +307,15 @@ impl PostDialect for Postgres {
         if keys.is_empty() {
             return Ok(());
         }
-        let mut query =
-            QueryBuilder::<Postgres>::new("SELECT pg_advisory_xact_lock(keys.lock_key) FROM (");
-        query.push_values(keys, |mut row, key| {
-            row.push_storage_bind(key);
-        });
-        query.push(") AS keys(lock_key) ORDER BY keys.lock_key");
-        query.build().execute(&mut *conn).await?;
+        for keys in keys.chunks(crate::sql::SET_OPERATION_BIND_BATCH) {
+            let mut query =
+                QueryBuilder::<Postgres>::new("SELECT pg_advisory_xact_lock(keys.lock_key) FROM (");
+            query.push_values(keys, |mut row, key| {
+                row.push_storage_bind(key);
+            });
+            query.push(") AS keys(lock_key) ORDER BY keys.lock_key");
+            query.build().execute(&mut *conn).await?;
+        }
         Ok(())
     }
 
@@ -463,7 +465,7 @@ impl PostDialect for Postgres {
     async fn bulk_mutate_posts(
         transaction: &mut WriteTransaction,
         user_id: UserId,
-        snapshot: &crate::BulkSelectionSnapshot,
+        snapshot: &crate::ManagementSelectionSnapshot,
         operation: &crate::BulkPostOperation,
         now: UtcInstant,
     ) -> Result<crate::BulkPostMutationEvidence, crate::BulkPostMutationError> {

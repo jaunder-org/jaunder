@@ -12,10 +12,10 @@ use sqlx::{Database, Decode, Encode, Executor, QueryBuilder, Type};
 use crate::posts::PostDialect;
 use crate::posts::management::{
     BulkLockedPost, BulkPostMutationError, BulkPostMutationResult, BulkPostOperation,
-    BulkSelectionSnapshot,
+    ManagementSelectionSnapshot,
 };
 use crate::posts::models::POST_RECORD_COLUMNS;
-use crate::sql::QueryBuilderStorageExt;
+use crate::sql::{QueryBuilderStorageExt, SET_OPERATION_BIND_BATCH};
 
 /// Storage result plus feed invalidations earned by the committed mutation.
 #[derive(Debug)]
@@ -110,7 +110,7 @@ where
 async fn lock_snapshot<DB>(
     conn: &mut DB::Connection,
     user_id: UserId,
-    snapshot: &BulkSelectionSnapshot,
+    snapshot: &ManagementSelectionSnapshot,
 ) -> Result<Vec<BulkLockedPost>, BulkPostMutationError>
 where
     DB: PostDialect,
@@ -124,26 +124,32 @@ where
     if snapshot.targets.is_empty() {
         return Ok(Vec::new());
     }
-    let mut query = QueryBuilder::<DB>::new("WITH selection(post_id, mutation_version) AS (");
-    query.push_values(&snapshot.targets, |mut row, target| {
-        row.push_storage_bind(target.post_id)
-            .push_storage_bind(target.mutation_version);
-    });
-    query
-        .push(") SELECT ")
-        .push(POST_RECORD_COLUMNS)
-        .push(", p.mutation_version, ");
-    query.push(DB::TAGS_SUBQUERY).push(" AS tags, ");
-    query
-        .push(DB::MANAGED_AUDIENCES_SUBQUERY)
-        .push(" AS audiences FROM selection s JOIN posts p ON p.post_id = s.post_id AND p.mutation_version = s.mutation_version JOIN users u ON u.user_id = p.user_id WHERE p.user_id = ")
-        .push_storage_bind(user_id)
-        .push(" AND p.deleted_at IS NULL ORDER BY p.post_id")
-        .push(DB::BULK_LOCK_SUFFIX);
-    let rows = query
-        .build_query_as::<BulkLockedPost>()
-        .fetch_all(&mut *conn)
-        .await?;
+    let mut rows = Vec::with_capacity(snapshot.targets.len());
+    for targets in snapshot.targets.chunks(SET_OPERATION_BIND_BATCH) {
+        let mut query = QueryBuilder::<DB>::new("WITH selection(post_id, mutation_version) AS (");
+        query.push_values(targets, |mut row, target| {
+            row.push_storage_bind(target.post_id)
+                .push_storage_bind(target.mutation_version);
+        });
+        query
+            .push(") SELECT ")
+            .push(POST_RECORD_COLUMNS)
+            .push(", p.mutation_version, ");
+        query.push(DB::TAGS_SUBQUERY).push(" AS tags, ");
+        query
+            .push(DB::MANAGED_AUDIENCES_SUBQUERY)
+            .push(" AS audiences FROM selection s JOIN posts p ON p.post_id = s.post_id AND p.mutation_version = s.mutation_version JOIN users u ON u.user_id = p.user_id WHERE p.user_id = ")
+            .push_storage_bind(user_id)
+            .push(" AND p.deleted_at IS NULL ORDER BY p.post_id")
+            .push(DB::BULK_LOCK_SUFFIX);
+        rows.extend(
+            query
+                .build_query_as::<BulkLockedPost>()
+                .fetch_all(&mut *conn)
+                .await?,
+        );
+    }
+    rows.sort_by_key(|row| row.record.post_id);
     let exact = rows.len() == snapshot.targets.len()
         && rows.iter().zip(&snapshot.targets).all(|(row, target)| {
             row.record.post_id == target.post_id && row.mutation_version == target.mutation_version
@@ -165,22 +171,27 @@ where
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
     DB::Arguments: sqlx::IntoArguments<DB>,
 {
-    let mut query = QueryBuilder::<DB>::new(
-        "SELECT source, sha256, filename FROM post_media WHERE subject_kind = 'current' AND revision_id = 0 AND post_id IN (",
-    );
-    push_ids(&mut query, ids);
-    query.push(") ORDER BY source, sha256, filename");
-    Ok(query
-        .build_query_as::<(MediaSource, ContentHash, Filename)>()
-        .fetch_all(&mut *conn)
-        .await?
-        .into_iter()
-        .map(|(source, sha256, filename)| MediaRef {
-            source,
-            sha256,
-            filename,
-        })
-        .collect())
+    let mut media = BTreeSet::new();
+    for ids in ids.chunks(SET_OPERATION_BIND_BATCH) {
+        let mut query = QueryBuilder::<DB>::new(
+            "SELECT source, sha256, filename FROM post_media WHERE subject_kind = 'current' AND revision_id = 0 AND post_id IN (",
+        );
+        push_ids(&mut query, ids);
+        query.push(") ORDER BY source, sha256, filename");
+        media.extend(
+            query
+                .build_query_as::<(MediaSource, ContentHash, Filename)>()
+                .fetch_all(&mut *conn)
+                .await?
+                .into_iter()
+                .map(|(source, sha256, filename)| MediaRef {
+                    source,
+                    sha256,
+                    filename,
+                }),
+        );
+    }
+    Ok(media)
 }
 
 async fn capture_revisions<DB>(
@@ -197,18 +208,25 @@ where
     DB::Arguments: sqlx::IntoArguments<DB>,
     usize: sqlx::ColumnIndex<DB::Row>,
 {
-    let mut query = QueryBuilder::<DB>::new(
-        "INSERT INTO post_revisions (post_id, user_id, title, rendered_title, slug, body, format, rendered_html, summary, created_at, updated_at, published_at, deleted_at, captured_at) SELECT post_id, user_id, title, rendered_title, slug, body, format, rendered_html, summary, created_at, updated_at, published_at, deleted_at, ",
-    );
-    query
-        .push_storage_bind(now)
-        .push(" FROM posts WHERE post_id IN (");
-    push_ids(&mut query, ids);
-    query.push(") ORDER BY post_id RETURNING post_id, revision_id");
-    query
-        .build_query_as::<(PostId, RevisionId)>()
-        .fetch_all(&mut *conn)
-        .await
+    let mut revisions = Vec::with_capacity(ids.len());
+    for ids in ids.chunks(SET_OPERATION_BIND_BATCH) {
+        let mut query = QueryBuilder::<DB>::new(
+            "INSERT INTO post_revisions (post_id, user_id, title, rendered_title, slug, body, format, rendered_html, summary, created_at, updated_at, published_at, deleted_at, captured_at) SELECT post_id, user_id, title, rendered_title, slug, body, format, rendered_html, summary, created_at, updated_at, published_at, deleted_at, ",
+        );
+        query
+            .push_storage_bind(now)
+            .push(" FROM posts WHERE post_id IN (");
+        push_ids(&mut query, ids);
+        query.push(") ORDER BY post_id RETURNING post_id, revision_id");
+        revisions.extend(
+            query
+                .build_query_as::<(PostId, RevisionId)>()
+                .fetch_all(&mut *conn)
+                .await?,
+        );
+    }
+    revisions.sort_by_key(|(post_id, _)| *post_id);
+    Ok(revisions)
 }
 
 fn push_revision_map<DB>(query: &mut QueryBuilder<DB>, revisions: &[(PostId, RevisionId)])
@@ -234,20 +252,22 @@ where
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
     DB::Arguments: sqlx::IntoArguments<DB>,
 {
-    let mut tags = QueryBuilder::<DB>::new("WITH revisions(post_id, revision_id) AS (");
-    push_revision_map(&mut tags, revisions);
-    tags.push(") INSERT INTO post_revision_tags (revision_id, tag_slug, tag_display) SELECT r.revision_id, t.tag_slug, pt.tag_display FROM revisions r JOIN post_tags pt ON pt.post_id = r.post_id JOIN tags t ON t.tag_id = pt.tag_id");
-    tags.build().execute(&mut *conn).await?;
+    for revisions in revisions.chunks(SET_OPERATION_BIND_BATCH) {
+        let mut tags = QueryBuilder::<DB>::new("WITH revisions(post_id, revision_id) AS (");
+        push_revision_map(&mut tags, revisions);
+        tags.push(") INSERT INTO post_revision_tags (revision_id, tag_slug, tag_display) SELECT r.revision_id, t.tag_slug, pt.tag_display FROM revisions r JOIN post_tags pt ON pt.post_id = r.post_id JOIN tags t ON t.tag_id = pt.tag_id");
+        tags.build().execute(&mut *conn).await?;
 
-    let mut audiences = QueryBuilder::<DB>::new("WITH revisions(post_id, revision_id) AS (");
-    push_revision_map(&mut audiences, revisions);
-    audiences.push(") INSERT INTO post_revision_audiences (revision_id, target_kind, audience_id) SELECT r.revision_id, tk.name, pa.audience_id FROM revisions r JOIN post_audiences pa ON pa.post_id = r.post_id JOIN target_kinds tk ON tk.kind_id = pa.target_kind_id");
-    audiences.build().execute(&mut *conn).await?;
+        let mut audiences = QueryBuilder::<DB>::new("WITH revisions(post_id, revision_id) AS (");
+        push_revision_map(&mut audiences, revisions);
+        audiences.push(") INSERT INTO post_revision_audiences (revision_id, target_kind, audience_id) SELECT r.revision_id, tk.name, pa.audience_id FROM revisions r JOIN post_audiences pa ON pa.post_id = r.post_id JOIN target_kinds tk ON tk.kind_id = pa.target_kind_id");
+        audiences.build().execute(&mut *conn).await?;
 
-    let mut media = QueryBuilder::<DB>::new("WITH revisions(post_id, revision_id) AS (");
-    push_revision_map(&mut media, revisions);
-    media.push(") INSERT INTO post_media (post_id, subject_kind, revision_id, source, sha256, filename, reference_kind, reference_form) SELECT pm.post_id, 'revision', r.revision_id, pm.source, pm.sha256, pm.filename, pm.reference_kind, pm.reference_form FROM revisions r JOIN post_media pm ON pm.post_id = r.post_id WHERE pm.subject_kind = 'current' AND pm.revision_id = 0");
-    media.build().execute(&mut *conn).await?;
+        let mut media = QueryBuilder::<DB>::new("WITH revisions(post_id, revision_id) AS (");
+        push_revision_map(&mut media, revisions);
+        media.push(") INSERT INTO post_media (post_id, subject_kind, revision_id, source, sha256, filename, reference_kind, reference_form) SELECT pm.post_id, 'revision', r.revision_id, pm.source, pm.sha256, pm.filename, pm.reference_kind, pm.reference_form FROM revisions r JOIN post_media pm ON pm.post_id = r.post_id WHERE pm.subject_kind = 'current' AND pm.revision_id = 0");
+        media.build().execute(&mut *conn).await?;
+    }
     Ok(())
 }
 
@@ -267,30 +287,32 @@ where
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
     DB::Arguments: sqlx::IntoArguments<DB>,
 {
-    let mut delete = QueryBuilder::<DB>::new("DELETE FROM post_audiences WHERE post_id IN (");
-    push_ids(&mut delete, ids);
-    delete.push(")").build().execute(&mut *conn).await?;
+    let targets = canonical_audiences(audiences);
+    for ids in ids.chunks(SET_OPERATION_BIND_BATCH) {
+        let mut delete = QueryBuilder::<DB>::new("DELETE FROM post_audiences WHERE post_id IN (");
+        push_ids(&mut delete, ids);
+        delete.push(")").build().execute(&mut *conn).await?;
 
-    let targets: Vec<_> = canonical_audiences(audiences).into_iter().collect();
-    if !targets.is_empty() {
-        let mut insert = QueryBuilder::<DB>::new("WITH changed(post_id) AS (");
-        insert.push_values(ids, |mut row, id| {
-            row.push_storage_bind(*id);
-        });
-        insert.push("), targets(target_kind, audience_id) AS (");
-        insert.push_values(&targets, |mut row, (kind, audience_id)| {
-            row.push_storage_bind(*kind).push_storage_bind(*audience_id);
-        });
-        insert.push(") INSERT INTO post_audiences (post_id, target_kind_id, audience_id) SELECT c.post_id, tk.kind_id, t.audience_id FROM changed c CROSS JOIN targets t JOIN target_kinds tk ON tk.name = t.target_kind");
-        insert.build().execute(&mut *conn).await?;
+        for targets in targets.chunks(SET_OPERATION_BIND_BATCH) {
+            let mut insert = QueryBuilder::<DB>::new("WITH changed(post_id) AS (");
+            insert.push_values(ids, |mut row, id| {
+                row.push_storage_bind(*id);
+            });
+            insert.push("), targets(target_kind, audience_id) AS (");
+            insert.push_values(targets, |mut row, (kind, audience_id)| {
+                row.push_storage_bind(*kind).push_storage_bind(*audience_id);
+            });
+            insert.push(") INSERT INTO post_audiences (post_id, target_kind_id, audience_id) SELECT c.post_id, tk.kind_id, t.audience_id FROM changed c CROSS JOIN targets t JOIN target_kinds tk ON tk.name = t.target_kind");
+            insert.build().execute(&mut *conn).await?;
+        }
+
+        let mut update = QueryBuilder::<DB>::new("UPDATE posts SET updated_at = ");
+        update
+            .push_storage_bind(now)
+            .push(", mutation_version = mutation_version + 1 WHERE post_id IN (");
+        push_ids(&mut update, ids);
+        update.push(")").build().execute(&mut *conn).await?;
     }
-
-    let mut update = QueryBuilder::<DB>::new("UPDATE posts SET updated_at = ");
-    update
-        .push_storage_bind(now)
-        .push(", mutation_version = mutation_version + 1 WHERE post_id IN (");
-    push_ids(&mut update, ids);
-    update.push(")").build().execute(&mut *conn).await?;
     Ok(())
 }
 
@@ -306,12 +328,14 @@ where
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
     DB::Arguments: sqlx::IntoArguments<DB>,
 {
-    let mut query = QueryBuilder::<DB>::new("UPDATE posts SET deleted_at = ");
-    query
-        .push_storage_bind(now)
-        .push(", mutation_version = mutation_version + 1 WHERE post_id IN (");
-    push_ids(&mut query, ids);
-    query.push(")").build().execute(&mut *conn).await?;
+    for ids in ids.chunks(SET_OPERATION_BIND_BATCH) {
+        let mut query = QueryBuilder::<DB>::new("UPDATE posts SET deleted_at = ");
+        query
+            .push_storage_bind(now)
+            .push(", mutation_version = mutation_version + 1 WHERE post_id IN (");
+        push_ids(&mut query, ids);
+        query.push(")").build().execute(&mut *conn).await?;
+    }
     Ok(())
 }
 
@@ -319,7 +343,7 @@ where
 pub(crate) async fn apply_bulk_post_operation<DB>(
     conn: &mut DB::Connection,
     user_id: UserId,
-    snapshot: &BulkSelectionSnapshot,
+    snapshot: &ManagementSelectionSnapshot,
     operation: &BulkPostOperation,
     now: UtcInstant,
 ) -> Result<BulkPostMutationEvidence, BulkPostMutationError>

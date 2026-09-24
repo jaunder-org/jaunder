@@ -22,9 +22,9 @@ pub use cursors::{
 };
 pub use errors::{CreatePostError, ListByTagError, TaggingError, UpdatePostError};
 pub use management::{
-    BulkPostMutationError, BulkPostMutationResult, BulkPostOperation, BulkSelectionSnapshot,
-    BulkSelectionTarget, ManagedPostRecord, PostManagementAudienceFilter, PostManagementPage,
-    PostManagementRequest, PostManagementStateFilter, PostSelectionIntent,
+    BulkPostMutationError, BulkPostMutationResult, BulkPostOperation, BulkSelectionTarget,
+    ManagedPostRecord, ManagementSelectionSnapshot, PostManagementAudienceFilter,
+    PostManagementPage, PostManagementRequest, PostManagementStateFilter, PostSelectionIntent,
     ResolvePostSelectionError,
 };
 pub use media::{

@@ -113,7 +113,7 @@ pub struct BulkSelectionTarget {
 
 /// Immutable target set confirmed before execution.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct BulkSelectionSnapshot {
+pub struct ManagementSelectionSnapshot {
     pub targets: Vec<BulkSelectionTarget>,
     pub selected_count: usize,
 }
@@ -123,7 +123,7 @@ pub struct BulkSelectionSnapshot {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum BulkManageOperation {
     ChangeAudience { audience: AudienceSelection },
-    Delete,
+    Delete { confirmed_count: Option<usize> },
 }
 
 /// Counts for a transaction confirmed committed by storage.
@@ -258,7 +258,7 @@ pub(super) async fn list_managed_posts_impl(
 #[cfg(feature = "server")]
 pub(super) async fn resolve_management_selection_impl(
     intent: ManageSelectionIntent,
-) -> Result<BulkSelectionSnapshot, InternalError> {
+) -> Result<ManagementSelectionSnapshot, InternalError> {
     let auth = auth::require_auth().await?;
     let storage_intent = match intent {
         ManageSelectionIntent::Explicit { post_ids } => PostSelectionIntent::Explicit(post_ids),
@@ -292,7 +292,7 @@ pub(super) async fn resolve_management_selection_impl(
             mutation_version: target.mutation_version.value(),
         })
         .collect::<Vec<_>>();
-    Ok(BulkSelectionSnapshot {
+    Ok(ManagementSelectionSnapshot {
         selected_count: targets.len(),
         targets,
     })
@@ -300,8 +300,8 @@ pub(super) async fn resolve_management_selection_impl(
 
 #[cfg(feature = "server")]
 fn storage_snapshot(
-    snapshot: BulkSelectionSnapshot,
-) -> Result<storage::BulkSelectionSnapshot, InternalError> {
+    snapshot: ManagementSelectionSnapshot,
+) -> Result<storage::ManagementSelectionSnapshot, InternalError> {
     let ordered = snapshot
         .targets
         .windows(2)
@@ -327,16 +327,24 @@ fn storage_snapshot(
             })
         })
         .collect::<Result<Vec<_>, InternalError>>()?;
-    Ok(storage::BulkSelectionSnapshot { targets })
+    Ok(storage::ManagementSelectionSnapshot { targets })
 }
 
 /// Executes one confirmed exact snapshot inside a single write scope.
 #[cfg(feature = "server")]
 pub(super) async fn execute_management_operation_impl(
-    snapshot: BulkSelectionSnapshot,
+    snapshot: ManagementSelectionSnapshot,
     operation: BulkManageOperation,
 ) -> Result<common::MutationOutcome<BulkManageResult>, InternalError> {
     let auth = auth::require_auth().await?;
+    if let BulkManageOperation::Delete { confirmed_count } = &operation
+        && snapshot.selected_count >= 10
+        && *confirmed_count != Some(snapshot.selected_count)
+    {
+        return Err(InternalError::validation(
+            "Enter the exact selected Post count to confirm deletion",
+        ));
+    }
     let operation = match operation {
         BulkManageOperation::ChangeAudience { audience } => {
             let targets = common::visibility::audience_selection_to_targets(&audience);
@@ -346,7 +354,7 @@ pub(super) async fn execute_management_operation_impl(
                 .map_err(InternalError::from)?;
             storage::BulkPostOperation::ChangeAudience(targets)
         }
-        BulkManageOperation::Delete => storage::BulkPostOperation::Delete,
+        BulkManageOperation::Delete { .. } => storage::BulkPostOperation::Delete,
     };
     let snapshot = storage_snapshot(snapshot)?;
     let outcome = storage::perform_bulk_post_mutation(

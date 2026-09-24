@@ -7,8 +7,8 @@ use common::visibility::{AudienceBase, AudienceSelection};
 use leptos::prelude::RwSignal;
 
 use super::{
-    BulkManageResult, BulkSelectionSnapshot, BulkSelectionTarget, ManageAudienceFilter,
-    ManagePostsCursor, ManagePostsPage, ManagePublicationState, ManagedPost,
+    BulkManageResult, BulkSelectionTarget, ManageAudienceFilter, ManagePostsCursor,
+    ManagePostsPage, ManagePublicationState, ManagedPost, ManagementSelectionSnapshot,
 };
 
 /// Which bulk confirmation the page is presenting.
@@ -31,7 +31,7 @@ pub struct ManagePageState {
     pub loading: RwSignal<bool>,
     pub error: RwSignal<Option<String>>,
     pub selection: RwSignal<ManageSelectionState>,
-    pub confirmation: RwSignal<Option<(ManageConfirmationKind, BulkSelectionSnapshot)>>,
+    pub confirmation: RwSignal<Option<(ManageConfirmationKind, ManagementSelectionSnapshot)>>,
     pub pending: RwSignal<bool>,
     pub success: RwSignal<Option<String>>,
     pub delete_count: RwSignal<String>,
@@ -88,7 +88,7 @@ impl ManageSelectionState {
         }
     }
 
-    pub fn replace_with_snapshot(&mut self, snapshot: &BulkSelectionSnapshot) {
+    pub fn replace_with_snapshot(&mut self, snapshot: &ManagementSelectionSnapshot) {
         self.targets = snapshot
             .targets
             .iter()
@@ -106,7 +106,7 @@ impl ManageSelectionState {
     }
 
     #[must_use]
-    pub fn snapshot(&self) -> BulkSelectionSnapshot {
+    pub fn snapshot(&self) -> ManagementSelectionSnapshot {
         let targets = self
             .targets
             .iter()
@@ -115,7 +115,7 @@ impl ManageSelectionState {
                 mutation_version: *mutation_version,
             })
             .collect::<Vec<_>>();
-        BulkSelectionSnapshot {
+        ManagementSelectionSnapshot {
             selected_count: targets.len(),
             targets,
         }
@@ -184,7 +184,7 @@ mod tests {
         assert_eq!(selection.post_ids(), vec![PostId::from(1), PostId::from(9)]);
         assert_eq!(selection.snapshot().selected_count, 2);
 
-        selection.replace_with_snapshot(&BulkSelectionSnapshot {
+        selection.replace_with_snapshot(&ManagementSelectionSnapshot {
             targets: vec![BulkSelectionTarget {
                 post_id: PostId::from(7),
                 mutation_version: 3,

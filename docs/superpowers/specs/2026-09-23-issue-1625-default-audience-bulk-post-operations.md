@@ -74,7 +74,11 @@ operations apply predictably across an explicitly confirmed Post selection.
   not an administrative bypass.
 - No arbitrary selection-size cap is introduced. The initial operations are
   expected to remain bounded enough for a synchronous transaction, and the UI
-  prevents duplicate submission while one is pending.
+  prevents duplicate submission while one is pending. This is the narrow
+  exception to ADR-0092 recorded by
+  `docs/adr/drafts/uncapped-exact-post-management-mutations.md`; SQL bind inputs
+  remain partitioned into fixed-size set-based batches inside the one atomic
+  transaction.
 
 ## Acceptance
 
