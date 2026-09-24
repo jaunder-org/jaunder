@@ -803,6 +803,17 @@ mod tests {
     }
 
     #[test]
+    fn switching_to_org_or_staying_org_does_not_strip_source() {
+        Owner::new().with(|| {
+            let state = ComposeState::new();
+            state.body.set_value("#+TITLE: Authored\n\nContent");
+            state.switch_format(PostFormat::Org);
+            state.switch_format(PostFormat::Org);
+            assert_eq!(state.body.value(), "#+TITLE: Authored\n\nContent");
+        });
+    }
+
+    #[test]
     fn switching_without_a_projected_header_preserves_author_source() {
         Owner::new().with(|| {
             let state = ComposeState::new();
