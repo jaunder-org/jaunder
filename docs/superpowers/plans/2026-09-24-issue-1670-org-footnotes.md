@@ -15,10 +15,11 @@ Out: a second parser, Emacs/client behavior, Markdown/HTML footnotes, historical
 Post Revision rewriting, and duplicating PR #1671's fork/queue bootstrap.
 
 **Baseline:** PR #1671 merged as `ce88c2c84c534a3e4777fe4db6a6d63d73628ec9`;
-this checkout now includes its fork pin and offline queue contract. Work on the
-orgize fork belongs to its own repository and must be reviewed and pinned back
-into Jaunder; this outline does not authorize working in another checkout from
-this session.
+this checkout includes its fork pin and offline queue contract and is rebased on
+PR #1674 (`9588c3f8cf240086a71fd98d18754aa07a41417b`), which adds migrations
+`0046`/`0047` and a startup Post-projection refresh. Work on the orgize fork
+belongs to its own repository and must be reviewed and pinned back into Jaunder;
+this outline does not authorize working in another checkout from this session.
 
 ## Task outline
 
@@ -38,23 +39,26 @@ this session.
 - [ ] Supply a stable Post-scoped rendering identity on create and update.
   - Contract: the Post ID is available before first persisted render and enters
     Org body export on create and update. The offline rebuild takes the same ID
-    through this rendering boundary in Task 3. Rendering retains the inseparable
-    sanitized HTML/Media-reference aggregate; two identical Post bodies never
-    share HTML anchors on a page.
+    through this rendering boundary. Rendering retains the inseparable sanitized
+    HTML/Media-reference aggregate; two identical Post bodies never share HTML
+    anchors on a page.
   - Verification: focused host/storage tests for new and updated Posts,
     identical bodies with distinct IDs, sanitizer-preserved forward/back links,
     unchanged non-Org rendering and unchanged native AtomPub source.
+- [x] Re-enqueue the existing full Post rebuild for both backends.
+  - Contract: migration `0048` on each backend requests the same
+    `rebuild_rendered_posts` operation as `0045` and PR #1674's `0047`,
+    including retained Deleted Posts. Do not add another dispatcher operation.
+  - Verification: on each backend, drain through `0047`, migrate to `0048`,
+    observe one new pending full rebuild, then drain it with the existing
+    dispatcher.
 - [ ] Rebuild all current Posts and dependent public projections offline.
-  - Contract: add the next SQLx migration on each backend to enqueue the
-    existing `rebuild_rendered_posts` operation, as `0045` did. Reuse its closed
-    dispatcher and full current-Post pass (including retained Deleted Posts)
-    with each Post's stable ID; do not create a second operation. Replace exact
-    sanitized HTML-derived Media references, invalidate affected Syndication
-    Feed cache/validators and enqueue `feed_events` atomically with completion
-    of the pending operation. Preserve source, timestamps and historical Post
-    Revisions. Respect the offline-only ADR-0092 exception, never a request-time
-    unbounded write transaction; allocate the next migration numbers after
-    #1671's `0045`.
+  - Contract: the queued full current-Post pass uses each Post's stable ID.
+    Replace exact sanitized HTML-derived Media references, invalidate affected
+    Syndication Feed cache/validators and enqueue `feed_events` atomically with
+    completion of the pending operation. Preserve source, timestamps and
+    historical Post Revisions. Respect the offline-only ADR-0092 exception,
+    never a request-time unbounded write transaction.
   - Verification: `#[apply(backends)]` tests for SQLite/PostgreSQL old rows,
     including retained Deleted Posts and non-Org Posts, Post-ID-scoped links
     matching newly created and updated Posts, media inside referenced notes,
@@ -81,9 +85,10 @@ this session.
 - Verify Post ID allocation/order against both dialects and every create path;
   preserve rendering/sanitization and ADR-0090's inseparable Media-reference
   contract.
-- Do not overwrite #1671's pending migrations or rebuild old derivative data via
-  a semantic Post edit. Keep reviewer-visible source and historical revisions
-  unchanged.
+- Do not overwrite #1671's or PR #1674's pending migrations or rebuild old
+  derivative data via a semantic Post edit. Keep reviewer-visible source and
+  historical revisions unchanged; reconcile #1674's checkpointed startup refresh
+  with the later full rebuild without duplicate public feed events.
 - For each completed slice, use focused proof and `jaunder-commit` (stage the
   checked tree, then commit through precommit); broad gate only when the
   boundary warrants it. No unapproved lint suppressions or `Co-Authored-By`

@@ -773,6 +773,37 @@ main = putStrLn "hello"
 
     #[apply(backends)]
     #[tokio::test]
+    async fn migration_0048_requeues_full_current_post_rebuild(#[case] backend: Backend) {
+        // The new migration must enqueue work even on an instance that drained 0047.
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(47).await.unwrap();
+        db.drain_pending_code_migrations().await;
+        db.migrate_current().await.unwrap();
+        let pending = db
+            .pool
+            .string_quintuples(
+                "SELECT operation, '', '', '', '' FROM pending_code_migrations ORDER BY queue_id",
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            pending.iter().map(|row| row.0.as_str()).collect::<Vec<_>>(),
+            ["rebuild_rendered_posts"],
+            "the follow-up migration reuses the full current-Post rebuild"
+        );
+        db.drain_pending_code_migrations().await;
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM pending_code_migrations")
+                .await
+                .unwrap(),
+            0,
+            "the existing dispatcher consumes the follow-up request"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
     async fn migration_0045_rebuilds_only_changed_current_derivatives_and_public_feeds(
         #[case] backend: Backend,
     ) {
