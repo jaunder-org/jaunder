@@ -1233,7 +1233,7 @@ mod tests {
             let body: PostBody = match format {
                 PostFormat::Org => format!("#+begin_src {label}\n{source}\n#+end_src").parse(),
                 PostFormat::Markdown => format!("```{label}\n{source}\n```").parse(),
-                PostFormat::Html => unreachable!(),
+                PostFormat::Html => unreachable!("only Org and Markdown source cases are tested"),
             }
             .unwrap();
             let html = render(&body, format);
@@ -1294,7 +1294,7 @@ mod tests {
             let plain = match format {
                 PostFormat::Org => render_org(source),
                 PostFormat::Markdown => render_markdown(source),
-                PostFormat::Html => unreachable!(),
+                PostFormat::Html => unreachable!("only Org and Markdown source cases are tested"),
             };
             let highlighted = render(&parse_post_body(source), format);
             assert!(highlighted.contains("class=\"j-syn-"), "{highlighted}");
@@ -1311,12 +1311,16 @@ mod tests {
                 let source = match format {
                     PostFormat::Org => format!("#+begin_src {label}\n{malformed}\n#+end_src"),
                     PostFormat::Markdown => format!("```{label}\n{malformed}\n```"),
-                    PostFormat::Html => unreachable!(),
+                    PostFormat::Html => {
+                        unreachable!("only Org and Markdown source cases are tested")
+                    }
                 };
                 let plain = match format {
                     PostFormat::Org => render_org(&source),
                     PostFormat::Markdown => render_markdown(&source),
-                    PostFormat::Html => unreachable!(),
+                    PostFormat::Html => {
+                        unreachable!("only Org and Markdown source cases are tested")
+                    }
                 };
                 let rendered = render(&parse_post_body(&source), format);
                 assert!(rendered.contains("<pre>"), "{format:?}/{label}: {rendered}");
@@ -1341,7 +1345,9 @@ mod tests {
                 .map(|(label, code)| match format {
                     PostFormat::Org => format!("#+begin_src {label}\n{code}\n#+end_src"),
                     PostFormat::Markdown => format!("```{label}\n{code}\n```"),
-                    PostFormat::Html => unreachable!(),
+                    PostFormat::Html => {
+                        unreachable!("only Org and Markdown source cases are tested")
+                    }
                 })
                 .collect::<Vec<_>>()
                 .join("\n\n")
@@ -1444,6 +1450,17 @@ mod tests {
                 "{format:?}: {error}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn first_org_block_failure_prevents_later_highlight_attempts() {
+        let source = "#+begin_src elisp\n(message \"first\")\n#+end_src\n\n#+begin_src rust\nfn second() {}\n#+end_src";
+        let error = crate::test_faults::with_invalid_highlight_query(async {
+            super::render(&parse_post_body(source), &PostFormat::Org)
+                .expect_err("an invalid query must fail the whole Post")
+        })
+        .await;
+        assert!(matches!(error, HighlightError::Initialization { .. }));
     }
 
     #[test]

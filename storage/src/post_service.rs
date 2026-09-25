@@ -4038,6 +4038,26 @@ mod tests {
 
     // Each arm maps to a fixed `(kind, public_message)` pair.
     #[test]
+    fn update_render_failure_preserves_typed_cause_through_public_boundary() {
+        use host::error::{ErrorKind, InternalError};
+
+        let error = host::render::HighlightError::Initialization {
+            language: "injected-invalid-query",
+            detail: "unknown node".to_owned(),
+        };
+        let update: PerformUpdateError = crate::UpdatePostError::Render(error).into();
+        assert!(matches!(update, PerformUpdateError::Render(_)));
+        let failure: InternalError = update.into();
+        assert_eq!(failure.kind(), ErrorKind::Internal);
+        assert!(
+            failure
+                .operator_message()
+                .contains("injected-invalid-query")
+        );
+        assert!(!failure.public_message().contains("unknown node"));
+    }
+
+    #[test]
     fn from_perform_update_error_maps_variants() {
         use host::error::{ErrorKind, InternalError};
 

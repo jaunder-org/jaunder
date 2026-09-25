@@ -169,6 +169,16 @@ mod tests {
         assert_eq!(internal.kind(), ErrorKind::Storage);
         assert_eq!(internal.public_message(), "storage operation failed");
 
+        let render: InternalError =
+            UpdatePostError::Render(host::render::HighlightError::Initialization {
+                language: "injected-invalid-query",
+                detail: "unknown node".to_owned(),
+            })
+            .into();
+        assert_eq!(render.kind(), ErrorKind::Internal);
+        assert_eq!(render.public_message(), "server operation failed");
+        assert!(render.operator_message().contains("injected-invalid-query"));
+
         for error in [
             UpdatePostError::SlugConflict,
             UpdatePostError::BookkeepingMismatch,

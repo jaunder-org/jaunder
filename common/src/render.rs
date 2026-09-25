@@ -449,6 +449,27 @@ where
 /// `<code>`; the ten closed `j-syn-*` token classes survive on `<span>`. CSS must
 /// scope those tokens to Post-body code since the filter cannot inspect ancestry.
 #[cfg(feature = "sanitize")]
+fn allowed_post_code_class(element: &str, token: &str) -> bool {
+    match element {
+        "pre" | "code" => token.starts_with("language-"),
+        "span" => matches!(
+            token,
+            "j-syn-comment"
+                | "j-syn-keyword"
+                | "j-syn-string"
+                | "j-syn-number"
+                | "j-syn-function"
+                | "j-syn-type"
+                | "j-syn-variable"
+                | "j-syn-constant"
+                | "j-syn-operator"
+                | "j-syn-punctuation"
+        ),
+        _ => false,
+    }
+}
+
+#[cfg(feature = "sanitize")]
 static SANITIZER: std::sync::LazyLock<ammonia::Builder<'static>> = std::sync::LazyLock::new(|| {
     let mut builder = ammonia::Builder::default();
     builder.add_tags(["audio", "video", "source", "track"]);
@@ -466,23 +487,7 @@ static SANITIZER: std::sync::LazyLock<ammonia::Builder<'static>> = std::sync::La
         // Ammonia only calls the filter for allowlisted tag/attribute pairs.
         let kept = value
             .split_whitespace()
-            .filter(|token| match element {
-                "pre" | "code" => token.starts_with("language-"),
-                "span" => matches!(
-                    *token,
-                    "j-syn-comment"
-                        | "j-syn-keyword"
-                        | "j-syn-string"
-                        | "j-syn-number"
-                        | "j-syn-function"
-                        | "j-syn-type"
-                        | "j-syn-variable"
-                        | "j-syn-constant"
-                        | "j-syn-operator"
-                        | "j-syn-punctuation"
-                ),
-                _ => false,
-            })
+            .filter(|token| allowed_post_code_class(element, token))
             .collect::<Vec<_>>()
             .join(" ");
         (!kept.is_empty()).then_some(kept.into())
@@ -1164,6 +1169,15 @@ mod tests {
         let no_language = sanitize(r#"<code class="j-anon-only">x</code>"#);
         assert!(!no_language.contains("j-anon-only"), "{no_language}");
         assert!(!no_language.contains("class"), "{no_language}");
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn token_classes_never_escape_code_or_span_elements() {
+        assert!(!allowed_post_code_class("p", "j-syn-keyword"));
+        assert!(!allowed_post_code_class("div", "language-rust"));
+        assert!(allowed_post_code_class("span", "j-syn-keyword"));
+        assert!(allowed_post_code_class("code", "language-rust"));
     }
 
     #[cfg(feature = "sanitize")]

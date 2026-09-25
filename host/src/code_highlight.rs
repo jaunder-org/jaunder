@@ -454,6 +454,24 @@ fn supported(
     }
 }
 
+fn configured<'a>(
+    language: &'static str,
+    configuration: Result<&'a HighlightConfiguration, &'a HighlightError>,
+) -> Result<&'a HighlightConfiguration, HighlightError> {
+    configuration.map_err(|error| HighlightError::Initialization {
+        language,
+        detail: error.to_string(),
+    })
+}
+
+fn preserve_renderer_line_ending(code: &str, mut output: String) -> String {
+    // HtmlRenderer may invent one terminal LF on unterminated input.
+    if !code.ends_with('\n') && output.ends_with('\n') {
+        output.pop();
+    }
+    output
+}
+
 /// One budget shared by every eligible code block in document order.
 #[derive(Default)]
 pub(crate) struct HighlightBudget {
@@ -500,7 +518,7 @@ impl HighlightBudget {
             (language, configuration.as_ref())
         } else {
             let Some(grammar) = bundled else {
-                return Ok(None);
+                unreachable!("unknown labels return before the resource budget");
             };
             (
                 grammar.name,
@@ -518,17 +536,12 @@ impl HighlightBudget {
                     .as_ref(),
             )
         };
-        let configuration = configuration.map_err(|error| HighlightError::Initialization {
-            language,
-            detail: error.to_string(),
-        })?;
+        let configuration = configured(language, configuration)?;
         let mut highlighter = Highlighter::new();
         let events = highlighter.highlight(configuration, code.as_bytes(), None, None, |_| None)?;
         let mut renderer = HtmlRenderer::new();
         renderer.render(events, code.as_bytes(), &|capture, attrs| {
-            let Some(capture_name) = CAPTURES.get(capture.0) else {
-                return;
-            };
+            let capture_name = CAPTURES.get(capture.0).copied().unwrap_or("");
             let category = match capture_name.split('.').next() {
                 Some("module" | "constructor" | "namespace" | "interface") => "type",
                 Some("tag" | "import") => "keyword",
@@ -543,12 +556,10 @@ impl HighlightBudget {
             };
             attrs.extend_from_slice(format!("class=\"j-syn-{category}\"").as_bytes());
         })?;
-        let mut output = renderer.lines().collect::<String>();
-        // HtmlRenderer invents one terminal LF on unterminated input.
-        if !code.ends_with('\n') && output.ends_with('\n') {
-            output.pop();
-        }
-        Ok(Some(output))
+        Ok(Some(preserve_renderer_line_ending(
+            code,
+            renderer.lines().collect::<String>(),
+        )))
     }
 }
 
@@ -578,7 +589,9 @@ mod tests {
                         format!("#+begin_src {}\n{code}#+end_src", grammar.labels[0])
                     }
                     PostFormat::Markdown => format!("```{}\n{code}```", grammar.labels[0]),
-                    PostFormat::Html => unreachable!(),
+                    PostFormat::Html => {
+                        unreachable!("catalog smoke tests cover Org and Markdown only")
+                    }
                 };
                 let body: PostBody = source.parse().unwrap();
                 let html = crate::render::render(&body, &format)
@@ -621,7 +634,9 @@ mod tests {
                 let source = match format {
                     PostFormat::Org => format!("#+begin_src {label}\n{code}\n#+end_src"),
                     PostFormat::Markdown => format!("```{label}\n{code}\n```"),
-                    PostFormat::Html => unreachable!(),
+                    PostFormat::Html => {
+                        unreachable!("catalog smoke tests cover Org and Markdown only")
+                    }
                 };
                 let body: PostBody = source.parse().unwrap();
                 let html = crate::render::render(&body, &format)
@@ -633,6 +648,31 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn configured_query_failure_retains_language_and_source_detail() {
+        let failure = Err(HighlightError::Initialization {
+            language: "fixture",
+            detail: "unknown capture".to_owned(),
+        });
+        let mapped = configured("pinned-grammar", failure.as_ref())
+            .err()
+            .expect("invalid query is rejected");
+        assert!(matches!(
+            mapped,
+            HighlightError::Initialization {
+                language: "pinned-grammar",
+                detail,
+            } if detail.contains("unknown capture")
+        ));
+    }
+
+    #[test]
+    fn renderer_terminal_lf_is_removed_only_when_not_authored() {
+        assert_eq!(preserve_renderer_line_ending("x", "x\n".into()), "x");
+        assert_eq!(preserve_renderer_line_ending("x\n", "x\n".into()), "x\n");
+        assert_eq!(preserve_renderer_line_ending("x", "x".into()), "x");
     }
 
     #[test]

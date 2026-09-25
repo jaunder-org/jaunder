@@ -45,6 +45,7 @@ tokio::task_local! {
         tokio::sync::oneshot::Receiver<()>,
     )>>;
     static FORCE_CAS_MISSES: std::cell::Cell<u8>;
+    static FORCE_CHECKPOINT_MISS: ();
 }
 
 #[cfg(test)]
@@ -248,6 +249,14 @@ where
         feed_events.enqueue_many(transaction, &paths).await?;
     }
     let conn = DB::write_connection(transaction)?;
+    // Simulate a progress-row version race inside the write transaction. The
+    // injected mutation must roll back with the failed checkpoint update.
+    #[cfg(test)]
+    if FORCE_CHECKPOINT_MISS.try_with(|()| ()).is_ok() {
+        sqlx::query("UPDATE post_projection_refresh_progress SET version = 99 WHERE id = 1")
+            .execute(&mut *conn)
+            .await?;
+    }
     let progress = sqlx::query_scalar::<DB, RefreshCursor>(
         "UPDATE post_projection_refresh_progress
          SET cursor_post_id = $1, completed = $2
@@ -378,6 +387,78 @@ mod tests {
             CloseablePool::Sqlite(pool) => StorageFactory::sqlite(pool.clone()),
             CloseablePool::Postgres(pool) => StorageFactory::postgres(pool.clone()),
         }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn closed_pool_fails_before_starting_projection_refresh(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let refresh_factory = factory(&env);
+        env.base.pool().close().await;
+        let error = refresh_factory
+            .refresh_current_post_projections()
+            .await
+            .expect_err("closed pool cannot begin a refresh write transaction");
+        assert!(
+            matches!(
+                error,
+                PostProjectionRefreshError::Storage(sqlx::Error::PoolClosed)
+            ),
+            "{error}"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn repeated_lost_commit_acknowledgements_fail_visibly(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let refresh_factory = factory(&env);
+        let scope = refresh_factory
+            .write_scope()
+            .with_commit_acknowledgement_loss_after_commit_for_test();
+        let feed_events = refresh_factory.feed_events();
+        let error = match backend {
+            Backend::Sqlite => run::<sqlx::Sqlite>(&scope, feed_events).await,
+            Backend::Postgres => run::<sqlx::Postgres>(&scope, feed_events).await,
+        }
+        .expect_err("repeated unconfirmed commits cannot report success");
+        assert!(matches!(
+            error,
+            PostProjectionRefreshError::IndeterminateCommits
+        ));
+        refresh_factory
+            .refresh_current_post_projections()
+            .await
+            .expect("a confirmed retry observes the committed checkpoint");
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn failed_checkpoint_update_rolls_back_then_resumes(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let refresh_factory = factory(&env);
+        let error = FORCE_CHECKPOINT_MISS
+            .scope((), refresh_factory.refresh_current_post_projections())
+            .await
+            .expect_err("a stale checkpoint cannot commit");
+        assert!(matches!(error, PostProjectionRefreshError::Checkpoint));
+        let (version, cursor, completed): (i32, i64, bool) = crate::with_closeable_pool!(
+            env.base.pool(),
+            pool,
+            {
+                sqlx::query_as(
+                    "SELECT version, cursor_post_id, completed FROM post_projection_refresh_progress WHERE id = 1",
+                )
+                .fetch_one(pool)
+                .await
+                .expect("checkpoint remains unchanged")
+            }
+        );
+        assert_eq!((version, cursor, completed), (1, 0, false));
+        refresh_factory
+            .refresh_current_post_projections()
+            .await
+            .expect("failed checkpoint remains resumable");
     }
 
     #[apply(backends)]
