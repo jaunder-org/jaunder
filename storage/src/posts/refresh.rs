@@ -463,6 +463,55 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
+    async fn candidate_refetch_skips_missing_and_deleted_posts(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let missing_id = PostId::from(999_999_i64);
+        let missing = match backend {
+            Backend::Sqlite => {
+                env.write_scope()
+                    .run(|tx| Box::pin(refresh_candidate::<sqlx::Sqlite>(tx, missing_id)))
+                    .await
+            }
+            Backend::Postgres => {
+                env.write_scope()
+                    .run(|tx| Box::pin(refresh_candidate::<sqlx::Postgres>(tx, missing_id)))
+                    .await
+            }
+        };
+        assert!(matches!(missing, Ok(MutationOutcome::Confirmed(None))));
+
+        let owner = SeedUser::new()
+            .seed(Arc::clone(&env.users()), env.write_scope().clone())
+            .await
+            .user_id;
+        let post = SeedRawPost::new(owner)
+            .body(parse_post_body("```elisp\n(message \"gone\")\n```"))
+            .seed(env.posts(), env.write_scope().clone())
+            .await;
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query("UPDATE posts SET deleted_at = created_at WHERE post_id = $1")
+                .bind_storage(post.post_id)
+                .execute(pool)
+                .await
+                .expect("mark candidate Deleted");
+        });
+        let deleted = match backend {
+            Backend::Sqlite => {
+                env.write_scope()
+                    .run(|tx| Box::pin(refresh_candidate::<sqlx::Sqlite>(tx, post.post_id)))
+                    .await
+            }
+            Backend::Postgres => {
+                env.write_scope()
+                    .run(|tx| Box::pin(refresh_candidate::<sqlx::Postgres>(tx, post.post_id)))
+                    .await
+            }
+        };
+        assert!(matches!(deleted, Ok(MutationOutcome::Confirmed(None))));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
     async fn public_tagged_posts_enqueue_exact_affected_feed_paths_once_per_batch(
         #[case] backend: Backend,
     ) {
