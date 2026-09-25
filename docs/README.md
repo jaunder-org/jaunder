@@ -242,6 +242,8 @@ convention). See the Status column below for each ADR's current status.
 | [0212](adr/0212-hierarchical-default-audience.md)                      | Hierarchical Default Audience                                                                                | accepted   |
 | [0213](adr/0213-uncapped-exact-post-management-mutations.md)           | Uncapped exact Post management mutations                                                                     | accepted   |
 | [0214](adr/0214-single-line-authored-post-titles.md)                   | Authored Post Titles Are One Logical Line                                                                    | accepted   |
+| [0215](adr/0215-offline-code-migration-queue.md)                       | SQLx-triggered offline Rust migrations                                                                       | accepted   |
+| [0216](adr/0216-orgize-v010-special-string-export-fork.md)             | Pin Org special-string export to a focused v0.10 orgize fork                                                 | accepted   |
 
 <!-- adr-table:end -->
 

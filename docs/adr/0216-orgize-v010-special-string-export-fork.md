@@ -1,6 +1,6 @@
-# ADR-DRAFT: Pin Org special-string export to a focused v0.10 orgize fork
+# ADR-0216: Pin Org special-string export to a focused v0.10 orgize fork
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-24
 - Issue: [#1656](https://github.com/jaunder-org/jaunder/issues/1656)
 

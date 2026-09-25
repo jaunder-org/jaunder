@@ -1,6 +1,6 @@
-# ADR-DRAFT: SQLx-triggered offline Rust migrations
+# ADR-0215: SQLx-triggered offline Rust migrations
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-24
 - Issue: [#1656](https://github.com/jaunder-org/jaunder/issues/1656)
 
@@ -13,7 +13,7 @@ and a one-shot Rust migration tied to an in-memory startup cannot survive a
 crash between the SQL migration and the repair. Backup and restore must carry
 pending work across SQLite and PostgreSQL without pretending it was completed.
 
-[ADR-0092](../0092-sqlite-bounded-write-lock-occupancy.md) ordinarily prohibits
+[ADR-0092](0092-sqlite-bounded-write-lock-occupancy.md) ordinarily prohibits
 unbounded rendering or loops inside a SQLite write transaction. That
 request-time rule would prevent a single atomic rebuild of all current Posts.
 
