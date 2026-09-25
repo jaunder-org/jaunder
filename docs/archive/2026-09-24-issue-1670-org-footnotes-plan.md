@@ -4,7 +4,7 @@
 > independently contracted work. Planning trigger: the fork/Jaunder interface,
 > first-write Post ID, and transactional offline storage rebuild cross
 > architecture and storage boundaries. The approved spec is
-> `docs/superpowers/specs/2026-09-24-issue-1670-org-footnotes.md`.
+> `docs/archive/2026-09-24-issue-1670-org-footnotes-spec.md`.
 
 ## Scope
 
