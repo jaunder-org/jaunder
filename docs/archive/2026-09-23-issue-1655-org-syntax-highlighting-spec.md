@@ -1,5 +1,8 @@
 # Issue #1655 — Semantic highlighting for published Org and Markdown code blocks
 
+Implementation and independent review completed on the issue branch; PR CI and
+explicit human merge approval remain pending.
+
 ## Outcome
 
 Ship broad language highlighting, including Emacs Lisp and Haskell, in both Org

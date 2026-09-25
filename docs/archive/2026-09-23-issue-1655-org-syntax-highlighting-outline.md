@@ -2,7 +2,7 @@
 
 > Execute with `jaunder-iterate`; use `jaunder-dispatch` only for an
 > individually bounded task. The approved
-> [spec](../specs/2026-09-23-issue-1655-org-syntax-highlighting.md) is
+> [spec](2026-09-23-issue-1655-org-syntax-highlighting-spec.md) is
 > authoritative. This outline exists because token markup changes the
 > sanitizer/Style Contract and refreshing stored projections crosses
 > dual-backend lifecycle, concurrency, and feed-outbox boundaries.
@@ -38,7 +38,7 @@ historical Post Revisions, an unbounded rewrite of legacy content.
     settings.
   - Verification: rerunnable fixture/harness tests and the recorded baseline
     command/results; no production Post render change.
-- [ ] **2. Establish the sanitized semantic-token contract.** Add exactly the
+- [x] **2. Establish the sanitized semantic-token contract.** Add exactly the
       spec's ten `j-syn-*` span classes to the common-owned sanitizer policy and
       corresponding narrowly scoped built-in CSS defaults; make public custom
       theme overrides an additive Style Contract v1 surface. Keep Home
@@ -52,7 +52,7 @@ historical Post Revisions, an unbounded rewrite of legacy content.
   - Verification: common sanitizer tests with forged raw HTML, arbitrary
     classes/styles/event attributes and legal markup; theme override/default
     proof on the correct public/Home surfaces.
-- [ ] **3. Render eligible blocks through the shared host Post projection.**
+- [x] **3. Render eligible blocks through the shared host Post projection.**
       Insert the chosen highlighter at both the Org source-block and Markdown
       fenced-code exporter boundaries without altering either authored body or
       AtomPub Members. Use only tree-sitter-highlight with pinned grammars and
@@ -63,15 +63,15 @@ historical Post Revisions, an unbounded rewrite of legacy content.
       per-Post attempt accounting; keep Markdown indented/unlabeled code, inline
       code and raw authored HTML unhighlighted. Preserve valid Post Shortcodes
       outside code and shortcode-looking text inside it in both formats.
-      Unknown, failed, and over-limit eligible blocks remain escaped plain code.
+      Unknown and over-limit eligible blocks remain escaped plain code. Malformed
+      source uses Tree-sitter recovery and preserves the exporter's text.
   - Contract: the decoded `<code>` text from every highlighted/fallback result
     equals the same unhighlighted exporter for that format, scalar-for-scalar;
     no supported capture escapes the ten-category vocabulary. Change
     `host::render::render` and `render_post` to return a typed `Result` for
     unexpected registry/query initialization, ABI or infrastructure failures;
     propagate that error through each storage post-service and web/AtomPub
-    create/update, preview, and maintenance caller. Only expected malformed
-    author source may degrade to escaped plain code. Do not log an unexpected
+    create/update, preview, and maintenance caller. Do not log an unexpected
     failure and return a success-shaped fallback.
   - Verification: focused host unit tests for all four regression
     language/format pairs, catalog smoke tests covering every approved grammar
@@ -83,7 +83,7 @@ historical Post Revisions, an unbounded rewrite of legacy content.
     injected unexpected query/registry error propagation; backend-parity
     web/AtomPub create/update and web preview tests for both formats'
     native-source fidelity and typed errors without a partial write.
-- [ ] **4. Verify integrated safety and broad coverage.** Smoke-test every
+- [x] **4. Verify integrated safety and broad coverage.** Smoke-test every
       bundled Tree-sitter grammar/query in both exporters, verify representative
       colored tokens, source fidelity, sanitizer constraints and the bounded
       resource behavior. The owner accepted the representative Tree-sitter
@@ -96,7 +96,7 @@ historical Post Revisions, an unbounded rewrite of legacy content.
     authorize Tasks 5–6.
   - Verification: catalog smoke tests, source-fidelity fixtures, security tests
     and release size report; no new performance approval step.
-- [ ] **5. Refresh existing current projections without an author revision.**
+- [x] **5. Refresh existing current projections without an author revision.**
       SQL migrations in both backends create/seed a versioned refresh-progress
       row only; they do not render HTML. After migrations and before the new
       server mounts its router or starts feed/WebSub workers, run the
@@ -127,7 +127,7 @@ historical Post Revisions, an unbounded rewrite of legacy content.
     version/cursor resume/idempotence, concurrent startup/edit/deletion,
     second-stale failure, atomic rollback on derived-state failure, unchanged
     timestamp/ETag/revision, Media-reference consistency and exact feed events.
-- [ ] **6. Demonstrate the end-to-end public result.** Verify newly created and
+- [x] **6. Demonstrate the end-to-end public result.** Verify newly created and
       refreshed Org and Markdown Posts in the public permalink, Local and Home,
       all four format/language combinations and a plain fallback at a narrow
       viewport; check public Atom/RSS/JSON Syndication Feeds and regenerated

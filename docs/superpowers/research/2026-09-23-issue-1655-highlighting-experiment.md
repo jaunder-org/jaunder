@@ -7,17 +7,18 @@ below remain the historical evidence for the failed **original** +25 ms overhead
 limit, not the revised production verdict. The owner subsequently removed the
 agent-proposed 5 MiB binary-growth cap and broadened the requirement from two
 languages to a comprehensive built-in catalog. The new attempt still needs
-integrated safety/fidelity and a reported (not gated) final binary size.
+integrated safety/fidelity and a reported (not gated) final binary size; the
+subsequent Tree-sitter-only implementation records these proofs below.
 
 The original approved
-[spec](../specs/2026-09-23-issue-1655-org-syntax-highlighting.md) and
-[outline](../plans/2026-09-23-issue-1655-org-syntax-highlighting.md) required at
-most 25 ms additional warm p95 at 64 KiB in **each** Org/Markdown × Emacs
-Lisp/Haskell pair. Direct Tree-sitter missed this gate in all four pairs. The
-conditional production renderer, sanitizer, CSS, error-propagation, ADR draft
-and architecture edits were **reverted**, without attempting the existing-Post
-refresh or opening a PR. This report and the reproducible isolated probe remain
-for a revised design decision; no partial feature is shipping.
+[spec](../../archive/2026-09-23-issue-1655-org-syntax-highlighting-spec.md) and
+[outline](../../archive/2026-09-23-issue-1655-org-syntax-highlighting-outline.md)
+required at most 25 ms additional warm p95 at 64 KiB in **each** Org/Markdown ×
+Emacs Lisp/Haskell pair. Direct Tree-sitter missed this gate in all four pairs.
+The conditional production renderer, sanitizer, CSS, error-propagation, ADR
+draft and architecture edits were **reverted**, without attempting the
+existing-Post refresh or opening a PR. This report and the reproducible isolated
+probe remain for a revised design decision; no partial feature is shipping.
 
 ## Unchanged baseline
 
