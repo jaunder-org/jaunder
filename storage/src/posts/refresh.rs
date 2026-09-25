@@ -44,6 +44,7 @@ tokio::task_local! {
         tokio::sync::oneshot::Sender<()>,
         tokio::sync::oneshot::Receiver<()>,
     )>>;
+    static FORCE_CAS_MISSES: std::cell::Cell<u8>;
 }
 
 #[cfg(test)]
@@ -285,54 +286,81 @@ where
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
     DB::Arguments: sqlx::IntoArguments<DB>,
 {
-    let conn = DB::write_connection(transaction)?;
-    let locked = sqlx::query(DB::LIFECYCLE_STATE_SQL)
+    let mut retried = false;
+    loop {
+        let conn = DB::write_connection(transaction)?;
+        let locked = sqlx::query(DB::LIFECYCLE_STATE_SQL)
+            .bind_storage(post_id)
+            .fetch_optional(&mut *conn)
+            .await?
+            .is_some();
+        if !locked {
+            return Ok(None);
+        }
+        let record = DB::fetch_lifecycle_post(conn, post_id).await?;
+        if record.deleted_at.is_some()
+            || !matches!(record.format, PostFormat::Org | PostFormat::Markdown)
+        {
+            return Ok(None);
+        }
+        let rendered = host::render::with_media(&record.body, &record.format)?;
+        if record.rendered_html.as_ref() == rendered.html().as_ref() {
+            return Ok(None);
+        }
+        DB::lock_lifecycle_media_references(conn, post_id).await?;
+        // A test-only miss simulates a concurrent CAS loss that cannot be
+        // produced by another writer once BEGIN IMMEDIATE/FOR UPDATE is held.
+        #[cfg(test)]
+        let forced_miss = FORCE_CAS_MISSES
+            .try_with(|remaining| {
+                let count = remaining.take();
+                if count > 0 {
+                    remaining.set(count - 1);
+                    true
+                } else {
+                    false
+                }
+            })
+            .unwrap_or(false);
+        #[cfg(not(test))]
+        let forced_miss = false;
+        let persisted = if forced_miss {
+            None
+        } else {
+            sqlx::query_scalar::<DB, PostId>(
+                "UPDATE posts SET rendered_html = $1
+                 WHERE post_id = $2 AND body = $3 AND format = $4 AND rendered_html = $5
+                   AND deleted_at IS NULL RETURNING post_id",
+            )
+            .bind_storage(rendered.html())
+            .bind_storage(post_id)
+            .bind_storage(&record.body)
+            .bind_storage(record.format)
+            .bind_storage(&record.rendered_html)
+            .fetch_optional(&mut *conn)
+            .await?
+        };
+        if persisted != Some(post_id) {
+            if retried {
+                return Err(PostProjectionRefreshError::Stale(post_id));
+            }
+            retried = true;
+            continue; // Reload and rerender the current locked Post once.
+        }
+        media::replace_post_media::<DB>(conn, post_id, rendered.media()).await?;
+        let public = sqlx::query_scalar::<DB, Exists>(
+            "SELECT EXISTS(
+                SELECT 1 FROM post_audiences pa JOIN target_kinds tk
+                    ON tk.kind_id = pa.target_kind_id
+                WHERE pa.post_id = $1 AND tk.name = 'public'
+             )",
+        )
         .bind_storage(post_id)
-        .fetch_optional(&mut *conn)
+        .fetch_one(&mut *conn)
         .await?
-        .is_some();
-    if !locked {
-        return Ok(None);
+        .into_bool();
+        return Ok(Some((record, public)));
     }
-    let record = DB::fetch_lifecycle_post(conn, post_id).await?;
-    if record.deleted_at.is_some()
-        || !matches!(record.format, PostFormat::Org | PostFormat::Markdown)
-    {
-        return Ok(None);
-    }
-    let rendered = host::render::with_media(&record.body, &record.format)?;
-    if record.rendered_html.as_ref() == rendered.html().as_ref() {
-        return Ok(None);
-    }
-    DB::lock_lifecycle_media_references(conn, post_id).await?;
-    let persisted = sqlx::query_scalar::<DB, PostId>(
-        "UPDATE posts SET rendered_html = $1
-         WHERE post_id = $2 AND body = $3 AND format = $4 AND rendered_html = $5
-           AND deleted_at IS NULL RETURNING post_id",
-    )
-    .bind_storage(rendered.html())
-    .bind_storage(post_id)
-    .bind_storage(&record.body)
-    .bind_storage(record.format)
-    .bind_storage(&record.rendered_html)
-    .fetch_optional(&mut *conn)
-    .await?;
-    if persisted != Some(post_id) {
-        return Err(PostProjectionRefreshError::Stale(post_id));
-    }
-    media::replace_post_media::<DB>(conn, post_id, rendered.media()).await?;
-    let public = sqlx::query_scalar::<DB, Exists>(
-        "SELECT EXISTS(
-            SELECT 1 FROM post_audiences pa JOIN target_kinds tk
-                ON tk.kind_id = pa.target_kind_id
-            WHERE pa.post_id = $1 AND tk.name = 'public'
-         )",
-    )
-    .bind_storage(post_id)
-    .fetch_one(&mut *conn)
-    .await?
-    .into_bool();
-    Ok(Some((record, public)))
 }
 
 #[cfg(test)]
@@ -550,6 +578,80 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
+    async fn stale_projection_cas_reloads_once_or_rolls_back_after_second_miss(
+        #[case] backend: Backend,
+    ) {
+        for misses in [1, 2] {
+            let env = backend.setup().await;
+            let owner = SeedUser::new()
+                .seed(Arc::clone(&env.users()), env.write_scope().clone())
+                .await
+                .user_id;
+            let post = SeedRawPost::new(owner)
+                .body(parse_post_body("```elisp\n(message \"current\")\n```"))
+                .seed(env.posts(), env.write_scope().clone())
+                .await;
+            env.base
+                .pool()
+                .execute("UPDATE posts SET rendered_html = '<p>old presentation</p>'")
+                .await
+                .expect("stale fixture");
+            let refresh_factory = factory(&env);
+            let result = FORCE_CAS_MISSES
+                .scope(
+                    std::cell::Cell::new(misses),
+                    refresh_factory.refresh_current_post_projections(),
+                )
+                .await;
+            let (html, cursor, completed): (String, i64, bool) = crate::with_closeable_pool!(
+                env.base.pool(),
+                pool,
+                {
+                    let html =
+                        sqlx::query_scalar("SELECT rendered_html FROM posts WHERE post_id = $1")
+                            .bind_storage(post.post_id)
+                            .fetch_one(pool)
+                            .await
+                            .expect("current projection");
+                    let (cursor, completed) = sqlx::query_as(
+                        "SELECT cursor_post_id, completed FROM post_projection_refresh_progress WHERE id = 1",
+                    )
+                    .fetch_one(pool)
+                    .await
+                    .expect("checkpoint");
+                    (html, cursor, completed)
+                }
+            );
+            if misses == 1 {
+                result.expect("one missed CAS re-reads, rerenders, and commits");
+                assert!(html.contains("j-syn-"));
+                assert_eq!(cursor, i64::from(post.post_id));
+                assert!(completed);
+            } else {
+                assert!(
+                    matches!(&result, Err(PostProjectionRefreshError::Stale(id)) if *id == post.post_id),
+                    "two misses must fail visibly: {result:?}"
+                );
+                assert_eq!(html, "<p>old presentation</p>");
+                assert_eq!(cursor, 0);
+                assert!(!completed);
+                factory(&env)
+                    .refresh_current_post_projections()
+                    .await
+                    .expect("resume after failed batch");
+                let current = env
+                    .posts()
+                    .get_post_by_id(post.post_id, &ViewerIdentity::Local { user_id: owner })
+                    .await
+                    .expect("lookup")
+                    .expect("Post exists");
+                assert!(current.rendered_html.as_ref().contains("j-syn-"));
+            }
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
     async fn invalid_highlight_query_rolls_back_projection_and_cursor_then_resumes(
         #[case] backend: Backend,
     ) {
@@ -568,7 +670,7 @@ mod tests {
             .await
             .expect("stale fixture");
 
-        let error = host::test_support::with_invalid_highlight_query(
+        let error = host::test_faults::with_invalid_highlight_query(
             factory(&env).refresh_current_post_projections(),
         )
         .await

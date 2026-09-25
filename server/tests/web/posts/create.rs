@@ -56,7 +56,7 @@ async fn invalid_highlight_query_rejects_web_creation_without_persisting_a_post(
         ),
         (PostFormat::Markdown, "```elisp\n(message \"hi\")\n```"),
     ] {
-        let (status, body) = host::test_support::with_invalid_highlight_query(create_post_json(
+        let (status, body) = host::test_faults::with_invalid_highlight_query(create_post_json(
             app.clone(),
             PostInputs::new(parse_post_body(source), format),
             Some(&cookie),

@@ -1428,7 +1428,7 @@ mod tests {
             ),
             (PostFormat::Markdown, "```elisp\n(message \"hi\")\n```"),
         ] {
-            let error = crate::test_support::with_invalid_highlight_query(async {
+            let error = crate::test_faults::with_invalid_highlight_query(async {
                 super::render(&parse_post_body(source), &format)
                     .expect_err("invalid query must fail")
             })

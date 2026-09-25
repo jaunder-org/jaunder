@@ -29,9 +29,13 @@ aliases are reviewable and tested. Labels are ASCII-case-folded. Parse at most
 64 KiB of decoded exporter code per block. Allow at most 16 attempts and 128 KiB
 attempted bytes per Post, visiting blocks in document order. Unrecognized or
 over-budget code stays escaped, uncolored source. Keep the decoded code text
-identical to that of the same format's unhighlighted exporter. An expected
-malformed source can fall back to plain code; unexpected grammar/query/engine
-errors are typed failures, not successful writes.
+identical to that of the same format's unhighlighted exporter. Tree-sitter
+normally recovers malformed authored code into a highlight stream, possibly
+styling some tokens; the decoded text remains safe and unchanged. No distinct
+recoverable malformed-input parser error exists in the pinned highlighter;
+unexpected grammar/query/engine errors are typed failures, not successful
+writes. If a later Tree-sitter API exposes a distinct authored-input failure,
+plain-code fallback may be added without masking those typed errors.
 
 Widen `common::render::sanitize` only to the ten closed `j-syn-*` span classes:
 `comment`, `keyword`, `string`, `number`, `function`, `type`, `variable`,

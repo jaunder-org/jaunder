@@ -33,6 +33,8 @@ pub mod smtp_config;
 pub mod smtp_password;
 pub mod stored_password_hash;
 pub mod telemetry;
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_faults;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 pub mod theme_operations;

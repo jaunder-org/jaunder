@@ -248,6 +248,15 @@ bytes**, SHA-256
 a visibility report, **not** an acceptance limit; the owner explicitly rejected
 the invented 5 MiB binary-growth cap.
 
+The reproducible Nix runtime dependency-closure measurement for this candidate
+is `devtool run -- nix build --no-link .#jaunder`, then
+`devtool run -- nix path-info -S .#jaunder`: the Linux `jaunder` package
+resolves to `/nix/store/8r6xlgqrww90kjvjv305g7yk36pcic0k-jaunder-0.1.0` with a
+transitive closure of **144,824,664 bytes (138.1 MiB)**. This is a separate
+whole-package/runtime-closure diagnostic, not the stripped standalone Cargo
+server size above and **not** a release-size acceptance gate. An unchanged
+main-branch Nix closure was not measured, so no closure delta is claimed.
+
 ## Malformed syntax and the Tree-sitter error model
 
 The approved spec initially called for a “failed-parser” fallback in a mixed
