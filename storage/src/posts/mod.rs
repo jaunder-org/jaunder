@@ -29,8 +29,7 @@ pub use management::{
 };
 pub use media::{
     MAX_MEDIA_REFERENCE_SNAPSHOT, MediaReferenceEvidence, MediaReferenceSnapshot,
-    PersistedMediaReference, PersistedMediaSubject, PostMediaReferenceBackfill,
-    ProvenForeignReference,
+    PersistedMediaReference, PersistedMediaSubject, ProvenForeignReference,
 };
 pub use models::PermalinkDate;
 pub use models::{

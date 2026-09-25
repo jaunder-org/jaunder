@@ -4,7 +4,7 @@ use sqlx::PgPool;
 use sqlx::postgres::PgConnectOptions;
 
 use crate::backup::CatalogTableName;
-use crate::posts::media;
+use crate::code_migrations;
 use crate::sql::Exists;
 use crate::{StorageFactory, instance_identity};
 
@@ -21,16 +21,20 @@ pub fn resolved_postgres_options(
     options.log_slow_statements(LevelFilter::Warn, runtime.sql_slow_query_threshold())
 }
 
-#[tracing::instrument(name = "storage.postgres.open_database", skip(options, runtime))]
+#[tracing::instrument(
+    name = "storage.postgres.open_database",
+    skip(options, runtime, authorize_drain)
+)]
 pub(crate) async fn open_postgres_database_with_pool(
     options: &PgConnectOptions,
     runtime: &crate::StorageRuntimeConfig,
+    authorize_drain: &(dyn Fn() -> sqlx::Result<()> + Sync),
 ) -> sqlx::Result<(StorageFactory, PgPool, crate::InstanceId)> {
     let options = resolved_postgres_options(options, runtime);
     let pool = PgPool::connect_with(options).await?;
     sqlx::migrate!("./migrations/postgres").run(&pool).await?;
     let instance_id = instance_identity::ensure(&pool).await?;
-    media::backfill_post_media_references(&pool).await?;
+    code_migrations::drain_pending(&pool, authorize_drain).await?;
     crate::posts::search::backfill_post_search_projections(&pool).await?;
     Ok((StorageFactory::postgres(pool.clone()), pool, instance_id))
 }

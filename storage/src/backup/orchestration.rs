@@ -9,7 +9,7 @@ use std::{
 
 use sha2::{Digest, Sha256};
 
-use crate::{DbConnectOptions, StorageRuntimeConfig, postgres, sqlite};
+use crate::{DatabaseLockGuard, DbConnectOptions, StorageRuntimeConfig, postgres, sqlite};
 
 use super::{
     BackupMode, archive,
@@ -63,6 +63,8 @@ fn mirror_themes(
 pub async fn export_backup(
     options: BackupExportOptions<'_>,
 ) -> Result<BackupManifest, BackupError> {
+    let _database_lock =
+        DatabaseLockGuard::acquire(media_content_root(options.media_path)?).await?;
     match options.mode {
         BackupMode::Directory => export_directory_backup(options).await,
         BackupMode::Archive => export_archive_backup(options).await,
@@ -74,6 +76,27 @@ pub async fn export_backup(
 /// Returns `Err(BackupError)` if the backup restore fails.
 pub async fn restore_backup(
     options: BackupRestoreOptions<'_>,
+) -> Result<BackupRestoreOutcome, BackupError> {
+    restore_backup_with_after_import(options, || {}).await
+}
+
+/// Test seam for proving that a restore holds the outer command's lock across
+/// database import, Media placement, and validation. Never used by production.
+///
+/// # Errors
+///
+/// Returns `Err(BackupError)` if the backup restore fails.
+#[cfg(any(test, feature = "test-support"))]
+pub async fn restore_backup_paused_after_import(
+    options: BackupRestoreOptions<'_>,
+    after_import: impl FnOnce(),
+) -> Result<BackupRestoreOutcome, BackupError> {
+    restore_backup_with_after_import(options, after_import).await
+}
+
+async fn restore_backup_with_after_import(
+    options: BackupRestoreOptions<'_>,
+    after_import: impl FnOnce(),
 ) -> Result<BackupRestoreOutcome, BackupError> {
     let extracted_archive = if options.source_path.is_file() {
         Some(archive::extract_archive_backup(options.source_path)?)
@@ -115,6 +138,7 @@ pub async fn restore_backup(
             .await?
         }
     };
+    after_import();
     media::restore_media_directory(&source_path.join("media"), options.media_path)?;
 
     Ok(BackupRestoreOutcome {

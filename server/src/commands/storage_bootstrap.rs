@@ -2,6 +2,7 @@ use std::io;
 
 use crate::cli::{AppTarget, BootstrapDb, StorageArgs};
 use common::pg_role_password::PgRolePassword;
+use storage::DatabaseLockGuard;
 
 use super::support;
 
@@ -18,7 +19,11 @@ pub async fn cmd_init(storage: &StorageArgs, skip_if_exists: bool) -> anyhow::Re
         Err(e) => return Err(e.into()),
     }
     let runtime = support::storage_runtime_config(&storage.db)?;
-    storage::open_database(&storage.db, &runtime).await?;
+    let _database_lock = DatabaseLockGuard::acquire(&storage.storage_path).await?;
+    storage::open_database_authorizing_drain(&storage.db, &runtime, &|| {
+        support::authorize_cli_code_migration(&storage.storage_path)
+    })
+    .await?;
     println!(
         "Initialized: storage={} db={}",
         storage.storage_path.display(),

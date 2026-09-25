@@ -4,6 +4,7 @@
   fenix,
   crane,
   atom-fork,
+  orgize-fork,
 }:
 let
   # One explicit screenshot font universe for host baseline generation and
@@ -284,26 +285,25 @@ let
       );
   };
 
-  # The #813 draft ADR pins atom_syndication's namespace-aware upstream
-  # revision. Substitute its flake checkout during vendoring so product
-  # builds resolve the Cargo git patch without sandbox network access.
+  # Supply each exact-revision Cargo git patch from its pinned flake checkout
+  # for the product and tools workspaces without sandbox network access.
+  vendorPinnedFork = prefix: ps: drv:
+    let
+      p = builtins.head ps;
+    in
+    if p.name == "atom_syndication" || p.name == "orgize" then
+      pkgs.runCommandLocal "${prefix}-fork-vendor-${p.name}-${p.version}" { } ''
+        dst="$out/${p.name}-${p.version}"
+        mkdir -p "$dst"
+        cp -a ${if p.name == "orgize" then orgize-fork else atom-fork}/. "$dst/"
+        chmod -R u+w "$dst"
+        echo '{"files":{},"package":null}' > "$dst/.cargo-checksum.json"
+      ''
+    else
+      drv;
   cargoVendorDir = craneLib.vendorCargoDeps {
     inherit src;
-    overrideVendorGitCheckout =
-      ps: drv:
-      let
-        p = builtins.head ps;
-      in
-      if p.name == "atom_syndication" then
-        pkgs.runCommandLocal "atom-fork-vendor-${p.name}-${p.version}" { } ''
-          dst="$out/${p.name}-${p.version}"
-          mkdir -p "$dst"
-          cp -a ${atom-fork}/. "$dst/"
-          chmod -R u+w "$dst"
-          echo '{"files":{},"package":null}' > "$dst/.cargo-checksum.json"
-        ''
-      else
-        drv;
+    overrideVendorGitCheckout = vendorPinnedFork "product";
   };
 
   commonArgs = {
@@ -513,21 +513,7 @@ let
     ];
   };
   toolsVendorArgs = {
-    overrideVendorGitCheckout =
-      ps: drv:
-      let
-        p = builtins.head ps;
-      in
-      if p.name == "atom_syndication" then
-        pkgs.runCommandLocal "tools-atom-fork-vendor-${p.name}-${p.version}" { } ''
-          dst="$out/${p.name}-${p.version}"
-          mkdir -p "$dst"
-          cp -a ${atom-fork}/. "$dst/"
-          chmod -R u+w "$dst"
-          echo '{"files":{},"package":null}' > "$dst/.cargo-checksum.json"
-        ''
-      else
-        drv;
+    overrideVendorGitCheckout = vendorPinnedFork "tools";
   };
   toolsCargoVendorDir = craneLib.vendorCargoDeps (toolsBaseArgs // toolsVendorArgs);
   toolsArgs = toolsBaseArgs // {

@@ -20,6 +20,10 @@
       url = "github:jaunder-org/atom/921118c311d2117956d86e25052918e7c549ef00";
       flake = false;
     };
+    orgize-fork = {
+      url = "github:jaunder-org/orgize/0f936bb07ad64225c124503163516723e4d007ed";
+      flake = false;
+    };
   };
 
   outputs =
@@ -30,6 +34,7 @@
       flake-utils,
       crane,
       atom-fork,
+      orgize-fork,
     }:
     let
       nixosLayer = import ./nix/nixos.nix { inherit self nixpkgs; };
@@ -42,7 +47,7 @@
       system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        packageLayer = import ./nix/packages.nix { inherit system pkgs fenix crane atom-fork; };
+        packageLayer = import ./nix/packages.nix { inherit system pkgs fenix crane atom-fork orgize-fork; };
         checkLayer = import ./nix/checks.nix {
           inherit self system pkgs nixpkgs;
           nixosInternals = nixosLayer.internals;

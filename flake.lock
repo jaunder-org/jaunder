@@ -87,13 +87,31 @@
         "type": "github"
       }
     },
+    "orgize-fork": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1790271838,
+        "narHash": "sha256-h78jsVW9872JIeHPvNG8r/P4G5atprlECgD8k5Cf6Eg=",
+        "owner": "jaunder-org",
+        "repo": "orgize",
+        "rev": "0f936bb07ad64225c124503163516723e4d007ed",
+        "type": "github"
+      },
+      "original": {
+        "owner": "jaunder-org",
+        "repo": "orgize",
+        "rev": "0f936bb07ad64225c124503163516723e4d007ed",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
         "atom-fork": "atom-fork",
         "crane": "crane",
         "fenix": "fenix",
         "flake-utils": "flake-utils",
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": "nixpkgs",
+        "orgize-fork": "orgize-fork"
       }
     },
     "rust-analyzer-src": {

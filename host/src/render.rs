@@ -1224,6 +1224,27 @@ mod tests {
     }
 
     #[test]
+    fn org_special_strings_render_in_prose_and_titles_but_not_literal_content() {
+        let source = "A---B *bold--word* then... ~code---...~";
+        let html = render(&parse_post_body(source), &PostFormat::Org);
+        assert!(html.contains("A—B"), "{html}");
+        assert!(html.contains("<b>bold–word</b>"), "{html}");
+        assert!(html.contains("then…"), "{html}");
+        assert!(html.contains("<code>code---...</code>"), "{html}");
+        let title: PostTitle = "Three---two--one...".parse().unwrap();
+        let rendered = render_title(&title, &PostFormat::Org);
+        assert_eq!(rendered_title_visible_text(&rendered), "Three—two–one…");
+        assert_eq!(title.as_ref(), "Three---two--one...");
+        for format in [PostFormat::Markdown, PostFormat::Html] {
+            let unchanged = render(&parse_post_body("A---B -- C ..."), &format);
+            assert!(
+                unchanged.contains("A---B -- C ..."),
+                "{format:?}: {unchanged}"
+            );
+        }
+    }
+
+    #[test]
     fn org_list() {
         let html = render_org("- alpha\n- beta");
         assert!(html.contains("alpha"));

@@ -6,7 +6,7 @@ use common::{
     tagged_url::HubUrl, username::Username,
 };
 use host::{config_key::SiteConfigKey, password::Password};
-use storage::{BackupRestoreOutcome, FeedWindowMutation, StorageFactory};
+use storage::{BackupRestoreOutcome, DatabaseLockGuard, FeedWindowMutation, StorageFactory};
 
 use crate::{
     cli::{
@@ -46,14 +46,23 @@ pub(crate) fn resolve_trusted_proxies(
 
 async fn open_existing_storage(storage: &StorageArgs) -> anyhow::Result<StorageFactory> {
     let runtime = support::storage_runtime_config(&storage.db)?;
-    Ok(storage::open_existing_database(&storage.db, &runtime).await?)
+    let _database_lock = DatabaseLockGuard::acquire(&storage.storage_path).await?;
+    Ok(
+        storage::open_existing_database_authorizing_drain(&storage.db, &runtime, &|| {
+            support::authorize_cli_code_migration(&storage.storage_path)
+        })
+        .await?,
+    )
 }
 
 async fn open_account_storage(storage: &StorageArgs) -> anyhow::Result<StorageFactory> {
     let runtime = support::storage_runtime_config(&storage.db)?;
-    storage::open_existing_database(&storage.db, &runtime)
-        .await
-        .context(support::INIT_FIRST_CONTEXT)
+    let _database_lock = DatabaseLockGuard::acquire(&storage.storage_path).await?;
+    storage::open_existing_database_authorizing_drain(&storage.db, &runtime, &|| {
+        support::authorize_cli_code_migration(&storage.storage_path)
+    })
+    .await
+    .context(support::INIT_FIRST_CONTEXT)
 }
 
 async fn execute_user_create(
@@ -425,6 +434,61 @@ impl DeadLetterAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn cli_drain_refuses_live_server_but_allows_ordinary_reads() {
+        let directory = tempfile::tempdir().expect("storage directory");
+        let db: storage::DbConnectOptions =
+            format!("sqlite:{}", directory.path().join("jaunder.db").display())
+                .parse()
+                .expect("SQLite URL");
+        let storage = StorageArgs {
+            storage_path: directory.path().to_owned(),
+            db: db.clone(),
+        };
+        storage::open_database(&db, &storage::StorageRuntimeConfig::default())
+            .await
+            .expect("initialize and drain migration queue");
+        let storage::DbConnectOptions::Sqlite(options) = &db else {
+            unreachable!("fixture uses SQLite")
+        };
+        let pool = sqlx::SqlitePool::connect_with(options.clone())
+            .await
+            .unwrap();
+        let server = crate::runtime_file::StartupLockGuard::acquire(directory.path())
+            .expect("represent live server");
+        open_existing_storage(&storage)
+            .await
+            .expect("a live server does not block ordinary CLI reads");
+        sqlx::query("INSERT INTO pending_code_migrations (operation) VALUES ('backfill_post_media_references')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let error = open_existing_storage(&storage)
+            .await
+            .err()
+            .expect("pending offline work must refuse a live server");
+        assert!(format!("{error:#}").contains("stopping the live server"));
+        let account_error = open_account_storage(&storage)
+            .await
+            .err()
+            .expect("pending account command must refuse a live server");
+        assert!(format!("{account_error:#}").contains("stopping the live server"));
+        let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pending_code_migrations")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(remaining, 1, "refusal leaves the pending row untouched");
+        drop(server);
+        open_existing_storage(&storage)
+            .await
+            .expect("retry after the server stops drains offline work");
+        let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pending_code_migrations")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(remaining, 0);
+    }
 
     fn test_telemetry() -> host::telemetry::TelemetryConfig {
         host::telemetry::TelemetryConfig::from_raw(

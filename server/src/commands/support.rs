@@ -1,10 +1,25 @@
-use std::{fs, io};
+use std::{fs, io, path::Path};
+
+use crate::runtime_file::StartupLockGuard;
 
 use storage::StorageRuntimeConfig;
 
 /// Context added when a command requires an initialized application database.
 pub(super) const INIT_FIRST_CONTEXT: &str =
     "database could not be opened; run `jaunder init` first";
+
+/// Only a pending offline operation needs the server stopped. The database
+/// lock remains held by the caller until the queue drains; a server that starts
+/// after this check must wait for that lock before it can serve.
+pub(super) fn authorize_cli_code_migration(storage_path: &Path) -> sqlx::Result<()> {
+    StartupLockGuard::acquire(storage_path)
+        .map(drop)
+        .map_err(|error| {
+            sqlx::Error::Protocol(format!(
+                "offline code migration requires stopping the live server: {error}"
+            ))
+        })
+}
 
 fn inherited(name: &str) -> Result<Option<String>, std::env::VarError> {
     match std::env::var(name) {

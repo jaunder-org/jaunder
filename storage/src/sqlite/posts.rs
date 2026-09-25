@@ -1,11 +1,10 @@
 use async_trait::async_trait;
 use sqlx::{Pool, QueryBuilder, Sqlite};
 
-use crate::helpers;
 use crate::posts::{
     errors::is_active_post_slug_conflict,
     lifecycle::{self, PostBookkeepingRow},
-    media::{self, MediaReferenceEvidence, PostMediaReferenceBackfill},
+    media::{self, MediaReferenceEvidence},
     models::PostPublicationClear,
     search::{PostMutationVersion, PostSearchBackfillCandidate, StoredPostSearchText},
     tags::{self, PostTag, PostTagDiff},
@@ -13,8 +12,8 @@ use crate::posts::{
 };
 use crate::sql::{QueryBuilderStorageExt, QueryStorageExt};
 use crate::{
-    InstanceId, PostDialect, PostMutation, PostRecord, PostStore, PublishUpdate, RenderedHtml,
-    TaggingError, UpdatePostError, UpdatePostInput, WriteTransaction, sqlite_connection,
+    InstanceId, PostDialect, PostMutation, PostRecord, PostStore, PublishUpdate, TaggingError,
+    UpdatePostError, UpdatePostInput, WriteTransaction, sqlite_connection,
 };
 use common::idempotency_key::IdempotencyKey;
 use common::ids::{PostId, TagId, UserId};
@@ -482,59 +481,6 @@ impl PostDialect for Sqlite {
         Ok(())
     }
 
-    async fn apply_post_media_reference_backfill(
-        pool: &Pool<Self>,
-        candidates: &[PostMediaReferenceBackfill],
-    ) -> sqlx::Result<()> {
-        let mut conn = pool.acquire().await?;
-        sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
-        let result: sqlx::Result<()> = async {
-            let current: Vec<(PostId, RenderedHtml)> = sqlx::query_as(
-                "SELECT p.post_id, p.rendered_html
-                 FROM posts p
-                 WHERE EXISTS (
-                     SELECT 1 FROM post_media pm
-                     WHERE pm.post_id = p.post_id AND pm.reference_kind = 'legacy'
-                 )
-                 ORDER BY p.post_id",
-            )
-            .fetch_all(&mut *conn)
-            .await?;
-            let unchanged = current.len() == candidates.len()
-                && current
-                    .iter()
-                    .zip(candidates)
-                    .all(|((post_id, html), candidate)| {
-                        *post_id == candidate.post_id
-                            && html.as_ref() == candidate.rendered_html.as_str()
-                    });
-            if !unchanged {
-                return Err(sqlx::Error::Protocol(
-                    "post rendered HTML changed during media-reference backfill".to_owned(),
-                ));
-            }
-            media::replace_legacy_post_media::<Sqlite>(&mut conn, candidates).await
-        }
-        .await;
-
-        match result {
-            Ok(()) => {
-                sqlx::query("COMMIT").execute(&mut *conn).await?;
-                Ok(())
-            }
-            Err(error) => helpers::preserve_after_secondary(
-                Err(error),
-                sqlx::query("ROLLBACK")
-                    .execute(&mut *conn)
-                    .await
-                    .map(|_| ()),
-                host::error::ErrorKind::Storage,
-                host::error::ErrorClass::Transient,
-                "storage.sqlite.post_media_reference_backfill.rollback",
-            ),
-        }
-    }
-
     async fn insert_post_media_rows(
         conn: &mut Self::Connection,
         rows: std::collections::BTreeSet<(
@@ -577,65 +523,5 @@ impl PostDialect for Sqlite {
         media::push_live_media_reference_predicate(&mut query, current_instance_id);
         query.push(" ORDER BY pm.post_id");
         query.build_query_scalar::<PostId>().fetch_all(pool).await
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::posts::media::PostMediaReferenceBackfill;
-    use crate::sql::QueryStorageExt;
-    use crate::test_support::{Backend, CloseablePool, SeedRawPost, SeedUser, sqlite_only};
-    use rstest::*;
-    use rstest_reuse::*;
-
-    // reason: SQLite's immediate writer transaction is the dialect-specific snapshot guard.
-    #[apply(sqlite_only)]
-    #[tokio::test]
-    async fn media_backfill_rejects_a_stale_rendered_html_snapshot(#[case] backend: Backend) {
-        let env = backend.setup().await;
-        let user = SeedUser::new()
-            .seed(
-                std::sync::Arc::clone(&env.users()),
-                env.write_scope().clone(),
-            )
-            .await
-            .user_id;
-        let post_id = SeedRawPost::new(user)
-            .seed(
-                std::sync::Arc::clone(&env.posts()),
-                env.write_scope().clone(),
-            )
-            .await
-            .post_id;
-        crate::with_closeable_pool!(env.base.pool(), pool, {
-            sqlx::query(
-                "INSERT INTO post_media
-                 (post_id, source, sha256, filename, reference_kind, reference_form)
-                 VALUES ($1, 'upload',
-                 '0000000000000000000000000000000000000000000000000000000000000000',
-                 'snapshot.jpg', 'legacy', 'legacy')",
-            )
-            .bind_storage(post_id)
-            .execute(pool)
-            .await
-            .map(|_| ())
-        })
-        .expect("seed legacy reference row");
-        let CloseablePool::Sqlite(pool) = env.base.pool() else {
-            unreachable!("SQLite setup yields a SQLite pool")
-        };
-        let error = <Sqlite as PostDialect>::apply_post_media_reference_backfill(
-            pool,
-            &[PostMediaReferenceBackfill {
-                post_id,
-                rendered_html: "stale HTML".to_owned(),
-                references: Vec::new(),
-            }],
-        )
-        .await
-        .expect_err("a changed snapshot must not rewrite derived references");
-
-        assert!(matches!(error, sqlx::Error::Protocol(_)));
     }
 }

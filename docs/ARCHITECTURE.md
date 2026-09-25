@@ -154,9 +154,27 @@ by URL scheme: `DbConnectOptions` (`storage/src/db.rs`) parses `sqlite:` vs
 `postgres://` and `open_database`/`open_existing_database` dispatch accordingly.
 Each backend has its own migration tree under
 `storage/migrations/{sqlite,postgres}`; the two trees carry identical numbered
-filenames (currently `0001`–`0041`), and maintaining that parity — same
+filenames (currently `0001`–`0045`), and maintaining that parity — same
 migrations, same behavior — is the accepted cost of the pluggable strategy
 ([ADR-0001](adr/0001-storage-backends.md)).
+
+SQLx migrations can also enqueue offline Rust operations in
+`pending_code_migrations`. On open, `storage/src/code_migrations/` drains these
+rows in queue-ID order, one transaction per row containing both the operation
+and its deletion; a failed or unknown operation prevents startup and leaves the
+row for retry. The Media-reference repair now runs only when enqueued; the
+subsequent `rebuild_rendered_posts` operation recomputes only changed current
+Post HTML and Rendered Titles (including retained Deleted Posts), reconciles
+changed current-Post Media references, and invalidates/enqueues affected public
+Syndication Feeds without changing authored content, edit times, or historical
+Post Revisions. A later migration may reuse an operation name. The
+storage-directory `database.lock` spans SQLx plus the queue drain on command
+paths for both backends; a CLI with pending work additionally refuses a live
+same-directory server's `runtime.lock`, while an ordinary CLI open without
+pending work remains allowed. Offline queue transactions alone may perform
+unbounded rendering inside SQLite's write lock; request-time work still follows
+ADR-0092's bounded occupancy rule
+([Offline code migrations](adr/drafts/offline-code-migration-queue.md)).
 
 ### Crate layout and the generic store pattern
 
@@ -331,9 +349,11 @@ change; server contract tests pin the exact set. Consequently the complete
 `post_revisions` scalar rows, their immutable
 `post_revision_tags`/`post_revision_audiences` children, and revision-qualified
 `post_media` rows and durable `post_permalink_aliases` travel with every
-whole-store backup, without revision- or alias-specific export paths; typed
-restore validation covers their domain fields
-([ADR-0136](adr/0136-local-post-lifecycle.md),
+whole-store backup, without revision- or alias-specific export paths. Pending
+`pending_code_migrations` rows travel as data too: an exact-schema restore
+preserves their retry obligation until the next database open, instead of
+marking them complete on import. Typed restore validation covers the domain
+fields ([ADR-0136](adr/0136-local-post-lifecycle.md),
 [ADR-0064](adr/0064-backup-target-auto-derivation.md)).
 
 **Compatibility is explicit and independent of package chronology.** The
@@ -371,7 +391,11 @@ cascade with FKs off, but keeps the split anyway so the two restore shapes stay
 identical ([ADR-0115](adr/0115-clear-then-load-restore.md)). Restore refuses any
 target that is not empty (every table except migration/identity bootstrap
 tables; `storage::database_is_empty`, enforced by `ensure_restore_target_empty`
-in `server/src/commands/backup.rs`) — there is no force-overwrite mode
+in `server/src/commands/backup.rs`) — there is no force-overwrite mode. The
+server's backup command holds `database.lock` through its snapshot. Restore
+refuses a live same-directory server and holds that lock continuously from the
+emptiness check through database, Theme, and Media placement and validation
+([Offline code migrations](adr/drafts/offline-code-migration-queue.md))
 ([ADR-0064](adr/0064-backup-target-auto-derivation.md)). Failure is
 backend-uniform: a constraint-violating restore returns
 `BackupError::ConstraintViolation` and leaves the target unmodified on both
@@ -521,7 +545,11 @@ not repair legacy rows.
 The source and rendered forms feed deliberately separate serialization surfaces
 — Syndication Feeds consume presentation projections, while the AtomPub
 Collection preserves native source — detailed in the Protocols section
-([ADR-0015](adr/0015-atompub-serialization-surfaces.md)).
+([ADR-0015](adr/0015-atompub-serialization-surfaces.md)). Org prose export uses
+a focused `v0.10` `orgize` fork for Emacs-compatible `---`, `--`, and `...`
+typography; code, verbatim, link destinations, and authored source remain
+literal
+([Org export fork](adr/drafts/orgize-v010-special-string-export-fork.md)).
 
 **Content rights follow the User's current publication-wide setting.** Every
 User has one closed Content License: All Rights Reserved by default, CC0, or one
@@ -4131,8 +4159,9 @@ correction itself (`:76-83`, #412).
 
 **Dependency patching.** The workspace carries temporary exact-revision git
 `[patch.crates-io]` entries for lettre
-([ADR-0119](adr/0119-lettre-fork-pinned-by-rev.md)) and the Passkey
-`webauthn-rs`/`webauthn-rs-core` pair
+([ADR-0119](adr/0119-lettre-fork-pinned-by-rev.md)), Org export's `orgize`
+([Org export fork](adr/drafts/orgize-v010-special-string-export-fork.md)), and
+the Passkey `webauthn-rs`/`webauthn-rs-core` pair
 ([Passkeys are additive cookie-Session credentials](adr/0194-passkeys-are-additive-cookie-session-credentials.md)).
 The latter pins `jaunder-org/webauthn-rs` branch `feature/passkey-policy-apis`
 at `6d0acc73fbf4436b1ed853fa5c8a219dac304a8e`, preserving upstream defaults

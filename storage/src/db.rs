@@ -397,6 +397,24 @@ pub async fn open_database(
     Ok(open_database_with_observer(opts, runtime).await?.factory)
 }
 
+/// Opens or creates a database, requiring authorization only when `SQLx` queued
+/// offline Rust work. The caller holds the directory lock through this call.
+///
+/// # Errors
+///
+/// Returns a connection, migration, or authorization error before handing out storage.
+pub async fn open_database_authorizing_drain(
+    opts: &DbConnectOptions,
+    runtime: &StorageRuntimeConfig,
+    authorize_drain: &(dyn Fn() -> sqlx::Result<()> + Sync),
+) -> sqlx::Result<StorageFactory> {
+    Ok(
+        open_database_with_observer_authorizing_drain(opts, runtime, authorize_drain)
+            .await?
+            .factory,
+    )
+}
+
 /// Opens (or creates) a database and returns its storage factory plus a pool observer.
 ///
 /// # Errors
@@ -407,10 +425,24 @@ pub async fn open_database_with_observer(
     opts: &DbConnectOptions,
     runtime: &StorageRuntimeConfig,
 ) -> sqlx::Result<OpenedDatabase> {
+    open_database_with_observer_authorizing_drain(opts, runtime, &|| Ok(())).await
+}
+
+/// Production composition roots supply a pending-work authorization check.
+///
+/// # Errors
+///
+/// Returns a connection, migration, or authorization error before handing out storage.
+pub async fn open_database_with_observer_authorizing_drain(
+    opts: &DbConnectOptions,
+    runtime: &StorageRuntimeConfig,
+    authorize_drain: &(dyn Fn() -> sqlx::Result<()> + Sync),
+) -> sqlx::Result<OpenedDatabase> {
     match opts {
         DbConnectOptions::Sqlite(options) => {
             let (factory, pool, instance_id) =
-                sqlite::open_sqlite_database_with_pool(options, true, runtime).await?;
+                sqlite::open_sqlite_database_with_pool(options, true, runtime, authorize_drain)
+                    .await?;
             Ok(OpenedDatabase {
                 factory,
                 instance_id,
@@ -421,7 +453,8 @@ pub async fn open_database_with_observer(
         }
         DbConnectOptions::Postgres { options, .. } => {
             let (factory, pool, instance_id) =
-                postgres::open_postgres_database_with_pool(options, runtime).await?;
+                postgres::open_postgres_database_with_pool(options, runtime, authorize_drain)
+                    .await?;
             Ok(OpenedDatabase {
                 factory,
                 instance_id,
@@ -450,6 +483,23 @@ pub async fn open_existing_database(
         .factory)
 }
 
+/// Opens an existing database, requiring authorization only when offline work is pending.
+///
+/// # Errors
+///
+/// Returns a connection, migration, or authorization error before handing out storage.
+pub async fn open_existing_database_authorizing_drain(
+    opts: &DbConnectOptions,
+    runtime: &StorageRuntimeConfig,
+    authorize_drain: &(dyn Fn() -> sqlx::Result<()> + Sync),
+) -> sqlx::Result<StorageFactory> {
+    Ok(
+        open_existing_database_with_observer_authorizing_drain(opts, runtime, authorize_drain)
+            .await?
+            .factory,
+    )
+}
+
 /// Opens an existing database and returns its storage factory plus a pool observer.
 ///
 /// # Errors
@@ -463,10 +513,24 @@ pub async fn open_existing_database_with_observer(
     opts: &DbConnectOptions,
     runtime: &StorageRuntimeConfig,
 ) -> sqlx::Result<OpenedDatabase> {
+    open_existing_database_with_observer_authorizing_drain(opts, runtime, &|| Ok(())).await
+}
+
+/// Production composition roots supply a pending-work authorization check.
+///
+/// # Errors
+///
+/// Returns a connection, migration, or authorization error before handing out storage.
+pub async fn open_existing_database_with_observer_authorizing_drain(
+    opts: &DbConnectOptions,
+    runtime: &StorageRuntimeConfig,
+    authorize_drain: &(dyn Fn() -> sqlx::Result<()> + Sync),
+) -> sqlx::Result<OpenedDatabase> {
     match opts {
         DbConnectOptions::Sqlite(options) => {
             let (factory, pool, instance_id) =
-                sqlite::open_sqlite_database_with_pool(options, false, runtime).await?;
+                sqlite::open_sqlite_database_with_pool(options, false, runtime, authorize_drain)
+                    .await?;
             Ok(OpenedDatabase {
                 factory,
                 instance_id,
@@ -477,7 +541,8 @@ pub async fn open_existing_database_with_observer(
         }
         DbConnectOptions::Postgres { options, .. } => {
             let (factory, pool, instance_id) =
-                postgres::open_postgres_database_with_pool(options, runtime).await?;
+                postgres::open_postgres_database_with_pool(options, runtime, authorize_drain)
+                    .await?;
             Ok(OpenedDatabase {
                 factory,
                 instance_id,

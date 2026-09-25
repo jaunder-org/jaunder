@@ -14,6 +14,8 @@ pub mod account_mutations;
 mod audiences;
 mod backend;
 mod backup;
+mod code_migrations;
+mod database_lock;
 mod db;
 mod email;
 mod error;
@@ -62,11 +64,14 @@ pub mod test_support;
 pub use account_mutations::*;
 pub use audiences::*;
 pub use backend::*;
+#[cfg(any(test, feature = "test-support"))]
+pub use backup::restore_backup_paused_after_import;
 pub use backup::{
     BackupError, BackupExportOptions, BackupManifest, BackupMode, BackupRestoreOptions,
     BackupRestoreOutcome, RestoreValidationIssue, RestoreValidationReport, export_backup,
     restore_backup,
 };
+pub use database_lock::DatabaseLockGuard;
 pub use db::*;
 pub use email::*;
 pub use error::{MissingRow, RequireRow};

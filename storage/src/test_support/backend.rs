@@ -1378,10 +1378,14 @@ impl Backend {
                 let DbConnectOptions::Sqlite(options) = sqlite_url(&dir) else {
                     unreachable!("sqlite_url always yields Sqlite")
                 };
-                let (factory, pool, instance_id) =
-                    crate::sqlite::open_sqlite_database_with_pool(&options, true, &runtime)
-                        .await
-                        .unwrap();
+                let (factory, pool, instance_id) = crate::sqlite::open_sqlite_database_with_pool(
+                    &options,
+                    true,
+                    &runtime,
+                    &|| Ok(()),
+                )
+                .await
+                .unwrap();
                 (factory, TestBase::sqlite(dir, pool, instance_id))
             }
             Backend::Postgres => {
@@ -1391,9 +1395,13 @@ impl Backend {
                     unreachable!("template_postgres_url always yields Postgres")
                 };
                 let (factory, pool, instance_id) =
-                    crate::postgres::open_postgres_database_with_pool(options, &runtime)
-                        .await
-                        .unwrap();
+                    crate::postgres::open_postgres_database_with_pool(
+                        options,
+                        &runtime,
+                        &|| Ok(()),
+                    )
+                    .await
+                    .unwrap();
                 std::fs::write(dir.path().join(PG_URL_FILE), url.expose_url())
                     .expect("write recorded Postgres URL");
                 (factory, TestBase::postgres(dir, guard, pool, instance_id))

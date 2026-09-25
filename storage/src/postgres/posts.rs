@@ -1,11 +1,10 @@
 use async_trait::async_trait;
 use sqlx::{Pool, Postgres, QueryBuilder};
 
-use crate::helpers;
 use crate::posts::{
     errors::is_active_post_slug_conflict,
     lifecycle::{self, PostBookkeepingRow},
-    media::{self, MediaReferenceEvidence, PostMediaReferenceBackfill},
+    media::{self, MediaReferenceEvidence},
     models::PostPublicationClear,
     search::{PostMutationVersion, PostSearchBackfillCandidate, StoredPostSearchText},
     tags::{self, PostTag, PostTagDiff},
@@ -13,8 +12,8 @@ use crate::posts::{
 };
 use crate::sql::{QueryBuilderStorageExt, QueryStorageExt};
 use crate::{
-    InstanceId, PostDialect, PostMutation, PostRecord, PostStore, PublishUpdate, RenderedHtml,
-    TaggingError, UpdatePostError, UpdatePostInput, WriteTransaction, postgres_connection,
+    InstanceId, PostDialect, PostMutation, PostRecord, PostStore, PublishUpdate, TaggingError,
+    UpdatePostError, UpdatePostInput, WriteTransaction, postgres_connection,
 };
 use common::idempotency_key::IdempotencyKey;
 use common::ids::{PostId, TagId, UserId};
@@ -603,46 +602,6 @@ impl PostDialect for Postgres {
         );
         query.build().execute(pool).await?;
         Ok(())
-    }
-
-    async fn apply_post_media_reference_backfill(
-        pool: &Pool<Self>,
-        candidates: &[PostMediaReferenceBackfill],
-    ) -> sqlx::Result<()> {
-        let mut tx = pool.begin().await?;
-        let current: Vec<(PostId, RenderedHtml)> = sqlx::query_as(
-            "SELECT p.post_id, p.rendered_html
-             FROM posts p
-             WHERE EXISTS (
-                 SELECT 1 FROM post_media pm
-                 WHERE pm.post_id = p.post_id AND pm.reference_kind = 'legacy'
-             )
-             ORDER BY p.post_id
-             FOR UPDATE",
-        )
-        .fetch_all(&mut *tx)
-        .await?;
-        let unchanged = current.len() == candidates.len()
-            && current
-                .iter()
-                .zip(candidates)
-                .all(|((post_id, html), candidate)| {
-                    *post_id == candidate.post_id
-                        && html.as_ref() == candidate.rendered_html.as_str()
-                });
-        if !unchanged {
-            return helpers::preserve_after_secondary(
-                Err(sqlx::Error::Protocol(
-                    "post rendered HTML changed during media-reference backfill".to_owned(),
-                )),
-                tx.rollback().await,
-                host::error::ErrorKind::Storage,
-                host::error::ErrorClass::Transient,
-                "storage.postgres.post_media_reference_backfill.rollback",
-            );
-        }
-        media::replace_legacy_post_media::<Postgres>(&mut tx, candidates).await?;
-        tx.commit().await
     }
 
     async fn insert_post_media_rows(

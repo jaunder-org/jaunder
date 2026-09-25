@@ -6,8 +6,8 @@ mod tests {
     use std::borrow::Cow;
 
     use crate::DbConnectOptions;
+    use crate::code_migrations;
     use crate::posts::PostDialect;
-    use crate::posts::media;
     use crate::posts::search::{
         PostMutationVersion, PostSearchBackfillCandidate, StoredPostSearchText,
         backfill_post_search_projections,
@@ -44,6 +44,7 @@ mod tests {
     }
 
     struct MigrationDatabase {
+        options: DbConnectOptions,
         pool: CloseablePool,
         _sqlite: Option<TempDir>,
         _postgres: Option<PostgresDbGuard>,
@@ -63,6 +64,7 @@ mod tests {
                             .await
                             .unwrap();
                     Self {
+                        options,
                         pool: CloseablePool::Sqlite(pool),
                         _sqlite: Some(base),
                         _postgres: None,
@@ -80,6 +82,7 @@ mod tests {
                     };
                     let pool = PgPool::connect_with(pg_options.clone()).await.unwrap();
                     Self {
+                        options,
                         pool: CloseablePool::Postgres(pool),
                         _sqlite: None,
                         _postgres: Some(guard),
@@ -107,17 +110,22 @@ mod tests {
             }
         }
 
-        async fn backfill_post_media_references(&self) {
+        async fn drain_pending_code_migrations(&self) {
+            self.drain_pending(&|| Ok(()))
+                .await
+                .expect("offline migration succeeds");
+        }
+
+        async fn drain_pending(
+            &self,
+            authorize: &(dyn Fn() -> sqlx::Result<()> + Sync),
+        ) -> sqlx::Result<()> {
             match &self.pool {
                 CloseablePool::Sqlite(pool) => {
-                    media::backfill_post_media_references(pool)
-                        .await
-                        .expect("startup backfill succeeds");
+                    code_migrations::drain_pending(pool, authorize).await
                 }
                 CloseablePool::Postgres(pool) => {
-                    media::backfill_post_media_references(pool)
-                        .await
-                        .expect("startup backfill succeeds");
+                    code_migrations::drain_pending(pool, authorize).await
                 }
             }
         }
@@ -281,22 +289,29 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn migration_0027_backfills_legacy_post_media_origins_from_rendered_html(
+    async fn migration_0044_backfills_legacy_post_media_origins_from_rendered_html(
         #[case] backend: Backend,
     ) {
         let db = MigrationDatabase::new(backend).await;
         db.migrate_to(26).await.unwrap();
         db.seed_legacy_post_media().await;
 
-        db.migrate_current().await.unwrap();
-        db.backfill_post_media_references().await;
+        db.migrate_to(44).await.unwrap();
+        db.drain_pending_code_migrations().await;
 
         assert_eq!(
             db.pool
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            42
+            44
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM pending_code_migrations")
+                .await
+                .unwrap(),
+            0
         );
         assert_eq!(
             db.pool
@@ -327,6 +342,584 @@ mod tests {
             2,
             "absolute and scheme-relative spellings remain distinct exact rows"
         );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn pending_code_migrations_are_ordered_reusable_and_reject_unknown_operations(
+        #[case] backend: Backend,
+    ) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(44).await.unwrap();
+        db.pool
+            .execute("INSERT INTO pending_code_migrations (operation) VALUES ('not_registered')")
+            .await
+            .unwrap();
+        db.pool
+            .execute("INSERT INTO pending_code_migrations (operation) VALUES ('backfill_post_media_references')")
+            .await
+            .unwrap();
+        let authorized = AtomicUsize::new(0);
+        let error = db
+            .drain_pending(&|| {
+                authorized.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+            .await
+            .expect_err("unknown operation stops before the following operation");
+        assert!(error.to_string().contains("not_registered"));
+        assert_eq!(authorized.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM pending_code_migrations")
+                .await
+                .unwrap(),
+            2,
+            "the earlier migration committed and the unknown row remains"
+        );
+        db.pool
+            .execute("DELETE FROM pending_code_migrations WHERE operation = 'not_registered'")
+            .await
+            .unwrap();
+        db.drain_pending_code_migrations().await;
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM pending_code_migrations")
+                .await
+                .unwrap(),
+            0
+        );
+        db.pool
+            .execute("INSERT INTO pending_code_migrations (operation) VALUES ('backfill_post_media_references')")
+            .await
+            .unwrap();
+        db.drain_pending_code_migrations().await;
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM pending_code_migrations")
+                .await
+                .unwrap(),
+            0,
+            "a later SQLx migration can enqueue the same operation again"
+        );
+        let error = db
+            .drain_pending(&|| unreachable!("a drained queue must not request authorization"))
+            .await;
+        assert!(error.is_ok(), "no pending row needs no authorization");
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn pending_code_migration_rolls_back_work_if_queue_delete_fails(
+        #[case] backend: Backend,
+    ) {
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(26).await.unwrap();
+        db.seed_legacy_post_media().await;
+        db.migrate_to(44).await.unwrap();
+        let legacy_before = db
+            .pool
+            .scalar_i64("SELECT COUNT(*) FROM post_media WHERE reference_kind = 'legacy'")
+            .await
+            .unwrap();
+        match backend {
+            Backend::Sqlite => {
+                db.pool.execute(
+                    "CREATE TRIGGER reject_queue_delete BEFORE DELETE ON pending_code_migrations
+                     BEGIN SELECT RAISE(ABORT, 'injected queue delete failure'); END",
+                ).await.unwrap();
+            }
+            Backend::Postgres => {
+                db.pool.execute(
+                    "CREATE FUNCTION reject_queue_delete() RETURNS trigger LANGUAGE plpgsql AS $$
+                     BEGIN RAISE EXCEPTION 'injected queue delete failure'; END; $$",
+                ).await.unwrap();
+                db.pool.execute(
+                    "CREATE TRIGGER reject_queue_delete BEFORE DELETE ON pending_code_migrations
+                     FOR EACH ROW EXECUTE FUNCTION reject_queue_delete()",
+                ).await.unwrap();
+            }
+        }
+        let error = db
+            .drain_pending(&|| Ok(()))
+            .await
+            .expect_err("injected delete fails");
+        assert!(error.to_string().contains("injected queue delete failure"));
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM pending_code_migrations")
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM post_media WHERE reference_kind = 'legacy'")
+                .await
+                .unwrap(),
+            legacy_before,
+            "the derived changes roll back with the pending row"
+        );
+        let drop_trigger = match backend {
+            Backend::Sqlite => "DROP TRIGGER reject_queue_delete",
+            Backend::Postgres => "DROP TRIGGER reject_queue_delete ON pending_code_migrations",
+        };
+        db.pool.execute(drop_trigger).await.unwrap();
+        db.drain_pending_code_migrations().await;
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM pending_code_migrations")
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM post_media WHERE reference_kind = 'legacy'")
+                .await
+                .unwrap(),
+            0
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn sqlx_failure_returns_no_opened_storage_or_rust_operation(#[case] backend: Backend) {
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(43).await.unwrap();
+        match backend {
+            Backend::Sqlite => {
+                db.pool
+                    .execute(
+                        "CREATE TRIGGER reject_enqueue BEFORE INSERT ON pending_code_migrations
+                     BEGIN SELECT RAISE(ABORT, 'injected SQLx failure'); END",
+                    )
+                    .await
+                    .unwrap();
+            }
+            Backend::Postgres => {
+                db.pool
+                    .execute(
+                        "CREATE FUNCTION reject_enqueue() RETURNS trigger LANGUAGE plpgsql AS $$
+                     BEGIN RAISE EXCEPTION 'injected SQLx failure'; END; $$",
+                    )
+                    .await
+                    .unwrap();
+                db.pool
+                    .execute(
+                        "CREATE TRIGGER reject_enqueue BEFORE INSERT ON pending_code_migrations
+                     FOR EACH ROW EXECUTE FUNCTION reject_enqueue()",
+                    )
+                    .await
+                    .unwrap();
+            }
+        }
+        let open =
+            crate::open_existing_database(&db.options, &crate::StorageRuntimeConfig::default())
+                .await;
+        assert!(
+            open.is_err(),
+            "SQLx failure must prevent handing out a storage factory"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
+                .await
+                .unwrap(),
+            43
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM pending_code_migrations")
+                .await
+                .unwrap(),
+            0,
+            "the failing SQLx migration did not enqueue any Rust work"
+        );
+        let drop_trigger = match backend {
+            Backend::Sqlite => "DROP TRIGGER reject_enqueue",
+            Backend::Postgres => "DROP TRIGGER reject_enqueue ON pending_code_migrations",
+        };
+        db.pool.execute(drop_trigger).await.unwrap();
+        crate::open_existing_database(&db.options, &crate::StorageRuntimeConfig::default())
+            .await
+            .expect("next open completes SQLx and drains Rust work");
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM pending_code_migrations")
+                .await
+                .unwrap(),
+            0
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn migration_0045_runs_media_repair_before_render_rebuild(#[case] backend: Backend) {
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(26).await.unwrap();
+        db.seed_legacy_post_media().await;
+        db.migrate_current().await.unwrap();
+        let pending = db
+            .pool
+            .string_quintuples(
+                "SELECT operation, '', '', '', '' FROM pending_code_migrations ORDER BY queue_id",
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            pending.iter().map(|row| row.0.as_str()).collect::<Vec<_>>(),
+            ["backfill_post_media_references", "rebuild_rendered_posts"]
+        );
+        db.drain_pending_code_migrations().await;
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM post_media WHERE subject_kind = 'current'")
+                .await
+                .unwrap(),
+            0,
+            "rebuild reconciles the backfilled references against the current authored body"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM pending_code_migrations")
+                .await
+                .unwrap(),
+            0
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn migration_0045_rebuilds_only_changed_current_derivatives_and_public_feeds(
+        #[case] backend: Backend,
+    ) {
+        use common::render::PostFormat;
+
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(44).await.unwrap();
+        db.drain_pending_code_migrations().await;
+        let user = match backend {
+            Backend::Sqlite => {
+                "INSERT INTO users (user_id, username, password_hash, created_at) VALUES (404, 'rebuild-author', 'hash', CURRENT_TIMESTAMP)"
+            }
+            Backend::Postgres => {
+                "INSERT INTO users (user_id, username, password_hash, created_at) OVERRIDING SYSTEM VALUE VALUES (404, 'rebuild-author', 'hash', CURRENT_TIMESTAMP)"
+            }
+        };
+        db.pool.execute(user).await.unwrap();
+        let posts = match backend {
+            Backend::Sqlite => "INSERT INTO posts (post_id, user_id, title, rendered_title, slug, body, format, rendered_html, created_at, updated_at, published_at, deleted_at) VALUES
+                (505, 404, 'A---B...', 'A---B...', 'rebuild-org', 'A---B...', 'org', '<p>A---B...</p>', '2025-01-01T00:00:00Z', '2025-02-01T00:00:00Z', '2025-02-01T00:00:00Z', NULL),
+                (506, 404, NULL, NULL, 'rebuild-markdown', 'word', 'markdown', '<p>word</p>', '2025-01-01T00:00:00Z', '2025-02-01T00:00:00Z', NULL, NULL),
+                (507, 404, NULL, NULL, 'rebuild-html', '<p>fixed</p>', 'html', '<p>fixed</p>', '2025-01-01T00:00:00Z', '2025-02-01T00:00:00Z', NULL, NULL),
+                (508, 404, 'Deleted--', 'Deleted--', 'rebuild-deleted', 'Deleted---...', 'org', '<p>Deleted---...</p>', '2025-01-01T00:00:00Z', '2025-02-01T00:00:00Z', '2025-02-01T00:00:00Z', '2025-03-01T00:00:00Z')",
+            Backend::Postgres => "INSERT INTO posts (post_id, user_id, title, rendered_title, slug, body, format, rendered_html, created_at, updated_at, published_at, deleted_at) OVERRIDING SYSTEM VALUE VALUES
+                (505, 404, 'A---B...', 'A---B...', 'rebuild-org', 'A---B...', 'org', '<p>A---B...</p>', '2025-01-01T00:00:00Z', '2025-02-01T00:00:00Z', '2025-02-01T00:00:00Z', NULL),
+                (506, 404, NULL, NULL, 'rebuild-markdown', 'word', 'markdown', '<p>word</p>', '2025-01-01T00:00:00Z', '2025-02-01T00:00:00Z', NULL, NULL),
+                (507, 404, NULL, NULL, 'rebuild-html', '<p>fixed</p>', 'html', '<p>fixed</p>', '2025-01-01T00:00:00Z', '2025-02-01T00:00:00Z', NULL, NULL),
+                (508, 404, 'Deleted--', 'Deleted--', 'rebuild-deleted', 'Deleted---...', 'org', '<p>Deleted---...</p>', '2025-01-01T00:00:00Z', '2025-02-01T00:00:00Z', '2025-02-01T00:00:00Z', '2025-03-01T00:00:00Z')",
+        };
+        db.pool.execute(posts).await.unwrap();
+        db.pool
+            .execute("UPDATE posts SET rendered_html = '<p>stale</p>' WHERE post_id = 506")
+            .await
+            .unwrap();
+        let title_only = match backend {
+            Backend::Sqlite => "INSERT INTO posts (post_id, user_id, title, rendered_title, slug, body, format, rendered_html, created_at, updated_at)
+                 VALUES (509, 404, 'title', 'stale', 'title-only', '<p>fixed</p>', 'html', '<p>fixed</p>', '2025-01-01T00:00:00Z', '2025-02-01T00:00:00Z')",
+            Backend::Postgres => "INSERT INTO posts (post_id, user_id, title, rendered_title, slug, body, format, rendered_html, created_at, updated_at)
+                 OVERRIDING SYSTEM VALUE VALUES (509, 404, 'title', 'stale', 'title-only', '<p>fixed</p>', 'html', '<p>fixed</p>', '2025-01-01T00:00:00Z', '2025-02-01T00:00:00Z')",
+        };
+        db.pool.execute(title_only).await.unwrap();
+        db.pool
+            .execute(
+                "INSERT INTO post_audiences (post_id, target_kind_id, audience_id)
+             SELECT 505, kind_id, NULL FROM target_kinds WHERE name = 'public'",
+            )
+            .await
+            .unwrap();
+        db.pool.execute(
+            "INSERT INTO post_revisions (post_id, user_id, title, rendered_title, slug, body, format, rendered_html, created_at, updated_at, published_at)
+             SELECT post_id, user_id, title, rendered_title, slug, body, format, rendered_html, created_at, updated_at, published_at FROM posts WHERE post_id = 505",
+        ).await.unwrap();
+        db.pool
+            .execute("INSERT INTO tags (tag_slug) VALUES ('topic')")
+            .await
+            .unwrap();
+        db.pool
+            .execute(
+                "INSERT INTO post_tags (post_id, tag_id, tag_display)
+             SELECT 505, tag_id, 'Topic' FROM tags WHERE tag_slug = 'topic'",
+            )
+            .await
+            .unwrap();
+        let before =  db.pool.string_quintuples(
+            "SELECT CAST(post_id AS TEXT), COALESCE(title, ''), body, rendered_html, CAST(updated_at AS TEXT)
+             FROM posts ORDER BY post_id",
+        ).await.unwrap();
+        let revision_before = db.pool.string_quintuples(
+            "SELECT title, body, rendered_html, CAST(updated_at AS TEXT), COALESCE(rendered_title, '') FROM post_revisions",
+        ).await.unwrap();
+        db.pool.execute(
+            "INSERT INTO feed_cache (feed_url, body, etag, content_type, representation_modified_at, generated_at, semantic_fingerprint)
+             VALUES ('/feed.rss', 'stale', 'old-etag', 'application/rss+xml', '2025-02-01T00:00:00Z', '2025-02-01T00:00:00Z', 'old-fingerprint')",
+        ).await.unwrap();
+        db.migrate_current().await.unwrap();
+        db.drain_pending_code_migrations().await;
+        let after = db.pool.string_quintuples(
+            "SELECT CAST(post_id AS TEXT), COALESCE(title, ''), body, rendered_html, CAST(updated_at AS TEXT)
+             FROM posts ORDER BY post_id",
+        ).await.unwrap();
+        let org = host::render::render_post(
+            Some("A---B...".parse().unwrap()),
+            "A---B...".parse().unwrap(),
+            PostFormat::Org,
+        );
+        assert_eq!(
+            after[0].2, before[0].2,
+            "authored Org source remains unchanged"
+        );
+        assert_eq!(after[0].3, org.rendered_html().as_ref());
+        let current_title = db
+            .pool
+            .string_quintuples(
+                "SELECT rendered_title, '', '', '', '' FROM posts WHERE post_id = 505",
+            )
+            .await
+            .unwrap();
+        assert_eq!(current_title[0].0, org.rendered_title().unwrap().as_ref());
+        assert_eq!(after[0].4, before[0].4, "semantic edit time is unchanged");
+        assert_eq!(after[1].2, before[1].2, "Markdown source is unchanged");
+        assert_eq!(
+            after[1].3, "<p>word</p>\n",
+            "Markdown derivative is rebuilt"
+        );
+        assert_eq!(after[1].4, before[1].4, "Markdown edit time is unchanged");
+        assert_eq!(
+            after[2], before[2],
+            "HTML with current rendering is untouched"
+        );
+        assert_ne!(after[3].3, before[3].3, "retained Deleted Post is rebuilt");
+        assert_eq!(after[3].4, before[3].4);
+        assert_eq!(
+            after[4].3, before[4].3,
+            "title-only rebuild leaves HTML body unchanged"
+        );
+        assert_eq!(after[4].4, before[4].4);
+        let title_only = db
+            .pool
+            .string_quintuples(
+                "SELECT rendered_title, '', '', '', '' FROM posts WHERE post_id = 509",
+            )
+            .await
+            .unwrap();
+        assert_eq!(title_only[0].0, "title");
+        assert_eq!(db.pool.string_quintuples(
+            "SELECT title, body, rendered_html, CAST(updated_at AS TEXT), COALESCE(rendered_title, '') FROM post_revisions"
+        ).await.unwrap(), revision_before, "historical Post Revision bytes are immutable");
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM post_revisions")
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM feed_cache WHERE feed_url = '/feed.rss'")
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM feed_events")
+                .await
+                .unwrap(),
+            12,
+            "only changed public Post affects site, User, and Tag feeds in three formats"
+        );
+        let paths = db
+            .pool
+            .string_quintuples("SELECT feed_url, '', '', '', '' FROM feed_events ORDER BY feed_url")
+            .await
+            .unwrap();
+        assert!(
+            paths
+                .iter()
+                .any(|path| path.0.contains("/tags/topic/feed.rss")),
+            "affected Tag Syndication Feeds are queued for regeneration"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM pending_code_migrations")
+                .await
+                .unwrap(),
+            0
+        );
+        db.pool
+            .execute(
+                "INSERT INTO pending_code_migrations (operation) VALUES ('rebuild_rendered_posts')",
+            )
+            .await
+            .unwrap();
+        db.drain_pending_code_migrations().await;
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM feed_events")
+                .await
+                .unwrap(),
+            12,
+            "byte-identical repeat rebuild produces no publish work"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn migration_0045_reconciles_current_media_and_rolls_back_failed_attempt(
+        #[case] backend: Backend,
+    ) {
+        const HASH: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(44).await.unwrap();
+        db.drain_pending_code_migrations().await;
+        let user = match backend {
+            Backend::Sqlite => {
+                "INSERT INTO users (user_id, username, password_hash, created_at) VALUES (404, 'media-rebuild', 'hash', CURRENT_TIMESTAMP)"
+            }
+            Backend::Postgres => {
+                "INSERT INTO users (user_id, username, password_hash, created_at) OVERRIDING SYSTEM VALUE VALUES (404, 'media-rebuild', 'hash', CURRENT_TIMESTAMP)"
+            }
+        };
+        db.pool.execute(user).await.unwrap();
+        let post = match backend {
+            Backend::Sqlite => {
+                r#"INSERT INTO posts (post_id, user_id, slug, body, format, rendered_html, created_at, updated_at)
+              VALUES (505, 404, 'changed-media', '<img src="/media/upload/e3/b0/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/new.jpg">', 'html',
+                 '<img src="/media/upload/e3/b0/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/old.jpg">',
+                 '2025-01-01T00:00:00Z', '2025-02-01T00:00:00Z')"#
+            }
+            Backend::Postgres => {
+                r#"INSERT INTO posts (post_id, user_id, slug, body, format, rendered_html, created_at, updated_at)
+              OVERRIDING SYSTEM VALUE VALUES (505, 404, 'changed-media', '<img src="/media/upload/e3/b0/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/new.jpg">', 'html',
+                 '<img src="/media/upload/e3/b0/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/old.jpg">',
+                 '2025-01-01T00:00:00Z', '2025-02-01T00:00:00Z')"#
+            }
+        };
+        db.pool.execute(post).await.unwrap();
+        db.pool.execute(
+            "INSERT INTO post_revisions (post_id, user_id, slug, body, format, rendered_html, created_at, updated_at)
+             SELECT post_id, user_id, slug, body, format, rendered_html, created_at, updated_at FROM posts WHERE post_id = 505",
+        ).await.unwrap();
+        let insert_media = format!(
+            "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) VALUES
+             (404, '{HASH}', 'old.jpg', 'upload', 'image/jpeg', 1),
+             (404, '{HASH}', 'new.jpg', 'upload', 'image/jpeg', 1)"
+        );
+        let insert_current = format!(
+            "INSERT INTO post_media (post_id, source, sha256, filename, reference_kind, reference_form)
+             VALUES (505, 'upload', '{HASH}', 'old.jpg', 'local', '/media/upload/e3/b0/{HASH}/old.jpg')"
+        );
+        let insert_revision = format!(
+            "INSERT INTO post_media (post_id, subject_kind, revision_id, source, sha256, filename, reference_kind, reference_form)
+             SELECT 505, 'revision', revision_id, 'upload', '{HASH}', 'old.jpg', 'local', '/media/upload/e3/b0/{HASH}/old.jpg'
+             FROM post_revisions WHERE post_id = 505"
+        );
+        crate::with_closeable_pool!(&db.pool, pool, {
+            async {
+                // All substitutions use the fixed test-only content hash.
+                sqlx::query(sqlx::AssertSqlSafe(insert_media))
+                    .execute(pool)
+                    .await?;
+                sqlx::query(sqlx::AssertSqlSafe(insert_current))
+                    .execute(pool)
+                    .await?;
+                sqlx::query(sqlx::AssertSqlSafe(insert_revision))
+                    .execute(pool)
+                    .await?;
+                Ok::<_, sqlx::Error>(())
+            }
+            .await
+        })
+        .unwrap();
+        let original_html = db.pool.string_quintuples(
+            "SELECT rendered_html, body, CAST(updated_at AS TEXT), '', '' FROM posts WHERE post_id = 505"
+        ).await.unwrap();
+        db.migrate_current().await.unwrap();
+        match backend {
+            Backend::Sqlite => db
+                .pool
+                .execute(
+                    "CREATE TRIGGER reject_rebuild_delete BEFORE DELETE ON pending_code_migrations
+                 BEGIN SELECT RAISE(ABORT, 'injected rebuild failure'); END",
+                )
+                .await
+                .unwrap(),
+            Backend::Postgres => {
+                db.pool.execute(
+                    "CREATE FUNCTION reject_rebuild_delete() RETURNS trigger LANGUAGE plpgsql AS $$
+                     BEGIN RAISE EXCEPTION 'injected rebuild failure'; END; $$"
+                ).await.unwrap();
+                db.pool.execute(
+                    "CREATE TRIGGER reject_rebuild_delete BEFORE DELETE ON pending_code_migrations
+                     FOR EACH ROW EXECUTE FUNCTION reject_rebuild_delete()"
+                ).await.unwrap();
+            }
+        }
+        let error = db
+            .drain_pending(&|| Ok(()))
+            .await
+            .expect_err("failure after rebuild rolls back");
+        assert!(error.to_string().contains("injected rebuild failure"));
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM pending_code_migrations")
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(db.pool.string_quintuples(
+            "SELECT rendered_html, body, CAST(updated_at AS TEXT), '', '' FROM posts WHERE post_id = 505"
+        ).await.unwrap(), original_html, "rendering rolls back with the queue row");
+        assert_eq!(db.pool.scalar_i64("SELECT COUNT(*) FROM post_media WHERE subject_kind = 'current' AND filename = 'old.jpg'").await.unwrap(), 1);
+        let drop_trigger = match backend {
+            Backend::Sqlite => "DROP TRIGGER reject_rebuild_delete",
+            Backend::Postgres => "DROP TRIGGER reject_rebuild_delete ON pending_code_migrations",
+        };
+        db.pool.execute(drop_trigger).await.unwrap();
+        db.drain_pending_code_migrations().await;
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM pending_code_migrations")
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(db.pool.scalar_i64("SELECT COUNT(*) FROM post_media WHERE subject_kind = 'current' AND filename = 'old.jpg'").await.unwrap(), 0);
+        assert_eq!(db.pool.scalar_i64("SELECT COUNT(*) FROM post_media WHERE subject_kind = 'current' AND filename = 'new.jpg'").await.unwrap(), 1);
+        assert_eq!(db.pool.scalar_i64("SELECT COUNT(*) FROM post_media WHERE subject_kind = 'revision' AND filename = 'old.jpg'").await.unwrap(), 1);
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM media WHERE user_id = 404")
+                .await
+                .unwrap(),
+            2,
+            "Media Record ownership is unchanged"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM feed_events")
+                .await
+                .unwrap(),
+            0,
+            "non-public derivative change does not create publish work"
+        );
+        assert_eq!(db.pool.string_quintuples(
+            "SELECT body, CAST(updated_at AS TEXT), '', '', '' FROM posts WHERE post_id = 505"
+        ).await.unwrap()[0].0, original_html[0].1);
     }
 
     #[apply(backends)]
@@ -1023,7 +1616,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            42,
+            45,
         );
     }
 
@@ -1495,7 +2088,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            42
+            45
         );
         assert_eq!(
             db.pool
