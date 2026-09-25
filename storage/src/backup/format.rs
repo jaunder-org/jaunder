@@ -31,6 +31,7 @@ pub(crate) const TABLES_EXCLUDED_FROM_BACKUP: &[&str] = &[
     "_sqlx_migrations",
     "feed_cache",
     "post_projection_refresh_progress",
+    "post_id_allocator",
     "passkey_registration_ceremonies",
     "passkey_authentication_ceremonies",
 ];
@@ -283,6 +284,7 @@ mod tests {
             "posts",
             "users",
             "feed_cache",
+            "post_id_allocator",
             "_sqlx_migrations",
             "sqlite_sequence",
             "channels",

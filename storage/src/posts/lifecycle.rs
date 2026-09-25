@@ -537,65 +537,54 @@ where
 
     let search_text: StoredPostSearchText =
         post_search_projection(input.rendered.title(), &input.slug).into();
+    // All PostStore creates use the same allocator. A concurrent Markdown or
+    // fixture create must never claim an ID already reserved for Org rendering.
+    let identity = match input.reserved_post_id {
+        Some(id) => id,
+        None => {
+            sqlx::query_scalar::<_, PostId>(DB::RESERVE_POST_ID_SQL)
+                .fetch_one(&mut *conn)
+                .await?
+        }
+    };
     let post_id = sqlx::query_scalar::<_, PostId>(
-        "INSERT INTO posts (user_id, title, rendered_title, slug, search_text, body, format, rendered_html, created_at, updated_at, published_at, summary)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        "INSERT INTO posts (post_id, user_id, title, rendered_title, slug, search_text, body, format, rendered_html, created_at, updated_at, published_at, summary)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
          RETURNING post_id",
     )
-    .bind_storage(input.user_id)
-    // `Option::as_ref` → `Option<&PostTitle>` (a typed newtype bind, not an
-    // `AsRef<str>` strip); the sqlx bridge encodes `Option<&PostTitle>`.
-    .bind_storage(input.rendered.title())
-    .bind_storage(input.rendered.rendered_title())
-    .bind_storage(&input.slug)
-    .bind_storage(search_text)
-    .bind_storage(input.rendered.body())
-    .bind_storage(input.rendered.format())
-    .bind_storage(input.rendered.rendered_html())
-    .bind_storage(now)
-    .bind_storage(now)
-    .bind_storage(input.published_at)
-    // `Option::as_ref` → `Option<&PostSummary>` (a typed newtype bind via the
-    // ADR-0071 sqlx bridge, not an `AsRef<str>` strip); the `sqlx-newtype-bind`
-    // gate forbids stripping to `&str` here.
-    .bind_storage(input.summary.as_ref())
-    .fetch_one(&mut *conn)
-    .await
-    .map_err(|error| match error {
-        sqlx::Error::Database(database) if is_active_post_slug_conflict(database.as_ref()) => {
-            CreatePostError::SlugConflict
-        }
-        error => CreatePostError::Internal(error),
-    })?;
+        .bind_storage(identity)
+        .bind_storage(input.user_id)
+        // `Option::as_ref` → `Option<&PostTitle>` (a typed newtype bind, not an
+        // `AsRef<str>` strip); the sqlx bridge encodes `Option<&PostTitle>`.
+        .bind_storage(input.rendered.title())
+        .bind_storage(input.rendered.rendered_title())
+        .bind_storage(&input.slug)
+        .bind_storage(search_text)
+        .bind_storage(input.rendered.body())
+        .bind_storage(input.rendered.format())
+        .bind_storage(input.rendered.rendered_html())
+        .bind_storage(now)
+        .bind_storage(now)
+        .bind_storage(input.published_at)
+        // `Option::as_ref` → `Option<&PostSummary>` (a typed newtype bind via the
+        // ADR-0071 sqlx bridge, not an `AsRef<str>` strip); the `sqlx-newtype-bind`
+        // gate forbids stripping to `&str` here.
+        .bind_storage(input.summary.as_ref())
+        .fetch_one(&mut *conn)
+        .await
+        .map_err(|error| match error {
+            sqlx::Error::Database(database) if is_active_post_slug_conflict(database.as_ref()) => {
+                CreatePostError::SlugConflict
+            }
+            error => CreatePostError::Internal(error),
+        })?;
 
     if !create_expectations_match(input) {
         return Err(CreatePostError::BookkeepingMismatch);
     }
 
-    // The database allocates the Post ID at INSERT on both backends. Replace
-    // the provisional Org projection inside this same transaction before any
-    // reader can see it; all of its derived media must come from this final HTML.
-    let scoped_rendering = if input.rendered.format() == PostFormat::Org {
-        let rendering = host::render::render_post_scoped(
-            post_id,
-            input.rendered.title().cloned(),
-            input.rendered.body().clone(),
-            input.rendered.format(),
-        )?;
-        sqlx::query("UPDATE posts SET rendered_html = $1 WHERE post_id = $2")
-            .bind_storage(rendering.rendered_html())
-            .bind_storage(post_id)
-            .execute(&mut *conn)
-            .await?;
-        Some(rendering)
-    } else {
-        None
-    };
-    let media_refs = scoped_rendering
-        .as_ref()
-        .map_or_else(|| input.rendered.media(), |rendering| rendering.media());
     visibility::replace_post_audiences::<DB>(conn, post_id, &input.audiences).await?;
-    media::replace_post_media::<DB>(conn, post_id, media_refs).await?;
+    media::replace_post_media::<DB>(conn, post_id, input.rendered.media()).await?;
     tags::insert_post_tags::<DB>(conn, post_id, &input.tags).await?;
 
     if let Some(key) = input.idempotency_key.as_ref() {

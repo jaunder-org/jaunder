@@ -1203,6 +1203,211 @@ main = putStrLn "hello"
 
     #[apply(backends)]
     #[tokio::test]
+    async fn migration_0048_rebuilds_footnote_media_and_public_feeds_atomically(
+        #[case] backend: Backend,
+    ) {
+        const HASH: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(47).await.unwrap();
+        db.drain_pending_code_migrations().await;
+        let user = match backend {
+            Backend::Sqlite => {
+                "INSERT INTO users (user_id, username, password_hash, created_at) VALUES (404, 'note-author', 'hash', CURRENT_TIMESTAMP)"
+            }
+            Backend::Postgres => {
+                "INSERT INTO users (user_id, username, password_hash, created_at) OVERRIDING SYSTEM VALUE VALUES (404, 'note-author', 'hash', CURRENT_TIMESTAMP)"
+            }
+        };
+        db.pool.execute(user).await.unwrap();
+        let body = format!("reference[fn:n]\n\n[fn:n] [[/media/upload/e3/b0/{HASH}/new.jpg]]");
+        let post = match backend {
+            Backend::Sqlite => format!(
+                "INSERT INTO posts (post_id, user_id, slug, body, format, rendered_html, created_at, updated_at, published_at) VALUES (505, 404, 'note-media', '{body}', 'org', '<p>old</p>', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            ),
+            Backend::Postgres => format!(
+                "INSERT INTO posts (post_id, user_id, slug, body, format, rendered_html, created_at, updated_at, published_at) OVERRIDING SYSTEM VALUE VALUES (505, 404, 'note-media', '{body}', 'org', '<p>old</p>', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            ),
+        };
+        crate::with_closeable_pool!(&db.pool, pool, {
+            sqlx::query(sqlx::AssertSqlSafe(post))
+                .execute(pool)
+                .await
+                .map(|_| ())
+        })
+        .unwrap();
+        db.pool
+            .execute(
+                "INSERT INTO post_audiences (post_id, target_kind_id, audience_id)
+             SELECT 505, kind_id, NULL FROM target_kinds WHERE name = 'public'",
+            )
+            .await
+            .unwrap();
+        db.pool.execute(
+            "INSERT INTO post_revisions (post_id, user_id, slug, body, format, rendered_html, created_at, updated_at, published_at)
+             SELECT post_id, user_id, slug, body, format, rendered_html, created_at, updated_at, published_at FROM posts WHERE post_id = 505",
+        ).await.unwrap();
+        let media = format!(
+            "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) VALUES
+             (404, '{HASH}', 'old.jpg', 'upload', 'image/jpeg', 1),
+             (404, '{HASH}', 'new.jpg', 'upload', 'image/jpeg', 1)"
+        );
+        let current = format!(
+            "INSERT INTO post_media (post_id, source, sha256, filename, reference_kind, reference_form)
+             VALUES (505, 'upload', '{HASH}', 'old.jpg', 'local', '/media/upload/e3/b0/{HASH}/old.jpg')"
+        );
+        crate::with_closeable_pool!(&db.pool, pool, {
+            async {
+                sqlx::query(sqlx::AssertSqlSafe(media))
+                    .execute(pool)
+                    .await?;
+                sqlx::query(sqlx::AssertSqlSafe(current))
+                    .execute(pool)
+                    .await?;
+                Ok::<_, sqlx::Error>(())
+            }
+            .await
+        })
+        .unwrap();
+        db.pool.execute(
+            "INSERT INTO feed_cache (feed_url, body, etag, content_type, representation_modified_at, generated_at, semantic_fingerprint)
+             VALUES ('/feed.rss', 'stale', 'old-etag', 'application/rss+xml', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'old-fingerprint')",
+        ).await.unwrap();
+        let before = db.pool.string_quintuples(
+            "SELECT rendered_html, body, CAST(updated_at AS TEXT), '', '' FROM posts WHERE post_id = 505"
+        ).await.unwrap();
+        db.migrate_to(48).await.unwrap();
+        match backend {
+            Backend::Sqlite => db.pool.execute(
+                "CREATE TRIGGER reject_note_rebuild_delete BEFORE DELETE ON pending_code_migrations
+                 BEGIN SELECT RAISE(ABORT, 'injected footnote rebuild failure'); END",
+            ).await.unwrap(),
+            Backend::Postgres => {
+                db.pool.execute(
+                    "CREATE FUNCTION reject_note_rebuild_delete() RETURNS trigger LANGUAGE plpgsql AS $$
+                     BEGIN RAISE EXCEPTION 'injected footnote rebuild failure'; END; $$",
+                ).await.unwrap();
+                db.pool.execute(
+                    "CREATE TRIGGER reject_note_rebuild_delete BEFORE DELETE ON pending_code_migrations
+                     FOR EACH ROW EXECUTE FUNCTION reject_note_rebuild_delete()",
+                ).await.unwrap();
+            }
+        }
+        let error = db
+            .drain_pending(&|| Ok(()))
+            .await
+            .expect_err("injected failure aborts all effects");
+        assert!(
+            error
+                .to_string()
+                .contains("injected footnote rebuild failure")
+        );
+        assert_eq!(db.pool.string_quintuples(
+            "SELECT rendered_html, body, CAST(updated_at AS TEXT), '', '' FROM posts WHERE post_id = 505"
+        ).await.unwrap(), before);
+        assert_eq!(db.pool.scalar_i64("SELECT COUNT(*) FROM post_media WHERE subject_kind = 'current' AND filename = 'old.jpg'").await.unwrap(), 1);
+        assert_eq!(db.pool.scalar_i64("SELECT COUNT(*) FROM post_media WHERE subject_kind = 'current' AND filename = 'new.jpg'").await.unwrap(), 0);
+        assert_eq!(db.pool.scalar_i64("SELECT COUNT(*) FROM feed_cache WHERE feed_url = '/feed.rss' AND etag = 'old-etag'").await.unwrap(), 1);
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM feed_events")
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM pending_code_migrations")
+                .await
+                .unwrap(),
+            1
+        );
+        let drop_trigger = match backend {
+            Backend::Sqlite => "DROP TRIGGER reject_note_rebuild_delete",
+            Backend::Postgres => {
+                "DROP TRIGGER reject_note_rebuild_delete ON pending_code_migrations"
+            }
+        };
+        db.pool.execute(drop_trigger).await.unwrap();
+        db.drain_pending_code_migrations().await;
+        let after = db.pool.string_quintuples(
+            "SELECT rendered_html, body, CAST(updated_at AS TEXT), '', '' FROM posts WHERE post_id = 505"
+        ).await.unwrap();
+        assert_eq!(
+            after[0].1, before[0].1,
+            "authored Org source stays unchanged"
+        );
+        assert_eq!(
+            after[0].2, before[0].2,
+            "semantic edit time stays unchanged"
+        );
+        assert!(
+            after[0].0.contains("id=\"post-505-fn-1\""),
+            "{}",
+            after[0].0
+        );
+        assert!(after[0].0.contains("new.jpg"), "{}", after[0].0);
+        assert_eq!(db.pool.scalar_i64("SELECT COUNT(*) FROM post_media WHERE subject_kind = 'current' AND filename = 'old.jpg'").await.unwrap(), 0);
+        assert_eq!(db.pool.scalar_i64("SELECT COUNT(*) FROM post_media WHERE subject_kind = 'current' AND filename = 'new.jpg'").await.unwrap(), 1);
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM post_media WHERE subject_kind = 'current'")
+                .await
+                .unwrap(),
+            1,
+            "Media rows match only the sanitized referenced note"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM feed_cache WHERE feed_url = '/feed.rss'")
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM feed_events")
+                .await
+                .unwrap(),
+            6
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM pending_code_migrations")
+                .await
+                .unwrap(),
+            0
+        );
+        let revision = db
+            .pool
+            .string_quintuples(
+                "SELECT body, rendered_html, '', '', '' FROM post_revisions WHERE post_id = 505",
+            )
+            .await
+            .unwrap();
+        assert_eq!(revision[0].0, before[0].1);
+        assert_eq!(
+            revision[0].1, before[0].0,
+            "historical Revision is untouched"
+        );
+        db.pool
+            .execute(
+                "INSERT INTO pending_code_migrations (operation) VALUES ('rebuild_rendered_posts')",
+            )
+            .await
+            .unwrap();
+        db.drain_pending_code_migrations().await;
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM feed_events")
+                .await
+                .unwrap(),
+            6,
+            "repeat rebuild emits no duplicate events"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
     async fn migration_0039_adds_nullable_columns_without_repairing_existing_rows(
         #[case] backend: Backend,
     ) {

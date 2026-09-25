@@ -331,6 +331,7 @@ impl SeedRawPost {
             .expect("fixture Post rendering must succeed");
         CreatePostInput {
             user_id: self.user_id,
+            reserved_post_id: None,
             slug,
             rendered,
             published_at: self.published_at,

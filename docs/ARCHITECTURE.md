@@ -154,7 +154,7 @@ by URL scheme: `DbConnectOptions` (`storage/src/db.rs`) parses `sqlite:` vs
 `postgres://` and `open_database`/`open_existing_database` dispatch accordingly.
 Each backend has its own migration tree under
 `storage/migrations/{sqlite,postgres}`; the two trees carry identical numbered
-filenames (currently `0001`–`0047`), and maintaining that parity — same
+filenames (currently `0001`–`0048`), and maintaining that parity — same
 migrations, same behavior — is the accepted cost of the pluggable strategy
 ([ADR-0001](adr/0001-storage-backends.md)).
 
@@ -175,11 +175,14 @@ pending work remains allowed. Offline queue transactions alone may perform
 unbounded rendering inside SQLite's write lock; request-time work still follows
 ADR-0092's bounded occupancy rule
 ([Offline code migrations](adr/drafts/offline-code-migration-queue.md)). The
-`0047` enqueues `rebuild_rendered_posts` again for the new syntax rules,
-including databases that already ran `0045`. The offline rebuild drains before
-the bounded startup Post projection refresh; when it has already updated the
-same HTML, the refresh still records its checkpoint but does not enqueue
-duplicate events.
+`0047` enqueues `rebuild_rendered_posts` again for the new syntax rules; `0048`
+re-enqueues it for Org footnotes, including databases that already drained
+`0047`. On SQLite, `0048` also initializes the short-write Post ID allocator
+shared by all Post creations; PostgreSQL uses its existing Post sequence. Org
+creation reserves identity before rendering, outside the content-write
+transaction. The offline rebuild drains before the bounded startup Post
+projection refresh; when it has already updated the same HTML, the refresh still
+records its checkpoint but does not enqueue duplicate events.
 
 ### Crate layout and the generic store pattern
 

@@ -23,7 +23,7 @@ this outline does not authorize working in another checkout from this session.
 
 ## Task outline
 
-- [ ] Capture the baseline, then deliver tested footnote HTML export in
+- [x] Capture the baseline, then deliver tested footnote HTML export in
       `jaunder-org/orgize`.
   - Contract: exporter accepts a caller-supplied stable namespace for footnote
     fragment IDs; references/definitions and their back-links share it, while
@@ -36,7 +36,7 @@ this outline does not authorize working in another checkout from this session.
     cases, semantic notes-section markup, preserved Org links/emphasis in notes,
     and the production source shape; comparable baseline screenshot of a public
     Org Post before presentation mutation.
-- [ ] Supply a stable Post-scoped rendering identity on create and update.
+- [x] Supply a stable Post-scoped rendering identity on create and update.
   - Contract: the Post ID is available before first persisted render and enters
     Org body export on create and update. The offline rebuild takes the same ID
     through this rendering boundary. Rendering retains the inseparable sanitized
@@ -52,7 +52,7 @@ this outline does not authorize working in another checkout from this session.
   - Verification: on each backend, drain through `0047`, migrate to `0048`,
     observe one new pending full rebuild, then drain it with the existing
     dispatcher.
-- [ ] Rebuild all current Posts and dependent public projections offline.
+- [x] Rebuild all current Posts and dependent public projections offline.
   - Contract: the queued full current-Post pass uses each Post's stable ID.
     Replace exact sanitized HTML-derived Media references, invalidate affected
     Syndication Feed cache/validators and enqueue `feed_events` atomically with
@@ -66,7 +66,7 @@ this outline does not authorize working in another checkout from this session.
     all effects back; retry produces the final HTML and exactly one committed
     notification per affected feed, with no pending work and no repeat effects
     on the next open.
-- [ ] Demonstrate published footnotes in the browser and finish visual proof.
+- [x] Demonstrate published footnotes in the browser and finish visual proof.
   - Contract: the public Post fixture includes forward/repeated references and a
     wrapped, linked definition; UI anchors navigate within their Post even on a
     multi-Post page.

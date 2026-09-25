@@ -185,7 +185,17 @@ pub async fn create_rendered_post(
     content: RenderedPostContent,
     now: UtcInstant,
 ) -> Result<MutationOutcome<PostRecord>, CreatePostError> {
-    let input = render_post_input(content)?;
+    let reserved_id = if content.format == PostFormat::Org {
+        Some(
+            storage
+                .reserve_post_id()
+                .await
+                .map_err(CreatePostError::Internal)?,
+        )
+    } else {
+        None
+    };
+    let input = render_post_input_with_identity(content, reserved_id)?;
     let _media_locks = content_locks
         .acquire(
             input
@@ -243,7 +253,17 @@ pub async fn create_rendered_post_with_media_ownership(
     content: RenderedPostContent,
     now: UtcInstant,
 ) -> Result<MutationOutcome<PostRecord>, CreatePostError> {
-    let input = render_post_input(content)?;
+    let reserved_id = if content.format == PostFormat::Org {
+        Some(
+            storage
+                .reserve_post_id()
+                .await
+                .map_err(CreatePostError::Internal)?,
+        )
+    } else {
+        None
+    };
+    let input = render_post_input_with_identity(content, reserved_id)?;
     let local_media = ownership
         .resolve(input.rendered.media())
         .await
@@ -294,13 +314,21 @@ pub async fn create_rendered_post_with_media_ownership(
 }
 
 /// Renders `body` per `format` and assembles the [`CreatePostInput`] without
-/// writing it. Shared by [`create_rendered_post`] (write one) and the batch
-/// seeders (collect many), so the render-and-assemble recipe lives in one place.
+/// writing it. The batch seeders use it for Markdown fixtures. Production Org
+/// creation instead reserves an ID and calls the identity-bearing private twin
+/// before acquiring the content write transaction.
 ///
 /// # Errors
 /// Returns a typed highlighting error if the source cannot be rendered safely.
 pub fn render_post_input(
     content: RenderedPostContent,
+) -> Result<CreatePostInput, host::render::HighlightError> {
+    render_post_input_with_identity(content, None)
+}
+
+fn render_post_input_with_identity(
+    content: RenderedPostContent,
+    reserved_post_id: Option<PostId>,
 ) -> Result<CreatePostInput, host::render::HighlightError> {
     let RenderedPostContent {
         user_id,
@@ -315,9 +343,14 @@ pub fn render_post_input(
         idempotency_key,
         expectations,
     } = content;
-    let rendered = host::render::render_post(title, body, format)?;
+    let rendered = if let Some(post_id) = reserved_post_id {
+        host::render::render_post_scoped(post_id, title, body, format)?
+    } else {
+        host::render::render_post(title, body, format)?
+    };
     Ok(CreatePostInput {
         user_id,
+        reserved_post_id,
         slug,
         rendered,
         published_at,
@@ -3150,6 +3183,42 @@ mod tests {
         );
         assert!(updated.rendered_html.contains("revised note"));
         assert!(!updated.rendered_html.contains("original note"));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn reserved_org_identity_cannot_be_claimed_by_an_interleaved_markdown_create(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(Arc::clone(&env.users()), env.write_scope().clone())
+            .await
+            .user_id;
+        let reserved = env.posts().reserve_post_id().await.unwrap();
+        let markdown = perform_post_creation(
+            &env.write_scope(),
+            &env.media_content_locks(),
+            Arc::clone(&env.posts()),
+            Arc::clone(&env.feed_events()),
+            PostCreation {
+                user_id,
+                body: parse_post_body("interleaved Markdown"),
+                title: None,
+                format: PostFormat::Markdown,
+                slug_override: None,
+                published_at: None,
+                max_attempts: 100,
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+                tags: Vec::new(),
+                idempotency_key: None,
+                expectations: PostBookkeepingExpectation::default(),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(i64::from(confirmed(markdown).post_id) > i64::from(reserved));
     }
 
     #[apply(backends)]

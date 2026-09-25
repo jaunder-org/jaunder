@@ -1,6 +1,6 @@
 import { test, expect, slowBrowserFirstNavigationTimeoutMs } from "./fixtures";
 import { goto } from "./helpers";
-import { composePost, followPermalink } from "./posts";
+import { composePost, createPostViaApi, followPermalink } from "./posts";
 import { applySeededSession, createSessionViaTool } from "./seed";
 
 const source = `#+TITLE: Footnote navigation
@@ -49,4 +49,32 @@ test("published Org footnotes link to their notes and back", async ({
     body.locator(firstTarget!).locator('a[href^="#post-"]'),
   ).toHaveCount(2);
   await expect(body.locator('a[href$="-fn-2"]').first()).toBeVisible();
+});
+
+test("identical Org footnotes navigate independently on the Home timeline", async ({
+  tracedContext,
+}, testInfo) => {
+  const session = await createSessionViaTool("testlogin");
+  const context = await tracedContext();
+  await applySeededSession(context, session);
+  const page = await context.newPage();
+  const first = await createPostViaApi(page, { body: source, format: "org" });
+  const second = await createPostViaApi(page, { body: source, format: "org" });
+  await goto(page, "/app", {
+    timeout: slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000),
+  });
+  expect(first.post_id).not.toBe(second.post_id);
+  for (const id of [first.post_id, second.post_id]) {
+    const article = page.locator("article.j-post", {
+      has: page.locator(`#post-${id}-fn-1`),
+    });
+    await expect(article).toBeVisible();
+    await article.locator(`#post-${id}-fnref-1-1 a`).click();
+    await expect(article.locator(`#post-${id}-fn-1`)).toContainText(
+      "linked source",
+    );
+    await expect(
+      article.locator(`a[href="#post-${id}-fnref-1-1"]`),
+    ).toBeVisible();
+  }
 });
