@@ -78,12 +78,16 @@
        (= (jaunder--pull-media-effective-port candidate)
           (jaunder--pull-media-effective-port origin))))
 
+(defun jaunder--pull-media-root-relative-p (url)
+  "Return non-nil for a root-relative URL, excluding protocol-relative hosts."
+  (and (string-prefix-p "/" url)
+       (not (string-prefix-p "//" url))))
+
 (defun jaunder--pull-media-url-parts (url origin)
   "Return (HASH LEAF) when URL is eligible canonical media at ORIGIN.
 Return nil for every non-candidate form."
   (let* ((case-fold-search nil)
-         (root-relative (and (string-prefix-p "/" url)
-                             (not (string-prefix-p "//" url))))
+         (root-relative (jaunder--pull-media-root-relative-p url))
          (candidate (condition-case nil
                         (url-generic-parse-url
                          (if root-relative (url-expand-file-name url origin) url))
@@ -91,8 +95,14 @@ Return nil for every non-candidate form."
          (configured (condition-case nil
                          (url-generic-parse-url origin)
                        (error nil))))
+    ;; A canonical-route near-match cannot become an unrelated path through
+    ;; URL resolution and then silently escape the offline Media contract.
+    (when (and root-relative candidate
+               (not (string-search "?" url))
+               (string-match-p "\\`/media/\\(?:upload\\|cached\\)/" url)
+               (not (equal (url-filename candidate) url)))
+      (error "jaunder pull media: malformed canonical media URL: %s" url))
     (when (and candidate configured (url-type candidate) (url-host candidate)
-               ;; Resolution must not normalize a noncanonical authored path.
                (or (not root-relative) (equal (url-filename candidate) url))
                (not (url-user candidate))
                (not (url-password candidate))
@@ -149,8 +159,7 @@ URL.  LABEL requests an explicit Markdown link preserving that displayed text."
                  (url-filename (url-generic-parse-url url)) "/" t))))
              ;; Author source stays root-relative; transport always targets the
              ;; configured origin and never receives an author-supplied host.
-             (key (if (and (string-prefix-p "/" url)
-                           (not (string-prefix-p "//" url)))
+             (key (if (jaunder--pull-media-root-relative-p url)
                       (url-expand-file-name url origin)
                     url))
              (reference (gethash key table)))

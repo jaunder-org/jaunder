@@ -66,13 +66,17 @@
   "Other relative forms stay intact; malformed authoritative paths fail."
   (let* ((path (format "/media/upload/e3/b0/%s/ok.png"
                        jaunder-pull-media-test--hash))
-         (body (format "![query](%s?x=1) ![other](images/ok.png) ![host](//elsewhere.example%s)"
-                       path path)))
-    (should (equal (jaunder-pull-media-test--rewrite "markdown" body) body))
+         (body (format "![query](%s?x=1) ![other](images/ok.png) ![host](//elsewhere.example%s) ![external](https://elsewhere.example%s)"
+                       path path path))
+         (plan (jaunder--pull-media-plan
+                "markdown" body jaunder-pull-media-test--origin)))
+    (should-not (jaunder-pull-media-plan-references plan))
+    (should (equal (jaunder--pull-media-apply-plan plan) body))
     (dolist (bad (list (format "/media/upload/ff/b0/%s/ok.png"
                                jaunder-pull-media-test--hash)
                        (format "/media/cached/e3/b0/%s/a%%2Fb.png"
-                               jaunder-pull-media-test--hash)))
+                               jaunder-pull-media-test--hash)
+                       "/media/upload/../unrelated.png"))
       (should-error (jaunder-pull-media-test--rewrite
                      "markdown" (format "![bad](%s)" bad))))))
 
