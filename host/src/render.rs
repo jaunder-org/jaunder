@@ -390,6 +390,24 @@ impl orgize::export::Traverser for OrgShortcodeExport<'_> {
                     ctx,
                 );
             }
+            // HtmlExport skips these nodes (or may skip a descriptionless Link)
+            // without sending a matching Leave. Their content cannot contain
+            // a direct section paragraph, so do not put them on our stack.
+            orgize::export::Event::Enter(
+                container @ (orgize::export::Container::FnRef(_)
+                | orgize::export::Container::FnDef(_)
+                | orgize::export::Container::Keyword(_)
+                | orgize::export::Container::Link(_)
+                | orgize::export::Container::OrgTableRow(_)),
+            ) => self
+                .html
+                .event(orgize::export::Event::Enter(container), ctx),
+            orgize::export::Event::Leave(
+                container @ (orgize::export::Container::Link(_)
+                | orgize::export::Container::OrgTableRow(_)),
+            ) => self
+                .html
+                .event(orgize::export::Event::Leave(container), ctx),
             orgize::export::Event::Enter(container) => {
                 self.containers.push(Self::container(&container));
                 self.html
@@ -1191,7 +1209,28 @@ mod tests {
             assert!(ordinary.contains(expected), "ordinary: {ordinary}");
             assert!(rendered.contains(expected), "rendered: {rendered}");
         }
-        assert!(rendered.contains("youtube-nocookie.com/embed/dQw4w9WgXcQ"));
+        assert!(
+            rendered.contains("youtube-nocookie.com/embed/dQw4w9WgXcQ"),
+            "rendered: {rendered}"
+        );
+    }
+
+    #[test]
+    fn org_shortcodes_follow_exporter_skipped_nodes_without_losing_section_depth() {
+        let shortcode = "{{< youtube dQw4w9WgXcQ >}}";
+        for prefix in [
+            "before[fn:note]\n\n[fn:note] retained footnote",
+            "[[https://example.com/path]]",
+            "[[https://example.com/image.png]]",
+            "#+FOO: ignored keyword",
+        ] {
+            let source = format!("{prefix}\n\n{shortcode}\n");
+            let rendered = render(&parse_post_body(&source), PostFormat::Org);
+            assert!(
+                rendered.contains("youtube-nocookie.com/embed/dQw4w9WgXcQ"),
+                "source: {source}; rendered: {rendered}"
+            );
+        }
     }
 
     #[test]
