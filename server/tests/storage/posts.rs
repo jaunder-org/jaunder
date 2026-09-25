@@ -169,7 +169,7 @@ async fn post_update_writes_revision_and_updates_record(#[case] backend: Backend
     let update_input = UpdateRawPost::new("update-test")
         .format(PostFormat::Org)
         .unpublish()
-        .build();
+        .build_for_post(post_id);
     let record = confirmed(
         update_post!(
             Arc::clone(&env.posts()),
@@ -1112,7 +1112,7 @@ async fn rendered_title_lifecycle_preserves_transitions_no_op_and_prior_snapshot
                 .format(PostFormat::Org)
                 .unpublish()
                 .request_clock("2026-09-19T12:00:01Z".parse().unwrap())
-                .build()
+                .build_for_post(post_id)
         )
         .unwrap(),
     );
