@@ -248,7 +248,7 @@ allow-git = []
 # `jaunder-org` carries exact-revision `[patch.crates-io]` entries for lettre
 # (#297; docs/adr/0119-lettre-fork-pinned-by-rev.md) and WebAuthn Passkey policy
 # (#1455; docs/adr/0194-passkeys-are-additive-cookie-session-credentials.md),
-# and Org special-string export (#1656; based on upstream v0.10).
+# and Org special-string/footnote export (#1656/#1670; based on upstream v0.10).
 # `unknown-git` is only "warn" above, so this entry documents deliberate
 # exceptions rather than making the gate pass. Drop each patch and its rationale
 # when its upstream release supplies the corresponding behavior.

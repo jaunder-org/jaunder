@@ -6,6 +6,8 @@
 use crate::post_summary;
 use std::fmt;
 
+#[cfg(feature = "sanitize")]
+use crate::ids::PostId;
 use crate::post_body::{InvalidPostBody, PostBody};
 use crate::post_title::{InvalidPostTitle, PostTitle};
 use crate::slug::{self, Slug};
@@ -266,10 +268,29 @@ pub enum RenderedHtmlPart<'a> {
 #[cfg(feature = "sanitize")]
 #[must_use]
 pub fn assemble_rendered_html(parts: &[RenderedHtmlPart<'_>]) -> RenderedHtml {
+    assemble_with_sanitizer(parts, &SANITIZER)
+}
+
+/// Assembles Org Post export with narrowly permitted numeric footnote targets.
+/// Markdown and HTML must keep using the ordinary sanitizer.
+#[cfg(feature = "sanitize")]
+#[must_use]
+pub fn assemble_org_post_rendered_html(
+    post_id: PostId,
+    parts: &[RenderedHtmlPart<'_>],
+) -> RenderedHtml {
+    assemble_with_sanitizer(parts, &post_sanitizer(Some(post_id)))
+}
+
+#[cfg(feature = "sanitize")]
+fn assemble_with_sanitizer(
+    parts: &[RenderedHtmlPart<'_>],
+    sanitizer: &ammonia::Builder<'_>,
+) -> RenderedHtml {
     let mut html = String::new();
     for part in parts {
         match part {
-            RenderedHtmlPart::Untrusted(raw) => html.push_str(&SANITIZER.clean(raw).to_string()),
+            RenderedHtmlPart::Untrusted(raw) => html.push_str(&sanitizer.clean(raw).to_string()),
             RenderedHtmlPart::Embed(embed) => html.push_str(&embed.html()),
         }
     }
@@ -469,8 +490,34 @@ fn allowed_post_code_class(element: &str, token: &str) -> bool {
     }
 }
 
+/// Admit only the fork's Post-scoped numeric footnote targets, not arbitrary
+/// author-supplied IDs or classes that could borrow application selectors.
 #[cfg(feature = "sanitize")]
-static SANITIZER: std::sync::LazyLock<ammonia::Builder<'static>> = std::sync::LazyLock::new(|| {
+fn allowed_post_footnote_id(element: &str, value: &str, current_post_id: PostId) -> bool {
+    let Some(rest) = value.strip_prefix("post-") else {
+        return false;
+    };
+    let marker = match element {
+        "li" => "-fn-",
+        "sup" => "-fnref-",
+        _ => return false,
+    };
+    let Some((post_id, suffix)) = rest.split_once(marker) else {
+        return false;
+    };
+    let digits = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
+    digits(post_id)
+        && post_id.parse::<i64>().ok() == Some(current_post_id.into())
+        && suffix.split('-').all(digits)
+        && suffix.split('-').count() == if element == "li" { 1 } else { 2 }
+}
+
+#[cfg(feature = "sanitize")]
+static SANITIZER: std::sync::LazyLock<ammonia::Builder<'static>> =
+    std::sync::LazyLock::new(|| post_sanitizer(None));
+
+#[cfg(feature = "sanitize")]
+fn post_sanitizer(post_id: Option<PostId>) -> ammonia::Builder<'static> {
     let mut builder = ammonia::Builder::default();
     builder.add_tags(["audio", "video", "source", "track"]);
     builder.add_tag_attributes("audio", ["src", "controls"]);
@@ -480,7 +527,16 @@ static SANITIZER: std::sync::LazyLock<ammonia::Builder<'static>> = std::sync::La
     builder.add_tag_attributes("code", ["class"]);
     builder.add_tag_attributes("pre", ["class"]);
     builder.add_tag_attributes("span", ["class"]);
-    builder.attribute_filter(|element, attribute, value| {
+    if post_id.is_some() {
+        builder.add_tag_attributes("li", ["id"]);
+        builder.add_tag_attributes("sup", ["id"]);
+    }
+    builder.attribute_filter(move |element, attribute, value| {
+        if attribute == "id" {
+            return post_id
+                .filter(|id| allowed_post_footnote_id(element, value, *id))
+                .map(|_| value.into());
+        }
         if attribute != "class" {
             return Some(value.into());
         }
@@ -493,7 +549,7 @@ static SANITIZER: std::sync::LazyLock<ammonia::Builder<'static>> = std::sync::La
         (!kept.is_empty()).then_some(kept.into())
     });
     builder
-});
+}
 
 /// The title-specific subset of ammonia's sanitizer surface.
 #[cfg(feature = "sanitize")]
@@ -567,6 +623,13 @@ pub fn rendered_post_title_visible_text(title: &RenderedPostTitle) -> String {
 pub fn sanitize(raw: &str) -> RenderedHtml {
     RenderedHtml(SANITIZER.clean(raw).to_string())
 }
+
+/// Sanitizes Org Post HTML while preserving only numeric Post-scoped footnote IDs.
+#[cfg(feature = "sanitize")]
+#[must_use]
+pub fn sanitize_org_post(post_id: PostId, raw: &str) -> RenderedHtml {
+    RenderedHtml(post_sanitizer(Some(post_id)).clean(raw).to_string())
+}
 /// The sanitizer's complete permitted `(element, attribute)` surface.
 ///
 /// This test-only inspection seam lets host media-reference coverage classify
@@ -574,9 +637,10 @@ pub fn sanitize(raw: &str) -> RenderedHtml {
 #[cfg(all(feature = "sanitize", any(test, feature = "test-support")))]
 #[must_use]
 pub fn sanitizer_permitted_attribute_pairs() -> Vec<(&'static str, &'static str)> {
-    let tags = SANITIZER.clone_tags();
-    let generic_attributes = SANITIZER.clone_generic_attributes();
-    let tag_attributes = SANITIZER.clone_tag_attributes();
+    let org_policy = post_sanitizer(Some(PostId::from(1)));
+    let tags = org_policy.clone_tags();
+    let generic_attributes = org_policy.clone_generic_attributes();
+    let tag_attributes = org_policy.clone_tag_attributes();
 
     tags.iter()
         .flat_map(|tag| generic_attributes.iter().map(move |attr| (*tag, *attr)))
@@ -1154,6 +1218,33 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn sanitizer_keeps_only_numeric_post_footnote_targets() {
+        let raw = r#"<sup id="post-42-fnref-1-2">1</sup><li id="post-42-fn-1">note</li>
+               <sup id="other">bad</sup><li id="post-42-fn-1-x">bad</li>
+               <p id="post-42-fn-1">bad</p>"#;
+        assert!(
+            !sanitize(raw).contains(" id=\""),
+            "generic sanitizer must not admit Org IDs"
+        );
+        let html = sanitize_org_post(PostId::from(42), raw);
+        assert!(!sanitize_org_post(PostId::from(43), raw).contains(" id=\""));
+        assert!(html.contains("id=\"post-42-fnref-1-2\""), "{html}");
+        assert!(html.contains("id=\"post-42-fn-1\""), "{html}");
+        assert_eq!(html.matches(" id=\"").count(), 2, "{html}");
+        assert!(!allowed_post_footnote_id(
+            "p",
+            "post-42-fn-1",
+            PostId::from(42)
+        ));
+        assert!(!allowed_post_footnote_id(
+            "sup",
+            "post-42-fn-1",
+            PostId::from(42)
+        ));
     }
 
     #[cfg(feature = "sanitize")]

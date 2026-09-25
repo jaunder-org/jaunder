@@ -39,7 +39,8 @@ use sha2::Digest as _;
 use storage::{
     AudienceStorage, MediaRecord, MediaStorage, OperatorStatus, PostBookkeepingExpectation,
     PostFormat, PostLifecycle, PostRevisionCursor, PostStorage, PublishedPageRequest,
-    RenderedPostContent, SubscriptionStorage, UserStorage, WriteScope, render_post_input,
+    RenderedPostContent, SubscriptionStorage, UserStorage, WriteScope,
+    render_post_inputs_for_create,
 };
 
 const FIXED_CLOCK: &str = "2026-09-01T12:00:00Z";
@@ -413,7 +414,7 @@ fn publish_media_blob(target: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn build_post_input(
+fn build_post_content(
     index: usize,
     plan: &performance::DatasetPlan,
     authors: &[(Username, UserId)],
@@ -421,7 +422,7 @@ fn build_post_input(
     media: &[Vec<MediaRef>],
     clock: UtcInstant,
     backdated_count: usize,
-) -> anyhow::Result<storage::CreatePostInput> {
+) -> anyhow::Result<RenderedPostContent> {
     let index_u64 = u64::try_from(index)?;
     let author_index = index % authors.len();
     let body_bucket = bucket(index_u64, &plan.body_distribution);
@@ -464,7 +465,7 @@ fn build_post_input(
     let tags = (0..tag_count)
         .map(|tag| format!("perf-{index}-{tag}").parse::<TagLabel>())
         .collect::<Result<Vec<_>, _>>()?;
-    render_fixture_input(RenderedPostContent {
+    Ok(RenderedPostContent {
         user_id: authors[author_index].1,
         title: Some(format!("Performance Post {index}").parse::<PostTitle>()?),
         slug: format!("performance-{index:06}").parse::<Slug>()?,
@@ -477,10 +478,6 @@ fn build_post_input(
         idempotency_key: None,
         expectations: PostBookkeepingExpectation::default(),
     })
-}
-
-fn render_fixture_input(content: RenderedPostContent) -> anyhow::Result<storage::CreatePostInput> {
-    Ok(render_post_input(content)?)
 }
 
 fn post_published_at(
@@ -526,19 +523,25 @@ async fn create_posts(
     let mut ids = Vec::with_capacity(post_count);
     for batch_start in (0..post_count).step_by(POST_BATCH_SIZE) {
         let batch_end = (batch_start + POST_BATCH_SIZE).min(post_count);
-        let inputs = (batch_start..batch_end)
-            .map(|index| {
-                build_post_input(
-                    index,
-                    plan,
-                    authors,
-                    audiences,
-                    media,
-                    clock,
-                    backdated_count,
-                )
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
+        let mut contents = Vec::with_capacity(batch_end - batch_start);
+        for index in batch_start..batch_end {
+            let content = build_post_content(
+                index,
+                plan,
+                authors,
+                audiences,
+                media,
+                clock,
+                backdated_count,
+            )?; // cov:ignore: canonical performance plans have valid content and bounded fixture clocks; malformed plans fail in plan validation
+            contents.push(content);
+        }
+        let inputs = render_post_inputs_for_create(
+            &storage.write_scope,
+            Arc::clone(&storage.posts),
+            contents,
+        )
+        .await?;
         let posts = Arc::clone(&storage.posts);
         let outcome = storage
             .write_scope
@@ -675,7 +678,12 @@ async fn apply_post_revisions(
     let mut body = existing.body;
     for revision in 0..target.revisions {
         body = revised_body(body, revision)?;
-        let rendered = host::render::render_post(existing.title.clone(), body, existing.format)?;
+        let rendered = host::render::render_post_scoped(
+            target.post_id,
+            existing.title.clone(),
+            body,
+            existing.format,
+        )?; // cov:ignore: seeded canonical bodies render; forcing a highlighter failure here requires test-only fault injection unavailable to this support crate
         let input = storage::UpdatePostInput {
             slug: existing.slug.clone(),
             rendered,
@@ -1133,6 +1141,93 @@ pub fn write_manifest(output: &Path, manifest: &DatasetManifest) -> anyhow::Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::*;
+    use rstest_reuse::*;
+    use storage::test_support::{Backend, SeedUser, backends};
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn performance_org_batch_and_revision_keep_scoped_footnotes(#[case] backend: Backend) {
+        let env = backend.setup().pristine().await;
+        let user_id = SeedUser::new()
+            .seed(env.users(), env.write_scope())
+            .await
+            .user_id;
+        let contents = ["performance-footnote-one", "performance-footnote-two"]
+            .into_iter()
+            .map(|slug| RenderedPostContent {
+                user_id,
+                title: None,
+                slug: slug.parse().unwrap(),
+                body: "A x[fn:shared]\n\n[fn:shared] A useful note."
+                    .parse()
+                    .unwrap(),
+                format: PostFormat::Org,
+                published_at: None,
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+                tags: Vec::new(),
+                idempotency_key: None,
+                expectations: PostBookkeepingExpectation::default(),
+            })
+            .collect();
+        let posts = env.posts();
+        let scope = env.write_scope();
+        let inputs = render_post_inputs_for_create(&scope, Arc::clone(&posts), contents)
+            .await
+            .unwrap();
+        let ids = inputs
+            .iter()
+            .map(|input| {
+                let id = input
+                    .reserved_post_id
+                    .expect("Org input reserves a Post ID");
+                assert!(
+                    input
+                        .rendered
+                        .rendered_html()
+                        .contains(&format!("id=\"post-{id}-fn-1\""))
+                );
+                id
+            })
+            .collect::<Vec<_>>();
+        assert_ne!(ids[0], ids[1]);
+        let outcome = scope
+            .run(move |tx| Box::pin(async move { posts.create_posts(tx, &inputs).await }))
+            .await
+            .unwrap();
+        let created = crate::confirmed_fixture_outcome(outcome, "performance Org batch").unwrap();
+        assert_eq!(created, ids);
+
+        let target = RevisionTarget {
+            post_id: ids[0],
+            author: user_id,
+            revisions: 1,
+            deleted: false,
+        };
+        let revision_posts = env.posts();
+        let outcome = scope
+            .run(move |tx| {
+                Box::pin(async move {
+                    apply_post_revisions(&*revision_posts, tx, target, UtcInstant::now()).await
+                })
+            })
+            .await
+            .unwrap();
+        crate::confirmed_fixture_outcome(outcome, "performance Org revision").unwrap();
+        let persisted = env
+            .posts()
+            .get_post_by_id(ids[0], &ViewerIdentity::local(user_id))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            persisted
+                .rendered_html
+                .contains(&format!("id=\"post-{}-fn-1\"", ids[0]))
+        );
+        assert!(persisted.rendered_html.contains("A useful note."));
+    }
 
     fn observation() -> PersistedPostObservation {
         PersistedPostObservation {
@@ -1169,17 +1264,21 @@ mod tests {
             expectations: PostBookkeepingExpectation::default(),
         };
         let error = host::test_faults::with_invalid_highlight_query(async {
-            render_fixture_input(content)
-                .err()
-                .expect("invalid grammar query must not seed a Post")
+            host::render::render_post_scoped(
+                PostId::from(1_i64),
+                content.title,
+                content.body,
+                content.format,
+            )
+            .expect_err("invalid grammar query must not seed a Post")
         })
         .await;
         assert!(matches!(
-            error.downcast_ref::<host::render::HighlightError>(),
-            Some(host::render::HighlightError::Initialization {
+            error,
+            host::render::HighlightError::Initialization {
                 language: "injected-invalid-query",
                 ..
-            })
+            }
         ));
     }
 

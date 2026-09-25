@@ -16,7 +16,7 @@ use crate::steps::scan::run_source_scan;
 
 const POLICED_ROOTS: &[&str] = &["storage/src", "server/src", "web/src"];
 
-/// The authoritative, closed application-mutation census. Counts add to 94.
+/// The authoritative, closed application-mutation census. Counts add to 96.
 const AUDITED_TRAITS: &[(&str, &[&str])] = &[
     (
         "AudienceStorage",
@@ -75,6 +75,8 @@ const AUDITED_TRAITS: &[(&str, &[&str])] = &[
     (
         "PostStorage",
         &[
+            "reserve_post_id",
+            "reserve_post_ids",
             "create_post",
             "create_post_with_proven_local_media",
             "create_posts",

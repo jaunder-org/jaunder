@@ -133,6 +133,9 @@ async fn apply_post_update(
 
 #[async_trait]
 impl PostDialect for Sqlite {
+    const RESERVE_POST_ID_SQL: &'static str = "UPDATE post_id_allocator
+         SET last_post_id = MAX(last_post_id, (SELECT COALESCE(MAX(post_id), 0) FROM posts)) + 1
+         WHERE id = 1 RETURNING last_post_id";
     /// `ORDER BY t.tag_slug` is what makes [`PostRecord::tags`] slug-ordered
     /// (#772); `SQLite`'s default BINARY collation is already byte order, so no
     /// `COLLATE` is needed here. See [`PostDialect::TAGS_SUBQUERY`] for why the
