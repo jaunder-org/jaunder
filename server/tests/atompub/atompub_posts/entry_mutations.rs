@@ -22,7 +22,7 @@ use storage::{
     test_support::{Backend, backends, backends_matrix},
 };
 
-use super::fixtures::{entry_xml, location_post_id};
+use super::fixtures::{entry_xml, etag_of, location_post_id};
 
 #[apply(backends)]
 #[tokio::test]
@@ -318,6 +318,120 @@ async fn shortcode_create_and_update_preserve_member_source(
         entry.content().and_then(|content| content.value()),
         Some(canonical_update_source.as_str()),
         "AtomPub Member preserves canonical update source rather than generated markup"
+    );
+}
+
+#[apply(backends_matrix)]
+#[case::org_elisp(
+    "text/org",
+    PostFormat::Org,
+    "#+begin_src elisp\n(message \"created\")\n#+end_src",
+    "#+begin_src elisp\n(message \"updated\")\n#+end_src"
+)]
+#[case::org_haskell(
+    "text/org",
+    PostFormat::Org,
+    "#+begin_src haskell\ngreeting = \"created\"\n#+end_src",
+    "#+begin_src haskell\ngreeting = \"updated\"\n#+end_src"
+)]
+#[case::markdown_elisp(
+    "text/markdown",
+    PostFormat::Markdown,
+    "```elisp\n(message \"created\")\n```",
+    "```elisp\n(message \"updated\")\n```"
+)]
+#[case::markdown_haskell(
+    "text/markdown",
+    PostFormat::Markdown,
+    "```haskell\ngreeting = \"created\"\n```",
+    "```haskell\ngreeting = \"updated\"\n```"
+)]
+#[tokio::test]
+async fn highlighted_code_atompub_create_and_update_preserve_member_source(
+    backend: Backend,
+    #[case] content_type: &str,
+    #[case] format: PostFormat,
+    #[case] create_source: &str,
+    #[case] update_source: &str,
+) {
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, &env.base);
+    let xml = |source: &str| {
+        format!(
+            "<entry xmlns=\"http://www.w3.org/2005/Atom\"><title>Highlighted</title><content type=\"{content_type}\"><![CDATA[{source}]]></content></entry>"
+        )
+    };
+    let created = app
+        .clone()
+        .oneshot(atompub_post_xml(&session, "posts", &xml(create_source)))
+        .await
+        .expect("create highlighted Post");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let post_id = PostId::from(location_post_id(&created));
+    let create_etag = etag_of(&created);
+    let post = env
+        .posts()
+        .get_post_by_id(post_id, &ViewerIdentity::local(session.user_id))
+        .await
+        .unwrap()
+        .expect("created Post");
+    assert_eq!(post.format, format);
+    assert_eq!(post.body.as_ref(), format!("{create_source}\n"));
+    assert!(post.rendered_html.as_ref().contains("class=\"j-syn-"));
+    let member = app
+        .clone()
+        .oneshot(atompub_get(&session, &format!("posts/{post_id}")))
+        .await
+        .expect("Member GET");
+    assert_eq!(etag_of(&member), create_etag);
+    let entry = body_string(member)
+        .await
+        .parse::<host::atompub::Entry>()
+        .expect("native Member source");
+    assert_eq!(
+        entry.content().and_then(|content| content.value()),
+        Some(format!("{create_source}\n").as_str())
+    );
+
+    let updated = app
+        .clone()
+        .oneshot(atompub_put_xml(
+            &session,
+            &format!("posts/{post_id}"),
+            &xml(update_source),
+        ))
+        .await
+        .expect("update highlighted Post");
+    assert_eq!(updated.status(), StatusCode::OK);
+    let update_etag = etag_of(&updated);
+    assert_ne!(update_etag, create_etag);
+    let post = env
+        .posts()
+        .get_post_by_id(post_id, &ViewerIdentity::local(session.user_id))
+        .await
+        .unwrap()
+        .expect("updated Post");
+    assert_eq!(post.format, format);
+    assert_eq!(post.body.as_ref(), format!("{update_source}\n"));
+    assert!(post.rendered_html.as_ref().contains("class=\"j-syn-"));
+    let member = app
+        .oneshot(atompub_get(&session, &format!("posts/{post_id}")))
+        .await
+        .expect("updated Member GET");
+    assert_eq!(etag_of(&member), update_etag);
+    let entry = body_string(member)
+        .await
+        .parse::<host::atompub::Entry>()
+        .expect("updated native Member source");
+    assert_eq!(
+        entry.content().and_then(|content| content.value()),
+        Some(format!("{update_source}\n").as_str())
     );
 }
 

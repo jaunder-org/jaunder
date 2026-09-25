@@ -247,3 +247,37 @@ bytes**, SHA-256
 **56,751,584 bytes** larger than the unchanged 39,505,472-byte baseline. This is
 a visibility report, **not** an acceptance limit; the owner explicitly rejected
 the invented 5 MiB binary-growth cap.
+
+## Malformed syntax and the Tree-sitter error model
+
+The approved spec initially called for a “failed-parser” fallback in a mixed
+resource-budget sequence. `tree-sitter-highlight` 0.27 normally recovers
+malformed authored text into a parse tree with error nodes and emits a highlight
+stream; its `Error` variants are cancellation, invalid language, and unknown
+engine error, **not** a distinct recoverable malformed-input result. Swallowing
+those unexpected engine failures as plain code would contradict the typed-error
+safety contract. The corrected spec therefore requires exact safe exporter-text
+preservation under error recovery and counts the attempt, while keeping plain
+fallback for unknown or budget-rejected blocks. Integrated tests cover malformed
+Org/Markdown × Emacs Lisp/Haskell text and a mixed malformed-but-recovered,
+unknown, oversized and attempt-limit sequence. This is a correction to an
+unreachable test case, not a second highlighting engine or a weakened resource
+limit.
+
+## Integrated browser and Theme Package proof
+
+The earlier two-language trial's “no after screenshots” statement above is
+historical, not a description of this candidate. Comparable built-in-theme
+captures were made on the same seeded public permalinks and Home before and
+after the Tree-sitter-only feature. The transient files are
+`/tmp/pi-playwright/milestone-22-11/issue-1655/{org-elisp,org-haskell,md-elisp,md-haskell,home}-{before,after}.png`;
+there is also a narrow Org/Haskell pair. They are local visual evidence, not
+tracked application assets. `end2end/tests/posts.spec.ts` checks all four
+Org/Markdown × Emacs Lisp/Haskell pairs on public permalink, Local, and Home.
+
+A later focused `cargo xtask e2e-local theme-presentation.spec.ts` run passed:
+through the real create/publish/select Theme Package API, a public permalink
+uses `--j-syn-string: rgb(0, 90, 120)` while Home remains Jaunder-styled; an
+older-style package with no semantic-token override inherits the readable
+`rgb(47, 156, 91)` default. This proof does not inject CSS into the page and is
+separate from the earlier simulated-variable trial.

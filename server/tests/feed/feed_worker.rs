@@ -3,7 +3,10 @@ use std::sync::Arc;
 
 use crate::helpers::CapturingWebSubClient;
 use common::{
-    tagged_url::HubUrl, test_support::parse_etag, time::UtcInstant, visibility::AudienceTarget,
+    tagged_url::HubUrl,
+    test_support::{parse_etag, parse_post_body},
+    time::UtcInstant,
+    visibility::AudienceTarget,
 };
 use host::feed::FeedPath;
 use jaunder::feed::worker::FeedWorker;
@@ -105,6 +108,80 @@ fn make_worker(
         feed_events,
         websub,
     )
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn refreshed_highlighting_rebuilds_atom_rss_and_json_feed_caches_and_validators(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let user = SeedUser::new()
+        .seed(Arc::clone(&env.users()), env.write_scope())
+        .await;
+    SeedRawPost::new(user.user_id)
+        .body(parse_post_body("```elisp\n(message \"refreshed\")\n```"))
+        .seed(env.posts(), env.write_scope())
+        .await;
+    env.base
+        .pool()
+        .execute("UPDATE posts SET rendered_html = '<p>old presentation</p>'")
+        .await
+        .expect("stale historical projection");
+
+    let worker = make_worker(
+        env.posts(),
+        env.feed_cache(),
+        env.publisher(),
+        env.feed_events(),
+        env.write_scope(),
+        env.base.path(),
+        Arc::new(CapturingWebSubClient::default()),
+    );
+    let paths: Vec<_> = ["atom", "rss", "json"]
+        .map(|extension| fp(&format!("/~{}/feed.{extension}", user.username)))
+        .into();
+    for path in &paths {
+        let events = env.feed_events();
+        let path = path.clone();
+        event_write(env.write_scope(), move |transaction| {
+            Box::pin(async move { events.enqueue(transaction, &path).await })
+        })
+        .await;
+    }
+    worker.tick().await;
+    let mut before = Vec::new();
+    for path in &paths {
+        let cached = env
+            .feed_cache()
+            .get(path)
+            .await
+            .expect("feed cache lookup")
+            .expect("stale feed cached");
+        assert!(cached.representation().body().contains("old presentation"));
+        before.push(cached);
+    }
+
+    env.refresh_current_post_projections()
+        .await
+        .expect("atomic presentation refresh");
+    worker.tick().await;
+
+    for (path, previous) in paths.iter().zip(before) {
+        let current = env
+            .feed_cache()
+            .get(path)
+            .await
+            .expect("regenerated feed lookup")
+            .expect("regenerated feed cached");
+        let body = current.representation().body();
+        assert!(body.contains("j-syn-"), "{path}: {body}");
+        assert!(!body.contains("old presentation"), "{path}: {body}");
+        assert_ne!(
+            current.etag, previous.etag,
+            "{path}: changed representation must change validator"
+        );
+    }
 }
 
 #[apply(backends)]

@@ -62,6 +62,75 @@ test("custom package propagates an opaque contrasting timeline divider in dark p
   }
 });
 
+test("Theme Package overrides a public syntax token without changing Home", async ({
+  page,
+  tracedContext,
+}) => {
+  await signInAsNewUser(page);
+  const post = await createPostViaApi(page, {
+    body: '# Semantic token\n\n```elisp\n(message "theme")\n```',
+    audience: "public",
+  });
+  const themePackage = conformanceThemePackage();
+  themePackage.stylesheet +=
+    '\n[data-jaunder-part="post-body"] { --j-syn-string: rgb(0, 90, 120); }\n';
+  await publishAndSelectTheme(page, themePackage);
+
+  const publicContext = await tracedContext();
+  try {
+    const publicPage = await publicContext.newPage();
+    await goto(publicPage, post.permalink);
+    await expect(publicPage.locator(".j-root")).toHaveAttribute(
+      "data-theme",
+      "custom",
+    );
+    await expect(
+      publicPage.locator(".j-post-body pre code .j-syn-string").first(),
+    ).toHaveCSS("color", "rgb(0, 90, 120)");
+
+    await goto(page, "/app");
+    const homeToken = page.locator(
+      'article.j-post:has-text("Semantic token") pre code .j-syn-string',
+    );
+    await expect(homeToken.first()).toBeVisible();
+    await expect(homeToken.first()).not.toHaveCSS("color", "rgb(0, 90, 120)");
+    await expect(page.locator(".j-root")).not.toHaveAttribute(
+      "data-theme",
+      "custom",
+    );
+  } finally {
+    await publicContext.close();
+  }
+});
+
+test("Theme Package without syntax hooks inherits readable token defaults", async ({
+  page,
+  tracedContext,
+}) => {
+  await signInAsNewUser(page);
+  const post = await createPostViaApi(page, {
+    body: '# Legacy syntax\n\n```elisp\n(message "legacy")\n```',
+    audience: "public",
+  });
+  await publishAndSelectTheme(page, conformanceThemePackage());
+  const publicContext = await tracedContext();
+  try {
+    const publicPage = await publicContext.newPage();
+    await goto(publicPage, post.permalink);
+    await expect(publicPage.locator(".j-root")).toHaveAttribute(
+      "data-theme",
+      "custom",
+    );
+    const token = publicPage
+      .locator(".j-post-body pre code .j-syn-string")
+      .first();
+    await expect(token).toBeVisible();
+    await expect(token).toHaveCSS("color", "rgb(47, 156, 91)");
+  } finally {
+    await publicContext.close();
+  }
+});
+
 test("custom package font compilation and immutable asset serving retain byte identity", async ({
   page,
   tracedContext,

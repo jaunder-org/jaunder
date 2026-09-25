@@ -1266,20 +1266,21 @@ mod tests {
         }
     }
 
+    fn decoded_code(html: &str) -> String {
+        let after_start = html
+            .split_once("<code")
+            .unwrap()
+            .1
+            .split_once('>')
+            .unwrap()
+            .1;
+        let encoded = after_start.split_once("</code>").unwrap().0;
+        let bare = ammonia::Builder::empty().clean(encoded).to_string();
+        html_escape::decode_html_entities(&bare).into_owned()
+    }
+
     #[test]
     fn highlighted_code_keeps_the_exporters_exact_decoded_text() {
-        fn decoded_code(html: &str) -> String {
-            let after_start = html
-                .split_once("<code")
-                .unwrap()
-                .1
-                .split_once('>')
-                .unwrap()
-                .1;
-            let encoded = after_start.split_once("</code>").unwrap().0;
-            let bare = ammonia::Builder::empty().clean(encoded).to_string();
-            html_escape::decode_html_entities(&bare).into_owned()
-        }
         for (format, source) in [
             (
                 PostFormat::Org,
@@ -1299,6 +1300,36 @@ mod tests {
             assert!(highlighted.contains("class=\"j-syn-"), "{highlighted}");
             assert_eq!(decoded_code(&highlighted), decoded_code(&plain));
             assert!(!highlighted.contains("<script>"));
+        }
+    }
+
+    #[test]
+    fn malformed_tree_sitter_input_recovers_without_changing_safe_exported_text() {
+        let malformed = "(() [unterminated \"string\n<script>alert(1)</script> & é";
+        for format in [PostFormat::Org, PostFormat::Markdown] {
+            for label in ["elisp", "haskell"] {
+                let source = match format {
+                    PostFormat::Org => format!("#+begin_src {label}\n{malformed}\n#+end_src"),
+                    PostFormat::Markdown => format!("```{label}\n{malformed}\n```"),
+                    PostFormat::Html => unreachable!(),
+                };
+                let plain = match format {
+                    PostFormat::Org => render_org(&source),
+                    PostFormat::Markdown => render_markdown(&source),
+                    PostFormat::Html => unreachable!(),
+                };
+                let rendered = render(&parse_post_body(&source), format);
+                assert!(rendered.contains("<pre>"), "{format:?}/{label}: {rendered}");
+                assert_eq!(
+                    decoded_code(&rendered),
+                    decoded_code(&plain),
+                    "{format:?}/{label} must preserve exporter code text"
+                );
+                assert!(
+                    !rendered.contains("<script>"),
+                    "{format:?}/{label}: {rendered}"
+                );
+            }
         }
     }
 
@@ -1372,6 +1403,19 @@ mod tests {
                 "{format:?}"
             );
             assert!(!highlighted[16], "{format:?}: seventeenth attempt rejected");
+
+            // A recovered syntax error still uses one of the sixteen attempts.
+            // Unknown and oversized blocks before it do not consume slots.
+            let mut mixed_blocks = vec![
+                ("unknown", "skip"),
+                ("elisp", "(() [unterminated \"string"),
+                ("elisp", oversized),
+            ];
+            mixed_blocks.extend([("elisp", "(message \"ok\")"); 16]);
+            let flags = highlighted_blocks(&source(format, &mixed_blocks), format);
+            assert_eq!(flags.len(), 19);
+            assert!(flags[3..18].iter().all(|&colored| colored), "{format:?}");
+            assert!(!flags[18], "{format:?}: recovered syntax spends one slot");
         }
     }
 

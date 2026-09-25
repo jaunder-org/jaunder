@@ -106,9 +106,9 @@ tracing-subscriber = { workspace = true }
 # `sqlx` itself is a non-optional dep above.
 default = ["sqlx"]
 sqlx = []
-test-utils = ["cheap-kdf"]
+test-utils = ["cheap-kdf", "dep:tokio"]
 cheap-kdf = []
-test-support = ["common/test-support", "dep:tokio"]
+test-support = ["common/test-support"]
 
 [lints]
 workspace = true

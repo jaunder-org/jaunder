@@ -88,34 +88,37 @@ policy for each new grammar.
   blocks. Only recognized-language blocks with payload at most 64 KiB may
   attempt parsing. At most 16 attempts and 128 KiB of attempted payload are
   allowed per Post. Each attempt consumes both its byte count and one slot even
-  if parsing falls back, so malformed blocks cannot cause unbounded repeated
-  work. Unknown languages, individually oversized blocks, and blocks that would
-  exceed a cumulative limit remain entirely plain escaped code without consuming
-  further budget; later smaller eligible blocks may still fit. Never partially
-  token-wrap a rejected block. A per-block parser failure caused by malformed
-  authored input may fall back to plain escaped code. Change the host Post
-  renderer to return a typed error for unexpected grammar/query initialization,
-  ABI, or infrastructure failures; propagate it through every web/AtomPub write,
-  preview and refresh caller rather than panicking or returning a success-shaped
-  plain-code fallback. A failed refresh must not advance its checkpoint. The
-  owner considers the paired Tree-sitter measurements sufficient and does not
-  require another latency threshold or language-by-language performance
-  decision. Smoke-test every bundled grammar and query in both formats; keep the
-  resource limits above for safety. Report stripped release server size and
-  dependency closure for visibility, **not as a size gate**: the previously
-  mentioned 5 MiB binary-growth limit was an agent mistake, never a user
-  requirement. Go to production only if broad coverage and safety/fidelity
-  proofs pass; do not ship partial format or catalog support.
+  when Tree-sitter recovers malformed syntax, so such blocks cannot cause
+  unbounded repeated work. Unknown languages, individually oversized blocks, and
+  blocks that would exceed a cumulative limit remain entirely plain escaped code
+  without consuming further budget; later smaller eligible blocks may still fit.
+  Never partially token-wrap a rejected block. Tree-sitter normally recovers
+  malformed syntax into a highlight stream; its output must preserve safe
+  decoded exporter text, even when some tokens are styled. If a future
+  Tree-sitter API exposes a distinct recoverable authored-input failure, a
+  plain-code fallback is permitted and that attempt remains charged. Change the
+  host Post renderer to return a typed error for unexpected grammar/query
+  initialization, ABI, or infrastructure failures; propagate it through every
+  web/AtomPub write, preview and refresh caller rather than panicking or
+  returning a success-shaped plain-code fallback. A failed refresh must not
+  advance its checkpoint. The owner considers the paired Tree-sitter
+  measurements sufficient and does not require another latency threshold or
+  language-by-language performance decision. Smoke-test every bundled grammar
+  and query in both formats; keep the resource limits above for safety. Report
+  stripped release server size and dependency closure for visibility, **not as a
+  size gate**: the previously mentioned 5 MiB binary-growth limit was an agent
+  mistake, never a user requirement. Go to production only if broad coverage and
+  safety/fidelity proofs pass; do not ship partial format or catalog support.
 
 ## Acceptance
 
 - A reproducible comparison records real Emacs Lisp/Haskell samples under **Org
   and Markdown**, malformed and markup-looking code, unknown and missing labels,
   exact per-block and cumulative UTF-8-byte/count boundaries (including mixed
-  eligible, failed-parser, unknown and oversized blocks in order), and the
-  built-in Tree-sitter grammar/query/alias inventory. Report binary/dependency
-  size for visibility; do not reduce format or language support to meet a size
-  or latency target.
+  eligible, malformed-but-recovered, unknown and oversized blocks in order), and
+  the built-in Tree-sitter grammar/query/alias inventory. Report
+  binary/dependency size for visibility; do not reduce format or language
+  support to meet a size or latency target.
 - HTML `<code>` decoded text equals the same unhighlighted **Org or Markdown**
   export, scalar for scalar, for supported and fallback paths, including
   leading/trailing blank lines, tabs, `<`, `&`, quotes, invalid syntax, and
@@ -126,14 +129,15 @@ policy for each new grammar.
 - Both backends prove web creation and AtomPub create/update for **Org and
   Markdown** preserve native source while current rendered HTML highlights both
   supported languages in each format. Test exact aliases, unknown labels,
-  Markdown indented/unlabeled/raw-HTML exclusions, malformed and over-budget
-  fallback, and capture-category mapping. Markdown tests prove mixed-case
-  first-word aliases and trailing info words work, but an alias only in a later
-  word or embedded in a larger token does not trigger highlighting. For each
-  format, a mixed document proves that valid Post Shortcodes outside code keep
-  their behavior and shortcode-looking code text stays literal. All active Org
-  and Markdown Posts (including scheduled/private/drafts) refresh; Deleted and
-  HTML-format Posts and every historical Post Revision remain untouched.
+  Markdown indented/unlabeled/raw-HTML exclusions, safe malformed recovery and
+  over-budget fallback, and capture-category mapping. Markdown tests prove
+  mixed-case first-word aliases and trailing info words work, but an alias only
+  in a later word or embedded in a larger token does not trigger highlighting.
+  For each format, a mixed document proves that valid Post Shortcodes outside
+  code keep their behavior and shortcode-looking code text stays literal. All
+  active Org and Markdown Posts (including scheduled/private/drafts) refresh;
+  Deleted and HTML-format Posts and every historical Post Revision remain
+  untouched.
 - Dual-backend interruption/resume, repeated refresh, concurrent author edit,
   and concurrent soft-delete tests prove checkpoint/CAS behavior, no lost source
   or unrecorded author change, no mutation/retry of a Deleted Post, unchanged
@@ -154,7 +158,8 @@ policy for each new grammar.
 - An injected invalid grammar/query initialization fails visibly and with its
   typed cause in the Post write/preview path; no partial Post is committed.
   Failure during a refresh preserves the last committed checkpoint and row.
-  Expected malformed authored code remains safely preformatted instead.
+  Expected malformed authored code remains safely preformatted with its decoded
+  text unchanged, even if Tree-sitter error recovery still styles some tokens.
 - Appropriate focused tests, independent security/architecture review, and the
   repository verification ladder pass before PR review. Production adoption
   includes a proposed ADR draft amending ADR-0079 and ADR-0136 and a matching

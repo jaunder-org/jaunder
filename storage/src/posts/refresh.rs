@@ -40,6 +40,22 @@ tokio::task_local! {
         tokio::sync::oneshot::Sender<()>,
         tokio::sync::oneshot::Receiver<()>,
     )>>;
+    static PAUSE_AFTER_CHECKPOINT: std::cell::RefCell<Option<(
+        tokio::sync::oneshot::Sender<()>,
+        tokio::sync::oneshot::Receiver<()>,
+    )>>;
+}
+
+#[cfg(test)]
+async fn pause_after_checkpoint_for_test() {
+    let pause = PAUSE_AFTER_CHECKPOINT
+        .try_with(|slot| slot.borrow_mut().take())
+        .ok()
+        .flatten();
+    if let Some((paused, resume)) = pause {
+        let _ = paused.send(());
+        let _ = resume.await;
+    }
 }
 
 #[cfg(test)]
@@ -188,8 +204,11 @@ where
         });
     }
 
-    // PostgreSQL already holds the progress-row lock but has not selected or
-    // locked candidates. Author lifecycle writes can finish during this pause.
+    // The SQLite write lock or PostgreSQL checkpoint-row lock is already held.
+    // A test-scoped pause can force a second startup to contend for that lock.
+    #[cfg(test)]
+    pause_after_checkpoint_for_test().await;
+    // PostgreSQL permits author lifecycle writes while holding progress only.
     #[cfg(test)]
     if DB::PROJECTION_REFRESH_PROGRESS_SQL.contains("FOR UPDATE") {
         pause_before_candidate_lock_for_test().await;
@@ -716,12 +735,27 @@ mod tests {
             .expect("stale fixture");
         let first = factory(&env);
         let second = factory(&env);
-        let (a, b) = tokio::join!(
+        let (paused, started) = tokio::sync::oneshot::channel();
+        let (resume, release) = tokio::sync::oneshot::channel();
+        let first_run = PAUSE_AFTER_CHECKPOINT.scope(
+            std::cell::RefCell::new(Some((paused, release))),
             first.refresh_current_post_projections(),
-            second.refresh_current_post_projections()
         );
+        let second_run = async {
+            started.await.expect("first startup holds checkpoint lock");
+            let mut waiting = Box::pin(second.refresh_current_post_projections());
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(100), &mut waiting)
+                    .await
+                    .is_err(),
+                "second startup cannot finish while the first holds the checkpoint"
+            );
+            resume.send(()).expect("first startup still waiting");
+            waiting.await
+        };
+        let (a, b) = tokio::join!(first_run, second_run);
         a.expect("first startup");
-        b.expect("second startup");
+        b.expect("second startup after checkpoint release");
         let record = env
             .posts()
             .get_post_by_id(post.post_id, &ViewerIdentity::Local { user_id: owner })
