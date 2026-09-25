@@ -39,6 +39,43 @@
                            jaunder-pull-media-test--hash
                            "/my%20photo%25%E6%97%A5%E6%9C%AC.jpg#crop]] after")))))
 
+(ert-deftest jaunder-pull-media-org-localizes-web-copied-root-relative-url ()
+  "An explicitly pulled Org link uses the web composer's Media URL."
+  (let* ((url (format "/media/upload/e3/b0/%s/my%%20photo.png#crop"
+                      jaunder-pull-media-test--hash))
+         (body (format "Before [[%s][photo]] after" url)))
+    (should (equal (jaunder-pull-media-test--rewrite "org" body)
+                   (format "Before [[file:local-media/%s/my%%20photo.png#crop][photo]] after"
+                           jaunder-pull-media-test--hash)))))
+
+(ert-deftest jaunder-pull-media-root-relative-cached-destinations-in-native-formats ()
+  "Cached Media uses the configured origin without changing non-link source."
+  (let* ((url (format "/media/cached/e3/b0/%s/photo.png" jaunder-pull-media-test--hash))
+         (local (format "local-media/%s/photo.png" jaunder-pull-media-test--hash)))
+    (should (equal (jaunder-pull-media-test--rewrite
+                    "org" (format "plain %s [[%s]]" url url))
+                   (format "plain %s [[file:%s]]" url local)))
+    (should (equal (jaunder-pull-media-test--rewrite
+                    "markdown" (format "![image](%s#view) `%s`" url url))
+                   (format "![image](%s#view) `%s`" local url)))
+    (should (equal (jaunder-pull-media-test--rewrite
+                    "html" (format "<img src=\"%s\"><code>%s</code>" url url))
+                   (format "<img src=\"%s\"><code>%s</code>" local url)))))
+
+(ert-deftest jaunder-pull-media-root-relative-rejections-and-malformed-paths ()
+  "Other relative forms stay intact; malformed authoritative paths fail."
+  (let* ((path (format "/media/upload/e3/b0/%s/ok.png"
+                       jaunder-pull-media-test--hash))
+         (body (format "![query](%s?x=1) ![other](images/ok.png) ![host](//elsewhere.example%s)"
+                       path path)))
+    (should (equal (jaunder-pull-media-test--rewrite "markdown" body) body))
+    (dolist (bad (list (format "/media/upload/ff/b0/%s/ok.png"
+                               jaunder-pull-media-test--hash)
+                       (format "/media/cached/e3/b0/%s/a%%2Fb.png"
+                               jaunder-pull-media-test--hash)))
+      (should-error (jaunder-pull-media-test--rewrite
+                     "markdown" (format "![bad](%s)" bad))))))
+
 (ert-deftest jaunder-pull-media-markdown-plan-rewrites-links-and-images-only ()
   ;; Markdown label and alt source are opaque; only their destinations change.
   (let* ((url (jaunder-pull-media-test--url "cafe%20%25%E2%98%95.png" "#view"))

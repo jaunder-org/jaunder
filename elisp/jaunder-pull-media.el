@@ -11,6 +11,7 @@
 
 (require 'cl-lib)
 (require 'url-parse)
+(require 'url-expand)
 (require 'url-util)
 (require 'cmark)
 (require 'plz)
@@ -80,14 +81,19 @@
 (defun jaunder--pull-media-url-parts (url origin)
   "Return (HASH LEAF) when URL is eligible canonical media at ORIGIN.
 Return nil for every non-candidate form."
-  (let ((case-fold-search nil)
-        (candidate (condition-case nil
-                       (url-generic-parse-url url)
-                     (error nil)))
-        (configured (condition-case nil
-                        (url-generic-parse-url origin)
-                      (error nil))))
-    (when (and (url-type candidate) (url-host candidate)
+  (let* ((case-fold-search nil)
+         (root-relative (and (string-prefix-p "/" url)
+                             (not (string-prefix-p "//" url))))
+         (candidate (condition-case nil
+                        (url-generic-parse-url
+                         (if root-relative (url-expand-file-name url origin) url))
+                      (error nil)))
+         (configured (condition-case nil
+                         (url-generic-parse-url origin)
+                       (error nil))))
+    (when (and candidate configured (url-type candidate) (url-host candidate)
+               ;; Resolution must not normalize a noncanonical authored path.
+               (or (not root-relative) (equal (url-filename candidate) url))
                (not (url-user candidate))
                (not (url-password candidate))
                (not (string-search "?" url))
@@ -141,7 +147,12 @@ URL.  LABEL requests an explicit Markdown link preserving that displayed text."
                (last
                 (split-string
                  (url-filename (url-generic-parse-url url)) "/" t))))
-             (key url)
+             ;; Author source stays root-relative; transport always targets the
+             ;; configured origin and never receives an author-supplied host.
+             (key (if (and (string-prefix-p "/" url)
+                           (not (string-prefix-p "//" url)))
+                      (url-expand-file-name url origin)
+                    url))
              (reference (gethash key table)))
         (unless reference
           (setq reference
