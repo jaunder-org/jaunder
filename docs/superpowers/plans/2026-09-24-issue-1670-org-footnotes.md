@@ -44,22 +44,24 @@ this session.
   - Verification: focused host/storage tests for new and updated Posts,
     identical bodies with distinct IDs, sanitizer-preserved forward/back links,
     unchanged non-Org rendering and unchanged native AtomPub source.
-- [ ] Rebuild existing Org renderings and dependent public projections offline.
-  - Contract: use #1671's `pending_code_migrations` queue and shared closed
-    dispatcher with a follow-up enqueue migration and operation to rebuild
-    current Post HTML using each Post's stable ID. Replace exact sanitized
-    HTML-derived Media references, invalidate affected Syndication Feed
-    cache/validators and enqueue `feed_events` atomically with completion of the
-    pending operation. Preserve source, timestamps and historical Post
+- [ ] Rebuild all current Posts and dependent public projections offline.
+  - Contract: add the next SQLx migration on each backend to enqueue the
+    existing `rebuild_rendered_posts` operation, as `0045` did. Reuse its closed
+    dispatcher and full current-Post pass (including retained Deleted Posts)
+    with each Post's stable ID; do not create a second operation. Replace exact
+    sanitized HTML-derived Media references, invalidate affected Syndication
+    Feed cache/validators and enqueue `feed_events` atomically with completion
+    of the pending operation. Preserve source, timestamps and historical Post
     Revisions. Respect the offline-only ADR-0092 exception, never a request-time
     unbounded write transaction; allocate the next migration numbers after
     #1671's `0045`.
   - Verification: `#[apply(backends)]` tests for SQLite/PostgreSQL old rows,
-    Post-ID-scoped links matching newly created and updated Posts, media inside
-    referenced notes, feed cache/notification change and unaffected Posts.
-    Injected failure rolls all effects back; retry produces the final HTML and
-    exactly one committed notification per affected feed, with no pending work
-    and no repeat effects on the next open.
+    including retained Deleted Posts and non-Org Posts, Post-ID-scoped links
+    matching newly created and updated Posts, media inside referenced notes,
+    feed cache/notification change and unaffected Posts. Injected failure rolls
+    all effects back; retry produces the final HTML and exactly one committed
+    notification per affected feed, with no pending work and no repeat effects
+    on the next open.
 - [ ] Demonstrate published footnotes in the browser and finish visual proof.
   - Contract: the public Post fixture includes forward/repeated references and a
     wrapped, linked definition; UI anchors navigate within their Post even on a

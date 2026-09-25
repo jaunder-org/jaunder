@@ -38,15 +38,17 @@ definition. Authored Org source remains unchanged.
   Cargo, tools, Nix vendoring/flake lock and source allowance rather than
   creating a second fork mechanism. Review the fork delta against the prior pin.
 - Existing stored Post renderings do not change by changing the exporter alone.
-  Use the #1671 offline queue/rebuild contract to refresh affected current Post
-  derivatives on both storage backends without changing authored source,
-  semantic edit timestamps, or historical Post Revisions. For each changed body
-  replace that Post's Media references with the exact set derived from sanitized
-  new HTML (including referenced note contents). For affected public Syndication
-  Feeds invalidate cached representations/validators and enqueue the existing
-  `feed_events` notification path, atomically with the rebuild, so readers and
-  WebSub subscribers can observe the changed projection. Do not emit a semantic
-  Post edit or revision.
+  Enqueue #1671's existing `rebuild_rendered_posts` operation with a new SQLx
+  migration for each backend, triggering a full rebuild of all current Posts
+  (including retained Deleted Posts), not only Org Posts with footnotes. Refresh
+  changed Post derivatives on both storage backends without changing authored
+  source, semantic edit timestamps, or historical Post Revisions. For each
+  changed body replace that Post's Media references with the exact set derived
+  from sanitized new HTML (including referenced note contents). For affected
+  public Syndication Feeds invalidate cached representations/validators and
+  enqueue the existing `feed_events` notification path, atomically with the
+  rebuild, so readers and WebSub subscribers can observe the changed projection.
+  Do not emit a semantic Post edit or revision.
 
 ## Acceptance
 
