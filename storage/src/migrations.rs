@@ -634,6 +634,29 @@ main = putStrLn "hello"
                 .0,
             "rebuild_rendered_posts"
         );
+        let authorize = || Ok(());
+        let error = host::test_faults::with_invalid_highlight_query(db.drain_pending(&authorize))
+            .await
+            .expect_err("a highlighter failure must stop the offline rebuild");
+        let sqlx::Error::Decode(source) = error else {
+            panic!("offline rendering must preserve a typed source: {error}");
+        };
+        assert!(matches!(
+            source.downcast_ref::<host::render::HighlightError>(),
+            Some(host::render::HighlightError::Initialization {
+                language: "injected-invalid-query",
+                ..
+            })
+        ));
+        assert_eq!(db.pool.string_quintuples(snapshots).await.unwrap(), before);
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM pending_code_migrations")
+                .await
+                .unwrap(),
+            1,
+            "failed rendering leaves the queued rebuild available for retry"
+        );
         db.drain_pending_code_migrations().await;
 
         let after = db.pool.string_quintuples(snapshots).await.unwrap();
