@@ -185,6 +185,67 @@
        (delete-directory source-root t)
        (delete-directory pull-root t)))))
 
+(ert-deftest jaunder-pull-web-copied-media-url-after-selected-reconciliation ()
+  "A web-style root-relative Media URL stays remote until selected pull."
+  (jaunder-test--with-live-server
+   (let* ((root (make-temp-file "jaunder-web-copy-pull-" t))
+          (image (expand-file-name "web image.png" root))
+          (bytes "WEB-COPIED-MEDIA")
+          (jaunder-blogs
+           (list (cons (file-name-as-directory root)
+                       (list :base-url jaunder-test-base-url
+                             :username jaunder-test-username)))))
+     (unwind-protect
+         (jaunder--call-with-blog
+          root
+          (lambda ()
+            (with-temp-file image (insert bytes))
+            (let* ((absolute (jaunder--upload-media image "image/png"))
+                   ;; media.spec.ts proves Copy writes the thumbnail's src;
+                   ;; this live AtomPub/Emacs leg exercises that same public route.
+                   (copied (url-filename (url-generic-parse-url absolute)))
+                   (source (format "[[%s][web image]]" copied))
+                   (member (jaunder-pull-integration--create-server-only-member
+                            root source))
+                   (id (jaunder-inventory-member-id member))
+                   (path (expand-file-name
+                          (concat (jaunder-inventory-member-slug member) ".org") root))
+                   (hash (secure-hash 'sha256 bytes))
+                   (copy (expand-file-name
+                          (format "local-media/%s/web image.png" hash) root))
+                   (real-get (symbol-function 'jaunder--pull-media-get))
+                   (gets nil))
+              (should (string-prefix-p "/media/upload/" copied))
+              (cl-letf (((symbol-function 'jaunder--pull-media-get)
+                         (lambda (url destination)
+                           (push url gets)
+                           (funcall real-get url destination))))
+                (jaunder-reconcile root)
+                (with-current-buffer "*Jaunder Reconcile*"
+                  (jaunder-reconcile-refresh)
+                  (should-not gets)
+                  (should-not (file-exists-p copy))
+                  (should-not (file-exists-p path))
+                  (puthash (format "post:%s" id) t jaunder-reconcile-marks)
+                  (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
+                    (jaunder-reconcile-pull-selected)))
+                (should (equal gets (list absolute))))
+              (should (equal (with-temp-buffer
+                               (insert-file-contents-literally copy)
+                               (buffer-string)) bytes))
+              (should (equal (with-temp-buffer
+                               (insert-file-contents path)
+                               (org-mode)
+                               (jaunder-entry-body (jaunder--org->atom)))
+                             (format "[[file:local-media/%s/web%%20image.png][web image]]"
+                                     hash)))
+              (let ((remote (jaunder--http-request
+                             "GET" (jaunder-inventory-member-edit-uri member))))
+                (should (eq (plist-get remote :status) 200))
+                (should (string-match-p (regexp-quote copied)
+                                        (plist-get remote :body)))))))
+       (delete-directory root t)))))
+
 (ert-deftest jaunder-pull-localizes-media-retries-reuses-and-republishes ()
   "One verified public download serves retries and separate pulled Posts."
   (jaunder-test--with-live-server

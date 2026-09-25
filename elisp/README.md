@@ -174,13 +174,16 @@ live ERT.
 
 ## Pulled media
 
-When a server-only Post is pulled, eligible same-instance media links are
-rewritten to relative files under `local-media/<sha256>/` and their verified
-bytes are retained there. These **Local Media Copies** are durable blog content,
-not a cache: include `local-media/` in backups and do not expect automatic
-eviction or repair. The configured root is trusted, author-owned local state;
-the client rejects symlinks during creation and immediately before mutation, but
-cannot defend a malicious replacement after its final check without dirfd APIs.
+When a Post is explicitly pulled, eligible same-instance Media links—including
+canonical root-relative URLs copied from the web composer—are rewritten to
+relative files under `local-media/<sha256>/` and their verified bytes are
+retained there. Root-relative URLs resolve only against the configured Jaunder
+origin; reconciliation and report refresh do not download Media. These **Local
+Media Copies** are durable managed content, not a cache: include `local-media/`
+in backups and do not expect automatic eviction or repair. The configured root
+is trusted, author-owned local state; the client rejects symlinks during
+creation and immediately before mutation, but cannot defend a malicious
+replacement after its final check without dirfd APIs.
 
 Markdown pull localization uses the pinned upstream `cmark-el` CommonMark
 parser. It rewrites only AST-recognized link, image, and autolink destinations;
