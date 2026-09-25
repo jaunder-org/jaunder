@@ -201,7 +201,8 @@
           (lambda ()
             (with-temp-file image (insert bytes))
             (let* ((absolute (jaunder--upload-media image "image/png"))
-                   ;; Copy media URL exposes the public root-relative route.
+                   ;; media.spec.ts proves Copy writes the thumbnail's src;
+                   ;; this live AtomPub/Emacs leg exercises that same public route.
                    (copied (url-filename (url-generic-parse-url absolute)))
                    (source (format "[[%s][web image]]" copied))
                    (member (jaunder-pull-integration--create-server-only-member

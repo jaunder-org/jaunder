@@ -83,6 +83,12 @@
   (and (string-prefix-p "/" url)
        (not (string-prefix-p "//" url))))
 
+(defun jaunder--pull-media-resolved-url (url origin)
+  "Resolve root-relative URL at ORIGIN for validation and transport."
+  (if (jaunder--pull-media-root-relative-p url)
+      (url-expand-file-name url origin)
+    url))
+
 (defun jaunder--pull-media-url-parts (url origin)
   "Return (HASH LEAF) when URL is eligible canonical media at ORIGIN.
 Return nil for every non-candidate form."
@@ -90,7 +96,7 @@ Return nil for every non-candidate form."
          (root-relative (jaunder--pull-media-root-relative-p url))
          (candidate (condition-case nil
                         (url-generic-parse-url
-                         (if root-relative (url-expand-file-name url origin) url))
+                         (jaunder--pull-media-resolved-url url origin))
                       (error nil)))
          (configured (condition-case nil
                          (url-generic-parse-url origin)
@@ -159,9 +165,7 @@ URL.  LABEL requests an explicit Markdown link preserving that displayed text."
                  (url-filename (url-generic-parse-url url)) "/" t))))
              ;; Author source stays root-relative; transport always targets the
              ;; configured origin and never receives an author-supplied host.
-             (key (if (jaunder--pull-media-root-relative-p url)
-                      (url-expand-file-name url origin)
-                    url))
+             (key (jaunder--pull-media-resolved-url url origin))
              (reference (gethash key table)))
         (unless reference
           (setq reference

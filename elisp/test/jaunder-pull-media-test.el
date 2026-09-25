@@ -48,6 +48,19 @@
                    (format "Before [[file:local-media/%s/my%%20photo.png#crop][photo]] after"
                            jaunder-pull-media-test--hash)))))
 
+(ert-deftest jaunder-pull-media-root-relative-upload-in-markdown-and-html ()
+  "The web-copied upload route localizes through both native parsers."
+  (let* ((url (format "/media/upload/e3/b0/%s/photo.png"
+                      jaunder-pull-media-test--hash))
+         (local (format "local-media/%s/photo.png"
+                        jaunder-pull-media-test--hash)))
+    (should (equal (jaunder-pull-media-test--rewrite
+                    "markdown" (format "![image](%s#view) `%s`" url url))
+                   (format "![image](%s#view) `%s`" local url)))
+    (should (equal (jaunder-pull-media-test--rewrite
+                    "html" (format "<img src=\"%s\"><code>%s</code>" url url))
+                   (format "<img src=\"%s\"><code>%s</code>" local url)))))
+
 (ert-deftest jaunder-pull-media-root-relative-cached-destinations-in-native-formats ()
   "Cached Media uses the configured origin without changing non-link source."
   (let* ((url (format "/media/cached/e3/b0/%s/photo.png" jaunder-pull-media-test--hash))
