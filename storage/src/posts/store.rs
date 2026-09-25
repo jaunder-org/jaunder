@@ -140,7 +140,7 @@ pub enum PostPermalinkAliasMatch {
 pub trait PostStorage: Send + Sync {
     /// Reserves a durable numeric ID for rendering before a Post write starts.
     /// A failed create may leave an unused ID, just like a rolled-back sequence.
-    async fn reserve_post_id(&self) -> Result<PostId>;
+    async fn reserve_post_id(&self, transaction: &mut WriteTransaction) -> Result<PostId>;
 
     /// Creates a new post at `now`.
     ///
@@ -1014,9 +1014,10 @@ where
     DB::Arguments: sqlx::IntoArguments<DB>,
     usize: sqlx::ColumnIndex<DB::Row>,
 {
-    async fn reserve_post_id(&self) -> Result<PostId> {
+    async fn reserve_post_id(&self, transaction: &mut WriteTransaction) -> Result<PostId> {
+        let conn = DB::write_connection(transaction)?;
         sqlx::query_scalar::<_, PostId>(DB::RESERVE_POST_ID_SQL)
-            .fetch_one(&self.pool)
+            .fetch_one(&mut *conn)
             .await
     }
 

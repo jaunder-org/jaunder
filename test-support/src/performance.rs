@@ -39,7 +39,8 @@ use sha2::Digest as _;
 use storage::{
     AudienceStorage, MediaRecord, MediaStorage, OperatorStatus, PostBookkeepingExpectation,
     PostFormat, PostLifecycle, PostRevisionCursor, PostStorage, PublishedPageRequest,
-    RenderedPostContent, SubscriptionStorage, UserStorage, WriteScope, render_post_input,
+    RenderedPostContent, SubscriptionStorage, UserStorage, WriteScope,
+    render_post_input_for_create,
 };
 
 const FIXED_CLOCK: &str = "2026-09-01T12:00:00Z";
@@ -413,7 +414,7 @@ fn publish_media_blob(target: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn build_post_input(
+fn build_post_content(
     index: usize,
     plan: &performance::DatasetPlan,
     authors: &[(Username, UserId)],
@@ -421,7 +422,7 @@ fn build_post_input(
     media: &[Vec<MediaRef>],
     clock: UtcInstant,
     backdated_count: usize,
-) -> anyhow::Result<storage::CreatePostInput> {
+) -> anyhow::Result<RenderedPostContent> {
     let index_u64 = u64::try_from(index)?;
     let author_index = index % authors.len();
     let body_bucket = bucket(index_u64, &plan.body_distribution);
@@ -464,7 +465,7 @@ fn build_post_input(
     let tags = (0..tag_count)
         .map(|tag| format!("perf-{index}-{tag}").parse::<TagLabel>())
         .collect::<Result<Vec<_>, _>>()?;
-    render_fixture_input(RenderedPostContent {
+    Ok(RenderedPostContent {
         user_id: authors[author_index].1,
         title: Some(format!("Performance Post {index}").parse::<PostTitle>()?),
         slug: format!("performance-{index:06}").parse::<Slug>()?,
@@ -479,8 +480,12 @@ fn build_post_input(
     })
 }
 
-fn render_fixture_input(content: RenderedPostContent) -> anyhow::Result<storage::CreatePostInput> {
-    Ok(render_post_input(content)?)
+async fn render_fixture_input(
+    write_scope: &WriteScope,
+    posts: Arc<dyn PostStorage>,
+    content: RenderedPostContent,
+) -> anyhow::Result<storage::CreatePostInput> {
+    Ok(render_post_input_for_create(write_scope, posts, content).await?)
 }
 
 fn post_published_at(
@@ -526,19 +531,22 @@ async fn create_posts(
     let mut ids = Vec::with_capacity(post_count);
     for batch_start in (0..post_count).step_by(POST_BATCH_SIZE) {
         let batch_end = (batch_start + POST_BATCH_SIZE).min(post_count);
-        let inputs = (batch_start..batch_end)
-            .map(|index| {
-                build_post_input(
-                    index,
-                    plan,
-                    authors,
-                    audiences,
-                    media,
-                    clock,
-                    backdated_count,
-                )
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
+        let mut inputs = Vec::with_capacity(batch_end - batch_start);
+        for index in batch_start..batch_end {
+            let content = build_post_content(
+                index,
+                plan,
+                authors,
+                audiences,
+                media,
+                clock,
+                backdated_count,
+            )?;
+            inputs.push(
+                render_fixture_input(&storage.write_scope, Arc::clone(&storage.posts), content)
+                    .await?,
+            );
+        }
         let posts = Arc::clone(&storage.posts);
         let outcome = storage
             .write_scope
@@ -1133,6 +1141,54 @@ pub fn write_manifest(output: &Path, manifest: &DatasetManifest) -> anyhow::Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::*;
+    use rstest_reuse::*;
+    use storage::test_support::{Backend, SeedUser, backends};
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn performance_org_batch_input_reserves_scoped_footnotes(#[case] backend: Backend) {
+        let env = backend.setup().pristine().await;
+        let user_id = SeedUser::new()
+            .seed(env.users(), env.write_scope())
+            .await
+            .user_id;
+        let content = RenderedPostContent {
+            user_id,
+            title: None,
+            slug: "performance-footnote".parse().unwrap(),
+            body: "A[fn:shared]\n\n[fn:shared] A useful note."
+                .parse()
+                .unwrap(),
+            format: PostFormat::Org,
+            published_at: None,
+            summary: None,
+            audiences: vec![AudienceTarget::Public],
+            tags: Vec::new(),
+            idempotency_key: None,
+            expectations: PostBookkeepingExpectation::default(),
+        };
+        let posts = env.posts();
+        let scope = env.write_scope();
+        let input = render_fixture_input(&scope, Arc::clone(&posts), content)
+            .await
+            .unwrap();
+        let id = input
+            .reserved_post_id
+            .expect("Org input reserves a Post ID");
+        assert!(
+            input
+                .rendered
+                .rendered_html()
+                .contains(&format!("id=\"post-{id}-fn-1\""))
+        );
+        let outcome = scope
+            .run(move |tx| Box::pin(async move { posts.create_posts(tx, &[input]).await }))
+            .await
+            .unwrap();
+        let created = crate::confirmed_fixture_outcome(outcome, "performance Org Post").unwrap();
+        assert_eq!(created, vec![id]);
+    }
 
     fn observation() -> PersistedPostObservation {
         PersistedPostObservation {
@@ -1169,17 +1225,21 @@ mod tests {
             expectations: PostBookkeepingExpectation::default(),
         };
         let error = host::test_faults::with_invalid_highlight_query(async {
-            render_fixture_input(content)
-                .err()
-                .expect("invalid grammar query must not seed a Post")
+            host::render::render_post_scoped(
+                PostId::from(1_i64),
+                content.title,
+                content.body,
+                content.format,
+            )
+            .expect_err("invalid grammar query must not seed a Post")
         })
         .await;
         assert!(matches!(
-            error.downcast_ref::<host::render::HighlightError>(),
-            Some(host::render::HighlightError::Initialization {
+            error,
+            host::render::HighlightError::Initialization {
                 language: "injected-invalid-query",
                 ..
-            })
+            }
         ));
     }
 

@@ -59,6 +59,34 @@ pub struct RenderedPostContent {
     pub expectations: PostBookkeepingExpectation,
 }
 
+/// An ID reservation failed before a content write could begin.
+#[derive(Debug, Error)]
+pub enum ReservePostIdError {
+    /// The short reservation scope could not complete.
+    #[error(transparent)]
+    Scope(#[from] WriteScopeError<sqlx::Error>),
+    /// The allocator's commit may have succeeded, but was not acknowledged.
+    #[error("Post ID reservation commit is indeterminate")]
+    CommitIndeterminate,
+}
+
+/// Reserves a durable identity in its own short write scope, before Org rendering.
+///
+/// # Errors
+/// Returns a scope or indeterminate-commit error; unused IDs are harmless.
+pub async fn reserve_post_id(
+    write_scope: &WriteScope,
+    storage: Arc<dyn PostStorage>,
+) -> Result<PostId, ReservePostIdError> {
+    let outcome = write_scope
+        .run(move |transaction| Box::pin(async move { storage.reserve_post_id(transaction).await }))
+        .await?;
+    match outcome {
+        MutationOutcome::Confirmed(id) => Ok(id),
+        MutationOutcome::CommitIndeterminate(_) => Err(ReservePostIdError::CommitIndeterminate),
+    }
+}
+
 /// Converts a post-creation write-scope failure into its public service error.
 fn map_create_post_scope_error(error: WriteScopeError<CreatePostError>) -> CreatePostError {
     match error {
@@ -109,6 +137,7 @@ fn map_create_post_attempt_error(
         }
         CreatePostError::BookkeepingMismatch => Err(PerformCreationError::BookkeepingMismatch),
         CreatePostError::Render(error) => Err(PerformCreationError::Render(error)),
+        CreatePostError::Reservation(error) => Err(PerformCreationError::Reservation(error)),
         CreatePostError::Internal(error) => Err(PerformCreationError::Storage(error)),
     }
 }
@@ -185,17 +214,7 @@ pub async fn create_rendered_post(
     content: RenderedPostContent,
     now: UtcInstant,
 ) -> Result<MutationOutcome<PostRecord>, CreatePostError> {
-    let reserved_id = if content.format == PostFormat::Org {
-        Some(
-            storage
-                .reserve_post_id()
-                .await
-                .map_err(CreatePostError::Internal)?,
-        )
-    } else {
-        None
-    };
-    let input = render_post_input_with_identity(content, reserved_id)?;
+    let input = render_post_input_for_create(write_scope, Arc::clone(&storage), content).await?;
     let _media_locks = content_locks
         .acquire(
             input
@@ -253,17 +272,7 @@ pub async fn create_rendered_post_with_media_ownership(
     content: RenderedPostContent,
     now: UtcInstant,
 ) -> Result<MutationOutcome<PostRecord>, CreatePostError> {
-    let reserved_id = if content.format == PostFormat::Org {
-        Some(
-            storage
-                .reserve_post_id()
-                .await
-                .map_err(CreatePostError::Internal)?,
-        )
-    } else {
-        None
-    };
-    let input = render_post_input_with_identity(content, reserved_id)?;
+    let input = render_post_input_for_create(write_scope, Arc::clone(&storage), content).await?;
     let local_media = ownership
         .resolve(input.rendered.media())
         .await
@@ -313,16 +322,34 @@ pub async fn create_rendered_post_with_media_ownership(
     Ok(finish_post_creation(outcome))
 }
 
-/// Renders `body` per `format` and assembles the [`CreatePostInput`] without
-/// writing it. The batch seeders use it for Markdown fixtures. Production Org
-/// creation instead reserves an ID and calls the identity-bearing private twin
-/// before acquiring the content write transaction.
+/// Renders a Post input before its content write. Org creation reserves an ID
+/// through a short write scope first; other formats need no reservation.
 ///
 /// # Errors
-/// Returns a typed highlighting error if the source cannot be rendered safely.
-pub fn render_post_input(
+/// Returns a reservation or highlighting error before any content write begins.
+pub async fn render_post_input_for_create(
+    write_scope: &WriteScope,
+    storage: Arc<dyn PostStorage>,
+    content: RenderedPostContent,
+) -> Result<CreatePostInput, CreatePostError> {
+    let reserved_id = if content.format == PostFormat::Org {
+        Some(reserve_post_id(write_scope, storage).await?)
+    } else {
+        None
+    };
+    Ok(render_post_input_with_identity(content, reserved_id)?)
+}
+
+/// Renders only the non-Org seed inputs that do not need a Post ID.
+#[cfg(any(test, feature = "seed-posts"))]
+fn render_post_input(
     content: RenderedPostContent,
 ) -> Result<CreatePostInput, host::render::HighlightError> {
+    assert_ne!(
+        content.format,
+        PostFormat::Org,
+        "Org requires a reserved Post ID"
+    );
     render_post_input_with_identity(content, None)
 }
 
@@ -859,6 +886,8 @@ pub enum PerformCreationError {
     BookkeepingMismatch,
     #[error(transparent)]
     Render(#[from] host::render::HighlightError),
+    #[error(transparent)]
+    Reservation(#[from] ReservePostIdError),
     #[error("storage error: {0}")]
     Storage(#[source] sqlx::Error),
 }
@@ -892,6 +921,7 @@ impl From<PerformCreationError> for host::error::InternalError {
                 InternalError::server_message("created post not found")
             }
             PerformCreationError::Render(e) => InternalError::server(e),
+            PerformCreationError::Reservation(e) => InternalError::server(e),
             PerformCreationError::Storage(e) => InternalError::storage(e),
         }
     }
@@ -3187,6 +3217,19 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
+    async fn indeterminate_reservation_does_not_start_org_content_write(#[case] backend: Backend) {
+        let env = backend.setup().pristine().await;
+        let scope = env
+            .write_scope()
+            .with_commit_acknowledgement_loss_after_commit_for_test();
+        let error = reserve_post_id(&scope, env.posts())
+            .await
+            .expect_err("unacknowledged reservation cannot be used for rendering");
+        assert!(matches!(error, ReservePostIdError::CommitIndeterminate));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
     async fn reserved_org_identity_cannot_be_claimed_by_an_interleaved_markdown_create(
         #[case] backend: Backend,
     ) {
@@ -3195,7 +3238,9 @@ mod tests {
             .seed(Arc::clone(&env.users()), env.write_scope().clone())
             .await
             .user_id;
-        let reserved = env.posts().reserve_post_id().await.unwrap();
+        let reserved = reserve_post_id(&env.write_scope(), env.posts())
+            .await
+            .unwrap();
         let markdown = perform_post_creation(
             &env.write_scope(),
             &env.media_content_locks(),

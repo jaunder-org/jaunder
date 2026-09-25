@@ -30,6 +30,9 @@ pub enum CreatePostError {
     /// Rendering failed before the Post was written.
     #[error(transparent)]
     Render(#[from] host::render::HighlightError),
+    /// Reserving a Post ID failed before the content write began.
+    #[error(transparent)]
+    Reservation(#[from] crate::post_service::ReservePostIdError),
     /// An unexpected database error occurred.
     #[error(transparent)]
     Internal(#[from] sqlx::Error),
