@@ -618,7 +618,7 @@ main = putStrLn "hello"
             "SELECT body, rendered_html, CAST(updated_at AS TEXT), '', '' FROM post_revisions";
         let old_revisions = db.pool.string_quintuples(revisions).await.unwrap();
 
-        db.migrate_current().await.unwrap();
+        db.migrate_to(47).await.unwrap();
         assert_eq!(
             db.pool
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
@@ -2100,7 +2100,7 @@ main = putStrLn "hello"
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            47,
+            48,
         );
     }
 
@@ -2572,7 +2572,7 @@ main = putStrLn "hello"
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            47
+            48
         );
         assert_eq!(
             db.pool
