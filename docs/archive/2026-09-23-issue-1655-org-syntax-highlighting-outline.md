@@ -98,9 +98,11 @@ historical Post Revisions, an unbounded rewrite of legacy content.
     and release size report; no new performance approval step.
 - [x] **5. Refresh existing current projections without an author revision.**
       SQL migrations in both backends create/seed a versioned refresh-progress
-      row only; they do not render HTML. After migrations and before the new
-      server mounts its router or starts feed/WebSub workers, run the
-      presentation-only refresh to completion (or fail startup visibly). The
+      row and enqueue the existing offline `rebuild_rendered_posts` operation
+      after the highlighting upgrade; they do not render HTML. Drain the queue
+      before running the bounded presentation-only refresh to completion (or
+      fail startup visibly), before the new server mounts its router or starts
+      feed/WebSub workers. The
       versioned row exposes current version, committed cursor, and completed
       status. Each batch selects at most 100 ascending active Org or Markdown
       Post IDs (never HTML-format Posts) after the committed cursor; within a

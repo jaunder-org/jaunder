@@ -70,8 +70,13 @@ policy for each new grammar.
   Revisions. This is an explicit exception to ADR-0079's no-backfill decision
   and ADR-0136's revision-on-meaningful-change rule, documented in a proposed
   ADR draft and `docs/ARCHITECTURE.md`.
-- The refresh processes at most 100 ascending Post IDs per transaction with a
-  durable checkpoint; restart resumes without skipping an uncommitted row, and
+- Migration `0047` enqueues the existing offline `rebuild_rendered_posts`
+  operation to update changed current derivatives of every Post (including
+  retained Deleted and HTML-format Posts) on databases that already ran `0045`.
+  It drains on database open before the separate bounded refresh, rolls back
+  atomically on failure, and does not rewrite authored source or revisions.
+  The bounded refresh processes at most 100 ascending active Org/Markdown Post
+  IDs per transaction with a durable checkpoint; restart resumes without skipping an uncommitted row, and
   completion is observable. Guard each rendered replacement in the write
   transaction by matching read source, format, and prior rendered value **and by
   proving `deleted_at IS NULL` at write time**. A concurrent edit wins (retry a
@@ -138,9 +143,10 @@ policy for each new grammar.
   in a later word or embedded in a larger token does not trigger highlighting.
   For each format, a mixed document proves that valid Post Shortcodes outside
   code keep their behavior and shortcode-looking code text stays literal. All
-  active Org and Markdown Posts (including scheduled/private/drafts) refresh;
-  Deleted and HTML-format Posts and every historical Post Revision remain
-  untouched.
+  active Org and Markdown Posts (including scheduled/private/drafts) undergo
+  the bounded refresh. The offline rebuild may update changed current rendered
+  derivatives of retained Deleted and HTML-format Posts; it leaves their source
+  and every historical Post Revision untouched.
 - Dual-backend interruption/resume, repeated refresh, concurrent author edit,
   and concurrent soft-delete tests prove checkpoint/CAS behavior, no lost source
   or unrecorded author change, no mutation/retry of a Deleted Post, unchanged

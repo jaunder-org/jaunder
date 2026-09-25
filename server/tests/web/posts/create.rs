@@ -227,6 +227,11 @@ async fn labeled_org_and_markdown_posts_preserve_source_and_highlight(#[case] ba
             app.clone(),
             PostInputs {
                 publish: Some(true),
+                audience: Some(AudienceSelection {
+                    public: true,
+                    subscribers: false,
+                    named: Vec::new(),
+                }),
                 ..PostInputs::new(parse_post_body(&source), format)
             },
             Some(&session.cookie()),

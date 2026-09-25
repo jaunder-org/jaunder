@@ -557,11 +557,168 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
+    async fn migration_0047_rebuilds_existing_code_blocks_without_author_edits(
+        #[case] backend: Backend,
+    ) {
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(46).await.unwrap();
+        db.drain_pending_code_migrations().await;
+        let user = match backend {
+            Backend::Sqlite => {
+                "INSERT INTO users (user_id, username, password_hash, created_at) VALUES (404, 'code-author', 'hash', CURRENT_TIMESTAMP)"
+            }
+            Backend::Postgres => {
+                "INSERT INTO users (user_id, username, password_hash, created_at) OVERRIDING SYSTEM VALUE VALUES (404, 'code-author', 'hash', CURRENT_TIMESTAMP)"
+            }
+        };
+        db.pool.execute(user).await.unwrap();
+        let posts = match backend {
+            Backend::Sqlite => {
+                r#"INSERT INTO posts (post_id, user_id, slug, body, format, rendered_html, created_at, updated_at, published_at, deleted_at) VALUES
+                (505, 404, 'old-org', '#+begin_src emacs-lisp
+(message "hello")
+#+end_src', 'org', '<p>old Org</p>', '2025-01-01T00:00:00Z', '2025-02-01T00:00:00Z', '2025-02-01T00:00:00Z', NULL),
+                (506, 404, 'old-markdown', '```haskell
+main = putStrLn "hello"
+```', 'markdown', '<p>old Markdown</p>', '2025-01-01T00:00:00Z', '2025-02-01T00:00:00Z', NULL, NULL),
+                (507, 404, 'old-deleted', '#+begin_src emacs-lisp
+(message "gone")
+#+end_src', 'org', '<p>old Deleted</p>', '2025-01-01T00:00:00Z', '2025-02-01T00:00:00Z', '2025-02-01T00:00:00Z', '2025-03-01T00:00:00Z'),
+                (508, 404, 'old-html', '<p>authored</p>', 'html', '<p>old HTML</p>', '2025-01-01T00:00:00Z', '2025-02-01T00:00:00Z', NULL, NULL)"#
+            }
+            Backend::Postgres => {
+                r#"INSERT INTO posts (post_id, user_id, slug, body, format, rendered_html, created_at, updated_at, published_at, deleted_at) OVERRIDING SYSTEM VALUE VALUES
+                (505, 404, 'old-org', '#+begin_src emacs-lisp
+(message "hello")
+#+end_src', 'org', '<p>old Org</p>', '2025-01-01T00:00:00Z', '2025-02-01T00:00:00Z', '2025-02-01T00:00:00Z', NULL),
+                (506, 404, 'old-markdown', '```haskell
+main = putStrLn "hello"
+```', 'markdown', '<p>old Markdown</p>', '2025-01-01T00:00:00Z', '2025-02-01T00:00:00Z', NULL, NULL),
+                (507, 404, 'old-deleted', '#+begin_src emacs-lisp
+(message "gone")
+#+end_src', 'org', '<p>old Deleted</p>', '2025-01-01T00:00:00Z', '2025-02-01T00:00:00Z', '2025-02-01T00:00:00Z', '2025-03-01T00:00:00Z'),
+                (508, 404, 'old-html', '<p>authored</p>', 'html', '<p>old HTML</p>', '2025-01-01T00:00:00Z', '2025-02-01T00:00:00Z', NULL, NULL)"#
+            }
+        };
+        db.pool.execute(posts).await.unwrap();
+        db.pool
+            .execute(
+                "INSERT INTO post_audiences (post_id, target_kind_id, audience_id)
+             SELECT 505, kind_id, NULL FROM target_kinds WHERE name = 'public'",
+            )
+            .await
+            .unwrap();
+        db.pool.execute(
+            "INSERT INTO post_revisions (post_id, user_id, slug, body, format, rendered_html, created_at, updated_at, published_at)
+             SELECT post_id, user_id, slug, body, format, rendered_html, created_at, updated_at, published_at FROM posts WHERE post_id = 505",
+        ).await.unwrap();
+        let snapshots = "SELECT CAST(post_id AS TEXT), body, rendered_html, CAST(updated_at AS TEXT), COALESCE(CAST(deleted_at AS TEXT), '') FROM posts ORDER BY post_id";
+        let before = db.pool.string_quintuples(snapshots).await.unwrap();
+        let revisions =
+            "SELECT body, rendered_html, CAST(updated_at AS TEXT), '', '' FROM post_revisions";
+        let old_revisions = db.pool.string_quintuples(revisions).await.unwrap();
+
+        db.migrate_current().await.unwrap();
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
+                .await
+                .unwrap(),
+            47
+        );
+        assert_eq!(
+            db.pool
+                .string_quintuples("SELECT operation, '', '', '', '' FROM pending_code_migrations")
+                .await
+                .unwrap()[0]
+                .0,
+            "rebuild_rendered_posts"
+        );
+        db.drain_pending_code_migrations().await;
+
+        let after = db.pool.string_quintuples(snapshots).await.unwrap();
+        for (old, new) in before.iter().zip(&after) {
+            assert_eq!(
+                (
+                    old.0.as_str(),
+                    old.1.as_str(),
+                    old.3.as_str(),
+                    old.4.as_str()
+                ),
+                (
+                    new.0.as_str(),
+                    new.1.as_str(),
+                    new.3.as_str(),
+                    new.4.as_str()
+                ),
+                "authored body, identity, edit time and deletion remain unchanged"
+            );
+        }
+        for post in after.iter().take(3) {
+            assert!(
+                post.2.contains("j-syn-"),
+                "code block must be highlighted: {}",
+                post.0
+            );
+        }
+        assert_eq!(after[3].2, "<p>authored</p>");
+        assert_eq!(
+            db.pool.string_quintuples(revisions).await.unwrap(),
+            old_revisions
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM pending_code_migrations")
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM feed_events")
+                .await
+                .unwrap(),
+            6,
+            "only the public Org Post queues Site and User Feeds"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM post_projection_refresh_progress WHERE id = 1 AND completed = FALSE")
+                .await
+                .unwrap(),
+            1,
+            "bounded refresh can checkpoint without duplicate changes afterward"
+        );
+        let factory = match &db.pool {
+            CloseablePool::Sqlite(pool) => crate::StorageFactory::sqlite(pool.clone()),
+            CloseablePool::Postgres(pool) => crate::StorageFactory::postgres(pool.clone()),
+        };
+        factory.refresh_current_post_projections().await.unwrap();
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM post_projection_refresh_progress WHERE id = 1 AND completed = TRUE")
+                .await
+                .unwrap(),
+            1,
+            "the bounded checkpoint follows the offline rebuild"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM feed_events")
+                .await
+                .unwrap(),
+            6,
+            "unchanged projections must not enqueue duplicate events"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
     async fn migration_0045_runs_media_repair_before_render_rebuild(#[case] backend: Backend) {
         let db = MigrationDatabase::new(backend).await;
         db.migrate_to(26).await.unwrap();
         db.seed_legacy_post_media().await;
-        db.migrate_current().await.unwrap();
+        db.migrate_to(45).await.unwrap();
         let pending = db
             .pool
             .string_quintuples(
@@ -677,7 +834,8 @@ mod tests {
             Some("A---B...".parse().unwrap()),
             "A---B...".parse().unwrap(),
             PostFormat::Org,
-        );
+        )
+        .unwrap();
         assert_eq!(
             after[0].2, before[0].2,
             "authored Org source remains unchanged"
@@ -848,7 +1006,7 @@ mod tests {
         let original_html = db.pool.string_quintuples(
             "SELECT rendered_html, body, CAST(updated_at AS TEXT), '', '' FROM posts WHERE post_id = 505"
         ).await.unwrap();
-        db.migrate_current().await.unwrap();
+        db.migrate_to(45).await.unwrap();
         match backend {
             Backend::Sqlite => db
                 .pool
@@ -1616,7 +1774,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            46,
+            47,
         );
     }
 
@@ -2088,7 +2246,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            46
+            47
         );
         assert_eq!(
             db.pool

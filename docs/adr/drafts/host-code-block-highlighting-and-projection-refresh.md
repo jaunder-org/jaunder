@@ -50,18 +50,25 @@ narrower class allowlist without weakening its `RenderedHtml` safety guarantee.
 
 Once the renderer passes integrated safety and fidelity checks, refresh _current
 active Org and Markdown Post projections_ with a bounded, durable checkpoint
-before accepting traffic or starting Syndication Feed workers. One transaction
-locks/rechecks progress and at most 100 ascending Post IDs, CAS-checks current
-source, format, prior rendered bytes and active state, and atomically replaces
-changed rendered HTML, Media references, affected public-feed events and its
-checkpoint. A stale author edit is rerendered once or fails visibly; a Deleted
-Post is skipped. Resumption and concurrent startup must not skip or double-apply
-a row. Old-version writers are drained before a rolling deployment refresh. The
-transition changes presentation only: preserve authored source, Post identity,
-timestamps, AtomPub Member content ETag, and immutable Post Revisions. This
-narrow exception to ADR-0079's no-backfill choice and ADR-0136's
-revision-on-meaningful-change rule does not authorize arbitrary history
-rewriting.
+before accepting traffic or starting Syndication Feed workers. The offline
+`rebuild_rendered_posts` queue operation is enqueued again by migration `0047`
+and drains first during database open
+([offline code migrations](offline-code-migration-queue.md)), including on
+installations that already ran `0045`. It rebuilds changed current derivatives
+of every Post, including retained Deleted and HTML-format Posts; the bounded
+refresh still processes only active Org and Markdown Posts, recording progress
+without duplicate events when the offline rebuild already updated their HTML.
+One transaction locks/rechecks progress and at most 100 ascending Post IDs,
+CAS-checks current source, format, prior rendered bytes and active state, and
+atomically replaces changed rendered HTML, Media references, affected
+public-feed events and its checkpoint. A stale author edit is rerendered once or
+fails visibly; a Deleted Post is skipped. Resumption and concurrent startup must
+not skip or double-apply a row. Old-version writers are drained before a rolling
+deployment refresh. The transition changes presentation only: preserve authored
+source, Post identity, timestamps, AtomPub Member content ETag, and immutable
+Post Revisions. This narrow exception to ADR-0079's no-backfill choice and
+ADR-0136's revision-on-meaningful-change rule does not authorize arbitrary
+history rewriting.
 
 This one-time **startup-only** transition deliberately narrows ADR-0092's SQLite
 write-lock occupancy rule: with old-version writers drained and before this
