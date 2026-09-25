@@ -142,6 +142,25 @@ pub trait PostStorage: Send + Sync {
     /// A failed create may leave an unused ID, just like a rolled-back sequence.
     async fn reserve_post_id(&self, transaction: &mut WriteTransaction) -> Result<PostId>;
 
+    /// Reserves a bounded batch in one short transaction before rendering.
+    /// No rendering occurs while this transaction holds a write lock.
+    async fn reserve_post_ids(
+        &self,
+        transaction: &mut WriteTransaction,
+        count: usize,
+    ) -> Result<Vec<PostId>> {
+        if count > 256 {
+            return Err(sqlx::Error::Protocol(
+                "Post ID reservation batch exceeds 256".to_owned(),
+            ));
+        }
+        let mut ids = Vec::with_capacity(count);
+        for _ in 0..count {
+            ids.push(self.reserve_post_id(transaction).await?);
+        }
+        Ok(ids)
+    }
+
     /// Creates a new post at `now`.
     ///
     /// A keyed create uses `now` both to retire an expired mapping in this

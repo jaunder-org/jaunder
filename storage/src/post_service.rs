@@ -68,6 +68,9 @@ pub enum ReservePostIdError {
     /// The allocator's commit may have succeeded, but was not acknowledged.
     #[error("Post ID reservation commit is indeterminate")]
     CommitIndeterminate,
+    /// The storage implementation returned fewer IDs than requested.
+    #[error("Post ID reservation returned {actual} IDs instead of {expected}")]
+    CountMismatch { expected: usize, actual: usize },
 }
 
 /// Reserves a durable identity in its own short write scope, before Org rendering.
@@ -78,11 +81,39 @@ pub async fn reserve_post_id(
     write_scope: &WriteScope,
     storage: Arc<dyn PostStorage>,
 ) -> Result<PostId, ReservePostIdError> {
+    reserve_post_ids(write_scope, storage, 1)
+        .await?
+        .into_iter()
+        .next()
+        .ok_or(ReservePostIdError::CountMismatch {
+            expected: 1,
+            actual: 0,
+        })
+}
+
+/// Reserves up to 256 IDs in one short write scope, never across rendering.
+///
+/// # Errors
+/// Returns a scope or indeterminate-commit error; unused IDs are harmless.
+pub async fn reserve_post_ids(
+    write_scope: &WriteScope,
+    storage: Arc<dyn PostStorage>,
+    count: usize,
+) -> Result<Vec<PostId>, ReservePostIdError> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
     let outcome = write_scope
-        .run(move |transaction| Box::pin(async move { storage.reserve_post_id(transaction).await }))
+        .run(move |transaction| {
+            Box::pin(async move { storage.reserve_post_ids(transaction, count).await })
+        })
         .await?;
     match outcome {
-        MutationOutcome::Confirmed(id) => Ok(id),
+        MutationOutcome::Confirmed(ids) if ids.len() == count => Ok(ids),
+        MutationOutcome::Confirmed(ids) => Err(ReservePostIdError::CountMismatch {
+            expected: count,
+            actual: ids.len(),
+        }),
         MutationOutcome::CommitIndeterminate(_) => Err(ReservePostIdError::CommitIndeterminate),
     }
 }
@@ -338,6 +369,39 @@ pub async fn render_post_input_for_create(
         None
     };
     Ok(render_post_input_with_identity(content, reserved_id)?)
+}
+
+/// Prepares a bounded seed batch, reserving all Org Post identities in one
+/// short write scope, then rendering every input without a write lock.
+///
+/// # Errors
+/// Returns a reservation or highlighting error before any content write begins.
+pub async fn render_post_inputs_for_create(
+    write_scope: &WriteScope,
+    storage: Arc<dyn PostStorage>,
+    contents: Vec<RenderedPostContent>,
+) -> Result<Vec<CreatePostInput>, CreatePostError> {
+    let org_count = contents
+        .iter()
+        .filter(|content| content.format == PostFormat::Org)
+        .count();
+    let ids = reserve_post_ids(write_scope, storage, org_count).await?;
+    let mut ids = ids.into_iter();
+    contents
+        .into_iter()
+        .map(|content| {
+            let id = if content.format == PostFormat::Org {
+                Some(ids.next().ok_or_else(|| {
+                    CreatePostError::Internal(sqlx::Error::Protocol(
+                        "reserved Post ID batch exhausted before rendering".to_owned(),
+                    ))
+                })?)
+            } else {
+                None
+            };
+            Ok(render_post_input_with_identity(content, id)?)
+        })
+        .collect()
 }
 
 /// Renders only the non-Org seed inputs that do not need a Post ID.
@@ -3213,6 +3277,19 @@ mod tests {
         );
         assert!(updated.rendered_html.contains("revised note"));
         assert!(!updated.rendered_html.contains("original note"));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn post_id_reservation_batch_rejects_unbounded_requests(#[case] backend: Backend) {
+        let env = backend.setup().pristine().await;
+        let error = reserve_post_ids(&env.write_scope(), env.posts(), 257)
+            .await
+            .expect_err("batch must be bounded before rendering");
+        assert!(matches!(
+            error,
+            ReservePostIdError::Scope(WriteScopeError::Operation(_))
+        ));
     }
 
     #[apply(backends)]

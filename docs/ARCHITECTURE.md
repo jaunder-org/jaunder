@@ -179,12 +179,14 @@ ADR-0092's bounded occupancy rule
 re-enqueues it for Org footnotes, including databases that already drained
 `0047`. On SQLite, `0048` also initializes the short-write Post ID allocator
 shared by all Post creations; PostgreSQL uses its existing Post sequence. Org
-creation (including sandbox and performance batch seeding) reserves identity in
-a separate short `WriteScope` before rendering, outside the content-write
-transaction. An unused reservation is allowed if rendering or creation fails.
-The offline rebuild drains before the bounded startup Post projection refresh;
-when it has already updated the same HTML, the refresh still records its
-checkpoint but does not enqueue duplicate events.
+creation reserves identity in a separate short `WriteScope` before rendering,
+outside the content-write transaction. Sandbox and performance seeding reserve
+up to 256 Org IDs in one bounded short scope per batch, then render outside it;
+performance revisions render with the existing Post ID. An unused reservation is
+allowed if rendering or creation fails. The offline rebuild drains before the
+bounded startup Post projection refresh; when it has already updated the same
+HTML, the refresh still records its checkpoint but does not enqueue duplicate
+events.
 
 ### Crate layout and the generic store pattern
 
@@ -503,9 +505,9 @@ Details in the testing section.
   ([structural write scopes and mutation outcomes](adr/0164-structural-write-scopes-and-mutation-outcomes.md)).
   Its explicit `run` boundary supplies a sealed mutable `WriteTransaction`
   capability, never storage lookup or arbitrary SQL. The closed audited
-  application surface has exactly 95 declarations: Audience (5), Email
+  application surface has exactly 96 declarations: Audience (5), Email
   Verification (2), Feed Cache (2), Feed Event (12), Invite (2), Media (2),
-  Password Reset (2), Passkey (11), Post (11), Publisher (5), Session (5), Site
+  Password Reset (2), Passkey (11), Post (12), Publisher (5), Session (5), Site
   Config (11), Subscription (2), User Config (2), Theme (16), and User (5).
   Cross-store account mutations compose these capability-taking primitives as
   storage-owned functions
@@ -513,7 +515,7 @@ Details in the testing section.
   Each declaration takes `&mut WriteTransaction`; there are no pool-backed,
   auto-committing, standalone, or compatibility mutation paths. The structural
   gate derives the observed declarations, compares them with the closed
-  95-method list, rejects unknown, missing, and duplicate declarations, and
+  96-method list, rejects unknown, missing, and duplicate declarations, and
   rejects production transaction starts that bypass the
   `WriteScope`/`WriteTransaction` composition. It excludes administrative
   lifecycle work, dialect code, and internal helpers. Callback failure is

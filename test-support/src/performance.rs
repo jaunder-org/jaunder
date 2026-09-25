@@ -40,7 +40,7 @@ use storage::{
     AudienceStorage, MediaRecord, MediaStorage, OperatorStatus, PostBookkeepingExpectation,
     PostFormat, PostLifecycle, PostRevisionCursor, PostStorage, PublishedPageRequest,
     RenderedPostContent, SubscriptionStorage, UserStorage, WriteScope,
-    render_post_input_for_create,
+    render_post_inputs_for_create,
 };
 
 const FIXED_CLOCK: &str = "2026-09-01T12:00:00Z";
@@ -480,14 +480,6 @@ fn build_post_content(
     })
 }
 
-async fn render_fixture_input(
-    write_scope: &WriteScope,
-    posts: Arc<dyn PostStorage>,
-    content: RenderedPostContent,
-) -> anyhow::Result<storage::CreatePostInput> {
-    Ok(render_post_input_for_create(write_scope, posts, content).await?)
-}
-
 fn post_published_at(
     index: usize,
     lifecycle: &str,
@@ -531,7 +523,7 @@ async fn create_posts(
     let mut ids = Vec::with_capacity(post_count);
     for batch_start in (0..post_count).step_by(POST_BATCH_SIZE) {
         let batch_end = (batch_start + POST_BATCH_SIZE).min(post_count);
-        let mut inputs = Vec::with_capacity(batch_end - batch_start);
+        let mut contents = Vec::with_capacity(batch_end - batch_start);
         for index in batch_start..batch_end {
             let content = build_post_content(
                 index,
@@ -542,11 +534,14 @@ async fn create_posts(
                 clock,
                 backdated_count,
             )?;
-            inputs.push(
-                render_fixture_input(&storage.write_scope, Arc::clone(&storage.posts), content)
-                    .await?,
-            );
+            contents.push(content);
         }
+        let inputs = render_post_inputs_for_create(
+            &storage.write_scope,
+            Arc::clone(&storage.posts),
+            contents,
+        )
+        .await?;
         let posts = Arc::clone(&storage.posts);
         let outcome = storage
             .write_scope
@@ -683,7 +678,12 @@ async fn apply_post_revisions(
     let mut body = existing.body;
     for revision in 0..target.revisions {
         body = revised_body(body, revision)?;
-        let rendered = host::render::render_post(existing.title.clone(), body, existing.format)?;
+        let rendered = host::render::render_post_scoped(
+            target.post_id,
+            existing.title.clone(),
+            body,
+            existing.format,
+        )?;
         let input = storage::UpdatePostInput {
             slug: existing.slug.clone(),
             rendered,
@@ -1147,47 +1147,86 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn performance_org_batch_input_reserves_scoped_footnotes(#[case] backend: Backend) {
+    async fn performance_org_batch_and_revision_keep_scoped_footnotes(#[case] backend: Backend) {
         let env = backend.setup().pristine().await;
         let user_id = SeedUser::new()
             .seed(env.users(), env.write_scope())
             .await
             .user_id;
-        let content = RenderedPostContent {
-            user_id,
-            title: None,
-            slug: "performance-footnote".parse().unwrap(),
-            body: "A[fn:shared]\n\n[fn:shared] A useful note."
-                .parse()
-                .unwrap(),
-            format: PostFormat::Org,
-            published_at: None,
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            tags: Vec::new(),
-            idempotency_key: None,
-            expectations: PostBookkeepingExpectation::default(),
-        };
+        let contents = ["performance-footnote-one", "performance-footnote-two"]
+            .into_iter()
+            .map(|slug| RenderedPostContent {
+                user_id,
+                title: None,
+                slug: slug.parse().unwrap(),
+                body: "A x[fn:shared]\n\n[fn:shared] A useful note."
+                    .parse()
+                    .unwrap(),
+                format: PostFormat::Org,
+                published_at: None,
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+                tags: Vec::new(),
+                idempotency_key: None,
+                expectations: PostBookkeepingExpectation::default(),
+            })
+            .collect();
         let posts = env.posts();
         let scope = env.write_scope();
-        let input = render_fixture_input(&scope, Arc::clone(&posts), content)
+        let inputs = render_post_inputs_for_create(&scope, Arc::clone(&posts), contents)
             .await
             .unwrap();
-        let id = input
-            .reserved_post_id
-            .expect("Org input reserves a Post ID");
-        assert!(
-            input
-                .rendered
-                .rendered_html()
-                .contains(&format!("id=\"post-{id}-fn-1\""))
-        );
+        let ids = inputs
+            .iter()
+            .map(|input| {
+                let id = input
+                    .reserved_post_id
+                    .expect("Org input reserves a Post ID");
+                assert!(
+                    input
+                        .rendered
+                        .rendered_html()
+                        .contains(&format!("id=\"post-{id}-fn-1\""))
+                );
+                id
+            })
+            .collect::<Vec<_>>();
+        assert_ne!(ids[0], ids[1]);
         let outcome = scope
-            .run(move |tx| Box::pin(async move { posts.create_posts(tx, &[input]).await }))
+            .run(move |tx| Box::pin(async move { posts.create_posts(tx, &inputs).await }))
             .await
             .unwrap();
-        let created = crate::confirmed_fixture_outcome(outcome, "performance Org Post").unwrap();
-        assert_eq!(created, vec![id]);
+        let created = crate::confirmed_fixture_outcome(outcome, "performance Org batch").unwrap();
+        assert_eq!(created, ids);
+
+        let target = RevisionTarget {
+            post_id: ids[0],
+            author: user_id,
+            revisions: 1,
+            deleted: false,
+        };
+        let revision_posts = env.posts();
+        let outcome = scope
+            .run(move |tx| {
+                Box::pin(async move {
+                    apply_post_revisions(&*revision_posts, tx, target, UtcInstant::now()).await
+                })
+            })
+            .await
+            .unwrap();
+        crate::confirmed_fixture_outcome(outcome, "performance Org revision").unwrap();
+        let persisted = env
+            .posts()
+            .get_post_by_id(ids[0], &ViewerIdentity::local(user_id))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            persisted
+                .rendered_html
+                .contains(&format!("id=\"post-{}-fn-1\"", ids[0]))
+        );
+        assert!(persisted.rendered_html.contains("A useful note."));
     }
 
     fn observation() -> PersistedPostObservation {

@@ -35,7 +35,7 @@ use storage::{
     PersistedMediaReference, PostBookkeepingExpectation, PostFormat, PostStorage, PreparedPassword,
     ProvenLocalMediaRefs, RenderedPostContent, SessionStorage, SiteConfigStorage,
     ThemeAssetManager, ThemeOwner, ThemeRoleBinding, ThemeStorage, UserStorage, WriteScope,
-    render_post_input_for_create, seed_post_input,
+    render_post_inputs_for_create, seed_post_input,
 };
 
 pub mod panic_gate;
@@ -1149,7 +1149,7 @@ async fn seed_sandbox_posts(
     manifest: &SandboxSeedManifest,
 ) -> anyhow::Result<()> {
     let fixtures = manifest.posts.clone();
-    let mut inputs = Vec::with_capacity(fixtures.len());
+    let mut contents = Vec::with_capacity(fixtures.len());
     for fixture in fixtures {
         let user_id = user_ids
             .iter()
@@ -1157,15 +1157,9 @@ async fn seed_sandbox_posts(
             .ok_or_else(|| {
                 anyhow::anyhow!("sandbox manifest author {} is not seeded", fixture.author)
             })?;
-        inputs.push(
-            render_post_input_for_create(
-                &write_scope,
-                Arc::clone(&posts),
-                sandbox_post_content(&fixture, user_id)?,
-            )
-            .await?,
-        );
+        contents.push(sandbox_post_content(&fixture, user_id)?);
     }
+    let inputs = render_post_inputs_for_create(&write_scope, Arc::clone(&posts), contents).await?;
     let outcome = write_scope
         .run(move |transaction| {
             Box::pin(async move {
@@ -1576,13 +1570,15 @@ mod sandbox_profile_tests {
             for (post, expected) in curated.into_iter().zip(expected) {
                 assert_eq!(post.body, expected.body);
                 assert_eq!(post.format, expected.format);
-                let rendered = render_post_input_for_create(
+                let rendered = render_post_inputs_for_create(
                     &env.write_scope(),
                     Arc::clone(&posts),
-                    sandbox_post_content(post, user.user_id).expect("curated Post input"),
+                    vec![sandbox_post_content(post, user.user_id).expect("curated Post input")],
                 )
                 .await
                 .expect("curated Post rendering")
+                .pop()
+                .expect("one curated Post")
                 .rendered;
                 assert!(rendered.rendered_html().contains(&format!("src=\"{url}\"")));
                 if post.author == "user" && post.format == PostFormat::Org {
