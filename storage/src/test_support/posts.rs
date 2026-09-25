@@ -327,7 +327,8 @@ impl SeedRawPost {
         let title = self
             .title
             .unwrap_or_else(|| parse_post_title(&format!("Post {n}")));
-        let rendered = host::render::render_post(Some(title), self.body, self.format);
+        let rendered = host::render::render_post(Some(title), self.body, self.format)
+            .expect("fixture Post rendering must succeed");
         CreatePostInput {
             user_id: self.user_id,
             slug,
@@ -527,9 +528,13 @@ impl UpdateRawPost {
     }
 
     /// Resolve into the [`UpdatePostInput`] to hand `update_post`, rendering `body` here.
+    ///
+    /// # Panics
+    /// Panics if a test fixture's Post body fails to render.
     #[must_use]
     pub fn build(self) -> UpdatePostInput {
-        let rendered = host::render::render_post(self.title, self.body, self.format);
+        let rendered = host::render::render_post(self.title, self.body, self.format)
+            .expect("fixture Post rendering must succeed");
         UpdatePostInput {
             slug: self.slug,
             rendered,
@@ -633,7 +638,7 @@ mod tests {
         assert_eq!(record.rendered_html, post.rendered_html);
         assert_eq!(
             record.rendered_html,
-            render(&record.body, &record.format),
+            render(&record.body, &record.format).unwrap(),
             "default rendered_html equals render(body)"
         );
     }

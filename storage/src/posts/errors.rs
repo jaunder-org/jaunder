@@ -27,6 +27,9 @@ pub enum CreatePostError {
     /// was selected under the same transaction that rejected this duplicate.
     #[error("idempotency key already used for this user")]
     IdempotencyConflict(PostId),
+    /// Rendering failed before the Post was written.
+    #[error(transparent)]
+    Render(#[from] host::render::HighlightError),
     /// An unexpected database error occurred.
     #[error(transparent)]
     Internal(#[from] sqlx::Error),
@@ -50,6 +53,9 @@ pub enum UpdatePostError {
     /// The non-authoritative current-content validator is stale.
     #[error("post content has changed")]
     StaleContent,
+    /// Rendering failed before the Post was written.
+    #[error(transparent)]
+    Render(#[from] host::render::HighlightError),
     /// An unexpected database error occurred.
     #[error(transparent)]
     Internal(#[from] sqlx::Error),
@@ -70,6 +76,7 @@ impl From<UpdatePostError> for host::error::InternalError {
             | UpdatePostError::StaleContent => {
                 InternalError::validation_source(error.to_string(), error)
             }
+            UpdatePostError::Render(e) => InternalError::server(e),
             UpdatePostError::Internal(e) => InternalError::storage(e),
         }
     }
@@ -161,6 +168,16 @@ mod tests {
         let internal: InternalError = UpdatePostError::Internal(sqlx::Error::PoolClosed).into();
         assert_eq!(internal.kind(), ErrorKind::Storage);
         assert_eq!(internal.public_message(), "storage operation failed");
+
+        let render: InternalError =
+            UpdatePostError::Render(host::render::HighlightError::Initialization {
+                language: "injected-invalid-query",
+                detail: "unknown node".to_owned(),
+            })
+            .into();
+        assert_eq!(render.kind(), ErrorKind::Internal);
+        assert_eq!(render.public_message(), "server operation failed");
+        assert!(render.operator_message().contains("injected-invalid-query"));
 
         for error in [
             UpdatePostError::SlugConflict,

@@ -57,7 +57,10 @@ where
     let now = UtcInstant::now();
     let mut affected_feeds = BTreeSet::new();
     for post in posts {
-        let rendering = host::render::render_post(post.title, post.body, post.format);
+        // SQLx has no generic domain-error variant. Preserve the renderer's
+        // typed source while deriving the stored Post projection.
+        let rendering = host::render::render_post(post.title, post.body, post.format)
+            .map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
         let body_changed = rendering.rendered_html() != &post.rendered_html;
         let title_changed = rendering.rendered_title() != post.rendered_title.as_ref();
         if !body_changed && !title_changed {

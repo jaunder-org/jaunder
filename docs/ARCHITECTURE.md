@@ -154,7 +154,7 @@ by URL scheme: `DbConnectOptions` (`storage/src/db.rs`) parses `sqlite:` vs
 `postgres://` and `open_database`/`open_existing_database` dispatch accordingly.
 Each backend has its own migration tree under
 `storage/migrations/{sqlite,postgres}`; the two trees carry identical numbered
-filenames (currently `0001`–`0045`), and maintaining that parity — same
+filenames (currently `0001`–`0047`), and maintaining that parity — same
 migrations, same behavior — is the accepted cost of the pluggable strategy
 ([ADR-0001](adr/0001-storage-backends.md)).
 
@@ -174,7 +174,12 @@ same-directory server's `runtime.lock`, while an ordinary CLI open without
 pending work remains allowed. Offline queue transactions alone may perform
 unbounded rendering inside SQLite's write lock; request-time work still follows
 ADR-0092's bounded occupancy rule
-([Offline code migrations](adr/drafts/offline-code-migration-queue.md)).
+([Offline code migrations](adr/drafts/offline-code-migration-queue.md)). The
+`0047` enqueues `rebuild_rendered_posts` again for the new syntax rules,
+including databases that already ran `0045`. The offline rebuild drains before
+the bounded startup Post projection refresh; when it has already updated the
+same HTML, the refresh still records its checkpoint but does not enqueue
+duplicate events.
 
 ### Crate layout and the generic store pattern
 
@@ -311,8 +316,15 @@ client-validation mapping
   selection is uncapped and remains one atomic transaction, while each set-based
   statement partitions bind inputs into fixed-size batches
   ([uncapped exact Post management mutations](adr/0213-uncapped-exact-post-management-mutations.md)).
-  ADR-0022's Argon2-inside-the-claim-window remains the other documented
-  exception.
+  ADR-0022's Argon2-inside-the-claim-window remains another documented
+  exception. The bounded, one-time Post projection refresh is a **startup-only**
+  exception: after old-version writers are drained and before traffic or Feed
+  workers, SQLite holds `BEGIN IMMEDIATE` while rendering and CAS-updating at
+  most 100 Posts with their Media references, affected Feed events, and
+  checkpoint in one transaction. Per-Post parse limits and commits between
+  batches bound its lock hold; no request path or recurring worker inherits this
+  exception
+  ([host code-block highlighting and projection refresh](adr/drafts/host-code-block-highlighting-and-projection-refresh.md)).
 - **Slug-ordered tag locks.** A transaction that will touch several `tags` rows
   sorts them by slug before acquiring any lock, so every transaction takes the
   row locks in one global order and concurrent `set_post_tags` reconciles cannot
@@ -638,7 +650,18 @@ Post source, raw author iframes, malformed forms, and unknown providers remain
 sanitized or literal. Fixed provider players are external presentation
 resources, not Media references. The stored native source and AtomPub Member
 stay unchanged, while the canonical rendered HTML serves web and Syndication
-Feed surfaces.
+Feed surfaces. Host rendering additionally recognizes bounded, explicitly
+labeled Org source blocks and Markdown fences using only host-side
+`tree-sitter-highlight` with a broad, statically linked pinned grammar/query
+catalog. Emacs Lisp and Haskell are among its regression languages. Tree-sitter
+query captures map to ten closed semantic `j-syn-*` span classes inside code
+while the decoded exporter text, native source and AtomPub Member remain
+unchanged. `common::render::sanitize` admits those fixed span classes alongside
+its existing `language-*` code classes; the CSS scopes token colors to Post-body
+`pre code`, since the attribute filter cannot inspect ancestry. The 64 KiB
+block, 16-attempt and 128 KiB per-Post limits bound parsing. Unexpected
+highlighter failures propagate as typed render errors
+([host code-block highlighting and projection refresh](adr/drafts/host-code-block-highlighting-and-projection-refresh.md)).
 
 `RenderedHtml`'s field is crate-private: ordinary application crates have no raw
 constructor, conversion, blanket `Deserialize`, or trusted-string rebuild door.
@@ -844,14 +867,22 @@ summary, immutable creation time, prior modification time, and
 publication/deletion timestamps; child values are copied rather than linked to
 mutable tag or audience lookup rows. A semantic no-op writes neither a Revision
 nor an updated timestamp. Creation is revision-free because it has no prior
-state ([ADR-0136](adr/0136-local-post-lifecycle.md)). Media referenced by an
-owner's retained current Post or revision participates in the ordinary reference
-guard, including Deleted Posts; web force is the explicit override and may
-knowingly delete the final Media Record, breaking retained history. This does
-not make foreign/unknown/legacy global safety overridable, and qualifying
-cross-user references use independent records rather than pinning the owner's
-record. A Media Record survives removal of its references and Post deletion
-until explicit owner deletion
+state ([ADR-0136](adr/0136-local-post-lifecycle.md)). The bounded, checkpointed
+highlighting refresh is a distinct **presentation-only** transition over current
+active Org and Markdown projections: changed HTML, derived Media references and
+affected public-feed events commit together after a CAS on current
+source/format/rendered bytes and active status. It preserves timestamps, AtomPub
+Member content ETags, native source and every historical Post Revision; Deleted
+and HTML-format Posts are skipped. It resumes before the new server accepts
+traffic, and old-version writers must be drained first
+([host code-block highlighting and projection refresh](adr/drafts/host-code-block-highlighting-and-projection-refresh.md)).
+Media referenced by an owner's retained current Post or revision participates in
+the ordinary reference guard, including Deleted Posts; web force is the explicit
+override and may knowingly delete the final Media Record, breaking retained
+history. This does not make foreign/unknown/legacy global safety overridable,
+and qualifying cross-user references use independent records rather than pinning
+the owner's record. A Media Record survives removal of its references and Post
+deletion until explicit owner deletion
 ([per-user Media Record policy](adr/0183-per-user-media-records-from-local-post-references.md)).
 
 Revision records have no product mutators: only top-level Post mutation and
@@ -1643,11 +1674,15 @@ authority; discovery remains ordinary repository links rather than a registry
 
 Public markup exposes a versioned semantic Style Contract shared by built-in and
 custom themes; accessible source order and exact concept hooks are stable while
-incidental wrappers are not. Custom CSS is scoped inside an unthemeable
-paint-containment/low-stacking boundary. The root then places the dedicated
-`#j-trusted-post-actions` sibling after that theme surface and before the
-warning-only `#j-trusted-chrome` sibling; minimal Portal transport mounts
-authenticated Post controls into the former, outside the Style Contract.
+incidental wrappers are not. Ten scoped `j-syn-*` token hooks and matching
+`--j-syn-*` CSS variables add code colors to Style Contract v1 without changing
+old Theme Packages; Home uses its own Jaunder styling
+([host code-block highlighting and projection refresh](adr/drafts/host-code-block-highlighting-and-projection-refresh.md)).
+Custom CSS is scoped inside an unthemeable paint-containment/low-stacking
+boundary. The root then places the dedicated `#j-trusted-post-actions` sibling
+after that theme surface and before the warning-only `#j-trusted-chrome`
+sibling; minimal Portal transport mounts authenticated Post controls into the
+former, outside the Style Contract.
 
 One compact Actions button appears over a protected, in-flow slot in the header
 of the Post it controls. The viewer-independent slot reserves the button

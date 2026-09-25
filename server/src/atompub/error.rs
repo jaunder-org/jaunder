@@ -257,7 +257,8 @@ impl From<storage::PerformUpdateError> for HandlerError {
             storage::PerformUpdateError::NotFound | storage::PerformUpdateError::Unauthorized => {
                 HandlerError::NotFound
             }
-            error @ storage::PerformUpdateError::Storage(_) => internal(error),
+            error @ (storage::PerformUpdateError::Storage(_)
+            | storage::PerformUpdateError::Render(_)) => internal(error),
         }
     }
 }

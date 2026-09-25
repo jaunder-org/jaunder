@@ -30,6 +30,7 @@ const fn legacy_backup_format_version() -> u32 {
 pub(crate) const TABLES_EXCLUDED_FROM_BACKUP: &[&str] = &[
     "_sqlx_migrations",
     "feed_cache",
+    "post_projection_refresh_progress",
     "passkey_registration_ceremonies",
     "passkey_authentication_ceremonies",
 ];

@@ -7,9 +7,74 @@ use tower::ServiceExt;
 use rstest::*;
 use rstest_reuse::*;
 
-use storage::test_support::{Backend, backends};
+use common::test_support::parse_post_body;
+use jiff::tz::Offset;
+use storage::test_support::{Backend, SeedRawPost, SeedUser, backends};
 
 use super::fixtures::{get, projector_app, seed_published_post};
+
+#[apply(backends)]
+#[tokio::test]
+async fn refreshed_post_changes_public_permalink_etag_but_keeps_cache_age_bound(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let user = SeedUser::new().seed(env.users(), env.write_scope()).await;
+    let post = SeedRawPost::new(user.user_id)
+        .body(parse_post_body("```elisp\n(message \"refreshed\")\n```"))
+        .seed(env.posts(), env.write_scope())
+        .await;
+    let date = Offset::UTC
+        .to_datetime(post.published_at.expect("published Post").value())
+        .date();
+    let uri = format!(
+        "/~{}/{:04}/{:02}/{:02}/{}",
+        user.username,
+        date.year(),
+        date.month(),
+        date.day(),
+        post.slug
+    );
+    env.base
+        .pool()
+        .execute("UPDATE posts SET rendered_html = '<p>old presentation</p>'")
+        .await
+        .expect("stale historical projection");
+    let before = projector_app(env.posts(), env.users(), env.themes())
+        .oneshot(get(&uri))
+        .await
+        .expect("public permalink before refresh");
+    assert_eq!(before.status(), StatusCode::OK);
+    assert_eq!(
+        before.headers()[header::CACHE_CONTROL],
+        "public, max-age=300"
+    );
+    let before_etag = before.headers()[header::ETAG].clone();
+
+    env.refresh_current_post_projections()
+        .await
+        .expect("startup refresh");
+    let conditional = Request::builder()
+        .method("GET")
+        .uri(&uri)
+        .header(header::IF_NONE_MATCH, &before_etag)
+        .body(Body::empty())
+        .unwrap();
+    let after = projector_app(env.posts(), env.users(), env.themes())
+        .oneshot(conditional)
+        .await
+        .expect("public permalink after refresh");
+    assert_eq!(after.status(), StatusCode::OK, "old ETag is stale");
+    assert_eq!(
+        after.headers()[header::CACHE_CONTROL],
+        "public, max-age=300"
+    );
+    assert_ne!(after.headers()[header::ETAG], before_etag);
+    let html = axum::body::to_bytes(after.into_body(), usize::MAX)
+        .await
+        .expect("projected HTML");
+    assert!(String::from_utf8_lossy(&html).contains("j-syn-"));
+}
 
 #[apply(backends)]
 #[tokio::test]

@@ -14,6 +14,18 @@
   --muted: #6e6e6a;
   --muted-soft: #9a9a96;
 
+  /* Semantic code tokens — public Theme Packages may override these. */
+  --j-syn-comment: var(--muted);
+  --j-syn-keyword: var(--accent-ink);
+  --j-syn-string: var(--ok);
+  --j-syn-number: var(--warn);
+  --j-syn-function: var(--ink-soft);
+  --j-syn-type: var(--accent-ink);
+  --j-syn-variable: var(--ink);
+  --j-syn-constant: var(--warn);
+  --j-syn-operator: var(--ink-soft);
+  --j-syn-punctuation: var(--ink-soft);
+
   /* lines */
   --line: #ebebe8;
   --line-soft: #f2f2ef;
@@ -1035,6 +1047,39 @@
 .j-post-body img {
   max-width: 100%;
   height: auto;
+}
+
+/* The sanitizer cannot inspect ancestors: never color an authored token
+ * class outside a Post-body code block. */
+.j-post-body pre code .j-syn-comment {
+  color: var(--j-syn-comment);
+}
+.j-post-body pre code .j-syn-keyword {
+  color: var(--j-syn-keyword);
+}
+.j-post-body pre code .j-syn-string {
+  color: var(--j-syn-string);
+}
+.j-post-body pre code .j-syn-number {
+  color: var(--j-syn-number);
+}
+.j-post-body pre code .j-syn-function {
+  color: var(--j-syn-function);
+}
+.j-post-body pre code .j-syn-type {
+  color: var(--j-syn-type);
+}
+.j-post-body pre code .j-syn-variable {
+  color: var(--j-syn-variable);
+}
+.j-post-body pre code .j-syn-constant {
+  color: var(--j-syn-constant);
+}
+.j-post-body pre code .j-syn-operator {
+  color: var(--j-syn-operator);
+}
+.j-post-body pre code .j-syn-punctuation {
+  color: var(--j-syn-punctuation);
 }
 
 .j-provider-embed {

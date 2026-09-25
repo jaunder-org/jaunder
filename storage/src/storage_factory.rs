@@ -11,6 +11,7 @@ use std::sync::Arc;
 use sqlx::{PgPool, SqlitePool};
 
 use crate::backend::WriteScopeFactoryBackend;
+use crate::posts::{PostProjectionRefreshError, refresh};
 use crate::{
     AudienceStorage, AudienceStore, EmailVerificationStorage, EmailVerificationStore,
     FeedCacheStorage, FeedCacheStore, FeedEventStorage, FeedEventStore, InviteStorage, InviteStore,
@@ -41,6 +42,25 @@ impl StorageFactory {
     pub(crate) fn postgres(pool: PgPool) -> Self {
         Self {
             inner: StorageFactoryInner::Postgres(pool),
+        }
+    }
+
+    /// Reprojects existing current active Org/Markdown Posts after migrations,
+    /// before any router or feed worker can observe an old projection.
+    ///
+    /// # Errors
+    /// Returns an error if rendering, storage, or event enqueue fails; the
+    /// failed batch leaves its durable checkpoint unchanged.
+    pub async fn refresh_current_post_projections(&self) -> Result<(), PostProjectionRefreshError> {
+        let scope = self.write_scope();
+        let feed_events = self.feed_events();
+        match &self.inner {
+            StorageFactoryInner::Sqlite(_) => {
+                refresh::run::<sqlx::Sqlite>(&scope, feed_events).await
+            }
+            StorageFactoryInner::Postgres(_) => {
+                refresh::run::<sqlx::Postgres>(&scope, feed_events).await
+            }
         }
     }
 

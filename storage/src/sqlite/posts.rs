@@ -163,6 +163,8 @@ impl PostDialect for Sqlite {
     const LIFECYCLE_STATE_SQL: &'static str =
         "SELECT user_id, deleted_at, published_at FROM posts WHERE post_id = $1";
 
+    const PROJECTION_REFRESH_PROGRESS_SQL: &'static str = "SELECT version, cursor_post_id, completed FROM post_projection_refresh_progress WHERE id = 1";
+
     async fn fetch_lifecycle_post(
         conn: &mut <Self as sqlx::Database>::Connection,
         post_id: PostId,

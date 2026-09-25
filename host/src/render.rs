@@ -1,5 +1,7 @@
 //! Host-side rendering and media-reference extraction.
 
+use crate::code_highlight::HighlightBudget;
+pub use crate::code_highlight::HighlightError;
 use common::media::{self, MediaReference};
 use common::post_body::PostBody;
 use common::post_summary::{
@@ -11,7 +13,7 @@ use common::render::{
     PostFormat, RenderedHtml, RenderedHtmlPart, RenderedPostTitle, TrustedProviderEmbed,
     assemble_rendered_html,
 };
-/// Renders `body` to HTML based on `format`. Pure, infallible function.
+/// Renders `body` to HTML based on `format`, reporting unexpected highlighter failures.
 ///
 /// Parser output is author supplied, so every Markdown, Org, and HTML fragment
 /// crosses [`common::render::sanitize`]. Markdown and Org additionally pass
@@ -25,12 +27,14 @@ use common::render::{
 ///
 /// Host-only: this module is owned by the host crate, so no build exposes a
 /// weaker unsanitized implementation.
-#[must_use]
-pub fn render(body: &PostBody, format: &PostFormat) -> RenderedHtml {
+///
+/// # Errors
+/// Returns a highlighting error when the pinned grammar or rendering engine fails.
+pub fn render(body: &PostBody, format: &PostFormat) -> Result<RenderedHtml, HighlightError> {
     match format {
         PostFormat::Markdown => render_markdown_with_shortcodes(body),
         PostFormat::Org => render_org_with_shortcodes(body),
-        PostFormat::Html => common::render::sanitize(body),
+        PostFormat::Html => Ok(common::render::sanitize(body)),
     }
 }
 
@@ -182,20 +186,47 @@ fn render_markdown(body: &str) -> String {
     html_output
 }
 
-fn render_markdown_with_shortcodes(body: &str) -> RenderedHtml {
+fn render_markdown_with_shortcodes(body: &str) -> Result<RenderedHtml, HighlightError> {
     render_markdown_with_shortcodes_using(body, POST_SHORTCODE_PROVIDERS)
 }
 
 fn render_markdown_with_shortcodes_using(
     body: &str,
     providers: &[(&str, ProviderConstructor)],
-) -> RenderedHtml {
-    use pulldown_cmark::{Event, Parser, Tag, TagEnd, html};
+) -> Result<RenderedHtml, HighlightError> {
+    use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd, html};
     let mut markers = Vec::new();
     let mut events = Vec::new();
+    let mut budget = HighlightBudget::default();
+    let mut code_block: Option<(String, String, Vec<Event<'_>>)> = None;
     let mut depth = 0_usize;
     let mut skipped = false;
     for (event, range) in Parser::new_ext(body, markdown_options()).into_offset_iter() {
+        if let Some((label, code, original)) = &mut code_block {
+            if matches!(event, Event::End(TagEnd::CodeBlock)) {
+                if let Some(highlighted) = budget.render(label, code)? {
+                    events.push(Event::Html(highlighted.into()));
+                } else {
+                    events.append(original);
+                }
+                events.push(event);
+                code_block = None;
+            } else {
+                if let Event::Text(text) = &event {
+                    code.push_str(text);
+                }
+                original.push(event);
+            }
+            continue;
+        }
+        if let Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) = &event
+            && let Some(label) = info
+                .split_whitespace()
+                .next()
+                .filter(|label| !label.is_empty())
+        {
+            code_block = Some((label.to_owned(), String::new(), Vec::new()));
+        }
         if skipped {
             if matches!(event, Event::End(TagEnd::Paragraph)) {
                 skipped = false;
@@ -223,7 +254,7 @@ fn render_markdown_with_shortcodes_using(
     }
     let mut html = String::new();
     html::push_html(&mut html, events.into_iter());
-    assemble_with_markers(&html, markers)
+    Ok(assemble_with_markers(&html, markers))
 }
 
 /// Renders Org-mode to HTML using orgize.
@@ -245,6 +276,8 @@ struct OrgShortcodeExport<'a> {
     html: orgize::export::HtmlExport,
     containers: Vec<OrgContainer>,
     markers: Vec<(String, TrustedProviderEmbed)>,
+    budget: HighlightBudget,
+    highlight_error: Option<HighlightError>,
 }
 
 impl OrgShortcodeExport<'_> {
@@ -289,6 +322,30 @@ impl OrgShortcodeExport<'_> {
 impl orgize::export::Traverser for OrgShortcodeExport<'_> {
     fn event(&mut self, event: orgize::export::Event, ctx: &mut orgize::export::TraversalContext) {
         match event {
+            orgize::export::Event::Enter(orgize::export::Container::SourceBlock(block)) => {
+                if self.highlight_error.is_none()
+                    && let Some(language) = block.language()
+                {
+                    let code = block.value();
+                    match self.budget.render(language.as_ref(), &code) {
+                        Ok(Some(highlighted)) => {
+                            self.html.push_str(format!(
+                                "<pre><code class=\"language-{}\">{highlighted}</code></pre>",
+                                orgize::export::HtmlEscape(&language)
+                            ));
+                            ctx.skip();
+                            return;
+                        }
+                        Ok(None) => {}
+                        Err(error) => self.highlight_error = Some(error),
+                    }
+                }
+                self.containers.push(OrgContainer::Other);
+                self.html.event(
+                    orgize::export::Event::Enter(orgize::export::Container::SourceBlock(block)),
+                    ctx,
+                );
+            }
             orgize::export::Event::Enter(
                 container @ (orgize::export::Container::Comment(_)
                 | orgize::export::Container::CommentBlock(_)
@@ -338,40 +395,47 @@ impl orgize::export::Traverser for OrgShortcodeExport<'_> {
     }
 }
 
-fn render_org_with_shortcodes(body: &str) -> RenderedHtml {
+fn render_org_with_shortcodes(body: &str) -> Result<RenderedHtml, HighlightError> {
     let org = orgize::Org::parse(body);
     let mut export = OrgShortcodeExport {
         source: body,
         html: orgize::export::HtmlExport::default(),
         containers: Vec::new(),
         markers: Vec::new(),
+        budget: HighlightBudget::default(),
+        highlight_error: None,
     };
     org.traverse(&mut export);
+    if let Some(error) = export.highlight_error {
+        return Err(error);
+    }
     let html = export.html.finish();
-    assemble_with_markers(&html, export.markers)
+    Ok(assemble_with_markers(&html, export.markers))
 }
 
 /// Renders a Post's title and body projections as one inseparable write aggregate.
 ///
 /// The title source, format, and both derived fragments travel together so storage
 /// cannot bind a title from one authoring input with derivatives from another.
-#[must_use]
+///
+/// # Errors
+/// Returns a highlighting error if the body cannot be rendered safely.
 pub fn render_post(
     title: Option<PostTitle>,
     body: PostBody,
     format: PostFormat,
-) -> PostRenderOutput {
-    let rendered_html = render(&body, &format);
+) -> Result<PostRenderOutput, HighlightError> {
+    let rendered_html = render(&body, &format)?;
     let media = extract_media_refs(rendered_html.as_ref());
     let rendered_title = title.as_ref().map(|title| render_title(title, &format));
-    PostRenderOutput {
+    Ok(PostRenderOutput {
         title,
         body,
         format,
         rendered_title,
         rendered_html,
         media,
-    }
+    })
 }
 
 /// Renders an authored title through the common ammonia-owned title policy.
@@ -619,7 +683,7 @@ pub(super) fn extract_media_refs_with(html: &str, pairs: &[(&str, &str)]) -> Vec
 /// # use host::render::{RenderOutput, render, with_media};
 /// # let body: PostBody = "hello".parse().unwrap();
 /// let other: PostBody = "different".parse().unwrap();
-/// let out = with_media(&body, &PostFormat::Markdown);
+/// let out = with_media(&body, &PostFormat::Markdown).unwrap();
 /// assert!(out.media().is_empty());
 /// let _direct = render(&body, &PostFormat::Markdown); // `render` resolves
 /// let _other = render(&other, &PostFormat::Markdown); // the last negative's fixture
@@ -656,11 +720,13 @@ pub struct RenderOutput {
 }
 
 /// Renders a body and derives its media references from its sanitized HTML.
-#[must_use]
-pub fn with_media(body: &PostBody, format: &PostFormat) -> RenderOutput {
-    let html = render(body, format);
+///
+/// # Errors
+/// Returns a highlighting error if the body cannot be rendered safely.
+pub fn with_media(body: &PostBody, format: &PostFormat) -> Result<RenderOutput, HighlightError> {
+    let html = render(body, format)?;
     let media = extract_media_refs(html.as_ref());
-    RenderOutput { html, media }
+    Ok(RenderOutput { html, media })
 }
 
 impl RenderOutput {
@@ -694,6 +760,14 @@ mod tests {
     use common::render::{PostFormat, canonicalize_body};
     use common::test_support::{parse_post_body, rendered_html};
 
+    fn render(body: &PostBody, format: PostFormat) -> RenderedHtml {
+        super::render(body, &format).unwrap()
+    }
+
+    fn with_media(body: &PostBody, format: PostFormat) -> RenderOutput {
+        super::with_media(body, &format).unwrap()
+    }
+
     #[test]
     fn rendered_body_summary_strips_elements_and_decodes_normalized_text() {
         let html =
@@ -718,7 +792,7 @@ mod tests {
         ]
         .map(|(source, format)| {
             let body = parse_post_body(source);
-            summarize_rendered_html(&render(&body, &format))
+            summarize_rendered_html(&render(&body, format))
         });
 
         assert_eq!(
@@ -784,7 +858,7 @@ mod tests {
     fn markdown_body_with_leading_indent_still_renders_as_code_block() {
         let body = parse_post_body("    fn main() {}\n");
         let canonical = canonicalize_body(&body, &PostFormat::Markdown).expect("body survives");
-        let html = render(&canonical, &PostFormat::Markdown);
+        let html = render(&canonical, PostFormat::Markdown);
         assert!(html.contains("<pre><code>"), "{html}");
         assert!(!html.contains("<p>fn main()"), "{html}");
     }
@@ -803,8 +877,8 @@ mod tests {
             let body = parse_post_body(raw);
             let canonical = canonicalize_body(&body, &PostFormat::Markdown).expect("body survives");
             assert_eq!(
-                render(&canonical, &PostFormat::Markdown),
-                render(&body, &PostFormat::Markdown),
+                render(&canonical, PostFormat::Markdown),
+                render(&body, PostFormat::Markdown),
                 "canonicalization changed rendered output for {raw:?}"
             );
         }
@@ -828,7 +902,7 @@ mod tests {
         ] {
             let body = parse_post_body(&body);
             let original = body.clone();
-            let rendered = render(&body, &format);
+            let rendered = render(&body, format);
             assert_eq!(body, original);
             assert!(
                 rendered.contains("youtube-nocookie.com/embed/dQw4w9WgXcQ"),
@@ -910,7 +984,7 @@ mod tests {
             &format!("> {valid}"),
             &format!("ordinary {valid}"),
         ] {
-            let rendered = render(&parse_post_body(source), &PostFormat::Markdown);
+            let rendered = render(&parse_post_body(source), PostFormat::Markdown);
             assert!(!rendered.contains("<iframe"), "{source:?}: {rendered}");
             assert!(
                 rendered.contains("youtube")
@@ -942,7 +1016,7 @@ mod tests {
             &format!("* Headline\n{valid}"),
         ] {
             let body = parse_post_body(source);
-            let rendered = render(&body, &PostFormat::Org);
+            let rendered = render(&body, PostFormat::Org);
             assert!(!rendered.contains("<iframe"), "{source:?}: {rendered}");
             assert!(rendered.contains("dQw4w9WgXcQ"), "{source:?}: {rendered}");
             assert_eq!(body.as_ref(), source);
@@ -951,13 +1025,13 @@ mod tests {
             "# {{< unknown opaque >}}",
             ":LOGBOOK:\n{{< youtube not-an-id >}}\n:END:",
         ] {
-            let rendered = render(&parse_post_body(source), &PostFormat::Org);
+            let rendered = render(&parse_post_body(source), PostFormat::Org);
             assert!(!rendered.contains("<iframe"), "{source:?}: {rendered}");
             assert!(rendered.contains("{{&lt;"), "{source:?}: {rendered}");
         }
         let multiple_hidden = render(
             &parse_post_body(":LOGBOOK:\n{{< unknown first >}}\n{{< unknown second >}}\n:END:"),
-            &PostFormat::Org,
+            PostFormat::Org,
         );
         assert!(multiple_hidden.contains("first"), "{multiple_hidden}");
         assert!(multiple_hidden.contains("second"), "{multiple_hidden}");
@@ -966,7 +1040,7 @@ mod tests {
             &parse_post_body(
                 "# {{< unknown opaque >}}<img src=\"https://evil.example/active.png\">",
             ),
-            &PostFormat::Org,
+            PostFormat::Org,
         );
         assert!(!hidden_markup.contains("<img"), "{hidden_markup}");
         assert!(hidden_markup.contains("&lt;img"), "{hidden_markup}");
@@ -978,13 +1052,13 @@ mod tests {
             ":PROPERTIES:\n:VALUE: ordinary property\n:END:",
         ] {
             assert_eq!(
-                render(&parse_post_body(source), &PostFormat::Org),
+                render(&parse_post_body(source), PostFormat::Org),
                 common::render::sanitize(&render_org(source)),
                 "ordinary hidden Org content changed: {source:?}"
             );
         }
 
-        let html = render(&parse_post_body(valid), &PostFormat::Html);
+        let html = render(&parse_post_body(valid), PostFormat::Html);
         assert!(!html.contains("<iframe"), "{html}");
     }
 
@@ -994,7 +1068,7 @@ mod tests {
         let source = format!(
             "before [reference][site] and a footnote[^note]\n\n{shortcode}\n\nafter\n\n[site]: https://example.com/path\n[^note]: retained footnote"
         );
-        let rendered = render(&parse_post_body(&source), &PostFormat::Markdown);
+        let rendered = render(&parse_post_body(&source), PostFormat::Markdown);
         let ordinary = common::render::sanitize(&render_markdown(&source));
 
         for expected in [
@@ -1016,7 +1090,8 @@ mod tests {
         let rendered = render_markdown_with_shortcodes_using(
             "before\n\n{{< fixture fixture-id >}}\n\nafter",
             &[("fixture", fixture_provider)],
-        );
+        )
+        .unwrap();
         assert!(
             rendered.contains("https://fixture.invalid/player/fixture-video"),
             "{rendered}"
@@ -1033,7 +1108,7 @@ mod tests {
         let source = format!(
             "before [[https://example.com/path][reference]] and [fn:note]\n\n{shortcode}\n\nafter\n\n[fn:note] retained footnote"
         );
-        let rendered = render(&parse_post_body(&source), &PostFormat::Org);
+        let rendered = render(&parse_post_body(&source), PostFormat::Org);
         let ordinary = common::render::sanitize(&render_org(&source));
 
         for expected in ["reference", "retained footnote"] {
@@ -1061,7 +1136,7 @@ mod tests {
                 "player.vimeo.com/video/123456789",
             ),
         ] {
-            let rendered = render(&parse_post_body(source), &PostFormat::Markdown);
+            let rendered = render(&parse_post_body(source), PostFormat::Markdown);
             assert!(rendered.contains(provider_url), "{source:?}: {rendered}");
         }
         for source in [
@@ -1069,7 +1144,7 @@ mod tests {
             "{{< youtube dQw4w9WgXcQ extra >}}",
             "{{< vimeo 123456789 extra >}}",
         ] {
-            let rendered = render(&parse_post_body(source), &PostFormat::Markdown);
+            let rendered = render(&parse_post_body(source), PostFormat::Markdown);
             assert!(!rendered.contains("<iframe"), "{source:?}: {rendered}");
         }
     }
@@ -1095,7 +1170,7 @@ mod tests {
             "<iframe src=\"https://evil.example\"></iframe>\n\n",
             "{{< youtube dQw4w9WgXcQ >}}"
         );
-        let rendered = render(&parse_post_body(source), &PostFormat::Markdown);
+        let rendered = render(&parse_post_body(source), PostFormat::Markdown);
         assert!(!rendered.contains("evil.example"), "{rendered}");
         assert!(!rendered.contains("JAUNDER_SHORTCODE_"), "{rendered}");
         assert!(!rendered.contains("-->"), "{rendered}");
@@ -1145,6 +1220,247 @@ mod tests {
         let html = render_markdown("```rust\nfn main() {}\n```");
         assert!(html.contains("<code"));
         assert!(html.contains("fn main()"));
+    }
+
+    #[test]
+    fn explicitly_labeled_code_highlights_in_both_post_formats() {
+        for (format, label, source) in [
+            (PostFormat::Org, "elisp", "(message \"hello\")"),
+            (PostFormat::Org, "haskell", "foo :: Int\nfoo = 1"),
+            (PostFormat::Markdown, "emacs-lisp", "(message \"hello\")"),
+            (PostFormat::Markdown, "hs", "foo :: Int\nfoo = 1"),
+        ] {
+            let body: PostBody = match format {
+                PostFormat::Org => format!("#+begin_src {label}\n{source}\n#+end_src").parse(),
+                PostFormat::Markdown => format!("```{label}\n{source}\n```").parse(),
+                PostFormat::Html => unreachable!("only Org and Markdown source cases are tested"),
+            }
+            .unwrap();
+            let html = render(&body, format);
+            assert!(html.contains("class=\"j-syn-"), "{format:?}: {html}");
+        }
+    }
+
+    #[test]
+    fn markdown_highlighting_requires_a_supported_first_fence_word() {
+        for (source, highlighted) in [
+            ("```ElIsP extra\n(message \"hi\")\n```", true),
+            ("```HS extra\nfoo = 1\n```", true),
+            ("```text elisp\n(message \"hi\")\n```", false),
+            ("```not-elisp\n(message \"hi\")\n```", false),
+            ("```\n(message \"hi\")\n```", false),
+            ("    (message \"hi\")", false),
+            ("`(message \"hi\")`", false),
+            (
+                "<pre><code class=\"language-elisp\">(message \"hi\")</code></pre>",
+                false,
+            ),
+        ] {
+            let body = parse_post_body(source);
+            let html = render(&body, PostFormat::Markdown);
+            assert_eq!(
+                html.contains("class=\"j-syn-"),
+                highlighted,
+                "{source}: {html}"
+            );
+        }
+    }
+
+    fn decoded_code(html: &str) -> String {
+        let after_start = html
+            .split_once("<code")
+            .unwrap()
+            .1
+            .split_once('>')
+            .unwrap()
+            .1;
+        let encoded = after_start.split_once("</code>").unwrap().0;
+        let bare = ammonia::Builder::empty().clean(encoded).to_string();
+        html_escape::decode_html_entities(&bare).into_owned()
+    }
+
+    #[test]
+    fn highlighted_code_keeps_the_exporters_exact_decoded_text() {
+        for (format, source) in [
+            (
+                PostFormat::Org,
+                "#+begin_src elisp\n\t(message \"<script> & é\")\n\n#+end_src",
+            ),
+            (
+                PostFormat::Markdown,
+                "```haskell\n\tfoo = \"<script> & é\"\n\n```",
+            ),
+        ] {
+            let plain = match format {
+                PostFormat::Org => render_org(source),
+                PostFormat::Markdown => render_markdown(source),
+                PostFormat::Html => unreachable!("only Org and Markdown source cases are tested"),
+            };
+            let highlighted = render(&parse_post_body(source), format);
+            assert!(highlighted.contains("class=\"j-syn-"), "{highlighted}");
+            assert_eq!(decoded_code(&highlighted), decoded_code(&plain));
+            assert!(!highlighted.contains("<script>"));
+        }
+    }
+
+    #[test]
+    fn malformed_tree_sitter_input_recovers_without_changing_safe_exported_text() {
+        let malformed = "(() [unterminated \"string\n<script>alert(1)</script> & é";
+        for format in [PostFormat::Org, PostFormat::Markdown] {
+            for label in ["elisp", "haskell"] {
+                let source = match format {
+                    PostFormat::Org => format!("#+begin_src {label}\n{malformed}\n#+end_src"),
+                    PostFormat::Markdown => format!("```{label}\n{malformed}\n```"),
+                    PostFormat::Html => {
+                        unreachable!("only Org and Markdown source cases are tested")
+                    }
+                };
+                let plain = match format {
+                    PostFormat::Org => render_org(&source),
+                    PostFormat::Markdown => render_markdown(&source),
+                    PostFormat::Html => {
+                        unreachable!("only Org and Markdown source cases are tested")
+                    }
+                };
+                let rendered = render(&parse_post_body(&source), format);
+                assert!(rendered.contains("<pre>"), "{format:?}/{label}: {rendered}");
+                assert_eq!(
+                    decoded_code(&rendered),
+                    decoded_code(&plain),
+                    "{format:?}/{label} must preserve exporter code text"
+                );
+                assert!(
+                    !rendered.contains("<script>"),
+                    "{format:?}/{label}: {rendered}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn highlight_budget_counts_exported_bytes_and_attempts_in_order() {
+        fn source(format: PostFormat, blocks: &[(&str, &str)]) -> String {
+            blocks
+                .iter()
+                .map(|(label, code)| match format {
+                    PostFormat::Org => format!("#+begin_src {label}\n{code}\n#+end_src"),
+                    PostFormat::Markdown => format!("```{label}\n{code}\n```"),
+                    PostFormat::Html => {
+                        unreachable!("only Org and Markdown source cases are tested")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        }
+
+        fn highlighted_blocks(source: &str, format: PostFormat) -> Vec<bool> {
+            render(&parse_post_body(source), format)
+                .split("<code")
+                .skip(1)
+                .map(|code| {
+                    code.split("</code>")
+                        .next()
+                        .unwrap()
+                        .contains("class=\"j-syn-")
+                })
+                .collect()
+        }
+
+        let block = "(message \"hi\")\n".repeat(5000);
+        let exact = &block[..65_535]; // Exporter appends one LF: exactly 64 KiB.
+        let oversized = &block[..65_536]; // Exported block is 64 KiB + 1.
+        for format in [PostFormat::Org, PostFormat::Markdown] {
+            let mixed = source(
+                format,
+                &[
+                    ("unknown", "first"),
+                    ("elisp", exact),
+                    ("elisp", oversized),
+                    ("elisp", "(message \"fits after rejected block\")"),
+                ],
+            );
+            assert_eq!(
+                highlighted_blocks(&mixed, format),
+                [false, true, false, true],
+                "{format:?}: oversized and unknown blocks must not spend budget"
+            );
+
+            let cumulative = source(
+                format,
+                &[
+                    ("unknown", "first"),
+                    ("elisp", exact),
+                    ("elisp", oversized),
+                    ("elisp", exact), // Exactly 128 KiB attempted for this Post.
+                    ("elisp", "(message \"over cumulative budget\")"),
+                ],
+            );
+            assert_eq!(
+                highlighted_blocks(&cumulative, format),
+                [false, true, false, true, false],
+                "{format:?}: exactly 128 KiB fits but no later attempted bytes do"
+            );
+
+            let counted = source(format, &[("elisp", "(message \"hi\")"); 17]);
+            let highlighted = highlighted_blocks(&counted, format);
+            assert_eq!(highlighted.len(), 17);
+            assert!(
+                highlighted[..16].iter().all(|&colored| colored),
+                "{format:?}"
+            );
+            assert!(!highlighted[16], "{format:?}: seventeenth attempt rejected");
+
+            // A recovered syntax error still uses one of the sixteen attempts.
+            // Unknown and oversized blocks before it do not consume slots.
+            let mut mixed_blocks = vec![
+                ("unknown", "skip"),
+                ("elisp", "(() [unterminated \"string"),
+                ("elisp", oversized),
+            ];
+            mixed_blocks.extend([("elisp", "(message \"ok\")"); 16]);
+            let flags = highlighted_blocks(&source(format, &mixed_blocks), format);
+            assert_eq!(flags.len(), 19);
+            assert!(flags[3..18].iter().all(|&colored| colored), "{format:?}");
+            assert!(!flags[18], "{format:?}: recovered syntax spends one slot");
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_highlight_query_fails_preview_render_with_typed_cause() {
+        for (format, source) in [
+            (
+                PostFormat::Org,
+                "#+begin_src elisp\n(message \"hi\")\n#+end_src",
+            ),
+            (PostFormat::Markdown, "```elisp\n(message \"hi\")\n```"),
+        ] {
+            let error = crate::test_faults::with_invalid_highlight_query(async {
+                super::render(&parse_post_body(source), &format)
+                    .expect_err("invalid query must fail")
+            })
+            .await;
+            assert!(
+                matches!(
+                    error,
+                    HighlightError::Initialization {
+                        language: "injected-invalid-query",
+                        ..
+                    }
+                ),
+                "{format:?}: {error}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn first_org_block_failure_prevents_later_highlight_attempts() {
+        let source = "#+begin_src elisp\n(message \"first\")\n#+end_src\n\n#+begin_src rust\nfn second() {}\n#+end_src";
+        let error = crate::test_faults::with_invalid_highlight_query(async {
+            super::render(&parse_post_body(source), &PostFormat::Org)
+                .expect_err("an invalid query must fail the whole Post")
+        })
+        .await;
+        assert!(matches!(error, HighlightError::Initialization { .. }));
     }
 
     #[test]
@@ -1226,7 +1542,7 @@ mod tests {
     #[test]
     fn org_special_strings_render_in_prose_and_titles_but_not_literal_content() {
         let source = "A---B *bold--word* then... ~code---...~";
-        let html = render(&parse_post_body(source), &PostFormat::Org);
+        let html = render(&parse_post_body(source), PostFormat::Org);
         assert!(html.contains("A—B"), "{html}");
         assert!(html.contains("<b>bold–word</b>"), "{html}");
         assert!(html.contains("then…"), "{html}");
@@ -1236,7 +1552,7 @@ mod tests {
         assert_eq!(rendered_title_visible_text(&rendered), "Three—two–one…");
         assert_eq!(title.as_ref(), "Three---two--one...");
         for format in [PostFormat::Markdown, PostFormat::Html] {
-            let unchanged = render(&parse_post_body("A---B -- C ..."), &format);
+            let unchanged = render(&parse_post_body("A---B -- C ..."), format);
             assert!(
                 unchanged.contains("A---B -- C ..."),
                 "{format:?}: {unchanged}"
@@ -1297,7 +1613,7 @@ mod tests {
                  ```rust\nfn main() {}\n```\n\n\
                  | a | b |\n|---|---|\n| 1 | 2 |\n",
             ),
-            &PostFormat::Markdown,
+            PostFormat::Markdown,
         );
         for expected in [
             "<h1>",
@@ -1317,7 +1633,7 @@ mod tests {
             &parse_post_body(
                 "* Heading\n\nSome *bold* text and [[https://example.com][a link]].\n",
             ),
-            &PostFormat::Org,
+            PostFormat::Org,
         );
         for expected in [
             "<h1>",
@@ -1345,13 +1661,13 @@ mod tests {
 
     #[test]
     fn render_dispatches_markdown() {
-        let result = render(&parse_post_body("**bold**"), &PostFormat::Markdown);
+        let result = render(&parse_post_body("**bold**"), PostFormat::Markdown);
         assert!(result.contains("<strong>bold</strong>"));
     }
 
     #[test]
     fn render_dispatches_org() {
-        let result = render(&parse_post_body("*bold*"), &PostFormat::Org);
+        let result = render(&parse_post_body("*bold*"), PostFormat::Org);
         assert!(result.contains("<b>bold</b>"));
     }
 
@@ -1384,7 +1700,7 @@ mod tests {
     fn render_markdown_strips_embedded_script() {
         let result = render(
             &parse_post_body(format!("Hello\n\n{ACTIVE_MARKUP}").as_str()),
-            &PostFormat::Markdown,
+            PostFormat::Markdown,
         );
         assert_no_active_markup(&result);
         assert!(!result.contains("alert(1)"), "{result}");
@@ -1399,7 +1715,7 @@ mod tests {
         // the literal text `alert(1)` surviving *escaped* is harmless.
         let result = render(
             &parse_post_body(format!("Hello\n\n@@html:{ACTIVE_MARKUP}@@").as_str()),
-            &PostFormat::Org,
+            PostFormat::Org,
         );
         assert_no_active_markup(&result);
         assert!(result.contains("Hello"), "{result}");
@@ -1409,7 +1725,7 @@ mod tests {
     fn render_html_strips_embedded_script() {
         let result = render(
             &parse_post_body(format!("<p>hi</p>{ACTIVE_MARKUP}").as_str()),
-            &PostFormat::Html,
+            PostFormat::Html,
         );
         assert_no_active_markup(&result);
         assert!(!result.contains("alert(1)"), "{result}");
@@ -1422,7 +1738,7 @@ mod tests {
     fn render_html_format_preserves_safe_markup() {
         let body = "<p>hi <b>there</b></p>";
         assert_eq!(
-            render(&parse_post_body(body), &PostFormat::Html).as_ref(),
+            render(&parse_post_body(body), PostFormat::Html).as_ref(),
             body
         );
     }
@@ -1444,7 +1760,7 @@ mod tests {
         ];
 
         for (format, body) in bodies {
-            let html = render(&parse_post_body(&body), &format);
+            let html = render(&parse_post_body(&body), format);
             for expected in [
                 "<video",
                 "/media/video.webm",
@@ -1479,7 +1795,7 @@ mod tests {
         // Rendered via the real renderer, so this pins end-to-end behaviour rather than a
         // hand-written fragment.
         let body = parse_post_body(&format!("![alt]({})", media_url_for("photo.jpg")));
-        let refs = extract_media_refs(render(&body, &PostFormat::Markdown).as_ref());
+        let refs = extract_media_refs(render(&body, PostFormat::Markdown).as_ref());
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].media().filename.as_ref(), "photo.jpg");
     }
@@ -1488,7 +1804,7 @@ mod tests {
     fn extract_finds_a_raw_img_embedded_in_a_markdown_body() {
         // The rendered-HTML choice (spec D2): raw HTML passes through the Markdown parser.
         let body = parse_post_body(&format!("<img src=\"{}\">", media_url_for("photo.jpg")));
-        let refs = extract_media_refs(render(&body, &PostFormat::Markdown).as_ref());
+        let refs = extract_media_refs(render(&body, PostFormat::Markdown).as_ref());
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].media().filename.as_ref(), "photo.jpg");
     }
@@ -1498,7 +1814,7 @@ mod tests {
         // The #675 regression, at the extractor level: a post addressing the file by the
         // name a person types must resolve to the stored, encoded spelling.
         let body = parse_post_body(&format!("<img src=\"{}\">", media_url_for("my photo.jpg")));
-        let refs = extract_media_refs(render(&body, &PostFormat::Markdown).as_ref());
+        let refs = extract_media_refs(render(&body, PostFormat::Markdown).as_ref());
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].media().filename.as_ref(), "my%20photo.jpg");
     }
@@ -1508,7 +1824,7 @@ mod tests {
         let body = parse_post_body(&format!(
             "<a href=\"/atompub/alice/media/{MEDIA_TEST_SHA256}/photo.jpg\">doc</a>"
         ));
-        let refs = extract_media_refs(render(&body, &PostFormat::Markdown).as_ref());
+        let refs = extract_media_refs(render(&body, PostFormat::Markdown).as_ref());
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].media().source, MediaSource::Upload);
     }
@@ -1526,20 +1842,20 @@ mod tests {
                 "<{element} {attribute}=\"{}\"></{element}>",
                 media_url_for(filename)
             ));
-            let refs = extract_media_refs(render(&body, &PostFormat::Html).as_ref());
+            let refs = extract_media_refs(render(&body, PostFormat::Html).as_ref());
             assert_eq!(refs.len(), 1, "{element}[{attribute}] was not extracted");
             assert_eq!(refs[0].media().filename.as_ref(), filename);
         }
 
         let external_track = parse_post_body(r#"<track src="https://example.com/captions.vtt">"#);
         assert!(
-            extract_media_refs(render(&external_track, &PostFormat::Html).as_ref()).is_empty(),
+            extract_media_refs(render(&external_track, PostFormat::Html).as_ref()).is_empty(),
             "a non-Media-shaped external track must not become a Media reference"
         );
 
         // A URL displayed as literal text points nobody at anything (spec D2).
         let fenced = parse_post_body(&format!("```\n{}\n```", media_url_for("photo.jpg")));
-        assert!(extract_media_refs(render(&fenced, &PostFormat::Markdown).as_ref()).is_empty());
+        assert!(extract_media_refs(render(&fenced, PostFormat::Markdown).as_ref()).is_empty());
     }
 
     #[test]
@@ -1551,7 +1867,7 @@ mod tests {
             "<video src=\"{scheme_relative}\"></video><source src=\"{local}\">\
              <track src=\"{absolute}\"><audio src=\"{absolute}\"></audio>"
         ));
-        let refs = extract_media_refs(render(&body, &PostFormat::Markdown).as_ref());
+        let refs = extract_media_refs(render(&body, PostFormat::Markdown).as_ref());
         assert_eq!(refs.len(), 3, "only complete duplicate references collapse");
         assert_eq!(
             refs.iter()
@@ -1564,7 +1880,7 @@ mod tests {
     #[test]
     fn extract_ignores_non_media_links() {
         let body = parse_post_body("<a href=\"https://example.com/page\">x</a>");
-        assert!(extract_media_refs(render(&body, &PostFormat::Markdown).as_ref()).is_empty());
+        assert!(extract_media_refs(render(&body, PostFormat::Markdown).as_ref()).is_empty());
     }
 
     #[test]
@@ -1601,7 +1917,7 @@ mod tests {
     #[test]
     fn render_output_derives_its_media_from_its_html() {
         let body = parse_post_body(&format!("<img src=\"{}\">", media_url_for("photo.jpg")));
-        let out = with_media(&body, &PostFormat::Markdown);
+        let out = with_media(&body, PostFormat::Markdown);
         assert_eq!(
             out.media(),
             extract_media_refs(out.html().as_ref()).as_slice()
@@ -1611,13 +1927,13 @@ mod tests {
 
     #[test]
     fn render_output_media_is_empty_for_a_body_referencing_nothing() {
-        let out = with_media(&parse_post_body("plain text"), &PostFormat::Markdown);
+        let out = with_media(&parse_post_body("plain text"), PostFormat::Markdown);
         assert!(out.media().is_empty());
     }
 
     #[test]
     fn render_output_into_html_consumes_the_derived_media_pair() {
-        let out = with_media(&parse_post_body("plain text"), &PostFormat::Markdown);
+        let out = with_media(&parse_post_body("plain text"), PostFormat::Markdown);
         assert_eq!(out.into_html().as_ref(), "<p>plain text</p>\n");
     }
 

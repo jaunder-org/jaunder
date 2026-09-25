@@ -520,6 +520,17 @@ impl TestEnv {
         self.factory.posts()
     }
 
+    /// Exercises the composition root's startup projection refresh without
+    /// exposing its pool-owning factory outside storage.
+    ///
+    /// # Errors
+    /// Returns the refresh's typed storage, render, or checkpoint failure.
+    pub async fn refresh_current_post_projections(
+        &self,
+    ) -> Result<(), crate::PostProjectionRefreshError> {
+        self.factory.refresh_current_post_projections().await
+    }
+
     /// Mints subscription storage for this test's backend.
     #[must_use]
     pub fn subscriptions(&self) -> Arc<dyn SubscriptionStorage> {

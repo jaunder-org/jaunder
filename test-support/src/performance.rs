@@ -464,7 +464,7 @@ fn build_post_input(
     let tags = (0..tag_count)
         .map(|tag| format!("perf-{index}-{tag}").parse::<TagLabel>())
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(render_post_input(RenderedPostContent {
+    render_fixture_input(RenderedPostContent {
         user_id: authors[author_index].1,
         title: Some(format!("Performance Post {index}").parse::<PostTitle>()?),
         slug: format!("performance-{index:06}").parse::<Slug>()?,
@@ -476,7 +476,11 @@ fn build_post_input(
         tags,
         idempotency_key: None,
         expectations: PostBookkeepingExpectation::default(),
-    }))
+    })
+}
+
+fn render_fixture_input(content: RenderedPostContent) -> anyhow::Result<storage::CreatePostInput> {
+    Ok(render_post_input(content)?)
 }
 
 fn post_published_at(
@@ -671,7 +675,7 @@ async fn apply_post_revisions(
     let mut body = existing.body;
     for revision in 0..target.revisions {
         body = revised_body(body, revision)?;
-        let rendered = host::render::render_post(existing.title.clone(), body, existing.format);
+        let rendered = host::render::render_post(existing.title.clone(), body, existing.format)?;
         let input = storage::UpdatePostInput {
             slug: existing.slug.clone(),
             rendered,
@@ -1145,6 +1149,38 @@ mod tests {
             id: PostId::from(1_i64),
             index: 0,
         }
+    }
+
+    #[tokio::test]
+    async fn fixture_render_failure_preserves_typed_highlighter_cause() {
+        let content = RenderedPostContent {
+            user_id: UserId::from(1_i64),
+            title: None,
+            slug: "highlight-fault".parse().unwrap(),
+            body: "#+begin_src elisp\n(message \"hi\")\n#+end_src"
+                .parse()
+                .unwrap(),
+            format: PostFormat::Org,
+            published_at: None,
+            summary: None,
+            audiences: vec![AudienceTarget::Public],
+            tags: Vec::new(),
+            idempotency_key: None,
+            expectations: PostBookkeepingExpectation::default(),
+        };
+        let error = host::test_faults::with_invalid_highlight_query(async {
+            render_fixture_input(content)
+                .err()
+                .expect("invalid grammar query must not seed a Post")
+        })
+        .await;
+        assert!(matches!(
+            error.downcast_ref::<host::render::HighlightError>(),
+            Some(host::render::HighlightError::Initialization {
+                language: "injected-invalid-query",
+                ..
+            })
+        ));
     }
 
     #[test]

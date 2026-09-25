@@ -27,6 +27,7 @@ use crate::posts::{
     management::StoredPostSearchPattern,
     media::{MediaAdvisoryLockKey, MediaReferenceSnapshotLimit, PersistedMediaSubjectKind},
     models::{PermalinkDateText, PostPublicationClear},
+    refresh::{RefreshBatchLimit, RefreshCompleted, RefreshCursor, RefreshVersion},
     search::{PostMutationVersion, StoredPostSearchText},
     tags::TagSlugPrefixPattern,
 };
@@ -226,6 +227,10 @@ approve_storage_binds!(
     PostId,
     PostMutationVersion,
     PostPublicationClear,
+    RefreshBatchLimit,
+    RefreshCompleted,
+    RefreshCursor,
+    RefreshVersion,
     PostTitle,
     RevisionId,
     RootRelativeUrl,

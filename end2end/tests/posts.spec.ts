@@ -4,6 +4,7 @@ import {
   expect,
   slowBrowserFirstNavigationTimeoutMs,
   slowBrowserTimeoutMs,
+  setTestBudget,
 } from "./fixtures";
 import {
   BASE_URL,
@@ -148,6 +149,7 @@ test("published Org source blocks are distinct and readable on narrow screens", 
   await expect(body).toContainText("Outro paragraph.");
   const code = body.locator("pre");
   await expect(code).toContainText("(use-package consult");
+  await expect(code.locator('span[class^="j-syn-"]').first()).toBeVisible();
   const style = await code.evaluate((element) => {
     const css = getComputedStyle(element);
     return {
@@ -178,6 +180,7 @@ test("published Org source blocks are distinct and readable on narrow screens", 
   });
   const homeCode = page.locator('article.j-post:has-text("Code sample") pre');
   await expect(homeCode).toContainText("(use-package consult");
+  await expect(homeCode.locator('span[class^="j-syn-"]').first()).toBeVisible();
   expect(
     await homeCode.evaluate(
       (element) => getComputedStyle(element).backgroundColor,
@@ -192,6 +195,9 @@ test("published Org source blocks are distinct and readable on narrow screens", 
     });
     const publicCode = publicPage.locator(".j-post-body pre");
     await expect(publicCode).toContainText("(use-package consult");
+    await expect(
+      publicCode.locator('span[class^="j-syn-"]').first(),
+    ).toBeVisible();
     expect(
       await publicCode.evaluate(
         (element) => getComputedStyle(element).backgroundColor,
@@ -206,6 +212,9 @@ test("published Org source blocks are distinct and readable on narrow screens", 
       'article.j-post:has-text("Code sample") pre',
     );
     await expect(localCode).toContainText("(use-package consult");
+    await expect(
+      localCode.locator('span[class^="j-syn-"]').first(),
+    ).toBeVisible();
     expect(
       await localCode.evaluate(
         (element) => getComputedStyle(element).backgroundColor,
@@ -215,6 +224,92 @@ test("published Org source blocks are distinct and readable on narrow screens", 
     await anonymous.close();
   }
 });
+
+for (const fixture of [
+  {
+    name: "Org Haskell",
+    format: "org",
+    body: '#+TITLE: Haskell token proof\n\n#+begin_src haskell\ngreeting :: String\ngreeting = "hello"\n#+end_src\n',
+    code: 'greeting = "hello"',
+  },
+  {
+    name: "Markdown Emacs Lisp",
+    format: "markdown",
+    body: '# Emacs Lisp token proof\n\n```elisp\n(message "hello")\n```\n',
+    code: '(message "hello")',
+  },
+  {
+    name: "Markdown Haskell",
+    format: "markdown",
+    body: '# Haskell token proof\n\n```hs\ngreeting :: String\ngreeting = "hello"\n```\n',
+    code: 'greeting = "hello"',
+  },
+  {
+    name: "Markdown Rust",
+    format: "markdown",
+    body: '# Rust token proof\n\n```rust\nfn greet() { println!("hello"); }\n```\n',
+    code: 'fn greet() { println!("hello"); }',
+  },
+] as const) {
+  test(`${fixture.name} tokens appear on public, Local, and Home`, async ({
+    registeredPage,
+    tracedContext,
+  }, testInfo) => {
+    setTestBudget(90_000);
+    const page = await registeredPage("/posts/new");
+    const summary = await composePost(page, {
+      body: fixture.body,
+      format: fixture.format,
+      audience: "public",
+      publish: true,
+    });
+    await followPermalink(page, summary);
+    const permalink = new URL(page.url()).pathname;
+    const code = page.locator(".j-post-body pre code");
+    await expect(code).toContainText(fixture.code);
+    await expect(code.locator('span[class^="j-syn-"]').first()).toBeVisible();
+
+    await navigateInApp(page, () => click(page, '.j-nav a[href="/app"]'), {
+      url: "/app",
+      ready: '.j-topbar h1:has-text("Home")',
+    });
+    const homeCode = page.locator("article.j-post pre code", {
+      hasText: fixture.code,
+    });
+    await expect(
+      homeCode.locator('span[class^="j-syn-"]').first(),
+    ).toBeVisible();
+
+    const anonymous = await tracedContext();
+    try {
+      const publicPage = await anonymous.newPage();
+      await goto(publicPage, permalink, {
+        timeout: slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000),
+      });
+      await expect(
+        publicPage
+          .locator('.j-post-body pre code span[class^="j-syn-"]')
+          .first(),
+      ).toBeVisible();
+      await navigateInApp(
+        publicPage,
+        () => click(publicPage, '.j-nav a[href="/"]'),
+        {
+          url: "/",
+          ready: '.j-topbar h1:has-text("Jaunder")',
+        },
+      );
+      const localCode = publicPage.locator("article.j-post pre code", {
+        hasText: fixture.code,
+      });
+      await expect(
+        localCode.locator('span[class^="j-syn-"]').first(),
+      ).toBeVisible();
+    } finally {
+      await anonymous.close();
+    }
+  });
+}
 
 test("published Markdown shortcodes render responsive provider embeds", async ({
   registeredPage,
