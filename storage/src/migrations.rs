@@ -778,6 +778,31 @@ main = putStrLn "hello"
         let db = MigrationDatabase::new(backend).await;
         db.migrate_to(47).await.unwrap();
         db.drain_pending_code_migrations().await;
+        let user = match backend {
+            Backend::Sqlite => {
+                "INSERT INTO users (user_id, username, password_hash, created_at) VALUES (60, 'footnote-author', 'hash', CURRENT_TIMESTAMP)"
+            }
+            Backend::Postgres => {
+                "INSERT INTO users (user_id, username, password_hash, created_at) OVERRIDING SYSTEM VALUE VALUES (60, 'footnote-author', 'hash', CURRENT_TIMESTAMP)"
+            }
+        };
+        db.pool.execute(user).await.unwrap();
+        let posts = match backend {
+            Backend::Sqlite => "INSERT INTO posts (post_id, user_id, slug, body, format, rendered_html, created_at, updated_at, deleted_at) VALUES
+                (61, 60, 'footnote-one', 'reference[fn:n]\n\n[fn:n] note', 'org', '<p>old</p>', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL),
+                (62, 60, 'footnote-two', 'reference[fn:n]\n\n[fn:n] note', 'org', '<p>old</p>', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            Backend::Postgres => "INSERT INTO posts (post_id, user_id, slug, body, format, rendered_html, created_at, updated_at, deleted_at) OVERRIDING SYSTEM VALUE VALUES
+                (61, 60, 'footnote-one', 'reference[fn:n]\n\n[fn:n] note', 'org', '<p>old</p>', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL),
+                (62, 60, 'footnote-two', 'reference[fn:n]\n\n[fn:n] note', 'org', '<p>old</p>', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+        };
+        db.pool.execute(posts).await.unwrap();
+        db.pool.execute(
+            "INSERT INTO post_revisions (post_id, user_id, slug, body, format, rendered_html, created_at, updated_at)
+             SELECT post_id, user_id, slug, body, format, rendered_html, created_at, updated_at FROM posts WHERE post_id = 61",
+        ).await.unwrap();
+        let before = db.pool.string_quintuples(
+            "SELECT CAST(post_id AS TEXT), body, rendered_html, CAST(updated_at AS TEXT), COALESCE(CAST(deleted_at AS TEXT), '') FROM posts ORDER BY post_id",
+        ).await.unwrap();
         db.migrate_current().await.unwrap();
         let pending = db
             .pool
@@ -792,6 +817,48 @@ main = putStrLn "hello"
             "the follow-up migration reuses the full current-Post rebuild"
         );
         db.drain_pending_code_migrations().await;
+        let after = db.pool.string_quintuples(
+            "SELECT CAST(post_id AS TEXT), body, rendered_html, CAST(updated_at AS TEXT), COALESCE(CAST(deleted_at AS TEXT), '') FROM posts ORDER BY post_id",
+        ).await.unwrap();
+        for (index, id) in [61, 62].into_iter().enumerate() {
+            assert_eq!(
+                after[index].1, before[index].1,
+                "authored Org source is immutable"
+            );
+            assert_eq!(after[index].3, before[index].3, "edit time is immutable");
+            assert_eq!(
+                after[index].4, before[index].4,
+                "deletion time is immutable"
+            );
+            assert!(
+                after[index].2.contains(&format!("id=\"post-{id}-fn-1\"")),
+                "{}",
+                after[index].2
+            );
+            assert!(
+                after[index]
+                    .2
+                    .contains(&format!("href=\"#post-{id}-fnref-1-1\"")),
+                "{}",
+                after[index].2
+            );
+        }
+        assert_ne!(
+            after[0].2, after[1].2,
+            "identical source gets distinct Post anchors"
+        );
+        let revision = db
+            .pool
+            .string_quintuples(
+                "SELECT body, rendered_html, '', '', '' FROM post_revisions WHERE post_id = 61",
+            )
+            .await
+            .unwrap();
+        assert_eq!(revision[0].0, before[0].1);
+        assert_eq!(
+            revision[0].1, before[0].2,
+            "historical Revision is immutable"
+        );
         assert_eq!(
             db.pool
                 .scalar_i64("SELECT COUNT(*) FROM pending_code_migrations")

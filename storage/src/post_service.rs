@@ -513,8 +513,8 @@ pub async fn perform_post_update(
         None => derived_slug,
     };
 
-    let rendered =
-        host::render::render_post(title, body, format).map_err(PerformUpdateError::Render)?;
+    let rendered = host::render::render_post_scoped(post_id, title, body, format)
+        .map_err(PerformUpdateError::Render)?;
     let input = UpdatePostInput {
         slug,
         rendered,
@@ -599,8 +599,8 @@ pub async fn perform_post_update_with_media_ownership(
     let body = common::render::canonicalize_body(&body, &format)
         .map_err(|_| PerformUpdateError::EmptyPost)?;
     let slug = slug_override.cloned().unwrap_or(derived_slug);
-    let rendered =
-        host::render::render_post(title, body, format).map_err(PerformUpdateError::Render)?;
+    let rendered = host::render::render_post_scoped(post_id, title, body, format)
+        .map_err(PerformUpdateError::Render)?;
     let local_media = ownership
         .resolve(rendered.media())
         .await
@@ -3075,6 +3075,81 @@ mod tests {
         );
         assert!(record.body.contains("#+FOO: x"), "body: {:?}", record.body);
         assert!(record.body.contains("Hello"), "body: {:?}", record.body);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn org_create_and_update_persist_post_scoped_footnotes(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(Arc::clone(&env.users()), env.write_scope().clone())
+            .await
+            .user_id;
+        let mut created = Vec::new();
+        for _ in 0..2 {
+            let record = perform_post_creation(
+                &env.write_scope(),
+                &env.media_content_locks(),
+                Arc::clone(&env.posts()),
+                Arc::clone(&env.feed_events()),
+                PostCreation {
+                    user_id,
+                    body: parse_post_body("First[fn:n]\n\n[fn:n] original note"),
+                    title: None,
+                    format: PostFormat::Org,
+                    slug_override: None,
+                    published_at: None,
+                    max_attempts: 100,
+                    summary: None,
+                    audiences: vec![AudienceTarget::Public],
+                    tags: Vec::new(),
+                    idempotency_key: None,
+                    expectations: PostBookkeepingExpectation::default(),
+                },
+            )
+            .await
+            .unwrap();
+            let record = confirmed(record);
+            let id = record.post_id;
+            assert!(
+                record
+                    .rendered_html
+                    .contains(&format!("id=\"post-{id}-fn-1\""))
+            );
+            created.push(record);
+        }
+        assert_ne!(created[0].rendered_html, created[1].rendered_html);
+        let first_id = created[0].post_id;
+        let updated = perform_post_update(
+            &env.write_scope(),
+            &env.media_content_locks(),
+            Arc::clone(&env.posts()),
+            Arc::clone(&env.feed_events()),
+            PostUpdate {
+                post_id: first_id,
+                editor_user_id: user_id,
+                body: parse_post_body("Changed[fn:n]\n\n[fn:n] revised note"),
+                title: None,
+                format: PostFormat::Org,
+                slug_override: None,
+                publish: PublishUpdate::Publish { at: None },
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+                tags: Some(Vec::new()),
+                request_clock: UtcInstant::now(),
+                expectations: PostBookkeepingExpectation::default(),
+            },
+        )
+        .await
+        .unwrap();
+        let updated = confirmed(updated);
+        assert!(
+            updated
+                .rendered_html
+                .contains(&format!("id=\"post-{first_id}-fn-1\""))
+        );
+        assert!(updated.rendered_html.contains("revised note"));
+        assert!(!updated.rendered_html.contains("original note"));
     }
 
     #[apply(backends)]

@@ -572,8 +572,30 @@ where
         return Err(CreatePostError::BookkeepingMismatch);
     }
 
+    // The database allocates the Post ID at INSERT on both backends. Replace
+    // the provisional Org projection inside this same transaction before any
+    // reader can see it; all of its derived media must come from this final HTML.
+    let scoped_rendering = if input.rendered.format() == PostFormat::Org {
+        let rendering = host::render::render_post_scoped(
+            post_id,
+            input.rendered.title().cloned(),
+            input.rendered.body().clone(),
+            input.rendered.format(),
+        )?;
+        sqlx::query("UPDATE posts SET rendered_html = $1 WHERE post_id = $2")
+            .bind_storage(rendering.rendered_html())
+            .bind_storage(post_id)
+            .execute(&mut *conn)
+            .await?;
+        Some(rendering)
+    } else {
+        None
+    };
+    let media_refs = scoped_rendering
+        .as_ref()
+        .map_or_else(|| input.rendered.media(), |rendering| rendering.media());
     visibility::replace_post_audiences::<DB>(conn, post_id, &input.audiences).await?;
-    media::replace_post_media::<DB>(conn, post_id, input.rendered.media()).await?;
+    media::replace_post_media::<DB>(conn, post_id, media_refs).await?;
     tags::insert_post_tags::<DB>(conn, post_id, &input.tags).await?;
 
     if let Some(key) = input.idempotency_key.as_ref() {

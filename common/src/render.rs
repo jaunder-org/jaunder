@@ -469,6 +469,27 @@ fn allowed_post_code_class(element: &str, token: &str) -> bool {
     }
 }
 
+/// Admit only the fork's Post-scoped numeric footnote targets, not arbitrary
+/// author-supplied IDs or classes that could borrow application selectors.
+#[cfg(feature = "sanitize")]
+fn allowed_post_footnote_id(element: &str, value: &str) -> bool {
+    let Some(rest) = value.strip_prefix("post-") else {
+        return false;
+    };
+    let marker = match element {
+        "li" => "-fn-",
+        "sup" => "-fnref-",
+        _ => return false,
+    };
+    let Some((post_id, suffix)) = rest.split_once(marker) else {
+        return false;
+    };
+    let digits = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
+    digits(post_id)
+        && suffix.split('-').all(digits)
+        && suffix.split('-').count() == if element == "li" { 1 } else { 2 }
+}
+
 #[cfg(feature = "sanitize")]
 static SANITIZER: std::sync::LazyLock<ammonia::Builder<'static>> = std::sync::LazyLock::new(|| {
     let mut builder = ammonia::Builder::default();
@@ -480,7 +501,12 @@ static SANITIZER: std::sync::LazyLock<ammonia::Builder<'static>> = std::sync::La
     builder.add_tag_attributes("code", ["class"]);
     builder.add_tag_attributes("pre", ["class"]);
     builder.add_tag_attributes("span", ["class"]);
+    builder.add_tag_attributes("li", ["id"]);
+    builder.add_tag_attributes("sup", ["id"]);
     builder.attribute_filter(|element, attribute, value| {
+        if attribute == "id" {
+            return allowed_post_footnote_id(element, value).then(|| value.into());
+        }
         if attribute != "class" {
             return Some(value.into());
         }
@@ -1154,6 +1180,19 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn sanitizer_keeps_only_numeric_post_footnote_targets() {
+        let html = sanitize(
+            r#"<sup id="post-42-fnref-1-2">1</sup><li id="post-42-fn-1">note</li>
+               <sup id="other">bad</sup><li id="post-42-fn-1-x">bad</li>
+               <p id="post-42-fn-1">bad</p>"#,
+        );
+        assert!(html.contains("id=\"post-42-fnref-1-2\""), "{html}");
+        assert!(html.contains("id=\"post-42-fn-1\""), "{html}");
+        assert_eq!(html.matches(" id=\"").count(), 2, "{html}");
     }
 
     #[cfg(feature = "sanitize")]
