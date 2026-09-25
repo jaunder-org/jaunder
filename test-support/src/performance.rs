@@ -533,7 +533,7 @@ async fn create_posts(
                 media,
                 clock,
                 backdated_count,
-            )?;
+            )?; // cov:ignore: canonical performance plans have valid content and bounded fixture clocks; malformed plans fail in plan validation
             contents.push(content);
         }
         let inputs = render_post_inputs_for_create(
@@ -683,7 +683,7 @@ async fn apply_post_revisions(
             existing.title.clone(),
             body,
             existing.format,
-        )?;
+        )?; // cov:ignore: seeded canonical bodies render; forcing a highlighter failure here requires test-only fault injection unavailable to this support crate
         let input = storage::UpdatePostInput {
             slug: existing.slug.clone(),
             rendered,

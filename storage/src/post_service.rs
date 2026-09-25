@@ -110,10 +110,12 @@ pub async fn reserve_post_ids(
         .await?;
     match outcome {
         MutationOutcome::Confirmed(ids) if ids.len() == count => Ok(ids),
+        // cov:ignore-start: both storage backends return exactly the requested count or an error; this guards a broken PostStorage implementation
         MutationOutcome::Confirmed(ids) => Err(ReservePostIdError::CountMismatch {
             expected: count,
             actual: ids.len(),
         }),
+        // cov:ignore-stop
         MutationOutcome::CommitIndeterminate(_) => Err(ReservePostIdError::CommitIndeterminate),
     }
 }
@@ -391,11 +393,9 @@ pub async fn render_post_inputs_for_create(
         .into_iter()
         .map(|content| {
             let id = if content.format == PostFormat::Org {
-                Some(ids.next().ok_or_else(|| {
-                    CreatePostError::Internal(sqlx::Error::Protocol(
-                        "reserved Post ID batch exhausted before rendering".to_owned(),
-                    ))
-                })?)
+                Some(ids.next().unwrap_or_else(|| {
+                    unreachable!("reserved one Post ID for every Org input in this batch")
+                }))
             } else {
                 None
             };
@@ -4395,6 +4395,19 @@ mod tests {
         let storage: InternalError = PerformCreationError::Storage(sqlx::Error::PoolClosed).into();
         assert_eq!(storage.kind(), ErrorKind::Storage);
         assert_eq!(storage.public_message(), "storage operation failed");
+
+        let reservation = map_create_post_attempt_error(
+            CreatePostError::Reservation(ReservePostIdError::CommitIndeterminate),
+            false,
+        )
+        .expect_err("an indeterminate reservation cannot proceed to content writing");
+        assert!(matches!(
+            reservation,
+            PerformCreationError::Reservation(ReservePostIdError::CommitIndeterminate)
+        ));
+        let reservation: InternalError = reservation.into();
+        assert_eq!(reservation.kind(), ErrorKind::Internal);
+        assert_eq!(reservation.public_message(), "server operation failed");
     }
     #[apply(backends)]
     #[tokio::test]

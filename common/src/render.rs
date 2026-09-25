@@ -1235,6 +1235,16 @@ mod tests {
         assert!(html.contains("id=\"post-42-fnref-1-2\""), "{html}");
         assert!(html.contains("id=\"post-42-fn-1\""), "{html}");
         assert_eq!(html.matches(" id=\"").count(), 2, "{html}");
+        assert!(!allowed_post_footnote_id(
+            "p",
+            "post-42-fn-1",
+            PostId::from(42)
+        ));
+        assert!(!allowed_post_footnote_id(
+            "sup",
+            "post-42-fn-1",
+            PostId::from(42)
+        ));
     }
 
     #[cfg(feature = "sanitize")]
