@@ -253,6 +253,8 @@ async fn apply_post_update(
 
 #[async_trait]
 impl PostDialect for Postgres {
+    const RESERVE_POST_ID_SQL: &'static str =
+        "SELECT nextval(pg_get_serial_sequence('posts', 'post_id'))";
     /// `ORDER BY t.tag_slug COLLATE "C"` is what makes [`PostRecord::tags`]
     /// slug-ordered (#772). The `COLLATE` is load-bearing — see
     /// [`PostDialect::TAGS_SUBQUERY`] for why — and must stay in sync with the

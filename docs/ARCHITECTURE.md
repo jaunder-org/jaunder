@@ -154,7 +154,7 @@ by URL scheme: `DbConnectOptions` (`storage/src/db.rs`) parses `sqlite:` vs
 `postgres://` and `open_database`/`open_existing_database` dispatch accordingly.
 Each backend has its own migration tree under
 `storage/migrations/{sqlite,postgres}`; the two trees carry identical numbered
-filenames (currently `0001`–`0047`), and maintaining that parity — same
+filenames (currently `0001`–`0048`), and maintaining that parity — same
 migrations, same behavior — is the accepted cost of the pluggable strategy
 ([ADR-0001](adr/0001-storage-backends.md)).
 
@@ -175,11 +175,18 @@ pending work remains allowed. Offline queue transactions alone may perform
 unbounded rendering inside SQLite's write lock; request-time work still follows
 ADR-0092's bounded occupancy rule
 ([Offline code migrations](adr/drafts/offline-code-migration-queue.md)). The
-`0047` enqueues `rebuild_rendered_posts` again for the new syntax rules,
-including databases that already ran `0045`. The offline rebuild drains before
-the bounded startup Post projection refresh; when it has already updated the
-same HTML, the refresh still records its checkpoint but does not enqueue
-duplicate events.
+`0047` enqueues `rebuild_rendered_posts` again for the new syntax rules; `0048`
+re-enqueues it for Org footnotes, including databases that already drained
+`0047`. On SQLite, `0048` also initializes the short-write Post ID allocator
+shared by all Post creations; PostgreSQL uses its existing Post sequence. Org
+creation reserves identity in a separate short `WriteScope` before rendering,
+outside the content-write transaction. Sandbox and performance seeding reserve
+up to 256 Org IDs in one bounded short scope per batch, then render outside it;
+performance revisions render with the existing Post ID. An unused reservation is
+allowed if rendering or creation fails. The offline rebuild drains before the
+bounded startup Post projection refresh; when it has already updated the same
+HTML, the refresh still records its checkpoint but does not enqueue duplicate
+events.
 
 ### Crate layout and the generic store pattern
 
@@ -498,17 +505,17 @@ Details in the testing section.
   ([structural write scopes and mutation outcomes](adr/0164-structural-write-scopes-and-mutation-outcomes.md)).
   Its explicit `run` boundary supplies a sealed mutable `WriteTransaction`
   capability, never storage lookup or arbitrary SQL. The closed audited
-  application surface has exactly 94 declarations: Audience (5), Email
+  application surface has exactly 96 declarations: Audience (5), Email
   Verification (2), Feed Cache (2), Feed Event (12), Invite (2), Media (2),
-  Password Reset (2), Passkey (11), Post (9), Publisher (5), Session (5), Site
-  Config (11), Subscription (2), User Config (2), Theme (17), and User (5).
+  Password Reset (2), Passkey (11), Post (12), Publisher (5), Session (5), Site
+  Config (11), Subscription (2), User Config (2), Theme (16), and User (5).
   Cross-store account mutations compose these capability-taking primitives as
   storage-owned functions
   ([account mutations compose storage primitives](adr/0166-account-mutations-compose-storage-primitives.md)).
   Each declaration takes `&mut WriteTransaction`; there are no pool-backed,
   auto-committing, standalone, or compatibility mutation paths. The structural
   gate derives the observed declarations, compares them with the closed
-  94-method list, rejects unknown, missing, and duplicate declarations, and
+  96-method list, rejects unknown, missing, and duplicate declarations, and
   rejects production transaction starts that bypass the
   `WriteScope`/`WriteTransaction` composition. It excludes administrative
   lifecycle work, dialect code, and internal helpers. Callback failure is

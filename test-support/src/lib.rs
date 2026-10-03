@@ -35,7 +35,7 @@ use storage::{
     PersistedMediaReference, PostBookkeepingExpectation, PostFormat, PostStorage, PreparedPassword,
     ProvenLocalMediaRefs, RenderedPostContent, SessionStorage, SiteConfigStorage,
     ThemeAssetManager, ThemeOwner, ThemeRoleBinding, ThemeStorage, UserStorage, WriteScope,
-    render_post_input, seed_post_input,
+    render_post_inputs_for_create, seed_post_input,
 };
 
 pub mod panic_gate;
@@ -587,7 +587,7 @@ fn user_markdown(asset_url: &RootRelativeUrl) -> String {
 
 fn user_org(asset_url: &RootRelativeUrl) -> String {
     format!(
-        "* A calm field note\n\nA /steady practice/ makes room for better work.\n\n[[/notes/practice][Read the practice note]]\n\n- Name the question\n- Share the answer\n\n#+begin_src text\nanswer = \"kind\"\n#+end_src\n\n| Moment | Choice |\n|---------+--------|\n| Morning | Listen |\n| Evening | Rest   |\n\n#+caption: Blue horizon\n[[{asset_url}]]"
+        "* A calm field note\n\nA /steady practice/ makes room for better work[fn:practice].\n\n[fn:practice] Shared work grows from patient questions.\n\n[[/notes/practice][Read the practice note]]\n\n- Name the question\n- Share the answer\n\n#+begin_src text\nanswer = \"kind\"\n#+end_src\n\n| Moment | Choice |\n|---------+--------|\n| Morning | Listen |\n| Evening | Rest   |\n\n#+caption: Blue horizon\n[[{asset_url}]]"
     )
 }
 
@@ -1149,24 +1149,20 @@ async fn seed_sandbox_posts(
     manifest: &SandboxSeedManifest,
 ) -> anyhow::Result<()> {
     let fixtures = manifest.posts.clone();
+    let mut contents = Vec::with_capacity(fixtures.len());
+    for fixture in fixtures {
+        let user_id = user_ids
+            .iter()
+            .find_map(|(username, user_id)| (*username == fixture.author).then_some(*user_id))
+            .ok_or_else(|| {
+                anyhow::anyhow!("sandbox manifest author {} is not seeded", fixture.author)
+            })?;
+        contents.push(sandbox_post_content(&fixture, user_id)?);
+    }
+    let inputs = render_post_inputs_for_create(&write_scope, Arc::clone(&posts), contents).await?;
     let outcome = write_scope
         .run(move |transaction| {
             Box::pin(async move {
-                let mut inputs = Vec::with_capacity(fixtures.len());
-                for fixture in fixtures {
-                    let user_id = user_ids
-                        .iter()
-                        .find_map(|(username, user_id)| {
-                            (*username == fixture.author).then_some(*user_id)
-                        })
-                        .ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "sandbox manifest author {} is not seeded",
-                                fixture.author
-                            )
-                        })?;
-                    inputs.push(render_post_input(sandbox_post_content(&fixture, user_id)?)?);
-                }
                 Ok::<_, anyhow::Error>(posts.create_posts(transaction, &inputs).await?)
             })
         })
@@ -1574,12 +1570,23 @@ mod sandbox_profile_tests {
             for (post, expected) in curated.into_iter().zip(expected) {
                 assert_eq!(post.body, expected.body);
                 assert_eq!(post.format, expected.format);
-                let rendered = render_post_input(
-                    sandbox_post_content(post, user.user_id).expect("curated Post input"),
+                let rendered = render_post_inputs_for_create(
+                    &env.write_scope(),
+                    Arc::clone(&posts),
+                    vec![sandbox_post_content(post, user.user_id).expect("curated Post input")],
                 )
+                .await
                 .expect("curated Post rendering")
+                .pop()
+                .expect("one curated Post")
                 .rendered;
                 assert!(rendered.rendered_html().contains(&format!("src=\"{url}\"")));
+                if post.author == "user" && post.format == PostFormat::Org {
+                    let html = rendered.rendered_html();
+                    assert!(html.contains("id=\"post-"), "{html}");
+                    assert!(html.contains("-fn-1\""), "{html}");
+                    assert!(html.contains("Shared work grows from patient questions"));
+                }
             }
         }
     }

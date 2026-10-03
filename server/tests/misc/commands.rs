@@ -1018,8 +1018,14 @@ async fn cmd_backup_covers_every_table_or_deliberately_excludes_it(#[case] backe
             .expect("count Postgres tables")
         }
     };
+    // SQLite's Post ID allocator is a migration-seeded table; PostgreSQL
+    // reserves IDs through a sequence instead.
+    let expected_table_count = match &args.db {
+        storage::DbConnectOptions::Sqlite(_) => 50,
+        storage::DbConnectOptions::Postgres { .. } => 49,
+    };
     assert_eq!(
-        live_table_count, 49,
+        live_table_count, expected_table_count,
         "a table was added or removed — update the golden set and denylist deliberately"
     );
 }

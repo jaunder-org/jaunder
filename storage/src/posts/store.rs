@@ -138,6 +138,29 @@ pub enum PostPermalinkAliasMatch {
 #[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
 #[async_trait]
 pub trait PostStorage: Send + Sync {
+    /// Reserves a durable numeric ID for rendering before a Post write starts.
+    /// A failed create may leave an unused ID, just like a rolled-back sequence.
+    async fn reserve_post_id(&self, transaction: &mut WriteTransaction) -> Result<PostId>;
+
+    /// Reserves a bounded batch in one short transaction before rendering.
+    /// No rendering occurs while this transaction holds a write lock.
+    async fn reserve_post_ids(
+        &self,
+        transaction: &mut WriteTransaction,
+        count: usize,
+    ) -> Result<Vec<PostId>> {
+        if count > 256 {
+            return Err(sqlx::Error::Protocol(
+                "Post ID reservation batch exceeds 256".to_owned(),
+            ));
+        }
+        let mut ids = Vec::with_capacity(count);
+        for _ in 0..count {
+            ids.push(self.reserve_post_id(transaction).await?);
+        }
+        Ok(ids)
+    }
+
     /// Creates a new post at `now`.
     ///
     /// A keyed create uses `now` both to retire an expired mapping in this
@@ -580,6 +603,9 @@ pub trait PostStorage: Send + Sync {
 /// ADR-0021). Everything else is shared on [`PostStore`].
 #[async_trait]
 pub trait PostDialect: Backend {
+    /// Atomic reservation outside a content write. `SQLite` uses a one-row
+    /// allocator; `PostgreSQL` uses the existing `posts.post_id` sequence.
+    const RESERVE_POST_ID_SQL: &'static str;
     /// Correlated JSON tag-aggregation subquery (on `p.post_id`) spelled in
     /// this backend's JSON dialect, yielding a `text` column.
     ///
@@ -1007,6 +1033,13 @@ where
     DB::Arguments: sqlx::IntoArguments<DB>,
     usize: sqlx::ColumnIndex<DB::Row>,
 {
+    async fn reserve_post_id(&self, transaction: &mut WriteTransaction) -> Result<PostId> {
+        let conn = DB::write_connection(transaction)?;
+        sqlx::query_scalar::<_, PostId>(DB::RESERVE_POST_ID_SQL)
+            .fetch_one(&mut *conn)
+            .await
+    }
+
     #[tracing::instrument(
         name = "storage.posts.create",
         skip(self, transaction, input),
@@ -7184,6 +7217,7 @@ mod tests {
             env.write_scope().clone(),
             CreatePostInput {
                 user_id,
+                reserved_post_id: None,
                 slug: parse_slug("no-title"),
                 rendered: host::render::render_post(
                     None,

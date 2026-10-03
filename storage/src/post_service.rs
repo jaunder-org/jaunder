@@ -59,6 +59,67 @@ pub struct RenderedPostContent {
     pub expectations: PostBookkeepingExpectation,
 }
 
+/// An ID reservation failed before a content write could begin.
+#[derive(Debug, Error)]
+pub enum ReservePostIdError {
+    /// The short reservation scope could not complete.
+    #[error(transparent)]
+    Scope(#[from] WriteScopeError<sqlx::Error>),
+    /// The allocator's commit may have succeeded, but was not acknowledged.
+    #[error("Post ID reservation commit is indeterminate")]
+    CommitIndeterminate,
+    /// The storage implementation returned fewer IDs than requested.
+    #[error("Post ID reservation returned {actual} IDs instead of {expected}")]
+    CountMismatch { expected: usize, actual: usize },
+}
+
+/// Reserves a durable identity in its own short write scope, before Org rendering.
+///
+/// # Errors
+/// Returns a scope or indeterminate-commit error; unused IDs are harmless.
+pub async fn reserve_post_id(
+    write_scope: &WriteScope,
+    storage: Arc<dyn PostStorage>,
+) -> Result<PostId, ReservePostIdError> {
+    reserve_post_ids(write_scope, storage, 1)
+        .await?
+        .into_iter()
+        .next()
+        .ok_or(ReservePostIdError::CountMismatch {
+            expected: 1,
+            actual: 0,
+        })
+}
+
+/// Reserves up to 256 IDs in one short write scope, never across rendering.
+///
+/// # Errors
+/// Returns a scope or indeterminate-commit error; unused IDs are harmless.
+pub async fn reserve_post_ids(
+    write_scope: &WriteScope,
+    storage: Arc<dyn PostStorage>,
+    count: usize,
+) -> Result<Vec<PostId>, ReservePostIdError> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    let outcome = write_scope
+        .run(move |transaction| {
+            Box::pin(async move { storage.reserve_post_ids(transaction, count).await })
+        })
+        .await?;
+    match outcome {
+        MutationOutcome::Confirmed(ids) if ids.len() == count => Ok(ids),
+        // cov:ignore-start: both storage backends return exactly the requested count or an error; this guards a broken PostStorage implementation
+        MutationOutcome::Confirmed(ids) => Err(ReservePostIdError::CountMismatch {
+            expected: count,
+            actual: ids.len(),
+        }),
+        // cov:ignore-stop
+        MutationOutcome::CommitIndeterminate(_) => Err(ReservePostIdError::CommitIndeterminate),
+    }
+}
+
 /// Converts a post-creation write-scope failure into its public service error.
 fn map_create_post_scope_error(error: WriteScopeError<CreatePostError>) -> CreatePostError {
     match error {
@@ -109,6 +170,7 @@ fn map_create_post_attempt_error(
         }
         CreatePostError::BookkeepingMismatch => Err(PerformCreationError::BookkeepingMismatch),
         CreatePostError::Render(error) => Err(PerformCreationError::Render(error)),
+        CreatePostError::Reservation(error) => Err(PerformCreationError::Reservation(error)),
         CreatePostError::Internal(error) => Err(PerformCreationError::Storage(error)),
     }
 }
@@ -185,7 +247,7 @@ pub async fn create_rendered_post(
     content: RenderedPostContent,
     now: UtcInstant,
 ) -> Result<MutationOutcome<PostRecord>, CreatePostError> {
-    let input = render_post_input(content)?;
+    let input = render_post_input_for_create(write_scope, Arc::clone(&storage), content).await?;
     let _media_locks = content_locks
         .acquire(
             input
@@ -243,7 +305,7 @@ pub async fn create_rendered_post_with_media_ownership(
     content: RenderedPostContent,
     now: UtcInstant,
 ) -> Result<MutationOutcome<PostRecord>, CreatePostError> {
-    let input = render_post_input(content)?;
+    let input = render_post_input_for_create(write_scope, Arc::clone(&storage), content).await?;
     let local_media = ownership
         .resolve(input.rendered.media())
         .await
@@ -293,14 +355,71 @@ pub async fn create_rendered_post_with_media_ownership(
     Ok(finish_post_creation(outcome))
 }
 
-/// Renders `body` per `format` and assembles the [`CreatePostInput`] without
-/// writing it. Shared by [`create_rendered_post`] (write one) and the batch
-/// seeders (collect many), so the render-and-assemble recipe lives in one place.
+/// Renders a Post input before its content write. Org creation reserves an ID
+/// through a short write scope first; other formats need no reservation.
 ///
 /// # Errors
-/// Returns a typed highlighting error if the source cannot be rendered safely.
-pub fn render_post_input(
+/// Returns a reservation or highlighting error before any content write begins.
+pub async fn render_post_input_for_create(
+    write_scope: &WriteScope,
+    storage: Arc<dyn PostStorage>,
     content: RenderedPostContent,
+) -> Result<CreatePostInput, CreatePostError> {
+    let reserved_id = if content.format == PostFormat::Org {
+        Some(reserve_post_id(write_scope, storage).await?)
+    } else {
+        None
+    };
+    Ok(render_post_input_with_identity(content, reserved_id)?)
+}
+
+/// Prepares a bounded seed batch, reserving all Org Post identities in one
+/// short write scope, then rendering every input without a write lock.
+///
+/// # Errors
+/// Returns a reservation or highlighting error before any content write begins.
+pub async fn render_post_inputs_for_create(
+    write_scope: &WriteScope,
+    storage: Arc<dyn PostStorage>,
+    contents: Vec<RenderedPostContent>,
+) -> Result<Vec<CreatePostInput>, CreatePostError> {
+    let org_count = contents
+        .iter()
+        .filter(|content| content.format == PostFormat::Org)
+        .count();
+    let ids = reserve_post_ids(write_scope, storage, org_count).await?;
+    let mut ids = ids.into_iter();
+    contents
+        .into_iter()
+        .map(|content| {
+            let id = if content.format == PostFormat::Org {
+                Some(ids.next().unwrap_or_else(|| {
+                    unreachable!("reserved one Post ID for every Org input in this batch")
+                }))
+            } else {
+                None
+            };
+            Ok(render_post_input_with_identity(content, id)?)
+        })
+        .collect()
+}
+
+/// Renders only the non-Org seed inputs that do not need a Post ID.
+#[cfg(any(test, feature = "seed-posts"))]
+fn render_post_input(
+    content: RenderedPostContent,
+) -> Result<CreatePostInput, host::render::HighlightError> {
+    assert_ne!(
+        content.format,
+        PostFormat::Org,
+        "Org requires a reserved Post ID"
+    );
+    render_post_input_with_identity(content, None)
+}
+
+fn render_post_input_with_identity(
+    content: RenderedPostContent,
+    reserved_post_id: Option<PostId>,
 ) -> Result<CreatePostInput, host::render::HighlightError> {
     let RenderedPostContent {
         user_id,
@@ -315,9 +434,14 @@ pub fn render_post_input(
         idempotency_key,
         expectations,
     } = content;
-    let rendered = host::render::render_post(title, body, format)?;
+    let rendered = if let Some(post_id) = reserved_post_id {
+        host::render::render_post_scoped(post_id, title, body, format)?
+    } else {
+        host::render::render_post(title, body, format)?
+    };
     Ok(CreatePostInput {
         user_id,
+        reserved_post_id,
         slug,
         rendered,
         published_at,
@@ -513,8 +637,8 @@ pub async fn perform_post_update(
         None => derived_slug,
     };
 
-    let rendered =
-        host::render::render_post(title, body, format).map_err(PerformUpdateError::Render)?;
+    let rendered = host::render::render_post_scoped(post_id, title, body, format)
+        .map_err(PerformUpdateError::Render)?;
     let input = UpdatePostInput {
         slug,
         rendered,
@@ -599,8 +723,8 @@ pub async fn perform_post_update_with_media_ownership(
     let body = common::render::canonicalize_body(&body, &format)
         .map_err(|_| PerformUpdateError::EmptyPost)?;
     let slug = slug_override.cloned().unwrap_or(derived_slug);
-    let rendered =
-        host::render::render_post(title, body, format).map_err(PerformUpdateError::Render)?;
+    let rendered = host::render::render_post_scoped(post_id, title, body, format)
+        .map_err(PerformUpdateError::Render)?;
     let local_media = ownership
         .resolve(rendered.media())
         .await
@@ -826,6 +950,8 @@ pub enum PerformCreationError {
     BookkeepingMismatch,
     #[error(transparent)]
     Render(#[from] host::render::HighlightError),
+    #[error(transparent)]
+    Reservation(#[from] ReservePostIdError),
     #[error("storage error: {0}")]
     Storage(#[source] sqlx::Error),
 }
@@ -859,6 +985,7 @@ impl From<PerformCreationError> for host::error::InternalError {
                 InternalError::server_message("created post not found")
             }
             PerformCreationError::Render(e) => InternalError::server(e),
+            PerformCreationError::Reservation(e) => InternalError::server(e),
             PerformCreationError::Storage(e) => InternalError::storage(e),
         }
     }
@@ -3079,6 +3206,145 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
+    async fn org_create_and_update_persist_post_scoped_footnotes(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(Arc::clone(&env.users()), env.write_scope().clone())
+            .await
+            .user_id;
+        let mut created = Vec::new();
+        for _ in 0..2 {
+            let record = perform_post_creation(
+                &env.write_scope(),
+                &env.media_content_locks(),
+                Arc::clone(&env.posts()),
+                Arc::clone(&env.feed_events()),
+                PostCreation {
+                    user_id,
+                    body: parse_post_body("First[fn:n]\n\n[fn:n] original note"),
+                    title: None,
+                    format: PostFormat::Org,
+                    slug_override: None,
+                    published_at: None,
+                    max_attempts: 100,
+                    summary: None,
+                    audiences: vec![AudienceTarget::Public],
+                    tags: Vec::new(),
+                    idempotency_key: None,
+                    expectations: PostBookkeepingExpectation::default(),
+                },
+            )
+            .await
+            .unwrap();
+            let record = confirmed(record);
+            let id = record.post_id;
+            assert!(
+                record
+                    .rendered_html
+                    .contains(&format!("id=\"post-{id}-fn-1\""))
+            );
+            created.push(record);
+        }
+        assert_ne!(created[0].rendered_html, created[1].rendered_html);
+        let first_id = created[0].post_id;
+        let updated = perform_post_update(
+            &env.write_scope(),
+            &env.media_content_locks(),
+            Arc::clone(&env.posts()),
+            Arc::clone(&env.feed_events()),
+            PostUpdate {
+                post_id: first_id,
+                editor_user_id: user_id,
+                body: parse_post_body("Changed[fn:n]\n\n[fn:n] revised note"),
+                title: None,
+                format: PostFormat::Org,
+                slug_override: None,
+                publish: PublishUpdate::Publish { at: None },
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+                tags: Some(Vec::new()),
+                request_clock: UtcInstant::now(),
+                expectations: PostBookkeepingExpectation::default(),
+            },
+        )
+        .await
+        .unwrap();
+        let updated = confirmed(updated);
+        assert!(
+            updated
+                .rendered_html
+                .contains(&format!("id=\"post-{first_id}-fn-1\""))
+        );
+        assert!(updated.rendered_html.contains("revised note"));
+        assert!(!updated.rendered_html.contains("original note"));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn post_id_reservation_batch_rejects_unbounded_requests(#[case] backend: Backend) {
+        let env = backend.setup().pristine().await;
+        let error = reserve_post_ids(&env.write_scope(), env.posts(), 257)
+            .await
+            .expect_err("batch must be bounded before rendering");
+        assert!(matches!(
+            error,
+            ReservePostIdError::Scope(WriteScopeError::Operation(_))
+        ));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn indeterminate_reservation_does_not_start_org_content_write(#[case] backend: Backend) {
+        let env = backend.setup().pristine().await;
+        let scope = env
+            .write_scope()
+            .with_commit_acknowledgement_loss_after_commit_for_test();
+        let error = reserve_post_id(&scope, env.posts())
+            .await
+            .expect_err("unacknowledged reservation cannot be used for rendering");
+        assert!(matches!(error, ReservePostIdError::CommitIndeterminate));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn reserved_org_identity_cannot_be_claimed_by_an_interleaved_markdown_create(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(Arc::clone(&env.users()), env.write_scope().clone())
+            .await
+            .user_id;
+        let reserved = reserve_post_id(&env.write_scope(), env.posts())
+            .await
+            .unwrap();
+        let markdown = perform_post_creation(
+            &env.write_scope(),
+            &env.media_content_locks(),
+            Arc::clone(&env.posts()),
+            Arc::clone(&env.feed_events()),
+            PostCreation {
+                user_id,
+                body: parse_post_body("interleaved Markdown"),
+                title: None,
+                format: PostFormat::Markdown,
+                slug_override: None,
+                published_at: None,
+                max_attempts: 100,
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+                tags: Vec::new(),
+                idempotency_key: None,
+                expectations: PostBookkeepingExpectation::default(),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(i64::from(confirmed(markdown).post_id) > i64::from(reserved));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
     async fn test_perform_post_update_canonicalizes_org_body(#[case] backend: Backend) {
         let env = backend.setup().await;
         let seeded_user = SeedUser::new()
@@ -4129,6 +4395,19 @@ mod tests {
         let storage: InternalError = PerformCreationError::Storage(sqlx::Error::PoolClosed).into();
         assert_eq!(storage.kind(), ErrorKind::Storage);
         assert_eq!(storage.public_message(), "storage operation failed");
+
+        let reservation = map_create_post_attempt_error(
+            CreatePostError::Reservation(ReservePostIdError::CommitIndeterminate),
+            false,
+        )
+        .expect_err("an indeterminate reservation cannot proceed to content writing");
+        assert!(matches!(
+            reservation,
+            PerformCreationError::Reservation(ReservePostIdError::CommitIndeterminate)
+        ));
+        let reservation: InternalError = reservation.into();
+        assert_eq!(reservation.kind(), ErrorKind::Internal);
+        assert_eq!(reservation.public_message(), "server operation failed");
     }
     #[apply(backends)]
     #[tokio::test]

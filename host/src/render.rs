@@ -2,6 +2,7 @@
 
 use crate::code_highlight::HighlightBudget;
 pub use crate::code_highlight::HighlightError;
+use common::ids::PostId;
 use common::media::{self, MediaReference};
 use common::post_body::PostBody;
 use common::post_summary::{
@@ -11,7 +12,7 @@ use common::post_summary::{
 use common::post_title::PostTitle;
 use common::render::{
     PostFormat, RenderedHtml, RenderedHtmlPart, RenderedPostTitle, TrustedProviderEmbed,
-    assemble_rendered_html,
+    assemble_org_post_rendered_html, assemble_rendered_html,
 };
 /// Renders `body` to HTML based on `format`, reporting unexpected highlighter failures.
 ///
@@ -33,7 +34,7 @@ use common::render::{
 pub fn render(body: &PostBody, format: &PostFormat) -> Result<RenderedHtml, HighlightError> {
     match format {
         PostFormat::Markdown => render_markdown_with_shortcodes(body),
-        PostFormat::Org => render_org_with_shortcodes(body),
+        PostFormat::Org => render_org_with_shortcodes(body, None),
         PostFormat::Html => Ok(common::render::sanitize(body)),
     }
 }
@@ -137,9 +138,16 @@ fn marker_with_nonce(source: &str, index: usize, mut next_nonce: impl FnMut() ->
     }
 }
 
-fn assemble_with_markers(html: &str, markers: Vec<(String, TrustedProviderEmbed)>) -> RenderedHtml {
+fn assemble_with_markers(
+    html: &str,
+    markers: Vec<(String, TrustedProviderEmbed)>,
+    post_id: Option<PostId>,
+) -> RenderedHtml {
     if markers.is_empty() {
-        return common::render::sanitize(html);
+        return post_id.map_or_else(
+            || common::render::sanitize(html),
+            |id| common::render::sanitize_org_post(id, html),
+        );
     }
     let mut owned_parts = Vec::new();
     let mut remaining = html;
@@ -165,7 +173,11 @@ fn assemble_with_markers(html: &str, markers: Vec<(String, TrustedProviderEmbed)
             parts
         })
         .collect();
-    assemble_rendered_html(&parts)
+    if let Some(id) = post_id {
+        assemble_org_post_rendered_html(id, &parts)
+    } else {
+        assemble_rendered_html(&parts)
+    }
 }
 
 fn markdown_options() -> pulldown_cmark::Options {
@@ -254,7 +266,7 @@ fn render_markdown_with_shortcodes_using(
     }
     let mut html = String::new();
     html::push_html(&mut html, events.into_iter());
-    Ok(assemble_with_markers(&html, markers))
+    Ok(assemble_with_markers(&html, markers, None))
 }
 
 /// Renders Org-mode to HTML using orgize.
@@ -378,6 +390,24 @@ impl orgize::export::Traverser for OrgShortcodeExport<'_> {
                     ctx,
                 );
             }
+            // HtmlExport skips these nodes (or may skip a descriptionless Link)
+            // without sending a matching Leave. Their content cannot contain
+            // a direct section paragraph, so do not put them on our stack.
+            orgize::export::Event::Enter(
+                container @ (orgize::export::Container::FnRef(_)
+                | orgize::export::Container::FnDef(_)
+                | orgize::export::Container::Keyword(_)
+                | orgize::export::Container::Link(_)
+                | orgize::export::Container::OrgTableRow(_)),
+            ) => self
+                .html
+                .event(orgize::export::Event::Enter(container), ctx),
+            orgize::export::Event::Leave(
+                container @ (orgize::export::Container::Link(_)
+                | orgize::export::Container::OrgTableRow(_)),
+            ) => self
+                .html
+                .event(orgize::export::Event::Leave(container), ctx),
             orgize::export::Event::Enter(container) => {
                 self.containers.push(Self::container(&container));
                 self.html
@@ -395,11 +425,16 @@ impl orgize::export::Traverser for OrgShortcodeExport<'_> {
     }
 }
 
-fn render_org_with_shortcodes(body: &str) -> Result<RenderedHtml, HighlightError> {
+fn render_org_with_shortcodes(
+    body: &str,
+    post_id: Option<PostId>,
+) -> Result<RenderedHtml, HighlightError> {
     let org = orgize::Org::parse(body);
     let mut export = OrgShortcodeExport {
         source: body,
-        html: orgize::export::HtmlExport::default(),
+        html: post_id.map_or_else(orgize::export::HtmlExport::default, |id| {
+            orgize::export::HtmlExport::with_footnote_namespace(id.into())
+        }),
         containers: Vec::new(),
         markers: Vec::new(),
         budget: HighlightBudget::default(),
@@ -410,7 +445,7 @@ fn render_org_with_shortcodes(body: &str) -> Result<RenderedHtml, HighlightError
         return Err(error);
     }
     let html = export.html.finish();
-    Ok(assemble_with_markers(&html, export.markers))
+    Ok(assemble_with_markers(&html, export.markers, post_id))
 }
 
 /// Renders a Post's title and body projections as one inseparable write aggregate.
@@ -425,7 +460,33 @@ pub fn render_post(
     body: PostBody,
     format: PostFormat,
 ) -> Result<PostRenderOutput, HighlightError> {
-    let rendered_html = render(&body, &format)?;
+    render_post_with_identity(title, body, format, None)
+}
+
+/// Renders the complete persisted Post projection with its stable fragment identity.
+///
+/// # Errors
+/// Returns a highlighting error if the body cannot be rendered safely.
+pub fn render_post_scoped(
+    post_id: PostId,
+    title: Option<PostTitle>,
+    body: PostBody,
+    format: PostFormat,
+) -> Result<PostRenderOutput, HighlightError> {
+    render_post_with_identity(title, body, format, Some(post_id))
+}
+
+fn render_post_with_identity(
+    title: Option<PostTitle>,
+    body: PostBody,
+    format: PostFormat,
+    post_id: Option<PostId>,
+) -> Result<PostRenderOutput, HighlightError> {
+    let rendered_html = if format == PostFormat::Org {
+        render_org_with_shortcodes(&body, post_id)?
+    } else {
+        render(&body, &format)?
+    };
     let media = extract_media_refs(rendered_html.as_ref());
     let rendered_title = title.as_ref().map(|title| render_title(title, &format));
     Ok(PostRenderOutput {
@@ -556,6 +617,8 @@ pub const INERT_ATTRS: &[&str] = &[
     // Advisory text and human-language metadata (`lang`/`title` are generic — permitted
     // on every tag; `hreflang` is the language of a link's *target*, not a link).
     "alt", "hreflang", "lang", "title",
+    // Numeric Post-scoped footnote fragment targets are inert, never fetched.
+    "id",
     // Media presentation, format and caption metadata. URL-bearing `src`/`poster`
     // remain pair-classified in `MEDIA_URL_ATTRS`.
     "controls", "default", "kind", "label", "srclang", "type",
@@ -766,6 +829,37 @@ mod tests {
 
     fn with_media(body: &PostBody, format: PostFormat) -> RenderOutput {
         super::with_media(body, &format).unwrap()
+    }
+
+    #[test]
+    fn org_footnote_post_identity_survives_sanitization_without_changing_other_formats() {
+        let body = parse_post_body(concat!(
+            "first[fn:n] again[fn:n]\n\n[fn:n] a [[https://example.org][link]] ",
+            "[[/media/upload/e3/b0/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/new.jpg]]",
+        ));
+        let first =
+            render_post_scoped(PostId::from(21), None, body.clone(), PostFormat::Org).unwrap();
+        let second = render_post_scoped(PostId::from(22), None, body, PostFormat::Org).unwrap();
+        let html = first.rendered_html().as_ref();
+        assert!(html.contains("id=\"post-21-fn-1\""), "{html}");
+        assert!(html.contains("id=\"post-21-fnref-1-2\""), "{html}");
+        assert!(html.contains("href=\"#post-21-fnref-1-1\""), "{html}");
+        assert!(html.contains("href=\"#post-21-fnref-1-2\""), "{html}");
+        assert!(html.contains("href=\"https://example.org\""), "{html}");
+        assert_eq!(
+            first.media().len(),
+            1,
+            "referenced note Media joins the rendering aggregate"
+        );
+        assert!(second.rendered_html().contains("id=\"post-22-fn-1\""));
+        assert!(!second.rendered_html().contains("post-21-"));
+
+        for format in [PostFormat::Markdown, PostFormat::Html] {
+            let body = parse_post_body("<sup id=\"post-21-fnref-1-1\">some text</sup>");
+            let scoped = render_post_scoped(PostId::from(21), None, body.clone(), format).unwrap();
+            assert_eq!(scoped, render_post(None, body, format).unwrap());
+            assert!(!scoped.rendered_html().contains(" id=\""));
+        }
     }
 
     #[test]
@@ -1115,7 +1209,28 @@ mod tests {
             assert!(ordinary.contains(expected), "ordinary: {ordinary}");
             assert!(rendered.contains(expected), "rendered: {rendered}");
         }
-        assert!(rendered.contains("youtube-nocookie.com/embed/dQw4w9WgXcQ"));
+        assert!(
+            rendered.contains("youtube-nocookie.com/embed/dQw4w9WgXcQ"),
+            "rendered: {rendered}"
+        );
+    }
+
+    #[test]
+    fn org_shortcodes_follow_exporter_skipped_nodes_without_losing_section_depth() {
+        let shortcode = "{{< youtube dQw4w9WgXcQ >}}";
+        for prefix in [
+            "before[fn:note]\n\n[fn:note] retained footnote",
+            "[[https://example.com/path]]",
+            "[[https://example.com/image.png]]",
+            "#+FOO: ignored keyword",
+        ] {
+            let source = format!("{prefix}\n\n{shortcode}\n");
+            let rendered = render(&parse_post_body(&source), PostFormat::Org);
+            assert!(
+                rendered.contains("youtube-nocookie.com/embed/dQw4w9WgXcQ"),
+                "source: {source}; rendered: {rendered}"
+            );
+        }
     }
 
     #[test]

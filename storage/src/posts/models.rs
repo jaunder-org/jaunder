@@ -365,6 +365,8 @@ pub struct PostMutation {
 #[derive(Clone)]
 pub struct CreatePostInput {
     pub user_id: UserId,
+    /// ID reserved before rendering; Org creates must carry this identity.
+    pub reserved_post_id: Option<PostId>,
     pub slug: Slug,
     /// Authored source and every derivative. Private fields on [`PostRenderOutput`]
     /// make title/body/format mismatches impossible at the storage boundary.
