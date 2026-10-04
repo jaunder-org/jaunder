@@ -31,6 +31,16 @@
    (jaunder-pub-test--in-buffer
     "#+TITLE: Hello\n#+PROPERTY: JAUNDER_STATUS published\n\nFirst body.\n"
     (jaunder-publish)
+    (should (string-match-p
+             (concat "#\\+PROPERTY: JAUNDER_STATUS published\n"
+                     "#\\+PROPERTY: JAUNDER_AUDIENCE private\n"
+                     "#\\+PROPERTY: JAUNDER_DATE_TZ [^\n]+\n"
+                     "#\\+PROPERTY: JAUNDER_DATE_UTC [^\n]+\n"
+                     "#\\+PROPERTY: JAUNDER_SLUG [^\n]+\n"
+                     "#\\+PROPERTY: JAUNDER_ID [^\n]+\n"
+                     "#\\+PROPERTY: JAUNDER_SYNCED [^\n]+\n"
+                     "#\\+PROPERTY: JAUNDER_SYNCED_AT [^\n]+\n")
+             (buffer-string)))
     (let ((id (jaunder--buffer-property "JAUNDER_ID"))
           (slug (jaunder--buffer-property "JAUNDER_SLUG"))
           (synced (jaunder--buffer-property "JAUNDER_SYNCED")))
