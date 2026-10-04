@@ -177,8 +177,9 @@ ADR-0092's bounded occupancy rule
 ([Offline code migrations](adr/drafts/offline-code-migration-queue.md)). The
 `0047` enqueues `rebuild_rendered_posts` again for the new syntax rules; `0048`
 re-enqueues it for Org footnotes, including databases that already drained
-`0047`; `0049` enqueues it again for catalog-wide token quality even after both
-earlier requests completed, and resets bounded progress to version 2
+`0047`; `0049` only enqueues it again for catalog-wide token quality even after
+both earlier requests completed, without resetting the separate bounded refresh
+checkpoint
 ([catalog-wide code token quality and repeatable projection refresh](adr/drafts/catalog-code-token-quality-and-refresh.md)).
 On SQLite, `0048` also initializes the short-write Post ID allocator shared by
 all Post creations; PostgreSQL uses its existing Post sequence. Org creation
@@ -186,9 +187,10 @@ reserves identity in a separate short `WriteScope` before rendering, outside the
 content-write transaction. Sandbox and performance seeding reserve up to 256 Org
 IDs in one bounded short scope per batch, then render outside it; performance
 revisions render with the existing Post ID. An unused reservation is allowed if
-rendering or creation fails. The offline rebuild drains before the bounded
-startup Post projection refresh; when it has already updated the same HTML, the
-refresh still records its checkpoint but does not enqueue duplicate events.
+rendering or creation fails. On installations with unfinished version-1
+progress, the offline rebuild drains first; the bounded startup pass then
+checkpoints without duplicate events for already-updated HTML. A completed
+version-1 checkpoint is not reopened by `0049`.
 
 ### Crate layout and the generic store pattern
 
@@ -882,18 +884,19 @@ summary, immutable creation time, prior modification time, and
 publication/deletion timestamps; child values are copied rather than linked to
 mutable tag or audience lookup rows. A semantic no-op writes neither a Revision
 nor an updated timestamp. Creation is revision-free because it has no prior
-state ([ADR-0136](adr/0136-local-post-lifecycle.md)). The bounded, checkpointed
-highlighting refresh is a distinct **presentation-only** transition over current
-active Org and Markdown projections: changed HTML, derived Media references and
-affected public-feed events commit together after a CAS on current
-source/format/rendered bytes and active status. Version 2 repeats the bounded
-pass after the new offline rebuild, including on installations that completed
-version 1; byte-equal rows do not enqueue duplicate events. It preserves
+state ([ADR-0136](adr/0136-local-post-lifecycle.md)). The original version-1
+bounded, checkpointed highlighting refresh remains a distinct
+**presentation-only** transition over current active Org and Markdown
+projections: changed HTML, derived Media references and affected public-feed
+events commit together after a CAS on current source/format/rendered bytes and
+active status. Migration `0049` leaves its checkpoint untouched; its queued
+offline rebuild covers every current Post instead of restarting the bounded
+pass. Byte-equal rows enqueue no duplicate events. Both paths preserve
 timestamps, AtomPub Member content ETags, native source and every historical
 Post Revision; Deleted and HTML-format Posts are skipped by the bounded pass but
-may have changed current derivatives rebuilt by the separate offline operation.
-It resumes before the new server accepts traffic, and old-version writers must
-be drained first
+may have changed current derivatives rebuilt by the offline operation. Any
+unfinished version-1 pass resumes before the new server accepts traffic, and
+old-version writers must be drained first
 ([host code-block highlighting and projection refresh](adr/drafts/host-code-block-highlighting-and-projection-refresh.md);
 [catalog-wide code token quality and repeatable projection refresh](adr/drafts/catalog-code-token-quality-and-refresh.md)).
 Media referenced by an owner's retained current Post or revision participates in

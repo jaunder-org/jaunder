@@ -54,13 +54,16 @@ classification of every expression.
 ## Browser presentation evidence
 
 A preserved local sandbox upgraded an already-populated database through `0049`
-(progress version 2, completed; offline queue empty). Chromium captures compare
-the reported production excerpts at the original capture with local recreations
-using those same historical bytes and supported labels after it; the live
-production permalinks have **not** been deployed with this change. The
-historical malformed Haskell excerpt becomes intact plain code rather than a
-whole-block keyword cascade. The unchanged Emacs Lisp excerpt retains existing
-roles and now distinguishes evaluated call heads.
+(offline queue empty). These captures predate the removal of an unnecessary
+version-2 checkpoint reset; that change affects startup bookkeeping, not the
+renderer, stored HTML, or visual output. The final enqueue-only migration has
+separate dual-backend tests. Chromium captures compare the reported production
+excerpts at the original capture with local recreations using those same
+historical bytes and supported labels after it; the live production permalinks
+have **not** been deployed with this change. The historical malformed Haskell
+excerpt becomes intact plain code rather than a whole-block keyword cascade. The
+unchanged Emacs Lisp excerpt retains existing roles and now distinguishes
+evaluated call heads.
 
 After the author corrected Haskell, the public code block was recaptured as
 `host/src/code_highlight/fixtures/production-haskell.hs` (SHA-256
@@ -122,7 +125,7 @@ Emacs Lisp query pattern, a too-coarse capture-to-hook mapping and a renderer
 EOF detail; changing engines would not cure the shared Haskell parse or
 source-fidelity constraints. Preserve the existing budgets, typed errors,
 class-only sanitization and source contract. Add only reviewed hooks, with CSS
-scoped to Post-body `pre code`; refresh stored projections through new durable
-version 2 rather than altering authored source. The CLI's absence and the
-shared-query limitation are recorded rather than presented as independent
-confirmation.
+scoped to Post-body `pre code`; refresh stored projections by enqueueing the
+existing offline rebuild without restarting version-1 bounded progress or
+altering authored source. The CLI's absence and the shared-query limitation are
+recorded rather than presented as independent confirmation.

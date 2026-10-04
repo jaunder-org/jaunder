@@ -18,7 +18,9 @@ not ordinary call heads. Other reviewed capture names (`diff.plus`/`diff.minus`,
 headings/quotes and calls/definitions) collapse into indistinguishable classes.
 Earlier offline rebuilds and the version-1 bounded refresh can already be
 complete on deployed installations. Changing only the renderer would leave old
-stored Post projections stale.
+stored Post projections stale. The existing offline rebuild already visits
+**every** current Post; restarting the separate bounded pass for an ordinary
+re-render would duplicate the work without adding coverage.
 
 The approved
 [quality spec](../../archive/2026-10-03-issue-1678-code-highlighting-quality-spec.md)
@@ -58,19 +60,19 @@ existing Style Contract v1 packages remain valid, and authenticated Home retains
 the built-in stylesheet. This refines the earlier draft's **ten**-hook
 vocabulary without opening arbitrary classes.
 
-Migration `0049` enqueues the existing offline `rebuild_rendered_posts`
-operation anew and resets the durable bounded progress row to version 2, cursor
-zero and incomplete even if version 1 finished. Drain the offline rebuild before
-the version-2 active Org/Markdown bounded pass and before serving traffic. The
-offline operation may rebuild changed derivatives of retained Deleted and
-HTML-format Posts, while the bounded pass skips them; this remains two separate
-operations. The existing per-batch lock/CAS, atomic checkpoint, Media reference
-and public Syndication Feed outbox path is reused. A byte-equal projection
-enqueues no duplicate event. The worker asynchronously regenerates feed bytes
-and validators from those committed events; its work is not part of the refresh
-transaction. A version-1 writer must fail its checkpoint rather than silently
-skip version 2. Source, timestamps, AtomPub Member ETags and Post Revisions
-remain unchanged.
+Migration `0049` **only enqueues** the existing offline `rebuild_rendered_posts`
+operation anew. SQLx applies that request once even when older queue rows were
+already drained; the shared dispatcher needs no new operation case. Drain the
+request under the existing storage lock before traffic. Its transaction
+recomputes changed current derivatives for active, retained Deleted and
+HTML-format Posts, reconciles Media references and affected public Syndication
+Feed outbox events, and deletes the queue row together. A byte-equal projection
+enqueues no duplicate event; a failed transaction leaves the request to retry.
+The worker asynchronously regenerates feed bytes and validators from committed
+events. Leave the established version-1 bounded refresh checkpoint and pass
+implementation untouched: an unfinished original pass may complete through its
+existing startup path, but this ordinary re-render does not restart it. Source,
+timestamps, AtomPub Member ETags and Post Revisions remain unchanged.
 
 ## Consequences
 
@@ -78,7 +80,7 @@ The quote-aware Emacs Lisp pass parses a bounded block again to inspect quote
 ancestry; malformed Haskell with an unterminated leading pragma displays intact
 plain code instead of false certainty. The corpus is a gate for adding or
 changing grammars. Adding any further visual role needs a reviewed sanitizer and
-scoped-style change, not a raw query name. Installation upgrades may spend time
-in both offline rebuild and the bounded version-2 pass before traffic; failures
-remain resumable and visible. Concurrent old-version writers must be stopped
-before the migration, as with the previous refresh decision.
+scoped-style change, not a raw query name. Installation upgrades perform one
+newly enqueued offline rebuild before traffic, not a second bounded pass; a
+failed queue transaction remains retryable. Concurrent old-version writers must
+be stopped before the migration, as with the previous refresh decision.

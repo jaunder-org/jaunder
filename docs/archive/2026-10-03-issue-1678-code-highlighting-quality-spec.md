@@ -50,21 +50,21 @@ promised.
   and Post Revisions. Keep the existing per-block/per-Post parsing limits and
   typed failure boundary; an unsupported or over-budget block remains escaped
   plain code.
-- Refresh already-stored **active** Org and Markdown Post projections through
-  the established bounded, resumable presentation-only transition before serving
-  the new version; its bounded pass skips Deleted and HTML-format Posts. Use a
-  new durable enqueue/version transition so installations that already drained
-  the #1655 and later renderer migrations run the changed renderer once, then
-  checkpoint without duplicate feed events if the offline rebuild already
-  updated a row. As in the existing offline rebuild contract, that separate
-  operation may update changed current derivatives of retained Deleted/HTML
-  Posts; it does not rewrite their source or revisions. Preserve Post identity,
-  authoring format, timestamps, AtomPub Member content ETag and immutable
-  revisions; maintain derived Media references, public Syndication Feeds and
-  validators when rendered bytes change. Old-version writers must be fenced.
-  Document any new security, Style Contract, engine or transition decision in a
-  numberless ADR draft and project it into `docs/ARCHITECTURE.md`; consider
-  `CONTEXT.md` for vocabulary changes.
+- Refresh already-stored Post projections by having a new SQLx migration
+  **only enqueue** the existing offline `rebuild_rendered_posts` operation,
+  including on installations that drained earlier renderer requests. Its
+  existing transaction and queue deletion rebuild changed current derivatives
+  of active, retained Deleted and HTML-format Posts before serving traffic;
+  unchanged bytes must not duplicate public Syndication Feed events. Do not
+  restart or version the separate bounded active-Post refresh established by
+  #1655: its existing durable checkpoint remains untouched by this ordinary
+  re-render request. Preserve Post identity, authoring format, source,
+  timestamps, AtomPub Member content ETag and immutable revisions; maintain
+  derived Media references, public Syndication Feeds and validators when
+  rendered bytes change. Old-version writers must be fenced. Document any new
+  security, Style Contract, engine or transition decision in a numberless ADR
+  draft and project it into `docs/ARCHITECTURE.md`; consider `CONTEXT.md` for
+  vocabulary changes.
 
 ## Acceptance
 
@@ -88,11 +88,12 @@ promised.
   outside Post-body code cannot color content. Existing HTML safety,
   resource-limit, error-propagation and source-fidelity tests stay green.
 - Tests on SQLite and PostgreSQL prove new and existing active Post projections,
-  a fresh durable enqueue on databases whose earlier refreshes completed,
-  restart/resume and idempotent refresh, bounded-pass exclusion of Deleted/HTML
-  Posts, preservation of source/revisions/timestamps/Member ETags, and correct
-  public Syndication Feed/validator updates for changed markup. A changed
-  projection must not be an unrecorded author edit.
+  a fresh durable enqueue after earlier requests completed, transactional retry
+  and idempotent drain, and an unchanged bounded-refresh checkpoint. Prove
+  preservation of source/revisions/timestamps/Member ETags, retained
+  Deleted/HTML current-derivative behavior, and correct public Syndication
+  Feed/validator updates for changed markup. A changed projection must not be
+  an unrecorded author edit.
 - Before presentation changes, capture baseline images. Afterward, provide
   comparable **transient manual-review** before/after screenshots for the two
   production permalinks above and representative Local and authenticated Home

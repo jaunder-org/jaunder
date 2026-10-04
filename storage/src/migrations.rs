@@ -110,6 +110,18 @@ mod tests {
             }
         }
 
+        fn latest_migration_version(&self) -> i64 {
+            let migrator = match &self.pool {
+                CloseablePool::Sqlite(_) => &SQLITE_MIGRATOR,
+                CloseablePool::Postgres(_) => &POSTGRES_MIGRATOR,
+            };
+            migrator
+                .iter()
+                .map(|migration| migration.version)
+                .max()
+                .expect("each backend has migrations")
+        }
+
         async fn drain_pending_code_migrations(&self) {
             self.drain_pending(&|| Ok(()))
                 .await
@@ -712,11 +724,6 @@ main = putStrLn "hello"
             1,
             "bounded refresh can checkpoint without duplicate changes afterward"
         );
-        // The original migration's version-1 checkpoint is intentionally
-        // rejected by the current renderer. Apply the later migrations before
-        // exercising today's bounded version-2 pass.
-        db.migrate_current().await.unwrap();
-        db.drain_pending_code_migrations().await;
         let factory = match &db.pool {
             CloseablePool::Sqlite(pool) => crate::StorageFactory::sqlite(pool.clone()),
             CloseablePool::Postgres(pool) => crate::StorageFactory::postgres(pool.clone()),
@@ -876,7 +883,7 @@ main = putStrLn "hello"
 
     #[apply(backends)]
     #[tokio::test]
-    async fn migration_0049_requeues_quality_refresh_after_prior_completion(
+    async fn migration_0049_requeues_quality_rebuild_without_restarting_refresh(
         #[case] backend: Backend,
     ) {
         let db = MigrationDatabase::new(backend).await;
@@ -969,9 +976,9 @@ module Main where
             )
             .await
             .unwrap();
-        assert_eq!(progress[0].0, "2");
-        assert_eq!(progress[0].1, "0");
-        assert_eq!(progress[0].2, "0");
+        assert_eq!(progress[0].0, "1");
+        assert_eq!(progress[0].1, "77");
+        assert_eq!(progress[0].2, "1");
         let pending = db
             .pool
             .string_quintuples(
@@ -1054,7 +1061,7 @@ module Main where
                 checkpoint[0].1.as_str(),
                 checkpoint[0].2.as_str()
             ],
-            ["2", "82", "1"]
+            ["1", "77", "1"]
         );
         assert_eq!(db.pool.string_quintuples(snapshot).await.unwrap(), after);
         assert_eq!(
@@ -1063,7 +1070,7 @@ module Main where
                 .await
                 .unwrap(),
             6,
-            "bounded active-Post pass must not duplicate offline rebuild events"
+            "completed version-1 pass must not duplicate offline rebuild events"
         );
         factory.refresh_current_post_projections().await.unwrap();
         assert_eq!(
@@ -2306,7 +2313,7 @@ module Main where
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            49,
+            db.latest_migration_version(),
         );
     }
 
@@ -2778,7 +2785,7 @@ module Main where
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            49
+            db.latest_migration_version()
         );
         assert_eq!(
             db.pool

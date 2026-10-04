@@ -91,31 +91,28 @@ for unlabeled/HTML/unknown code, new visual-snapshot variants.
     rendering behavior crosses storage; broader gate only at integration
     boundaries.
 - [x] **4. Re-admit completed installations and refresh stored projections
-      safely.** Add a fresh, versioned migration for both backends that enqueues
-      the existing offline `rebuild_rendered_posts` operation and
-      resets/advances the durable bounded-refresh version even when earlier
-      #1655/#1670 refreshes completed. Reuse the existing pre-traffic ordering
-      and batch/CAS path in `storage/src/posts/refresh.rs`; do not render inside
-      SQL migrations. Offline rebuild may update changed current derivatives of
-      retained Deleted/HTML Posts, while the bounded pass processes only active
-      Org/Markdown Posts. Preserve source, timestamps, revisions and AtomPub
-      Member ETags; commit changed projection, Media references, affected public
-      Syndication Feed outbox events and checkpoint atomically without duplicate
-      events. The worker then regenerates feed representations and validators;
-      those asynchronous results are not part of the refresh transaction.
-  - Contract: old writers drained; concurrency, stale author edits/deletes,
-    failure, partial batch and repeated startup cannot skip or double-apply a
-    Post. A byte-identical projection causes no feed event. Only committed
-    checkpoints progress.
-  - Verification: `#[apply(backends)]` migration-from-already-complete,
-    interruption/resume, concurrent-start/edit/delete, no-op and rollback tests;
-    include stale active Org/Markdown, Deleted and HTML-format Posts to prove
-    offline-rebuild effects separately from bounded-pass eligibility and cursor
-    progress. Assert both backends' exact checkpoint, source/revision/timestamp/
-    ETag and outbox events; consume affected events and prove regenerated public
-    feed bytes and validators change when representation bytes change. Focused
-    `devtool run -- cargo xtask test-local -- -p storage refresh` before
-    integration gates.
+      safely.** Add one SQLx migration per backend that only enqueues the
+      existing offline `rebuild_rendered_posts` operation, even after earlier
+      #1655/#1670 requests drained. Do not dispatch a version-specific Rust
+      operation, render inside SQL, or reset the separate version-1 bounded
+      refresh checkpoint. The queue drain runs before traffic and updates only
+      changed current derivatives of active, retained Deleted and HTML-format
+      Posts without altering source, timestamps, revisions or AtomPub Member
+      ETags. Its transaction commits changed projection, Media references,
+      affected public Syndication Feed outbox events and queue deletion together;
+      the worker regenerates feed bytes and validators asynchronously.
+  - Contract: old writers drained; a failure leaves the queue row for retry,
+    repeated startup cannot enqueue twice, and a byte-identical projection
+    produces no new feed event. The existing bounded refresh remains available
+    for installations with unfinished version-1 progress but is not rearmed by
+    this ordinary re-render request.
+  - Verification: `#[apply(backends)]` migration-from-already-drained,
+    idempotent open, rollback/retry and no-op checks, including active Org and
+    Markdown, retained Deleted and HTML-format Posts. Assert unchanged bounded
+    progress, source/revision/timestamp/ETag, and correct outbox events; consume
+    affected events and prove regenerated public feed bytes and validators
+    change when representation bytes change. Keep the existing bounded-refresh
+    tests as the proof of that independent version-1 path.
 - [x] **5. Prove public results and prepare the reviewed change.** Verify new
       and refreshed code on public permalink, Local and authenticated Home,
       including unknown-language fallback and public Syndication Feeds; inspect
