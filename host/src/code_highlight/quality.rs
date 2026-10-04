@@ -60,6 +60,41 @@ fn render_code(label: &str, code: &str, format: PostFormat) -> String {
         .to_string()
 }
 
+// Derive categories from rendered scopes, not expected corpus roles: an
+// unreviewed broad capture can nest around valid narrow token captures.
+fn whole_block_categories(decoded: &str, roles: &[Vec<&str>]) -> Vec<String> {
+    let nonblank = decoded
+        .as_bytes()
+        .iter()
+        .enumerate()
+        .filter(|(_, byte)| !byte.is_ascii_whitespace())
+        .map(|(offset, _)| offset)
+        .collect::<Vec<_>>();
+    if nonblank.len() < 12 {
+        return Vec::new();
+    }
+    let categories = nonblank
+        .iter()
+        .flat_map(|&offset| roles[offset].iter().copied())
+        .filter(|role| role.starts_with("j-syn-"))
+        .collect::<std::collections::BTreeSet<_>>();
+    categories
+        .into_iter()
+        .filter_map(|category| {
+            let covered = nonblank
+                .iter()
+                .filter(|&&offset| roles[offset].contains(&category))
+                .count();
+            (covered * 10 >= nonblank.len() * 9).then(|| {
+                format!(
+                    "{category} covers {covered}/{} nonblank source bytes",
+                    nonblank.len()
+                )
+            })
+        })
+        .collect()
+}
+
 fn captured_bytes(language: tree_sitter::Language, query: &str, code: &str, role: &str) -> usize {
     use tree_sitter_highlight::{HighlightEvent, Highlighter};
 
@@ -196,40 +231,28 @@ fn catalog_corpus_names_every_grammar_and_checks_reviewed_token_ranges() {
                     ));
                 }
             }
-            // A sample with distinct reviewed roles may not paint nearly all
-            // of its nonblank source as one category. This catches gross
-            // whole-block cascades outside the named Haskell regression.
-            let nonblank = decoded
-                .as_bytes()
-                .iter()
-                .enumerate()
-                .filter(|(_, byte)| !byte.is_ascii_whitespace())
-                .map(|(offset, _)| offset)
-                .collect::<Vec<_>>();
-            if nonblank.len() >= 12
-                && case
-                    .roles
-                    .iter()
-                    .any(|role| role.role.class() != case.roles[0].role.class())
-            {
-                for expectation in case.roles {
-                    let category = format!("j-syn-{}", expectation.role.class());
-                    let covered = nonblank
-                        .iter()
-                        .filter(|&&offset| roles[offset].contains(&category.as_str()))
-                        .count();
-                    if covered * 10 >= nonblank.len() * 9 {
-                        failures.push(format!(
-                            "{}/{format:?}: {category} covers {covered}/{} nonblank source bytes; misleading whole-block color: {html}",
-                            case.label,
-                            nonblank.len()
-                        ));
-                    }
-                }
+            for overcolored in whole_block_categories(&decoded, &roles) {
+                failures.push(format!(
+                    "{}/{format:?}: {overcolored}; misleading whole-block color: {html}",
+                    case.label
+                ));
             }
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn whole_block_oracle_rejects_unexpected_roles_nesting_valid_ranges() {
+    let code = "let answer = 42;\n";
+    let mut roles = vec![vec!["j-syn-function-call"]; code.len()];
+    for active in &mut roles[.."let".len()] {
+        active.push("j-syn-keyword");
+    }
+    assert_eq!(
+        whole_block_categories(code, &roles),
+        ["j-syn-function-call covers 13/13 nonblank source bytes"]
+    );
 }
 
 #[test]

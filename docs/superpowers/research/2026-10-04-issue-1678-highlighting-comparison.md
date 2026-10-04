@@ -6,11 +6,13 @@ The checked-in `host/src/code_highlight/quality/catalog.rs` pins UTF-8 byte
 starts, source text and typed expected roles for all **42** grammar variants.
 The test renders each canonical label through both Org and Markdown, compares
 decoded code to the same exporter's unknown-language/plain rendering, and checks
-role coverage even when captures nest. A separate alias test renders every
-declared label through both exporters and compares its token markup with the
-canonical label. The two reported production excerpts are byte-for-byte fixtures
-captured from their public `<code>` elements on 2026-10-04, including the
-Haskell typo; malformed, quoted and unknown-language cases are separate
+role coverage at each exact range even when captures nest. A separate guard
+rejects any rendered category spanning at least 90% of nonblank sample bytes,
+including categories absent from the expected-range list. An alias test renders
+every declared label through both exporters and compares its token markup with
+the canonical label. The two reported production excerpts are byte-for-byte
+fixtures captured from their public `<code>` elements on 2026-10-04, including
+the Haskell typo; malformed, quoted and unknown-language cases are separate
 regressions.
 
 `tree-sitter` CLI is not on the pinned devShell PATH in this checkout. Instead
@@ -61,9 +63,13 @@ states, `issue-1678-matched` was seeded and captured under `origin/main`
 (`df0dc8f72`), then **the same SQLite workspace, four Posts and published Theme
 Package** were upgraded and captured under `cd5c28ef` (this branch). The Haskell
 and Emacs Lisp code uses the byte-exact production fixtures and supported
-labels; Diff and Markdown exercise the other repaired roles. The manifest and 24
-captures per phase are transient under `/tmp/pi-playwright/issue-1678/matched/`:
-`manifest.json`, `before-evidence.json`, `after-evidence.json`, and
+labels. The manifest's code bytes equal the checked-in fixtures (SHA-256
+`e3fcf0b2326dfc74b902a3efd6936f6b0e84e09f4b153c5daeaa47e5f3a6a364` and
+`deb7e0040bc9cfb03c5905e800d1af893c864b56714c47af2b1a92340337250f`). The Haskell
+opening ends in malformed `#-`, **not** the closing `#-}`. Diff and Markdown
+exercise the other repaired roles. The manifest and 24 captures per phase are
+transient under `/tmp/pi-playwright/issue-1678/matched/`: `manifest.json`,
+`before-evidence.json`, `after-evidence.json`, and
 `{before,after}-{studio,terminal,reader,custom}-{name}-{390,1280}.png`. Public
 permalinks cover both excerpts at both widths in every built-in theme and the
 custom package; Studio also covers Local and authenticated Home at both widths.
