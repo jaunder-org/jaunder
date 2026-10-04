@@ -672,10 +672,12 @@ impl HighlightBudget {
         let no_highlight = CAPTURES
             .iter()
             .position(|capture| *capture == "none")
+            // cov:ignore-start: the fixed capture registry always includes `none`; no source or query can remove it at runtime.
             .ok_or_else(|| HighlightError::Initialization {
                 language,
                 detail: "closed capture registry is missing `none`".into(),
             })?;
+        // cov:ignore-stop
         let events = events.map(|event| {
             event.map(|event| match event {
                 HighlightEvent::Source { end, .. } => {
@@ -788,12 +790,12 @@ mod tests {
                     let source = match format {
                         PostFormat::Org => format!("#+begin_src {alias}\n{code}#+end_src"),
                         PostFormat::Markdown => format!("```{alias}\n{code}```"),
-                        PostFormat::Html => unreachable!(),
+                        PostFormat::Html => unreachable!("catalog tests exclude HTML"),
                     };
                     let body: PostBody = source.parse().unwrap();
                     let html = crate::render::render(&body, &format)
                         .unwrap_or_else(|error| {
-                            panic!("{} alias {alias}/{format:?}: {error}", grammar.name)
+                            panic!("{} alias {alias}/{format:?}: {error}", grammar.name) // cov:ignore: pinned catalog aliases render successfully; this is diagnostic-only on a regression.
                         })
                         .to_string();
                     assert!(
@@ -813,7 +815,7 @@ mod tests {
                         PostFormat::Markdown => {
                             format!("```{}\n{code}```", grammar.labels[0])
                         }
-                        PostFormat::Html => unreachable!(),
+                        PostFormat::Html => unreachable!("catalog tests exclude HTML"),
                     };
                     let canonical_body: PostBody = canonical_source.parse().unwrap();
                     let canonical_html = crate::render::render(&canonical_body, &format)

@@ -44,9 +44,11 @@ pub(super) struct ExpectedRole {
     pub role: Role,
 }
 
+// cov:ignore-start: `at` only constructs static corpus cases during compile-time evaluation; no runtime call exists.
 const fn at(start: usize, token: &'static str, role: Role) -> ExpectedRole {
     ExpectedRole { start, token, role }
 }
+// cov:ignore-stop
 
 pub(super) struct Case {
     pub label: &'static str,

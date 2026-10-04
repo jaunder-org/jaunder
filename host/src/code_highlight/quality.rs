@@ -95,6 +95,51 @@ fn whole_block_categories(decoded: &str, roles: &[Vec<&str>]) -> Vec<String> {
         .collect()
 }
 
+fn catalog_failures(
+    case: &catalog::Case,
+    format: PostFormat,
+    html: &str,
+    decoded: &str,
+    roles: &[Vec<&str>],
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    for expectation in case.roles {
+        let start = expectation.start;
+        let end = start + expectation.token.len();
+        assert_eq!(
+            case.code.get(start..end),
+            Some(expectation.token),
+            "{}/{format:?}: bad fixture range {start}..{end}",
+            case.label
+        );
+        assert_eq!(
+            decoded.get(start..end),
+            Some(expectation.token),
+            "{}/{format:?}: exporter displaced source range {start}..{end}",
+            case.label
+        );
+        let expected = format!("j-syn-{}", expectation.role.class());
+        let active = &roles[start..end];
+        if !active
+            .iter()
+            .all(|roles| roles.contains(&expected.as_str()))
+        {
+            failures.push(format!(
+                "{}/{format:?}: bytes {start}..{end} {token:?} expected {expected}, got {active:?}; HTML: {html}",
+                case.label,
+                token = expectation.token
+            ));
+        }
+    }
+    for overcolored in whole_block_categories(decoded, roles) {
+        failures.push(format!(
+            "{}/{format:?}: {overcolored}; misleading whole-block color: {html}",
+            case.label
+        ));
+    }
+    failures
+}
+
 fn captured_bytes(language: tree_sitter::Language, query: &str, code: &str, role: &str) -> usize {
     use tree_sitter_highlight::{HighlightEvent, Highlighter};
 
@@ -212,40 +257,7 @@ fn catalog_corpus_names_every_grammar_and_checks_reviewed_token_ranges() {
                 "{}/{format:?}: changed decoded source; highlighted={html}; plain={plain_html}",
                 case.label
             );
-            for expectation in case.roles {
-                let start = expectation.start;
-                let end = start + expectation.token.len();
-                assert_eq!(
-                    case.code.get(start..end),
-                    Some(expectation.token),
-                    "{}/{format:?}: bad fixture range {start}..{end}",
-                    case.label
-                );
-                assert_eq!(
-                    decoded.get(start..end),
-                    Some(expectation.token),
-                    "{}/{format:?}: exporter displaced source range {start}..{end}",
-                    case.label
-                );
-                let expected = format!("j-syn-{}", expectation.role.class());
-                let active = &roles[start..end];
-                if !active
-                    .iter()
-                    .all(|roles| roles.contains(&expected.as_str()))
-                {
-                    failures.push(format!(
-                        "{}/{format:?}: bytes {start}..{end} {token:?} expected {expected}, got {active:?}; HTML: {html}",
-                        case.label,
-                        token = expectation.token
-                    ));
-                }
-            }
-            for overcolored in whole_block_categories(&decoded, &roles) {
-                failures.push(format!(
-                    "{}/{format:?}: {overcolored}; misleading whole-block color: {html}",
-                    case.label
-                ));
-            }
+            failures.extend(catalog_failures(case, format, &html, &decoded, &roles));
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
@@ -262,6 +274,31 @@ fn whole_block_oracle_rejects_unexpected_roles_nesting_valid_ranges() {
         whole_block_categories(code, &roles),
         ["j-syn-function-call covers 13/13 nonblank source bytes"]
     );
+}
+
+#[test]
+fn short_code_does_not_trigger_whole_block_guard() {
+    let code = "tiny";
+    assert!(whole_block_categories(code, &vec![vec!["j-syn-keyword"]; code.len()]).is_empty());
+}
+
+#[test]
+fn catalog_failure_messages_identify_missing_ranges_and_whole_block_roles() {
+    let code = "let answer = 42;\n";
+    let case = catalog::Case {
+        label: "rust",
+        code,
+        roles: &[catalog::ExpectedRole {
+            start: 0,
+            token: "let",
+            role: catalog::Role::String,
+        }],
+    };
+    let roles = vec![vec!["j-syn-keyword"]; code.len()];
+    let failures = catalog_failures(&case, PostFormat::Org, "synthetic HTML", code, &roles);
+    assert_eq!(failures.len(), 2);
+    assert!(failures[0].contains("rust/Org: bytes 0..3 \"let\" expected j-syn-string"));
+    assert!(failures[1].contains("j-syn-keyword covers 13/13 nonblank source bytes"));
 }
 
 #[test]
