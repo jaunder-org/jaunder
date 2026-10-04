@@ -54,10 +54,29 @@ the linked production excerpts before this change with local recreations using
 the same code and supported labels after it; the live production permalinks have
 **not** been deployed with this change. The malformed Haskell excerpt is intact
 plain code instead of a whole-block keyword cascade. The Emacs Lisp excerpt
-retains existing roles and now distinguishes evaluated call heads. Transient
-screenshots cover 390px and 1280px, public permalinks, Local, authenticated
-Home, Studio, Terminal, Reader, and a published custom Theme Package; they are
-not repository `@visual` snapshots.
+retains existing roles and now distinguishes evaluated call heads.
+
+To make the before/after proof reproducible rather than compare unrelated local
+states, `issue-1678-matched` was seeded and captured under `origin/main`
+(`df0dc8f72`), then **the same SQLite workspace, four Posts and published Theme
+Package** were upgraded and captured under `cd5c28ef` (this branch). The Haskell
+and Emacs Lisp code uses the byte-exact production fixtures and supported
+labels; Diff and Markdown exercise the other repaired roles. The manifest and 24
+captures per phase are transient under `/tmp/pi-playwright/issue-1678/matched/`:
+`manifest.json`, `before-evidence.json`, `after-evidence.json`, and
+`{before,after}-{studio,terminal,reader,custom}-{name}-{390,1280}.png`. Public
+permalinks cover both excerpts at both widths in every built-in theme and the
+custom package; Studio also covers Local and authenticated Home at both widths.
+The custom **public** selection applies to the author's permalinks, not the
+viewer's Local/Home surfaces. For a direct review, five transient side-by-side
+images named `pair-studio-haskell-mobile.png`, `pair-studio-elisp-mobile.png`,
+`pair-custom-diff-mobile.png`, `pair-home-desktop-code.png`, and
+`pair-local-desktop-code.png` are in that folder. The latter two crop the same
+Post-body code region from desktop feed captures because their scroll-container
+positions differ; the unmodified full images remain alongside them. No image is
+a repository `@visual` snapshot. Production-before screenshots remain a separate
+real-site anchor, **not** a claim that a live production after-image exists
+before deployment.
 
 The focused browser flow passed `expectAccessible` on authenticated Home.
 Measured minimum contrast among visible code-token roles in the local captures
