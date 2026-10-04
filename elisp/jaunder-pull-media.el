@@ -15,6 +15,7 @@
 (require 'url-util)
 (require 'cmark)
 (require 'plz)
+(require 'jaunder-transport)
 (require 'org)
 (require 'org-element)
 (require 'jaunder-warn)
@@ -883,9 +884,11 @@ public media identity and URL hash are valid only for the direct response."
                (file-regular-p destination))
     (error "jaunder pull media: temporary destination is not a regular file: %S" destination))
   (let ((plz-curl-default-args
-         (delete "--location" (copy-sequence plz-curl-default-args))))
+         (jaunder--bounded-read-curl-args
+          (delete "--location" (copy-sequence plz-curl-default-args)))))
     (condition-case err
-        (let ((response (plz 'get url :as 'response :decode nil)))
+        (let ((response (plz 'get url :as 'response :decode nil
+                             :connect-timeout jaunder--http-connect-timeout-seconds)))
           (jaunder--pull-media-write-bytes (plz-response-body response) destination)
           (list :status (plz-response-status response)
                 :headers (plz-response-headers response)))

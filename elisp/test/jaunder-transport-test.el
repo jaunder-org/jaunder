@@ -102,6 +102,65 @@
       (dolist (method '("POST" "GET" "PUT" "DELETE"))
         (jaunder--http-request method "https://blog/atompub/alice/posts/1")))))
 
+(ert-deftest jaunder-http-read-bounds-are-inactivity-not-whole-request ()
+  "A slow but transferring read survives; a stalled read eventually fails."
+  (let ((jaunder--active-blog '(:base-url "https://blog" :username "alice"))
+        captured)
+    (cl-letf (((symbol-function 'jaunder--auth-secret) (lambda () "secret"))
+              ((symbol-function 'plz)
+               (lambda (_verb _url &rest args)
+                 (setq captured (list args plz-curl-default-args))
+                 (make-plz-response :status 200 :headers nil :body ""))))
+      (jaunder--http-request "GET" "https://blog/atompub/alice/posts/1")
+      (should (equal (plist-get (car captured) :connect-timeout) 15))
+      (should (equal (cadr captured)
+                     (append plz-curl-default-args
+                             '("--speed-limit" "1" "--speed-time" "60"))))
+      (should-not (plist-get (car captured) :timeout))
+      (jaunder--http-request "PUT" "https://blog/atompub/alice/posts/1" "bytes")
+      (should (= (plist-get (car captured) :connect-timeout) 15))
+      (should-not (member "--speed-limit" (cadr captured))))))
+
+(ert-deftest jaunder-http-timeout-options-reach-curl-and-curl-failure-is-not-a-response ()
+  "Real plz passes both bounds to curl; exit 28 never becomes a partial Post."
+  (let* ((root (make-temp-file "jaunder-fake-curl-" t))
+         (program (expand-file-name "curl" root))
+         (args-file (expand-file-name "args" root))
+         (config-file (expand-file-name "config" root))
+         (destination (expand-file-name "media" root))
+         (plz-curl-program program)
+         (process-environment
+          (append (list (concat "JAUNDER_FAKE_CURL_ARGS=" args-file)
+                        (concat "JAUNDER_FAKE_CURL_CONFIG=" config-file))
+                  process-environment))
+         (jaunder--active-blog '(:base-url "https://blog" :username "alice")))
+    (unwind-protect
+        (progn
+          (with-temp-file program
+            (insert "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$JAUNDER_FAKE_CURL_ARGS\"\n"
+                    "cat > \"$JAUNDER_FAKE_CURL_CONFIG\"\nexit 28\n"))
+          (set-file-modes program #o700)
+          (cl-letf (((symbol-function 'jaunder--auth-secret) (lambda () "dummy")))
+            (let ((failure (should-error (jaunder--http-request
+                                          "GET" "https://blog/atompub/alice/posts/1")
+                                         :type 'plz-curl-error)))
+              (should (string-match-p "timeout"
+                                      (downcase (error-message-string failure))))))
+          (let ((args (with-temp-buffer (insert-file-contents args-file) (buffer-string)))
+                (config (with-temp-buffer (insert-file-contents config-file) (buffer-string))))
+            (should (string-match-p "--speed-limit\n1\n--speed-time\n60" args))
+            (should (string-match-p "--connect-timeout \"15\"" config))
+            (should-not (string-match-p "--max-time" config)))
+          (with-temp-file destination)
+          (should-error (jaunder--pull-media-get "https://blog/media/a" destination)
+                        :type 'plz-curl-error)
+          (let ((args (with-temp-buffer (insert-file-contents args-file) (buffer-string)))
+                (config (with-temp-buffer (insert-file-contents config-file) (buffer-string))))
+            (should (string-match-p "--speed-limit\n1\n--speed-time\n60" args))
+            (should-not (string-match-p "--location" args))
+            (should (string-match-p "--connect-timeout \"15\"" config))))
+      (delete-directory root t))))
+
 (ert-deftest jaunder-curl-header-value-escapes-quotes-and-backslashes ()
   ;; plz 0.9.1 wraps each header value in double quotes inside a curl --config
   ;; file without escaping it, so a raw quote (a strong ETag echoed as If-Match)

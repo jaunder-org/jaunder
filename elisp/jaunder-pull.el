@@ -378,6 +378,7 @@ standalone server-only pulls acquire equivalent complete evidence themselves."
                     (jaunder-pulled-member-format pulled-member) body
                     (jaunder--active-base-url))))
         ;; Copies are durable safe partial work; the Post remains the final claim.
+        (jaunder--reconcile-pull-progress "acquiring Local Media Copies")
         (jaunder--pull-media-materialize root instance-id plan)
         (list :etag etag :id (car identity) :slug (cdr identity)
               :audience-omitted (jaunder-pulled-member-audience-omitted pulled-member)
@@ -399,7 +400,9 @@ localized Post is installed only after every Local Media Copy verifies."
        root
        (lambda ()
          (let* ((staged (jaunder--pull-stage-member root member))
-                (result (jaunder--install-pulled-bytes path (plist-get staged :bytes))))
+                (result (progn
+                          (jaunder--reconcile-pull-progress "installing local Post")
+                          (jaunder--install-pulled-bytes path (plist-get staged :bytes)))))
            (when (eq (jaunder-pull-result-status result) 'pulled)
              (setf (jaunder-pull-result-id result) (plist-get staged :id)
                    (jaunder-pull-result-slug result) (plist-get staged :slug)
