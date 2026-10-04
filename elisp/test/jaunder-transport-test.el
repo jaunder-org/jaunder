@@ -141,9 +141,11 @@
                     "cat > \"$JAUNDER_FAKE_CURL_CONFIG\"\nexit 28\n"))
           (set-file-modes program #o700)
           (cl-letf (((symbol-function 'jaunder--auth-secret) (lambda () "dummy")))
-            (should-error (jaunder--http-request
-                           "GET" "https://blog/atompub/alice/posts/1")
-                          :type 'plz-curl-error))
+            (let ((failure (should-error (jaunder--http-request
+                                          "GET" "https://blog/atompub/alice/posts/1")
+                                         :type 'plz-curl-error)))
+              (should (string-match-p "timeout"
+                                      (downcase (error-message-string failure))))))
           (let ((args (with-temp-buffer (insert-file-contents args-file) (buffer-string)))
                 (config (with-temp-buffer (insert-file-contents config-file) (buffer-string))))
             (should (string-match-p "--speed-limit\n1\n--speed-time\n60" args))
