@@ -2,15 +2,16 @@
 
 ## Method and scope
 
-The checked-in `host/src/code_highlight/quality/catalog.rs` names source ranges
-and expected roles for all **42** pinned grammar variants. The test renders each
-canonical label through both Org and Markdown, compares decoded code to the same
-exporter's unknown-language/plain rendering, and checks role coverage even when
-captures nest. A separate alias test renders every declared label through both
-exporters and compares its token markup with the canonical label. The two
-reported production excerpts are byte-for-byte fixtures captured from their
-public `<code>` elements on 2026-10-04, including the Haskell typo; malformed,
-quoted and unknown-language cases are separate regressions.
+The checked-in `host/src/code_highlight/quality/catalog.rs` pins UTF-8 byte
+starts, source text and typed expected roles for all **42** grammar variants.
+The test renders each canonical label through both Org and Markdown, compares
+decoded code to the same exporter's unknown-language/plain rendering, and checks
+role coverage even when captures nest. A separate alias test renders every
+declared label through both exporters and compares its token markup with the
+canonical label. The two reported production excerpts are byte-for-byte fixtures
+captured from their public `<code>` elements on 2026-10-04, including the
+Haskell typo; malformed, quoted and unknown-language cases are separate
+regressions.
 
 `tree-sitter` CLI is not on the pinned devShell PATH in this checkout. Instead
 of installing an unpinned CLI or changing the devShell for a one-off diagnostic,
@@ -39,8 +40,11 @@ nested scopes rather than demanding one flat `<span>` per token. Containerfile
 shell-form `RUN` and Make recipe shell text are raw/uninjected in their pinned
 grammars; their JSON-form command and Make variable/target roles are tested
 instead. Inline Markdown emphasis is not captured by the pinned block grammar;
-heading and quote are its reviewed block-level distinctions. These are explicit
-remaining limits, not a claim of semantic classification of every expression.
+heading and quote are its reviewed block-level distinctions. The pinned TSX
+query marks the closing `h1` tag name but not the opening one; its corpus oracle
+pins the closing byte range rather than allowing either occurrence to satisfy
+the expectation. These are explicit remaining limits, not a claim of semantic
+classification of every expression.
 
 ## Browser presentation evidence
 

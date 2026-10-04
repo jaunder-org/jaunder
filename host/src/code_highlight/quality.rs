@@ -168,23 +168,63 @@ fn catalog_corpus_names_every_grammar_and_checks_reviewed_token_ranges() {
                 "{}/{format:?}: changed decoded source; highlighted={html}; plain={plain_html}",
                 case.label
             );
-            for &(token, role) in case.roles {
-                assert!(
-                    case.code.contains(token),
-                    "{}/{format:?}: missing fixture token {token:?}",
+            for expectation in case.roles {
+                let start = expectation.start;
+                let end = start + expectation.token.len();
+                assert_eq!(
+                    case.code.get(start..end),
+                    Some(expectation.token),
+                    "{}/{format:?}: bad fixture range {start}..{end}",
                     case.label
                 );
-                let expected = format!("j-syn-{role}");
-                let covered = decoded.match_indices(token).any(|(start, _)| {
-                    roles[start..start + token.len()]
-                        .iter()
-                        .all(|active| active.contains(&expected.as_str()))
-                });
-                if !covered {
+                assert_eq!(
+                    decoded.get(start..end),
+                    Some(expectation.token),
+                    "{}/{format:?}: exporter displaced source range {start}..{end}",
+                    case.label
+                );
+                let expected = format!("j-syn-{}", expectation.role.class());
+                let active = &roles[start..end];
+                if !active
+                    .iter()
+                    .all(|roles| roles.contains(&expected.as_str()))
+                {
                     failures.push(format!(
-                        "{}/{format:?}: expected {token:?} as {role}; HTML: {html}",
-                        case.label
+                        "{}/{format:?}: bytes {start}..{end} {token:?} expected {expected}, got {active:?}; HTML: {html}",
+                        case.label,
+                        token = expectation.token
                     ));
+                }
+            }
+            // A sample with distinct reviewed roles may not paint nearly all
+            // of its nonblank source as one category. This catches gross
+            // whole-block cascades outside the named Haskell regression.
+            let nonblank = decoded
+                .as_bytes()
+                .iter()
+                .enumerate()
+                .filter(|(_, byte)| !byte.is_ascii_whitespace())
+                .map(|(offset, _)| offset)
+                .collect::<Vec<_>>();
+            if nonblank.len() >= 12
+                && case
+                    .roles
+                    .iter()
+                    .any(|role| role.role.class() != case.roles[0].role.class())
+            {
+                for expectation in case.roles {
+                    let category = format!("j-syn-{}", expectation.role.class());
+                    let covered = nonblank
+                        .iter()
+                        .filter(|&&offset| roles[offset].contains(&category.as_str()))
+                        .count();
+                    if covered * 10 >= nonblank.len() * 9 {
+                        failures.push(format!(
+                            "{}/{format:?}: {category} covers {covered}/{} nonblank source bytes; misleading whole-block color: {html}",
+                            case.label,
+                            nonblank.len()
+                        ));
+                    }
                 }
             }
         }
