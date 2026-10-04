@@ -125,7 +125,15 @@ test("Theme Package without syntax hooks inherits readable token defaults", asyn
       .locator(".j-post-body pre code .j-syn-string")
       .first();
     await expect(token).toBeVisible();
-    await expect(token).toHaveCSS("color", "rgb(47, 156, 91)");
+    const colors = await token.evaluate((element) => ({
+      token: getComputedStyle(element).color,
+      plain: getComputedStyle(element.closest("code")!).color,
+      surface: getComputedStyle(element.closest("pre")!).backgroundColor,
+    }));
+    expect(colors.token).not.toBe(colors.plain);
+    expect(contrastRatio(colors.token, colors.surface)).toBeGreaterThanOrEqual(
+      4.5,
+    );
   } finally {
     await publicContext.close();
   }
