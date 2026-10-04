@@ -150,6 +150,9 @@ send); absent it, the render falls back to the local zone via
     ;; authored local audience edit that still needs a conditional update.
     (when (and audiences (not (eq create-intent-matches 'changed)))
       (jaunder--replace-audience-properties audiences))
+    ;; Converge confirmed metadata before the identity checkpoint; an interrupted
+    ;; create still retains its ID, ETag and intent in that first saved image.
+    (jaunder--order-local-properties)
     ;; This is the create identity checkpoint.  It deliberately precedes the
     ;; intent cleanup below so an interruption retains a conditional baseline.
     (jaunder--save-buffer-silently)

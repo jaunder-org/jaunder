@@ -155,6 +155,41 @@ and native Post source remain unchanged."
                        audiences "\n")
             "\n")))
 
+(defconst jaunder--local-property-order
+  '("JAUNDER_STATUS" "JAUNDER_AUDIENCE" "JAUNDER_DATE_TZ"
+    "JAUNDER_DATE_UTC" "JAUNDER_FORMAT" "JAUNDER_SLUG"
+    "JAUNDER_ID" "JAUNDER_SYNCED" "JAUNDER_SYNCED_AT"
+    "JAUNDER_LOCAL_AHEAD" "JAUNDER_CREATE_KEY"
+    "JAUNDER_CREATE_DIGEST" "JAUNDER_CREATE_ATTEMPT_AT")
+  "Local Post properties in pull order, followed by recovery state.")
+
+(defun jaunder--order-local-properties ()
+  "Order known local Post properties after a server-confirmed write-back.
+Preserve each original line's bytes and the relative order of authored headers;
+unknown properties and the Post body are never rewritten.  Sorting is stable
+so repeated audiences keep their server-confirmed semantic order."
+  (save-excursion
+    (goto-char (point-min))
+    (let ((case-fold-search t)
+          (limit (copy-marker (jaunder--body-start)))
+          properties)
+      (while (re-search-forward
+              "^[ \t]*#\\+PROPERTY:[ \t]+\\(JAUNDER_[[:alnum:]_]+\\)\\(?:[ \t].*\\)?\\(?:\n\\|\\'\\)"
+              limit t)
+        (let ((rank (cl-position (upcase (match-string 1))
+                                 jaunder--local-property-order :test #'equal)))
+          (when rank
+            (push (cons rank (match-string 0)) properties)
+            (replace-match ""))))
+      (set-marker limit nil)
+      (when properties
+        (goto-char (point-min))
+        (while (looking-at-p org-keyword-regexp)
+          (forward-line 1))
+        (insert (mapconcat #'cdr
+                           (cl-stable-sort (nreverse properties) #'< :key #'car)
+                           ""))))))
+
 (defun jaunder--set-keyword (keyword value)
   "Set the file-level #+KEYWORD: to VALUE (idempotent replace or insert)."
   (jaunder--set-keyword-line

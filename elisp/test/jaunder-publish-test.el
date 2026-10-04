@@ -359,7 +359,9 @@ Lets the warning tests assert on emitted warnings without touching the real
 (ert-deftest jaunder-write-back-rejects-missing-advertised-audience-before-edit ()
   (with-temp-buffer
     (org-mode)
-    (insert "#+TITLE: T\n#+PROPERTY: JAUNDER_AUDIENCE public\n\nBody.\n")
+    (insert (concat "#+TITLE: T\n#+PROPERTY: JAUNDER_ID 7\n"
+                    "#+PROPERTY: JAUNDER_AUDIENCE public\n"
+                    "#+PROPERTY: JAUNDER_DATE_TZ UTC\n\nBody.\n"))
     (let* ((path (make-temp-file "jaunder-wb-audience-" nil ".org"))
            (response (jaunder-test--response
                       200 '(("ETag" . "\"remote\""))
@@ -372,6 +374,44 @@ Lets the warning tests assert on emitted warnings without touching the real
             (should (equal (buffer-string) before))
             (should-not (jaunder--buffer-property "JAUNDER_SYNCED")))
         (delete-file path)))))
+
+(ert-deftest jaunder-write-back-keeps-local-post-header-order-stable ()
+  "A confirmed update aligns existing local headers with pull without touching source."
+  (let* ((path (make-temp-file "jaunder-header-order-" nil ".org"))
+         (response (jaunder-test--response
+                    200 '(("ETag" . "\"new\""))
+                    (concat "<entry xmlns=\"http://www.w3.org/2005/Atom\""
+                            " xmlns:j=\"https://jaunder.org/ns/atompub\">"
+                            "<j:slug>same-slug</j:slug></entry>"))))
+    (unwind-protect
+        (with-temp-buffer
+          (insert (concat "#+TITLE: One\n"
+                          "#+PROPERTY: JAUNDER_ID 24\n"
+                          "#+AUTHOR: Someone\n"
+                          "#+PROPERTY: JAUNDER_DATE_TZ US/Eastern\n"
+                          "#+PROPERTY: JAUNDER_SYNCED \"old\"\n"
+                          "#+PROPERTY: JAUNDER_SLUG same-slug\n"
+                          "#+PROPERTY: JAUNDER_STATUS draft\n"
+                          "#+PROPERTY: JAUNDER_EXTENSION keep-me\n"
+                          "#+KEYWORDS: unchanged\n\nBody.\n"))
+          (org-mode)
+          (set-visited-file-name path nil t)
+          (jaunder--write-back response nil)
+          (let ((expected (concat "#+TITLE: One\n#+AUTHOR: Someone\n"
+                                  "#+PROPERTY: JAUNDER_EXTENSION keep-me\n"
+                                  "#+KEYWORDS: unchanged\n"
+                                  "#+PROPERTY: JAUNDER_STATUS draft\n"
+                                  "#+PROPERTY: JAUNDER_DATE_TZ US/Eastern\n"
+                                  "#+PROPERTY: JAUNDER_SLUG same-slug\n"
+                                  "#+PROPERTY: JAUNDER_ID 24\n"
+                                  "#+PROPERTY: JAUNDER_SYNCED \"new\"\n"
+                                  "#+PROPERTY: JAUNDER_SYNCED_AT ")))
+            (should (string-prefix-p expected (buffer-string)))
+            (should (string-suffix-p "\n\nBody.\n" (buffer-string)))
+            (jaunder--write-back response nil)
+            (should (string-prefix-p expected (buffer-string)))
+            (should (string-suffix-p "\n\nBody.\n" (buffer-string)))))
+      (delete-file path))))
 
 (ert-deftest jaunder-publish-changed-audience-replay-sends-unsent-conditional-put ()
   "An authored audience edit survives a replay and reaches the next PUT."
@@ -428,6 +468,10 @@ Lets the warning tests assert on emitted warnings without touching the real
                                  "subscribers"))
                   (should (equal (jaunder--buffer-property "JAUNDER_LOCAL_AHEAD")
                                  "true"))
+                  (should (string-match-p
+                           (concat "#\\+PROPERTY: JAUNDER_SYNCED_AT [^\n]+\n"
+                                   "#\\+PROPERTY: JAUNDER_LOCAL_AHEAD true\n")
+                           (buffer-string)))
                   (jaunder-publish))
                 (should (equal (nreverse methods) '("POST" "PUT")))
                 (should (string-match-p
