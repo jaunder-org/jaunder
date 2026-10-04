@@ -888,7 +888,7 @@ public media identity and URL hash are valid only for the direct response."
           (delete "--location" (copy-sequence plz-curl-default-args)))))
     (condition-case err
         (let ((response (plz 'get url :as 'response :decode nil
-                             :connect-timeout 15)))
+                             :connect-timeout jaunder--http-connect-timeout-seconds)))
           (jaunder--pull-media-write-bytes (plz-response-body response) destination)
           (list :status (plz-response-status response)
                 :headers (plz-response-headers response)))

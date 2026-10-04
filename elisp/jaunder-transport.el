@@ -28,6 +28,9 @@
 (require 'plz)
 (require 'jaunder-config)
 
+(defconst jaunder--http-connect-timeout-seconds 15
+  "Maximum time to establish an AtomPub or public-Media HTTP connection.")
+
 (defun jaunder--bounded-read-curl-args (args)
   "Add curl's low-speed read limit to ARGS.
 `plz' only exposes a whole-request timeout.  Do not kill an active Media
@@ -158,7 +161,7 @@ the auth header under load (ADR-0038)."
          ;; plz's text mode maps to curl --data, which strips CR/LF while
          ;; reading stdin or a file. Source documents and Media are byte streams.
          (plz verb url :headers headers :body body :body-type 'binary
-              :connect-timeout 15 :as 'response))
+              :connect-timeout jaunder--http-connect-timeout-seconds :as 'response))
       (plz-error
        (let* ((pe (seq-find #'plz-error-p (cdr err)))
               (resp (and pe (plz-error-response pe))))
