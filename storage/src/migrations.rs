@@ -2306,7 +2306,7 @@ module Main where
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            48,
+            49,
         );
     }
 
@@ -2778,7 +2778,7 @@ module Main where
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            48
+            49
         );
         assert_eq!(
             db.pool
