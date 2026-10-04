@@ -70,13 +70,13 @@ exact 1,160 bytes. The branch distinguishes eight function-call captures that
 production groups as functions; neither output colors the whole code block as
 one role. Current 390px/1280px structural counts and screenshots are transient
 under `/tmp/pi-playwright/issue-1678/corrected/` in `evidence.json`,
-`live-current-*.png`, `local-studio-*.png` and `local-custom-*.png`. These are a
-comparison of the old deployed renderer and this branch on corrected source, not
-a claim that this branch is deployed. The local corrected Post has eight
-semantic roles and 170 spans under Studio, Terminal, Reader and the custom Theme
-Package at both widths. Minimum observed token contrast was 6.34:1, 6.14:1,
-6.98:1 and 5.11:1 respectively; page-level horizontal overflow was zero in each
-capture.
+`live-current-*.png`, `local-studio-*.png`, `local-custom-*.png` and paired code
+crops `pair-corrected-haskell-{mobile,desktop}.png`. These are a comparison of
+the old deployed renderer and this branch on corrected source, not a claim that
+this branch is deployed. The local corrected Post has eight semantic roles and
+170 spans under Studio, Terminal, Reader and the custom Theme Package at both
+widths. Minimum observed token contrast was 6.34:1, 6.14:1, 6.98:1 and 5.11:1
+respectively; page-level horizontal overflow was zero in each capture.
 
 To make the before/after proof reproducible rather than compare unrelated local
 states, `issue-1678-matched` was seeded and captured under `origin/main`

@@ -21,7 +21,7 @@ complete on deployed installations. Changing only the renderer would leave old
 stored Post projections stale.
 
 The approved
-[quality spec](../../superpowers/specs/2026-10-03-issue-1678-code-highlighting-quality.md)
+[quality spec](../../archive/2026-10-03-issue-1678-code-highlighting-quality-spec.md)
 requires source fidelity, all existing languages and aliases, Theme Package
 compatibility, closed sanitization, and both database backends. This decision
 refines the earlier draft's token vocabulary and malformed-input behavior; it

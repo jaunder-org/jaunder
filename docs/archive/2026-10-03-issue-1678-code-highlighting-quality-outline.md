@@ -2,7 +2,7 @@
 
 > Execute with `jaunder-iterate`; use `jaunder-dispatch` only for a bounded
 > task. The approved
-> [spec](../specs/2026-10-03-issue-1678-code-highlighting-quality.md) is
+> [spec](2026-10-03-issue-1678-code-highlighting-quality-spec.md) is
 > authoritative. This outline exists because semantic-token changes cross the
 > sanitizer/Style Contract security boundary and refreshing existing Post
 > projections crosses migrations, both storage backends, concurrent startup and
@@ -116,7 +116,7 @@ for unlabeled/HTML/unknown code, new visual-snapshot variants.
     feed bytes and validators change when representation bytes change. Focused
     `devtool run -- cargo xtask test-local -- -p storage refresh` before
     integration gates.
-- [ ] **5. Prove public results and prepare the reviewed change.** Verify new
+- [x] **5. Prove public results and prepare the reviewed change.** Verify new
       and refreshed code on public permalink, Local and authenticated Home,
       including unknown-language fallback and public Syndication Feeds; inspect
       representative built-in/custom theme rendering and narrow width. Capture
