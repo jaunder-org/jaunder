@@ -520,7 +520,10 @@
         (cl-letf (((symbol-function 'plz)
                    (lambda (method url &rest arguments)
                      (setq captured (list method url arguments
-                                          (member "--location" plz-curl-default-args)))
+                                          (member "--location" plz-curl-default-args)
+                                          (cl-set-difference plz-curl-default-args
+                                                             '("--silent" "--compressed")
+                                                             :test #'equal)))
                      (make-plz-response :status 200 :headers '((etag . "\"x\""))
                                         :body (string-as-unibyte "\0\377bytes")))))
           (let ((response (jaunder--pull-media-get "https://example.test/media" destination)))
@@ -529,6 +532,9 @@
             (should (eq (plist-get (nth 2 captured) :as) 'response))
             (should-not (plist-get (nth 2 captured) :decode))
             (should-not (nth 3 captured))
+            (should (= (plist-get (nth 2 captured) :connect-timeout) 15))
+            (should (equal (nth 4 captured)
+                           '("--speed-limit" "1" "--speed-time" "60")))
             (should (equal (plist-get response :status) 200))
             (should (equal (with-temp-buffer
                              (set-buffer-multibyte nil)

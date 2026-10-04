@@ -231,12 +231,16 @@ returned."
   (jaunder--build-url (jaunder--active-base-url) "atompub"
                       (jaunder--active-username) "posts"))
 
+(defvar jaunder--inventory-page-progress nil
+  "Optional callback invoked after each successfully parsed Collection page.")
+
 (defun jaunder--fetch-collection-members ()
   "Enumerate the active blog's Collection, preserving page and Entry order."
   (let* ((collection-url (jaunder--collection-url))
          (url collection-url)
          (seen (make-hash-table :test #'equal))
          (ids (make-hash-table :test #'equal))
+         (page-number 0)
          members)
     (while url
       (when (gethash url seen)
@@ -254,7 +258,10 @@ returned."
                       (list (jaunder-inventory-member-id member))))
             (puthash (jaunder-inventory-member-id member) t ids))
           (setq members (nconc members (plist-get page :members))
-                url (plist-get page :next)))))
+                url (plist-get page :next)
+                page-number (1+ page-number))
+          (when jaunder--inventory-page-progress
+            (funcall jaunder--inventory-page-progress page-number)))))
     members))
 
 (defun jaunder--inventory-buffer-property (key)

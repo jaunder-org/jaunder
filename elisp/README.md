@@ -226,6 +226,27 @@ physically erasing the remote Post; a matched local file is removed only after
 the server confirms deletion, while deleting a server-only Post has no
 local-file effect.
 
+Fetching selected Posts remains a foreground command. It shows the current Post
+ID and batch position, Member and Local Media Copy staging, each completed page
+of fresh Collection verification, final Member revalidation, local installation,
+and final report refresh. Each Post reports success, blocked, or failed before
+moving on. Connections have a 15-second limit; a read with fewer than one byte
+per second for 60 seconds fails rather than waiting forever. An actively
+transferring large Media file has no whole-request deadline. The report's **Last
+batch** section retains per-Post failure details and the stage that failed. The
+operator can cancel between Posts, refresh the inventory, and select only
+unresolved rows to resume; never assume an interrupted Post was installed. A
+matched Post must re-enumerate the complete Collection before replacement to
+prove its remote identity is still unique. On a large Collection this repeats
+for each selected Post, so stage progress does not imply a short batch or
+background execution. In a host-only fixture of 100 Members (four 25-Member
+pages) and three selected server-ahead Posts, fresh verification made 12 page
+reads both before and after this change. The measured local-scan and
+Collection-parse costs were 0.002/0.054 seconds before and 0.002/0.051 seconds
+after; the network is mocked, and these small host timings cannot establish a
+production speedup. Remote pagination remains the likely large-collection cost
+to measure on a real deployment.
+
 A selection does not bypass safety checks. Unchanged Posts are no-ops; a true
 `conflict` is a uniquely matched Post whose local source and remote Member both
 changed since synchronization. Ordinary `p` and `f` do not resolve it. `l` and

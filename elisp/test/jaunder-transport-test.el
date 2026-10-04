@@ -102,6 +102,25 @@
       (dolist (method '("POST" "GET" "PUT" "DELETE"))
         (jaunder--http-request method "https://blog/atompub/alice/posts/1")))))
 
+(ert-deftest jaunder-http-read-bounds-are-inactivity-not-whole-request ()
+  "A slow but transferring read survives; a stalled read eventually fails."
+  (let ((jaunder--active-blog '(:base-url "https://blog" :username "alice"))
+        captured)
+    (cl-letf (((symbol-function 'jaunder--auth-secret) (lambda () "secret"))
+              ((symbol-function 'plz)
+               (lambda (_verb _url &rest args)
+                 (setq captured (list args plz-curl-default-args))
+                 (make-plz-response :status 200 :headers nil :body ""))))
+      (jaunder--http-request "GET" "https://blog/atompub/alice/posts/1")
+      (should (equal (plist-get (car captured) :connect-timeout) 15))
+      (should (equal (cadr captured)
+                     (append plz-curl-default-args
+                             '("--speed-limit" "1" "--speed-time" "60"))))
+      (should-not (plist-get (car captured) :timeout))
+      (jaunder--http-request "PUT" "https://blog/atompub/alice/posts/1" "bytes")
+      (should (= (plist-get (car captured) :connect-timeout) 15))
+      (should-not (member "--speed-limit" (cadr captured))))))
+
 (ert-deftest jaunder-curl-header-value-escapes-quotes-and-backslashes ()
   ;; plz 0.9.1 wraps each header value in double quotes inside a curl --config
   ;; file without escaping it, so a raw quote (a strong ETag echoed as If-Match)
