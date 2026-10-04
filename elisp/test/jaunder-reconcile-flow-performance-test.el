@@ -13,6 +13,8 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'jaunder)
+(load (expand-file-name "jaunder-reconcile-performance-fixture.el"
+                        (file-name-directory (or load-file-name buffer-file-name))) nil t)
 
 (ert-deftest jaunder-reconcile-selected-pull-measures-complete-paginated-flow ()
   "Three real matched pulls retain fresh checks through staging and refresh."
@@ -50,6 +52,8 @@
          (page-reads 0) (member-reads 0) (service-reads 0) (media-reads 0)
          (times (make-hash-table :test #'eq))
          (real-stage (symbol-function 'jaunder--pull-stage-member))
+         (real-scan (symbol-function 'jaunder--scan-root-locals))
+         (real-fetch (symbol-function 'jaunder--fetch-collection-members))
          (real-inventory (symbol-function 'jaunder--inventory-for-root))
          (real-revalidate (symbol-function 'jaunder--reconcile-pull-remote-revalidation))
          (real-install (symbol-function 'jaunder--reconcile-pull-install-staged))
@@ -60,52 +64,63 @@
           (cl-letf (((symbol-function 'jaunder--http-request)
                      (lambda (method url &rest _)
                        (should (equal method "GET"))
-                       (cond
-                        ((string-suffix-p "/atompub/service" url)
-                         (setq service-reads (1+ service-reads))
-                         (list :status 200 :body
-                               "<service xmlns=\"http://www.w3.org/2007/app\" xmlns:atom=\"http://www.w3.org/2005/Atom\"><workspace><atom:title>Blog</atom:title></workspace></service>"))
-                        ((string-match "/atompub/alice/posts/\\([0-9]+\\)\\'" url)
-                         (let* ((id (string-to-number (match-string 1 url)))
-                                (slug (format "post-%03d" id))
-                                (body (if (= id 1) (format "[[%s]]" media-url) "Remote body.")))
-                           (setq member-reads (1+ member-reads))
-                           (list :status 200
-                                 :headers (list (cons "etag" etag)
-                                                (cons "x-jaunder-instance" instance))
-                                 :body (format
-                                        "<entry xmlns=\"http://www.w3.org/2005/Atom\" xmlns:j=\"https://jaunder.org/ns/atompub\" xmlns:app=\"http://www.w3.org/2007/app\"><title>After</title><link rel=\"edit\" href=\"%s\"/><j:slug>%s</j:slug><content type=\"text/org\">%s</content><app:control><app:draft>yes</app:draft></app:control></entry>"
-                                        url slug body))))
-                        (t
-                         (let* ((page (if (string-match "/page-\\([2-4]\\)\\'" url)
-                                          (string-to-number (match-string 1 url)) 1))
-                                (start (1+ (* 25 (1- page))))
-                                (next (when (< page 4)
-                                        (format "https://example.test/page-%d" (1+ page)))))
-                           (setq page-reads (1+ page-reads))
-                           (list :status 200
-                                 :body (concat
-                                        "<feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:j=\"https://jaunder.org/ns/atompub\">"
-                                        (when next (format "<link rel=\"next\" href=\"%s\"/>" next))
-                                        (mapconcat
-                                         (lambda (id)
-                                           (format "<entry><link rel=\"edit\" href=\"https://example.test/atompub/alice/posts/%d\"/><j:slug>post-%03d</j:slug><j:etag>&quot;sha256-test&quot;</j:etag></entry>" id id))
-                                         (number-sequence start (+ start 24)) "")
-                                        "</feed>")))))))
+                       (let ((start (float-time))
+                             (kind (cond ((string-suffix-p "/atompub/service" url) 'service-http)
+                                         ((string-match "/atompub/alice/posts/[0-9]+\\'" url) 'member-http)
+                                         (t 'collection-http))))
+                         (prog1 (cond
+                                 ((string-suffix-p "/atompub/service" url)
+                                  (setq service-reads (1+ service-reads))
+                                  (list :status 200 :body
+                                        "<service xmlns=\"http://www.w3.org/2007/app\" xmlns:atom=\"http://www.w3.org/2005/Atom\"><workspace><atom:title>Publication</atom:title></workspace></service>"))
+                                 ((string-match "/atompub/alice/posts/\\([0-9]+\\)\\'" url)
+                                  (let* ((id (string-to-number (match-string 1 url)))
+                                         (slug (format "post-%03d" id))
+                                         (body (if (= id 1) (format "[[%s]]" media-url) "Remote body.")))
+                                    (setq member-reads (1+ member-reads))
+                                    (list :status 200
+                                          :headers (list (cons "etag" etag)
+                                                         (cons "x-jaunder-instance" instance))
+                                          :body (format
+                                                 "<entry xmlns=\"http://www.w3.org/2005/Atom\" xmlns:j=\"https://jaunder.org/ns/atompub\" xmlns:app=\"http://www.w3.org/2007/app\"><title>After</title><link rel=\"edit\" href=\"%s\"/><j:slug>%s</j:slug><content type=\"text/org\">%s</content><app:control><app:draft>yes</app:draft></app:control></entry>"
+                                                 url slug body))))
+                                 (t
+                                  (setq page-reads (1+ page-reads))
+                                  (list :status 200
+                                        :body (jaunder-test--collection-page
+                                               url "&quot;sha256-test&quot;"))))
+                           (puthash kind (+ (gethash kind times 0.0)
+                                            (- (float-time) start)) times)))))
                     ((symbol-function 'jaunder--pull-media-get)
                      (lambda (_url destination)
-                       (setq media-reads (1+ media-reads))
-                       (let ((coding-system-for-write 'no-conversion))
-                         (write-region media-bytes nil destination nil 'silent))
-                       (list :status 200 :headers
-                             (list (cons "x-jaunder-instance" instance)
-                                   (cons "etag" (format "\"sha256-%s\"" hash))))))
+                       (let ((start (float-time)))
+                         (setq media-reads (1+ media-reads))
+                         (let ((coding-system-for-write 'no-conversion))
+                           (write-region media-bytes nil destination nil 'silent))
+                         (prog1 (list :status 200 :headers
+                                      (list (cons "x-jaunder-instance" instance)
+                                            (cons "etag" (format "\"sha256-%s\"" hash))))
+                           (puthash 'media-http (+ (gethash 'media-http times 0.0)
+                                                   (- (float-time) start)) times)))))
                     ((symbol-function 'jaunder--pull-stage-member)
                      (lambda (directory member)
                        (let ((start (float-time)))
                          (prog1 (funcall real-stage directory member)
                            (puthash 'staging (+ (gethash 'staging times 0.0)
                                                 (- (float-time) start)) times)))))
+                    ((symbol-function 'jaunder--scan-root-locals)
+                     (lambda (directory)
+                       (let ((start (float-time)))
+                         (prog1 (funcall real-scan directory)
+                           (puthash 'local-scan (+ (gethash 'local-scan times 0.0)
+                                                   (- (float-time) start)) times)))))
+                    ((symbol-function 'jaunder--fetch-collection-members)
+                     (lambda ()
+                       (let ((start (float-time)))
+                         (prog1 (funcall real-fetch)
+                           (puthash 'collection-pagination
+                                    (+ (gethash 'collection-pagination times 0.0)
+                                       (- (float-time) start)) times)))))
                     ((symbol-function 'jaunder--inventory-for-root)
                      (lambda (directory)
                        (let ((start (float-time)))
@@ -172,18 +187,20 @@
             (should (= member-reads 6))
             (should (= service-reads 3))
             (should (= media-reads 1))
-            (dolist (stage '(staging inventory revalidation installation refresh))
+            (dolist (stage '(member-http media-http local-scan collection-pagination
+                                         staging inventory revalidation installation refresh))
               (should (numberp (gethash stage times)))))
-          (message "Selected pull 100/3 baseline: %d Collection, %d Member, %d service, %d Media GETs; staging %.3fs, inventory %.3fs, revalidation %.3fs, install %.3fs, refresh %.3fs."
-                   before-pages before-members before-service before-media
-                   (gethash 'staging before-times) (gethash 'inventory before-times)
-                   (gethash 'revalidation before-times) (gethash 'installation before-times)
-                   (gethash 'refresh before-times))
-          (message "Selected pull 100/3 progress: %d Collection, %d Member, %d service, %d Media GETs; staging %.3fs, inventory %.3fs, revalidation %.3fs, install %.3fs, refresh %.3fs. Synthetic HTTP excludes network."
-                   page-reads member-reads service-reads media-reads
-                   (gethash 'staging times) (gethash 'inventory times)
-                   (gethash 'revalidation times) (gethash 'installation times)
-                   (gethash 'refresh times)))
+          (dolist (arm (list (list "baseline" before-pages before-members before-service
+                                   before-media before-times)
+                             (list "progress" page-reads member-reads service-reads
+                                   media-reads times)))
+            (let ((clock (nth 5 arm)))
+              (message "Selected pull 100/3 %s: %d Collection, %d Member, %d service, %d Media GETs; Member HTTP %.6fs, Media HTTP %.6fs, local scan %.3fs, Collection pagination %.3fs, revalidation %.3fs, install %.3fs, refresh %.3fs. Synthetic HTTP excludes network."
+                       (nth 0 arm) (nth 1 arm) (nth 2 arm) (nth 3 arm) (nth 4 arm)
+                       (gethash 'member-http clock) (gethash 'media-http clock)
+                       (gethash 'local-scan clock) (gethash 'collection-pagination clock)
+                       (gethash 'revalidation clock) (gethash 'installation clock)
+                       (gethash 'refresh clock)))))
       (when (buffer-live-p buffer) (kill-buffer buffer))
       (delete-directory root t))))
 

@@ -241,13 +241,15 @@ prove its remote identity is still unique. On a large Collection this repeats
 for each selected Post, so stage progress does not imply a short batch or
 background execution. In a host-only fixture of 100 Members (four 25-Member
 pages) and three selected server-ahead Posts, fresh verification made 12 page
-reads and the final refresh made four more, both before and after this change.
-The full selected-pull fixture also records six Member, three service-document,
-and one Media request per run; Member staging, local inventory, revalidation,
-installation, and refresh are timed separately. The network is mocked and
-one-time parser warm-up affects the small host timings, so this does not
-establish a production speedup. Remote pagination remains a cost to measure on a
-real deployment.
+reads and the final refresh made four more, in both a silent baseline and the
+progress-reporting arm. Each arm records six Member, three service-document, and
+one Media request. Separate timing buckets cover synthetic Member and Media
+HTTP, local scan, full Collection pagination (including XML parsing), final
+revalidation, installation, and refresh. One host run measured local scan at
+0.002 seconds in each arm and Collection pagination at 0.044/0.052 seconds
+(silent/progress). The network is mocked and one-time parser warm-up affects
+small host timings, so this does not establish a production speedup. Remote
+pagination remains a cost to measure on a real deployment.
 
 A selection does not bypass safety checks. Unchanged Posts are no-ops; a true
 `conflict` is a uniquely matched Post whose local source and remote Member both

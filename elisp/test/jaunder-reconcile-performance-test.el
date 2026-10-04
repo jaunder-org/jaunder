@@ -11,6 +11,8 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'jaunder)
+(load (expand-file-name "jaunder-reconcile-performance-fixture.el"
+                        (file-name-directory (or load-file-name buffer-file-name))) nil t)
 
 (ert-deftest jaunder-reconcile-selected-fetch-reports-every-fresh-collection-page ()
   "Three matched Posts each verify all four fresh Collection pages before replacement."
@@ -56,20 +58,8 @@
                     ((symbol-function 'jaunder--http-request)
                      (lambda (method url &rest _)
                        (should (equal method "GET"))
-                       (let* ((page (if (string-match "/page-\\([2-4]\\)\\'" url)
-                                        (string-to-number (match-string 1 url)) 1))
-                              (start (1+ (* 25 (1- page))))
-                              (entries (cl-loop for id from start below (+ start 25)
-                                                collect (format
-                                                         "<entry><link rel=\"edit\" href=\"https://example.test/atompub/alice/posts/%d\"/><j:slug>post-%03d</j:slug></entry>"
-                                                         id id)))
-                              (next (when (< page 4)
-                                      (format "https://example.test/page-%d" (1+ page)))))
-                         (setq pages (1+ pages))
-                         (list :status 200
-                               :body (concat "<feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:j=\"https://jaunder.org/ns/atompub\">"
-                                             (when next (format "<link rel=\"next\" href=\"%s\"/>" next))
-                                             (mapconcat #'identity entries "") "</feed>")))))
+                       (setq pages (1+ pages))
+                       (list :status 200 :body (jaunder-test--collection-page url))))
                     ((symbol-function 'jaunder--reconcile-refresh-buffer)
                      (lambda (&rest _) nil))
                     ((symbol-function 'message)
