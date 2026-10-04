@@ -40,6 +40,10 @@ import { mintAppPassword } from "./sessions";
 import { allowSecondBoot } from "./bootBudget";
 import { expectVisual, expectVisualRegion } from "./visual";
 import { expectAccessible } from "./accessibility";
+import {
+  conformanceThemePackage,
+  publishAndSelectTheme,
+} from "./theme-helpers";
 
 const TIMELINE_PAGE_SIZE = 50;
 const TIMELINE_OVERFLOW_COUNT = 1;
@@ -310,6 +314,124 @@ for (const fixture of [
     }
   });
 }
+
+test("code roles stay scoped and themeable on permalink, Home and Local", async ({
+  registeredPage,
+  tracedContext,
+}, testInfo) => {
+  setTestBudget(90_000);
+  const page = await registeredPage("/posts/new");
+  const summary = await composePost(page, {
+    body: '#+TITLE: Semantic call proof\n\n#+begin_src elisp\n;; comment\n(message "hello")\n\'(quoted-data 1)\n#+end_src',
+    format: "org",
+    audience: "public",
+    publish: true,
+  });
+  await followPermalink(page, summary);
+  const permalink = new URL(page.url()).pathname;
+  const call = page.locator(".j-post-body pre code .j-syn-function-call", {
+    hasText: "message",
+  });
+  await expect(call).toHaveText("message");
+  await expect(
+    page.locator(".j-post-body pre code .j-syn-comment"),
+  ).toContainText("comment");
+  await expect(
+    page.locator(".j-post-body pre code .j-syn-string"),
+  ).toContainText('"hello"');
+  await expect(
+    page.locator(".j-post-body pre code .j-syn-function-call", {
+      hasText: "quoted-data",
+    }),
+  ).toHaveCount(0);
+  const forged = await createPostViaApi(page, {
+    format: "html",
+    body: '<p><span class="j-syn-function-call" style="color:red" onclick="alert(1)">outside</span></p><pre><code><span class="j-syn-function-call">inside</span></code></pre><p><span class="j-syn-unknown">unsupported</span></p>',
+  });
+
+  const theme = conformanceThemePackage();
+  theme.stylesheet += "\n:root { --j-syn-function-call: #573c8b; }";
+  await publishAndSelectTheme(page, theme);
+
+  await navigateInApp(page, () => click(page, '.j-nav a[href="/app"]'), {
+    url: "/app",
+    ready: '.j-topbar h1:has-text("Home")',
+  });
+  const homeCall = page
+    .locator("article.j-post", { hasText: "Semantic call proof" })
+    .locator("pre code .j-syn-function-call", { hasText: "message" });
+  await expect(homeCall).toBeVisible();
+  expect(
+    await homeCall.evaluate((node) => getComputedStyle(node).color),
+  ).not.toBe("rgb(87, 60, 139)");
+  await expectAccessible(page);
+
+  const anonymous = await tracedContext();
+  try {
+    const publicPage = await anonymous.newPage();
+    await publicPage.setViewportSize({ width: 390, height: 844 });
+    await goto(publicPage, permalink, {
+      timeout: slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000),
+    });
+    await expect(publicPage.locator(".j-root")).toHaveAttribute(
+      "data-theme",
+      "custom",
+    );
+    const publicCall = publicPage.locator(
+      ".j-post-body pre code .j-syn-function-call",
+      {
+        hasText: "message",
+      },
+    );
+    await expect(publicCall).toHaveText("message");
+    expect(
+      await publicCall.evaluate((node) => getComputedStyle(node).color),
+    ).toBe("rgb(87, 60, 139)");
+    const geometry = await publicPage
+      .locator(".j-post-body pre")
+      .evaluate((pre) => ({
+        viewport: document.documentElement.clientWidth,
+        page: document.documentElement.scrollWidth,
+        scroll: pre.scrollWidth,
+      }));
+    expect(geometry.page).toBeLessThanOrEqual(geometry.viewport);
+    expect(geometry.scroll).toBeLessThanOrEqual(geometry.viewport);
+    await navigateInApp(
+      publicPage,
+      () => click(publicPage, '.j-nav a[href="/"]'),
+      { url: "/", ready: '.j-topbar h1:has-text("Jaunder")' },
+    );
+    await expect(
+      publicPage
+        .locator("article.j-post", { hasText: "Semantic call proof" })
+        .locator("pre code .j-syn-function-call", { hasText: "message" }),
+    ).toBeVisible();
+
+    const forgedPage = await anonymous.newPage();
+    await goto(forgedPage, forged.permalink, {
+      timeout: slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000),
+    });
+    const outside = forgedPage.locator(".j-post-body p .j-syn-function-call", {
+      hasText: "outside",
+    });
+    await expect(outside).toHaveAttribute("class", "j-syn-function-call");
+    await expect(outside).not.toHaveAttribute("style");
+    await expect(outside).not.toHaveAttribute("onclick");
+    const colors = await outside.evaluate((node) => ({
+      outside: getComputedStyle(node).color,
+      parent: getComputedStyle(node.parentElement!).color,
+    }));
+    expect(colors.outside).toBe(colors.parent);
+    await expect(forgedPage.locator(".j-post-body .j-syn-unknown")).toHaveCount(
+      0,
+    );
+    await expect(
+      forgedPage.locator(".j-post-body pre code .j-syn-function-call"),
+    ).toHaveText("inside");
+  } finally {
+    await anonymous.close();
+  }
+});
 
 test("published Markdown shortcodes render responsive provider embeds", async ({
   registeredPage,

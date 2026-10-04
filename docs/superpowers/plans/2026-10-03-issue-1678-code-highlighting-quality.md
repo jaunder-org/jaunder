@@ -20,7 +20,7 @@ for unlabeled/HTML/unknown code, new visual-snapshot variants.
 
 ## Task outline
 
-- [ ] **1. Establish the quality oracle and choose a rendering path.** Build a
+- [x] **1. Establish the quality oracle and choose a rendering path.** Build a
       checked-in corpus manifest with at least one real, role-annotated sample
       per supported grammar; every canonical label and alias must work through
       both Org and Markdown. Include the two linked production excerpts with
@@ -47,8 +47,10 @@ for unlabeled/HTML/unknown code, new visual-snapshot variants.
     material differences and whether they reveal missing or misleading Jaunder
     markup, not merely that two tools serialize different HTML. Baseline
     screenshots are transient review artifacts, not committed `@visual`
-    snapshots.
-- [ ] **2. Establish the closed semantic-token contract.** Map reliable query
+    snapshots. The pinned CLI was absent from the devShell; the comparison
+    instead exercised the pinned highlighting API directly and records this
+    limitation rather than claiming independent-toolkit confirmation.
+- [x] **2. Establish the closed semantic-token contract.** Map reliable query
       captures into the smallest reviewed additive set of semantic hooks
       required by the corpus. Preserve class-only host-rendered spans and
       compatible public Theme Package overrides; Home stays built-in. If
@@ -67,7 +69,7 @@ for unlabeled/HTML/unknown code, new visual-snapshot variants.
   - Verification: adversarial sanitizer/security tests, built-in color and
     custom-theme override checks; no unsupported class colors outside code.
     Check docs links/ADR projection in the normal gate.
-- [ ] **3. Deliver catalog-wide quality at the shared host projection.** Make
+- [x] **3. Deliver catalog-wide quality at the shared host projection.** Make
       each corpus entry pass in both Org and Markdown through the integrated
       host renderer, correcting misleading query captures and maintaining
       meaningful role distinctions rather than painting whole blocks one color.
@@ -85,7 +87,7 @@ for unlabeled/HTML/unknown code, new visual-snapshot variants.
     sanitizer tests, and dual-backend web/AtomPub create/update checks where
     rendering behavior crosses storage; broader gate only at integration
     boundaries.
-- [ ] **4. Re-admit completed installations and refresh stored projections
+- [x] **4. Re-admit completed installations and refresh stored projections
       safely.** Add a fresh, versioned migration for both backends that enqueues
       the existing offline `rebuild_rendered_posts` operation and
       resets/advances the durable bounded-refresh version even when earlier

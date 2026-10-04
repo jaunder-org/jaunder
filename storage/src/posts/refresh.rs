@@ -31,7 +31,7 @@ pub(crate) struct RefreshCompleted(bool);
 #[derive(Clone, Copy, Debug, Eq, PartialEq, macros::SqlxBridge)]
 pub(crate) struct RefreshBatchLimit(i64);
 
-const VERSION: RefreshVersion = RefreshVersion(1);
+const VERSION: RefreshVersion = RefreshVersion(2);
 const BATCH_SIZE: u8 = 100;
 
 #[cfg(test)]
@@ -454,11 +454,41 @@ mod tests {
                 .expect("checkpoint remains unchanged")
             }
         );
-        assert_eq!((version, cursor, completed), (1, 0, false));
+        assert_eq!((version, cursor, completed), (VERSION.0, 0, false));
         refresh_factory
             .refresh_current_post_projections()
             .await
             .expect("failed checkpoint remains resumable");
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn an_old_refresh_version_cannot_skip_the_new_quality_pass(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        env.base
+            .pool()
+            .execute(
+                "UPDATE post_projection_refresh_progress
+                 SET version = 1, cursor_post_id = 77, completed = TRUE WHERE id = 1",
+            )
+            .await
+            .expect("simulate a completed old-version writer");
+        let error = factory(&env)
+            .refresh_current_post_projections()
+            .await
+            .expect_err("completed old progress must not bypass the new renderer");
+        assert!(matches!(error, PostProjectionRefreshError::Checkpoint));
+        assert_eq!(
+            env.base
+                .pool()
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM post_projection_refresh_progress
+                     WHERE id = 1 AND version = 1 AND cursor_post_id = 77 AND completed = TRUE",
+                )
+                .await
+                .expect("progress survives the rejected writer"),
+            1
+        );
     }
 
     #[apply(backends)]

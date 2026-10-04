@@ -177,16 +177,18 @@ ADR-0092's bounded occupancy rule
 ([Offline code migrations](adr/drafts/offline-code-migration-queue.md)). The
 `0047` enqueues `rebuild_rendered_posts` again for the new syntax rules; `0048`
 re-enqueues it for Org footnotes, including databases that already drained
-`0047`. On SQLite, `0048` also initializes the short-write Post ID allocator
-shared by all Post creations; PostgreSQL uses its existing Post sequence. Org
-creation reserves identity in a separate short `WriteScope` before rendering,
-outside the content-write transaction. Sandbox and performance seeding reserve
-up to 256 Org IDs in one bounded short scope per batch, then render outside it;
-performance revisions render with the existing Post ID. An unused reservation is
-allowed if rendering or creation fails. The offline rebuild drains before the
-bounded startup Post projection refresh; when it has already updated the same
-HTML, the refresh still records its checkpoint but does not enqueue duplicate
-events.
+`0047`; `0049` enqueues it again for catalog-wide token quality even after both
+earlier requests completed, and resets bounded progress to version 2
+([catalog-wide code token quality and repeatable projection refresh](adr/drafts/catalog-code-token-quality-and-refresh.md)).
+On SQLite, `0048` also initializes the short-write Post ID allocator shared by
+all Post creations; PostgreSQL uses its existing Post sequence. Org creation
+reserves identity in a separate short `WriteScope` before rendering, outside the
+content-write transaction. Sandbox and performance seeding reserve up to 256 Org
+IDs in one bounded short scope per batch, then render outside it; performance
+revisions render with the existing Post ID. An unused reservation is allowed if
+rendering or creation fails. The offline rebuild drains before the bounded
+startup Post projection refresh; when it has already updated the same HTML, the
+refresh still records its checkpoint but does not enqueue duplicate events.
 
 ### Crate layout and the generic store pattern
 
@@ -661,14 +663,20 @@ Feed surfaces. Host rendering additionally recognizes bounded, explicitly
 labeled Org source blocks and Markdown fences using only host-side
 `tree-sitter-highlight` with a broad, statically linked pinned grammar/query
 catalog. Emacs Lisp and Haskell are among its regression languages. Tree-sitter
-query captures map to ten closed semantic `j-syn-*` span classes inside code
-while the decoded exporter text, native source and AtomPub Member remain
-unchanged. `common::render::sanitize` admits those fixed span classes alongside
-its existing `language-*` code classes; the CSS scopes token colors to Post-body
+query captures map to fifteen closed semantic `j-syn-*` span classes inside
+code, including distinct calls, added/removed diff lines, headings and quoted
+code markup. A checked-in 42-grammar corpus guards named token ranges and alias
+rendering through Org and Markdown. An unterminated leading Haskell pragma falls
+back to intact plain code rather than coloring every line as a keyword; Emacs
+Lisp recognizes unquoted call heads without coloring quoted data as calls. The
+decoded exporter text, native source and AtomPub Member remain unchanged.
+`common::render::sanitize` admits only those fixed span classes alongside its
+existing `language-*` code classes; CSS scopes token colors to Post-body
 `pre code`, since the attribute filter cannot inspect ancestry. The 64 KiB
 block, 16-attempt and 128 KiB per-Post limits bound parsing. Unexpected
 highlighter failures propagate as typed render errors
-([host code-block highlighting and projection refresh](adr/drafts/host-code-block-highlighting-and-projection-refresh.md)).
+([host code-block highlighting and projection refresh](adr/drafts/host-code-block-highlighting-and-projection-refresh.md);
+[catalog-wide code token quality and repeatable projection refresh](adr/drafts/catalog-code-token-quality-and-refresh.md)).
 
 `RenderedHtml`'s field is crate-private: ordinary application crates have no raw
 constructor, conversion, blanket `Deserialize`, or trusted-string rebuild door.
@@ -878,11 +886,16 @@ state ([ADR-0136](adr/0136-local-post-lifecycle.md)). The bounded, checkpointed
 highlighting refresh is a distinct **presentation-only** transition over current
 active Org and Markdown projections: changed HTML, derived Media references and
 affected public-feed events commit together after a CAS on current
-source/format/rendered bytes and active status. It preserves timestamps, AtomPub
-Member content ETags, native source and every historical Post Revision; Deleted
-and HTML-format Posts are skipped. It resumes before the new server accepts
-traffic, and old-version writers must be drained first
-([host code-block highlighting and projection refresh](adr/drafts/host-code-block-highlighting-and-projection-refresh.md)).
+source/format/rendered bytes and active status. Version 2 repeats the bounded
+pass after the new offline rebuild, including on installations that completed
+version 1; byte-equal rows do not enqueue duplicate events. It preserves
+timestamps, AtomPub Member content ETags, native source and every historical
+Post Revision; Deleted and HTML-format Posts are skipped by the bounded pass but
+may have changed current derivatives rebuilt by the separate offline operation.
+It resumes before the new server accepts traffic, and old-version writers must
+be drained first
+([host code-block highlighting and projection refresh](adr/drafts/host-code-block-highlighting-and-projection-refresh.md);
+[catalog-wide code token quality and repeatable projection refresh](adr/drafts/catalog-code-token-quality-and-refresh.md)).
 Media referenced by an owner's retained current Post or revision participates in
 the ordinary reference guard, including Deleted Posts; web force is the explicit
 override and may knowingly delete the final Media Record, breaking retained
@@ -1681,10 +1694,12 @@ authority; discovery remains ordinary repository links rather than a registry
 
 Public markup exposes a versioned semantic Style Contract shared by built-in and
 custom themes; accessible source order and exact concept hooks are stable while
-incidental wrappers are not. Ten scoped `j-syn-*` token hooks and matching
+incidental wrappers are not. Fifteen scoped `j-syn-*` token hooks and matching
 `--j-syn-*` CSS variables add code colors to Style Contract v1 without changing
-old Theme Packages; Home uses its own Jaunder styling
-([host code-block highlighting and projection refresh](adr/drafts/host-code-block-highlighting-and-projection-refresh.md)).
+old Theme Packages; the five additive hooks distinguish calls, added/removed
+diff lines, headings and quotes. Home uses its own Jaunder styling
+([host code-block highlighting and projection refresh](adr/drafts/host-code-block-highlighting-and-projection-refresh.md);
+[catalog-wide code token quality and repeatable projection refresh](adr/drafts/catalog-code-token-quality-and-refresh.md)).
 Custom CSS is scoped inside an unthemeable paint-containment/low-stacking
 boundary. The root then places the dedicated `#j-trusted-post-actions` sibling
 after that theme surface and before the warning-only `#j-trusted-chrome`

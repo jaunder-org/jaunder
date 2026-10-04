@@ -254,6 +254,19 @@ The stable hooks are:
 | `source-attribution` | Optional source attribution                                    |
 | `continuation`       | Optional pagination continuation                               |
 
+Highlighted Post-body `pre code` has fifteen closed, scoped `j-syn-*` token
+hooks. In addition to `comment`, `keyword`, `string`, `number`, `function`,
+`type`, `variable`, `constant`, `operator`, and `punctuation`, the additive
+roles are `function-call`, `diff-plus`, `diff-minus`, `heading`, and `quote`.
+Each has a matching `--j-syn-*` CSS variable with a built-in default. Existing
+packages remain valid without overrides; a public theme may choose, for example,
+`:root { --j-syn-function-call: #573c8b; }`. Choose overrides with at least
+4.5:1 contrast against the theme's code background. Built-in defaults mix each
+theme's semantic color with its ink to keep small monospace text legible. Do not
+style an authored hook outside `[data-jaunder-part="post-body"] pre code`: a
+permitted forged class may survive sanitization, but only code tokens should
+acquire color.
+
 The contract guarantees these concepts, landmarks, route presence, cardinality,
 and accessible source order. Every public route has one `hero`; its optional
 decorative `header-image` precedes and shares that stable container with the

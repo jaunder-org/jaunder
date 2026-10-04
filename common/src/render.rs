@@ -467,7 +467,7 @@ where
 ///
 /// Re-admitting `class` without narrowing its values would let attacker-supplied
 /// markup borrow application CSS. Only `language-*` tokens survive on `<pre>` and
-/// `<code>`; the ten closed `j-syn-*` token classes survive on `<span>`. CSS must
+/// `<code>`; the closed `j-syn-*` token classes survive on `<span>`. CSS must
 /// scope those tokens to Post-body code since the filter cannot inspect ancestry.
 #[cfg(feature = "sanitize")]
 fn allowed_post_code_class(element: &str, token: &str) -> bool {
@@ -480,6 +480,11 @@ fn allowed_post_code_class(element: &str, token: &str) -> bool {
                 | "j-syn-string"
                 | "j-syn-number"
                 | "j-syn-function"
+                | "j-syn-function-call"
+                | "j-syn-diff-plus"
+                | "j-syn-diff-minus"
+                | "j-syn-heading"
+                | "j-syn-quote"
                 | "j-syn-type"
                 | "j-syn-variable"
                 | "j-syn-constant"
@@ -1280,6 +1285,11 @@ mod tests {
             "string",
             "number",
             "function",
+            "function-call",
+            "diff-plus",
+            "diff-minus",
+            "heading",
+            "quote",
             "type",
             "variable",
             "constant",
