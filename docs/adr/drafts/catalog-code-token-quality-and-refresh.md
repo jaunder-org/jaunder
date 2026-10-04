@@ -9,14 +9,16 @@
 The
 [host highlighting decision](../drafts/host-code-block-highlighting-and-projection-refresh.md)
 introduced a pinned 42-grammar catalog, ten closed semantic hooks and a
-versioned presentation-only refresh. A real Haskell Post has an unterminated
-opening pragma that its grammar parses as one whole-block `pragma` without an
-error; its query colors every line as a keyword. The upstream Emacs Lisp query
-colors definitions but not ordinary call heads. Other reviewed capture names
-(`diff.plus`/`diff.minus`, headings/quotes and calls/definitions) collapse into
-indistinguishable classes. Earlier offline rebuilds and the version-1 bounded
-refresh can already be complete on deployed installations. Changing only the
-renderer would leave old stored Post projections stale.
+versioned presentation-only refresh. At the original report, a Haskell Post had
+an unterminated opening pragma that its grammar parses as one whole-block
+`pragma` without an error; its query colored every line as a keyword. The author
+has since corrected that Post, while a historical fixture preserves the
+malformed-input regression. The upstream Emacs Lisp query colors definitions but
+not ordinary call heads. Other reviewed capture names (`diff.plus`/`diff.minus`,
+headings/quotes and calls/definitions) collapse into indistinguishable classes.
+Earlier offline rebuilds and the version-1 bounded refresh can already be
+complete on deployed installations. Changing only the renderer would leave old
+stored Post projections stale.
 
 The approved
 [quality spec](../../superpowers/specs/2026-10-03-issue-1678-code-highlighting-quality.md)

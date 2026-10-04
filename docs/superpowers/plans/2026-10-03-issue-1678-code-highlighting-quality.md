@@ -23,8 +23,9 @@ for unlabeled/HTML/unknown code, new visual-snapshot variants.
 - [x] **1. Establish the quality oracle and choose a rendering path.** Build a
       checked-in corpus manifest with at least one real, role-annotated sample
       per supported grammar; every canonical label and alias must work through
-      both Org and Markdown. Include the two linked production excerpts with
-      their actual exporter text, adversarial and malformed source, and exact
+      both Org and Markdown. Include the two linked current production excerpts
+      with their actual exporter text and preserve the originally reported
+      malformed Haskell bytes separately alongside adversarial source and exact
       decoded-text expectations. Measure current versus candidate capture/HTML
       quality using Tree-sitter CLI `highlight` and, where useful, an
       independent toolkit as diagnostic comparators, not as unreviewed
@@ -40,16 +41,18 @@ for unlabeled/HTML/unknown code, new visual-snapshot variants.
     stable quality oracle. Preserve catalog/aliases and existing budgets. If no
     candidate can meet the corpus safely, stop for a design decision rather than
     shrinking coverage or relaxing a gate.
-  - Verification: corpus fails on today's Haskell whole-line tokenization and
-    missing Emacs Lisp call-head distinctions; failures name the grammar and the
-    expected-versus-actual role/range. Exact text, catalog/alias census and
-    unknown-label plain-code evidence are inspectable. The comparison records
-    material differences and whether they reveal missing or misleading Jaunder
-    markup, not merely that two tools serialize different HTML. Baseline
-    screenshots are transient review artifacts, not committed `@visual`
-    snapshots. The pinned CLI was absent from the devShell; the comparison
-    instead exercised the pinned highlighting API directly and records this
-    limitation rather than claiming independent-toolkit confirmation.
+  - Verification: the historical malformed Haskell source reproduces the
+    whole-line cascade in reference queries, while corrected live Haskell gains
+    distinct token roles; Emacs Lisp still tests missing call heads. Failures
+    name the grammar and the expected-versus-actual role/range. Exact text,
+    catalog/alias census and unknown-label plain-code evidence are inspectable.
+    The comparison records material differences and whether they reveal missing
+    or misleading Jaunder markup, not merely that two tools serialize different
+    HTML. Baseline screenshots are transient review artifacts, not committed
+    `@visual` snapshots. The pinned CLI was absent from the devShell; the
+    comparison instead exercised the pinned highlighting API directly and
+    records this limitation rather than claiming independent-toolkit
+    confirmation.
 - [x] **2. Establish the closed semantic-token contract.** Map reliable query
       captures into the smallest reviewed additive set of semantic hooks
       required by the corpus. Preserve class-only host-rendered spans and

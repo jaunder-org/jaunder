@@ -5,10 +5,10 @@ use common::{post_body::PostBody, render::PostFormat};
 #[path = "quality/catalog.rs"]
 mod catalog;
 
-// Captured as decoded <code> text from the two public Posts on 2026-10-04.
-// Keep the malformed Haskell pragma intact: repairing the source would hide
-// the real Post's whole-block keyword regression.
+// The current public Haskell and Emacs Lisp code, plus the historical
+// unterminated Haskell source that exposed a whole-block parser cascade.
 const HASKELL: &str = include_str!("fixtures/production-haskell.hs");
+const HISTORICAL_MALFORMED_HASKELL: &str = include_str!("fixtures/historical-malformed-haskell.hs");
 const ELISP: &str = include_str!("fixtures/production-elisp.el");
 
 // The host renderer emits only nested spans inside a code element. Walk that
@@ -130,13 +130,22 @@ fn upstream_and_bundled_queries_expose_the_same_malformed_haskell_cascade() {
         tree_sitter_haskell::HIGHLIGHTS_QUERY,
         syntastica_queries::HASKELL_HIGHLIGHTS_CRATES_IO,
     ] {
-        let directive_bytes = captured_bytes(language.clone(), query, HASKELL, "keyword.directive");
+        let directive_bytes = captured_bytes(
+            language.clone(),
+            query,
+            HISTORICAL_MALFORMED_HASKELL,
+            "keyword.directive",
+        );
         assert!(
-            directive_bytes > HASKELL.len() * 9 / 10,
+            directive_bytes > HISTORICAL_MALFORMED_HASKELL.len() * 9 / 10,
             "the reference query did not reproduce the whole-document pragma capture"
         );
     }
-    let html = render_code("haskell", HASKELL, PostFormat::Markdown);
+    let html = render_code(
+        "haskell",
+        HISTORICAL_MALFORMED_HASKELL,
+        PostFormat::Markdown,
+    );
     assert!(
         !html.contains("j-syn-keyword"),
         "integrated fallback must reject that capture"
@@ -274,19 +283,49 @@ fn unknown_language_remains_escaped_and_uncolored_in_both_formats() {
 }
 
 #[test]
-fn malformed_production_haskell_must_not_mark_entire_source_as_keyword() {
-    // https://tendentious.org/~mdorman/2014/06/01/replacing-nothing-values-with-just-values-in-a-nested-structure
+fn historical_malformed_haskell_does_not_mark_entire_source_as_keyword() {
+    // Recorded before the author corrected the reported Post's opening pragma.
+    for format in [PostFormat::Markdown, PostFormat::Org] {
+        let html = render_code("haskell", HISTORICAL_MALFORMED_HASKELL, format);
+        let (decoded, roles) = semantic_code(&html);
+        assert!(
+            roles.iter().all(Vec::is_empty),
+            "{format:?}: an unterminated pragma must not color the source: {html}"
+        );
+        assert_eq!(
+            decoded.trim_end_matches('\n'),
+            HISTORICAL_MALFORMED_HASKELL.trim_end_matches('\n'),
+            "{format:?}: fallback must preserve authored code (aside from the format's trailing LF)"
+        );
+    }
+}
+
+#[test]
+fn corrected_production_haskell_retains_distinct_token_roles() {
     for format in [PostFormat::Markdown, PostFormat::Org] {
         let html = render_code("haskell", HASKELL, format);
+        let (decoded, roles) = semantic_code(&html);
+        let (plain, _) = semantic_code(&render_code("unknown-grammar", HASKELL, format));
+        assert_eq!(decoded, plain, "{format:?}: corrected Post source changed");
+        for (token, role) in [
+            ("module", "keyword"),
+            ("Item", "type"),
+            ("over", "function-call"),
+            ("\"Bar\"", "string"),
+        ] {
+            let start = HASKELL.find(token).expect("token in captured Post");
+            let end = start + token.len();
+            let expected = format!("j-syn-{role}");
+            assert!(
+                roles[start..end]
+                    .iter()
+                    .all(|active| active.contains(&expected.as_str())),
+                "{format:?}: source bytes {start}..{end} {token:?} lack {expected}: {html}"
+            );
+        }
         assert!(
-            !html.contains("<span class=\"j-syn-keyword\">import Control.Lens"),
-            "{format:?}: a missing closing pragma delimiter must not color the import as an entire keyword line: {html}"
-        );
-        let plain = ammonia::Builder::empty().clean(&html).to_string();
-        assert_eq!(
-            html_escape::decode_html_entities(&plain).trim_end_matches('\n'),
-            HASKELL.trim_end_matches('\n'),
-            "{format:?}: fallback must preserve authored code (aside from the format's trailing LF)"
+            whole_block_categories(&decoded, &roles).is_empty(),
+            "{format:?}: corrected Haskell has a whole-block capture: {html}"
         );
     }
 }

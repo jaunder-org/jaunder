@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings, TemplateHaskell #-}
+{-# LANGUAGE OverloadedStrings, TemplateHaskell #-
 module Main where
 
 import Control.Lens
@@ -35,3 +35,4 @@ collection :: Collectioncollection = Collection "Outermost" [Container "A" (Just
 
 makeDefault :: Collection -> Collection
 makeDefault =  over (collectionItems.each.containerItem) (Just . fromMaybe (Item "Bar"))
+

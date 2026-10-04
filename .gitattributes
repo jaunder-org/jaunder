@@ -1,2 +1,2 @@
-# Byte-exact production code fixture includes authored blank EOF lines.
-host/src/code_highlight/fixtures/production-haskell.hs -whitespace
+# Byte-exact historical Haskell code includes authored blank EOF lines.
+host/src/code_highlight/fixtures/historical-malformed-haskell.hs -whitespace
