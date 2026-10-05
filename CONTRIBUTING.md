@@ -66,6 +66,38 @@ Enter the development shell:
 nix develop
 ```
 
+The default `.#default` and `.#ci` shells target `x86_64-linux`,
+`aarch64-linux`, and `aarch64-darwin` (Apple Silicon macOS). The pinned nixpkgs
+no longer supports Intel macOS (`x86_64-darwin`), so the flake does not
+advertise that platform. On Linux, Playwright uses the browsers pinned in Nix.
+On macOS, Nix supplies the Rust/WASM/Node/database host tooling while Playwright
+browser binaries live in a writable user cache whose path includes the pinned
+`@playwright/test` version; shell entry never downloads browsers. Provision them
+explicitly with:
+
+```bash
+nix develop -c playwright install chromium firefox webkit
+```
+
+Use the repository's Linux VM lanes for canonical e2e verdicts and screenshot
+baselines. macOS WebKit is useful for investigation, but it is not actual
+Safari; verify Safari-specific behavior in Safari itself and keep the remaining
+device-specific requirement in the issue evidence. Theme thumbnails, NixOS
+services/VM tests, diagnostic coverage producers, and canonical screenshot
+baseline updates remain Linux-only. Do not update canonical snapshots on macOS.
+For host PostgreSQL testing on macOS, use `cargo xtask test-local` or
+`devtool pg run -- <command>` rather than the NixOS testing VM below.
+
+Check platform output boundaries and native shell/package evaluation with:
+
+```bash
+nix eval --impure --expr 'import ./nix/platform-contract.nix { flake = builtins.getFlake (toString ./.); }'
+```
+
+Run this on each supported native platform: Cargo source preparation uses
+import-from-derivation, so foreign-system derivation evaluation requires a
+matching builder and is not forced by this check.
+
 The default local backend remains SQLite. PostgreSQL development is also
 supported:
 
@@ -378,7 +410,10 @@ invoke it.
   complete capture under `.xtask/e2e-local/<run-id>/<browser>/capture/` and
   prints the exact `otel-traces.jsonl` path. No pre-existing server or collector
   is needed. Use this while iterating on the web UI; it uses the HTML reporter
-  for interactive debugging.
+  for interactive debugging. For browser-specific investigation on macOS, select
+  WebKit after provisioning browsers, for example
+  `cargo xtask e2e-local post-image-fit.spec.ts --browser webkit`; this proves
+  Playwright WebKit only, not actual Safari.
 - **Focused browser-flow proof** — `cargo xtask e2e-local <spec-or-file:line>`
   scopes the local loop to one Playwright positional filter when that spec or
   line covers the changed behavior:

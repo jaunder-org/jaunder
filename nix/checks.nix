@@ -1952,7 +1952,7 @@ in
   internals = {
     inherit mkPerformanceProducer;
   };
-  packages = pkgs.lib.optionalAttrs pkgs.stdenv.isLinux (
+  packages = pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (
     e2eSupportPackages
     // {
       # The probe realizes only this declarative inventory before it evaluates
@@ -2020,7 +2020,7 @@ wasm-coverage-measure-firefox-instrumented = mkWasmCoverageMeasurementProducer {
     // e2eSingleWorkerPackages
   );
 
-  checks = pkgs.lib.optionalAttrs pkgs.stdenv.isLinux (
+  checks = pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (
 e2eGateChecks
 // coverageCacheChecks
 // {

@@ -35,6 +35,10 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Evaluate supported platform boundaries
+        run: >-
+          nix eval --impure --expr
+          'import ./nix/platform-contract.nix { flake = builtins.getFlake (toString ./.); }'
       - name: Validate host lane (via xtask)
         run:
           nix develop .#ci --accept-flake-config -c cargo xtask ci-validate host

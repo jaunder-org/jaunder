@@ -381,8 +381,8 @@ let
       doCheck = false;
       nativeBuildInputs =
         hostArgs.nativeBuildInputs
-        ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.patchelf ];
-      postFixup = pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+        ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.patchelf ];
+      postFixup = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
         patchelf --add-rpath \
           "${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}" \
           "$out/bin/jaunder"
@@ -404,8 +404,8 @@ let
       doCheck = false;
       nativeBuildInputs =
         hostArgs.nativeBuildInputs
-        ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.patchelf ];
-      postFixup = pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+        ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.patchelf ];
+      postFixup = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
         patchelf --add-rpath \
           "${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}" \
           "$out/bin/test-support"
@@ -858,8 +858,8 @@ let
       doCheck = false;
       nativeBuildInputs =
         hostArgs.nativeBuildInputs
-        ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.patchelf ];
-      postFixup = pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+        ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.patchelf ];
+      postFixup = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
         patchelf --add-rpath \
           "${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}" \
           "$out/bin/jaunder"
@@ -881,8 +881,8 @@ let
       doCheck = false;
       nativeBuildInputs =
         hostArgs.nativeBuildInputs
-        ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.patchelf ];
-      postFixup = pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+        ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.patchelf ];
+      postFixup = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
         patchelf --add-rpath \
           "${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}" \
           "$out/bin/jaunder"
@@ -956,7 +956,7 @@ let
   );
 in
 {
-  packages = pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+  packages = {
     jaunder = jaunderBin;
     site = site;
     # The pre-wasm-bindgen, unstripped wasm. Exposed so
@@ -966,15 +966,16 @@ in
     inherit csrWasm;
     csrBundle = csrWasmBundle;
     devtool = devtoolBin;
-    theme-thumbnail-environment = themeThumbnailEnvironment;
     # The out-of-process e2e seed helper (ADR-0046). Exposed so it is
     # directly buildable/verifiable; it is placed only on the e2e VM PATH,
     # never in the prod artifact or the NixOS module.
+    test-support = testSupportBin;
+  } // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+    theme-thumbnail-environment = themeThumbnailEnvironment;
     # The manually linked diagnostic module and its retained IR/link evidence.
     # A failed producer still exposes its durable `status.json` and `pipeline.log`
     # for the later browser producer; no independent blocker derivation masks it.
     wasm-coverage-csr = diagnosticCsrWasmBundle;
-    test-support = testSupportBin;
   };
 
   emacsPackages = {
