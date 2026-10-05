@@ -180,12 +180,16 @@ impl Drop for Process {
 
 #[cfg(all(test, unix))]
 mod tests {
+    #[cfg(target_os = "linux")]
     use std::fs;
+    #[cfg(target_os = "linux")]
     use std::time::{Duration, Instant};
 
     use processkit::{Command, Outcome};
 
-    use super::{Process, process_identity_is_stopped, process_probe_reports_stopped};
+    #[cfg(target_os = "linux")]
+    use super::process_identity_is_stopped;
+    use super::{Process, process_probe_reports_stopped};
 
     #[test]
     fn wait_returns_the_child_outcome() {
@@ -307,6 +311,7 @@ mod tests {
         panic!("process tree remained alive after its owner dropped");
     }
 
+    #[cfg(target_os = "linux")]
     fn wait_for_pids(path: &std::path::Path) -> Vec<u32> {
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
@@ -325,6 +330,7 @@ mod tests {
         panic!("process tree did not publish parent and descendant IDs");
     }
 
+    #[cfg(target_os = "linux")]
     fn wait_for_capture(path: &std::path::Path) {
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {

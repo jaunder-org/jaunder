@@ -19,7 +19,7 @@ let
   # browser independently in CI or a workflow.
   themeThumbnailEnvironment = pkgs.buildEnv {
     name = "jaunder-theme-thumbnail-environment";
-    paths = [ pkgs.chromium pkgs.dejavu_fonts pkgs.fontconfig ];
+    paths = [ pkgs.dejavu_fonts pkgs.fontconfig ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.chromium ];
   };
   toolchain = fenix.packages.${system}.fromToolchainFile {
     file = ../rust-toolchain.toml;
@@ -317,9 +317,6 @@ let
     buildInputs = [
       pkgs.openssl
       pkgs.sqlite
-    ]
-    ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
-      pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
     ];
   };
 
@@ -507,9 +504,6 @@ let
       pkgs.openssl
       pkgs.sqlite
       pkgs.dav1d
-    ]
-    ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
-      pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
     ];
   };
   toolsVendorArgs = {

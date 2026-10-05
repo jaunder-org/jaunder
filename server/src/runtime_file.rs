@@ -2,7 +2,7 @@
 //! the bound address so an ephemeral (`--bind …:0`) server is discoverable by an
 //! out-of-process caller (the elisp test harness). See ADR-0035.
 //!
-//! Contents: `{ "ip": <ip>, "port": <port>, "pid": <pid>, "start_time": <jiffies> }`.
+//! Contents: `{ "ip": <ip>, "port": <port>, "pid": <pid>, "start_time": <platform token> }`.
 //! The JSON file is the out-of-process discovery contract. The adjacent OS-backed
 //! `.lock` file is the startup mutex: its kernel lock, not its on-disk existence,
 //! determines whether another live instance owns the storage directory. We still
@@ -12,13 +12,14 @@
 use anyhow::{Context, Result};
 use host::error;
 use std::fs::{self, File, OpenOptions};
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 /// Serializes `{ "ip", "port", "pid", "start_time" }` and writes it to `path`
 /// atomically: write a sibling `.tmp`, then rename (atomic on the same filesystem)
 /// so a reader never observes a half-written file. `start_time` is the writer's
-/// `/proc/self/stat` field 22, read by the caller so a failure hard-fails startup.
+/// platform-specific process creation token, read by the caller so a failure
+/// hard-fails startup.
 fn write_atomic(path: &Path, addr: SocketAddr, start_time: u64) -> std::io::Result<()> {
     let body = serde_json::json!({
         "ip": addr.ip().to_string(),
@@ -32,53 +33,28 @@ fn write_atomic(path: &Path, addr: SocketAddr, start_time: u64) -> std::io::Resu
     std::fs::rename(&tmp, path)
 }
 
-/// Field 22 (start-time, jiffies since boot) of a `/proc/<pid>/stat` line;
-/// `InvalidData` if malformed — a malformed stat is a hard failure in every caller.
-/// Field 2 (`comm`) is paren-wrapped and may contain spaces and `)`, so parse from
-/// the **last** `)` (via `rsplit_once`, not slice-indexing, so it can never panic on
-/// a char boundary); after it, `split_whitespace` coalesces the leading space and
-/// start-time is index 19 (the 20th field after `comm`).
-pub(crate) fn parse_stat_start_time(stat: &str) -> std::io::Result<u64> {
-    stat.rsplit_once(')')
-        .and_then(|(_, after)| after.split_whitespace().nth(19))
-        .and_then(|field| field.parse().ok())
-        .ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, "unparseable /proc stat")
-        })
-}
+#[cfg(any(target_os = "linux", test))]
+#[path = "runtime_file/proc_stat.rs"]
+mod proc_stat;
+#[cfg(target_os = "linux")]
+#[path = "runtime_file/process_identity_linux.rs"]
+mod process_identity;
+#[cfg(target_os = "macos")]
+#[path = "runtime_file/process_identity_macos.rs"]
+mod process_identity;
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[path = "runtime_file/process_identity_unsupported.rs"]
+mod process_identity;
 
-/// Reads a start-time from `path`. `Ok(Some)` when it reads and parses; `Ok(None)`
-/// when it does not exist (`NotFound` — a dead pid for `/proc/<pid>/stat`); `Err`
-/// on any other I/O error **or** an unparseable read (the `/proc` mechanism is
-/// unusable → the caller hard-fails). Path is a parameter so tests exercise every
-/// arm with planted files.
-pub(crate) fn read_start_time_at(path: &Path) -> std::io::Result<Option<u64>> {
-    match std::fs::read_to_string(path) {
-        Ok(s) => Ok(Some(parse_stat_start_time(&s)?)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e),
-    }
-}
-
-/// Reads a **required** start-time (our own, at startup): a missing file or read
-/// error is a hard fail — a runtime that can't read `/proc` can't enforce the
-/// start-up mutex, so it must refuse rather than serve with a broken guard.
-pub(crate) fn require_start_time_at(path: &Path) -> anyhow::Result<u64> {
-    read_start_time_at(path)?
-        .ok_or_else(|| anyhow::anyhow!("cannot read own start-time from {}", path.display()))
-}
-
-/// Reads a process's start-time from `/proc/<pid>/stat` (the `/proc` binding over
-/// [`read_start_time_at`]). `Ok(None)` = no such pid (dead); `Err` = unusable `/proc`.
-pub(crate) fn read_proc_start_time(pid: u32) -> std::io::Result<Option<u64>> {
-    read_start_time_at(Path::new(&format!("/proc/{pid}/stat")))
-}
+#[cfg(test)]
+use proc_stat::{parse_stat_start_time, read_start_time_at, require_start_time_at};
+pub(crate) use process_identity::{current_process_start_time, process_start_time};
 
 /// `Ok(true)` iff `pid` is live **and** its start-time matches `recorded` — i.e. the
 /// exact process that wrote the runtime file is still running. `Ok(false)` = dead pid
-/// or start-time mismatch (a recycled pid). `Err` = unusable `/proc` (hard fail).
+/// or start-time mismatch (a recycled pid). `Err` = unusable process table (hard fail).
 pub(crate) fn holder_is_live(pid: u32, recorded: u64) -> std::io::Result<bool> {
-    Ok(match read_proc_start_time(pid)? {
+    Ok(match process_start_time(pid)? {
         Some(actual) => actual == recorded,
         None => false,
     })
@@ -94,6 +70,7 @@ pub(crate) struct RuntimeProcessIdentity {
     pub(crate) start_time: u64,
 }
 
+#[cfg(any(target_os = "linux", test))]
 pub(crate) struct RuntimeRecord {
     pub(crate) process: RuntimeProcessIdentity,
     pub(crate) port: u16,
@@ -116,6 +93,7 @@ fn decode_runtime_process_identity(contents: &[u8]) -> Result<RuntimeProcessIden
     decode_process_identity(&value)
 }
 
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn decode_runtime_record(contents: &[u8]) -> Result<RuntimeRecord> {
     let value: serde_json::Value = serde_json::from_slice(contents)?;
     let process = decode_process_identity(&value)?;
@@ -125,7 +103,7 @@ pub(crate) fn decode_runtime_record(contents: &[u8]) -> Result<RuntimeRecord> {
         .ok_or_else(|| anyhow::anyhow!("invalid port"))?;
     value["ip"]
         .as_str()
-        .and_then(|ip| ip.parse::<IpAddr>().ok())
+        .and_then(|ip| ip.parse::<std::net::IpAddr>().ok())
         .ok_or_else(|| anyhow::anyhow!("invalid ip"))?;
     Ok(RuntimeRecord { process, port })
 }
@@ -694,7 +672,8 @@ mod tests {
         assert_eq!(require_start_time_at(&ok).unwrap(), 777);
         // Absent -> Err (the None -> hard-fail mapping).
         assert!(require_start_time_at(&dir.path().join("nope")).is_err());
-        // Our own real stat parses.
+        // Our own real stat parses on Linux.
+        #[cfg(target_os = "linux")]
         assert!(require_start_time_at(std::path::Path::new("/proc/self/stat")).is_ok());
     }
 
@@ -712,18 +691,19 @@ mod tests {
     }
 
     fn own_start_time() -> u64 {
-        require_start_time_at(std::path::Path::new("/proc/self/stat")).unwrap()
+        current_process_start_time().unwrap()
     }
 
     fn write_runtime(path: &std::path::Path, json: &serde_json::Value) {
         std::fs::write(path, json.to_string()).unwrap();
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
-    fn read_proc_start_time_self_and_dead() {
-        assert!(read_proc_start_time(std::process::id()).unwrap().is_some());
+    fn process_start_time_self_and_dead() {
+        assert!(process_start_time(std::process::id()).unwrap().is_some());
         // u32::MAX is above pid_max on any Linux system => /proc entry never exists.
-        assert_eq!(read_proc_start_time(u32::MAX).unwrap(), None);
+        assert_eq!(process_start_time(u32::MAX).unwrap(), None);
     }
 
     #[test]
