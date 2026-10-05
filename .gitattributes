@@ -1,0 +1,2 @@
+# Byte-exact historical Haskell code includes authored blank EOF lines.
+host/src/code_highlight/fixtures/historical-malformed-haskell.hs -whitespace

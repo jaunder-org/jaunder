@@ -1,0 +1,449 @@
+//! Production-derived quality regressions for host-rendered Post code.
+
+use common::{post_body::PostBody, render::PostFormat};
+
+#[path = "quality/catalog.rs"]
+mod catalog;
+
+// The current public Haskell and Emacs Lisp code, plus the historical
+// unterminated Haskell source that exposed a whole-block parser cascade.
+const HASKELL: &str = include_str!("fixtures/production-haskell.hs");
+const HISTORICAL_MALFORMED_HASKELL: &str = include_str!("fixtures/historical-malformed-haskell.hs");
+const ELISP: &str = include_str!("fixtures/production-elisp.el");
+
+// The host renderer emits only nested spans inside a code element. Walk that
+// closed output shape rather than matching serialized tag boundaries: a role
+// may cover a token through nested punctuation or split string captures.
+pub(super) fn semantic_code(html: &str) -> (String, Vec<Vec<&str>>) {
+    let (_, rest) = html.split_once("<code").expect("rendered code block");
+    let (_, rest) = rest.split_once('>').expect("open code element");
+    let (inner, _) = rest.split_once("</code>").expect("close code element");
+    let mut text = String::new();
+    let mut roles = Vec::new();
+    let mut scopes: Vec<Option<&str>> = Vec::new();
+    let mut remaining = inner;
+    while !remaining.is_empty() {
+        if remaining.starts_with("<span") {
+            let (tag, after) = remaining.split_once('>').expect("span start tag");
+            scopes.push(
+                tag.strip_prefix("<span class=\"")
+                    .and_then(|class| class.strip_suffix('"')),
+            );
+            remaining = after;
+        } else if let Some(after) = remaining.strip_prefix("</span>") {
+            scopes.pop().expect("balanced spans");
+            remaining = after;
+        } else {
+            let length = remaining.find('<').unwrap_or(remaining.len());
+            assert!(length > 0, "unexpected markup inside code: {remaining}");
+            let decoded = html_escape::decode_html_entities(&remaining[..length]);
+            let active = scopes.iter().filter_map(|scope| *scope).collect::<Vec<_>>();
+            roles.extend(std::iter::repeat_n(active, decoded.len()));
+            text.push_str(&decoded);
+            remaining = &remaining[length..];
+        }
+    }
+    assert!(scopes.is_empty(), "unbalanced spans in rendered code");
+    assert_eq!(roles.len(), text.len());
+    (text, roles)
+}
+
+fn render_code(label: &str, code: &str, format: PostFormat) -> String {
+    let source = match format {
+        PostFormat::Markdown => format!("```{label}\n{code}```"),
+        PostFormat::Org => format!("#+begin_src {label}\n{code}#+end_src"),
+        PostFormat::Html => unreachable!("HTML Posts do not syntax-highlight authored code"),
+    };
+    let body: PostBody = source.parse().expect("the fixture is a Post body");
+    crate::render::render(&body, &format)
+        .expect("a pinned highlighter is available")
+        .to_string()
+}
+
+// Derive categories from rendered scopes, not expected corpus roles: an
+// unreviewed broad capture can nest around valid narrow token captures.
+fn whole_block_categories(decoded: &str, roles: &[Vec<&str>]) -> Vec<String> {
+    let nonblank = decoded
+        .as_bytes()
+        .iter()
+        .enumerate()
+        .filter(|(_, byte)| !byte.is_ascii_whitespace())
+        .map(|(offset, _)| offset)
+        .collect::<Vec<_>>();
+    if nonblank.len() < 12 {
+        return Vec::new();
+    }
+    let categories = nonblank
+        .iter()
+        .flat_map(|&offset| roles[offset].iter().copied())
+        .filter(|role| role.starts_with("j-syn-"))
+        .collect::<std::collections::BTreeSet<_>>();
+    categories
+        .into_iter()
+        .filter_map(|category| {
+            let covered = nonblank
+                .iter()
+                .filter(|&&offset| roles[offset].contains(&category))
+                .count();
+            (covered * 10 >= nonblank.len() * 9).then(|| {
+                format!(
+                    "{category} covers {covered}/{} nonblank source bytes",
+                    nonblank.len()
+                )
+            })
+        })
+        .collect()
+}
+
+fn catalog_failures(
+    case: &catalog::Case,
+    format: PostFormat,
+    html: &str,
+    decoded: &str,
+    roles: &[Vec<&str>],
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    for expectation in case.roles {
+        let start = expectation.start;
+        let end = start + expectation.token.len();
+        assert_eq!(
+            case.code.get(start..end),
+            Some(expectation.token),
+            "{}/{format:?}: bad fixture range {start}..{end}",
+            case.label
+        );
+        assert_eq!(
+            decoded.get(start..end),
+            Some(expectation.token),
+            "{}/{format:?}: exporter displaced source range {start}..{end}",
+            case.label
+        );
+        let expected = format!("j-syn-{}", expectation.role.class());
+        let active = &roles[start..end];
+        if !active
+            .iter()
+            .all(|roles| roles.contains(&expected.as_str()))
+        {
+            failures.push(format!(
+                "{}/{format:?}: bytes {start}..{end} {token:?} expected {expected}, got {active:?}; HTML: {html}",
+                case.label,
+                token = expectation.token
+            ));
+        }
+    }
+    for overcolored in whole_block_categories(decoded, roles) {
+        failures.push(format!(
+            "{}/{format:?}: {overcolored}; misleading whole-block color: {html}",
+            case.label
+        ));
+    }
+    failures
+}
+
+fn captured_bytes(language: tree_sitter::Language, query: &str, code: &str, role: &str) -> usize {
+    use tree_sitter_highlight::{HighlightEvent, Highlighter};
+
+    let configuration = super::config(language, "comparison", query, "", "").unwrap();
+    let mut highlighter = Highlighter::new();
+    let events = highlighter
+        .highlight(&configuration, code.as_bytes(), None, None, |_| None)
+        .unwrap();
+    let mut scopes = Vec::new();
+    let mut covered = 0;
+    for event in events {
+        match event.unwrap() {
+            HighlightEvent::HighlightStart(capture) => {
+                scopes.push(super::CAPTURES.get(capture.0).copied().unwrap_or(""));
+            }
+            HighlightEvent::HighlightEnd => {
+                scopes.pop().expect("balanced capture events");
+            }
+            HighlightEvent::Source { start, end } => {
+                if scopes.contains(&role) {
+                    covered += end - start;
+                }
+            }
+        }
+    }
+    covered
+}
+
+#[test]
+fn upstream_and_bundled_queries_expose_the_same_malformed_haskell_cascade() {
+    let language: tree_sitter::Language = tree_sitter_haskell::LANGUAGE.into();
+    for query in [
+        tree_sitter_haskell::HIGHLIGHTS_QUERY,
+        syntastica_queries::HASKELL_HIGHLIGHTS_CRATES_IO,
+    ] {
+        let directive_bytes = captured_bytes(
+            language.clone(),
+            query,
+            HISTORICAL_MALFORMED_HASKELL,
+            "keyword.directive",
+        );
+        assert!(
+            directive_bytes > HISTORICAL_MALFORMED_HASKELL.len() * 9 / 10,
+            "the reference query did not reproduce the whole-document pragma capture"
+        );
+    }
+    let html = render_code(
+        "haskell",
+        HISTORICAL_MALFORMED_HASKELL,
+        PostFormat::Markdown,
+    );
+    assert!(
+        !html.contains("j-syn-keyword"),
+        "integrated fallback must reject that capture"
+    );
+}
+
+#[test]
+fn upstream_elisp_query_omits_call_heads_but_the_reviewed_query_captures_them() {
+    let language: tree_sitter::Language = tree_sitter_elisp::LANGUAGE.into();
+    let original = captured_bytes(
+        language.clone(),
+        tree_sitter_elisp::HIGHLIGHTS_QUERY,
+        ELISP,
+        "function.call",
+    );
+    let revised = format!(
+        "{}\n{}",
+        tree_sitter_elisp::HIGHLIGHTS_QUERY,
+        super::ELISP_CALL_QUERY
+    );
+    let candidate = captured_bytes(language, &revised, ELISP, "function.call");
+    assert_eq!(
+        original, 0,
+        "upstream already distinguishes calls; reconsider the extension"
+    );
+    assert!(
+        candidate >= "add-to-list".len(),
+        "candidate loses call heads"
+    );
+}
+
+#[test]
+fn catalog_corpus_names_every_grammar_and_checks_reviewed_token_ranges() {
+    let supported: std::collections::BTreeSet<_> = super::GRAMMARS
+        .iter()
+        .map(|grammar| grammar.labels[0])
+        .chain(["elisp", "haskell"])
+        .collect();
+    let represented: std::collections::BTreeSet<_> =
+        catalog::CASES.iter().map(|case| case.label).collect();
+    assert_eq!(
+        represented.len(),
+        catalog::CASES.len(),
+        "duplicate corpus labels"
+    );
+    assert_eq!(
+        represented, supported,
+        "a grammar is missing a quality oracle"
+    );
+    let mut failures = Vec::new();
+    for case in catalog::CASES {
+        assert!(
+            !case.roles.is_empty(),
+            "{} has no expected roles",
+            case.label
+        );
+        for format in [PostFormat::Markdown, PostFormat::Org] {
+            let html = render_code(case.label, case.code, format);
+            let (decoded, roles) = semantic_code(&html);
+            let plain_html = render_code("unknown-grammar", case.code, format);
+            let (plain, _) = semantic_code(&plain_html);
+            assert_eq!(
+                decoded, plain,
+                "{}/{format:?}: changed decoded source; highlighted={html}; plain={plain_html}",
+                case.label
+            );
+            failures.extend(catalog_failures(case, format, &html, &decoded, &roles));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn whole_block_oracle_rejects_unexpected_roles_nesting_valid_ranges() {
+    let code = "let answer = 42;\n";
+    let mut roles = vec![vec!["j-syn-function-call"]; code.len()];
+    for active in &mut roles[.."let".len()] {
+        active.push("j-syn-keyword");
+    }
+    assert_eq!(
+        whole_block_categories(code, &roles),
+        ["j-syn-function-call covers 13/13 nonblank source bytes"]
+    );
+}
+
+#[test]
+fn short_code_does_not_trigger_whole_block_guard() {
+    let code = "tiny";
+    assert!(whole_block_categories(code, &vec![vec!["j-syn-keyword"]; code.len()]).is_empty());
+}
+
+#[test]
+fn catalog_failure_messages_identify_missing_ranges_and_whole_block_roles() {
+    let code = "let answer = 42;\n";
+    let case = catalog::Case {
+        label: "rust",
+        code,
+        roles: &[catalog::ExpectedRole {
+            start: 0,
+            token: "let",
+            role: catalog::Role::String,
+        }],
+    };
+    let roles = vec![vec!["j-syn-keyword"]; code.len()];
+    let failures = catalog_failures(&case, PostFormat::Org, "synthetic HTML", code, &roles);
+    assert_eq!(failures.len(), 2);
+    assert!(failures[0].contains("rust/Org: bytes 0..3 \"let\" expected j-syn-string"));
+    assert!(failures[1].contains("j-syn-keyword covers 13/13 nonblank source bytes"));
+}
+
+#[test]
+fn unknown_language_remains_escaped_and_uncolored_in_both_formats() {
+    let code = "<script>alert('not executable')</script> & safe\n";
+    for format in [PostFormat::Markdown, PostFormat::Org] {
+        let html = render_code("not-a-grammar", code, format);
+        let (decoded, roles) = semantic_code(&html);
+        assert_eq!(decoded, code, "{format:?}: authored text changed");
+        assert!(
+            roles.iter().all(Vec::is_empty),
+            "{format:?}: unknown language received a token role: {html}"
+        );
+        assert!(
+            !html.contains("<script>"),
+            "{format:?}: code must stay escaped: {html}"
+        );
+    }
+}
+
+#[test]
+fn historical_malformed_haskell_does_not_mark_entire_source_as_keyword() {
+    // Recorded before the author corrected the reported Post's opening pragma.
+    for format in [PostFormat::Markdown, PostFormat::Org] {
+        let html = render_code("haskell", HISTORICAL_MALFORMED_HASKELL, format);
+        let (decoded, roles) = semantic_code(&html);
+        assert!(
+            roles.iter().all(Vec::is_empty),
+            "{format:?}: an unterminated pragma must not color the source: {html}"
+        );
+        assert_eq!(
+            decoded.trim_end_matches('\n'),
+            HISTORICAL_MALFORMED_HASKELL.trim_end_matches('\n'),
+            "{format:?}: fallback must preserve authored code (aside from the format's trailing LF)"
+        );
+    }
+}
+
+#[test]
+fn corrected_production_haskell_retains_distinct_token_roles() {
+    for format in [PostFormat::Markdown, PostFormat::Org] {
+        let html = render_code("haskell", HASKELL, format);
+        let (decoded, roles) = semantic_code(&html);
+        let (plain, _) = semantic_code(&render_code("unknown-grammar", HASKELL, format));
+        assert_eq!(decoded, plain, "{format:?}: corrected Post source changed");
+        for (token, role) in [
+            ("module", "keyword"),
+            ("Item", "type"),
+            ("over", "function-call"),
+            ("\"Bar\"", "string"),
+        ] {
+            let start = HASKELL.find(token).expect("token in captured Post");
+            let end = start + token.len();
+            let expected = format!("j-syn-{role}");
+            assert!(
+                roles[start..end]
+                    .iter()
+                    .all(|active| active.contains(&expected.as_str())),
+                "{format:?}: source bytes {start}..{end} {token:?} lack {expected}: {html}"
+            );
+        }
+        assert!(
+            whole_block_categories(&decoded, &roles).is_empty(),
+            "{format:?}: corrected Haskell has a whole-block capture: {html}"
+        );
+    }
+}
+
+#[test]
+fn well_formed_haskell_pragma_does_not_disable_highlighting() {
+    let code = "{-# LANGUAGE OverloadedStrings #-}\nmodule Main where\nmain = putStrLn \"hello\"\n";
+    for format in [PostFormat::Markdown, PostFormat::Org] {
+        let html = render_code("haskell", code, format);
+        assert!(html.contains("j-syn-keyword"), "{format:?}: {html}");
+        assert!(html.contains("j-syn-string"), "{format:?}: {html}");
+    }
+}
+
+#[test]
+fn quoted_elisp_list_head_is_not_a_function_call() {
+    for format in [PostFormat::Markdown, PostFormat::Org] {
+        let html = render_code(
+            "elisp",
+            "(list '(not-a-call (still-not-call x)) (quote (also-not-a-call z)) (actual-call y))\n",
+            format,
+        );
+        for symbol in ["not-a-call", "still-not-call", "also-not-a-call"] {
+            assert!(
+                !html.contains(&format!("class=\"j-syn-function-call\">{symbol}</span>")),
+                "{format:?}: quoted data is not a call ({symbol}): {html}"
+            );
+        }
+        assert!(
+            html.contains("class=\"j-syn-function-call\">actual-call</span>"),
+            "{format:?}: an unquoted list head is a call: {html}"
+        );
+    }
+}
+
+#[test]
+fn elisp_quasiquoted_data_and_unquoted_expressions_keep_distinct_roles() {
+    let code = "(list `(quoted-call ,(real-call 1)) (actual-call 2))\n";
+    for format in [PostFormat::Markdown, PostFormat::Org] {
+        let html = render_code("elisp", code, format);
+        assert!(
+            !html.contains("class=\"j-syn-function-call\">quoted-call</span>"),
+            "{format:?}: quasiquoted data cannot be a call: {html}"
+        );
+        for call in ["real-call", "actual-call"] {
+            assert!(
+                html.contains(&format!("class=\"j-syn-function-call\">{call}</span>")),
+                "{format:?}: unquoted expression must be a call ({call}): {html}"
+            );
+        }
+    }
+}
+
+#[test]
+fn elisp_nested_quasiquotes_only_activate_fully_unquoted_calls() {
+    let code = "(list ``(data ,(still-quoted 1) ,,(live-call 2)) '(literal `(ignored ,(also-ignored 3))))\n";
+    for format in [PostFormat::Markdown, PostFormat::Org] {
+        let html = render_code("elisp", code, format);
+        for symbol in ["still-quoted", "ignored", "also-ignored"] {
+            assert!(
+                !html.contains(&format!("class=\"j-syn-function-call\">{symbol}</span>")),
+                "{format:?}: quoted data is not a call ({symbol}): {html}"
+            );
+        }
+        assert!(
+            html.contains("class=\"j-syn-function-call\">live-call</span>"),
+            "{format:?}: a doubly unquoted head must be a call: {html}"
+        );
+    }
+}
+
+#[test]
+fn production_elisp_marks_unquoted_call_heads_as_functions() {
+    // https://tendentious.org/~mdorman/2014/12/28/how-i-would-start-out-with-emacs-now
+    for format in [PostFormat::Markdown, PostFormat::Org] {
+        let html = render_code("elisp", ELISP, format);
+        for call in ["add-to-list", "package-list-packages"] {
+            assert!(
+                html.contains(&format!("class=\"j-syn-function-call\">{call}</span>")),
+                "{format:?}: expected a function-call token for {call}: {html}"
+            );
+        }
+    }
+}

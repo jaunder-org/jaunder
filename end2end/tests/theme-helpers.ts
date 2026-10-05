@@ -174,12 +174,21 @@ export function packageMemberDigests(path: string): Map<string, string> {
 }
 
 export function rgbChannels(color: string): [number, number, number] {
-  const match = /^rgb\((\d+), (\d+), (\d+)\)$/.exec(color);
+  const rgb = /^rgb\((\d+), (\d+), (\d+)\)$/.exec(color);
+  if (rgb) return [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])];
+
+  // Computed color-mix() values serialize as color(srgb ...) in Chromium and
+  // Firefox, rather than rounding to rgb() bytes.
+  const srgb = /^color\(srgb ([\d.]+) ([\d.]+) ([\d.]+)\)$/.exec(color);
   expect(
-    match,
-    `expected an opaque computed rgb color, got ${color}`,
+    srgb,
+    `expected an opaque computed sRGB color, got ${color}`,
   ).not.toBeNull();
-  return [Number(match![1]), Number(match![2]), Number(match![3])];
+  return [
+    Number(srgb![1]) * 255,
+    Number(srgb![2]) * 255,
+    Number(srgb![3]) * 255,
+  ];
 }
 
 function luminance([red, green, blue]: [number, number, number]): number {

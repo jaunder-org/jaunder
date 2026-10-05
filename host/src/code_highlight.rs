@@ -1,7 +1,9 @@
 //! Host-only, bounded Tree-sitter highlighting for authored Post code blocks.
 
 use std::sync::{LazyLock, OnceLock};
-use tree_sitter_highlight::{HighlightConfiguration, Highlighter, HtmlRenderer};
+use tree_sitter_highlight::{
+    Highlight, HighlightConfiguration, HighlightEvent, Highlighter, HtmlRenderer,
+};
 
 const CAPTURES: &[&str] = &[
     "comment",
@@ -136,14 +138,17 @@ pub(crate) async fn with_invalid_query_for_test<F: std::future::Future>(future: 
     INVALID_QUERY_FOR_TEST.scope((), future).await
 }
 
+// Upstream Elisp colors definitions but omits unquoted call heads. Quote
+// context needs separate structural filtering: query patterns cannot exclude
+// arbitrarily nested quoted lists from this call-head capture.
+const ELISP_CALL_QUERY: &str = "(list . (symbol) @function.call)";
+
 static ELISP: LazyLock<Result<HighlightConfiguration, HighlightError>> = LazyLock::new(|| {
-    config(
-        tree_sitter_elisp::LANGUAGE.into(),
-        "elisp",
-        tree_sitter_elisp::HIGHLIGHTS_QUERY,
-        "",
-        "",
-    )
+    let query = format!(
+        "{}\n{ELISP_CALL_QUERY}",
+        tree_sitter_elisp::HIGHLIGHTS_QUERY
+    );
+    config(tree_sitter_elisp::LANGUAGE.into(), "elisp", &query, "", "")
 });
 
 static HASKELL: LazyLock<Result<HighlightConfiguration, HighlightError>> = LazyLock::new(|| {
@@ -464,12 +469,116 @@ fn configured<'a>(
     })
 }
 
+fn parse_elisp(code: &str) -> Result<tree_sitter::Tree, HighlightError> {
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_elisp::LANGUAGE.into())
+        .map_err(tree_sitter_highlight::Error::from)?;
+    parser.parse(code, None).ok_or(HighlightError::Engine(
+        tree_sitter_highlight::Error::Cancelled,
+    ))
+}
+
+fn elisp_quoted_symbols(tree: &tree_sitter::Tree, code: &str) -> std::collections::HashSet<usize> {
+    #[derive(Clone, Copy, Eq, PartialEq)]
+    enum Mode {
+        Evaluated,
+        Quoted,
+        Quasiquoted(u32),
+    }
+
+    // One bounded AST walk, rather than walking every call's ancestors in a
+    // potentially deeply nested list. Unquotes reduce only the innermost
+    // quasiquote depth; nothing inside a literal quote becomes a live call.
+    let mut symbols = std::collections::HashSet::new();
+    let mut pending = vec![(tree.root_node(), Mode::Evaluated)];
+    while let Some((node, parent_mode)) = pending.pop() {
+        let mode = if node.kind() == "special_form"
+            && node.child(1).is_some_and(|child| child.kind() == "quote")
+        {
+            Mode::Quoted
+        } else if node.kind() == "quote" {
+            match (parent_mode, code.as_bytes().get(node.start_byte())) {
+                (Mode::Quoted, _) => Mode::Quoted,
+                (Mode::Quasiquoted(depth), Some(&b'`')) => Mode::Quasiquoted(depth + 1),
+                (_, Some(&b'`')) => Mode::Quasiquoted(1),
+                _ => Mode::Quoted,
+            }
+        } else if node.kind() == "unquote" {
+            match parent_mode {
+                Mode::Quasiquoted(1) => Mode::Evaluated,
+                Mode::Quasiquoted(depth) => Mode::Quasiquoted(depth - 1),
+                other => other,
+            }
+        } else {
+            parent_mode
+        };
+        if node.kind() == "symbol" && mode != Mode::Evaluated {
+            symbols.insert(node.start_byte());
+        }
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            pending.push((child, mode));
+        }
+    }
+    symbols
+}
+
 fn preserve_renderer_line_ending(code: &str, mut output: String) -> String {
-    // HtmlRenderer may invent one terminal LF on unterminated input.
+    // HtmlRenderer invents an LF on unterminated lines and normalizes CRLF
+    // boundaries to LF. Restore the exporter's original line separator.
     if !code.ends_with('\n') && output.ends_with('\n') {
         output.pop();
+    } else if code.ends_with("\r\n") && output.ends_with('\n') && !output.ends_with("\r\n") {
+        output.insert(output.len() - 1, '\r');
     }
     output
+}
+
+fn has_unpaired_carriage_return(code: &str) -> bool {
+    code.as_bytes()
+        .windows(2)
+        .any(|pair| pair[0] == b'\r' && pair[1] != b'\n')
+        || code.ends_with('\r')
+}
+
+fn semantic_category(capture_name: &str) -> Option<&str> {
+    match capture_name.split('.').next() {
+        Some("function") if capture_name.rsplit('.').next() == Some("call") => {
+            Some("function-call")
+        }
+        Some("diff") if capture_name == "diff.plus" => Some("diff-plus"),
+        Some("diff") if capture_name == "diff.minus" => Some("diff-minus"),
+        Some("markup") if capture_name.starts_with("markup.heading") => Some("heading"),
+        Some("markup") if capture_name == "markup.quote" => Some("quote"),
+        Some("module" | "constructor" | "namespace" | "interface") => Some("type"),
+        Some("tag" | "import") => Some("keyword"),
+        Some("attribute" | "property" | "label") => Some("variable"),
+        Some("boolean") => Some("constant"),
+        Some("character" | "markup" | "diff") => Some("string"),
+        Some(
+            category @ ("comment" | "keyword" | "string" | "number" | "function" | "type"
+            | "variable" | "constant" | "operator" | "punctuation"),
+        ) => Some(category),
+        _ => None,
+    }
+}
+
+fn authored_highlighted_lines(
+    renderer: &HtmlRenderer,
+    code: &str,
+) -> Result<String, HighlightError> {
+    let mut lines = renderer.lines();
+    let mut output = String::new();
+    for source_line in code.split_inclusive('\n') {
+        let line = lines.next().ok_or(HighlightError::Engine(
+            tree_sitter_highlight::Error::Unknown,
+        ))?;
+        output.push_str(&preserve_renderer_line_ending(source_line, line.to_owned()));
+    }
+    // Some queries emit a zero-width capture at EOF, creating a phantom
+    // renderer line. Never append it to the authored source.
+    Ok(output)
 }
 
 /// One budget shared by every eligible code block in document order.
@@ -502,6 +611,16 @@ impl HighlightBudget {
         }
         self.attempts += 1;
         self.attempted_bytes += code.len();
+        // The pinned Haskell grammar accepts an unterminated opening pragma as
+        // one `pragma` node spanning the whole block. Its query then colors
+        // every subsequent line as a keyword rather than recovering. A plain
+        // block is less misleading; never modify the authored source text.
+        if matches!(direct, Some(("haskell", _)))
+            && code.trim_start().starts_with("{-#")
+            && !code.contains("#-}")
+        {
+            return Ok(None);
+        }
         // Test-only, task-scoped query corruption proves callers propagate an
         // initialization failure without changing the pinned production registry.
         #[cfg(any(test, feature = "test-utils"))]
@@ -537,31 +656,58 @@ impl HighlightBudget {
             )
         };
         let configuration = configured(language, configuration)?;
+        // A standalone carriage return is not a line separator the HTML
+        // renderer can round-trip. Leave the whole block escaped and intact.
+        if has_unpaired_carriage_return(code) {
+            return Ok(None);
+        }
+        let quoted_elisp_symbols = if language == "elisp" {
+            elisp_quoted_symbols(&parse_elisp(code)?, code)
+        } else {
+            std::collections::HashSet::new()
+        };
         let mut highlighter = Highlighter::new();
         let events = highlighter.highlight(configuration, code.as_bytes(), None, None, |_| None)?;
+        let mut source_offset = 0;
+        let no_highlight = CAPTURES
+            .iter()
+            .position(|capture| *capture == "none")
+            // cov:ignore-start: the fixed capture registry always includes `none`; no source or query can remove it at runtime.
+            .ok_or_else(|| HighlightError::Initialization {
+                language,
+                detail: "closed capture registry is missing `none`".into(),
+            })?;
+        // cov:ignore-stop
+        let events = events.map(|event| {
+            event.map(|event| match event {
+                HighlightEvent::Source { end, .. } => {
+                    source_offset = end;
+                    event
+                }
+                HighlightEvent::HighlightStart(Highlight(index))
+                    if CAPTURES.get(index) == Some(&"function.call")
+                        && quoted_elisp_symbols.contains(&source_offset) =>
+                {
+                    HighlightEvent::HighlightStart(Highlight(no_highlight))
+                }
+                _ => event,
+            })
+        });
         let mut renderer = HtmlRenderer::new();
         renderer.render(events, code.as_bytes(), &|capture, attrs| {
             let capture_name = CAPTURES.get(capture.0).copied().unwrap_or("");
-            let category = match capture_name.split('.').next() {
-                Some("module" | "constructor" | "namespace" | "interface") => "type",
-                Some("tag" | "import") => "keyword",
-                Some("attribute" | "property" | "label") => "variable",
-                Some("boolean") => "constant",
-                Some("character" | "markup" | "diff") => "string",
-                Some(
-                    category @ ("comment" | "keyword" | "string" | "number" | "function" | "type"
-                    | "variable" | "constant" | "operator" | "punctuation"),
-                ) => category,
-                _ => return,
+            let Some(category) = semantic_category(capture_name) else {
+                return;
             };
             attrs.extend_from_slice(format!("class=\"j-syn-{category}\"").as_bytes());
         })?;
-        Ok(Some(preserve_renderer_line_ending(
-            code,
-            renderer.lines().collect::<String>(),
-        )))
+        Ok(Some(authored_highlighted_lines(&renderer, code)?))
     }
 }
+
+#[cfg(test)]
+#[path = "code_highlight/quality.rs"]
+mod quality;
 
 #[cfg(test)]
 mod tests {
@@ -607,6 +753,81 @@ mod tests {
                     "{}/{format:?}: {html}",
                     grammar.name
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn bounded_renderer_keeps_exact_source_across_eof_and_line_ending_shapes() {
+        for label in ["elisp", "haskell", "markdown", "python"] {
+            for code in ["x", "x\n", "x\n\n", "\n", "x\r\n", "x\r\n\r\n"] {
+                let highlighted = HighlightBudget::default()
+                    .render(label, code)
+                    .unwrap_or_else(|error| panic!("{label}: {error}"))
+                    .expect("known language stays eligible");
+                let (plain, _) =
+                    quality::semantic_code(&format!("<pre><code>{highlighted}</code></pre>"));
+                assert_eq!(plain, code, "{label}: changed the source shape {code:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_alias_renders_the_same_code_as_its_canonical_label_in_both_formats() {
+        let code = "value = \"<tag> & é\"\n";
+        for grammar in &GRAMMARS {
+            let expected = HighlightBudget::default()
+                .render(grammar.labels[0], code)
+                .unwrap_or_else(|error| panic!("{}: {error}", grammar.name))
+                .expect("each canonical label is supported");
+            for &alias in grammar.labels {
+                let actual = HighlightBudget::default()
+                    .render(alias, code)
+                    .unwrap_or_else(|error| panic!("{} alias {alias}: {error}", grammar.name))
+                    .unwrap_or_else(|| panic!("{} alias {alias} was not recognized", grammar.name));
+                assert_eq!(actual, expected, "{} alias {alias}", grammar.name);
+                for format in [PostFormat::Org, PostFormat::Markdown] {
+                    let source = match format {
+                        PostFormat::Org => format!("#+begin_src {alias}\n{code}#+end_src"),
+                        PostFormat::Markdown => format!("```{alias}\n{code}```"),
+                        PostFormat::Html => unreachable!("catalog tests exclude HTML"),
+                    };
+                    let body: PostBody = source.parse().unwrap();
+                    let html = crate::render::render(&body, &format)
+                        .unwrap_or_else(|error| {
+                            panic!("{} alias {alias}/{format:?}: {error}", grammar.name) // cov:ignore: pinned catalog aliases render successfully; this is diagnostic-only on a regression.
+                        })
+                        .to_string();
+                    assert!(
+                        html.contains("<code"),
+                        "{} alias {alias}/{format:?}: {html}",
+                        grammar.name
+                    );
+                    assert!(
+                        html.contains("value"),
+                        "{} alias {alias}/{format:?}: {html}",
+                        grammar.name
+                    );
+                    let canonical_source = match format {
+                        PostFormat::Org => {
+                            format!("#+begin_src {}\n{code}#+end_src", grammar.labels[0])
+                        }
+                        PostFormat::Markdown => {
+                            format!("```{}\n{code}```", grammar.labels[0])
+                        }
+                        PostFormat::Html => unreachable!("catalog tests exclude HTML"),
+                    };
+                    let canonical_body: PostBody = canonical_source.parse().unwrap();
+                    let canonical_html = crate::render::render(&canonical_body, &format)
+                        .unwrap_or_else(|error| panic!("{} canonical: {error}", grammar.name))
+                        .to_string();
+                    assert_eq!(
+                        quality::semantic_code(&html),
+                        quality::semantic_code(&canonical_html),
+                        "{} alias {alias}/{format:?} changed exporter text or token roles",
+                        grammar.name
+                    );
+                }
             }
         }
     }
@@ -673,6 +894,22 @@ mod tests {
         assert_eq!(preserve_renderer_line_ending("x", "x\n".into()), "x");
         assert_eq!(preserve_renderer_line_ending("x\n", "x\n".into()), "x\n");
         assert_eq!(preserve_renderer_line_ending("x", "x".into()), "x");
+        assert_eq!(
+            preserve_renderer_line_ending("x\r\n", "x\n".into()),
+            "x\r\n"
+        );
+        assert_eq!(
+            preserve_renderer_line_ending("x\r\n", "x\r\n".into()),
+            "x\r\n"
+        );
+    }
+
+    #[test]
+    fn lone_carriage_return_falls_back_without_mutating_source() {
+        let html = HighlightBudget::default()
+            .render("python", "first\rsecond")
+            .expect("the fallback is not an engine failure");
+        assert!(html.is_none());
     }
 
     #[test]

@@ -110,6 +110,18 @@ mod tests {
             }
         }
 
+        fn latest_migration_version(&self) -> i64 {
+            let migrator = match &self.pool {
+                CloseablePool::Sqlite(_) => &SQLITE_MIGRATOR,
+                CloseablePool::Postgres(_) => &POSTGRES_MIGRATOR,
+            };
+            migrator
+                .iter()
+                .map(|migration| migration.version)
+                .max()
+                .expect("each backend has migrations")
+        }
+
         async fn drain_pending_code_migrations(&self) {
             self.drain_pending(&|| Ok(()))
                 .await
@@ -803,7 +815,7 @@ main = putStrLn "hello"
         let before = db.pool.string_quintuples(
             "SELECT CAST(post_id AS TEXT), body, rendered_html, CAST(updated_at AS TEXT), COALESCE(CAST(deleted_at AS TEXT), '') FROM posts ORDER BY post_id",
         ).await.unwrap();
-        db.migrate_current().await.unwrap();
+        db.migrate_to(48).await.unwrap();
         let pending = db
             .pool
             .string_quintuples(
@@ -866,6 +878,207 @@ main = putStrLn "hello"
                 .unwrap(),
             0,
             "the existing dispatcher consumes the follow-up request"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn migration_0049_requeues_quality_rebuild_without_restarting_refresh(
+        #[case] backend: Backend,
+    ) {
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(48).await.unwrap();
+        db.drain_pending_code_migrations().await;
+        let user = match backend {
+            Backend::Sqlite => {
+                "INSERT INTO users (user_id, username, password_hash, created_at)
+                VALUES (80, 'quality-author', 'hash', CURRENT_TIMESTAMP)"
+            }
+            Backend::Postgres => {
+                "INSERT INTO users (user_id, username, password_hash, created_at)
+                OVERRIDING SYSTEM VALUE VALUES (80, 'quality-author', 'hash', CURRENT_TIMESTAMP)"
+            }
+        };
+        db.pool.execute(user).await.unwrap();
+        let posts = match backend {
+            Backend::Sqlite => {
+                r#"INSERT INTO posts
+                (post_id, user_id, slug, body, format, rendered_html, created_at, updated_at, published_at, deleted_at) VALUES
+                (81, 80, 'quality-org', '#+begin_src elisp
+(message "hello")
+#+end_src', 'org', '<p>old Org</p>', '2025-01-01T00:00:00Z', '2025-02-01T00:00:00Z', '2025-02-01T00:00:00Z', NULL),
+                (82, 80, 'quality-md', '```haskell
+{-# LANGUAGE Broken #-
+module Main where
+```', 'markdown', '<p>old Markdown</p>', '2025-01-01T00:00:00Z', '2025-02-01T00:00:00Z', NULL, NULL),
+                (83, 80, 'quality-deleted', '#+begin_src elisp
+(message "gone")
+#+end_src', 'org', '<p>old Deleted</p>', '2025-01-01T00:00:00Z', '2025-02-01T00:00:00Z', '2025-02-01T00:00:00Z', '2025-03-01T00:00:00Z'),
+                (84, 80, 'quality-html', '<p>authored</p>', 'html', '<p>old HTML</p>', '2025-01-01T00:00:00Z', '2025-02-01T00:00:00Z', NULL, NULL)"#
+            }
+            Backend::Postgres => {
+                r#"INSERT INTO posts
+                (post_id, user_id, slug, body, format, rendered_html, created_at, updated_at, published_at, deleted_at)
+                OVERRIDING SYSTEM VALUE VALUES
+                (81, 80, 'quality-org', '#+begin_src elisp
+(message "hello")
+#+end_src', 'org', '<p>old Org</p>', '2025-01-01T00:00:00Z', '2025-02-01T00:00:00Z', '2025-02-01T00:00:00Z', NULL),
+                (82, 80, 'quality-md', '```haskell
+{-# LANGUAGE Broken #-
+module Main where
+```', 'markdown', '<p>old Markdown</p>', '2025-01-01T00:00:00Z', '2025-02-01T00:00:00Z', NULL, NULL),
+                (83, 80, 'quality-deleted', '#+begin_src elisp
+(message "gone")
+#+end_src', 'org', '<p>old Deleted</p>', '2025-01-01T00:00:00Z', '2025-02-01T00:00:00Z', '2025-02-01T00:00:00Z', '2025-03-01T00:00:00Z'),
+                (84, 80, 'quality-html', '<p>authored</p>', 'html', '<p>old HTML</p>', '2025-01-01T00:00:00Z', '2025-02-01T00:00:00Z', NULL, NULL)"#
+            }
+        };
+        db.pool.execute(posts).await.unwrap();
+        db.pool
+            .execute(
+                "INSERT INTO post_audiences (post_id, target_kind_id, audience_id)
+             SELECT 81, kind_id, NULL FROM target_kinds WHERE name = 'public'",
+            )
+            .await
+            .unwrap();
+        db.pool.execute(
+            "INSERT INTO post_revisions (post_id, user_id, slug, body, format, rendered_html, created_at, updated_at, published_at)
+             SELECT post_id, user_id, slug, body, format, rendered_html, created_at, updated_at, published_at
+             FROM posts WHERE post_id = 81",
+        ).await.unwrap();
+        let snapshot = "SELECT CAST(post_id AS TEXT), body, rendered_html,
+                        CAST(updated_at AS TEXT), COALESCE(CAST(deleted_at AS TEXT), '')
+                        FROM posts ORDER BY post_id";
+        let before = db.pool.string_quintuples(snapshot).await.unwrap();
+        db.pool
+            .execute(
+                "UPDATE post_projection_refresh_progress
+                 SET cursor_post_id = 77, completed = TRUE WHERE id = 1",
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM pending_code_migrations")
+                .await
+                .unwrap(),
+            0,
+            "older offline rebuilds have already drained"
+        );
+
+        db.migrate_current().await.unwrap();
+        let progress = db
+            .pool
+            .string_quintuples(
+                "SELECT CAST(version AS TEXT), CAST(cursor_post_id AS TEXT),
+                        CAST(CASE WHEN completed THEN 1 ELSE 0 END AS TEXT), '', ''
+                 FROM post_projection_refresh_progress WHERE id = 1",
+            )
+            .await
+            .unwrap();
+        assert_eq!(progress[0].0, "1");
+        assert_eq!(progress[0].1, "77");
+        assert_eq!(progress[0].2, "1");
+        let pending = db
+            .pool
+            .string_quintuples(
+                "SELECT operation, '', '', '', '' FROM pending_code_migrations ORDER BY queue_id",
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            pending.iter().map(|row| row.0.as_str()).collect::<Vec<_>>(),
+            ["rebuild_rendered_posts"],
+            "an already-completed installation must enqueue exactly one new rebuild"
+        );
+        db.migrate_current().await.unwrap();
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM pending_code_migrations")
+                .await
+                .unwrap(),
+            1,
+            "a repeated startup does not enqueue twice"
+        );
+
+        db.drain_pending_code_migrations().await;
+        let after = db.pool.string_quintuples(snapshot).await.unwrap();
+        for (old, new) in before.iter().zip(&after) {
+            assert_eq!(
+                (&old.0, &old.1, &old.3, &old.4),
+                (&new.0, &new.1, &new.3, &new.4),
+                "identity, source, edit and deletion times stay authored"
+            );
+        }
+        assert!(after[0].2.contains("j-syn-function-call"), "{}", after[0].2);
+        assert!(after[1].2.contains("module Main where"), "{}", after[1].2);
+        assert!(
+            !after[1].2.contains("j-syn-keyword"),
+            "the malformed Haskell block must not color the whole source"
+        );
+        assert!(
+            after[2].2.contains("j-syn-function-call"),
+            "the separate offline operation can rebuild a retained Deleted Post"
+        );
+        assert_eq!(after[3].2, "<p>authored</p>");
+        let revision = db
+            .pool
+            .string_quintuples(
+                "SELECT body, rendered_html, '', '', '' FROM post_revisions WHERE post_id = 81",
+            )
+            .await
+            .unwrap();
+        assert_eq!(revision[0].0, before[0].1);
+        assert_eq!(
+            revision[0].1, before[0].2,
+            "historical Revision stays immutable"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM feed_events")
+                .await
+                .unwrap(),
+            6,
+            "only the changed public Org Post schedules Site and User feed formats"
+        );
+        let factory = match &db.pool {
+            CloseablePool::Sqlite(pool) => crate::StorageFactory::sqlite(pool.clone()),
+            CloseablePool::Postgres(pool) => crate::StorageFactory::postgres(pool.clone()),
+        };
+        factory.refresh_current_post_projections().await.unwrap();
+        let checkpoint = db
+            .pool
+            .string_quintuples(
+                "SELECT CAST(version AS TEXT), CAST(cursor_post_id AS TEXT),
+                    CAST(CASE WHEN completed THEN 1 ELSE 0 END AS TEXT), '', ''
+             FROM post_projection_refresh_progress WHERE id = 1",
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            [
+                checkpoint[0].0.as_str(),
+                checkpoint[0].1.as_str(),
+                checkpoint[0].2.as_str()
+            ],
+            ["1", "77", "1"]
+        );
+        assert_eq!(db.pool.string_quintuples(snapshot).await.unwrap(), after);
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM feed_events")
+                .await
+                .unwrap(),
+            6,
+            "completed version-1 pass must not duplicate offline rebuild events"
+        );
+        factory.refresh_current_post_projections().await.unwrap();
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM feed_events")
+                .await
+                .unwrap(),
+            6
         );
     }
 
@@ -2100,7 +2313,7 @@ main = putStrLn "hello"
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            48,
+            db.latest_migration_version(),
         );
     }
 
@@ -2572,7 +2785,7 @@ main = putStrLn "hello"
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            48
+            db.latest_migration_version()
         );
         assert_eq!(
             db.pool

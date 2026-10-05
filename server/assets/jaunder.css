@@ -14,18 +14,6 @@
   --muted: #6e6e6a;
   --muted-soft: #9a9a96;
 
-  /* Semantic code tokens — public Theme Packages may override these. */
-  --j-syn-comment: var(--muted);
-  --j-syn-keyword: var(--accent-ink);
-  --j-syn-string: var(--ok);
-  --j-syn-number: var(--warn);
-  --j-syn-function: var(--ink-soft);
-  --j-syn-type: var(--accent-ink);
-  --j-syn-variable: var(--ink);
-  --j-syn-constant: var(--warn);
-  --j-syn-operator: var(--ink-soft);
-  --j-syn-punctuation: var(--ink-soft);
-
   /* lines */
   --line: #ebebe8;
   --line-soft: #f2f2ef;
@@ -98,6 +86,23 @@
 }
 
 .j-root {
+  /* Resolve token colors against each built-in or custom theme's palette. */
+  --j-syn-comment: color-mix(in srgb, var(--muted) 65%, var(--ink));
+  --j-syn-keyword: var(--accent-ink);
+  --j-syn-string: color-mix(in srgb, var(--ok) 58%, var(--ink));
+  --j-syn-number: color-mix(in srgb, var(--warn) 60%, var(--ink));
+  --j-syn-function: var(--ink-soft);
+  --j-syn-function-call: var(--accent-ink);
+  --j-syn-diff-plus: var(--j-syn-string);
+  --j-syn-diff-minus: color-mix(in srgb, var(--err) 70%, var(--ink));
+  --j-syn-heading: var(--accent-ink);
+  --j-syn-quote: var(--j-syn-comment);
+  --j-syn-type: var(--accent-ink);
+  --j-syn-variable: var(--ink);
+  --j-syn-constant: var(--j-syn-number);
+  --j-syn-operator: var(--ink-soft);
+  --j-syn-punctuation: var(--ink-soft);
+
   display: flex;
   flex-direction: column;
   position: relative;
@@ -1065,6 +1070,21 @@
 }
 .j-post-body pre code .j-syn-function {
   color: var(--j-syn-function);
+}
+.j-post-body pre code .j-syn-function-call {
+  color: var(--j-syn-function-call);
+}
+.j-post-body pre code .j-syn-diff-plus {
+  color: var(--j-syn-diff-plus);
+}
+.j-post-body pre code .j-syn-diff-minus {
+  color: var(--j-syn-diff-minus);
+}
+.j-post-body pre code .j-syn-heading {
+  color: var(--j-syn-heading);
+}
+.j-post-body pre code .j-syn-quote {
+  color: var(--j-syn-quote);
 }
 .j-post-body pre code .j-syn-type {
   color: var(--j-syn-type);

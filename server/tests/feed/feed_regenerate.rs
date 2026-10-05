@@ -343,6 +343,84 @@ async fn existing_org_post_rebuild_refreshes_rss_atom_json_feed_and_validator(
     }
 }
 
+#[apply(backends)]
+#[tokio::test]
+async fn code_quality_rebuild_changes_public_feed_bytes_and_validators_without_duplicate_events(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let user = SeedUser::new()
+        .seed(Arc::clone(&env.users()), env.write_scope())
+        .await;
+    let post = SeedRawPost::new(user.user_id)
+        .format(PostFormat::Org)
+        .body(parse_post_body(
+            "#+begin_src elisp\n(message \"hello\")\n#+end_src",
+        ))
+        .published_at(fixed_instant(1))
+        .seed(Arc::clone(&env.posts()), env.write_scope())
+        .await;
+    storage::with_closeable_pool!(env.base.pool(), pool, {
+        sqlx::query(
+            "UPDATE posts
+             SET rendered_html = '<pre><code class=\"language-elisp\">(message &quot;hello&quot;)</code></pre>'
+             WHERE post_id = $1",
+        )
+        .bind_storage(post.post_id)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO pending_code_migrations (operation) VALUES ('rebuild_rendered_posts')",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    });
+    let paths = [fp("/feed.rss"), fp("/feed.atom"), fp("/feed.json")];
+    let mut previous = Vec::new();
+    for path in &paths {
+        let row = render_feed(env.publisher(), env.posts(), path.clone()).await;
+        assert!(!row.representation().body().contains("j-syn-function-call"));
+        previous.push(row);
+    }
+    let options = match backend {
+        Backend::Sqlite => storage::test_support::sqlite_url(&env.base),
+        Backend::Postgres => storage::test_support::recorded_postgres_url(&env.base)
+            .parse()
+            .expect("recorded PostgreSQL URL"),
+    };
+    let factory =
+        storage::open_existing_database(&options, &storage::StorageRuntimeConfig::default())
+            .await
+            .expect("offline code quality rebuild drains before serving");
+    factory.refresh_current_post_projections().await.unwrap();
+    for (path, before) in paths.into_iter().zip(previous) {
+        let after = render_feed(env.publisher(), env.posts(), path).await;
+        assert!(
+            after
+                .representation()
+                .body()
+                .contains("j-syn-function-call")
+        );
+        assert_ne!(
+            before.representation().body(),
+            after.representation().body()
+        );
+        assert_ne!(before.semantic_fingerprint(), after.semantic_fingerprint());
+        assert_ne!(before.etag, after.etag);
+    }
+    assert_eq!(
+        env.base
+            .pool()
+            .scalar_i64("SELECT COUNT(*) FROM feed_events")
+            .await
+            .unwrap(),
+        6,
+        "the bounded pass does not duplicate offline rebuild feed events"
+    );
+}
+
 #[apply(backends_matrix)]
 #[case::markdown_youtube(
     PostFormat::Markdown,
