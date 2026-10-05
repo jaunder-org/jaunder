@@ -111,6 +111,21 @@ follow-up inspection; the supervised server and Safari driver were stopped.
 These fixtures establish built-in-theme desktop Safari behavior, not every
 custom Theme Package, image format, or mobile Safari variant.
 
+## Shipping gate status
+
+The reviewed infrastructure commit passed the hook-backed pre-commit gate.
+Pre-push's full product test lane found filesystem fixtures that create invalid
+UTF-8 filenames (macOS rejects these at creation), a Linux shutdown-dispatch
+expectation on the unsupported Darwin command, and a test-only SMTP dependency
+failure. Filename filesystem fixtures are Linux-only; Darwin shutdown dispatch
+has an explicit unsupported-platform regression instead.
+
+The full diagnostic product run executed 5459 tests, with 5454 passing. The SMTP
+mock's unconditional TLS identity import panics on Darwin before the plaintext
+SMTP command is exercised, for both SQLite and PostgreSQL. This is tracked in
+[#1688](https://github.com/jaunder-org/jaunder/issues/1688). No test or push
+gate was bypassed. Shipping remains blocked on that fixture fix.
+
 ## Remaining acceptance evidence
 
 - Actual iPhone/iPad Safari remains separate device-specific verification;
