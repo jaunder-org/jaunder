@@ -43,6 +43,10 @@ let
       emacsForCi
       pkgs.jq
       leptosfmt
+      # Rust's wasm32-unknown-unknown target invokes the generic `lld` driver on
+      # Darwin; `cargo xtask e2e-local` owns the CSR wasm build, so the shell it
+      # runs in must provide the linker instead of relying on a host install.
+      pkgs.lld
       pkgs.nodejs
       pkgs.openssl
       pkgs.pkg-config
@@ -69,9 +73,6 @@ let
       # invokes it on the host, so the CI shell needs it too.
       pkgs.binaryen
       wasm-bindgen-cli
-    ]
-    ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
-      pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
     ];
 
   # Interactive-only tools that `cargo xtask validate` never invokes and no
@@ -89,12 +90,14 @@ let
     pkgs.gh
   ];
 
+  themeThumbnailBrowser = if pkgs.stdenv.hostPlatform.isLinux then "${pkgs.chromium}/bin/chromium" else "";
+
   shellEnv = {
     RUST_SRC_PATH = "${toolchain}/lib/rustlib/src/rust/library";
     PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
     FONTCONFIG_FILE = "${visualFontConfig}";
-    JAUNDER_THEME_THUMBNAIL_BROWSER = "${pkgs.chromium}/bin/chromium";
+    JAUNDER_THEME_THUMBNAIL_BROWSER = themeThumbnailBrowser;
     LC_ALL = "C.UTF-8";
     TZ = "UTC";
     # The host `ert` step (run via `nix develop .#ci -c cargo xtask …`)
@@ -135,9 +138,9 @@ in
   # for it. See .github/workflows/mutants.yml.
   mutants = pkgs.mkShell (shellEnv // { buildInputs = ciInputs ++ [ pkgs.cargo-mutants ]; });
   theme-thumbnail = pkgs.mkShell {
-    buildInputs = [ themeThumbnailEnvironment ];
+    buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ themeThumbnailEnvironment ];
     FONTCONFIG_FILE = "${visualFontConfig}";
-    JAUNDER_THEME_THUMBNAIL_BROWSER = "${pkgs.chromium}/bin/chromium";
+    JAUNDER_THEME_THUMBNAIL_BROWSER = themeThumbnailBrowser;
     LC_ALL = "C.UTF-8";
     TZ = "UTC";
   };

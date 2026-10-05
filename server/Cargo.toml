@@ -48,6 +48,7 @@ opentelemetry.workspace = true
 opentelemetry_sdk.workspace = true
 opentelemetry-otlp.workspace = true
 log.workspace = true
+processkit = "3.3.4"
 sqlx = { workspace = true, features = ["postgres"] }
 lettre.workspace = true
 thiserror.workspace = true

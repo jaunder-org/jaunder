@@ -485,10 +485,10 @@ fn prepare_runtime_identity(
     storage_path: &Path,
     bind: SocketAddr,
 ) -> anyhow::Result<(RuntimeGuard, u64)> {
-    // Establish our own start-time up front (before opening the DB): if `/proc` is
-    // unusable we cannot preserve live runtime-file detection, so refuse rather
-    // than serve with a silently-broken guard (#141).
-    let start_time = runtime_file::require_start_time_at(Path::new("/proc/self/stat"))?;
+    // Establish our own start-time up front (before opening the DB): if the
+    // platform process table is unusable we cannot preserve live runtime-file
+    // detection, so refuse rather than serve with a silently-broken guard (#141).
+    let start_time = runtime_file::current_process_start_time()?;
     let runtime_path = runtime_file::canonical_runtime_path(storage_path);
     let startup_lock = StartupLockGuard::acquire(storage_path)?;
     match runtime_file::check_startup_mutex(&runtime_path)? {
@@ -1943,8 +1943,8 @@ mod tests {
         let stale_upload = tmp_dir.join("stale-upload");
         fs::write(&stale_upload, b"stale").expect("write stale upload");
         let runtime_path = temp.path().join("runtime.json");
-        let start_time = runtime_file::require_start_time_at(Path::new("/proc/self/stat"))
-            .expect("current process start time");
+        let start_time =
+            runtime_file::current_process_start_time().expect("current process start time");
         let live_identity = serde_json::json!({
             "ip": "127.0.0.1",
             "port": 1,

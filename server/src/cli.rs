@@ -352,12 +352,13 @@ pub enum Commands {
         trusted_proxies: Vec<TrustedProxyEntry>,
     },
 
-    /// Gracefully shut down the instance owning the selected storage directory.
+    /// Gracefully shut down the instance owning the selected storage directory (Linux only).
     ///
     /// Waits for that exact instance to exit and for its runtime identity to no
     /// longer name it, rather than merely reporting signal delivery. Refuses
     /// missing, malformed, dead, start-time-mismatched, or starting runtime
-    /// identities. On timeout, returns an error without escalation.
+    /// identities. On timeout, returns an error without escalation. Non-Linux
+    /// platforms should use normal terminal/service process control.
     ShutDown {
         #[command(flatten)]
         storage: StorageArgs,
@@ -1684,6 +1685,7 @@ mod tests {
             .expect("help exits through clap")
             .to_string();
         for topic in [
+            "Linux only",
             "storage directory",
             "exit",
             "runtime identity",
@@ -1694,6 +1696,7 @@ mod tests {
             "starting",
             "timeout",
             "escalation",
+            "Non-Linux",
         ] {
             assert!(help.contains(topic), "help must describe {topic}: {help}");
         }
