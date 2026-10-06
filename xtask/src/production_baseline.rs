@@ -1095,7 +1095,7 @@ fn global_lease_path() -> Result<PathBuf> {
     Ok(std::env::temp_dir().join("jaunder-production-baseline.lock"))
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn effective_uid() -> Result<u32> {
     let status = fs::read_to_string("/proc/self/status").context("reading effective user ID")?;
     let uid = status
@@ -1106,6 +1106,24 @@ fn effective_uid() -> Result<u32> {
         .nth(1)
         .context("missing effective user ID")?;
     uid.parse().context("parsing effective user ID")
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+fn effective_uid() -> Result<u32> {
+    let output = Command::new("id")
+        .arg("-u")
+        .output()
+        .context("running id -u for effective user ID")?;
+    if !output.status.success() {
+        bail!(
+            "reading effective user ID failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    String::from_utf8(output.stdout)?
+        .trim()
+        .parse()
+        .context("parsing effective user ID")
 }
 
 #[cfg(unix)]
@@ -1152,6 +1170,7 @@ fn read_lease(file: &mut std::fs::File) -> Result<LeaseRecord> {
     file.read_to_end(&mut contents)?;
     serde_json::from_slice(&contents).context("parsing production-baseline lease")
 }
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn process_start_ticks(pid: u32) -> Result<u64> {
     let text = fs::read_to_string(format!("/proc/{pid}/stat"))
         .with_context(|| format!("reading owner process {pid}"))?;
@@ -1162,6 +1181,11 @@ fn process_start_ticks(pid: u32) -> Result<u64> {
         .context("missing /proc process start time")?
         .parse()
         .context("parsing /proc process start time")
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn process_start_ticks(_pid: u32) -> Result<u64> {
+    Ok(0)
 }
 
 /// Render every durable field deterministically from JSON-authoritative evidence.

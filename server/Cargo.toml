@@ -86,7 +86,6 @@ common = { workspace = true, features = ["test-utils", "test-support"] }
 host = { workspace = true, features = ["test-support", "test-utils"] }
 storage = { workspace = true, features = ["test-utils", "test-support"] }
 csr_bundle = { path = "../tools/csr_bundle" }
-maik = "0.2.0"
 nix = { version = "0.31.3", features = ["signal"] }
 rstest = { workspace = true }
 rstest_reuse = { workspace = true }

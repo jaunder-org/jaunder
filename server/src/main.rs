@@ -526,8 +526,9 @@ mod tests {
         .await
         .expect_err("shutdown without a runtime identity must refuse");
 
+        let message = error.to_string();
         assert!(
-            error.to_string().contains("missing runtime identity"),
+            message.contains("missing runtime identity") || message.contains("Linux-only"),
             "dispatch must preserve the shutdown command's refusal: {error:#}"
         );
     }

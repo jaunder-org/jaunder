@@ -610,17 +610,19 @@ mod tests {
         ));
     }
 
-    #[cfg(unix)]
     #[test]
     fn rejects_non_utf8_asset_names() {
-        use std::os::unix::ffi::OsStringExt;
-
         let repository = repository();
         let assets = repository.path().join("assets");
-        let name = std::ffi::OsString::from_vec(b"invalid-\xFF.avif".to_vec());
-        let path = assets.join(&name);
         fs::create_dir(&assets).expect("assets");
-        fs::write(&path, b"asset").expect("asset");
+        let Some(path) = common::test_support::write_non_utf8_filename_fixture(
+            &assets,
+            b"invalid-\xFF.avif",
+            b"asset",
+        )
+        .expect("asset") else {
+            return;
+        };
 
         assert!(matches!(
             accept_theme_repository(repository.path()),
