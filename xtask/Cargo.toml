@@ -59,6 +59,11 @@ tokio = { version = "1.53.1", features = ["rt-multi-thread", "signal", "time"] }
 performance = { path = "../tools/performance" }
 serde_yaml = "0.9.34"
 base64 = "0.22.1"
+[target.'cfg(unix)'.dependencies]
+# Safe OS-provided lease flags and effective UID, without numeric flag tables,
+# /proc parsing for user identity, or shelling out to id.
+rustix = { version = "1.1.4", features = ["fs", "process"] }
+
 [dev-dependencies]
 # Synthesizes the fixture modules the attribution tests parse, so no binary wasm
 # blob is checked into the tree.

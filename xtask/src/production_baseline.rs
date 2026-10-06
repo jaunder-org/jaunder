@@ -7,7 +7,7 @@
 
 use std::{
     collections::BTreeSet,
-    fs::{self, OpenOptions},
+    fs,
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -25,13 +25,19 @@ use crate::{
     result::{CommandResult, StepResult},
 };
 
+mod platform;
+use platform::{
+    global_lease_path, open_lease, process_start_ticks, restrict_evidence_workspace,
+    restrict_workflow_error, validate_lease_file,
+};
+
 const UPSTREAM_URLS: [&str; 4] = [
     "https://github.com/jaunder-org/jaunder.git",
     "https://github.com/jaunder-org/jaunder",
     "git@github.com:jaunder-org/jaunder.git",
     "ssh://git@github.com/jaunder-org/jaunder.git",
 ];
-const HARNESS_PATHS: [&str; 16] = [
+const HARNESS_PATHS: [&str; 21] = [
     "docs/production-baseline.schema.json",
     "xtask/Cargo.toml",
     "xtask/build.rs",
@@ -40,6 +46,11 @@ const HARNESS_PATHS: [&str; 16] = [
     "xtask/src/cli.rs",
     "xtask/src/dispatch.rs",
     "xtask/src/production_baseline.rs",
+    "xtask/src/production_baseline/platform/mod.rs",
+    "xtask/src/production_baseline/platform/unix.rs",
+    "xtask/src/production_baseline/platform/non_unix.rs",
+    "xtask/src/production_baseline/platform/procfs.rs",
+    "xtask/src/production_baseline/platform/process_identity.rs",
     "xtask/src/production_baseline_lifecycle.rs",
     "end2end/tests/production-baseline-flow.spec.ts",
     "end2end/tests/production-baseline-harness.spec.ts",
@@ -991,203 +1002,12 @@ impl Drop for RunLease {
     }
 }
 
-#[cfg(unix)]
-fn open_lease(path: &Path) -> Result<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    // O_NOFOLLOW keeps an attacker-controlled link from becoming the lock inode.
-    OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .custom_flags(no_follow_flag()?)
-        .open(path)
-        .with_context(|| format!("opening host-global lease {}", path.display()))
-}
-
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn no_follow_flag() -> Result<i32> {
-    Ok(0o400_000)
-}
-
-#[cfg(any(
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "tvos",
-    target_os = "watchos",
-    target_os = "freebsd",
-    target_os = "dragonfly",
-    target_os = "netbsd"
-))]
-fn no_follow_flag() -> Result<i32> {
-    Ok(0x100)
-}
-
-#[cfg(target_os = "openbsd")]
-fn no_follow_flag() -> Result<i32> {
-    Ok(0x200)
-}
-
-#[cfg(all(
-    unix,
-    not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "tvos",
-        target_os = "watchos",
-        target_os = "freebsd",
-        target_os = "dragonfly",
-        target_os = "netbsd",
-        target_os = "openbsd"
-    ))
-))]
-fn no_follow_flag() -> Result<i32> {
-    bail!("this Unix platform does not expose a verified no-follow lease open flag")
-}
-#[cfg(not(unix))]
-fn open_lease(path: &Path) -> Result<std::fs::File> {
-    OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(path)
-        .with_context(|| format!("opening host-global lease {}", path.display()))
-}
-
-#[cfg(unix)]
-fn validate_lease_file(file: &std::fs::File, path: &Path) -> Result<()> {
-    use std::os::unix::fs::MetadataExt;
-
-    let metadata = file
-        .metadata()
-        .with_context(|| format!("inspecting host-global lease {}", path.display()))?;
-    if !metadata.is_file() || metadata.uid() != effective_uid()? {
-        bail!("host-global lease is not a regular file owned by this user");
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn validate_lease_file(file: &std::fs::File, _: &Path) -> Result<()> {
-    if !file.metadata()?.is_file() {
-        bail!("host-global lease is not a regular file");
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn global_lease_path() -> Result<PathBuf> {
-    let uid = effective_uid()?;
-    let runtime = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute() && private_runtime_directory(path, uid))
-        .unwrap_or_else(|| fallback_runtime_directory(uid));
-    ensure_private_runtime_directory(&runtime, uid)?;
-    Ok(runtime.join("jaunder-production-baseline.lock"))
-}
-
-#[cfg(not(unix))]
-fn global_lease_path() -> Result<PathBuf> {
-    Ok(std::env::temp_dir().join("jaunder-production-baseline.lock"))
-}
-
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn effective_uid() -> Result<u32> {
-    let status = fs::read_to_string("/proc/self/status").context("reading effective user ID")?;
-    let uid = status
-        .lines()
-        .find_map(|line| line.strip_prefix("Uid:"))
-        .context("missing effective user ID")?
-        .split_whitespace()
-        .nth(1)
-        .context("missing effective user ID")?;
-    uid.parse().context("parsing effective user ID")
-}
-
-#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
-fn effective_uid() -> Result<u32> {
-    let output = Command::new("id")
-        .arg("-u")
-        .output()
-        .context("running id -u for effective user ID")?;
-    if !output.status.success() {
-        bail!(
-            "reading effective user ID failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    String::from_utf8(output.stdout)?
-        .trim()
-        .parse()
-        .context("parsing effective user ID")
-}
-
-#[cfg(unix)]
-fn fallback_runtime_directory(uid: u32) -> PathBuf {
-    std::env::temp_dir().join(format!("jaunder-production-baseline-{uid}"))
-}
-
-#[cfg(unix)]
-fn private_runtime_directory(path: &Path, uid: u32) -> bool {
-    use std::os::unix::fs::MetadataExt;
-
-    let Ok(metadata) = fs::symlink_metadata(path) else {
-        return false;
-    };
-    metadata.is_dir() && metadata.uid() == uid && metadata.mode() & 0o777 == 0o700
-}
-
-#[cfg(unix)]
-fn ensure_private_runtime_directory(path: &Path, uid: u32) -> Result<()> {
-    match fs::create_dir(path) {
-        Ok(()) => {
-            use std::os::unix::fs::PermissionsExt;
-
-            fs::set_permissions(path, fs::Permissions::from_mode(0o700))
-                .context("restricting host lease runtime directory")?;
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(error) => {
-            return Err(error).with_context(|| {
-                format!("creating host lease runtime directory {}", path.display())
-            });
-        }
-    }
-    if private_runtime_directory(path, uid) {
-        Ok(())
-    } else {
-        bail!("host lease runtime directory is not caller-owned mode 0700")
-    }
-}
-
 fn read_lease(file: &mut std::fs::File) -> Result<LeaseRecord> {
     let mut contents = Vec::new();
     file.seek(SeekFrom::Start(0))?;
     file.read_to_end(&mut contents)?;
     serde_json::from_slice(&contents).context("parsing production-baseline lease")
 }
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn process_start_ticks(pid: u32) -> Result<u64> {
-    let text = fs::read_to_string(format!("/proc/{pid}/stat"))
-        .with_context(|| format!("reading owner process {pid}"))?;
-    let close = text.rfind(')').context("malformed /proc stat")?;
-    text[close + 2..]
-        .split_whitespace()
-        .nth(19)
-        .context("missing /proc process start time")?
-        .parse()
-        .context("parsing /proc process start time")
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
-fn process_start_ticks(_pid: u32) -> Result<u64> {
-    Ok(0)
-}
-
 /// Render every durable field deterministically from JSON-authoritative evidence.
 pub fn render_markdown(evidence: &Evidence) -> Result<String> {
     evidence.validate()?;
@@ -1356,19 +1176,6 @@ fn publication_workspace(root: &Path) -> Result<PathBuf> {
     Ok(path)
 }
 
-#[cfg(unix)]
-fn restrict_evidence_workspace(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
-        .context("restricting evidence staging workspace")
-}
-
-#[cfg(not(unix))]
-fn restrict_evidence_workspace(_: &Path) -> Result<()> {
-    Ok(())
-}
-
 /// Publish exactly the two sanitized files by atomically moving a validated directory out of
 /// the restricted workspace. Any failure before the final rename publishes nothing.
 pub fn publish(
@@ -1487,12 +1294,7 @@ fn persist_workflow_error(
 ) -> Result<()> {
     let path = lifecycle.private_path("workflow-error.txt")?;
     fs::write(&path, format!("{error:#}"))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-    }
+    restrict_workflow_error(&path)?;
     Ok(())
 }
 fn run_discovery(
@@ -2149,20 +1951,6 @@ mod tests {
         assert!(RunLease::acquire_at(&path).is_ok());
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn host_global_lease_refuses_a_symlink_without_truncating_its_target() {
-        use std::os::unix::fs::symlink;
-
-        let temp = tempdir().unwrap();
-        let target = temp.path().join("target");
-        let path = temp.path().join("production-baseline.lock");
-        fs::write(&target, b"must remain intact").unwrap();
-        symlink(&target, &path).unwrap();
-
-        assert!(RunLease::acquire_at(&path).is_err());
-        assert_eq!(fs::read(&target).unwrap(), b"must remain intact");
-    }
     fn evidence() -> Evidence {
         Evidence {
             schema_version: 1,
