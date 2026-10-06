@@ -51,6 +51,7 @@ test-support = []
 jiff = { workspace = true, features = ["js"] }
 
 [dev-dependencies]
+tempfile.workspace = true
 axum = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true }

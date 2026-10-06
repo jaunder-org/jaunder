@@ -574,18 +574,13 @@ mod tests {
     #[test]
     fn public_collision_rejection_reports_non_utf8_asset_path() {
         let public = tempfile::tempdir().expect("public");
-        common::test_support::with_non_utf8_filename_fixture(
-            public.path(),
-            &[0xff],
-            b"asset",
-            |_path| {
-                let error =
-                    reject_public_collisions_below(public.path(), Path::new(""), &BTreeSet::new())
-                        .expect_err("non-UTF8 public asset must be rejected");
+        common::test_support::with_non_utf8_filename_fixture(public.path(), b"asset", |_path| {
+            let error =
+                reject_public_collisions_below(public.path(), Path::new(""), &BTreeSet::new())
+                    .expect_err("non-UTF8 public asset must be rejected");
 
-                assert!(error.to_string().contains("public asset path is not UTF-8"));
-            },
-        )
+            assert!(error.to_string().contains("public asset path is not UTF-8"));
+        })
         .expect("write non-UTF8 asset fixture");
     }
     #[test]

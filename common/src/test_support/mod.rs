@@ -43,4 +43,4 @@ pub use numbers::{
 
 mod filesystem;
 
-pub use filesystem::{with_non_utf8_filename_fixture, write_non_utf8_filename_fixture};
+pub use filesystem::with_non_utf8_filename_fixture;
