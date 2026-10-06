@@ -2064,6 +2064,7 @@ dependencies = [
  "quote",
  "regex",
  "rustc-demangle",
+ "rustix",
  "serde",
  "serde_json",
  "serde_yaml",

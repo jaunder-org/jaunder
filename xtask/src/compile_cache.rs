@@ -120,6 +120,9 @@ mod tests {
 
         let roots = parse_worktree_roots(&output);
 
+        let root_a = root_a.canonicalize().unwrap();
+        let root_b = root_b.canonicalize().unwrap();
+
         assert_eq!(roots.len(), 2);
         assert!(roots.contains(&root_a));
         assert!(roots.contains(&root_b));

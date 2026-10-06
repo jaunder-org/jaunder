@@ -40,3 +40,7 @@ pub use numbers::{
     parse_destination_path, parse_invite_ttl_hours, parse_page_offset, parse_page_size,
     parse_retention_count, parse_row_limit,
 };
+
+mod filesystem;
+
+pub use filesystem::with_non_utf8_filename_fixture;

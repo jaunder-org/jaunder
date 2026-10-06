@@ -1,5 +1,11 @@
 use std::{fmt::Write as _, net::SocketAddr, sync::Arc};
 
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    net::{TcpListener, TcpStream},
+    sync::Mutex,
+};
+
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -69,6 +75,164 @@ fn default_host_config() -> (host::telemetry::TelemetryConfig, Option<ServeCaptu
 async fn execute_command(command: Commands) -> anyhow::Result<CommandOutput> {
     let (telemetry, capture) = default_host_config();
     command.execute(&telemetry, false, capture).await
+}
+
+#[derive(Clone, Debug, Default)]
+struct RecordedSmtpMail {
+    recipients: Vec<String>,
+    data: String,
+}
+
+struct PlainSmtpFixture {
+    addr: SocketAddr,
+    received: Arc<Mutex<Vec<RecordedSmtpMail>>>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl PlainSmtpFixture {
+    async fn start() -> Self {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind SMTP fixture");
+        let addr = listener.local_addr().expect("SMTP fixture local addr");
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let task_received = Arc::clone(&received);
+        let task = tokio::spawn(async move {
+            while let Ok((stream, _peer)) = listener.accept().await {
+                let connection_received = Arc::clone(&task_received);
+                tokio::spawn(async move {
+                    let _ = handle_plain_smtp_connection(stream, connection_received).await;
+                });
+            }
+        });
+
+        Self {
+            addr,
+            received,
+            task,
+        }
+    }
+
+    fn host() -> &'static str {
+        "127.0.0.1"
+    }
+
+    fn port(&self) -> u16 {
+        self.addr.port()
+    }
+
+    async fn assert_recipient(&self, expected: &str) {
+        let received = self.received.lock().await;
+        assert_eq!(received.len(), 1, "expected exactly one delivered message");
+        let message = &received[0];
+        assert!(
+            message
+                .recipients
+                .iter()
+                .any(|recipient| recipient == expected),
+            "expected recipient {expected}, got {:?}",
+            message.recipients
+        );
+        assert!(
+            !message.data.is_empty(),
+            "expected delivered message to contain DATA"
+        );
+    }
+}
+
+impl Drop for PlainSmtpFixture {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+async fn handle_plain_smtp_connection(
+    stream: TcpStream,
+    received: Arc<Mutex<Vec<RecordedSmtpMail>>>,
+) -> std::io::Result<()> {
+    let (reader, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(reader);
+    let mut line = String::new();
+    let mut current = RecordedSmtpMail::default();
+
+    writer.write_all(b"220 jaunder-test ESMTP\r\n").await?;
+
+    loop {
+        line.clear();
+        if reader.read_line(&mut line).await? == 0 {
+            break;
+        }
+        let command = line.trim_end_matches(['\r', '\n']);
+        let upper = command.to_ascii_uppercase();
+
+        if upper.starts_with("EHLO ") || upper.starts_with("HELO ") {
+            writer
+                .write_all(b"250-localhost\r\n250-AUTH PLAIN LOGIN\r\n250 OK\r\n")
+                .await?;
+        } else if upper.starts_with("AUTH PLAIN") {
+            writer
+                .write_all(b"235 Authentication succeeded\r\n")
+                .await?;
+        } else if upper == "AUTH LOGIN" {
+            writer.write_all(b"334 VXNlcm5hbWU6\r\n").await?;
+            line.clear();
+            reader.read_line(&mut line).await?;
+            writer.write_all(b"334 UGFzc3dvcmQ6\r\n").await?;
+            line.clear();
+            reader.read_line(&mut line).await?;
+            writer
+                .write_all(b"235 Authentication succeeded\r\n")
+                .await?;
+        } else if upper.starts_with("MAIL FROM:") {
+            current = RecordedSmtpMail::default();
+            writer.write_all(b"250 Sender OK\r\n").await?;
+        } else if upper.starts_with("RCPT TO:") {
+            if let Some(recipient) = parse_rcpt_to(command) {
+                current.recipients.push(recipient);
+            }
+            writer.write_all(b"250 Recipient OK\r\n").await?;
+        } else if upper == "DATA" {
+            writer
+                .write_all(b"354 End data with <CR><LF>.<CR><LF>\r\n")
+                .await?;
+            let mut data = String::new();
+            loop {
+                line.clear();
+                if reader.read_line(&mut line).await? == 0 {
+                    break;
+                }
+                if line.trim_end_matches(['\r', '\n']) == "." {
+                    break;
+                }
+                data.push_str(&line);
+            }
+            current.data = data;
+            received.lock().await.push(current.clone());
+            writer.write_all(b"250 Message accepted\r\n").await?;
+        } else if upper == "RSET" {
+            current = RecordedSmtpMail::default();
+            writer.write_all(b"250 OK\r\n").await?;
+        } else if upper == "NOOP" {
+            writer.write_all(b"250 OK\r\n").await?;
+        } else if upper == "QUIT" {
+            writer.write_all(b"221 Bye\r\n").await?;
+            break;
+        } else {
+            writer.write_all(b"502 Command not implemented\r\n").await?;
+        }
+    }
+
+    Ok(())
+}
+
+fn parse_rcpt_to(command: &str) -> Option<String> {
+    let recipient = command.get("RCPT TO:".len()..)?.trim();
+    let recipient = recipient
+        .split_ascii_whitespace()
+        .next()
+        .unwrap_or(recipient)
+        .trim_matches(['<', '>']);
+    Some(recipient.to_owned())
 }
 
 async fn execute_user_create(
@@ -2260,11 +2424,7 @@ async fn cmd_smtp_test_fails_when_smtp_not_configured(#[case] backend: Backend) 
 #[apply(backends)]
 #[tokio::test]
 async fn cmd_smtp_test_succeeds_with_mock_server(#[case] backend: Backend) {
-    let server = maik::MockServer::builder()
-        .no_verify_credentials()
-        .assert_after_n_emails(1)
-        .build();
-    server.start();
+    let server = PlainSmtpFixture::start().await;
     let env = InitializedCommandEnv::new(backend).await;
     let args = env.args;
     let factory = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
@@ -2274,7 +2434,7 @@ async fn cmd_smtp_test_succeeds_with_mock_server(#[case] backend: Backend) {
         factory.site_config(),
         factory.write_scope(),
         SiteConfigKey::SmtpHost,
-        &server.host().to_string(),
+        PlainSmtpFixture::host(),
     )
     .await
     .expect("set host");
@@ -2323,6 +2483,5 @@ async fn cmd_smtp_test_succeeds_with_mock_server(#[case] backend: Backend) {
         .await
         .expect("smtp test should succeed");
 
-    let assertion = maik::MailAssertion::new().recipients_are(["alice@example.com"]);
-    assert!(server.assert(assertion));
+    server.assert_recipient("alice@example.com").await;
 }

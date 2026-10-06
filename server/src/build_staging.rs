@@ -270,7 +270,7 @@ mod tests {
     use std::{
         collections::{BTreeMap, BTreeSet},
         fs, io,
-        path::{Path, PathBuf},
+        path::Path,
     };
 
     use csr_bundle::{Asset, Manifest, Representation, Role};
@@ -571,19 +571,17 @@ mod tests {
             .expect_err("invalid staged bundle");
         assert!(error.to_string().contains("invalid staged bundle"));
     }
-    #[cfg(unix)]
     #[test]
     fn public_collision_rejection_reports_non_utf8_asset_path() {
-        use std::os::unix::ffi::OsStringExt;
-
         let public = tempfile::tempdir().expect("public");
-        let non_utf8 = PathBuf::from(std::ffi::OsString::from_vec(vec![0xff]));
-        fs::write(public.path().join(&non_utf8), "asset").expect("write non-UTF8 asset");
+        common::test_support::with_non_utf8_filename_fixture(public.path(), b"asset", |_path| {
+            let error =
+                reject_public_collisions_below(public.path(), Path::new(""), &BTreeSet::new())
+                    .expect_err("non-UTF8 public asset must be rejected");
 
-        let error = reject_public_collisions_below(public.path(), Path::new(""), &BTreeSet::new())
-            .expect_err("non-UTF8 public asset must be rejected");
-
-        assert!(error.to_string().contains("public asset path is not UTF-8"));
+            assert!(error.to_string().contains("public asset path is not UTF-8"));
+        })
+        .expect("write non-UTF8 asset fixture");
     }
     #[test]
     fn staging_propagates_missing_declared_representation_copy_failure() {
