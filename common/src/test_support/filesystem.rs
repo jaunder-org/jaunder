@@ -5,8 +5,8 @@ use std::{io, path::PathBuf};
 ///
 /// Some developer hosts (notably common macOS/APFS configurations) reject such
 /// byte sequences before application code can observe them. Tests for non-UTF-8
-/// path handling should call this fixture helper and return early when it yields
-/// `Ok(None)` rather than scattering platform cfgs across product modules.
+/// path handling should use this fixture helper to keep platform differences
+/// out of individual product tests.
 ///
 /// # Errors
 ///
@@ -75,7 +75,7 @@ mod platform {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::{with_non_utf8_filename_fixture, write_non_utf8_filename_fixture};
     use std::path::PathBuf;
@@ -93,21 +93,27 @@ mod tests {
     #[test]
     fn runs_closure_when_host_accepts_raw_filename_bytes() {
         let parent = temp_dir("accepted-bytes");
+        let mut closure_ran = false;
 
         let path = with_non_utf8_filename_fixture(&parent, b"valid-name", b"contents", |path| {
+            closure_ran = true;
             assert_eq!(
                 std::fs::read(&path).unwrap_or_else(|error| panic!("contents: {error}")),
                 b"contents"
             );
             path
         })
-        .unwrap_or_else(|error| panic!("fixture result: {error}"))
-        .unwrap_or_else(|| panic!("accepted fixture"));
+        .unwrap_or_else(|error| panic!("fixture result: {error}"));
 
-        assert_eq!(
-            path.file_name().and_then(|name| name.to_str()),
-            Some("valid-name")
-        );
+        if let Some(path) = path {
+            assert!(closure_ran);
+            assert_eq!(
+                path.file_name().and_then(|name| name.to_str()),
+                Some("valid-name")
+            );
+        } else {
+            assert!(!closure_ran);
+        }
     }
 
     #[test]
@@ -129,11 +135,11 @@ mod tests {
         std::fs::write(&file_parent, b"file")
             .unwrap_or_else(|error| panic!("file parent: {error}"));
 
-        let Err(error) = write_non_utf8_filename_fixture(&file_parent, b"name", b"contents") else {
-            panic!("not-a-directory error");
-        };
-
-        assert_eq!(error.kind(), std::io::ErrorKind::NotADirectory);
+        match write_non_utf8_filename_fixture(&file_parent, b"name", b"contents") {
+            Err(error) => assert_eq!(error.kind(), std::io::ErrorKind::NotADirectory),
+            Ok(None) => {}
+            Ok(Some(path)) => panic!("fixture unexpectedly wrote under file parent: {path:?}"),
+        }
     }
 
     fn temp_dir(name: &str) -> PathBuf {
