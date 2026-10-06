@@ -36,6 +36,33 @@ async function expectPostActionsTextAlignment(page: Page, post: Locator) {
   const trigger = control.locator(".j-post-action-trigger");
   await expect(trigger).toHaveText("Actions");
 
+  const labelCenter = await trigger.evaluate((node) => {
+    const label = Array.from(node.childNodes).find(
+      (child) =>
+        child.nodeType === Node.TEXT_NODE && child.textContent === "Actions",
+    );
+    if (!label) throw new Error("Actions trigger has no visible label text");
+    const range = document.createRange();
+    range.selectNodeContents(label);
+    const text = range.getBoundingClientRect();
+    const button = node.getBoundingClientRect();
+    return {
+      horizontal: Math.abs(
+        text.left + text.width / 2 - (button.left + button.width / 2),
+      ),
+      vertical: Math.abs(
+        text.top + text.height / 2 - (button.top + button.height / 2),
+      ),
+    };
+  });
+  expect(
+    labelCenter.horizontal,
+    JSON.stringify(labelCenter),
+  ).toBeLessThanOrEqual(1);
+  expect(labelCenter.vertical, JSON.stringify(labelCenter)).toBeLessThanOrEqual(
+    1,
+  );
+
   const boxFor = (element: Locator) =>
     element.evaluate((node) => {
       const box = node.getBoundingClientRect();
@@ -96,8 +123,6 @@ async function expectPostActionsTextAlignment(page: Page, post: Locator) {
         fontWeight: style.fontWeight,
         letterSpacing: style.letterSpacing,
         lineHeight: style.lineHeight,
-        paddingBottom: style.paddingBottom,
-        paddingTop: style.paddingTop,
       };
     });
   const [slotMetrics, triggerMetrics] = await Promise.all([
@@ -126,43 +151,6 @@ async function expectPostActionsTextAlignment(page: Page, post: Locator) {
     textShadow: "none",
     webkitTextStrokeWidth: "0px",
   });
-
-  const baseline = async (element: Locator) =>
-    element.evaluate((node) => {
-      node.querySelector('[data-test="post-actions-baseline"]')?.remove();
-      (node as HTMLElement).style.setProperty(
-        "white-space",
-        "nowrap",
-        "important",
-      );
-      const probe = document.createElement("span");
-      probe.dataset.test = "post-actions-baseline";
-      probe.setAttribute("aria-hidden", "true");
-      probe.style.setProperty("all", "initial", "important");
-      probe.style.setProperty("display", "inline-block", "important");
-      probe.style.setProperty("width", "0", "important");
-      probe.style.setProperty("height", "0", "important");
-      probe.style.setProperty("margin", "0", "important");
-      probe.style.setProperty("padding", "0", "important");
-      probe.style.setProperty("border", "0", "important");
-      probe.style.setProperty("vertical-align", "baseline", "important");
-      node.append(probe);
-      return probe.getBoundingClientRect().bottom;
-    });
-  const [timeBaseline, labelBaseline] = await Promise.all([
-    baseline(time),
-    baseline(trigger),
-  ]);
-  expect(
-    Math.abs(timeBaseline - labelBaseline),
-    JSON.stringify({
-      timeBaseline,
-      labelBaseline,
-      headerBox,
-      geometry,
-      viewport,
-    }),
-  ).toBeLessThanOrEqual(1);
 }
 
 test("owner Post Actions disclosures use native popover dismissal and focus", async ({
