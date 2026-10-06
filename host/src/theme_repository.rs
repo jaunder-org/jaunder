@@ -615,19 +615,18 @@ mod tests {
         let repository = repository();
         let assets = repository.path().join("assets");
         fs::create_dir(&assets).expect("assets");
-        let Some(path) = common::test_support::write_non_utf8_filename_fixture(
+        common::test_support::with_non_utf8_filename_fixture(
             &assets,
             b"invalid-\xFF.avif",
             b"asset",
+            |path| {
+                assert!(matches!(
+                    accept_theme_repository(repository.path()),
+                    Err(ThemeRepositoryError::NonUtf8Name { path: error_path }) if error_path == path
+                ));
+            },
         )
-        .expect("asset") else {
-            return;
-        };
-
-        assert!(matches!(
-            accept_theme_repository(repository.path()),
-            Err(ThemeRepositoryError::NonUtf8Name { path: error_path }) if error_path == path
-        ));
+        .expect("asset");
     }
 
     #[cfg(unix)]
