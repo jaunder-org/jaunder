@@ -54,10 +54,10 @@ runners because source preparation uses import-from-derivation.
 The commit gate's full host tests additionally exposed two Darwin assumptions: a
 worktree-root test compared canonical paths to `/tmp` aliases, and the
 production-baseline lease helpers read UID and process start time from `/proc`.
-The root test now compares canonical paths; lease helpers use rustix's effective
-UID and processkit's platform process-info reader. Both focused regressions
-pass. This makes the host lease test portable; NixOS production-baseline
-execution still requires Linux.
+The initial local fix canonicalized the root comparison and used rustix and
+processkit for lease identity. The rebase onto `440087ec` supersedes these fixes
+with #1688's canonical-root regression and isolated production-baseline platform
+operations. NixOS production-baseline execution still requires Linux.
 
 The 12 `steps::e2e_local::tests` tests passed. A new platform guard refuses
 `--update-visual-snapshots` on non-Linux hosts before artifact preparation;
@@ -113,18 +113,25 @@ custom Theme Package, image format, or mobile Safari variant.
 
 ## Shipping gate status
 
-The reviewed infrastructure commit passed the hook-backed pre-commit gate.
-Pre-push's full product test lane found filesystem fixtures that create invalid
-UTF-8 filenames (macOS rejects these at creation), a Linux shutdown-dispatch
-expectation on the unsupported Darwin command, and a test-only SMTP dependency
-failure. Filename filesystem fixtures are Linux-only; Darwin shutdown dispatch
-has an explicit unsupported-platform regression instead.
+The initial reviewed infrastructure commit passed the hook-backed pre-commit
+gate. Pre-push's full product test lane found filesystem fixtures that create
+invalid UTF-8 filenames (macOS rejects these at creation), a Linux
+shutdown-dispatch expectation on the unsupported Darwin command, and a test-only
+SMTP dependency failure. After rebasing onto `440087ec`, #1688's portable
+native-path fixtures replace the initial Linux-only fixture workaround. Darwin
+shutdown dispatch has an explicit unsupported-platform regression.
 
 The full diagnostic product run executed 5459 tests, with 5454 passing. The SMTP
 mock's unconditional TLS identity import panics on Darwin before the plaintext
 SMTP command is exercised, for both SQLite and PostgreSQL. This is tracked in
-[#1688](https://github.com/jaunder-org/jaunder/issues/1688). No test or push
-gate was bypassed. Shipping remains blocked on that fixture fix.
+[#1688](https://github.com/jaunder-org/jaunder/issues/1688), whose fixes are now
+included through the rebase. No test or push gate was bypassed. Hook-backed
+shipping proof is rerun against the rebased branch, not inferred from the
+upstream fix. Rebased Darwin `jaunder` and `csrBundle` Nix builds passed,
+including the explicit sandboxed CSR linker input; platform-contract evaluation
+returned `true`. The platform contract is part of xtask's shared validation
+catalog, so CI's host lane and full local non-E2E validation run the same
+structured step.
 
 ## Remaining acceptance evidence
 

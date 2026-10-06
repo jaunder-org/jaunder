@@ -52,7 +52,6 @@ wasmparser = "0.258.0"
 # that emitted it.
 rustc-demangle = "0.1.28"
 processkit = "3.3.4"
-rustix = { version = "1.1.4", features = ["process"] }
 sha2 = "0.11.0"
 # `e2e-local` bridges processkit's async supervision into xtask's synchronous
 # command runner; a background worker keeps process I/O pumps live between calls.
