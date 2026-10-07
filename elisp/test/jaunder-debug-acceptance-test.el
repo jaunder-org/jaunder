@@ -297,6 +297,48 @@
      (should (string-match-p "outcome=success count=1" text)))
    (should-not jaunder--debug-operation-stack)))
 
+(ert-deftest jaunder-debug-acceptance-eviction-preserves-caller-match-data ()
+  "Marker updates cannot disturb regular-expression evidence used by BODY."
+  (jaunder-debug-acceptance--with-state
+   (let ((jaunder--debug-maximum-events 1)
+         (source "prefix123"))
+     (dotimes (number 2)
+       (jaunder--debug-write "config.resolve" "start" "debug-1"
+                             (format "seed-%d" number) nil nil))
+     (string-match "\\([0-9]+\\)" source)
+     (let ((before (match-data t)))
+       (should (equal "123"
+                      (jaunder--with-debug-operation "config.resolve" ()
+                                                     (jaunder--debug-fields count 1)
+                                                     (match-string 1 source))))
+       (should (equal before (match-data t)))))))
+
+(ert-deftest jaunder-debug-acceptance-pending-user-quit-stops-the-operation ()
+  "Pending keyboard cancellation is deferred through logging, never consumed."
+  (dolist (stage '(clock initial update))
+    (jaunder-debug-acceptance--with-state
+     (let ((quit-flag nil) (runs 0) (samples 0))
+       (cl-letf (((symbol-function 'jaunder--debug-now)
+                  (lambda ()
+                    (setq samples (1+ samples))
+                    (when (and (eq stage 'clock) (= samples 1)) (setq quit-flag t))
+                    10.0)))
+         (let ((condition
+                (condition-case condition
+                    (jaunder--with-debug-operation "config.resolve"
+                                                   (count (progn (when (eq stage 'initial) (setq quit-flag t)) 1))
+                                                   (setq runs (1+ runs))
+                                                   (jaunder--debug-fields count (progn (when (eq stage 'update) (setq quit-flag t)) 2))
+                                                   (setq runs (1+ runs)))
+                  (quit condition))))
+           (should (eq (car-safe condition) 'quit))))
+       (should (= runs (if (eq stage 'update) 1 0)))
+       (should-not jaunder--debug-operation-stack)
+       (should-not jaunder-debug-acceptance--warnings)
+       (let ((text (jaunder-debug-acceptance--text)))
+         (should (= 2 (length (split-string text "\n" t))))
+         (should (string-match-p "outcome=cancelled" text)))))))
+
 (ert-deftest jaunder-debug-acceptance-view-and-buffer-lifetime ()
   "Emission never displays; q buries evidence; clear and recreation preserve IDs."
   (jaunder-debug-acceptance--with-state

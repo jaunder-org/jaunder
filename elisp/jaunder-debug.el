@@ -143,10 +143,14 @@
 
 (defun jaunder--debug-safe (thunk)
   "Run ancillary diagnostic THUNK without changing a primary operation outcome."
-  (condition-case nil
-      (funcall thunk)
-    (error (jaunder--debug-warning) nil)
-    (quit (jaunder--debug-warning) nil)))
+  ;; Defer pending keyboard quit until the operation's handler can observe it.
+  ;; An explicit diagnostic quit remains an ancillary failure like an error.
+  (let ((inhibit-quit t))
+    (save-match-data
+      (condition-case nil
+          (funcall thunk)
+        (error (jaunder--debug-warning) nil)
+        (quit (jaunder--debug-warning) nil)))))
 
 (defun jaunder--debug-format-event (event)
   "Encode already validated EVENT as an ASCII line no longer than 1,024 bytes."
@@ -307,16 +311,21 @@
   (let ((state (make-symbol "state")))
     `(if (not jaunder-debug)
          (progn ,@body)
-       (let* ((jaunder--debug-operation-stack jaunder--debug-operation-stack)
-              (,state (jaunder--debug-safe
-                       (lambda ()
-                         (jaunder--debug-begin ,label
-                                               (lambda () ,(jaunder--debug-field-form fields)))))))
-         ;; Failed span setup cannot lend an ancestor's field-update target.
-         (unless ,state (setq jaunder--debug-operation-stack nil))
+       (let ((jaunder--debug-operation-stack jaunder--debug-operation-stack)
+             ,state)
          (unwind-protect
              (condition-case err
-                 (progn ,@body)
+                 (progn
+                   ;; Install state and cleanup before releasing a pending user quit.
+                   (let ((inhibit-quit t))
+                     (setq ,state
+                           (jaunder--debug-safe
+                            (lambda ()
+                              (jaunder--debug-begin
+                               ,label (lambda () ,(jaunder--debug-field-form fields))))))
+                     ;; Failed setup cannot lend an ancestor's field-update target.
+                     (unless ,state (setq jaunder--debug-operation-stack nil)))
+                   ,@body)
                (quit (when ,state (setf (jaunder--debug-span-outcome ,state) "cancelled"))
                      (signal (car err) (cdr err)))
                (error (when ,state (setf (jaunder--debug-span-outcome ,state) "error"))
