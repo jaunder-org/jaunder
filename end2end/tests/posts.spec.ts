@@ -34,6 +34,7 @@ import {
   openComposerFromSidebar,
   openPostActions,
   selectComposerAudience,
+  scrollHomeTo,
 } from "./posts";
 import { navigateInApp } from "./navigate";
 import { mintAppPassword } from "./sessions";
@@ -2341,18 +2342,22 @@ test("Home collapses its pristine composer at the scroll threshold", async ({
   await seedPostsViaTool(me, HOME_POST_SELF_COUNT, "Home Collapse Post");
   await goto(page, "/app", { timeout: firstNav });
 
+  // A clamped scroll at the top changes nothing and must not wait for an event.
+  await scrollHomeTo(page, -1);
+  expect(await page.evaluate(() => window.scrollY)).toBe(0);
+
   const expand = page.getByRole("button", { name: "Expand composer" });
   const collapse = page.getByRole("button", { name: "Collapse composer" });
   await expect(collapse).toBeVisible();
   await expect(expand).toBeHidden();
 
-  await page.evaluate(() => window.scrollTo(0, 95));
+  await scrollHomeTo(page, 95);
   await expect(collapse).toBeVisible();
-  await page.evaluate(() => window.scrollTo(0, 96));
+  await scrollHomeTo(page, 96);
   await expect(expand).toBeVisible();
   await expect(expand).toBeFocused();
 
-  await page.evaluate(() => window.scrollTo(0, 0));
+  await scrollHomeTo(page, 0);
   await expand.click();
   await expect(collapse).toBeFocused();
   await page.keyboard.press("PageDown");
@@ -2360,16 +2365,10 @@ test("Home collapses its pristine composer at the scroll threshold", async ({
 
   await expand.click();
   await expect(collapse).toBeFocused();
-  await page.evaluate(() => window.scrollBy(0, 100));
+  await scrollHomeTo(page, (await page.evaluate(() => window.scrollY)) + 100);
   await expect(collapse).toBeVisible();
 
-  await page.evaluate(() => window.scrollTo(0, 0));
-  await page.evaluate(
-    () =>
-      new Promise<void>((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-      ),
-  );
+  await scrollHomeTo(page, 0);
   await page.keyboard.press("PageDown");
   await expect(expand).toBeVisible();
 });
@@ -2389,19 +2388,19 @@ test("Home preserves editing state while its composer is compact", async ({
   const format = page.getByRole("button", { name: /Format Markdown/ });
 
   await body.focus();
-  await page.evaluate(() => window.scrollTo(0, 96));
+  await scrollHomeTo(page, 96);
   await expect(collapse).toBeVisible();
 
   await body.fill("A preserved draft");
   await page.locator(".j-topbar h1").click();
-  await page.evaluate(() => window.scrollTo(0, 0));
-  await page.evaluate(() => window.scrollTo(0, 160));
+  await scrollHomeTo(page, 0);
+  await scrollHomeTo(page, 160);
   await expect(collapse).toBeVisible();
 
   await body.fill("");
   await page.locator(".j-topbar h1").click();
-  await page.evaluate(() => window.scrollTo(0, 24));
-  await page.evaluate(() => window.scrollTo(0, 96));
+  await scrollHomeTo(page, 24);
+  await scrollHomeTo(page, 96);
   await expect(expand).toBeVisible();
 
   await expand.click();
@@ -2426,8 +2425,8 @@ test("Home preserves editing state while its composer is compact", async ({
   await body.fill("");
   await page.locator(".j-topbar h1").click();
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.evaluate(() => window.scrollTo(0, 24));
-  await page.evaluate(() => window.scrollTo(0, 96));
+  await scrollHomeTo(page, 24);
+  await scrollHomeTo(page, 96);
   await expect(expand).toBeVisible();
   expect(
     await page
@@ -2452,13 +2451,13 @@ test("Home collapse eligibility follows non-body edits and create outcomes", asy
 
   await summary.fill("Unsaved summary");
   await page.locator(".j-topbar h1").click();
-  await page.evaluate(() => window.scrollTo(0, 96));
+  await scrollHomeTo(page, 96);
   await expect(collapse).toBeVisible();
 
   await summary.fill("");
   await page.locator(".j-topbar h1").click();
-  await page.evaluate(() => window.scrollTo(0, 24));
-  await page.evaluate(() => window.scrollTo(0, 96));
+  await scrollHomeTo(page, 24);
+  await scrollHomeTo(page, 96);
   await expect(expand).toBeVisible();
 
   await expand.click();
@@ -2468,8 +2467,8 @@ test("Home collapse eligibility follows non-body edits and create outcomes", asy
     "Draft saved!",
   );
   await page.locator(".j-topbar h1").click();
-  await page.evaluate(() => window.scrollTo(0, 24));
-  await page.evaluate(() => window.scrollTo(0, 96));
+  await scrollHomeTo(page, 24);
+  await scrollHomeTo(page, 96);
   await expect(expand).toBeVisible();
 
   await navigateInApp(page, () => click(page, 'a[href="/drafts"]'), {
@@ -2485,8 +2484,8 @@ test("Home collapse eligibility follows non-body edits and create outcomes", asy
   await click(page, SEL.publishButton("false"));
   await expect(page.locator(".j-composer p.error")).toBeVisible();
   await page.locator(".j-topbar h1").click();
-  await page.evaluate(() => window.scrollTo(0, 24));
-  await page.evaluate(() => window.scrollTo(0, 160));
+  await scrollHomeTo(page, 24);
+  await scrollHomeTo(page, 160);
   await expect(collapse).toBeVisible();
 });
 

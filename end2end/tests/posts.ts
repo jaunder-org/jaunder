@@ -17,6 +17,27 @@ import {
 import { navigateInApp } from "./navigate";
 import { SEL } from "./selectors";
 
+/** Deliver each Home scroll observation before driving the next transition.
+ * Consecutive scrollTo calls can coalesce, hiding the re-arm offset from Home's
+ * scroll policy (#1692). The animation frame lets the delivered event's reactive
+ * work settle; a no-op scroll has no event to await. */
+export async function scrollHomeTo(page: Page, y: number): Promise<void> {
+  await page.evaluate(
+    (offset) =>
+      new Promise<void>((resolve) => {
+        const settled = () => requestAnimationFrame(() => resolve());
+        const previous = window.scrollY;
+        window.addEventListener("scroll", settled, { once: true });
+        window.scrollTo({ top: offset, behavior: "instant" });
+        if (window.scrollY === previous) {
+          window.removeEventListener("scroll", settled);
+          settled();
+        }
+      }),
+    y,
+  );
+}
+
 /** The two user-selectable post formats, each with the `.j-seg` button label
  *  that selects it and the HTML element its emphasis markup renders to.
  *
