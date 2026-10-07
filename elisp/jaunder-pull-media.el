@@ -3,9 +3,12 @@
 ;; Copyright (C) 2026 Jaunder contributors
 
 ;;; Commentary:
-;; Plan native-source media localization, then fetch and materialize verified
-;; Local Media Copies.  The server URL is the authority for content hash and
-;; canonical filename; public-media requests are anonymous and direct.
+;; Plan native-source media localization, prove bounded original Org Media
+;; destinations, then fetch and materialize verified Local Media Copies.  The
+;; server URL is the authority for content hash and canonical filename;
+;; public-media requests are anonymous and direct.  Original-destination proof
+;; is transient evidence only: matched-pull staging consumes it later, while
+;; ordinary localization retains its existing Local Media Copy behavior.
 
 ;;; Code:
 
@@ -19,6 +22,22 @@
 (require 'org)
 (require 'org-element)
 (require 'jaunder-warn)
+(require 'jaunder-org)
+
+(cl-defstruct (jaunder-pull-media-original-destination
+               (:constructor jaunder--make-pull-media-original-destination))
+  "One exact Org destination proven at its source and final Post locations.
+
+`spelling' excludes an Org fragment and remains distinct from `source-path',
+`final-path', and the literal-byte `hash'.  Keeping those facts separate means
+later staging can preserve authored source without using a filename as identity."
+  spelling source-path final-path hash)
+
+(cl-defstruct (jaunder-pull-media-original-proof
+               (:constructor jaunder--make-pull-media-original-proof))
+  "Transient original-destination evidence for one matched Org Post."
+  originals)
+
 (cl-defstruct (jaunder-pull-media-reference
                (:constructor jaunder--make-pull-media-reference))
   "One immutable local-media acquisition and its native replacements."
@@ -28,6 +47,115 @@
                (:constructor jaunder--make-pull-media-plan))
   "Immutable localization plan for one native body."
   format body references)
+
+(defun jaunder--pull-media-original-root (root)
+  "Return canonical ROOT after rejecting an invalid original-proof boundary."
+  (unless (and (stringp root) (file-name-absolute-p root))
+    (error "jaunder pull media: configured root is invalid: %S" root))
+  (let ((root (directory-file-name (expand-file-name root))))
+    (unless (and (file-directory-p root) (not (file-symlink-p root)))
+      (error "jaunder pull media: configured root is not a safe directory: %s" root))
+    root))
+
+(defun jaunder--pull-media-original-safe-regular-p (root path)
+  "Return non-nil when PATH is a readable regular non-symlink under ROOT.
+
+Every extant component from ROOT through PATH is checked instead of following a
+convenient truename: original reuse must not authorize a destination through a
+symlink.  Missing, unreadable, non-directory, and nonregular paths are expected
+ineligibility; filesystem errors intentionally propagate to the caller."
+  (when (and (file-in-directory-p path root)
+             (not (file-symlink-p path))
+             (file-attributes path))
+    (let ((component root)
+          (parts (split-string (file-relative-name path root) "/" t))
+          safe)
+      (setq safe (and (not (file-symlink-p component))
+                      (file-attributes component)
+                      (file-directory-p component)))
+      (while (and safe (> (length parts) 1))
+        (setq component (expand-file-name (pop parts) component)
+              safe (and (not (file-symlink-p component))
+                        (file-attributes component)
+                        (file-directory-p component))))
+      (and safe
+           (file-regular-p path)
+           (file-readable-p path)))))
+
+(defun jaunder--pull-media-original-link-spelling (record)
+  "Return RECORD's eligible relative destination spelling without a fragment.
+
+Only actual body links parsed by Org reach this boundary.  Local Post Link,
+attachment, absolute, query, and Org-search forms deliberately return nil so
+Media proof cannot reinterpret them."
+  (let* ((type (plist-get record :type))
+         (raw (plist-get record :raw-link))
+         (search (plist-get record :search-option))
+         (fragment (and (stringp raw) (string-search "#" raw)))
+         (spelling (and raw (if fragment (substring raw 0 fragment) raw)))
+         (path (and spelling
+                    (if (string-prefix-p "file:" spelling)
+                        (substring spelling 5)
+                      spelling))))
+    (when (and (member type '("file" "fuzzy"))
+               (stringp spelling)
+               (not search)
+               (not (string-search "?" spelling))
+               (not (file-name-absolute-p path))
+               (not (jaunder--local-post-link-candidate-p
+                     (list :type "file" :path path))))
+      spelling)))
+
+(defun jaunder--pull-media-original-resolve (post-path spelling)
+  "Resolve SPELLING from POST-PATH, decoding its relative file path once."
+  (let* ((path (if (string-prefix-p "file:" spelling)
+                   (substring spelling 5)
+                 spelling))
+         (decoded (decode-coding-string (url-unhex-string path) 'utf-8)))
+    (expand-file-name decoded (file-name-directory post-path))))
+
+(defun jaunder--pull-media-prove-original-destinations (root source-post final-post body)
+  "Return bounded original Media proof from matched Org SOURCE-POST BODY.
+
+SOURCE-POST supplies the only candidate body links.  Each distinct exact
+spelling is resolved independently at SOURCE-POST and FINAL-POST; both must be
+safe readable regular files inside ROOT with identical literal-byte digests.
+This performs no directory search or mutation and does not alter pull behavior."
+  (let ((root (jaunder--pull-media-original-root root))
+        (seen (make-hash-table :test #'equal))
+        originals)
+    (unless (and (stringp source-post) (file-name-absolute-p source-post)
+                 (stringp final-post) (file-name-absolute-p final-post)
+                 (stringp body))
+      (error "jaunder pull media: original proof needs absolute Post paths and body"))
+    (with-temp-buffer
+      (setq default-directory (file-name-directory source-post))
+      (insert body)
+      (org-mode)
+      (dolist (record (jaunder--org-body-links))
+        (when-let* ((spelling (jaunder--pull-media-original-link-spelling record)))
+          (unless (gethash spelling seen)
+            (puthash spelling t seen)
+            (let ((source-path (jaunder--pull-media-original-resolve source-post spelling))
+                  (final-path (jaunder--pull-media-original-resolve final-post spelling)))
+              (when (and (jaunder--pull-media-original-safe-regular-p root source-path)
+                         (jaunder--pull-media-original-safe-regular-p root final-path))
+                (let ((hash (jaunder--pull-media-file-sha256 source-path)))
+                  (when (equal hash (jaunder--pull-media-file-sha256 final-path))
+                    (push (jaunder--make-pull-media-original-destination
+                           :spelling spelling :source-path source-path
+                           :final-path final-path :hash hash)
+                          originals)))))))))
+    (jaunder--make-pull-media-original-proof :originals (nreverse originals))))
+
+(defun jaunder--pull-media-original-for-hash (proof hash)
+  "Return PROOF's one original destination with HASH, or nil when ambiguous."
+  (let ((matches
+         (cl-remove-if-not
+          (lambda (original)
+            (equal (jaunder-pull-media-original-destination-hash original) hash))
+          (jaunder-pull-media-original-proof-originals proof))))
+    (and (= (length matches) 1) (car matches))))
 
 (defun jaunder--pull-media-control-character-p (character)
   "Return non-nil when CHARACTER is a Unicode control character."

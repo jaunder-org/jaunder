@@ -3082,6 +3082,27 @@ copies installed before an ordinary failure or crash remain safe to reuse. There
 is no rollback, cache eviction, arbitrary external download, or multi-file
 transaction promise.
 
+Matched Org server-ahead pull, keep-remote, and merge staging additionally reuse
+an original relative body-level Media file destination when exactly one distinct
+eligible authored destination has bytes equal to the verified remote Media.
+Distinctness uses exact authored destination spelling excluding fragments, so
+aliases with different spellings are ambiguous even when resolving to one file.
+Repeated occurrences of one spelling are allowed; filename equality is not
+required. Candidates come only from the matched local Post, resolve inside its
+configured root without symlink components, and must remain valid from the final
+Post location. Local Post Link candidates, attachment links, absolute paths,
+queries, and Org search targets are excluded. Remote verification still runs;
+only the file destination is restored, preserving its authored spelling while
+remote descriptions, fragments, and other edits remain authoritative. Original
+files are revalidated at server-ahead and keep-remote installation. Ineligible
+or stale originals use verified Local Media Copies before Post installation,
+while successful reuse creates no redundant copy. Merge verifies reuse during
+initial remote staging; links thereafter are ordinary authored merge content
+under existing publish checks, without automatic completed-result rewrites.
+Unexpected I/O errors remain failures. Server-only pull and Markdown/HTML keep
+their ordinary localization policy
+([verified original Media reuse](adr/drafts/emacs-verified-original-media-reuse.md)).
+
 ## Domain types and invariants
 
 The rules in this section are cross-cutting: they govern `common`, `host`,

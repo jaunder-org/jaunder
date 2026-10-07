@@ -467,6 +467,102 @@
                          (format "jaunder pull media: malformed canonical media filename: %s" url)
                        (format "jaunder pull media: malformed canonical media URL: %s" url)))))))
 
+(ert-deftest jaunder-pull-media-original-proof-keeps-exact-spelling-and-bytes-separate ()
+  "A repeated eligible spelling proves one unchanged original destination."
+  (jaunder-pull-media-test--with-root root
+                                      (let* ((posts (expand-file-name "posts" root))
+                                             (images (expand-file-name "images" root))
+                                             (source (expand-file-name "old.org" posts))
+                                             (final (expand-file-name "new.org" posts))
+                                             (target (expand-file-name "画.png" images))
+                                             (bytes (string-as-unibyte "\0\377original"))
+                                             (body "[[file:../images/%E7%94%BB.png#crop]] [[file:../images/%E7%94%BB.png]]"))
+                                        (make-directory posts)
+                                        (make-directory images)
+                                        (jaunder-pull-media-test--write-bytes target bytes)
+                                        (let* ((proof (jaunder--pull-media-prove-original-destinations
+                                                       root source final body))
+                                               (original (jaunder--pull-media-original-for-hash
+                                                          proof (secure-hash 'sha256 bytes))))
+                                          (should (= 1 (length (jaunder-pull-media-original-proof-originals proof))))
+                                          (should (equal (jaunder-pull-media-original-destination-spelling original)
+                                                         "file:../images/%E7%94%BB.png"))
+                                          (should (equal (jaunder-pull-media-original-destination-source-path original)
+                                                         target))
+                                          (should (equal (jaunder-pull-media-original-destination-final-path original)
+                                                         target))
+                                          (should (equal (jaunder-pull-media-original-destination-hash original)
+                                                         (secure-hash 'sha256 bytes)))
+                                          (should (equal (with-temp-buffer
+                                                           (set-buffer-multibyte nil)
+                                                           (insert-file-contents-literally target)
+                                                           (buffer-string))
+                                                         bytes))))))
+
+(ert-deftest jaunder-pull-media-original-proof-rejects-ambiguity-and-excluded-org-links ()
+  "Aliases are ambiguous; non-file or non-relative forms never become originals."
+  (jaunder-pull-media-test--with-root root
+                                      (let* ((posts (expand-file-name "posts" root))
+                                             (images (expand-file-name "images" root))
+                                             (source (expand-file-name "post.org" posts))
+                                             (target (expand-file-name "a.png" images))
+                                             (bytes (string-as-unibyte "same"))
+                                             (hash (secure-hash 'sha256 bytes)))
+                                        (make-directory posts)
+                                        (make-directory images)
+                                        (jaunder-pull-media-test--write-bytes target bytes)
+                                        (let ((proof (jaunder--pull-media-prove-original-destinations
+                                                      root source source
+                                                      (concat "[[file:../images/a.png]] [[../images/a.png]] "
+                                                              "[[attachment:a.png]] [[/tmp/a.png]] [[file:../images/a.png?x]] "
+                                                              "[[file:../images/a.png::heading]] [[file:../images/post.org]]"))))
+                                          (should-not (jaunder--pull-media-original-for-hash proof hash))
+                                          (should (= 2 (length (jaunder-pull-media-original-proof-originals proof))))))))
+
+(ert-deftest jaunder-pull-media-original-proof-falls-back-for-unsafe-or-stale-targets ()
+  "Missing, unreadable, nonregular, symlinked, and cross-root paths are ineligible."
+  (jaunder-pull-media-test--with-root root
+                                      (let* ((posts (expand-file-name "posts" root))
+                                             (images (expand-file-name "images" root))
+                                             (source (expand-file-name "post.org" posts))
+                                             (outside (make-temp-file "jaunder-pull-media-outside-"))
+                                             (bytes (string-as-unibyte "original"))
+                                             (hash (secure-hash 'sha256 bytes)))
+                                        (unwind-protect
+                                            (progn
+                                              (make-directory posts)
+                                              (make-directory images)
+                                              (jaunder-pull-media-test--write-bytes (expand-file-name "good.png" images) bytes)
+                                              (make-directory (expand-file-name "directory" images))
+                                              (jaunder-pull-media-test--write-bytes outside bytes)
+                                              (make-symbolic-link outside (expand-file-name "symlink.png" images))
+                                              (make-symbolic-link images (expand-file-name "images-link" root))
+                                              (let ((proof (jaunder--pull-media-prove-original-destinations
+                                                            root source source
+                                                            (format "[[file:../images/missing.png]] [[file:../images/directory]] [[file:../images/symlink.png]] [[file:../images-link/good.png]] [[file:%s]]\n#+begin_src text\n[[file:../images/good.png]]\n#+end_src"
+                                                                    (file-relative-name outside posts)))))
+                                                (should-not (jaunder--pull-media-original-for-hash proof hash)))
+                                              (cl-letf (((symbol-function 'file-readable-p)
+                                                         (lambda (path) (not (equal path (expand-file-name "good.png" images))))))
+                                                (should-not
+                                                 (jaunder--pull-media-original-for-hash
+                                                  (jaunder--pull-media-prove-original-destinations
+                                                   root source source "[[file:../images/good.png]]")
+                                                  hash)))
+                                              (jaunder-pull-media-test--write-bytes
+                                               (expand-file-name "good.png" images) (string-as-unibyte "changed"))
+                                              (should-not
+                                               (jaunder--pull-media-original-for-hash
+                                                (jaunder--pull-media-prove-original-destinations
+                                                 root source source "[[file:../images/good.png]]")
+                                                hash))
+                                              (cl-letf (((symbol-function 'file-regular-p)
+                                                         (lambda (_path) (error "unexpected filesystem failure"))))
+                                                (should-error
+                                                 (jaunder--pull-media-prove-original-destinations
+                                                  root source source "[[file:../images/good.png]]"))))
+                                          (delete-file outside)))))
+
 (defun jaunder-pull-media-test--materialization-plan (hash leaf &optional references)
   "Return a one-object localization plan for HASH and decoded LEAF."
   (ignore references)
