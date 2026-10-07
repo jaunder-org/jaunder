@@ -334,10 +334,6 @@ impl OrgShortcodeExport<'_> {
 impl orgize::export::Traverser for OrgShortcodeExport<'_> {
     fn event(&mut self, event: orgize::export::Event, ctx: &mut orgize::export::TraversalContext) {
         match event {
-            orgize::export::Event::Enter(orgize::export::Container::VerseBlock(block)) => {
-                export_org_verse(self.source, &mut self.html, block);
-                ctx.skip();
-            }
             orgize::export::Event::Enter(orgize::export::Container::SourceBlock(block)) => {
                 if self.highlight_error.is_none()
                     && let Some(language) = block.language()
@@ -429,94 +425,13 @@ impl orgize::export::Traverser for OrgShortcodeExport<'_> {
     }
 }
 
-/// Verse is prose with authored line boundaries. Reuse the document exporter
-/// for inline objects, retaining footnote identity and inert shortcode text.
-fn export_org_verse(
-    source: &str,
-    html: &mut orgize::export::HtmlExport,
-    block: orgize::ast::VerseBlock,
-) {
-    use orgize::export::{Container, Event, TraversalContext, Traverser};
-
-    let content = &source[usize::from(block.content_start())..usize::from(block.content_end())];
-    html.event(
-        Event::Enter(Container::VerseBlock(block.clone())),
-        &mut TraversalContext::default(),
-    );
-    let indent = content
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(verse_indent)
-        .min()
-        .unwrap_or(0);
-    for line in content.lines() {
-        html.push_str("&nbsp;".repeat(verse_indent(line).saturating_sub(indent)));
-        for object in
-            verse_inline_objects(line.trim_start_matches([' ', '\t'])).children_with_tokens()
-        {
-            html.element(object, &mut TraversalContext::default());
-        }
-        html.push_str("<br>");
-    }
-    html.event(
-        Event::Leave(Container::VerseBlock(block)),
-        &mut TraversalContext::default(),
-    );
-}
-
-/// A leading prose sentinel prevents line text from becoming a block, heading,
-/// TODO keyword, or tag list. Remove only that sentinel from the parsed tree;
-/// orgize remains the authority for all inline syntax and text export.
-fn verse_inline_objects(line: &str) -> orgize::SyntaxNode {
-    use orgize::rowan::{GreenNode, GreenToken, NodeOrToken, ast::AstNode};
-
-    let parsed = orgize::Org::parse(format!("x {line}"));
-    let Some(paragraph) = parsed.first_node::<orgize::ast::Paragraph>() else {
-        unreachable!("a prose-prefixed verse line always parses as a paragraph");
-    };
-    let children =
-        paragraph.syntax().children_with_tokens().enumerate().map(
-            |(index, element)| match element {
-                NodeOrToken::Node(node) => NodeOrToken::Node(node.green().into_owned()),
-                NodeOrToken::Token(token) => {
-                    let text = if index == 0 {
-                        let Some(text) = token.text().strip_prefix("x ") else {
-                            unreachable!("the first prose token contains the verse sentinel");
-                        };
-                        text
-                    } else {
-                        token.text()
-                    };
-                    NodeOrToken::Token(GreenToken::new(
-                        orgize::rowan::SyntaxKind(token.kind() as u16),
-                        text,
-                    ))
-                }
-            },
-        );
-    orgize::SyntaxNode::new_root(GreenNode::new(
-        orgize::rowan::SyntaxKind(orgize::SyntaxKind::PARAGRAPH as u16),
-        children.collect::<Vec<_>>(),
-    ))
-}
-
-/// Org export measures indentation in columns; tabs reach the next eight-column stop.
-fn verse_indent(line: &str) -> usize {
-    line.chars()
-        .take_while(|ch| matches!(ch, ' ' | '\t'))
-        .fold(0, |columns, ch| {
-            if ch == '\t' {
-                columns + 8 - columns % 8
-            } else {
-                columns + 1
-            }
-        })
-}
-
 fn render_org_with_shortcodes(
     body: &str,
     post_id: Option<PostId>,
 ) -> Result<RenderedHtml, HighlightError> {
+    use orgize::export::Traverser;
+    use orgize::rowan::ast::AstNode;
+
     let org = orgize::Org::parse(body);
     let mut export = OrgShortcodeExport {
         source: body,
@@ -528,7 +443,11 @@ fn render_org_with_shortcodes(
         budget: HighlightBudget::default(),
         highlight_error: None,
     };
-    org.traverse(&mut export);
+    let document = crate::org_verse::expand(org.document().syntax());
+    export.element(
+        orgize::SyntaxElement::Node(document),
+        &mut orgize::export::TraversalContext::default(),
+    );
     if let Some(error) = export.highlight_error {
         return Err(error);
     }
@@ -1781,6 +1700,56 @@ mod tests {
             !html.contains("<pre") && !html.contains("#+begin"),
             "{html}"
         );
+    }
+
+    #[test]
+    fn org_verse_preserves_multiline_emphasis_and_distinct_anonymous_notes() {
+        let source = "#+begin_verse\n*first\nsecond*\nA[fn::first note]\nB[fn::other note]\n#+end_verse\n\n#+begin_verse\nC[fn::third note]\n#+end_verse";
+        let rendered = super::render_post_scoped(
+            PostId::from(77),
+            None,
+            parse_post_body(source),
+            PostFormat::Org,
+        )
+        .unwrap();
+        let html = rendered.rendered_html().as_ref();
+        assert!(html.contains("<b>first<br>second</b><br>"), "{html}");
+        for number in 1..=3 {
+            assert!(
+                html.contains(&format!("id=\"post-77-fn-{number}\"")),
+                "{html}"
+            );
+        }
+        for note in ["first note", "other note", "third note"] {
+            assert!(html.contains(note), "{html}");
+        }
+    }
+
+    #[test]
+    fn org_verse_multiline_inline_objects_keep_literal_and_reference_boundaries() {
+        let source = "Outside[fn::outside note].\n\n#+begin_verse\nA ~literal\ncode~ and =verbatim=.\n[[https://example.org][linked\nlabel]]\nFirst[fn:named] then second[fn:named].\n#+end_verse\n\n[fn:named] Named note.";
+        let rendered = super::render_post_scoped(
+            PostId::from(78),
+            None,
+            parse_post_body(source),
+            PostFormat::Org,
+        )
+        .unwrap();
+        let html = rendered.rendered_html().as_ref();
+        assert!(
+            html.contains("<code>literal\ncode</code> and <code>verbatim</code>"),
+            "{html}"
+        );
+        assert!(html.contains(">linked<br>label</a>"), "{html}");
+        assert!(
+            html.contains("outside note") && html.contains("Named note."),
+            "{html}"
+        );
+        assert!(
+            html.contains("id=\"post-78-fn-1\"") && html.contains("id=\"post-78-fn-2\""),
+            "{html}"
+        );
+        assert!(html.contains("id=\"post-78-fnref-2-2\""), "{html}");
     }
 
     #[test]
