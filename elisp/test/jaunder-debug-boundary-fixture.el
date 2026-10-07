@@ -1,8 +1,8 @@
 ;;; jaunder-debug-boundary-fixture.el --- Shared diagnostic boundary fixtures -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; Acquisition, transformation, pull, and Media proofs share one isolated
-;; diagnostic session and exact event-label reader.  Sessions restore all
+;; Client operation proofs share one isolated diagnostic session and exact
+;; event-label reader.  Sessions restore all
 ;; global diagnostic state and dispose only of their owned evidence buffer.
 
 ;;; Code:

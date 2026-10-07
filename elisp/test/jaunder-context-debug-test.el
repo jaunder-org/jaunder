@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 ;; Time the actual configuration and credential owners without changing their
-;; selected blog, lookup count, opaque secret identity, or native conditions.
+;; resolved account context, lookup count, secret identity, or native conditions.
 
 ;;; Code:
 

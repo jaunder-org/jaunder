@@ -71,7 +71,13 @@ backend behavior changes; use existing live Emacs fixtures for consumer proof.
   - Progress: `config.resolve` and `auth.lookup` wrap their actual owners,
     without dynamic fields. Four focused off/on, privacy, condition and
     disabled-work proofs pass; the complete pure suite is 471/471 and
-    byte-compilation is warning-free. Remaining workflow owners are pending.
+    byte-compilation is warning-free. `author.new`, `author.complete`, and
+    `author.cancel` now wrap their real command lifecycles. Three additional
+    off/on proofs cover both creation paths, actual
+    publishing/write-back/rename, local deletion, input-buffer exit, callback
+    correlation, and native error/quit partial effects; the pure suite is
+    474/474 and byte-compilation is warning-free. Remaining workflow owners are
+    pending.
   - Contract: outer command/batch/row spans nest existing lower-level
     operations; direct helper calls remain independent roots. Ediff setup and
     later finish/ cancel/discard are separate calls, not a fictitious

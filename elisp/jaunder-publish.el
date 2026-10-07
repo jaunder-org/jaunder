@@ -29,6 +29,7 @@
 ;; silently never matches a condition symbol that no `define-error' has run for.
 (require 'plz)
 
+(require 'jaunder-debug)
 (require 'jaunder-entry)
 (require 'jaunder-config)
 (require 'jaunder-datetime)
@@ -334,18 +335,22 @@ the command before file creation has no filesystem side effect."
 (defun jaunder-new-post-complete ()
   "Publish the new Post and close its input buffer on success."
   (interactive)
-  (jaunder-publish)
-  (kill-current-buffer))
+  (jaunder--with-debug-operation
+   "author.complete" nil
+   (jaunder-publish)
+   (kill-current-buffer)))
 
 (defun jaunder-new-post-cancel ()
   "Delete the local new Post and close its input buffer."
   (interactive)
-  (let ((path (or (buffer-file-name)
-                  (error "jaunder: new Post buffer is not visiting a file"))))
-    (when (file-exists-p path)
-      (delete-file path))
-    (set-buffer-modified-p nil)
-    (kill-current-buffer)))
+  (jaunder--with-debug-operation
+   "author.cancel" nil
+   (let ((path (or (buffer-file-name)
+                   (error "jaunder: new Post buffer is not visiting a file"))))
+     (when (file-exists-p path)
+       (delete-file path))
+     (set-buffer-modified-p nil)
+     (kill-current-buffer))))
 
 (defun jaunder-new-post (&optional prefix)
   "Create an Org Post and visit its body.
@@ -354,33 +359,35 @@ status before creating the file.  With PREFIX, preserve minimal-template
 creation without prompts; an unmatched nonempty `jaunder-blogs' is then an
 error rather than an implicit target choice."
   (interactive "P")
-  (if prefix
-      (let* ((entry (jaunder--select-minimal-new-post-blog))
-             (path
-              (jaunder--new-post-in
-               (car entry) (format-time-string "%Y%m%dT%H%M%S"))))
-        (switch-to-buffer (find-file-noselect path))
-        (jaunder-new-post-mode 1)
-        (goto-char (point-max)))
-    (let* ((entry (jaunder--select-new-post-blog))
-           (dir (car entry))
-           (title (read-string "Title: "))
-           (tags
-            (jaunder--read-new-post-tags
-             (jaunder--new-post-tag-candidates entry)))
-           (status
-            (completing-read
-             "Status: " '("draft" "published" "scheduled") nil t nil nil "draft"))
-           (scheduled-date
-            (when (equal status "scheduled")
-              (jaunder--read-new-post-schedule)))
-           (path
-            (jaunder--new-post-in dir (format-time-string "%Y%m%dT%H%M%S"))))
-      (jaunder--write-new-post-metadata
-       path title tags status scheduled-date)
-      (switch-to-buffer (find-file-noselect path))
-      (jaunder-new-post-mode 1)
-      (goto-char (point-max)))))
+  (jaunder--with-debug-operation
+   "author.new" nil
+   (if prefix
+       (let* ((entry (jaunder--select-minimal-new-post-blog))
+              (path
+               (jaunder--new-post-in
+                (car entry) (format-time-string "%Y%m%dT%H%M%S"))))
+         (switch-to-buffer (find-file-noselect path))
+         (jaunder-new-post-mode 1)
+         (goto-char (point-max)))
+     (let* ((entry (jaunder--select-new-post-blog))
+            (dir (car entry))
+            (title (read-string "Title: "))
+            (tags
+             (jaunder--read-new-post-tags
+              (jaunder--new-post-tag-candidates entry)))
+            (status
+             (completing-read
+              "Status: " '("draft" "published" "scheduled") nil t nil nil "draft"))
+            (scheduled-date
+             (when (equal status "scheduled")
+               (jaunder--read-new-post-schedule)))
+            (path
+             (jaunder--new-post-in dir (format-time-string "%Y%m%dT%H%M%S"))))
+       (jaunder--write-new-post-metadata
+        path title tags status scheduled-date)
+       (switch-to-buffer (find-file-noselect path))
+       (jaunder-new-post-mode 1)
+       (goto-char (point-max))))))
 
 
 (defun jaunder--idempotency-key ()
