@@ -277,6 +277,22 @@ file reclamation, and owner-reference reporting
 ([ADR-0016](adr/0016-dependency-injection-and-appstate.md),
 [ADR-0154](adr/0154-media-reference-live-ownership.md)).
 
+**Proposed image-upload privacy target.** The
+[image metadata privacy decision](adr/drafts/image-upload-metadata-privacy.md)
+requires this shared ingress to sanitize new JPEG, PNG/APNG, GIF, WebP and
+HEIC/HEIF bytes before minting a public Media identity. Detected image format
+controls stored/served Content-Type without renaming the canonical filename.
+Sanitized bytes define hash, URL, ETag, deduplication, stored size and quota.
+Source formats and compressed payloads remain intact; validated orientation,
+color/HDR, transparency and animation survive while descriptive metadata,
+descriptive ICC fields and embedded thumbnails/previews are removed; other
+optional camera-editing extras may be discarded. Unsafe covered inputs fail
+closed without public originals. SVG and non-image Media remain accepted outside
+this guarantee. Existing hash identities and Local Media Copies are not
+rewritten; sensitive existing images need separately approved replacement and
+retirement under the current ownership/history/reclaim guards. This is a
+proposed delivery target, not implemented sanitizer behavior.
+
 Nothing in the codebase now pins reactive-owner lifetime for this:
 `server_boundary` (`web/src/error/server.rs:99`) is a thin error-projection
 wrapper that awaits the body and maps `InternalError → WebError`. The
