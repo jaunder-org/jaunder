@@ -27,10 +27,24 @@ for (const width of [390, 1280]) {
       const owner = await tracedContext();
       await applySeededSession(owner, await createSessionViaTool("testlogin"));
       const creator = await owner.newPage();
+      if (surface === "Local") {
+        // Fill one Local page with Posts newer than the old 2020 fixture, but
+        // older than a newly published Post so parallel cases cannot evict it.
+        for (let index = 0; index < 51; index++) {
+          await createPostViaApi(creator, {
+            body: `Org verse timeline crowding at ${width}px ${index}`,
+            publishAt: "2021-01-02T12:00:00Z",
+          });
+        }
+      }
       const post = await createPostViaApi(creator, {
         body: source,
         format: "org",
-        publishAt: "2020-01-02T12:00:00Z",
+        // Local must be newly published; only screenshot permalinks need a
+        // fixed timestamp. Omit publishAt to use the server's current time.
+        ...(surface === "permalink"
+          ? { publishAt: "2020-01-02T12:00:00Z" }
+          : {}),
       });
       const path = new URL(post.permalink, "http://localhost").pathname;
       const viewer = await tracedContext();
