@@ -3634,5 +3634,53 @@ The current filename supplies the local slug evidence used by matched-pull tests
                          bytes)))
       (delete-directory root t))))
 
+(ert-deftest jaunder-reconcile-pull-rechecks-local-preflight-after-media-finalization ()
+  "A local Post mutation during Media work blocks replacement at the final boundary."
+  (let* ((row (jaunder--make-reconcile-row
+               :member (jaunder-reconcile-test--member "7" "old")))
+         (staged '(:id "7" :slug "old" :media-staged owned :bytes "replacement"))
+         (jaunder-reconcile-report (jaunder--make-reconcile-report :root "/tmp/"))
+         (preflights 0)
+         finalized)
+    (cl-letf (((symbol-function 'jaunder--reconcile-pull-preflight)
+               (lambda (_row _staged)
+                 (setq preflights (1+ preflights))
+                 (when (= preflights 2)
+                   (should finalized)
+                   'local-bytes-changed)))
+              ((symbol-function 'jaunder--reconcile-finalize-staged-media)
+               (lambda (_root value)
+                 (should (= preflights 1))
+                 (setq finalized t)
+                 value))
+              ((symbol-function 'jaunder--reconcile-replace-pulled-file)
+               (lambda (&rest _) (ert-fail "must not replace after post-media preflight"))))
+      (let ((result (jaunder--reconcile-pull-install-staged
+                     row staged '(:http-status 200) "/tmp/old.org")))
+        (should finalized)
+        (should (= preflights 2))
+        (should (eq (plist-get result :outcome) 'blocked))
+        (should (eq (plist-get result :reason) 'local-bytes-changed))))))
+
+(ert-deftest jaunder-reconcile-merge-result-setup-failure-cleans-owned-output ()
+  "A result owned before Ediff setup fails is removed and cannot be published."
+  (let* ((result (generate-new-buffer " *Jaunder owned Ediff result*"))
+         (session (jaunder--make-reconcile-merge-session))
+         (ediff-buffer-C result))
+    (unwind-protect
+        (progn
+          (with-current-buffer result (insert "unpublishable merge"))
+          (should-error
+           (cl-letf (((symbol-function 'add-hook)
+                      (lambda (&rest _) (error "injected Ediff hook failure"))))
+             (jaunder--reconcile-merge-bind-ediff-result session "*Jaunder merge result*")))
+          (should-not (jaunder-reconcile-merge-session-scratch session))
+          (should-not (buffer-live-p result)))
+      (when (buffer-live-p result)
+        (with-current-buffer result
+          (setq-local jaunder-reconcile-merge-allow-kill t)
+          (set-buffer-modified-p nil))
+        (kill-buffer result)))))
+
 (provide 'jaunder-reconcile-test)
 ;;; jaunder-reconcile-test.el ends here

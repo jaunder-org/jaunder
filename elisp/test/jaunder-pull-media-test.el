@@ -1458,4 +1458,85 @@
                                                        (signal 'file-error '("race")))))
                                             (jaunder--pull-media-materialize root jaunder-pull-media-test--instance plan)
                                             (should (jaunder--pull-media-verified-file-p target hash)))))))
+
+(ert-deftest jaunder-pull-media-original-proof-rejects-invalid-root-and-input-boundaries ()
+  "Proof creation rejects malformed roots and non-absolute Post inputs."
+  (dolist (root '(nil "relative" 17))
+    (should-error
+     (jaunder--pull-media-prove-original-destinations root "/tmp/source.org"
+                                                      "/tmp/final.org" "")))
+  (jaunder-pull-media-test--with-root root
+                                      (let ((file (expand-file-name "not-a-directory" root)))
+                                        (with-temp-file file (insert "not a root"))
+                                        (should-error
+                                         (jaunder--pull-media-prove-original-destinations
+                                          file "/tmp/source.org" "/tmp/final.org" ""))
+                                        (let ((link (make-temp-name (expand-file-name "root-link-" root))))
+                                          (unwind-protect
+                                              (progn
+                                                (make-symbolic-link root link)
+                                                (should-error
+                                                 (jaunder--pull-media-prove-original-destinations
+                                                  link "/tmp/source.org" "/tmp/final.org" "")))
+                                            (when (file-symlink-p link) (delete-file link))))
+                                        (dolist (arguments
+                                                 (list (list "relative.org" "/tmp/final.org" "")
+                                                       (list "/tmp/source.org" "relative.org" "")
+                                                       (list "/tmp/source.org" "/tmp/final.org" nil)))
+                                          (should-error
+                                           (apply #'jaunder--pull-media-prove-original-destinations
+                                                  root arguments))))))
+
+(ert-deftest jaunder-pull-media-rejected-reuse-must-belong-to-staged-media ()
+  "A caller cannot convert fallback evidence that its stage does not own."
+  (let* ((reuse (jaunder--make-pull-media-reuse))
+         (staged (jaunder--make-pull-media-staged
+                  :plan (jaunder--make-pull-media-plan :format "org" :body "" :references nil)
+                  :reuses nil :fallbacks nil)))
+    (should-error (jaunder--pull-media-staged-with-reuse-fallbacks staged (list reuse)))))
+
+(ert-deftest jaunder-pull-media-finalize-rejects-discrepant-installation-target ()
+  "Fallback metadata cannot redirect final Local Media Copy installation."
+  (let* ((bytes (string-as-unibyte "verified bytes"))
+         (hash (secure-hash 'sha256 bytes)))
+    (jaunder-pull-media-test--with-root
+     root
+     (let* ((expected (jaunder--pull-media-fallback-path root hash "image.png"))
+            (fallback (jaunder--make-pull-media-fallback
+                       :hash hash :leaf "image.png"
+                       :target (concat expected ".other")
+                       :native-target (format "local-media/%s/image.png" hash) :bytes bytes))
+            (staged (jaunder--make-pull-media-staged
+                     :plan (jaunder--make-pull-media-plan :format "org" :body "" :references nil)
+                     :reuses nil :fallbacks (list fallback))))
+       (should-error (jaunder--pull-media-finalize-staged root staged))
+       (should-not (file-exists-p expected))))))
+
+(ert-deftest jaunder-pull-media-finalize-rechecks-target-after-temporary-staging ()
+  "A changed installation target cannot redirect verified fallback bytes."
+  (let* ((bytes (string-as-unibyte "verified final target bytes"))
+         (hash (secure-hash 'sha256 bytes)))
+    (jaunder-pull-media-test--with-root
+     root
+     (let* ((expected (jaunder--pull-media-fallback-path root hash "image.png"))
+            (fallback (jaunder--make-pull-media-fallback
+                       :hash hash :leaf "image.png" :target expected
+                       :native-target (format "local-media/%s/image.png" hash) :bytes bytes))
+            (staged (jaunder--make-pull-media-staged
+                     :plan (jaunder--make-pull-media-plan :format "org" :body "" :references nil)
+                     :reuses nil :fallbacks (list fallback)))
+            (real-target (symbol-function 'jaunder--pull-media-target-path))
+            (calls 0))
+       (should-error
+        (cl-letf (((symbol-function 'jaunder--pull-media-target-path)
+                   (lambda (&rest arguments)
+                     (let ((target (apply real-target arguments)))
+                       (setq calls (1+ calls))
+                       (if (= calls 2) (concat target ".changed") target)))))
+          (jaunder--pull-media-finalize-staged root staged)))
+       (should (= calls 2))
+       (should-not (file-exists-p expected))
+       (should-not (directory-files (file-name-directory expected) nil
+                                    "\\`\\.jaunder-media-"))))))
+
 ;;; jaunder-pull-media-test.el ends here
