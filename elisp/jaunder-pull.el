@@ -24,6 +24,9 @@
 (defvar jaunder--pull-link-inventory nil
   "Optional inventory evidence supplied by a reconciliation pull staging run.")
 
+(defvar jaunder--pull-original-proof nil
+  "Optional matched-local Media evidence supplied by reconciliation staging.")
+
 (define-error 'jaunder-pull-stage-identity-changed
               "Member response identity changed since inventory" 'error)
 
@@ -331,12 +334,14 @@ creation, which is atomic and fails if another directory entry won the race."
         (when (and temporary (file-exists-p temporary))
           (delete-file temporary))))))
 
-(defun jaunder--pull-stage-member (root member)
+(defun jaunder--pull-stage-member (root member &optional original-proof)
   "Fetch, verify, and localize MEMBER, returning staged replacement data.
-Local Media Copies are materialized before this returns; the Post itself is not
-mutated.  The caller owns the final destination safety check and installation.
-`jaunder--pull-link-inventory' supplies the shared reconciliation snapshot;
-standalone server-only pulls acquire equivalent complete evidence themselves."
+When ORIGINAL-PROOF is non-nil, retain its verified Media stage for the matched
+consumer's final original-file revalidation.  Ordinary server-only callers
+finalize Local Media Copies here.  The caller owns the final destination safety
+check and installation.  `jaunder--pull-link-inventory' supplies the shared
+reconciliation snapshot; standalone server-only pulls acquire equivalent
+complete evidence themselves."
   (unless (jaunder-inventory-member-p member)
     (jaunder--pull-error "pull input must be a D1 inventory Member"))
   (let* ((audience-capable
@@ -377,14 +382,28 @@ standalone server-only pulls acquire equivalent complete evidence themselves."
              (plan (jaunder--pull-media-plan
                     (jaunder-pulled-member-format pulled-member) body
                     (jaunder--active-base-url))))
-        ;; Copies are durable safe partial work; the Post remains the final claim.
+        ;; The Post remains the final claim.  Matched consumers retain this
+        ;; stage so the original can be proved again at their install boundary.
         (jaunder--reconcile-pull-progress "acquiring Local Media Copies")
-        (jaunder--pull-media-materialize root instance-id plan)
-        (list :etag etag :id (car identity) :slug (cdr identity)
-              :audience-omitted (jaunder-pulled-member-audience-omitted pulled-member)
-              :synced-at (format-time-string "%Y-%m-%dT%H:%M:%SZ" captured-at t)
-              :bytes (jaunder--render-pulled-member
-                      pulled-member (jaunder--pull-media-apply-plan plan)))))))
+        (let* ((original-proof (or original-proof jaunder--pull-original-proof))
+               ;; Keep the established server-only materialization seam intact;
+               ;; only matched consumers need transient reuse evidence.
+               (media-staged (and original-proof
+                                  (jaunder--pull-media-stage
+                                   root instance-id plan original-proof))))
+          (unless media-staged
+            (jaunder--pull-media-materialize root instance-id plan))
+          (let ((localized-body
+                 (jaunder--pull-media-apply-plan
+                  (if media-staged
+                      (jaunder-pull-media-staged-plan media-staged)
+                    plan))))
+            (list :etag etag :id (car identity) :slug (cdr identity)
+                  :audience-omitted (jaunder-pulled-member-audience-omitted pulled-member)
+                  :synced-at (format-time-string "%Y-%m-%dT%H:%M:%SZ" captured-at t)
+                  :pulled-member pulled-member :original-proof original-proof
+                  :media-staged media-staged
+                  :bytes (jaunder--render-pulled-member pulled-member localized-body))))))))
 
 (defun jaunder--pull-member (root member)
   "Pull D1 inventory MEMBER into ROOT, returning `jaunder-pull-result'.

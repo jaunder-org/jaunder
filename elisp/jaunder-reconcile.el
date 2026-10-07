@@ -27,6 +27,7 @@
 (declare-function jaunder--pull-member "jaunder-pull")
 (declare-function jaunder--pull-stage-member "jaunder-pull")
 (declare-function jaunder--pull-response-identity "jaunder-pull")
+(declare-function jaunder--render-pulled-member "jaunder-pull")
 (declare-function jaunder-pull-result-status "jaunder-pull")
 (declare-function jaunder-pull-result-id "jaunder-pull")
 (declare-function jaunder-pull-result-slug "jaunder-pull")
@@ -36,6 +37,7 @@
 (declare-function jaunder-pull-result-local-effect "jaunder-pull")
 
 (defvar jaunder--pull-link-inventory)
+(defvar jaunder--pull-original-proof)
 
 (cl-defstruct (jaunder-reconcile-row
                (:constructor jaunder--make-reconcile-row))
@@ -1020,26 +1022,108 @@ Post body and all other metadata still come from the staged response."
                   (mapconcat #'identity (nreverse lines) "\n") "\n"
                   (substring bytes position)))))))
 
+(defun jaunder--reconcile-original-proof (root row)
+  "Prove ROW's Org Media destinations under ROOT for its reviewed final slug.
+The proof is intentionally derived only from the matched local Post, never
+from a root search.  A later final check repeats its filesystem predicates.
+Return nil for non-Org local source, preserving ordinary localization."
+  (let* ((local (jaunder-reconcile-row-local row))
+         (path (and local (jaunder-inventory-local-path local))))
+    (when (and path (string-suffix-p ".org" path))
+      (if (not (file-regular-p path))
+          ;; The ordinary matched preflight reports this as a blocked Post;
+          ;; staging must not turn it into an unrelated Media-proof failure.
+          (jaunder--make-pull-media-original-proof :originals nil)
+        (with-temp-buffer
+          (insert-file-contents-literally path)
+          ;; Posts are UTF-8 files; literal extraction avoids mode hooks, then
+          ;; explicit decoding keeps authored Unicode destinations as characters.
+          (decode-coding-region (point-min) (point-max) 'utf-8-unix)
+          (org-mode)
+          (let ((body (buffer-substring-no-properties
+                       (jaunder--body-start) (point-max))))
+            ;; Avoid filesystem proof work when no Org link can possibly select
+            ;; an original; retain an empty proof so matched staging still owns
+            ;; ordinary fallback installation.
+            (if (string-match-p "\\[\\[" body)
+                (jaunder--pull-media-prove-original-destinations
+                 root path
+                 (jaunder--pull-destination
+                  root (jaunder--reconcile-row-slug row))
+                 body)
+              (jaunder--make-pull-media-original-proof :originals nil))))))))
+
+(defun jaunder--reconcile-reuse-still-eligible-p (root reuse)
+  "Return non-nil when REUSE's original still proves its expected literal bytes."
+  (let* ((original (jaunder-pull-media-reuse-original reuse))
+         (hash (jaunder-pull-media-original-destination-hash original)))
+    (and (jaunder--pull-media-original-safe-regular-p
+          root (jaunder-pull-media-original-destination-source-path original))
+         (jaunder--pull-media-original-safe-regular-p
+          root (jaunder-pull-media-original-destination-final-path original))
+         (equal hash (jaunder--pull-media-file-sha256
+                      (jaunder-pull-media-original-destination-source-path original)))
+         (equal hash (jaunder--pull-media-file-sha256
+                      (jaunder-pull-media-original-destination-final-path original))))))
+
+(defun jaunder--reconcile-finalize-staged-media (root staged)
+  "Revalidate STAGED reuse after every fallback installation, then rerender it.
+This runs only at a matched consumer's boundary.  Rejected reuse consumes its
+already verified bytes; it never fetches again.  Each pass removes at least one
+reuse, so a finite stage settles without leaving a checked original stale after
+arbitrary fallback work."
+  (let ((media (plist-get staged :media-staged)))
+    (if (null media)
+        staged
+      ;; Ordinary fallback installation can be lengthy, so it must happen before
+      ;; the first original check and each newly rejected reuse triggers another
+      ;; check of every surviving original.
+      (jaunder--pull-media-finalize-staged root media)
+      (let (rejected)
+        (while (setq rejected
+                     (cl-remove-if
+                      (lambda (reuse)
+                        (jaunder--reconcile-reuse-still-eligible-p root reuse))
+                      (jaunder-pull-media-staged-reuses media)))
+          (setq media
+                (jaunder--pull-media-staged-with-reuse-fallbacks media rejected))
+          (jaunder--pull-media-finalize-staged root media))
+        (setq staged (plist-put (copy-sequence staged) :media-staged media))
+        (plist-put staged :bytes
+                   (jaunder--render-pulled-member
+                    (plist-get staged :pulled-member)
+                    (jaunder--pull-media-apply-plan
+                     (jaunder-pull-media-staged-plan media))))))))
+
 (defun jaunder--reconcile-pull-install-staged (row staged remote path)
   "Install STAGED ROW bytes after successful REMOTE revalidation at PATH."
   (let ((preflight (jaunder--reconcile-pull-preflight row staged)))
     (if preflight
         (jaunder--reconcile-blocked row preflight)
-      (let* ((destination (jaunder--reconcile-pull-destination row (plist-get staged :slug)))
-             (bytes (if (plist-get staged :audience-omitted)
-                        (jaunder--reconcile-preserve-legacy-audience
-                         path (plist-get staged :bytes))
-                      (plist-get staged :bytes)))
-             (installed (jaunder--reconcile-replace-pulled-file
-                         path destination bytes))
-             (committed (eq (plist-get installed :local-effect) 'replaced-at-old-path)))
-        (append (list :outcome (if committed 'failed 'success)
-                      :post-id (plist-get staged :id) :slug (plist-get staged :slug)
-                      :etag (plist-get staged :etag) :synced-at (plist-get staged :synced-at)
-                      :http-status (plist-get remote :http-status)
-                      :local-effect (plist-get installed :local-effect))
-                (when committed
-                  (list :reason 'pull-rename-failed :detail (plist-get installed :detail))))))))
+      (let* ((staged (if (plist-get staged :media-staged)
+                         (jaunder--reconcile-finalize-staged-media
+                          (jaunder-reconcile-report-root jaunder-reconcile-report) staged)
+                       staged))
+             ;; Media fallback can take time and create durable files, so repeat
+             ;; ADR-0200's local snapshot immediately before replacing the Post.
+             (after-media (jaunder--reconcile-pull-preflight row staged)))
+        (if after-media
+            (jaunder--reconcile-blocked row after-media)
+          (let* ((destination (jaunder--reconcile-pull-destination row (plist-get staged :slug)))
+                 (bytes (if (plist-get staged :audience-omitted)
+                            (jaunder--reconcile-preserve-legacy-audience
+                             path (plist-get staged :bytes))
+                          (plist-get staged :bytes)))
+                 (installed (jaunder--reconcile-replace-pulled-file
+                             path destination bytes))
+                 (committed (eq (plist-get installed :local-effect) 'replaced-at-old-path)))
+            (append (list :outcome (if committed 'failed 'success)
+                          :post-id (plist-get staged :id) :slug (plist-get staged :slug)
+                          :etag (plist-get staged :etag) :synced-at (plist-get staged :synced-at)
+                          :http-status (plist-get remote :http-status)
+                          :local-effect (plist-get installed :local-effect))
+                    (when committed
+                      (list :reason 'pull-rename-failed :detail (plist-get installed :detail))))))))))
 
 (defun jaunder--reconcile-pull-server-ahead-row (row)
   "Stage, inventory, and revalidate ROW before one final local preflight.
@@ -1047,51 +1131,55 @@ The order is Member and Media staging, fresh unique-match inventory, final
 remote strong-ETag revalidation, one local preflight, then replacement."
   (let* ((reviewed-etag (jaunder-reconcile-row-remote-etag row))
          (member (jaunder-reconcile-row-member row))
+         (report jaunder-reconcile-report)
+         (root (jaunder-reconcile-report-root report))
          (path (jaunder-inventory-local-path (jaunder-reconcile-row-local row))))
-    (if (not (jaunder--strong-etag-p reviewed-etag))
-        (jaunder--reconcile-blocked row 'reviewed-etag-invalid)
-      (condition-case err
-          (let* ((jaunder--pull-link-inventory
-                  (jaunder-reconcile-report-inventory jaunder-reconcile-report))
-                 (staged (progn
-                           (jaunder--reconcile-pull-progress "staging Member")
-                           (jaunder--pull-stage-member
-                            (jaunder-reconcile-report-root jaunder-reconcile-report) member)))
-                 (inventory (progn
-                              (jaunder--reconcile-pull-progress "verifying fresh Collection")
-                              (jaunder--reconcile-pull-unique-match row))))
-            (if (not (plist-get inventory :ok))
-                (jaunder--reconcile-blocked row (plist-get inventory :reason)
-                                            (plist-get inventory :detail))
-              (jaunder--reconcile-pull-progress "revalidating Member")
-              (let ((remote (jaunder--reconcile-pull-remote-revalidation row reviewed-etag)))
-                (cond
-                 ((not (plist-get remote :ok))
-                  (append (jaunder--reconcile-blocked row (plist-get remote :reason)
-                                                      (plist-get remote :detail))
-                          (list :etag (plist-get remote :etag)
-                                :http-status (plist-get remote :http-status))))
-                 ((not (equal reviewed-etag (plist-get staged :etag)))
-                  (append (jaunder--reconcile-blocked row 'etag-stale)
-                          (list :etag (plist-get remote :etag)
-                                :http-status (plist-get remote :http-status))))
-                 (t (jaunder--reconcile-pull-progress "installing local Post")
-                    (jaunder--reconcile-pull-install-staged row staged remote path))))))
-        (jaunder-pull-stage-identity-changed
-         (let ((evidence (car (cdr err))))
-           (list :outcome 'blocked
-                 :post-id (or (plist-get evidence :post-id)
-                              (jaunder--reconcile-row-post-id row))
-                 :slug (or (plist-get evidence :slug)
-                           (jaunder--reconcile-row-slug row))
-                 :etag (plist-get evidence :etag)
-                 :http-status (plist-get evidence :http-status)
-                 :local-effect 'unchanged :reason 'staged-identity-changed
-                 :detail (plist-get evidence :detail))))
-        (error (list :outcome 'failed :post-id (jaunder--reconcile-row-post-id row)
-                     :slug (jaunder--reconcile-row-slug row) :etag reviewed-etag
-                     :local-effect 'unchanged :reason 'pull-failed
-                     :detail (jaunder--reconcile-pull-error-detail err)))))))
+    ;; Pull staging switches buffers while preserving report-owned review evidence.
+    (let ((jaunder-reconcile-report report))
+      (if (not (jaunder--strong-etag-p reviewed-etag))
+          (jaunder--reconcile-blocked row 'reviewed-etag-invalid)
+        (condition-case err
+            (let* ((jaunder--pull-link-inventory
+                    (jaunder-reconcile-report-inventory jaunder-reconcile-report))
+                   (jaunder--pull-original-proof (jaunder--reconcile-original-proof root row))
+                   (staged (progn
+                             (jaunder--reconcile-pull-progress "staging Member")
+                             (jaunder--pull-stage-member root member)))
+                   (inventory (progn
+                                (jaunder--reconcile-pull-progress "verifying fresh Collection")
+                                (jaunder--reconcile-pull-unique-match row))))
+              (if (not (plist-get inventory :ok))
+                  (jaunder--reconcile-blocked row (plist-get inventory :reason)
+                                              (plist-get inventory :detail))
+                (jaunder--reconcile-pull-progress "revalidating Member")
+                (let ((remote (jaunder--reconcile-pull-remote-revalidation row reviewed-etag)))
+                  (cond
+                   ((not (plist-get remote :ok))
+                    (append (jaunder--reconcile-blocked row (plist-get remote :reason)
+                                                        (plist-get remote :detail))
+                            (list :etag (plist-get remote :etag)
+                                  :http-status (plist-get remote :http-status))))
+                   ((not (equal reviewed-etag (plist-get staged :etag)))
+                    (append (jaunder--reconcile-blocked row 'etag-stale)
+                            (list :etag (plist-get remote :etag)
+                                  :http-status (plist-get remote :http-status))))
+                   (t (jaunder--reconcile-pull-progress "installing local Post")
+                      (jaunder--reconcile-pull-install-staged row staged remote path))))))
+          (jaunder-pull-stage-identity-changed
+           (let ((evidence (car (cdr err))))
+             (list :outcome 'blocked
+                   :post-id (or (plist-get evidence :post-id)
+                                (jaunder--reconcile-row-post-id row))
+                   :slug (or (plist-get evidence :slug)
+                             (jaunder--reconcile-row-slug row))
+                   :etag (plist-get evidence :etag)
+                   :http-status (plist-get evidence :http-status)
+                   :local-effect 'unchanged :reason 'staged-identity-changed
+                   :detail (plist-get evidence :detail))))
+          (error (list :outcome 'failed :post-id (jaunder--reconcile-row-post-id row)
+                       :slug (jaunder--reconcile-row-slug row) :etag reviewed-etag
+                       :local-effect 'unchanged :reason 'pull-failed
+                       :detail (jaunder--reconcile-pull-error-detail err))))))))
 
 (defun jaunder--reconcile-pull-row (row)
   "Pull one explicitly selected ROW under the server-only and matched contracts."
@@ -1286,11 +1374,13 @@ Do not create an editable result until both before/after-staging guards pass."
                  (member (jaunder-reconcile-row-member row))
                  (jaunder--pull-link-inventory
                   (jaunder-reconcile-report-inventory jaunder-reconcile-report))
+                 (jaunder--pull-original-proof (jaunder--reconcile-original-proof root row))
                  (staged (jaunder--pull-stage-member root member)))
             (cond
              ((not (jaunder--reconcile-stage-matches-review-p row staged))
               (jaunder--reconcile-blocked row 'staged-identity-changed))
              (t
+              (setq staged (jaunder--reconcile-finalize-staged-media root staged))
               (let ((final (jaunder--reconcile-conflict-preflight row)))
                 (if (plist-get final :ok)
                     (list :staged staged)
@@ -1588,6 +1678,7 @@ operations write there, never to either Post.  `C-c C-c' explicitly finishes."
                  (path (jaunder-inventory-local-path (jaunder-reconcile-row-local row)))
                  (jaunder--pull-link-inventory
                   (jaunder-reconcile-report-inventory jaunder-reconcile-report))
+                 (jaunder--pull-original-proof (jaunder--reconcile-original-proof root row))
                  (staged (jaunder--pull-stage-member root member)))
             (if (not (jaunder--reconcile-stage-matches-review-p row staged))
                 (jaunder--reconcile-blocked row 'staged-identity-changed)

@@ -192,9 +192,17 @@ client maps parser block source positions back to exact source spans, so bytes
 outside localized destinations are preserved. The dependency is fetched with its
 upstream license notices because it is not packaged by Nixpkgs or MELPA.
 
-The Post file is installed only after its media verifies. If a pull fails, its
-Post remains server-only while already verified Local Media Copies remain safe;
-rerun `jaunder-reconcile` to retry and reuse those copies.
+The Post file is installed only after its media verifies. For a matched Org
+Post, a uniquely proven existing relative Media destination with the verified
+remote bytes is retained exactly as authored (including its file spelling);
+remote labels and fragments still come from the server. The client checks that
+original again immediately before server-ahead or keep-remote installation. A
+changed, missing, unsafe, or ambiguous original falls back to a verified Local
+Media Copy without modifying the original. Merge uses that policy only while
+staging its remote snapshot; its editable result remains ordinary authored
+content. If a pull fails, its Post remains server-only while already verified
+Local Media Copies remain safe; rerun `jaunder-reconcile` to retry and reuse
+those copies.
 
 ## Reconciliation batches
 

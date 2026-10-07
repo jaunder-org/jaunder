@@ -3536,5 +3536,151 @@ The current filename supplies the local slug evidence used by matched-pull tests
               (should (eq (jaunder-reconcile-result-local-effect preflight) 'unchanged)))))
       (kill-buffer buffer))))
 
+(ert-deftest jaunder-reconcile-active-reuse-cannot-bypass-local-preflight ()
+  "Disk and modified-buffer races block a staged matching original before install."
+  (dolist (race '(disk modified-buffer))
+    (let* ((root (file-name-as-directory (make-temp-file "jaunder-reuse-preflight-" t)))
+           (path (expand-file-name "old.org" root))
+           (assets (expand-file-name "assets" root))
+           (original (expand-file-name "original.png" assets))
+           (media-bytes (string-as-unibyte "verified media"))
+           (hash (secure-hash 'sha256 media-bytes))
+           (url (format "https://jaunder.example/media/upload/%s/%s/%s/original.png"
+                        (substring hash 0 2) (substring hash 2 4) hash))
+           (post (concat (jaunder-reconcile-test--pulled-bytes "7" "old" "\"old\"")
+                         "[[file:assets/original.png][original]]\n"))
+           buffer
+           (jaunder-reconcile-report (jaunder--make-reconcile-report :root root)))
+      (unwind-protect
+          (progn
+            (make-directory assets)
+            (with-temp-file path (insert post))
+            (with-temp-file original (set-buffer-multibyte nil) (insert media-bytes))
+            (let* ((row (jaunder-reconcile-test--matched-pull-row path "old"))
+                   (proof (jaunder--pull-media-prove-original-destinations
+                           root path path "[[file:assets/original.png][original]]"))
+                   (plan (jaunder--pull-media-plan "org" (format "[[%s]]" url)
+                                                   "https://jaunder.example"))
+                   (media (cl-letf (((symbol-function 'jaunder--pull-media-get)
+                                     (lambda (_url temporary)
+                                       (with-temp-file temporary
+                                         (set-buffer-multibyte nil) (insert media-bytes))
+                                       (list :status 200
+                                             :headers (list (cons "x-jaunder-instance"
+                                                                  "123e4567-e89b-12d3-a456-426614174000")
+                                                            (cons "etag" (format "\"sha256-%s\"" hash)))))))
+                            (jaunder--pull-media-stage
+                             root "123e4567-e89b-12d3-a456-426614174000" plan proof)))
+                   (staged (list :id "7" :slug "old" :media-staged media :bytes "replacement")))
+              (should (jaunder-pull-media-staged-reuses media))
+              (pcase race
+                ('disk (with-temp-file path (insert "disk changed")))
+                ('modified-buffer
+                 (setq buffer (find-file-noselect path))
+                 (with-current-buffer buffer (goto-char (point-max)) (insert "edited"))))
+              (let ((result (jaunder--reconcile-pull-install-staged row staged
+                                                                    '(:http-status 200) path)))
+                (should (eq (plist-get result :outcome) 'blocked))
+                (should (eq (plist-get result :reason)
+                            (if (eq race 'disk) 'local-bytes-changed 'local-buffer-modified)))
+                (should-not (file-exists-p
+                             (expand-file-name (format "local-media/%s/original.png" hash) root))))))
+        (when (buffer-live-p buffer) (with-current-buffer buffer (set-buffer-modified-p nil))
+              (kill-buffer buffer))
+        (delete-directory root t)))))
+
+(ert-deftest jaunder-reconcile-final-media-revalidation-falls-back-without-refetch ()
+  "A changed original rewrites only its staged destination and installs retained bytes."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-reuse-final-" t)))
+         (original-path (expand-file-name "image.png" root))
+         (bytes (string-as-unibyte "verified remote bytes"))
+         (hash (secure-hash 'sha256 bytes))
+         (original (jaunder--make-pull-media-original-destination
+                    :spelling "file:image.png" :source-path original-path
+                    :final-path original-path :hash hash))
+         (fallback (jaunder--make-pull-media-fallback
+                    :hash hash :leaf "image.png"
+                    :target (jaunder--pull-media-fallback-path root hash "image.png")
+                    :native-target (format "file:local-media/%s/image.png" hash)
+                    :bytes bytes))
+         (media (jaunder--make-pull-media-staged
+                 :plan (jaunder--make-pull-media-plan
+                        :format "org" :body "remote"
+                        :references
+                        (list (jaunder--make-pull-media-reference
+                               :hash hash :leaf "image.png"
+                               :target "file:image.png"
+                               :replacements (list (list 0 6 nil nil)))))
+                 :reuses (list (jaunder--make-pull-media-reuse
+                                :original original :fallback fallback))
+                 :fallbacks nil))
+         finalized)
+    (unwind-protect
+        (progn
+          (with-temp-file original-path (insert "changed original"))
+          (cl-letf (((symbol-function 'jaunder--render-pulled-member)
+                     (lambda (_member body) body))
+                    ((symbol-function 'jaunder--pull-media-fetch-verified-bytes)
+                     (lambda (&rest _) (ert-fail "must not refetch retained fallback"))))
+            (setq finalized
+                  (jaunder--reconcile-finalize-staged-media
+                   root (list :media-staged media :pulled-member 'fixture))))
+          (should (equal (plist-get finalized :bytes)
+                         (format "file:local-media/%s/image.png" hash)))
+          (should-not (jaunder-pull-media-staged-reuses
+                       (plist-get finalized :media-staged)))
+          (should (equal (jaunder--pull-media-read-bytes
+                          (jaunder-pull-media-fallback-target fallback))
+                         bytes)))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-reconcile-pull-rechecks-local-preflight-after-media-finalization ()
+  "A local Post mutation during Media work blocks replacement at the final boundary."
+  (let* ((row (jaunder--make-reconcile-row
+               :member (jaunder-reconcile-test--member "7" "old")))
+         (staged '(:id "7" :slug "old" :media-staged owned :bytes "replacement"))
+         (jaunder-reconcile-report (jaunder--make-reconcile-report :root "/tmp/"))
+         (preflights 0)
+         finalized)
+    (cl-letf (((symbol-function 'jaunder--reconcile-pull-preflight)
+               (lambda (_row _staged)
+                 (setq preflights (1+ preflights))
+                 (when (= preflights 2)
+                   (should finalized)
+                   'local-bytes-changed)))
+              ((symbol-function 'jaunder--reconcile-finalize-staged-media)
+               (lambda (_root value)
+                 (should (= preflights 1))
+                 (setq finalized t)
+                 value))
+              ((symbol-function 'jaunder--reconcile-replace-pulled-file)
+               (lambda (&rest _) (ert-fail "must not replace after post-media preflight"))))
+      (let ((result (jaunder--reconcile-pull-install-staged
+                     row staged '(:http-status 200) "/tmp/old.org")))
+        (should finalized)
+        (should (= preflights 2))
+        (should (eq (plist-get result :outcome) 'blocked))
+        (should (eq (plist-get result :reason) 'local-bytes-changed))))))
+
+(ert-deftest jaunder-reconcile-merge-result-setup-failure-cleans-owned-output ()
+  "A result owned before Ediff setup fails is removed and cannot be published."
+  (let* ((result (generate-new-buffer " *Jaunder owned Ediff result*"))
+         (session (jaunder--make-reconcile-merge-session))
+         (ediff-buffer-C result))
+    (unwind-protect
+        (progn
+          (with-current-buffer result (insert "unpublishable merge"))
+          (should-error
+           (cl-letf (((symbol-function 'add-hook)
+                      (lambda (&rest _) (error "injected Ediff hook failure"))))
+             (jaunder--reconcile-merge-bind-ediff-result session "*Jaunder merge result*")))
+          (should-not (jaunder-reconcile-merge-session-scratch session))
+          (should-not (buffer-live-p result)))
+      (when (buffer-live-p result)
+        (with-current-buffer result
+          (setq-local jaunder-reconcile-merge-allow-kill t)
+          (set-buffer-modified-p nil))
+        (kill-buffer result)))))
+
 (provide 'jaunder-reconcile-test)
 ;;; jaunder-reconcile-test.el ends here
