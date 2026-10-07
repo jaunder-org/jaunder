@@ -25,7 +25,7 @@ server-only or non-Org behavior changes.
     encoded and implicit/explicit links, fragments, excluded forms, renamed
     equal bytes, missing/changed/unreadable and non-regular files, symlinks and
     cross-root targets.
-- [ ] Task 2: Stage verified Media with optional original destinations.
+- [x] Task 2: Stage verified Media with optional original destinations.
   - Contract: extend the existing native-source plan/staging flow with optional
     matched-local evidence; ordinary callers retain current behavior. Retain
     remote verification even for reuse. Carry transient reuse evidence and
