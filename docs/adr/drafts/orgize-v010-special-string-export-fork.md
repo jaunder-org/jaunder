@@ -39,3 +39,25 @@ locks must move together when advancing the fork; a manifest-only revision
 change is insufficient. Remove the patch, flake input, vendor overrides, and
 deny rationale for this fork together when an audited upstream release supplies
 the same exporter behavior.
+
+## Extension — 2026-10-07
+
+For [#1697](https://github.com/jaunder-org/jaunder/issues/1697), the fork was
+extended with native verse inline parsing and HTML layout export at
+`556b2c61ff326e17d456e576e51df2bfaf208e92`. The historical Decision above
+records the initial special-string change, not the current fork's full scope.
+
+Verse now keeps line breaks, blank lines, relative indentation and inline
+objects without reparsing or rewriting authored source in Jaunder. A typed
+inline parsing context travels through recursive objects, preserving physical
+comma escapes and keeping shortcode-looking text literal even with Org-fc
+enabled. Block closing names match case-insensitively; multi-paragraph quotes
+retain their existing export behavior. Document-owned footnote ranges and
+literal code/verbatim bytes remain intact.
+
+The root and tools Cargo revisions and locks and the Nix input and lock advanced
+together after review of the fork against the recorded upstream base. Jaunder
+returned to direct Orgize traversal, removing its temporary syntax-tree adapter;
+its existing sanitization, Post Shortcode, and storage boundaries did not move.
+Paired migration `0050` queues the existing offline rebuild for current Post
+derivatives without rewriting native source or historical Post Revisions.

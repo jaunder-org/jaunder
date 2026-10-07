@@ -25,7 +25,6 @@ pub mod etag;
 pub mod feed;
 pub mod invite;
 pub mod metrics;
-mod org_verse;
 pub mod passkey;
 pub mod password;
 pub mod render;

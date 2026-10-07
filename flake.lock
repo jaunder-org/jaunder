@@ -90,17 +90,17 @@
     "orgize-fork": {
       "flake": false,
       "locked": {
-        "lastModified": 1790336310,
-        "narHash": "sha256-ut9rGpT0wHGImOe85Y82+d6LPGXSDAFrBxLZaKqmCAo=",
+        "lastModified": 1791394229,
+        "narHash": "sha256-4ihTxFra8m3JL9JvH5v83ptWuvdq8lp7pvC9c/IYo8A=",
         "owner": "jaunder-org",
         "repo": "orgize",
-        "rev": "f0fc85d1f703b4f69c26c6fc8122b771b88ad1f0",
+        "rev": "556b2c61ff326e17d456e576e51df2bfaf208e92",
         "type": "github"
       },
       "original": {
         "owner": "jaunder-org",
         "repo": "orgize",
-        "rev": "f0fc85d1f703b4f69c26c6fc8122b771b88ad1f0",
+        "rev": "556b2c61ff326e17d456e576e51df2bfaf208e92",
         "type": "github"
       }
     },

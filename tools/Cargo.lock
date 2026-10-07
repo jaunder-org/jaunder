@@ -2415,7 +2415,7 @@ dependencies = [
 [[package]]
 name = "orgize"
 version = "0.10.0-alpha.10"
-source = "git+https://github.com/jaunder-org/orgize?rev=f0fc85d1f703b4f69c26c6fc8122b771b88ad1f0#f0fc85d1f703b4f69c26c6fc8122b771b88ad1f0"
+source = "git+https://github.com/jaunder-org/orgize?rev=556b2c61ff326e17d456e576e51df2bfaf208e92#556b2c61ff326e17d456e576e51df2bfaf208e92"
 dependencies = [
  "bytecount",
  "cfg-if",

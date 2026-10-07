@@ -429,9 +429,6 @@ fn render_org_with_shortcodes(
     body: &str,
     post_id: Option<PostId>,
 ) -> Result<RenderedHtml, HighlightError> {
-    use orgize::export::Traverser;
-    use orgize::rowan::ast::AstNode;
-
     let org = orgize::Org::parse(body);
     let mut export = OrgShortcodeExport {
         source: body,
@@ -443,11 +440,7 @@ fn render_org_with_shortcodes(
         budget: HighlightBudget::default(),
         highlight_error: None,
     };
-    let document = crate::org_verse::expand(org.document().syntax());
-    export.element(
-        orgize::SyntaxElement::Node(document),
-        &mut orgize::export::TraversalContext::default(),
-    );
+    org.traverse(&mut export);
     if let Some(error) = export.highlight_error {
         return Err(error);
     }
@@ -1776,6 +1769,22 @@ mod tests {
                 "{html}"
             );
         }
+    }
+
+    #[test]
+    fn org_verse_native_parser_preserves_nested_escapes_and_mixed_case_delimiters() {
+        let source = "#+BEGIN_VERSE\n*first\n,#+plain*\n{{< youtube dQw4w9WgXcQ >}}\n#+end_verse\n\n#+BEGIN_QUOTE\n*quoted*\n#+end_quote";
+        let html = render(&parse_post_body(source), PostFormat::Org);
+        assert!(html.contains("<b>first<br>#+plain</b>"), "{html}");
+        assert!(
+            html.contains("{{&lt; youtube dQw4w9WgXcQ &gt;}}<br>"),
+            "{html}"
+        );
+        assert!(html.contains("<blockquote><p><b>quoted</b>"), "{html}");
+        assert!(
+            !html.contains(",#+plain") && !html.contains("<iframe"),
+            "{html}"
+        );
     }
 
     #[test]

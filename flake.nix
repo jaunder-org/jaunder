@@ -21,7 +21,7 @@
       flake = false;
     };
     orgize-fork = {
-      url = "github:jaunder-org/orgize/f0fc85d1f703b4f69c26c6fc8122b771b88ad1f0";
+      url = "github:jaunder-org/orgize/556b2c61ff326e17d456e576e51df2bfaf208e92";
       flake = false;
     };
   };
