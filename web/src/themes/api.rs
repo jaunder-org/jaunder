@@ -97,7 +97,7 @@ use {
         auth,
         error::{self, InternalError},
     },
-    common::{media::MediaRef, theme},
+    common::{media::MediaRef, theme, theme::ThemeAssetDigest},
     host::{
         theme_operations::{ThemeOperationCoordinator, ThemeOperationRejected},
         theme_package::{
@@ -302,7 +302,12 @@ fn package_asset_urls(
             let (_, _, digest) = package
                 .asset(path)
                 .ok_or_else(|| InternalError::server_message("validated asset disappeared"))?;
-            Ok((path.to_owned(), format!("/theme/{}", digest_hex(&digest))))
+            Ok((
+                path.to_owned(),
+                ThemeAssetDigest::from_digest(digest)
+                    .content_url()
+                    .to_string(),
+            ))
         })
         .collect()
 }
@@ -1154,8 +1159,8 @@ mod tests {
         CatalogEntry, Draft, OwnershipScope, ThemeBindingInput, ThemeMediaInput, ThemePoolInput,
         admission_error, binding_wire, catalog, create_storage_error, digest_hex, draft_asset_urls,
         draft_from_archive, draft_from_input, draft_wire, get_selection, import_css,
-        import_package, manager_error, media_wire, plain_css_manifest, pool_wire,
-        publication_error, publish, remove, rename, replace_binding, replace_css,
+        import_package, manager_error, media_wire, package_asset_urls, plain_css_manifest,
+        pool_wire, publication_error, publish, remove, rename, replace_binding, replace_css,
         replace_draft_error, replace_pool, safe_filename, select, shuffle, theme_name,
         theme_storage_error,
     };
@@ -1166,7 +1171,7 @@ mod tests {
     use common::{
         ids::{ThemeId, UserId},
         media::{MediaRef, MediaSource},
-        theme::{ThemeImageRole, ThemePoolRevisionDigest},
+        theme::{ThemeAssetDigest, ThemeImageRole, ThemePoolRevisionDigest},
     };
     use host::{
         theme_operations::{ThemeOperationCoordinator, ThemeOperationRejected},
@@ -1282,6 +1287,13 @@ mod tests {
         assert_eq!(
             draft_asset_urls(&package, theme_id)["assets/logo.png"],
             "/theme/draft/12/assets/logo.png"
+        );
+        let (_, _, digest) = package
+            .asset("assets/logo.png")
+            .expect("validated package asset");
+        assert_eq!(
+            package_asset_urls(&package).expect("immutable package URLs")["assets/logo.png"],
+            ThemeAssetDigest::from_digest(digest).content_url().as_ref()
         );
     }
 

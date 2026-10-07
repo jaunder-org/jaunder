@@ -101,6 +101,26 @@ theme_digest_from_str!(ThemeStylesheetDigest);
 theme_digest_from_str!(ThemeAssetDigest);
 theme_digest_from_str!(ThemePoolRevisionDigest);
 
+fn immutable_theme_content_url(digest: &str) -> RootRelativeUrl {
+    RootRelativeUrl::from_trusted_path(format!("/theme/{digest}"))
+}
+
+macro_rules! theme_content_url {
+    ($($type:ty),+ $(,)?) => {
+        $(
+            impl $type {
+                /// Returns this validated content digest's canonical public address.
+                #[must_use]
+                pub fn content_url(&self) -> RootRelativeUrl {
+                    immutable_theme_content_url(self.as_ref())
+                }
+            }
+        )+
+    };
+}
+
+theme_content_url!(ThemeContentDigest, ThemeStylesheetDigest, ThemeAssetDigest);
+
 /// A public selection is either one of the closed built-ins or an opaque custom
 /// theme identity. The identity is intentionally stable across custom-theme renames.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -359,6 +379,39 @@ impl ThemeHeaderPool {
     }
 }
 
+const PACKAGED_DEFAULT_HEADER_SEED: [u8; 32] = [0; 32];
+
+/// Selects a package-default header path for one public presentation route.
+///
+/// Package defaults are a deterministic pool with a fixed seed, so persisted
+/// public themes, draft previews, and repository thumbnails select the same
+/// path for the same package revision and route.
+#[must_use]
+pub fn select_packaged_header_default<'a>(
+    packaged_defaults: Option<&'a [String]>,
+    revision: &ThemeRevisionDigest,
+    route: &PublicThemeRoute,
+) -> Option<&'a str> {
+    let packaged_defaults = packaged_defaults?;
+    let pool = ThemeHeaderPool::new(
+        packaged_defaults
+            .iter()
+            .cloned()
+            .map(ThemePoolEntry::Package)
+            .collect(),
+    )
+    .ok()?;
+    let ThemePoolEntry::Package(selected) =
+        pool.select(route, revision, &PACKAGED_DEFAULT_HEADER_SEED)
+    else {
+        unreachable!("a package-default pool contains only package entries")
+    };
+    packaged_defaults
+        .iter()
+        .find(|path| path.as_str() == selected)
+        .map(String::as_str)
+}
+
 fn push_length_prefixed(target: &mut Vec<u8>, value: &[u8]) {
     target.extend((value.len() as u64).to_be_bytes());
     target.extend(value);
@@ -467,6 +520,49 @@ mod tests {
         );
         assert_eq!(ThemeImageRole::Logo.token(), "logo");
         assert_eq!(ThemeImageRole::Header.token(), "header");
+    }
+
+    #[test]
+    fn immutable_content_addresses_are_restricted_to_content_digest_types() {
+        let digest = "a".repeat(64);
+        for url in [
+            digest
+                .parse::<ThemeContentDigest>()
+                .expect("valid content digest")
+                .content_url(),
+            digest
+                .parse::<ThemeStylesheetDigest>()
+                .expect("valid stylesheet digest")
+                .content_url(),
+            digest
+                .parse::<ThemeAssetDigest>()
+                .expect("valid asset digest")
+                .content_url(),
+        ] {
+            assert_eq!(url.as_ref(), format!("/theme/{digest}"));
+        }
+    }
+
+    #[test]
+    fn packaged_header_defaults_are_route_and_revision_stable() {
+        let defaults = [
+            "assets/header-a.png".to_owned(),
+            "assets/header-b.png".to_owned(),
+        ];
+        let revision: ThemeRevisionDigest = "b".repeat(64).parse().expect("valid digest");
+        let route = PublicThemeRoute::author(&"alice".parse().expect("valid username"));
+
+        let selected = select_packaged_header_default(Some(&defaults), &revision, &route);
+        assert_eq!(selected, Some("assets/header-b.png"));
+        assert_eq!(
+            selected,
+            select_packaged_header_default(Some(&defaults), &revision, &route)
+        );
+        assert_eq!(
+            select_packaged_header_default(None, &revision, &route),
+            None,
+            "an absent package default remains absent"
+        );
     }
 
     #[test]

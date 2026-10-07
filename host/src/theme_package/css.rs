@@ -20,7 +20,7 @@ use lightningcss::{
 use sha2::{Digest, Sha256};
 use unicode_casefold::UnicodeCaseFold;
 
-use super::{ThemePackageError, ThemePackageLimits};
+use super::{CompiledThemeContent, ThemePackageError, ThemePackageLimits};
 
 /// The deterministic, isolated stylesheet and its raw content digest.
 #[derive(Debug)]
@@ -30,6 +30,16 @@ pub struct CompiledCss {
 }
 
 impl CompiledCss {
+    /// Returns the transformed stylesheet as immutable package content.
+    #[must_use]
+    pub fn content(&self) -> CompiledThemeContent<'_> {
+        CompiledThemeContent {
+            mime: "text/css; charset=utf-8",
+            bytes: &self.bytes,
+            digest: self.digest,
+        }
+    }
+
     #[must_use]
     pub fn bytes(&self) -> &[u8] {
         &self.bytes

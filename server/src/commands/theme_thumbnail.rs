@@ -46,7 +46,7 @@ pub async fn cmd_theme_thumbnail(
             )
         })?;
     let logo_url = thumbnail_asset_url(accepted.revision().default_logo_path())?;
-    let header_path = storage::select_packaged_header_default(
+    let header_path = common::theme::select_packaged_header_default(
         accepted.revision().default_header_paths(),
         accepted.publication_revision(),
         &common::theme::PublicThemeRoute::site(),
@@ -161,18 +161,15 @@ async fn document_handler(State(state): State<Arc<PreviewState>>) -> Response {
     )
 }
 async fn css_handler(State(state): State<Arc<PreviewState>>) -> Response {
-    response(
-        StatusCode::OK,
-        "text/css; charset=utf-8",
-        state.accepted.revision().css().bytes(),
-    )
+    let content = state.accepted.revision().stylesheet_content();
+    response(StatusCode::OK, content.mime(), content.bytes())
 }
 async fn asset_handler(
     AxumPath(path): AxumPath<String>,
     State(state): State<Arc<PreviewState>>,
 ) -> Response {
-    match state.accepted.revision().asset(&path) {
-        Some((mime, bytes, _)) => response(StatusCode::OK, mime, bytes),
+    match state.accepted.revision().asset_content(&path) {
+        Some(content) => response(StatusCode::OK, content.mime(), content.bytes()),
         None => response(StatusCode::NOT_FOUND, "text/plain", b"not found"),
     }
 }

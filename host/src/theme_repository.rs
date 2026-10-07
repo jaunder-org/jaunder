@@ -149,7 +149,9 @@ fn accept_theme_repository_with_limits(
         .map(|(path, digest)| {
             (
                 path.to_owned(),
-                format!("/theme/{}", ThemeAssetDigest::from_digest(digest)),
+                ThemeAssetDigest::from_digest(digest)
+                    .content_url()
+                    .to_string(),
             )
         })
         .collect();
@@ -487,16 +489,15 @@ mod tests {
         );
         let publication_urls = BTreeMap::from([(
             "assets/pixel ?#.avif".to_owned(),
-            format!(
-                "/theme/{}",
-                ThemeAssetDigest::from_digest(
-                    accepted
-                        .revision()
-                        .asset("assets/pixel ?#.avif")
-                        .expect("compiled asset")
-                        .2
-                )
-            ),
+            ThemeAssetDigest::from_digest(
+                accepted
+                    .revision()
+                    .asset("assets/pixel ?#.avif")
+                    .expect("compiled asset")
+                    .2,
+            )
+            .content_url()
+            .to_string(),
         )]);
         let published =
             validate_theme_package(accepted.package_bytes(), ThemePackageLimits::default())

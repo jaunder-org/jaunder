@@ -7,6 +7,7 @@ use common::{
     theme::{
         PublicThemeRoute, PublicThemeSelection, PublishedThemeIdentity, PublishedThemePresentation,
         Theme, ThemeHeaderPool, ThemeImageRole, ThemePoolEntry, ThemeRevisionDigest,
+        select_packaged_header_default,
     },
 };
 use serde::Deserialize;
@@ -68,8 +69,6 @@ async fn resolve_selection(
         }
     }
 }
-const PACKAGED_DEFAULT_HEADER_SEED: [u8; 32] = [0; 32];
-
 async fn resolve_custom(
     owner: ThemeOwner,
     theme_id: ThemeId,
@@ -116,9 +115,7 @@ async fn resolve_custom(
     } else {
         None
     };
-    let stylesheet_url =
-        RootRelativeUrl::try_from(format!("/theme/{}", revision.stylesheet_digest))
-            .map_err(|_| sqlx::Error::RowNotFound)?;
+    let stylesheet_url = revision.stylesheet_digest.content_url();
     let logo_url = resolve_role(
         logo.as_ref(),
         &assets,
@@ -188,36 +185,6 @@ fn resolve_role_with_package_url(
             resolve_pool_entry(pool.select(route, revision, shuffle_seed), package_url)
         }
     }
-}
-
-/// Selects the package-default header path for one public presentation route.
-///
-/// The selection uses the same stable pool ordering and package-default seed as
-/// persisted public and Studio draft presentations.
-#[must_use]
-pub fn select_packaged_header_default<'a>(
-    packaged_defaults: Option<&'a [String]>,
-    revision: &ThemeRevisionDigest,
-    route: &PublicThemeRoute,
-) -> Option<&'a str> {
-    let packaged_defaults = packaged_defaults?;
-    let pool = ThemeHeaderPool::new(
-        packaged_defaults
-            .iter()
-            .cloned()
-            .map(ThemePoolEntry::Package)
-            .collect(),
-    )
-    .ok()?;
-    let ThemePoolEntry::Package(selected) =
-        pool.select(route, revision, &PACKAGED_DEFAULT_HEADER_SEED)
-    else {
-        unreachable!("a package-default pool contains only package entries")
-    };
-    packaged_defaults
-        .iter()
-        .find(|path| path.as_str() == selected)
-        .map(String::as_str)
 }
 
 fn resolve_packaged_header_default(
@@ -346,7 +313,7 @@ pub async fn resolve_draft_theme_images(
 
 fn package_url(assets: &[ThemePackageAsset], path: &str) -> Option<RootRelativeUrl> {
     let asset = assets.iter().find(|asset| asset.path == path)?;
-    format!("/theme/{}", asset.digest).parse().ok()
+    Some(asset.digest.content_url())
 }
 
 fn media_url_parts(source: &str, digest: &str, filename: &str) -> Option<RootRelativeUrl> {

@@ -26,16 +26,18 @@ subsystems or authorization for parallel implementation writers.
   - [x] Extract the shared immutable content-response primitive, preserving
         streamed 200 and conditional 304 behavior; focused checks pass on both
         backends. System and thumbnail consumers will adopt it in task 4.
-  - [ ] Extract reusable package-presentation primitives where custom
-        publication, system publication, and thumbnail consumers overlap;
-        preserve existing behavior before wiring the replacement path.
+  - [x] Share stable packaged-default header selection and typed immutable
+        content addressing across publication, public/draft presentation, and
+        thumbnails. Compiler-minted content views couple exact digest/MIME/bytes
+        without duplicating the owning revision or changing identity framing.
   - Contract: one compiler-minted package revision/asset representation and one
     exact digest/MIME/bytes representation. Trusted application CSS has a closed
     system-only role, not a bypass in the untrusted package validator. Custom
     mutation APIs continue to accept only operator/author-owned catalog inputs.
   - Verification: existing package parser/compiler, public presentation,
-    conditional HTTP, and thumbnail tests remain unchanged and green. Capture
-    reproducible visual baselines before the first presentation-affecting edit.
+    conditional HTTP, and thumbnail tests remain unchanged and green.
+  - [ ] Capture reproducible visual baselines before the first
+        presentation-affecting edit.
 
 - [ ] Task 2: Produce bundled packages and application styling artifacts.
   - Convert Studio, Terminal, and Reader presentation source to portable package

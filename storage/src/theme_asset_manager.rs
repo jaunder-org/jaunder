@@ -276,20 +276,16 @@ impl ThemeAssetManager {
     }
 
     fn blobs(compiled: &CompiledThemeRevision) -> Result<Vec<Blob<'_>>, ThemeAssetError> {
-        let mut blobs = Vec::new();
-        let css_digest = Self::digest(compiled.css().digest())?;
-        blobs.push(Blob {
-            digest: css_digest,
-            mime: "text/css; charset=utf-8",
-            bytes: compiled.css().bytes(),
-        });
-        for (_, mime, bytes, digest) in compiled.assets() {
-            blobs.push(Blob {
-                digest: Self::digest(digest)?,
-                mime,
-                bytes,
-            });
-        }
+        let mut blobs = compiled
+            .contents()
+            .map(|content| {
+                Ok(Blob {
+                    digest: Self::digest(content.digest())?,
+                    mime: content.mime(),
+                    bytes: content.bytes(),
+                })
+            })
+            .collect::<Result<Vec<_>, ThemeAssetError>>()?;
         blobs.sort_by(|left, right| left.digest.as_ref().cmp(right.digest.as_ref()));
         blobs.dedup_by(|left, right| left.digest == right.digest);
         Ok(blobs)
@@ -302,7 +298,7 @@ impl ThemeAssetManager {
         Ok(ThemeRevision {
             theme_id,
             digest: Self::revision_digest(compiled.revision_digest())?,
-            stylesheet_digest: Self::stylesheet_digest(compiled.css().digest())?,
+            stylesheet_digest: Self::stylesheet_digest(compiled.stylesheet_content().digest())?,
             manifest: compiled.canonical_manifest().to_vec(),
         })
     }

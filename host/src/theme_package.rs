@@ -43,6 +43,34 @@ use zip::ZipArchive;
 
 pub use css::{CompiledCss, compile_stylesheet};
 
+/// One exact compiler-minted immutable Theme content representation.
+///
+/// This borrowed view keeps MIME, bytes, and digest coupled for stylesheet and
+/// package-asset consumers without creating a second revision representation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CompiledThemeContent<'a> {
+    mime: &'static str,
+    bytes: &'a [u8],
+    digest: [u8; 32],
+}
+
+impl<'a> CompiledThemeContent<'a> {
+    #[must_use]
+    pub const fn mime(self) -> &'static str {
+        self.mime
+    }
+
+    #[must_use]
+    pub const fn bytes(self) -> &'a [u8] {
+        self.bytes
+    }
+
+    #[must_use]
+    pub const fn digest(self) -> [u8; 32] {
+        self.digest
+    }
+}
+
 const SOURCE_DOMAIN: &[u8] = b"jaunder-theme-source-v1";
 const REVISION_DOMAIN: &[u8] = b"jaunder-theme-revision-v1";
 /// Percent-encodes a validated package asset path for use below an HTTP route.
@@ -636,6 +664,24 @@ impl ValidatedThemePackage {
     }
 }
 impl CompiledThemeRevision {
+    /// Returns the transformed stylesheet as immutable content.
+    #[must_use]
+    pub fn stylesheet_content(&self) -> CompiledThemeContent<'_> {
+        self.css.content()
+    }
+
+    /// Returns one package asset as immutable content.
+    #[must_use]
+    pub fn asset_content(&self, path: &str) -> Option<CompiledThemeContent<'_>> {
+        self.assets.get(path).map(ThemeAsset::content)
+    }
+
+    /// Iterates the stylesheet then package assets in canonical path order.
+    pub fn contents(&self) -> impl Iterator<Item = CompiledThemeContent<'_>> {
+        std::iter::once(self.stylesheet_content())
+            .chain(self.assets.values().map(ThemeAsset::content))
+    }
+
     #[must_use]
     pub fn source_digest(&self) -> [u8; 32] {
         self.source_digest
@@ -662,20 +708,30 @@ impl CompiledThemeRevision {
     }
     #[must_use]
     pub fn asset(&self, path: &str) -> Option<(&str, &[u8], [u8; 32])> {
-        self.assets
-            .get(path)
-            .map(|asset| (asset.mime.as_str(), asset.bytes.as_slice(), asset.digest))
+        self.asset_content(path)
+            .map(|content| (content.mime(), content.bytes(), content.digest()))
     }
     /// Iterates package assets in their canonical normalized-path order.
     pub fn assets(&self) -> impl Iterator<Item = (&str, &str, &[u8], [u8; 32])> {
         self.assets.iter().map(|(path, asset)| {
+            let content = asset.content();
             (
                 path.as_str(),
-                asset.mime.as_str(),
-                asset.bytes.as_slice(),
-                asset.digest,
+                content.mime(),
+                content.bytes(),
+                content.digest(),
             )
         })
+    }
+}
+
+impl ThemeAsset {
+    fn content(&self) -> CompiledThemeContent<'_> {
+        CompiledThemeContent {
+            mime: self.mime.as_str(),
+            bytes: &self.bytes,
+            digest: self.digest,
+        }
     }
 }
 
@@ -1495,6 +1551,15 @@ mod tests {
                 .unwrap()
                 .contains("/theme-assets/logo")
         );
+        let stylesheet = revision.stylesheet_content();
+        assert_eq!(stylesheet.mime(), "text/css; charset=utf-8");
+        assert_eq!(stylesheet.bytes(), revision.css().bytes());
+        assert_eq!(stylesheet.digest(), revision.css().digest());
+        let logo_content = revision
+            .asset_content("assets/logo.png")
+            .expect("compiled logo asset");
+        assert_eq!(logo_content.mime(), "image/png");
+        assert_eq!(logo_content.bytes(), logo.as_slice());
         assert_eq!(
             revision
                 .asset("assets/logo.png")
