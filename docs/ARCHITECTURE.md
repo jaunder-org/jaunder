@@ -575,12 +575,13 @@ a focused `v0.10` `orgize` fork for Emacs-compatible `---`, `--`, and `...`
 typography and native verse inline parsing/layout export. Verse paragraphs keep
 physical line breaks, blank lines, relative indentation, and inline markup;
 recursive inline parsing preserves comma escapes and inert shortcode-looking
-text, including with Org-fc enabled. Block delimiters match case-insensitively,
-and quotes retain semantic blockquotes with ordinary paragraph boundaries.
-Jaunder traverses the original Orgize document directly; there is no host-owned
-verse syntax-tree adapter. Literal code/verbatim, link destinations, native
-source, and document-owned footnote identity remain intact. Exported HTML still
-crosses the existing host sanitization boundary
+text, including with Org-fc enabled. Verse and quote closing names match
+case-insensitively; unrelated blocks retain their previous matching semantics.
+Quotes retain semantic blockquotes with ordinary paragraph boundaries. Jaunder
+traverses the original Orgize document directly; there is no host-owned verse
+syntax-tree adapter. Literal code/verbatim, link destinations, native source,
+and document-owned footnote identity remain intact. Exported HTML still crosses
+the existing host sanitization boundary
 ([Org export fork](adr/drafts/orgize-v010-special-string-export-fork.md)).
 
 **Content rights follow the User's current publication-wide setting.** Every

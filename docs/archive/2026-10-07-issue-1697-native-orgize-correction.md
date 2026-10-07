@@ -10,14 +10,16 @@ pinned `jaunder-org/orgize` fork, not a Jaunder-owned syntax-tree adapter.
   `v0.10` fork. Preserve lossless authored source, document-owned footnote
   identity, cross-line inline objects, literal code/verbatim, and the existing
   multi-paragraph quote semantics.
-- Preserve comma-escaped verse lines, mixed-case begin/end delimiters, and inert
-  shortcode-looking text inside recursive inline objects. Exercise both the
-  default grammar and the optional Org-fc grammar directly in fork tests.
+- Preserve comma-escaped verse lines, mixed-case verse/quote begin/end
+  delimiters, and inert shortcode-looking text inside recursive inline objects.
+  Unrelated block names retain their previous exact closing-name matching.
+  Exercise both the default grammar and the optional Org-fc grammar directly
+  in fork tests.
 - Remove `host/src/org_verse.rs` and traverse the original parsed document
   directly through the existing Jaunder exporter and sanitizer.
 - Advance the root/tools Cargo patches and locks and the Nix input/lock together
   to the reviewed immutable revision
-  `556b2c61ff326e17d456e576e51df2bfaf208e92`.
+  `17311ba02d4317571fab04a752a479e09bef2397`.
 - Retain paired migration `0050`, backend-parametric rebuild preservation tests,
   and the focused Local/permalink browser proof. The original storage,
   sanitization, historical-revision, and no-production-access boundaries remain
