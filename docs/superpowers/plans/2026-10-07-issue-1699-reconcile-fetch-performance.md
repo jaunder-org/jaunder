@@ -80,11 +80,15 @@ backend behavior changes; use existing live Emacs fixtures for consumer proof.
     cover all eight required labels, including both validation, conditional
     update, and checkpoint owners. `publish.recover` owns durable intent
     preparation/matching; its replay transfer/retries are timed by
-    `publish.create`. Seven focused proofs compare native return values,
+    `publish.create`. Nine focused proofs compare native return values,
     wire/key/If-Match/delay sequences, unchanged and changed recovery,
-    checkpoint/rename partial effects, standalone calls, parent trees, and
-    disabled diagnostic factories. The pure suite is 481/481; production forms
-    are structurally identical after removing diagnostic wrappers. Remaining
+    checkpoint/rename partial effects, standalone calls, and disabled diagnostic
+    factories. Spec review exposed topology and standalone-root evidence gaps;
+    follow-up tests now assert exact root labels and immediate parent-label
+    edges, reject cycles and misordered terminals, require intent completion
+    before sibling transfer, and directly exercise intent, write-back, rename
+    and no-op rename. The pure suite is 483/483; production forms remain
+    structurally identical after removing diagnostic wrappers. Remaining
     report/inventory, batch/row, conflict, and merge owners are pending.
   - Contract: outer command/batch/row spans nest existing lower-level
     operations; direct helper calls remain independent roots. Ediff setup and

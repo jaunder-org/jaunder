@@ -1,8 +1,8 @@
 ;;; jaunder-debug-boundary-fixture.el --- Shared diagnostic boundary fixtures -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; Client operation proofs share one isolated diagnostic session and exact
-;; event-label reader.  Sessions restore all
+;; Client operation proofs share an isolated diagnostic session, exact
+;; event-label reader and ordered parent-tree assertions.  Sessions restore
 ;; global diagnostic state and dispose only of their owned evidence buffer.
 
 ;;; Code:
@@ -35,9 +35,11 @@
                  (string-match-p (concat " label=" (regexp-quote label) " phase=") line))
                (split-string text "\n" t)))
 
-(defun jaunder-debug-boundary--assert-tree (text roots)
-  "Assert paired spans and valid parent/correlation links in TEXT with ROOTS."
-  (let ((spans (make-hash-table :test #'equal)) (root-count 0))
+(defun jaunder-debug-boundary--assert-tree (text roots &optional edges)
+  "Assert complete ordered spans in TEXT with ROOTS and required label EDGES.
+ROOTS is a count or ordered root-label list.  EDGES maps child labels to their
+required immediate parent labels.  Distinct roots require distinct correlations."
+  (let ((spans (make-hash-table :test #'equal)) active root-labels correlations)
     (dolist (line (split-string text "\n" t))
       (should (string-match
                (rx " correlation=" (group (+ (not space)))
@@ -45,23 +47,36 @@
                    " label=" (group (+ (not space)))
                    " phase=" (group (or "start" "end"))
                    (optional " parent=" (group (+ (not space))))) line))
-      (let ((id (match-string 2 line))
-            (event (list (match-string 4 line) (match-string 3 line)
-                         (match-string 1 line) (match-string 5 line))))
-        (puthash id (append (gethash id spans) (list event)) spans)))
-    (maphash
-     (lambda (_ events)
-       (should (= 2 (length events)))
-       (should (equal (mapcar #'car events) '("start" "end")))
-       (should (equal (cdar events) (cdadr events)))
-       (let* ((event (car events)) (parent (nth 3 event)))
-         (if parent
-             (let ((ancestor (car (gethash parent spans))))
-               (should ancestor)
-               (should (equal (nth 2 event) (nth 2 ancestor))))
-           (setq root-count (1+ root-count)))))
-     spans)
-    (should (= roots root-count))))
+      (let* ((id (match-string 2 line))
+             (event (list (match-string 4 line) (match-string 3 line)
+                          (match-string 1 line) (match-string 5 line)))
+             (parent (nth 3 event))
+             (previous (gethash id spans)))
+        (if (equal (car event) "start")
+            (progn
+              (should-not previous)
+              (should-not (equal parent id))
+              ;; An already-open immediate parent plus a unique ID excludes
+              ;; cycles, orphan/late children and fabricated overlapping roots.
+              (should (equal parent (car active)))
+              (when-let* ((edge (assoc (nth 1 event) edges)))
+                (should (equal (cdr edge) (nth 1 (car (gethash parent spans))))))
+              (if parent
+                  (should (equal (nth 2 event) (nth 2 (car (gethash parent spans)))))
+                (should-not (member (nth 2 event) correlations))
+                (push (nth 2 event) correlations)
+                (push (nth 1 event) root-labels))
+              (push id active))
+          (should (equal id (car active)))
+          (should (= 1 (length previous)))
+          (should (equal (cdar previous) (cdr event)))
+          (pop active))
+        (puthash id (append previous (list event)) spans)))
+    (should-not active)
+    (maphash (lambda (_ events) (should (= 2 (length events)))) spans)
+    (if (integerp roots)
+        (should (= roots (length root-labels)))
+      (should (equal roots (nreverse root-labels))))))
 
 (provide 'jaunder-debug-boundary-fixture)
 ;;; jaunder-debug-boundary-fixture.el ends here
