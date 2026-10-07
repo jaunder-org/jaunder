@@ -43,7 +43,7 @@ production operations, and Theme Package contract changes.
     handler is unchanged. Run the focused storage migration suite through
     `devtool run -- cargo xtask test-local -- -p storage migrations::tests`.
     Update the architecture's migration/rebuild description with this slice.
-- [ ] Task 3: Demonstrate the published browser result and complete conformance.
+- [x] Task 3: Demonstrate the published browser result and complete conformance.
   - Depends on Tasks 1–2. Contract: a deterministic published Org fixture uses
     the same canonical output on Local and its public permalink, with no
     test-only renderer or new application endpoint.
