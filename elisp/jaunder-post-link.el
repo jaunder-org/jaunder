@@ -89,22 +89,26 @@ Member inventory."
 
 (defun jaunder--pulled-post-link-replacements (root members locals)
   "Return exact canonical-href to local-link replacements proven by inventories.
-Only one valid Member/local proof may own an href.  Invalid alternate outcomes,
-duplicate href evidence, and incomplete local evidence deliberately produce no
-replacement."
+Post IDs and canonical hrefs require singleton inventory evidence before current
+file proof.  Invalid alternate outcomes, duplicate evidence (even stale), and
+incomplete local evidence deliberately produce no replacement."
   (let ((by-href (make-hash-table :test #'equal))
-        ;; Only equal Post IDs can prove a target.  Preserve competing local
-        ;; evidence in each bucket so an indexed join cannot hide ambiguity.
-        (by-id (jaunder--index-by locals #'jaunder-inventory-local-id)))
-    (dolist (member members)
-      (let ((href (jaunder-inventory-member-alternate-href member)))
-        (when (and href (not (jaunder-inventory-member-alternate-invalid-reason member)))
-          (dolist (local (gethash (jaunder-inventory-member-id member) by-id))
-            (when (jaunder--pulled-post-link-target-p local member root)
-              (puthash href
-                       (cons (format "./%s.org" (jaunder-inventory-member-slug member))
-                             (gethash href by-href))
-                       by-href))))))
+        (local-by-id (jaunder--index-by locals #'jaunder-inventory-local-id))
+        (member-by-id (jaunder--index-by members #'jaunder-inventory-member-id))
+        (member-by-href (jaunder--index-by members #'jaunder-inventory-member-alternate-href)))
+    (maphash
+     (lambda (id member-bucket)
+       (let ((local-bucket (gethash id local-by-id)))
+         (when (and (= (length member-bucket) 1) (= (length local-bucket) 1))
+           (let* ((member (car member-bucket))
+                  (href (jaunder-inventory-member-alternate-href member)))
+             (when (and href
+                        (= (length (gethash href member-by-href)) 1)
+                        (not (jaunder-inventory-member-alternate-invalid-reason member))
+                        (jaunder--pulled-post-link-target-p (car local-bucket) member root))
+               (puthash href (list (format "./%s.org" (jaunder-inventory-member-slug member)))
+                        by-href))))))
+     member-by-id)
     by-href))
 
 (defun jaunder--reverse-pulled-post-links (body root members locals)

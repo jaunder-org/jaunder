@@ -52,6 +52,10 @@
 (defconst jaunder--debug-reserved-fields
   '(at correlation span parent label phase elapsed-ms outcome))
 
+(cl-defstruct (jaunder--debug-span (:constructor jaunder--make-debug-span))
+  "One logged operation's identity, clock, terminal fields and outcome."
+  label correlation id parent start fields (outcome "success"))
+
 (defvar jaunder--debug-id-counter 0)
 (defvar jaunder--debug-event-count 0)
 (defvar jaunder--debug-discarded 0)
@@ -248,28 +252,39 @@
   (when jaunder--debug-operation-stack
     (let ((safe (jaunder--debug-normalize-fields fields)))
       (unless (or safe (null fields)) (error "invalid diagnostic fields"))
-      (setf (nth 5 (car jaunder--debug-operation-stack))
-            (jaunder--debug-merge-fields (nth 5 (car jaunder--debug-operation-stack)) safe)))))
+      (let ((span (car jaunder--debug-operation-stack)))
+        (setf (jaunder--debug-span-fields span)
+              (jaunder--debug-merge-fields (jaunder--debug-span-fields span) safe))))))
 
 (defun jaunder--debug-begin (label field-thunk)
   "Start LABEL using FIELD-THUNK, returning state only after a logged start."
   (let* ((fields (funcall field-thunk))
          (parent-state (car jaunder--debug-operation-stack))
-         (correlation (if parent-state (nth 1 parent-state) (jaunder--debug-next-id)))
+         (correlation (if parent-state (jaunder--debug-span-correlation parent-state)
+                        (jaunder--debug-next-id)))
          (span (jaunder--debug-next-id))
          (start (jaunder--debug-now))
-         (state (list label correlation span (and parent-state (nth 2 parent-state)) start fields "success")))
+         (state (jaunder--make-debug-span
+                 :label label :correlation correlation :id span
+                 :parent (and parent-state (jaunder--debug-span-id parent-state))
+                 :start start :fields fields)))
     (unless (or (null fields) (jaunder--debug-normalize-fields fields))
       (error "invalid diagnostic fields"))
-    (when (jaunder--debug-write label "start" correlation span (nth 3 state) fields)
+    (when (jaunder--debug-write label "start" correlation span
+                                (jaunder--debug-span-parent state) fields)
       (push state jaunder--debug-operation-stack)
       state)))
 
 (defun jaunder--debug-finish (state)
   "Finish STATE without allowing terminal diagnostics to escape."
-  (let ((elapsed (max 0 (floor (* 1000 (- (jaunder--debug-now) (nth 4 state)))))))
-    (jaunder--debug-write (nth 0 state) "end" (nth 1 state) (nth 2 state)
-                          (nth 3 state) (nth 5 state) (nth 6 state) elapsed)))
+  (let ((elapsed (max 0 (floor (* 1000 (- (jaunder--debug-now)
+                                          (jaunder--debug-span-start state)))))))
+    (jaunder--debug-write (jaunder--debug-span-label state) "end"
+                          (jaunder--debug-span-correlation state)
+                          (jaunder--debug-span-id state)
+                          (jaunder--debug-span-parent state)
+                          (jaunder--debug-span-fields state)
+                          (jaunder--debug-span-outcome state) elapsed)))
 
 (defun jaunder--debug-field-form (fields)
   "Construct a lazy plist form from alternating literal keys and value forms."
@@ -288,6 +303,7 @@
 (defmacro jaunder--with-debug-operation (label fields &rest body)
   "Run BODY once with an optional diagnostic span for literal LABEL and FIELDS."
   (declare (indent 2) (debug (form form body)))
+  (unless (stringp label) (error "Diagnostic labels must be literal strings"))
   (let ((state (make-symbol "state")))
     `(if (not jaunder-debug)
          (progn ,@body)
@@ -301,9 +317,9 @@
          (unwind-protect
              (condition-case err
                  (progn ,@body)
-               (quit (when ,state (setf (nth 6 ,state) "cancelled"))
+               (quit (when ,state (setf (jaunder--debug-span-outcome ,state) "cancelled"))
                      (signal (car err) (cdr err)))
-               (error (when ,state (setf (nth 6 ,state) "error"))
+               (error (when ,state (setf (jaunder--debug-span-outcome ,state) "error"))
                       (signal (car err) (cdr err))))
            (when ,state
              (unwind-protect

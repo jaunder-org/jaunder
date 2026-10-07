@@ -26,6 +26,7 @@
 (require 'dom)
 (require 'xml)
 (require 'jaunder-entry)
+(require 'jaunder-debug)
 
 (defconst jaunder--atom-ns "http://www.w3.org/2005/Atom"
   "The Atom namespace URI.")
@@ -45,37 +46,38 @@ are omitted when nil, one `<category term>' per tag, and the
 `<app:control><app:draft>yes>' marker (with the `app' namespace) only for a
 draft.  All wire knowledge (namespaces, media types, element order) lives
 here."
-  (let* ((draft (jaunder-entry-draft entry))
-         (audiences (jaunder--canonical-audiences
-                     (jaunder-entry-audiences entry)))
-         (attrs (append
-                 (list (cons 'xmlns jaunder--atom-ns))
-                 ;; Declare foreign namespaces only when they are used.
-                 (when draft (list (cons 'xmlns:app jaunder--app-ns)))
-                 (when audiences (list (cons 'xmlns:j jaunder--atompub-ns)))))
-         (children '()))
-    (when (jaunder-entry-title entry)
-      (push (list 'title nil (jaunder-entry-title entry)) children))
-    (when (jaunder-entry-summary entry)
-      (push (list 'summary nil (jaunder-entry-summary entry)) children))
-    (dolist (term (jaunder-entry-categories entry))
-      (push (list 'category (list (cons 'term term))) children))
-    (dolist (audience audiences)
-      (push (list 'j:audience nil audience) children))
-    (push (list 'content
-                (list (cons 'type (jaunder-entry-content-type entry)))
-                (or (jaunder-entry-body entry) ""))
-          children)
-    (when (jaunder-entry-published entry)
-      (push (list 'published nil (jaunder-entry-published entry)) children))
-    (when draft
-      (push (list 'app:control nil (list 'app:draft nil "yes")) children))
-    (with-temp-buffer
-      ;; `dom-print' escapes unconditionally; the HTML/XML flag would only
-      ;; change boolean-attribute handling, which none of these elements use,
-      ;; so the single-arg call keeps output identical while staying portable.
-      (dom-print (append (list 'entry attrs) (nreverse children)))
-      (buffer-string))))
+  (jaunder--with-debug-operation "atom.serialize" (format "atom")
+                                 (let* ((draft (jaunder-entry-draft entry))
+                                        (audiences (jaunder--canonical-audiences
+                                                    (jaunder-entry-audiences entry)))
+                                        (attrs (append
+                                                (list (cons 'xmlns jaunder--atom-ns))
+                                                ;; Declare foreign namespaces only when they are used.
+                                                (when draft (list (cons 'xmlns:app jaunder--app-ns)))
+                                                (when audiences (list (cons 'xmlns:j jaunder--atompub-ns)))))
+                                        (children '()))
+                                   (when (jaunder-entry-title entry)
+                                     (push (list 'title nil (jaunder-entry-title entry)) children))
+                                   (when (jaunder-entry-summary entry)
+                                     (push (list 'summary nil (jaunder-entry-summary entry)) children))
+                                   (dolist (term (jaunder-entry-categories entry))
+                                     (push (list 'category (list (cons 'term term))) children))
+                                   (dolist (audience audiences)
+                                     (push (list 'j:audience nil audience) children))
+                                   (push (list 'content
+                                               (list (cons 'type (jaunder-entry-content-type entry)))
+                                               (or (jaunder-entry-body entry) ""))
+                                         children)
+                                   (when (jaunder-entry-published entry)
+                                     (push (list 'published nil (jaunder-entry-published entry)) children))
+                                   (when draft
+                                     (push (list 'app:control nil (list 'app:draft nil "yes")) children))
+                                   (with-temp-buffer
+                                     ;; `dom-print' escapes unconditionally; the HTML/XML flag would only
+                                     ;; change boolean-attribute handling, which none of these elements use,
+                                     ;; so the single-arg call keeps output identical while staying portable.
+                                     (dom-print (append (list 'entry attrs) (nreverse children)))
+                                     (buffer-string)))))
 
 (defun jaunder--atom-local-name (tag)
   "Return TAG's local XML name as a symbol."
@@ -141,62 +143,63 @@ projection.  Atom metadata is accepted only from the Atom namespace,
 `app:control'/`app:draft' only from APP, and `slug'/`audience' only from the
 Jaunder extension namespace.  No Member-required cardinality is enforced here,
 so media and publish responses remain valid."
-  (let* ((dom (with-temp-buffer
-                (insert xml)
-                (car (xml-parse-region (point-min) (point-max)))))
-         (entry-namespaces (jaunder--atom-namespace-context dom nil))
-         (titles (jaunder--atom-direct-elements-in-namespace
-                  dom 'title jaunder--atom-ns entry-namespaces))
-         (categories (jaunder--atom-direct-elements-in-namespace
-                      dom 'category jaunder--atom-ns entry-namespaces))
-         (summaries (jaunder--atom-direct-elements-in-namespace
-                     dom 'summary jaunder--atom-ns entry-namespaces))
-         (content-nodes (jaunder--atom-direct-elements-in-namespace
-                         dom 'content jaunder--atom-ns entry-namespaces))
-         (controls (jaunder--atom-direct-elements-in-namespace
-                    dom 'control jaunder--app-ns entry-namespaces))
-         (published-values (jaunder--atom-direct-elements-in-namespace
-                            dom 'published jaunder--atom-ns entry-namespaces))
-         (links (jaunder--atom-direct-elements-in-namespace
-                 dom 'link jaunder--atom-ns entry-namespaces))
-         (slugs (jaunder--atom-direct-elements-in-namespace
-                 dom 'slug jaunder--atompub-ns entry-namespaces))
-         (audiences (jaunder--atom-direct-elements-in-namespace
-                     dom 'audience jaunder--atompub-ns entry-namespaces))
-         (drafts (apply #'append
-                        (mapcar
-                         (lambda (control)
-                           (jaunder--atom-direct-elements-in-namespace
-                            control 'draft jaunder--app-ns
-                            (jaunder--atom-namespace-context
-                             control entry-namespaces)))
-                         controls)))
-         (edit-links (cl-remove-if-not
-                      (lambda (link) (equal (dom-attr link 'rel) "edit"))
-                      links))
-         (alternate-links (cl-remove-if-not
-                           (lambda (link) (equal (dom-attr link 'rel) "alternate"))
-                           links))
-         (content (car content-nodes))
-         (slug (car slugs))
-         (published (car published-values)))
-    (list (cons 'content-src (dom-attr content 'src))
-          (cons 'content-type (dom-attr content 'type))
-          (cons 'slug (and slug (dom-inner-text slug)))
-          (cons 'published (and published (dom-inner-text published)))
-          (cons 'titles (mapcar #'dom-inner-text titles))
-          (cons 'categories (mapcar (lambda (category) (dom-attr category 'term))
-                                    categories))
-          (cons 'summaries (mapcar #'dom-inner-text summaries))
-          (cons 'content-nodes content-nodes)
-          (cons 'drafts (mapcar #'dom-inner-text drafts))
-          (cons 'published-values (mapcar #'dom-inner-text published-values))
-          (cons 'edit-uris (mapcar (lambda (link) (dom-attr link 'href))
-                                   edit-links))
-          (cons 'alternate-uris (mapcar (lambda (link) (dom-attr link 'href))
-                                        alternate-links))
-          (cons 'slugs (mapcar #'dom-inner-text slugs))
-          (cons 'audiences (mapcar #'dom-inner-text audiences)))))
+  (jaunder--with-debug-operation "atom.parse" (format "atom")
+                                 (let* ((dom (with-temp-buffer
+                                               (insert xml)
+                                               (car (xml-parse-region (point-min) (point-max)))))
+                                        (entry-namespaces (jaunder--atom-namespace-context dom nil))
+                                        (titles (jaunder--atom-direct-elements-in-namespace
+                                                 dom 'title jaunder--atom-ns entry-namespaces))
+                                        (categories (jaunder--atom-direct-elements-in-namespace
+                                                     dom 'category jaunder--atom-ns entry-namespaces))
+                                        (summaries (jaunder--atom-direct-elements-in-namespace
+                                                    dom 'summary jaunder--atom-ns entry-namespaces))
+                                        (content-nodes (jaunder--atom-direct-elements-in-namespace
+                                                        dom 'content jaunder--atom-ns entry-namespaces))
+                                        (controls (jaunder--atom-direct-elements-in-namespace
+                                                   dom 'control jaunder--app-ns entry-namespaces))
+                                        (published-values (jaunder--atom-direct-elements-in-namespace
+                                                           dom 'published jaunder--atom-ns entry-namespaces))
+                                        (links (jaunder--atom-direct-elements-in-namespace
+                                                dom 'link jaunder--atom-ns entry-namespaces))
+                                        (slugs (jaunder--atom-direct-elements-in-namespace
+                                                dom 'slug jaunder--atompub-ns entry-namespaces))
+                                        (audiences (jaunder--atom-direct-elements-in-namespace
+                                                    dom 'audience jaunder--atompub-ns entry-namespaces))
+                                        (drafts (apply #'append
+                                                       (mapcar
+                                                        (lambda (control)
+                                                          (jaunder--atom-direct-elements-in-namespace
+                                                           control 'draft jaunder--app-ns
+                                                           (jaunder--atom-namespace-context
+                                                            control entry-namespaces)))
+                                                        controls)))
+                                        (edit-links (cl-remove-if-not
+                                                     (lambda (link) (equal (dom-attr link 'rel) "edit"))
+                                                     links))
+                                        (alternate-links (cl-remove-if-not
+                                                          (lambda (link) (equal (dom-attr link 'rel) "alternate"))
+                                                          links))
+                                        (content (car content-nodes))
+                                        (slug (car slugs))
+                                        (published (car published-values)))
+                                   (list (cons 'content-src (dom-attr content 'src))
+                                         (cons 'content-type (dom-attr content 'type))
+                                         (cons 'slug (and slug (dom-inner-text slug)))
+                                         (cons 'published (and published (dom-inner-text published)))
+                                         (cons 'titles (mapcar #'dom-inner-text titles))
+                                         (cons 'categories (mapcar (lambda (category) (dom-attr category 'term))
+                                                                   categories))
+                                         (cons 'summaries (mapcar #'dom-inner-text summaries))
+                                         (cons 'content-nodes content-nodes)
+                                         (cons 'drafts (mapcar #'dom-inner-text drafts))
+                                         (cons 'published-values (mapcar #'dom-inner-text published-values))
+                                         (cons 'edit-uris (mapcar (lambda (link) (dom-attr link 'href))
+                                                                  edit-links))
+                                         (cons 'alternate-uris (mapcar (lambda (link) (dom-attr link 'href))
+                                                                       alternate-links))
+                                         (cons 'slugs (mapcar #'dom-inner-text slugs))
+                                         (cons 'audiences (mapcar #'dom-inner-text audiences))))))
 
 (provide 'jaunder-atom)
 ;;; jaunder-atom.el ends here

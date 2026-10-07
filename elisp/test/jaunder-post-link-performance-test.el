@@ -73,6 +73,36 @@
                                body root (list member-one member-two) (list local-one local-two)))))
       (delete-directory root t))))
 
+(ert-deftest jaunder-pulled-post-links-reject-all-duplicate-inventory-evidence ()
+  "Duplicate IDs or hrefs stay ambiguous even when one candidate is stale."
+  (let* ((root (make-temp-file "jaunder-link-duplicate-" t))
+         (path (expand-file-name "one.org" root))
+         (href "https://example.test/~alice/one")
+         (other-href "https://example.test/~alice/other")
+         (body (format "[[%s][one]] [[%s][other]]" href other-href))
+         (local (jaunder--make-inventory-local :path path :id "1" :slug "one"))
+         (member (jaunder--make-inventory-member :id "1" :slug "one" :alternate-href href)))
+    (unwind-protect
+        (progn
+          (with-temp-file path (insert "#+PROPERTY: JAUNDER_ID 1\n#+PROPERTY: JAUNDER_SLUG one\n"))
+          (dolist (case
+                   (list
+                    (list (list member (jaunder--make-inventory-member
+                                        :id "1" :slug "one" :alternate-href other-href))
+                          (list local))
+                    (list (list member) (list local (jaunder--make-inventory-local
+                                                     :path path :id "1" :slug "stale")))
+                    (list (list member (jaunder--make-inventory-member
+                                        :id "2" :slug "absent" :alternate-href href))
+                          (list local))))
+            (let ((checks 0))
+              (cl-letf (((symbol-function 'jaunder--pulled-post-link-target-p)
+                         (lambda (&rest _) (setq checks (1+ checks)) t)))
+                (should (equal body (jaunder--reverse-pulled-post-links
+                                     body root (car case) (cadr case)))))
+              (should (= 0 checks)))))
+      (delete-directory root t))))
+
 (ert-deftest jaunder-pulled-post-links-index-preserves-current-file-evidence ()
   "Stale, missing, mismatched and out-of-root local proof leaves source intact."
   (let* ((root (make-temp-file "jaunder-link-current-" t))

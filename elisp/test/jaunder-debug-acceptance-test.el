@@ -79,7 +79,7 @@
                   (sort (copy-sequence jaunder--debug-labels) #'string<)))
    (dolist (label jaunder-debug-acceptance--labels)
      (jaunder-debug-clear)
-     (jaunder--with-debug-operation label () nil)
+     (eval (list 'jaunder--with-debug-operation label nil nil) t)
      (let ((lines (split-string (jaunder-debug-acceptance--text) "\n" t)))
        (should (= 2 (length lines)))
        (should (string-match-p (regexp-quote (concat "label=" label " phase=start"))
@@ -87,6 +87,15 @@
        (should (string-match-p (regexp-quote (concat "label=" label " phase=end"))
                                (cadr lines)))))
    (should-not jaunder-debug-acceptance--warnings)))
+
+(ert-deftest jaunder-debug-acceptance-labels-are-static-literals ()
+  "Dynamic label forms are rejected without evaluating payload or fields."
+  (dolist (label '(label (concat "config." "resolve") (error "PRIVATE-LABEL")))
+    (should-error
+     (macroexpand-1 (list 'jaunder--with-debug-operation label
+                          '(count (error "PRIVATE-FIELD")) 'body))
+     :type 'error))
+  (should (macroexpand-1 '(jaunder--with-debug-operation "config.resolve" () nil))))
 
 (ert-deftest jaunder-debug-acceptance-serialized-optional-vocabulary ()
   "Every enum, numeric and boolean boundary reaches only safe serialized text."
