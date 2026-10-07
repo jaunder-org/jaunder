@@ -8,8 +8,15 @@ publish.workspace = true
 workspace = true
 
 [features]
-default = ["performance"]
+# The ordinary/full devtool owns CSR and system-artifact production. The
+# docs-only `--no-default-features` tool intentionally excludes this host-heavy
+# capability and remains a lightweight documentation authority.
+default = ["performance", "system-artifacts"]
 performance = ["dep:common", "dep:jiff", "dep:performance", "dep:storage"]
+system-artifacts = ["dep:host"]
+# Internal-only A/B styling artifact production for the Task 5 qualification
+# derivation. Normal devtool and public package outputs omit this capability.
+qualification = ["system-artifacts", "host/qualification"]
 
 [dependencies]
 clap = { version = "4.6.6", features = ["derive"] }
@@ -35,3 +42,6 @@ performance = { path = "../performance", optional = true }
 storage = { path = "../../storage", optional = true }
 common = { path = "../../common", optional = true }
 jiff = { version = "0.2.21", optional = true }
+# The CSR bundle stages the closed system styling inventory before rendering its
+# shell. This is a host-only build dependency, never a wasm dependency.
+host = { path = "../../host", optional = true }

@@ -297,6 +297,10 @@ let
       && (
         (pkgs.lib.hasSuffix ".sql" path)
         || (pkgs.lib.hasSuffix ".css" path)
+        # Shipped Theme Package manifests are host-producer inputs, not generic
+        # data files. Keep this closed path in the server/Nix source closure so
+        # the same producer validates the exact release inputs in both builds.
+        || (pkgs.lib.hasInfix "/host/system_theme_sources/" path)
         # The CSR SPA shell the server embeds via include_str! (#239). Specific
         # (not a broad .html suffix) to keep stray HTML out of the crane src.
         || (pkgs.lib.hasSuffix "csr/index.html" path)
@@ -465,6 +469,11 @@ let
           type == "directory"
           || relative == "tools/Cargo.lock"
           || relative == "csr/index.html"
+          # Host system-artifact production is also a devtool dependency. Keep
+          # its closed Theme Package inputs and trusted application source with
+          # the host crate rather than letting a tool build a partial producer.
+          || relative == "server/assets/jaunder.css"
+          || pkgs.lib.hasPrefix "host/system_theme_sources/" relative
           || pkgs.lib.hasPrefix "storage/migrations/" relative
           || cargoMemberSource [ "common" "host" "macros" "storage" ] path type
           || pkgs.lib.hasPrefix "tools/doctests/testdata/" relative
@@ -512,14 +521,20 @@ let
     cp --no-preserve=mode -r ${docsToolsFilteredSrc}/. "$out/"
     mkdir -p \
       "$out/common/src" \
+      "$out/host/src" \
       "$out/storage/src" \
       "$out/tools/diagnostic-coverage-runtime/src" \
       "$out/tools/performance/src"
     printf '%s\n' '[package]' 'name = "common"' 'version = "0.1.0"' 'edition = "2024"' > "$out/common/Cargo.toml"
+    # Cargo still resolves optional path-dependency manifests with
+    # --no-default-features. Keep only a manifest/source placeholder here: the
+    # docs tool cannot enable devtool's system-artifact feature or build host.
+    printf '%s\n' '[package]' 'name = "host"' 'version = "0.1.0"' 'edition = "2024"' '[features]' 'qualification = []' > "$out/host/Cargo.toml"
     printf '%s\n' '[package]' 'name = "storage"' 'version = "0.1.0"' 'edition = "2024"' > "$out/storage/Cargo.toml"
     printf '%s\n' '[package]' 'name = "diagnostic-coverage-runtime"' 'version = "0.1.0"' 'edition = "2024"' > "$out/tools/diagnostic-coverage-runtime/Cargo.toml"
     printf '%s\n' '[package]' 'name = "performance"' 'version = "0.1.0"' 'edition = "2024"' > "$out/tools/performance/Cargo.toml"
     printf '%s\n' '# docs-only optional dependency placeholder' > "$out/common/src/lib.rs"
+    printf '%s\n' '# docs-only optional dependency placeholder' > "$out/host/src/lib.rs"
     printf '%s\n' '# docs-only optional dependency placeholder' > "$out/storage/src/lib.rs"
     printf '%s\n' '# docs-only workspace placeholder' > "$out/tools/diagnostic-coverage-runtime/src/lib.rs"
     printf '%s\n' '# docs-only workspace placeholder' > "$out/tools/performance/src/lib.rs"
@@ -587,6 +602,22 @@ let
       installPhase = ''
         mkdir -p $out/bin
         cp tools/target/release/devtool $out/bin/devtool
+      '';
+      # `installPhase` copies a host-linked executable directly, bypassing
+      # Crane's normal cargo binary install path. Give the full producer an
+      # ELF runtime closure for its native host dependencies.
+      nativeBuildInputs =
+        toolsArgs.nativeBuildInputs
+        ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.patchelf ];
+      postFixup = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+        patchelf --add-rpath \
+          "${
+            pkgs.lib.makeLibraryPath [
+              pkgs.openssl
+              pkgs.dav1d
+            ]
+          }" \
+          "$out/bin/devtool"
       '';
       doNotPostBuildInstallCargoBinaries = true;
     }

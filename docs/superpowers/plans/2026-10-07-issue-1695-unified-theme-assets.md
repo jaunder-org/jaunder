@@ -22,7 +22,7 @@ subsystems or authorization for parallel implementation writers.
 
 ## Task outline
 
-- [ ] Task 1: Establish shared compiled artifact and package contracts.
+- [x] Task 1: Establish shared compiled artifact and package contracts.
   - [x] Extract the shared immutable content-response primitive, preserving
         streamed 200 and conditional 304 behavior; focused checks pass on both
         backends. System and thumbnail consumers will adopt it in task 4.
@@ -36,10 +36,16 @@ subsystems or authorization for parallel implementation writers.
     mutation APIs continue to accept only operator/author-owned catalog inputs.
   - Verification: existing package parser/compiler, public presentation,
     conditional HTTP, and thumbnail tests remain unchanged and green.
-  - [ ] Capture reproducible visual baselines before the first
-        presentation-affecting edit.
+  - [x] Capture reproducible visual baselines before the first
+        presentation-affecting edit. Fourteen Chromium/light-scheme captures at
+        narrow/wide viewports are retained under
+        `/tmp/pi-playwright/issue-1695/` from source `af7d6d80`. `manifest.json`
+        and `image-fit-supplement-manifest.json` record replay conditions, all
+        bundled themes, custom presentation, Home controls, and
+        oversized/small-image geometry. Both focused capture runs passed. These
+        are transient review artifacts, not golden snapshots or Safari evidence.
 
-- [ ] Task 2: Produce bundled packages and application styling artifacts.
+- [x] Task 2: Produce bundled packages and application styling artifacts.
   - Convert Studio, Terminal, and Reader presentation source to portable package
     inputs; compile through the same package boundary used by custom
     publication. Separate private/trusted application styling from scoped public
@@ -60,6 +66,10 @@ subsystems or authorization for parallel implementation writers.
     corresponding addresses. Verify artifact admission and Nix source-closure
     inputs. Normal release derivations cannot select fixture variants; test that
     their inventory excludes qualification CSS.
+  - Evidence: focused producer, archive replay, ordinary/qualification CSR, and
+    CLI-exclusion proofs pass. The staged-source Nix package build passes after
+    correcting the full devtool's native-library RPATH; docs-only tooling builds
+    without the host producer. Runtime consumer adoption remains task 4 work.
 
 - [ ] Task 3: Add atomic system publication to the existing content lifecycle.
   - Add paired SQLite/PostgreSQL migrations and exact storage operations for

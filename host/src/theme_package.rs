@@ -55,6 +55,19 @@ pub struct CompiledThemeContent<'a> {
 }
 
 impl<'a> CompiledThemeContent<'a> {
+    /// Mints trusted system content outside the untrusted Theme Package boundary.
+    ///
+    /// This crate-only door is reserved for the closed application-CSS role:
+    /// callers supply no digest, so MIME, exact bytes, and digest remain coupled
+    /// in the same view used by compiled package content.
+    pub(crate) fn trusted_system(mime: &'static str, bytes: &'a [u8]) -> Self {
+        Self {
+            mime,
+            bytes,
+            digest: Sha256::digest(bytes).into(),
+        }
+    }
+
     #[must_use]
     pub const fn mime(self) -> &'static str {
         self.mime
