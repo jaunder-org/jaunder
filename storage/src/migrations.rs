@@ -881,6 +881,136 @@ main = putStrLn "hello"
         );
     }
 
+    async fn seed_verse_upgrade(db: &MigrationDatabase, backend: Backend) {
+        let user = match backend {
+            Backend::Sqlite => {
+                "INSERT INTO users (user_id, username, password_hash, created_at) VALUES (90, 'verse-author', 'hash', CURRENT_TIMESTAMP)"
+            }
+            Backend::Postgres => {
+                "INSERT INTO users (user_id, username, password_hash, created_at) OVERRIDING SYSTEM VALUE VALUES (90, 'verse-author', 'hash', CURRENT_TIMESTAMP)"
+            }
+        };
+        db.pool.execute(user).await.unwrap();
+        let posts = match backend {
+            Backend::Sqlite => "INSERT INTO posts (post_id, user_id, slug, body, format, rendered_html, created_at, updated_at, published_at, deleted_at) VALUES
+             (91, 90, 'verse-public', '#+begin_verse\nFirst *bold* line.\n  Second line.\n\nLast line.\n#+end_verse', 'org', '<p>stale verse</p>', '2020-01-01T00:00:00Z', '2020-02-01T00:00:00Z', '2020-02-01T00:00:00Z', NULL),
+             (92, 90, 'verse-deleted', '#+begin_verse\nFirst line.\nSecond line.\n#+end_verse', 'org', '<p>stale deleted</p>', '2020-01-01T00:00:00Z', '2020-02-01T00:00:00Z', '2020-02-01T00:00:00Z', '2020-03-01T00:00:00Z'),
+             (93, 90, 'unchanged', '<p>unchanged</p>', 'html', '<p>unchanged</p>', '2020-01-01T00:00:00Z', '2020-02-01T00:00:00Z', '2020-02-01T00:00:00Z', NULL)",
+            Backend::Postgres => "INSERT INTO posts (post_id, user_id, slug, body, format, rendered_html, created_at, updated_at, published_at, deleted_at) OVERRIDING SYSTEM VALUE VALUES
+             (91, 90, 'verse-public', '#+begin_verse\nFirst *bold* line.\n  Second line.\n\nLast line.\n#+end_verse', 'org', '<p>stale verse</p>', '2020-01-01T00:00:00Z', '2020-02-01T00:00:00Z', '2020-02-01T00:00:00Z', NULL),
+             (92, 90, 'verse-deleted', '#+begin_verse\nFirst line.\nSecond line.\n#+end_verse', 'org', '<p>stale deleted</p>', '2020-01-01T00:00:00Z', '2020-02-01T00:00:00Z', '2020-02-01T00:00:00Z', '2020-03-01T00:00:00Z'),
+             (93, 90, 'unchanged', '<p>unchanged</p>', 'html', '<p>unchanged</p>', '2020-01-01T00:00:00Z', '2020-02-01T00:00:00Z', '2020-02-01T00:00:00Z', NULL)",
+        };
+        db.pool.execute(posts).await.unwrap();
+        db.pool.execute(
+            "INSERT INTO post_audiences (post_id, target_kind_id, audience_id)
+             SELECT p.post_id, tk.kind_id, NULL FROM posts p CROSS JOIN target_kinds tk WHERE tk.name = 'public'"
+        ).await.unwrap();
+        db.pool.execute(
+            "INSERT INTO post_revisions (post_id, user_id, slug, body, format, rendered_html, created_at, updated_at, published_at)
+             SELECT post_id, user_id, slug, body, format, rendered_html, created_at, updated_at, published_at FROM posts WHERE post_id = 91"
+        ).await.unwrap();
+        db.pool.execute(
+            "INSERT INTO feed_cache (feed_url, body, etag, content_type, representation_modified_at, generated_at, semantic_fingerprint)
+             VALUES ('/feed.rss', 'stale', 'old-etag', 'application/rss+xml', '2020-02-01T00:00:00Z', '2020-02-01T00:00:00Z', 'old-fingerprint')"
+        ).await.unwrap();
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn migration_0050_rebuilds_verse_after_prior_requests_completed(
+        #[case] backend: Backend,
+    ) {
+        const AUTHORED: &str = "SELECT slug, body, CAST(updated_at AS TEXT), COALESCE(CAST(deleted_at AS TEXT), ''), CAST(mutation_version AS TEXT) FROM posts ORDER BY post_id";
+        const RENDERED: &str = "SELECT rendered_html, '', '', '', '' FROM posts ORDER BY post_id";
+        const HISTORY: &str = "SELECT body, rendered_html, CAST(updated_at AS TEXT), slug, format FROM post_revisions";
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(49).await.unwrap();
+        db.drain_pending_code_migrations().await;
+        seed_verse_upgrade(&db, backend).await;
+        let before = db.pool.string_quintuples(AUTHORED).await.unwrap();
+        let history = db.pool.string_quintuples(HISTORY).await.unwrap();
+        let member_etag = |row: &(String, String, String, String, String)| {
+            host::etag::PostContentEtag {
+                title: None,
+                slug: &row.0.parse().unwrap(),
+                body: &row.1.parse().unwrap(),
+                format: common::render::PostFormat::Org,
+                summary: None,
+                tags: vec![],
+                audiences: vec![common::visibility::AudienceTarget::Public],
+                draft: false,
+            }
+            .etag()
+        };
+        let etag_before = member_etag(&before[0]);
+        db.migrate_to(50).await.unwrap();
+        assert_eq!(db.pool.scalar_i64("SELECT COUNT(*) FROM pending_code_migrations WHERE operation = 'rebuild_rendered_posts'").await.unwrap(), 1);
+        db.drain_pending_code_migrations().await;
+        let after = db.pool.string_quintuples(AUTHORED).await.unwrap();
+        let rendered = db.pool.string_quintuples(RENDERED).await.unwrap();
+        assert_eq!(
+            after, before,
+            "source, slug, edit/deletion times and mutation version remain authored"
+        );
+        assert_eq!(member_etag(&after[0]), etag_before);
+        assert!(
+            rendered[0].0.contains(
+                "First <b>bold</b> line.<br>&nbsp;&nbsp;Second line.<br><br>Last line.<br>"
+            ),
+            "{}",
+            rendered[0].0
+        );
+        assert!(
+            rendered[1].0.contains("First line.<br>Second line.<br>"),
+            "{}",
+            rendered[1].0
+        );
+        assert_eq!(rendered[2].0, "<p>unchanged</p>");
+        assert_eq!(db.pool.string_quintuples(HISTORY).await.unwrap(), history);
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM feed_cache WHERE feed_url = '/feed.rss'")
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM feed_events")
+                .await
+                .unwrap(),
+            6,
+            "only changed public Post invalidates Site and User feeds"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM post_media")
+                .await
+                .unwrap(),
+            0,
+            "text-only verse has no Media references"
+        );
+        db.migrate_current().await.unwrap();
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM pending_code_migrations")
+                .await
+                .unwrap(),
+            0
+        );
+        db.drain_pending_code_migrations().await;
+        assert_eq!(db.pool.string_quintuples(RENDERED).await.unwrap(), rendered);
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM feed_events")
+                .await
+                .unwrap(),
+            6,
+            "reopen does not duplicate feed events"
+        );
+    }
+
     #[apply(backends)]
     #[tokio::test]
     async fn migration_0049_requeues_quality_rebuild_without_restarting_refresh(
@@ -966,7 +1096,7 @@ module Main where
             "older offline rebuilds have already drained"
         );
 
-        db.migrate_current().await.unwrap();
+        db.migrate_to(49).await.unwrap();
         let progress = db
             .pool
             .string_quintuples(
@@ -991,7 +1121,7 @@ module Main where
             ["rebuild_rendered_posts"],
             "an already-completed installation must enqueue exactly one new rebuild"
         );
-        db.migrate_current().await.unwrap();
+        db.migrate_to(49).await.unwrap();
         assert_eq!(
             db.pool
                 .scalar_i64("SELECT COUNT(*) FROM pending_code_migrations")

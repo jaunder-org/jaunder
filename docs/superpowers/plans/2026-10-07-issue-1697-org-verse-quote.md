@@ -29,7 +29,7 @@ production operations, and Theme Package contract changes.
     paragraphs, safe escaping, inert shortcodes, and unchanged prose/literals.
     Use `devtool run -- cargo xtask test-local -- -p host org_` for focused
     proof.
-- [ ] Task 2: Upgrade existing current Post projections on both backends.
+- [x] Task 2: Upgrade existing current Post projections on both backends.
   - Depends on Task 1's corrected renderer. Contract: matching next available
     SQLite/PostgreSQL migrations enqueue `rebuild_rendered_posts`; keep its
     existing atomic queue drain, directory locks, and retry behavior unchanged.
