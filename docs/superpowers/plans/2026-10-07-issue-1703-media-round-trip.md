@@ -36,7 +36,7 @@ server-only or non-Org behavior changes.
     link additions/removals, invalid remote evidence rejection, no redundant
     copy, and unchanged server-only, Markdown/HTML and durable-copy no-overwrite
     behavior. Assert original file bytes remain unchanged on reuse and fallback.
-- [ ] Task 3: Revalidate reuse in matched consumers and demonstrate round-trip.
+- [x] Task 3: Revalidate reuse in matched consumers and demonstrate round-trip.
   - Contract: server-ahead and keep-remote revalidate originals and finalize any
     verified fallback before replacing the Post. Re-run existing local Post
     preflight after any fallback work that can invalidate its safety snapshot.

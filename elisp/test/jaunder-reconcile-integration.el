@@ -240,6 +240,341 @@ When DRAFT is non-nil, create a draft Member."
          (kill-buffer buffer))
        (delete-directory root t)))))
 
+(defun jaunder-reconcile-live--put-member (id title body)
+  "Replace live Member ID with TITLE and native Org BODY."
+  (let* ((url (jaunder--member-url id))
+         (before (jaunder--http-request "GET" url))
+         (response (jaunder--http-request
+                    "PUT" url
+                    (jaunder--atom-entry->xml
+                     (jaunder--make-entry :title title :draft t
+                                          :content-type "text/org" :body body))
+                    "application/atom+xml"
+                    (list (cons "If-Match" (jaunder--response-header before "ETag"))))))
+    (should (eq (plist-get response :status) 200))
+    response))
+
+(ert-deftest jaunder-reconcile-live-matched-media-reuse-round-trips-every-consumer ()
+  "Live server-ahead, keep-remote, and merge staging retain verified Media."
+  (jaunder-test--with-live-server
+   (let* ((root (file-name-as-directory (make-temp-file "jaunder-reuse-live-" t)))
+          (assets (expand-file-name "assets" root))
+          (original (expand-file-name "π-image.png" assets))
+          (original-spelling "file:assets/π-image.png")
+          (bytes (string-as-unibyte "live verified media bytes"))
+          (jaunder-blogs (list (cons root (list :base-url jaunder-test-base-url
+                                                :username jaunder-test-username))))
+          path local id url scratch)
+     (unwind-protect
+         (jaunder--call-with-blog
+          root
+          (lambda ()
+            (make-directory assets)
+            (with-temp-file original (set-buffer-multibyte nil) (insert bytes))
+            (setq url (jaunder--upload-media original "image/png"))
+            (setq path (jaunder-reconcile-live--write-local
+                        root "initial.org" "Initial media"))
+            (setq local (find-file-noselect path))
+            (with-current-buffer local
+              (goto-char (point-max))
+              (insert (format "[[%s#authored-fragment][authored label]]\n" original-spelling))
+              (jaunder-publish)
+              (save-buffer)
+              (setq id (jaunder--buffer-property "JAUNDER_ID")
+                    path (buffer-file-name)))
+            ;; The remote body supplies the label and fragment to combine with local spelling.
+            (jaunder-reconcile-live--put-member
+             id "Initial media" (format "Remote server-ahead text.\n[[%s#remote-fragment][遠隔 label]]\n" url))
+            (let ((outcome (jaunder-reconcile-live--run-selected
+                            root (list (format "post:%s" id))
+                            #'jaunder-reconcile-pull-selected)))
+              (let ((result (car (plist-get outcome :results))))
+                (should (eq (jaunder-reconcile-result-outcome result) 'success))))
+            (when (buffer-live-p local)
+              (with-current-buffer local (set-buffer-modified-p nil))
+              (kill-buffer local))
+            (setq path (car (directory-files root t "\\.org\\'"))
+                  local (find-file-noselect path))
+            (let ((installed (with-temp-buffer
+                               (insert-file-contents-literally path) (buffer-string))))
+              (should (string-match-p
+                       (regexp-quote "[[file:assets/π-image.png#remote-fragment][遠隔 label]]")
+                       (decode-coding-string installed 'utf-8-unix)))
+              (should (string-match-p "Remote server-ahead text" installed)))
+            (should (equal (jaunder--pull-media-read-bytes original) bytes))
+            (should-not (file-exists-p (expand-file-name "local-media" root)))
+            ;; A conflict's keep-remote path performs the same final reuse.
+            (with-current-buffer local (goto-char (point-max)) (insert "Local edit.\n") (save-buffer))
+            (set-file-times path (time-add (current-time) (seconds-to-time 5)))
+            (jaunder-reconcile-live--put-member
+             id "Initial media" (format "Remote keep text.\n[[%s#keep-fragment][keep label]]\n" url))
+            (let ((outcome (jaunder-reconcile-live--run-selected
+                            root (list (format "post:%s" id))
+                            #'jaunder-reconcile-keep-remote-selected)))
+              (let ((result (car (plist-get outcome :results))))
+                (should (eq (jaunder-reconcile-result-outcome result) 'success))))
+            (with-current-buffer local
+              (should (string-match-p
+                       (regexp-quote "[[file:assets/π-image.png#keep-fragment][keep label]]")
+                       (buffer-string))))
+            (should-not (file-exists-p (expand-file-name "local-media" root)))
+            ;; Merge localizes only its initial remote staging; the explicit result
+            ;; remains ordinary authored content through completion.
+            (with-current-buffer local (goto-char (point-max)) (insert "Second local edit.\n") (save-buffer))
+            (set-file-times path (time-add (current-time) (seconds-to-time 5)))
+            (jaunder-reconcile-live--put-member
+             id "Initial media" (format "Remote merge text.\n[[%s#merge-fragment][merge label]]\n" url))
+            (jaunder-reconcile root)
+            (with-current-buffer "*Jaunder Reconcile*"
+              (puthash (format "post:%s" id) t jaunder-reconcile-marks)
+              (cl-letf (((symbol-function 'ediff-merge-buffers)
+                         (lambda (a b &optional startup _job _file)
+                           (should (string-match-p
+                                    (regexp-quote "[[file:assets/π-image.png#merge-fragment][merge label]]")
+                                    (with-current-buffer b (buffer-string))))
+                           (let ((output (generate-new-buffer " *Live media merge*")))
+                             (with-current-buffer output (insert "Explicit merge result.\n"))
+                             (with-temp-buffer
+                               (setq-local ediff-buffer-C output)
+                               (dolist (hook startup) (funcall hook))
+                               (run-hooks 'ediff-quit-hook))))))
+                (setq scratch (jaunder-reconcile-merge-selected)))
+              (with-current-buffer scratch
+                (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
+                  (jaunder-reconcile-merge-finish)))
+              (should (eq (jaunder-reconcile-result-outcome
+                           (car jaunder-reconcile-last-batch-results)) 'success)))
+            (should-not (file-exists-p (expand-file-name "local-media" root)))
+            (should (equal (jaunder--pull-media-read-bytes original) bytes))))
+       (when (buffer-live-p scratch) (with-current-buffer scratch (set-buffer-modified-p nil))
+             (kill-buffer scratch))
+       (when (buffer-live-p local) (with-current-buffer local (set-buffer-modified-p nil))
+             (kill-buffer local))
+       (delete-directory root t)))))
+
+(defun jaunder-reconcile-live--late-original-fallback (consumer)
+  "Prove CONSUMER installs retained Media after an original changes late."
+  (jaunder-test--with-live-server
+   (let* ((root (file-name-as-directory (make-temp-file "jaunder-late-reuse-" t)))
+          (assets (expand-file-name "assets" root))
+          (original (expand-file-name "original.png" assets))
+          (added (expand-file-name "added.png" assets))
+          (verified (string-as-unibyte "verified original bytes"))
+          (added-bytes (string-as-unibyte "ordinary fallback bytes"))
+          (hash (secure-hash 'sha256 verified))
+          (jaunder-blogs (list (cons root (list :base-url jaunder-test-base-url
+                                                :username jaunder-test-username))))
+          id path local original-url added-url requests mutated)
+     (unwind-protect
+         (jaunder--call-with-blog
+          root
+          (lambda ()
+            (make-directory assets)
+            (with-temp-file original (set-buffer-multibyte nil) (insert verified))
+            (with-temp-file added (set-buffer-multibyte nil) (insert added-bytes))
+            (setq original-url (jaunder--upload-media original "image/png")
+                  added-url (jaunder--upload-media added "image/png")
+                  path (jaunder-reconcile-live--write-local root "late.org" "Late media")
+                  local (find-file-noselect path))
+            (with-current-buffer local
+              (goto-char (point-max))
+              (insert "[[file:assets/original.png][original]]\n")
+              (jaunder-publish) (save-buffer)
+              (setq id (jaunder--buffer-property "JAUNDER_ID")
+                    path (buffer-file-name))
+              (when (eq consumer #'jaunder-reconcile-keep-remote-selected)
+                (goto-char (point-max)) (insert "Local conflict edit.\n") (save-buffer)))
+            (when (eq consumer #'jaunder-reconcile-keep-remote-selected)
+              (set-file-times path (time-add (current-time) (seconds-to-time 5))))
+            (jaunder-reconcile-live--put-member
+             id "Late media"
+             (format "[[%s#remote][remote original]]\n[[%s][ordinary addition]]\n"
+                     original-url added-url))
+            (let ((real-finalize (symbol-function 'jaunder--pull-media-finalize-staged))
+                  (real-get (symbol-function 'jaunder--pull-media-get)))
+              (cl-letf (((symbol-function 'jaunder--pull-media-get)
+                         (lambda (url destination)
+                           (push url requests)
+                           (funcall real-get url destination)))
+                        ((symbol-function 'jaunder--pull-media-finalize-staged)
+                         (lambda (stage-root staged)
+                           (prog1 (funcall real-finalize stage-root staged)
+                             ;; The first finalization owns the ordinary added Media.
+                             (unless mutated
+                               (setq mutated t)
+                               (with-temp-file original (insert "changed after staging")))))))
+                (let ((outcome (jaunder-reconcile-live--run-selected
+                                root (list (format "post:%s" id))
+                                consumer)))
+                  (should (eq (jaunder-reconcile-result-outcome
+                               (car (plist-get outcome :results))) 'success)))))
+            (should mutated)
+            (should (= (length requests) 2))
+            (should (equal (jaunder--pull-media-read-bytes original)
+                           (string-as-unibyte "changed after staging")))
+            (setq path (car (directory-files root t "\\.org\\'")))
+            (let ((installed (with-temp-buffer
+                               (insert-file-contents-literally path) (buffer-string))))
+              (should-not (string-match-p "file:assets/original.png" installed))
+              (should (string-match-p
+                       (regexp-quote (format "file:local-media/%s/original.png#remote" hash))
+                       installed)))
+            (should (equal (jaunder--pull-media-read-bytes
+                            (expand-file-name (format "local-media/%s/original.png" hash) root))
+                           verified))))
+       (when (buffer-live-p local) (with-current-buffer local (set-buffer-modified-p nil))
+             (kill-buffer local))
+       (delete-directory root t)))))
+
+(ert-deftest jaunder-reconcile-live-late-original-falls-back-after-ordinary-media-install ()
+  "Server-ahead pull rechecks the original after ordinary fallback work."
+  (jaunder-reconcile-live--late-original-fallback #'jaunder-reconcile-pull-selected))
+
+(ert-deftest jaunder-reconcile-live-keep-remote-late-original-falls-back-after-ordinary-media-install ()
+  "Keep-remote rechecks the original after ordinary fallback work."
+  (jaunder-reconcile-live--late-original-fallback #'jaunder-reconcile-keep-remote-selected))
+
+(ert-deftest jaunder-reconcile-live-original-reuse-slug-collision-preserves-post ()
+  "A canonical slug collision blocks a real reused-Media matched Post unchanged."
+  (jaunder-test--with-live-server
+   (let* ((root (file-name-as-directory (make-temp-file "jaunder-reuse-collision-" t)))
+          (assets (expand-file-name "assets" root))
+          (original (expand-file-name "original.png" assets))
+          (bytes (string-as-unibyte "collision verified bytes"))
+          (jaunder-blogs (list (cons root (list :base-url jaunder-test-base-url
+                                                :username jaunder-test-username))))
+          id path local url before collision)
+     (unwind-protect
+         (jaunder--call-with-blog
+          root
+          (lambda ()
+            (make-directory assets)
+            (with-temp-file original (set-buffer-multibyte nil) (insert bytes))
+            (setq url (jaunder--upload-media original "image/png")
+                  path (jaunder-reconcile-live--write-local root "before.org" "Before slug")
+                  local (find-file-noselect path))
+            (with-current-buffer local
+              (goto-char (point-max))
+              (insert "[[file:assets/original.png][original]]\n")
+              (jaunder-save-draft) (save-buffer)
+              (setq id (jaunder--buffer-property "JAUNDER_ID")
+                    path (buffer-file-name)))
+            (setq before (with-temp-buffer (insert-file-contents-literally path) (buffer-string))
+                  collision (expand-file-name "collision-after-slug.org" root))
+            (with-temp-file collision (insert "occupied destination"))
+            ;; Draft titles remain slug-mutable, so this is a real canonical rename.
+            (jaunder-reconcile-live--put-member
+             id "Collision after slug" (format "[[%s#remote][remote original]]\n" url))
+            (let ((outcome (jaunder-reconcile-live--run-selected
+                            root (list (format "post:%s" id))
+                            #'jaunder-reconcile-pull-selected)))
+              (let ((result (car (plist-get outcome :results))))
+                (should (eq (jaunder-reconcile-result-outcome result) 'blocked))
+                (should (eq (jaunder-reconcile-result-reason result) 'pull-destination-occupied))))
+            (should (equal (with-temp-buffer (insert-file-contents-literally path) (buffer-string))
+                           before))
+            (should (equal (jaunder--pull-media-read-bytes original) bytes))
+            (should (equal (with-temp-buffer (insert-file-contents-literally collision) (buffer-string))
+                           "occupied destination"))
+            (should-not (file-exists-p (expand-file-name "local-media" root)))))
+       (when (buffer-live-p local) (with-current-buffer local (set-buffer-modified-p nil))
+             (kill-buffer local))
+       (delete-directory root t)))))
+
+(ert-deftest jaunder-reconcile-live-original-reuse-survives-canonical-slug-rename ()
+  "A slug-mutable draft rename retains its exact original Media destination."
+  (jaunder-test--with-live-server
+   (let* ((root (file-name-as-directory (make-temp-file "jaunder-reuse-rename-" t)))
+          (assets (expand-file-name "assets" root))
+          (original (expand-file-name "original.png" assets))
+          (bytes (string-as-unibyte "rename verified bytes"))
+          (jaunder-blogs (list (cons root (list :base-url jaunder-test-base-url
+                                                :username jaunder-test-username))))
+          id path local url)
+     (unwind-protect
+         (jaunder--call-with-blog
+          root
+          (lambda ()
+            (make-directory assets)
+            (with-temp-file original (set-buffer-multibyte nil) (insert bytes))
+            (setq url (jaunder--upload-media original "image/png")
+                  path (jaunder-reconcile-live--write-local root "before.org" "Before slug")
+                  local (find-file-noselect path))
+            (with-current-buffer local
+              (goto-char (point-max))
+              (insert "[[file:assets/original.png][original]]\n")
+              (jaunder-save-draft) (save-buffer)
+              (setq id (jaunder--buffer-property "JAUNDER_ID")))
+            (jaunder-reconcile-live--put-member
+             id "After slug" (format "[[%s#remote][remote original]]\n" url))
+            (let ((outcome (jaunder-reconcile-live--run-selected
+                            root (list (format "post:%s" id))
+                            #'jaunder-reconcile-pull-selected)))
+              (let ((result (car (plist-get outcome :results))))
+                (should (eq (jaunder-reconcile-result-outcome result) 'success))
+                (should (eq (jaunder-reconcile-result-local-effect result) 'renamed))))
+            (setq path (expand-file-name "after-slug.org" root))
+            (should (file-exists-p path))
+            (should (string-match-p "\\[\\[file:assets/original.png#remote\\]\\[remote original\\]\\]"
+                                    (with-temp-buffer (insert-file-contents path) (buffer-string))))
+            (should (equal (jaunder--pull-media-read-bytes original) bytes))
+            (should-not (file-exists-p (expand-file-name "local-media" root)))))
+       (when (buffer-live-p local) (with-current-buffer local (set-buffer-modified-p nil))
+             (kill-buffer local))
+       (delete-directory root t)))))
+
+(ert-deftest jaunder-reconcile-live-original-reuse-blocks-remote-drift-during-staging ()
+  "Verified original Media cannot authorize replacing a stale reviewed Member."
+  (jaunder-test--with-live-server
+   (let* ((root (file-name-as-directory (make-temp-file "jaunder-reuse-etag-" t)))
+          (original (expand-file-name "original.png" root))
+          (bytes (string-as-unibyte "etag verified media bytes"))
+          (jaunder-blogs (list (cons root (list :base-url jaunder-test-base-url
+                                                :username jaunder-test-username))))
+          id path local url before drifted)
+     (unwind-protect
+         (jaunder--call-with-blog
+          root
+          (lambda ()
+            (with-temp-file original (set-buffer-multibyte nil) (insert bytes))
+            (setq url (jaunder--upload-media original "image/png")
+                  path (jaunder-reconcile-live--write-local root "etag.org" "ETag media")
+                  local (find-file-noselect path))
+            (with-current-buffer local
+              (goto-char (point-max))
+              (insert "[[file:original.png][original]]\n")
+              (jaunder-save-draft) (save-buffer)
+              (setq id (jaunder--buffer-property "JAUNDER_ID")
+                    path (buffer-file-name)))
+            (setq before (jaunder--pull-media-read-bytes path))
+            (jaunder-reconcile-live--put-member
+             id "ETag media" (format "Reviewed remote.\n[[%s][remote]]\n" url))
+            (let ((real-get (symbol-function 'jaunder--pull-media-get)))
+              (cl-letf (((symbol-function 'jaunder--pull-media-get)
+                         (lambda (media-url destination)
+                           (prog1 (funcall real-get media-url destination)
+                             ;; A real remote edit lands after the reviewed Member
+                             ;; was fetched but before its final ETag revalidation.
+                             (unless drifted
+                               (setq drifted t)
+                               (jaunder-reconcile-live--put-member
+                                id "ETag media"
+                                (format "New remote.\n[[%s][new remote]]\n" url)))))))
+                (let* ((outcome (jaunder-reconcile-live--run-selected
+                                 root (list (format "post:%s" id))
+                                 #'jaunder-reconcile-pull-selected))
+                       (result (car (plist-get outcome :results))))
+                  (should drifted)
+                  (should (eq (jaunder-reconcile-result-outcome result) 'blocked))
+                  (should (eq (jaunder-reconcile-result-reason result) 'etag-stale)))))
+            (should (equal (jaunder--pull-media-read-bytes path) before))
+            (should (equal (jaunder--pull-media-read-bytes original) bytes))
+            (should-not (file-exists-p (expand-file-name "local-media" root)))))
+       (when (buffer-live-p local)
+         (with-current-buffer local (set-buffer-modified-p nil))
+         (kill-buffer local))
+       (delete-directory root t)))))
+
 (ert-deftest jaunder-reconcile-live-keep-remote-blocks-drift-then-accepts-reviewed-post ()
   "A later remote edit blocks; refreshing permits a confirmed remote choice."
   (jaunder-test--with-live-server
