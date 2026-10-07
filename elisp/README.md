@@ -67,6 +67,22 @@ steps in `cargo xtask check` and `cargo xtask validate` — both via
 `devtool check` — and, through the same implementation, as part of the
 `static-checks` Nix check (so `nix flake check` covers them too).
 
+## Diagnostics
+
+Set `jaunder-debug` to non-nil before an operation to retain bounded, safe
+operation timing in `*Jaunder Debug*`. The buffer is never displayed
+automatically and contains only the diagnostic field vocabulary; do not use it
+to capture request data, paths, URLs, credentials, or Post content. Use
+`M-x jaunder-debug-show` to inspect it, `M-x jaunder-debug-clear` to remove
+retained events, and `M-x jaunder-debug-disable` to stop future capture without
+erasing evidence. The buffer retains its 10,000 newest complete event lines and
+one cumulative eviction marker, is read-only, and `q` buries it. Killing it
+discards its retained evidence; the next enabled event recreates it.
+
+Diagnostics are client-local, unsaved troubleshooting evidence. Share only after
+reviewing it. They time client boundaries but do not remove the
+per-selected-Post complete Collection verification cost during pull.
+
 ## Post audience metadata
 
 An Org Post may declare its explicit audience with repeated file properties:

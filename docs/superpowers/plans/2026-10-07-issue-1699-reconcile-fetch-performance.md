@@ -27,7 +27,7 @@ backend behavior changes; use existing live Emacs fixtures for consumer proof.
     Exercise valid links, duplicates/ambiguity, stale/missing/out-of-root files,
     partial inventories and exact byte preservation. Upgrade the actual selected
     pull fixture's public permalink evidence without changing request counts.
-- [ ] **2. Deliver the diagnostic core and user controls.**
+- [x] **2. Deliver the diagnostic core and user controls.**
   - Contract: `elisp/jaunder-debug.el` owns the option `jaunder-debug` (off),
     `jaunder-debug-show`, `jaunder-debug-clear`, `jaunder-debug-disable`,
     operation context, field validation/encoding, and bounded read-only buffer.
@@ -38,7 +38,8 @@ backend behavior changes; use existing live Emacs fixtures for consumer proof.
     `jaunder--debug-fields` form adds final status/count/decision fields to that
     span. All field expressions and diagnostics bypass execution when disabled.
     These are the only event-writing routes; callers never format raw values.
-  - Verification: `elisp/test/jaunder-debug-test.el` covers disabled sentinels,
+  - Verification: `elisp/test/jaunder-debug-test.el` and
+    `elisp/test/jaunder-debug-acceptance-test.el` cover disabled sentinels,
     every spec allowlist/range, event size/ASCII limits, nesting/standalone
     roots, return/signal/quit preservation, buffer lifecycle, clear without
     creation, fresh IDs after clear, eviction-marker accounting, and

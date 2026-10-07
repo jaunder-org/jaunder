@@ -28,6 +28,7 @@
 ;;; Code:
 
 (require 'jaunder-entry)
+(require 'jaunder-debug)
 (require 'jaunder-config)
 (require 'jaunder-warn)
 (require 'jaunder-datetime)

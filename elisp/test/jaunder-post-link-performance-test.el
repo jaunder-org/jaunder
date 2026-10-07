@@ -13,8 +13,8 @@
 (require 'cl-lib)
 (require 'jaunder)
 
-(ert-deftest jaunder-pulled-post-links-bound-filesystem-proof-at-blog-scale ()
-  "Public Members join local identity before filesystem proof at blog scale."
+(ert-deftest jaunder-pulled-post-links-bound-filesystem-proof-at-inventory-scale ()
+  "Public Members join local identity before filesystem proof at inventory scale."
   (dolist (count '(100 1000))
     (let* ((root (make-temp-file "jaunder-link-scale-" t))
            (jaunder-blogs
