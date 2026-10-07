@@ -22,6 +22,7 @@
 (require 'org)
 (require 'org-element)
 (require 'jaunder-warn)
+(require 'jaunder-debug)
 (require 'jaunder-org)
 
 (cl-defstruct (jaunder-pull-media-original-destination
@@ -952,56 +953,58 @@ Quoted attribute values may contain `>'; only an unquoted delimiter ends a tag."
 
 (defun jaunder--pull-media-plan (format body origin)
   "Return a pure localization plan for FORMAT BODY at configured ORIGIN."
-  (unless (member format '("org" "markdown" "html"))
-    (error "jaunder pull media: unsupported format %S" format))
-  (let ((table (make-hash-table :test #'equal)))
-    (pcase format
-      ("org" (jaunder--pull-media-org-candidates table format origin body))
-      ("markdown" (jaunder--pull-media-markdown-candidates table format origin body))
-      ("html" (jaunder--pull-media-html-candidates table format origin body)))
-    (let (references)
-      (maphash
-       (lambda (url value)
-         (push (jaunder--make-pull-media-reference
-                :url url :hash (nth 0 value) :leaf (nth 1 value)
-                :target (nth 2 value) :replacements (nreverse (nth 3 value)))
-               references))
-       table)
-      (jaunder--make-pull-media-plan :format format :body body
-                                     :references (sort references
-                                                       (lambda (a b)
-                                                         (string-lessp
-                                                          (jaunder-pull-media-reference-url a)
-                                                          (jaunder-pull-media-reference-url b))))))))
+  (jaunder--with-debug-operation "media.plan" ()
+                                 (unless (member format '("org" "markdown" "html"))
+                                   (error "jaunder pull media: unsupported format %S" format))
+                                 (let ((table (make-hash-table :test #'equal)))
+                                   (pcase format
+                                     ("org" (jaunder--pull-media-org-candidates table format origin body))
+                                     ("markdown" (jaunder--pull-media-markdown-candidates table format origin body))
+                                     ("html" (jaunder--pull-media-html-candidates table format origin body)))
+                                   (let (references)
+                                     (maphash
+                                      (lambda (url value)
+                                        (push (jaunder--make-pull-media-reference
+                                               :url url :hash (nth 0 value) :leaf (nth 1 value)
+                                               :target (nth 2 value) :replacements (nreverse (nth 3 value)))
+                                              references))
+                                      table)
+                                     (jaunder--make-pull-media-plan :format format :body body
+                                                                    :references (sort references
+                                                                                      (lambda (a b)
+                                                                                        (string-lessp
+                                                                                         (jaunder-pull-media-reference-url a)
+                                                                                         (jaunder-pull-media-reference-url b)))))))))
 
 (defun jaunder--pull-media-apply-plan (plan)
   "Apply PLAN's replacements in one source-order pass without altering other bytes."
-  (let ((replacements
-         (sort (cl-mapcan
-                (lambda (reference)
-                  (mapcar
-                   (lambda (replacement)
-                     (let ((target
-                            (concat
-                             (jaunder-pull-media-reference-target reference)
-                             (or (nth 2 replacement) ""))))
-                       (list
-                        (nth 0 replacement) (nth 1 replacement)
-                        (if-let* ((label (nth 3 replacement)))
-                            (format "[%s](%s)" label target)
-                          target))))
-                   (jaunder-pull-media-reference-replacements reference)))
-                (jaunder-pull-media-plan-references plan))
-               (lambda (a b) (< (car a) (car b)))))
-        (body (jaunder-pull-media-plan-body plan))
-        (position 0)
-        pieces)
-    (dolist (replacement replacements)
-      (push (substring body position (nth 0 replacement)) pieces)
-      (push (nth 2 replacement) pieces)
-      (setq position (nth 1 replacement)))
-    (push (substring body position) pieces)
-    (apply #'concat (nreverse pieces))))
+  (jaunder--with-debug-operation "media.apply" ()
+                                 (let ((replacements
+                                        (sort (cl-mapcan
+                                               (lambda (reference)
+                                                 (mapcar
+                                                  (lambda (replacement)
+                                                    (let ((target
+                                                           (concat
+                                                            (jaunder-pull-media-reference-target reference)
+                                                            (or (nth 2 replacement) ""))))
+                                                      (list
+                                                       (nth 0 replacement) (nth 1 replacement)
+                                                       (if-let* ((label (nth 3 replacement)))
+                                                           (format "[%s](%s)" label target)
+                                                         target))))
+                                                  (jaunder-pull-media-reference-replacements reference)))
+                                               (jaunder-pull-media-plan-references plan))
+                                              (lambda (a b) (< (car a) (car b)))))
+                                       (body (jaunder-pull-media-plan-body plan))
+                                       (position 0)
+                                       pieces)
+                                   (dolist (replacement replacements)
+                                     (push (substring body position (nth 0 replacement)) pieces)
+                                     (push (nth 2 replacement) pieces)
+                                     (setq position (nth 1 replacement)))
+                                   (push (substring body position) pieces)
+                                   (apply #'concat (nreverse pieces)))))
 
 (defconst jaunder--pull-media-instance-id-regexp
   "\\`[0-9a-f]\\{8\\}-[0-9a-f]\\{4\\}-[0-9a-f]\\{4\\}-[0-9a-f]\\{4\\}-[0-9a-f]\\{12\\}\\'")
@@ -1026,29 +1029,30 @@ The pinned plz 0.9.1 API cannot combine a file response with parsed headers, so
 this requests an un-decoded response and writes its body with no coding
 conversion.  Binding curl's default arguments removes its redirect option:
 public media identity and URL hash are valid only for the direct response."
-  (unless (and (stringp destination)
-               (file-exists-p destination)
-               (not (file-symlink-p destination))
-               (file-regular-p destination))
-    (error "jaunder pull media: temporary destination is not a regular file: %S" destination))
-  (let ((plz-curl-default-args
-         (jaunder--bounded-read-curl-args
-          (delete "--location" (copy-sequence plz-curl-default-args)))))
-    (condition-case err
-        (let ((response (plz 'get url :as 'response :decode nil
-                             :connect-timeout jaunder--http-connect-timeout-seconds)))
-          (jaunder--pull-media-write-bytes (plz-response-body response) destination)
-          (list :status (plz-response-status response)
-                :headers (plz-response-headers response)))
-      (plz-error
-       (let* ((plz-error (seq-find #'plz-error-p (cdr err)))
-              (response (and plz-error (plz-error-response plz-error))))
-         (if response
-             (progn
-               (jaunder--pull-media-write-bytes (plz-response-body response) destination)
-               (list :status (plz-response-status response)
-                     :headers (plz-response-headers response)))
-           (signal (car err) (cdr err))))))))
+  (jaunder--with-debug-operation "media.download" ()
+                                 (unless (and (stringp destination)
+                                              (file-exists-p destination)
+                                              (not (file-symlink-p destination))
+                                              (file-regular-p destination))
+                                   (error "jaunder pull media: temporary destination is not a regular file: %S" destination))
+                                 (let ((plz-curl-default-args
+                                        (jaunder--bounded-read-curl-args
+                                         (delete "--location" (copy-sequence plz-curl-default-args)))))
+                                   (condition-case err
+                                       (let ((response (plz 'get url :as 'response :decode nil
+                                                            :connect-timeout jaunder--http-connect-timeout-seconds)))
+                                         (jaunder--pull-media-write-bytes (plz-response-body response) destination)
+                                         (list :status (plz-response-status response)
+                                               :headers (plz-response-headers response)))
+                                     (plz-error
+                                      (let* ((plz-error (seq-find #'plz-error-p (cdr err)))
+                                             (response (and plz-error (plz-error-response plz-error))))
+                                        (if response
+                                            (progn
+                                              (jaunder--pull-media-write-bytes (plz-response-body response) destination)
+                                              (list :status (plz-response-status response)
+                                                    :headers (plz-response-headers response)))
+                                          (signal (car err) (cdr err)))))))))
 
 (defun jaunder--pull-media-ensure-directory (directory)
   "Return DIRECTORY after refusing symlinks and non-directory components."
@@ -1083,21 +1087,23 @@ This only validates and constructs the path; unlike
 
 (defun jaunder--pull-media-target-path (root hash leaf)
   "Return ROOT's safe Local Media Copy path for HASH and decoded LEAF."
-  (let* ((target (jaunder--pull-media-fallback-path root hash leaf))
-         (digest (directory-file-name (file-name-directory target)))
-         (media (directory-file-name (file-name-directory digest)))
-         (root (directory-file-name (file-name-directory media))))
-    (jaunder--pull-media-ensure-directory root)
-    (jaunder--pull-media-ensure-directory media)
-    (jaunder--pull-media-ensure-directory digest)
-    target))
+  (jaunder--with-debug-operation "media.path" ()
+				 (let* ((target (jaunder--pull-media-fallback-path root hash leaf))
+					(digest (directory-file-name (file-name-directory target)))
+					(media (directory-file-name (file-name-directory digest)))
+					(root (directory-file-name (file-name-directory media))))
+				   (jaunder--pull-media-ensure-directory root)
+				   (jaunder--pull-media-ensure-directory media)
+				   (jaunder--pull-media-ensure-directory digest)
+				   target)))
 
 (defun jaunder--pull-media-file-sha256 (path)
   "Return SHA-256 of PATH's literal bytes without decoding its contents."
-  (with-temp-buffer
-    (set-buffer-multibyte nil)
-    (insert-file-contents-literally path)
-    (secure-hash 'sha256 (current-buffer))))
+  (jaunder--with-debug-operation "media.hash" ()
+                                 (with-temp-buffer
+                                   (set-buffer-multibyte nil)
+                                   (insert-file-contents-literally path)
+                                   (secure-hash 'sha256 (current-buffer)))))
 
 (defun jaunder--pull-media-verified-file-p (path hash)
   "Return non-nil when PATH is a regular file with SHA-256 HASH."
@@ -1107,28 +1113,30 @@ This only validates and constructs the path; unlike
 
 (defun jaunder--pull-media-require-existing-copy (path hash)
   "Verify existing PATH has HASH, rejecting every unsafe or corrupt reuse."
-  (unless (jaunder--pull-media-verified-file-p path hash)
-    (error "jaunder pull media: existing copy is unsafe or corrupt: %s" path)))
+  (jaunder--with-debug-operation "media.verify" ()
+                                 (unless (jaunder--pull-media-verified-file-p path hash)
+                                   (error "jaunder pull media: existing copy is unsafe or corrupt: %s" path))))
 
 (defun jaunder--pull-media-validate-response (response instance-id hash temporary)
   "Validate RESPONSE and TEMPORARY against INSTANCE-ID and planned HASH."
-  (unless (= (plist-get response :status) 200)
-    (error "jaunder pull media: expected direct 200, got %S"
-           (plist-get response :status)))
-  (let ((case-fold-search nil)
-        (instances (jaunder--pull-media-header-values response "x-jaunder-instance"))
-        (etags (jaunder--pull-media-header-values response "etag")))
-    (unless (and (= (length instances) 1)
-                 (string-match-p jaunder--pull-media-instance-id-regexp (car instances))
-                 (equal (car instances) instance-id))
-      (error "jaunder pull media: media response has invalid instance identity"))
-    (unless (and (= (length etags) 1)
-                 (string-match
-                  (concat "\\`\"sha256-" "\\([0-9a-f]\\{64\\}\\)" "\"\\'") (car etags))
-                 (equal (match-string 1 (car etags)) hash))
-      (error "jaunder pull media: media response ETag disagrees with URL hash")))
-  (unless (equal (jaunder--pull-media-file-sha256 temporary) hash)
-    (error "jaunder pull media: downloaded bytes disagree with URL hash")))
+  (jaunder--with-debug-operation "media.verify" ()
+                                 (unless (= (plist-get response :status) 200)
+                                   (error "jaunder pull media: expected direct 200, got %S"
+                                          (plist-get response :status)))
+                                 (let ((case-fold-search nil)
+                                       (instances (jaunder--pull-media-header-values response "x-jaunder-instance"))
+                                       (etags (jaunder--pull-media-header-values response "etag")))
+                                   (unless (and (= (length instances) 1)
+                                                (string-match-p jaunder--pull-media-instance-id-regexp (car instances))
+                                                (equal (car instances) instance-id))
+                                     (error "jaunder pull media: media response has invalid instance identity"))
+                                   (unless (and (= (length etags) 1)
+                                                (string-match
+                                                 (concat "\\`\"sha256-" "\\([0-9a-f]\\{64\\}\\)" "\"\\'") (car etags))
+                                                (equal (match-string 1 (car etags)) hash))
+                                     (error "jaunder pull media: media response ETag disagrees with URL hash")))
+                                 (unless (equal (jaunder--pull-media-file-sha256 temporary) hash)
+                                   (error "jaunder pull media: downloaded bytes disagree with URL hash"))))
 
 (defun jaunder--pull-media-temporary-path (target)
   "Create and retain an exclusive same-filesystem staging file beside TARGET."
@@ -1311,13 +1319,14 @@ Successful reuse has no ordinary fallback and therefore creates no redundant
           nil)
       (dolist (copy temporaries)
         (jaunder--pull-media-clean-temporary (car copy))))))
-
 (defun jaunder--pull-media-materialize (root instance-id plan)
   "Materialize PLAN's verified Local Media Copies under configured ROOT.
 Ordinary callers retain durable-copy behavior; matched callers use staging to
 carry original-reuse evidence until their final installation boundary."
-  (jaunder--pull-media-finalize-staged
-   root (jaunder--pull-media-stage root instance-id plan)))
+  (jaunder--with-debug-operation
+   "media.materialize" (count (length (jaunder-pull-media-plan-references plan)))
+   (jaunder--pull-media-finalize-staged
+    root (jaunder--pull-media-stage root instance-id plan))))
 
 (provide 'jaunder-pull-media)
 ;;; jaunder-pull-media.el ends here

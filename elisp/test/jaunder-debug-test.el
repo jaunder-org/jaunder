@@ -2,6 +2,10 @@
 
 ;; Copyright (C) 2026 Jaunder contributors
 
+;;; Commentary:
+;; Isolated core contract proofs for lazy disabled diagnostics, safe field/event
+;; validation, bounded retention, operation correlation, and failure isolation.
+
 ;;; Code:
 
 (require 'ert)
