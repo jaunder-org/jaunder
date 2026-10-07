@@ -16,7 +16,6 @@ use tokio::fs;
 use tokio_util::io::ReaderStream;
 use web::error::InternalError;
 
-const CACHE_CONTROL: HeaderValue = HeaderValue::from_static("public, max-age=31536000, immutable");
 const NOSNIFF: HeaderValue = HeaderValue::from_static("nosniff");
 
 /// Registers immutable public custom-theme content routes.
@@ -120,11 +119,12 @@ async fn serve(
 
     let etag = theme_etag(&digest)?;
     if crate::feed::conditional::if_none_match_matches(&request_headers, etag.as_ref().as_bytes()) {
-        return response(
+        return crate::immutable_content::response(
             StatusCode::NOT_MODIFIED,
             Body::empty(),
             &eligibility.mime,
             &etag,
+            "server.theme_content.response",
         );
     }
 
@@ -135,35 +135,13 @@ async fn serve(
     };
     let body = Body::from_stream(ReaderStream::new(file));
 
-    response(StatusCode::OK, body, &eligibility.mime, &etag)
-}
-
-fn response(
-    status: StatusCode,
-    body: Body,
-    mime: &str,
-    etag: &common::etag::ETag,
-) -> Result<Response, StatusCode> {
-    let content_type = HeaderValue::from_str(mime).map_err(|_| {
-        InternalError::server(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "invalid stored theme MIME",
-        ))
-        .with_context("boundary", "server.theme_content.response")
-        .emit_boundary_failure();
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-    let etag =
-        HeaderValue::from_str(etag.as_ref()).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let mut response = Response::new(body);
-    *response.status_mut() = status;
-    let headers = response.headers_mut();
-    headers.insert(header::CONTENT_TYPE, content_type);
-    headers.insert(header::X_CONTENT_TYPE_OPTIONS, NOSNIFF);
-    headers.insert(header::CACHE_CONTROL, CACHE_CONTROL);
-    headers.insert(header::ETAG, etag);
-    Ok(response)
+    crate::immutable_content::response(
+        StatusCode::OK,
+        body,
+        &eligibility.mime,
+        &etag,
+        "server.theme_content.response",
+    )
 }
 
 fn content_path(storage_path: &std::path::Path, digest: &ThemeContentDigest) -> PathBuf {
@@ -276,17 +254,6 @@ mod tests {
     }
 
     const DIGEST: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
-
-    #[test]
-    fn response_rejects_invalid_stored_mime_without_serving_content() {
-        let digest: ThemeContentDigest = DIGEST.parse().expect("valid content digest");
-        let etag = theme_etag(&digest).expect("digest produces an ETag");
-
-        assert!(matches!(
-            response(StatusCode::OK, Body::empty(), "invalid\r\nmime", &etag),
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        ));
-    }
 
     #[test]
     fn storage_failures_are_internal_errors() {

@@ -7,6 +7,7 @@ pub mod client_telemetry;
 pub mod commands;
 pub mod context;
 pub mod feed;
+mod immutable_content;
 pub mod mailer;
 mod maintenance;
 pub mod media;

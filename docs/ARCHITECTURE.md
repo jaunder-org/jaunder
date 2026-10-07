@@ -1698,6 +1698,21 @@ theme changes that representation.
 The custom-theme architecture is governed by the accepted
 [`css-package-public-themes` ADR](adr/0184-css-package-public-themes.md).
 
+#### Committed direction — bundled Theme Packages
+
+The
+[unified styling assets decision](adr/drafts/unified-theme-and-application-assets.md)
+will use that same package validation, compilation, revision, and presentation
+pipeline for system-managed bundled Studio, Terminal, and Reader. Existing named
+selections will follow the installed release; bundled packages will be
+selectable but not editable/deletable through custom catalogs or charged to
+custom-theme quotas. Application CSS will retain system-only authority over
+structure, private surfaces, and protected controls while sharing theme
+content's installation, digest serving, eligibility, and retention mechanism.
+Custom packages will remain scoped and cannot acquire that authority.
+
+#### Current custom-theme lifecycle
+
 Theme authors keep the portable package source (`theme.json`, canonical
 `style.css`, and optional declared `assets/`) at a repository root; README,
 workflow, optional preprocessor sources, and committed `preview.png` remain
@@ -2510,10 +2525,10 @@ further SIGINT retains interactive forced exit. The bounded wait never escalates
 on timeout. No administration secret or network control channel exists
 ([identity-verified local shutdown](adr/0181-identity-verified-local-shutdown.md)).
 
-- `StaticAssets` (`server/src/assets.rs:3-5`, `#[folder = "assets/"]`) carries
-  the base stylesheets `jaunder.css` and `jaunder-themes.css`, mounted at
-  `/style` by `axum_embed::ServeEmbed` (`server/src/lib.rs:54,57`), which
-  supplies ETag and conditional-request handling.
+- `StaticAssets` (`server/src/assets.rs`, `#[folder = "assets/"]`) carries the
+  base stylesheets `jaunder.css` and `jaunder-themes.css`, mounted at `/style`
+  by `axum_embed::ServeEmbed` (`server/src/lib.rs`), which supplies ETag and
+  conditional-request handling.
 - `Site` (`server/src/site.rs`, `#[folder = "$OUT_DIR/site"]`) carries the CSR
   client: full-SHA-256-named runtime assets, their precompressed `.br`/`.gz`
   siblings, and the `public/` assets flattened to the site root
@@ -2525,9 +2540,10 @@ on timeout. No administration secret or network control channel exists
   filename heuristic duplicates asset identity
   ([content-addressed CSR bundle manifest](adr/0175-content-addressed-csr-bundle-manifest.md)).
 
-Only the two base stylesheets are embedded separately. ADR-0003 also anticipated
-**user-uploadable** stylesheets served from the storage layer; that was never
-built, and nothing in `storage/` or the config-key registry handles CSS.
+[ADR-0003](adr/0003-asset-management.md) establishes single-binary asset
+provisioning. The built-in base stylesheets are embedded separately; published
+custom Theme Package CSS is served through persistent content eligibility, not
+arbitrary user-uploaded global stylesheets.
 
 `ServeEmbed` does no `Accept-Encoding` negotiation, so `site::serve_site` is a
 hand-written handler: it picks Brotli, gzip, or identity bytes against the
@@ -2544,13 +2560,34 @@ leptos-CSR client plus the server-side public projector — is owned by the web
 section ([ADR-0040](adr/0040-web-rendering-leptos-csr.md),
 [ADR-0041](adr/0041-public-projector-and-csr-client.md)).
 
-**CLI surface.** The `jaunder` binary is also the operations tool
-(`server/src/cli.rs:233-382`): `serve` runs the server; `init` prepares the
-storage directory and database; `create-pg-db` bootstraps a PostgreSQL database;
-`user-create`, `user-invite`, and `app-password-create` manage accounts;
-`smtp-test` verifies mail configuration; `backup` (directory or archive mode)
-and `restore` round-trip the data, with the backup target auto-derived from the
-storage configuration ([ADR-0064](adr/0064-backup-target-auto-derivation.md),
+### Committed direction — shared styling assets
+
+The
+[unified styling assets decision](adr/drafts/unified-theme-and-application-assets.md)
+will replace the separate embedded stylesheet handler. The binary will carry
+system-managed bundled Theme Packages and application CSS for the shared
+persistent content store. Before accepting requests, startup will idempotently
+install and verify that inventory and atomically advance system references;
+failure will prevent startup. System and custom styling assets will share
+digest-addressed immutable responses and retain superseded bytes while
+referenced and through the one-year asset lifetime plus five-minute HTML
+freshness window after detachment. Backup/restore will preserve retained content
+and eligibility. All document consumers, including the database-independent
+thumbnail transport, will use generated digest references. Legacy
+`/style/jaunder.css` and `/style/jaunder-themes.css` will return 404 without
+aliases or SPA fallback; legacy documents may be unstyled until refreshed. This
+amends ADR-0003's serving mechanism while preserving single-binary provisioning
+and CSR asset behavior.
+
+### Current CLI surface
+
+The `jaunder` binary is also the operations tool (`server/src/cli.rs:233-382`):
+`serve` runs the server; `init` prepares the storage directory and database;
+`create-pg-db` bootstraps a PostgreSQL database; `user-create`, `user-invite`,
+and `app-password-create` manage accounts; `smtp-test` verifies mail
+configuration; `backup` (directory or archive mode) and `restore` round-trip the
+data, with the backup target auto-derived from the storage configuration
+([ADR-0064](adr/0064-backup-target-auto-derivation.md),
 [ADR-0054](adr/0054-backup-test-homing-and-uniform-restore-failure.md)); and
 `site-config set/get/list/unset` reads and writes site settings. The operator
 Site Settings card resolves one `SiteIdentity` aggregate: required Local title,
