@@ -19,11 +19,18 @@ pkgs.runCommand "issue-1702-image-sanitizer-feasibility-witness"
   ''
     set -eu
     mkdir -p "$out/fixtures/input" "$out/fixtures/candidate" "$out/fixtures/icc" \
-      "$out/fixtures/repeated" "$out/fixtures/format-specific" "$out/reports"
+      "$out/fixtures/repeated" "$out/fixtures/format-specific" "$out/fixtures/ordinary" "$out/reports"
     $CC -std=c17 -Wall -Wextra -Werror ${./make_icc_fixture.c} \
       -I${pkgs.lcms.dev}/include -L${pkgs.lcms}/lib -llcms2 -o make-icc-fixture
     $CC -std=c17 -Wall -Wextra -Werror ${./validate_icc.c} \
       -I${pkgs.lcms.dev}/include -L${pkgs.lcms}/lib -llcms2 -o validate-icc
+    $CC -std=c17 -Wall -Wextra -Werror ${./make_rgb_icc_fixture.c} \
+      -I${pkgs.lcms.dev}/include -L${pkgs.lcms}/lib -llcms2 -o make-rgb-icc-fixture
+    $CC -std=c17 -Wall -Wextra -Werror ${./validate_rgb_icc.c} \
+      -I${pkgs.lcms.dev}/include -L${pkgs.lcms}/lib -llcms2 -o validate-rgb-icc
+
+    python3 -B ${./verify_curve_controls.py} ${./rewrite_rgb_icc.py} \
+      > "$out/reports/curve-body-controls.txt"
 
     # This 32x24 gradient is generated artwork, not a photograph or device data.
     magick -size 32x24 gradient:'#1b4965-#ffb703' "$out/fixtures/input/base.png"
@@ -42,6 +49,40 @@ pkgs.runCommand "issue-1702-image-sanitizer-feasibility-witness"
     cmp "$out/fixtures/icc/scrubbed-v4.icc" "$out/fixtures/icc/scrubbed-v4.second-pass.icc"
     ./validate-icc "$out/fixtures/icc/input-v4.icc" "$out/fixtures/icc/scrubbed-v4.icc" \
       > "$out/reports/icc-transform-validation.txt"
+    ordinary_pipeline() {
+      source=$1
+      output=$2
+      work=$3
+      cp "$source" "$output"
+      exiftool -b -ICC_Profile "$output" > "$work.input.icc"
+      python3 ${./rewrite_rgb_icc.py} "$work.input.icc" "$work.output.icc"
+      exiftool -overwrite_original -all= "$output"
+      exiftool -overwrite_original "-ICC_Profile<=$work.output.icc" "$output"
+    }
+    for space in srgb display-p3; do
+      for version in 2 4; do
+        stem="$space-v$version"
+        ./make-rgb-icc-fixture "$space" "$out/fixtures/ordinary/$stem.icc" "$version"
+        python3 ${./rewrite_rgb_icc.py} "$out/fixtures/ordinary/$stem.icc" \
+          "$out/fixtures/ordinary/$stem.scrubbed.icc"
+        python3 ${./rewrite_rgb_icc.py} "$out/fixtures/ordinary/$stem.scrubbed.icc" \
+          "$out/fixtures/ordinary/$stem.scrubbed-second.icc"
+        cmp "$out/fixtures/ordinary/$stem.scrubbed.icc" "$out/fixtures/ordinary/$stem.scrubbed-second.icc"
+        ./validate-rgb-icc "$out/fixtures/ordinary/$stem.icc" "$out/fixtures/ordinary/$stem.scrubbed.icc" \
+          >> "$out/reports/ordinary-icc-transform-validation.txt"
+        magick "$out/fixtures/input/base.png" -profile "$out/fixtures/ordinary/$stem.icc" \
+          -quality 92 "$out/fixtures/ordinary/$stem.input.jpg"
+        # Each invocation extracts the profile from the actual JPEG, rewrites
+        # that extraction, and reinserts its own output; no fixed replacement
+        # profile is substituted into the JPEG pipeline.
+        ordinary_pipeline "$out/fixtures/ordinary/$stem.input.jpg" \
+          "$out/fixtures/ordinary/$stem.output.jpg" "$out/fixtures/ordinary/$stem.first"
+        ordinary_pipeline "$out/fixtures/ordinary/$stem.input.jpg" \
+          "$out/fixtures/ordinary/$stem.repeat.jpg" "$out/fixtures/ordinary/$stem.repeat-work"
+        ordinary_pipeline "$out/fixtures/ordinary/$stem.output.jpg" \
+          "$out/fixtures/ordinary/$stem.output-second.jpg" "$out/fixtures/ordinary/$stem.second"
+      done
+    done
     magick "$out/fixtures/input/base.png" -profile "$out/fixtures/icc/input-v4.icc" \
       -quality 92 "$out/fixtures/input/device-like.jpg"
     heif-enc -q 50 -o "$out/fixtures/input/device-like.heic" \
@@ -122,6 +163,13 @@ pkgs.runCommand "issue-1702-image-sanitizer-feasibility-witness"
     printf 'candidate-decode=passed\nrender-identical=yes\n' > "$out/reports/heif-candidate-decode-status.txt"
     python3 ${./verify.py} "$out/fixtures" > "$out/reports/independent.json"
     python3 ${./verify_controls.py} "$out/fixtures" ${./verify.py} > "$out/reports/independent-controls.txt"
+    python3 -B ${./verify_rgb_icc.py} "$out/fixtures" ${./verify.py} > "$out/reports/ordinary-icc-structural.txt"
+    python3 -B ${./verify_rgb_structure_controls.py} "$out/fixtures" \
+      ${./rewrite_rgb_icc.py} ${./verify_rgb_icc.py} "$out/reports/structure-controls" \
+      > "$out/reports/ordinary-icc-negative-controls.txt"
+    python3 -B ${./verify_rgb_controls.py} "$out/fixtures" ${./rewrite_rgb_icc.py} > "$out/reports/ordinary-icc-controls.txt"
+    ./validate-rgb-icc "$out/fixtures/ordinary/control-shared-trc.icc" \
+      "$out/fixtures/ordinary/control-shared-trc.scrubbed.icc" >> "$out/reports/ordinary-icc-transform-validation.txt"
     sha256sum "$out"/fixtures/input/* "$out"/fixtures/candidate/* "$out"/reports/*.png \
       > "$out/reports/SHA256SUMS"
   ''
