@@ -66,6 +66,8 @@ pub(crate) fn restore_table_order(tables: &[String]) -> Vec<&str> {
         | "theme_content_eligibility"
         | "theme_draft_content_charges"
         | "theme_retained_content_charges"
+        | "system_theme_revisions"
+        | "system_application_current"
         | "user_config" => 2,
         "audience_members"
         | "email_verifications"
@@ -83,11 +85,14 @@ pub(crate) fn restore_table_order(tables: &[String]) -> Vec<&str> {
         | "theme_header_pool"
         | "theme_selections"
         | "theme_owner_quotas"
-        | "theme_site_quota" => 3,
+        | "theme_site_quota"
+        | "system_theme_current"
+        | "system_theme_content_references" => 3,
         "post_revision_audiences"
         | "post_revision_tags"
         | "theme_draft_assets"
-        | "theme_revision_assets" => 4,
+        | "theme_revision_assets"
+        | "system_theme_revision_assets" => 4,
         "post_media" => 5,
         _ => 0,
     });
@@ -318,6 +323,11 @@ mod tests {
             "posts",
             "users",
             "post_revision_audiences",
+            "system_theme_revisions",
+            "system_theme_revision_assets",
+            "system_theme_current",
+            "system_theme_content_references",
+            "theme_content_eligibility",
         ]
         .into_iter()
         .map(str::to_owned)
@@ -338,6 +348,11 @@ mod tests {
         assert!(position("post_revisions") < position("post_revision_audiences"));
         assert!(position("post_revision_tags") < position("post_media"));
         assert!(position("post_revision_audiences") < position("post_media"));
+        assert!(position("system_theme_revisions") < position("system_theme_revision_assets"));
+        assert!(position("system_theme_revisions") < position("system_theme_current"));
+        assert!(
+            position("theme_content_eligibility") < position("system_theme_content_references")
+        );
     }
 
     #[test]

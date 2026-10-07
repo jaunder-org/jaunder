@@ -11,16 +11,16 @@ use common::{
     ids::ThemeId,
     theme::{ThemeAssetDigest, ThemeContentDigest, ThemeRevisionDigest, ThemeStylesheetDigest},
 };
-use host::theme_package::CompiledThemeRevision;
+use host::{system_theme::SystemArtifactInventory, theme_package::CompiledThemeRevision};
 use jiff::Timestamp;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::{fs, io::AsyncWriteExt};
 
 use crate::{
-    ThemeContentCharge, ThemeContentEligibility, ThemeOwner, ThemePackageAsset,
-    ThemePublicationAdmission, ThemeQuotaLimits, ThemeRevision, ThemeStorage, WriteScope,
-    WriteScopeError,
+    SystemThemeAdmission, ThemeContentCharge, ThemeContentEligibility, ThemeOwner,
+    ThemePackageAsset, ThemePublicationAdmission, ThemeQuotaLimits, ThemeRevision, ThemeStorage,
+    WriteScope, WriteScopeError,
 };
 
 /// The immutable-cache lifetime plus the public document freshness allowance.
@@ -110,6 +110,10 @@ impl ThemeAssetManager {
             self.collect(owner, &digest, now_unix_seconds).await?;
         }
 
+        for digest in self.themes.expired_system_content(now_unix_seconds).await? {
+            self.collect_system(&digest, now_unix_seconds).await?;
+        }
+
         // Reload after collection: only content that remains eligible may block
         // serving startup when its immutable bytes are absent or corrupt.
         let known = self
@@ -153,6 +157,81 @@ impl ThemeAssetManager {
             }
         }
         Ok(reconciliation)
+    }
+
+    /// Installs the complete compiler-minted system inventory before atomically
+    /// advancing all four release roles. The inventory lock serializes release
+    /// changes; sorted old/new digest locks join the ordinary content lifecycle.
+    /// No filesystem I/O occurs inside the short database transaction.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid deadlines, filesystem failures, corrupt existing bytes, or
+    /// failed admission. Commit-indeterminate outcomes retain installed bytes and
+    /// must not be treated as confirmed startup readiness.
+    pub async fn install_system(
+        &self,
+        inventory: &SystemArtifactInventory,
+        now_unix_seconds: i64,
+    ) -> Result<MutationOutcome<()>, ThemeAssetError> {
+        let admission = SystemThemeAdmission::from_inventory(inventory, now_unix_seconds)?;
+        let _inventory_lock = self.acquire_inventory_lock().await?;
+        let application = inventory.application().content();
+        let mut blobs = vec![Blob {
+            digest: ThemeContentDigest::from_digest(application.digest()),
+            mime: application.mime(),
+            bytes: application.bytes(),
+        }];
+        blobs.extend(
+            inventory
+                .themes()
+                .flat_map(|package| package.revision().contents())
+                .map(|content| Blob {
+                    digest: ThemeContentDigest::from_digest(content.digest()),
+                    mime: content.mime(),
+                    bytes: content.bytes(),
+                }),
+        );
+        blobs.sort_by(|left, right| left.digest.cmp(&right.digest));
+        blobs.dedup_by(|left, right| left.digest == right.digest);
+        let previous = self.themes.live_system_content_references().await?;
+        let _locks = self
+            .acquire_locks(
+                blobs.iter().map(|blob| &blob.digest).chain(
+                    previous
+                        .iter()
+                        .filter(|reference| reference.live_references > 0)
+                        .map(|reference| &reference.digest),
+                ),
+            )
+            .await?;
+        let mut installed = Vec::new();
+        for blob in &blobs {
+            match self.install(blob).await {
+                Ok(true) => installed.push(blob.digest.clone()),
+                Ok(false) => {}
+                Err(error) => {
+                    self.cleanup_newly_installed(&installed).await;
+                    return Err(error);
+                }
+            }
+        }
+        let themes = Arc::clone(&self.themes);
+        let outcome = self
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(
+                    async move { themes.admit_system_inventory(transaction, &admission).await },
+                )
+            })
+            .await;
+        match outcome {
+            Ok(outcome) => Ok(outcome),
+            Err(WriteScopeError::Operation(error) | WriteScopeError::Begin(error)) => {
+                self.cleanup_newly_installed(&installed).await;
+                Err(ThemeAssetError::Storage(error))
+            }
+        }
     }
 
     /// Publishes compiler-minted content. Files are installed under sorted digest
@@ -239,6 +318,31 @@ impl ThemeAssetManager {
         digest: &ThemeContentDigest,
         now_unix_seconds: i64,
     ) -> Result<MutationOutcome<()>, ThemeAssetError> {
+        self.collect_content(Some(owner), digest, now_unix_seconds)
+            .await
+    }
+
+    /// Collects expired system-only content through the ordinary lock-held,
+    /// eligibility-first detachment and unlink path, without custom quota charges.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error while any reference/retention guarantee/owner charge
+    /// prevents collection, or if locking/storage detachment fails.
+    pub async fn collect_system(
+        &self,
+        digest: &ThemeContentDigest,
+        now_unix_seconds: i64,
+    ) -> Result<MutationOutcome<()>, ThemeAssetError> {
+        self.collect_content(None, digest, now_unix_seconds).await
+    }
+
+    async fn collect_content(
+        &self,
+        owner: Option<ThemeOwner>,
+        digest: &ThemeContentDigest,
+        now_unix_seconds: i64,
+    ) -> Result<MutationOutcome<()>, ThemeAssetError> {
         let _locks = self.acquire_locks([digest]).await?;
         let transaction_digest = digest.clone();
         let themes = Arc::clone(&self.themes);
@@ -246,14 +350,27 @@ impl ThemeAssetManager {
             .write_scope
             .run(move |transaction| {
                 Box::pin(async move {
-                    themes
-                        .collect_retained_content(
-                            transaction,
-                            owner,
-                            &transaction_digest,
-                            now_unix_seconds,
-                        )
-                        .await
+                    match owner {
+                        Some(owner) => {
+                            themes
+                                .collect_retained_content(
+                                    transaction,
+                                    owner,
+                                    &transaction_digest,
+                                    now_unix_seconds,
+                                )
+                                .await
+                        }
+                        None => {
+                            themes
+                                .collect_system_content(
+                                    transaction,
+                                    &transaction_digest,
+                                    now_unix_seconds,
+                                )
+                                .await
+                        }
+                    }
                 })
             })
             .await
@@ -263,6 +380,7 @@ impl ThemeAssetManager {
                 }
             })?;
         if matches!(outcome, MutationOutcome::Confirmed(()))
+            && self.themes.content_eligibility(digest).await?.is_none()
             && let Err(error) = self.unlink_if_present(digest).await
         {
             host::error::report_swallowed(
@@ -329,6 +447,24 @@ impl ThemeAssetManager {
                 })
             })
             .collect()
+    }
+
+    async fn acquire_inventory_lock(&self) -> Result<std::fs::File, ThemeAssetError> {
+        let directory = self.storage_path.join("themes").join(".locks");
+        fs::create_dir_all(&directory).await?;
+        self.sync_content_directories(&directory).await?;
+        let path = directory.join("system-inventory.lock");
+        tokio::task::spawn_blocking(move || {
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)?;
+            file.lock()?;
+            Ok::<_, io::Error>(file)
+        })
+        .await
+        .map_err(io::Error::other)?
+        .map_err(ThemeAssetError::Filesystem)
     }
 
     async fn acquire_locks<'a>(
@@ -624,6 +760,7 @@ mod tests {
     use std::{fs, io, sync::Arc};
 
     use common::{MutationOutcome, ids::ThemeId, theme::ThemeContentDigest};
+    use jiff::Timestamp;
     use rstest::*;
     use rstest_reuse::*;
     use sha2::{Digest, Sha256};
@@ -734,6 +871,1216 @@ mod tests {
                 .unlink_if_present(&digest)
                 .await
                 .expect("an absent content path is not an error")
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn system_install_is_idempotent_and_outside_custom_quotas(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let inventory = host::system_theme::compile_system_artifact_inventory().unwrap();
+        let manager = ThemeAssetManager::new(
+            env.themes(),
+            env.write_scope().clone(),
+            Arc::new(env.base.path().to_path_buf()),
+        );
+        let quotas = env.themes().site_quota().await.unwrap();
+        assert!(
+            env.themes()
+                .system_application_content()
+                .await
+                .unwrap()
+                .is_none()
+        );
+        for package in inventory.themes() {
+            assert!(
+                env.themes()
+                    .system_theme_revision(package.theme())
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        confirmed(manager.install_system(&inventory, 100).await.unwrap());
+        let references = env.themes().system_content_references().await.unwrap();
+        assert_eq!(references.len(), 4);
+        assert!(
+            references
+                .iter()
+                .all(|reference| reference.live_references == 1)
+        );
+        confirmed(manager.install_system(&inventory, 200).await.unwrap());
+        assert_eq!(
+            env.themes().system_content_references().await.unwrap(),
+            references
+        );
+        assert_eq!(env.themes().site_quota().await.unwrap(), quotas);
+        assert!(
+            env.themes()
+                .list_themes(ThemeOwner::Site)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            env.themes()
+                .owner_quota(ThemeOwner::Site)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            env.themes()
+                .system_application_content()
+                .await
+                .unwrap()
+                .unwrap()
+                .digest,
+            inventory.application().content_digest()
+        );
+        for package in inventory.themes() {
+            let revision = env
+                .themes()
+                .system_theme_revision(package.theme())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(revision.digest, package.revision_digest());
+            assert_eq!(revision.source_digest, package.source_digest());
+            assert_eq!(revision.stylesheet_digest, package.stylesheet_digest());
+            assert_eq!(revision.manifest, package.revision().canonical_manifest());
+        }
+        let mut expected = vec![inventory.application().content()];
+        expected.extend(
+            inventory
+                .themes()
+                .flat_map(|package| package.revision().contents()),
+        );
+        for content in expected {
+            let digest = common::theme::ThemeContentDigest::from_digest(content.digest());
+            assert_eq!(
+                fs::read(manager.content_path(digest.as_ref())).unwrap(),
+                content.bytes()
+            );
+            assert_eq!(
+                env.themes()
+                    .content_eligibility(&digest)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .mime,
+                content.mime()
+            );
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn system_upgrade_rollback_and_later_detachment_preserve_retention(
+        #[case] backend: Backend,
+    ) {
+        use host::system_theme::qualification::{self, Fixture};
+        let env = backend.setup().await;
+        let a = qualification::compile(Fixture::A).unwrap();
+        let b = qualification::compile(Fixture::BApplication).unwrap();
+        let manager = ThemeAssetManager::new(
+            env.themes(),
+            env.write_scope().clone(),
+            Arc::new(env.base.path().to_path_buf()),
+        );
+        let digest_a = a.application().content_digest();
+        let digest_b = b.application().content_digest();
+        let retention = super::THEME_CONTENT_RETENTION_SECONDS;
+        confirmed(manager.install_system(&a, 100).await.unwrap());
+        confirmed(manager.install_system(&b, 200).await.unwrap());
+        let deadline = env
+            .themes()
+            .content_eligibility(&digest_a)
+            .await
+            .unwrap()
+            .unwrap()
+            .retained_until_unix_seconds;
+        assert_eq!(deadline, 200 + retention);
+        confirmed(manager.install_system(&a, 300).await.unwrap());
+        assert_eq!(
+            env.themes()
+                .content_eligibility(&digest_a)
+                .await
+                .unwrap()
+                .unwrap()
+                .retained_until_unix_seconds,
+            deadline
+        );
+        assert!(
+            manager.collect_system(&digest_a, deadline).await.is_err(),
+            "live rollback bytes cannot collect even past their old deadline"
+        );
+        assert_eq!(
+            fs::read(manager.content_path(digest_a.as_ref())).unwrap(),
+            a.application().content().bytes()
+        );
+        let later = deadline + 100;
+        confirmed(manager.install_system(&b, later).await.unwrap());
+        assert_eq!(
+            env.themes()
+                .content_eligibility(&digest_a)
+                .await
+                .unwrap()
+                .unwrap()
+                .retained_until_unix_seconds,
+            later + retention
+        );
+        assert!(
+            manager
+                .collect_system(&digest_a, later + retention - 1)
+                .await
+                .is_err()
+        );
+        confirmed(
+            manager
+                .collect_system(&digest_a, later + retention)
+                .await
+                .unwrap(),
+        );
+        assert!(!manager.content_path(digest_a.as_ref()).exists());
+        assert!(
+            env.themes()
+                .content_eligibility(&digest_a)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            fs::read(manager.content_path(digest_b.as_ref())).unwrap(),
+            b.application().content().bytes()
+        );
+        assert_eq!(
+            env.themes()
+                .system_application_content()
+                .await
+                .unwrap()
+                .unwrap()
+                .digest,
+            digest_b
+        );
+        for package in b.themes() {
+            assert_eq!(
+                env.themes()
+                    .system_theme_revision(package.theme())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .digest,
+                package.revision_digest()
+            );
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn system_admission_leaves_unrelated_retained_history_untouched_and_preserves_rollback_deadlines(
+        #[case] backend: Backend,
+    ) {
+        use host::system_theme::qualification::{self, Fixture};
+
+        let env = backend.setup().await;
+        let a = qualification::compile(Fixture::A).expect("compile release A");
+        let b_application =
+            qualification::compile(Fixture::BApplication).expect("compile application release B");
+        let b_theme = qualification::compile(Fixture::BTheme).expect("compile theme release B");
+        let manager = ThemeAssetManager::new(
+            env.themes(),
+            env.write_scope().clone(),
+            Arc::new(env.base.path().to_path_buf()),
+        );
+        let now = Timestamp::now().as_second();
+        let first = now.checked_add(1).expect("advance time");
+        let second = first.checked_add(1).expect("advance time");
+        let rollback = second.checked_add(1).expect("advance time");
+        let retention = super::THEME_CONTENT_RETENTION_SECONDS;
+        let b_application_digest = b_application.application().content_digest();
+        confirmed(manager.install_system(&a, now).await.expect("install A"));
+        confirmed(
+            manager
+                .install_system(&b_application, first)
+                .await
+                .expect("install application B"),
+        );
+        confirmed(
+            manager
+                .install_system(&b_theme, second)
+                .await
+                .expect("install theme B"),
+        );
+        let retained_before_repeat = env
+            .themes()
+            .system_content_references()
+            .await
+            .expect("read retained history")
+            .into_iter()
+            .find(|reference| reference.digest == b_application_digest)
+            .expect("application B is retained history");
+        assert_eq!(retained_before_repeat.live_references, 0);
+        assert_eq!(
+            retained_before_repeat.retained_until_unix_seconds,
+            second
+                .checked_add(retention)
+                .expect("retention deadline fits")
+        );
+
+        // Repeating B-theme does not include retained B-application content;
+        // admission must not visit or extend unrelated detached history.
+        confirmed(
+            manager
+                .install_system(&b_theme, now)
+                .await
+                .expect("repeat theme B"),
+        );
+        assert_eq!(
+            env.themes()
+                .system_content_references()
+                .await
+                .expect("read repeated retained history")
+                .into_iter()
+                .find(|reference| reference.digest == b_application_digest)
+                .expect("unrelated retained application remains")
+                .retained_until_unix_seconds,
+            retained_before_repeat.retained_until_unix_seconds
+        );
+
+        // B-application is an incoming retained digest on rollback: it must
+        // reattach without resetting the deadline established while detached.
+        confirmed(
+            manager
+                .install_system(&b_application, rollback)
+                .await
+                .expect("rollback to application B"),
+        );
+        let reattached = env
+            .themes()
+            .system_content_references()
+            .await
+            .expect("read reattached application")
+            .into_iter()
+            .find(|reference| reference.digest == b_application_digest)
+            .expect("application B remains tracked");
+        assert_eq!(reattached.live_references, 1);
+        assert_eq!(
+            reattached.retained_until_unix_seconds,
+            retained_before_repeat.retained_until_unix_seconds
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn system_theme_upgrade_changes_only_selected_package_identity(#[case] backend: Backend) {
+        use host::system_theme::qualification::{self, Fixture};
+        let env = backend.setup().await;
+        let a = qualification::compile(Fixture::A).unwrap();
+        let b = qualification::compile(Fixture::BTheme).unwrap();
+        let manager = ThemeAssetManager::new(
+            env.themes(),
+            env.write_scope().clone(),
+            Arc::new(env.base.path().to_path_buf()),
+        );
+        confirmed(manager.install_system(&a, 100).await.unwrap());
+        confirmed(manager.install_system(&b, 200).await.unwrap());
+        assert_eq!(
+            env.themes()
+                .system_application_content()
+                .await
+                .unwrap()
+                .unwrap()
+                .digest,
+            a.application().content_digest()
+        );
+        for package in b.themes() {
+            let revision = env
+                .themes()
+                .system_theme_revision(package.theme())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(revision.digest, package.revision_digest());
+            assert_eq!(revision.source_digest, package.source_digest());
+        }
+        let old_studio = common::theme::ThemeContentDigest::from_digest(
+            a.theme(common::theme::Theme::Studio)
+                .stylesheet_content()
+                .digest(),
+        );
+        assert_eq!(
+            env.themes()
+                .content_eligibility(&old_studio)
+                .await
+                .unwrap()
+                .unwrap()
+                .retained_until_unix_seconds,
+            200 + super::THEME_CONTENT_RETENTION_SECONDS
+        );
+        assert_eq!(
+            fs::read(manager.content_path(old_studio.as_ref())).unwrap(),
+            a.theme(common::theme::Theme::Studio)
+                .stylesheet_content()
+                .bytes()
+        );
+        confirmed(manager.install_system(&a, 300).await.unwrap());
+        assert_eq!(
+            env.themes()
+                .system_theme_revision(common::theme::Theme::Studio)
+                .await
+                .unwrap()
+                .unwrap()
+                .digest,
+            a.theme(common::theme::Theme::Studio).revision_digest()
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn system_admission_callback_failure_rolls_back_the_entire_inventory(
+        #[case] backend: Backend,
+    ) {
+        use host::system_theme::qualification::{self, Fixture};
+        let env = backend.setup().await;
+        let a = qualification::compile(Fixture::A).unwrap();
+        let b = qualification::compile(Fixture::BTheme).unwrap();
+        let manager = ThemeAssetManager::new(
+            env.themes(),
+            env.write_scope().clone(),
+            Arc::new(env.base.path().to_path_buf()),
+        );
+        confirmed(manager.install_system(&a, 100).await.unwrap());
+        let references = env.themes().system_content_references().await.unwrap();
+        let eligibilities = env.themes().list_content_eligibility().await.unwrap();
+        let admission = crate::SystemThemeAdmission::from_inventory(&b, 200).unwrap();
+        let themes = env.themes();
+        let result = env
+            .write_scope()
+            .run(move |transaction| {
+                Box::pin(async move {
+                    themes
+                        .admit_system_inventory(transaction, &admission)
+                        .await?;
+                    Err::<(), sqlx::Error>(sqlx::Error::RowNotFound)
+                })
+            })
+            .await;
+        assert!(result.is_err());
+        assert_eq!(
+            env.themes().system_content_references().await.unwrap(),
+            references
+        );
+        assert_eq!(
+            env.themes().list_content_eligibility().await.unwrap(),
+            eligibilities
+        );
+        assert_eq!(
+            env.themes()
+                .system_application_content()
+                .await
+                .unwrap()
+                .unwrap()
+                .digest,
+            a.application().content_digest()
+        );
+        for package in a.themes() {
+            assert_eq!(
+                env.themes()
+                    .system_theme_revision(package.theme())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .digest,
+                package.revision_digest()
+            );
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn system_materialization_failure_cleans_new_files_without_publishing_any_role(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let inventory = host::system_theme::compile_system_artifact_inventory().unwrap();
+        let manager = ThemeAssetManager::new(
+            env.themes(),
+            env.write_scope().clone(),
+            Arc::new(env.base.path().to_path_buf()),
+        );
+        let mut digests = vec![inventory.application().content_digest()];
+        digests.extend(
+            inventory
+                .themes()
+                .flat_map(|package| package.revision().contents())
+                .map(|content| ThemeContentDigest::from_digest(content.digest())),
+        );
+        digests.sort();
+        let blocked = digests.last().unwrap();
+        fs::create_dir_all(manager.content_path(blocked.as_ref())).unwrap();
+        assert!(manager.install_system(&inventory, 100).await.is_err());
+        assert!(
+            env.themes()
+                .system_content_references()
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            env.themes()
+                .list_content_eligibility()
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            env.themes()
+                .system_application_content()
+                .await
+                .unwrap()
+                .is_none()
+        );
+        for package in inventory.themes() {
+            assert!(
+                env.themes()
+                    .system_theme_revision(package.theme())
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        for digest in digests.iter().filter(|digest| *digest != blocked) {
+            assert!(!manager.content_path(digest.as_ref()).exists());
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn shared_system_and_custom_content_cannot_collect_the_other_live_owner(
+        #[case] backend: Backend,
+    ) {
+        use host::system_theme::qualification::{self, Fixture};
+        let env = backend.setup().await;
+        let a = qualification::compile(Fixture::A).unwrap();
+        let b = qualification::compile(Fixture::BTheme).unwrap();
+        let compiled = a.theme(common::theme::Theme::Studio).revision();
+        let manager = ThemeAssetManager::new(
+            env.themes(),
+            env.write_scope().clone(),
+            Arc::new(env.base.path().to_path_buf()),
+        );
+        confirmed(manager.install_system(&a, 100).await.unwrap());
+        let theme_id = create_theme(env.themes(), env.write_scope().clone(), compiled).await;
+        confirmed(
+            manager
+                .publish(ThemeOwner::Site, theme_id, compiled, limits(i64::MAX), 100)
+                .await
+                .unwrap(),
+        );
+        let digest = ThemeContentDigest::from_digest(compiled.stylesheet_content().digest());
+        let retention = super::THEME_CONTENT_RETENTION_SECONDS;
+        confirmed(manager.install_system(&b, 200).await.unwrap());
+        assert!(
+            manager
+                .collect_system(&digest, 200 + retention)
+                .await
+                .is_err(),
+            "detached system content must not remove custom-live bytes"
+        );
+        assert_eq!(
+            fs::read(manager.content_path(digest.as_ref())).unwrap(),
+            compiled.stylesheet_content().bytes()
+        );
+        confirmed(manager.install_system(&a, 300 + retention).await.unwrap());
+        let themes = env.themes();
+        let custom_deadline = 400 + 2 * retention;
+        confirmed(
+            env.write_scope()
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        themes
+                            .remove_theme(transaction, ThemeOwner::Site, theme_id, custom_deadline)
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
+        assert!(
+            manager
+                .collect(ThemeOwner::Site, &digest, custom_deadline)
+                .await
+                .is_err(),
+            "expired custom charges must not remove system-live bytes"
+        );
+        assert_eq!(
+            fs::read(manager.content_path(digest.as_ref())).unwrap(),
+            compiled.stylesheet_content().bytes()
+        );
+        let last_detach = custom_deadline + 100;
+        confirmed(manager.install_system(&b, last_detach).await.unwrap());
+        assert!(
+            manager
+                .collect(ThemeOwner::Site, &digest, last_detach + retention - 1)
+                .await
+                .is_err()
+        );
+        confirmed(
+            manager
+                .collect(ThemeOwner::Site, &digest, last_detach + retention)
+                .await
+                .unwrap(),
+        );
+        assert!(
+            env.themes()
+                .content_eligibility(&digest)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(!manager.content_path(digest.as_ref()).exists());
+        assert!(
+            !env.themes()
+                .system_content_references()
+                .await
+                .unwrap()
+                .iter()
+                .any(|reference| reference.digest == digest)
+        );
+        assert_eq!(env.themes().site_quota().await.unwrap().physical_bytes, 0);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn concurrent_system_installs_publish_one_complete_release_inventory(
+        #[case] backend: Backend,
+    ) {
+        use host::system_theme::qualification::{self, Fixture};
+
+        let env = backend.setup().await;
+        let a = qualification::compile(Fixture::A).expect("compile release A");
+        let b_application = qualification::compile(Fixture::BApplication)
+            .expect("compile application-only release B");
+        let b_theme =
+            qualification::compile(Fixture::BTheme).expect("compile theme-only release B");
+        let root = Arc::new(env.base.path().to_path_buf());
+        let first =
+            ThemeAssetManager::new(env.themes(), env.write_scope().clone(), Arc::clone(&root));
+        let second = ThemeAssetManager::new(env.themes(), env.write_scope().clone(), root);
+        let quotas = env.themes().site_quota().await.expect("read initial quota");
+        let now = Timestamp::now().as_second();
+        confirmed(
+            first
+                .install_system(&a, now)
+                .await
+                .expect("install release A"),
+        );
+
+        let (application_result, theme_result) = tokio::join!(
+            first.install_system(&b_application, now.checked_add(1).expect("advance time")),
+            second.install_system(&b_theme, now.checked_add(2).expect("advance time")),
+        );
+        confirmed(application_result.expect("install application release B"));
+        confirmed(theme_result.expect("install theme release B"));
+
+        let application = env
+            .themes()
+            .system_application_content()
+            .await
+            .expect("read current application")
+            .expect("current application exists");
+        let winner = if application.digest == b_application.application().content_digest() {
+            &b_application
+        } else {
+            assert_eq!(application.digest, b_theme.application().content_digest());
+            &b_theme
+        };
+        for package in winner.themes() {
+            let persisted = env
+                .themes()
+                .system_theme_revision(package.theme())
+                .await
+                .expect("read current bundled revision")
+                .expect("current bundled revision exists");
+            assert_eq!(persisted.digest, package.revision_digest());
+            assert_eq!(persisted.source_digest, package.source_digest());
+            assert_eq!(persisted.stylesheet_digest, package.stylesheet_digest());
+        }
+        let references = env
+            .themes()
+            .system_content_references()
+            .await
+            .expect("read references");
+        assert_eq!(
+            references.len(),
+            6,
+            "both competing replacement digests remain retained"
+        );
+        let live = references
+            .iter()
+            .filter(|reference| reference.live_references == 1)
+            .collect::<Vec<_>>();
+        assert_eq!(live.len(), 4, "only the complete winning inventory is live");
+        assert_eq!(
+            live.iter()
+                .map(|reference| reference.digest.clone())
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::iter::once(winner.application().content_digest())
+                .chain(winner.themes().flat_map(|package| {
+                    package
+                        .revision()
+                        .contents()
+                        .map(|content| ThemeContentDigest::from_digest(content.digest()))
+                }))
+                .collect(),
+            "positive references must be exactly the complete winning inventory"
+        );
+        let detached = references
+            .iter()
+            .filter(|reference| reference.live_references == 0)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            detached.len(),
+            2,
+            "both non-winning replacement digests are retained"
+        );
+        assert!(
+            detached
+                .iter()
+                .all(|reference| reference.retained_until_unix_seconds > now),
+            "non-winning release bytes remain retained rather than becoming collectable"
+        );
+        for content in std::iter::once(winner.application().content()).chain(
+            winner
+                .themes()
+                .flat_map(|package| package.revision().contents()),
+        ) {
+            let digest = ThemeContentDigest::from_digest(content.digest());
+            assert_eq!(
+                fs::read(first.content_path(digest.as_ref())).expect("read installed bytes"),
+                content.bytes()
+            );
+            assert!(
+                env.themes()
+                    .content_eligibility(&digest)
+                    .await
+                    .expect("read current eligibility")
+                    .is_some()
+            );
+        }
+        assert_eq!(
+            env.themes().site_quota().await.expect("read final quota"),
+            quotas
+        );
+        assert!(
+            env.themes()
+                .owner_quota(ThemeOwner::Site)
+                .await
+                .expect("read site quota")
+                .is_none()
+        );
+        assert!(
+            env.themes()
+                .list_themes(ThemeOwner::Site)
+                .await
+                .expect("read custom themes")
+                .is_empty()
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn expired_system_collection_racing_reinstallation_preserves_reinstalled_bytes(
+        #[case] backend: Backend,
+    ) {
+        use host::system_theme::qualification::{self, Fixture};
+
+        let env = backend.setup().await;
+        let a = qualification::compile(Fixture::A).expect("compile release A");
+        let b = qualification::compile(Fixture::BApplication).expect("compile release B");
+        let root = Arc::new(env.base.path().to_path_buf());
+        let collector =
+            ThemeAssetManager::new(env.themes(), env.write_scope().clone(), Arc::clone(&root));
+        let installer = ThemeAssetManager::new(env.themes(), env.write_scope().clone(), root);
+        let now = Timestamp::now().as_second();
+        let replacement = now.checked_add(1).expect("advance time");
+        let deadline = replacement
+            .checked_add(super::THEME_CONTENT_RETENTION_SECONDS)
+            .expect("retention deadline fits");
+        let digest = a.application().content_digest();
+        confirmed(
+            installer
+                .install_system(&a, now)
+                .await
+                .expect("install release A"),
+        );
+        confirmed(
+            installer
+                .install_system(&b, replacement)
+                .await
+                .expect("replace release A"),
+        );
+
+        let (collected, reinstalled) = tokio::join!(
+            collector.collect_system(&digest, deadline),
+            installer.install_system(&a, deadline),
+        );
+        match collected {
+            Ok(MutationOutcome::Confirmed(()))
+            | Err(ThemeAssetError::Storage(sqlx::Error::RowNotFound)) => {}
+            Err(error) => panic!("collector failed unexpectedly: {error}"),
+            Ok(MutationOutcome::CommitIndeterminate(())) => {
+                panic!("collector did not have a confirmed outcome")
+            }
+        }
+        confirmed(reinstalled.expect("reinstall release A"));
+        assert_eq!(
+            env.themes()
+                .system_application_content()
+                .await
+                .expect("read current application")
+                .expect("current application exists")
+                .digest,
+            digest
+        );
+        assert_eq!(
+            fs::read(installer.content_path(digest.as_ref())).expect("read reinstalled bytes"),
+            a.application().content().bytes()
+        );
+        assert!(
+            env.themes()
+                .content_eligibility(&digest)
+                .await
+                .expect("read eligibility")
+                .is_some()
+        );
+        assert_eq!(
+            env.themes()
+                .system_content_references()
+                .await
+                .expect("read references")
+                .into_iter()
+                .find(|reference| reference.digest == digest)
+                .expect("reinstalled digest remains tracked")
+                .live_references,
+            1
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn system_install_commit_acknowledgement_loss_retains_recoverable_inventory(
+        #[case] backend: Backend,
+    ) {
+        use host::system_theme::qualification::{self, Fixture};
+
+        let env = backend.setup().await;
+        let a = qualification::compile(Fixture::A).expect("compile release A");
+        let b = qualification::compile(Fixture::BApplication).expect("compile release B");
+        let root = Arc::new(env.base.path().to_path_buf());
+        let normal =
+            ThemeAssetManager::new(env.themes(), env.write_scope().clone(), Arc::clone(&root));
+        let acknowledgement_lost = ThemeAssetManager::new(
+            env.themes(),
+            env.write_scope()
+                .with_commit_acknowledgement_loss_after_commit_for_test(),
+            root,
+        );
+        let now = Timestamp::now().as_second();
+        confirmed(
+            normal
+                .install_system(&a, now)
+                .await
+                .expect("install release A"),
+        );
+        let outcome = acknowledgement_lost
+            .install_system(&b, now.checked_add(1).expect("advance time"))
+            .await
+            .expect("lost acknowledgement remains a mutation outcome");
+        assert!(matches!(outcome, MutationOutcome::CommitIndeterminate(())));
+
+        assert_eq!(
+            env.themes()
+                .system_application_content()
+                .await
+                .expect("read persisted application")
+                .expect("persisted application exists")
+                .digest,
+            b.application().content_digest()
+        );
+        for package in b.themes() {
+            assert_eq!(
+                env.themes()
+                    .system_theme_revision(package.theme())
+                    .await
+                    .expect("read persisted bundled revision")
+                    .expect("persisted bundled revision exists")
+                    .digest,
+                package.revision_digest()
+            );
+        }
+        let retained = a.application().content_digest();
+        assert_eq!(
+            fs::read(normal.content_path(retained.as_ref())).expect("read retained bytes"),
+            a.application().content().bytes()
+        );
+        for content in std::iter::once(b.application().content())
+            .chain(b.themes().flat_map(|package| package.revision().contents()))
+        {
+            let digest = ThemeContentDigest::from_digest(content.digest());
+            assert_eq!(
+                fs::read(normal.content_path(digest.as_ref()))
+                    .expect("read uncertain current bytes"),
+                content.bytes()
+            );
+        }
+        let references_before_retry = env
+            .themes()
+            .system_content_references()
+            .await
+            .expect("read uncertain references");
+        let eligibility_before_retry = env
+            .themes()
+            .list_content_eligibility()
+            .await
+            .expect("read uncertain eligibility");
+        confirmed(
+            normal
+                .install_system(&b, now.checked_add(2).expect("advance time"))
+                .await
+                .expect("idempotent retry"),
+        );
+        assert_eq!(
+            env.themes()
+                .system_content_references()
+                .await
+                .expect("read retry references"),
+            references_before_retry
+        );
+        assert_eq!(
+            env.themes()
+                .list_content_eligibility()
+                .await
+                .expect("read retry eligibility"),
+            eligibility_before_retry
+        );
+        normal
+            .reconcile_startup()
+            .await
+            .expect("reconcile current and retained bytes");
+        assert_eq!(
+            fs::read(normal.content_path(retained.as_ref()))
+                .expect("read retained bytes after reconciliation"),
+            a.application().content().bytes()
+        );
+        for content in std::iter::once(b.application().content())
+            .chain(b.themes().flat_map(|package| package.revision().contents()))
+        {
+            let digest = ThemeContentDigest::from_digest(content.digest());
+            assert_eq!(
+                fs::read(normal.content_path(digest.as_ref())).expect("read current bytes"),
+                content.bytes()
+            );
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn system_reconciliation_reclaims_complete_orphans_and_rejects_installed_corruption(
+        #[case] backend: Backend,
+    ) {
+        use host::system_theme::qualification::{self, Fixture};
+
+        let env = backend.setup().await;
+        let inventory = qualification::compile(Fixture::A).expect("compile release A");
+        let manager = ThemeAssetManager::new(
+            env.themes(),
+            env.write_scope().clone(),
+            Arc::new(env.base.path().to_path_buf()),
+        );
+        let orphan_bytes = b"uncommitted complete system orphan";
+        let orphan = digest(orphan_bytes);
+        let orphan_path = manager.content_path(orphan.as_ref());
+        fs::create_dir_all(orphan_path.parent().expect("content path has parent"))
+            .expect("create orphan shard");
+        fs::write(&orphan_path, orphan_bytes).expect("write complete uncommitted orphan");
+        let reconciliation = manager.reconcile_startup().await.expect("reconcile orphan");
+        assert_eq!(reconciliation.reclaimed_files, 1);
+        assert!(!orphan_path.exists());
+
+        confirmed(
+            manager
+                .install_system(&inventory, Timestamp::now().as_second())
+                .await
+                .expect("install release A"),
+        );
+        let digest = inventory.application().content_digest();
+        fs::write(
+            manager.content_path(digest.as_ref()),
+            b"corrupt installed bytes",
+        )
+        .expect("corrupt installed bytes");
+        assert!(
+            matches!(manager.reconcile_startup().await, Err(ThemeAssetError::IneligibleContent(found)) if found == digest)
+        );
+        fs::remove_file(manager.content_path(digest.as_ref())).expect("remove installed bytes");
+        assert!(
+            matches!(manager.reconcile_startup().await, Err(ThemeAssetError::IneligibleContent(found)) if found == digest)
+        );
+        assert_eq!(
+            env.themes()
+                .system_application_content()
+                .await
+                .expect("read persisted application")
+                .expect("persisted application remains")
+                .digest,
+            digest
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn shared_system_package_asset_tracks_roles_and_retention_boundaries(
+        #[case] backend: Backend,
+    ) {
+        use host::system_theme::shared_asset_fixture::{self, SharingFixture};
+
+        let env = backend.setup().await;
+        let png = compiled()
+            .assets()
+            .find(|(_, mime, _, _)| *mime == "image/png")
+            .map(|(_, _, bytes, _)| bytes.to_vec())
+            .expect("existing validated fixture supplies a PNG");
+        let both = shared_asset_fixture::compile(SharingFixture::Both, &png)
+            .expect("compile both-role inventory");
+        let one = shared_asset_fixture::compile(SharingFixture::One, &png)
+            .expect("compile one-role inventory");
+        let neither = shared_asset_fixture::compile(SharingFixture::Neither, &png)
+            .expect("compile no-role inventory");
+        let package = both.theme(common::theme::Theme::Terminal);
+        let validated = host::theme_package::validate_theme_package(
+            package.package_bytes(),
+            host::theme_package::ThemePackageLimits::default(),
+        )
+        .expect("shared package archive revalidates");
+        let asset_urls = validated
+            .asset_digests()
+            .map(|(path, digest)| {
+                (
+                    path.to_owned(),
+                    common::theme::ThemeAssetDigest::from_digest(digest)
+                        .content_url()
+                        .to_string(),
+                )
+            })
+            .collect();
+        let replay = validated
+            .compile(
+                &asset_urls,
+                host::theme_package::ThemePackageLimits::default(),
+            )
+            .expect("shared package recompiles with validator-minted URLs");
+        assert_eq!(
+            replay.revision_digest(),
+            package.revision().revision_digest()
+        );
+        assert_eq!(
+            replay.asset("assets/shared-a.png"),
+            package.revision().asset("assets/shared-a.png")
+        );
+        let manager = ThemeAssetManager::new(
+            env.themes(),
+            env.write_scope().clone(),
+            Arc::new(env.base.path().to_path_buf()),
+        );
+        let quotas = env.themes().site_quota().await.expect("read initial quota");
+        let now = Timestamp::now().as_second();
+        let partial = now.checked_add(1).expect("advance time");
+        let later = partial.checked_add(1).expect("advance time");
+        let retention = super::THEME_CONTENT_RETENTION_SECONDS;
+        let shared_asset = both
+            .theme(common::theme::Theme::Terminal)
+            .revision()
+            .asset("assets/shared-a.png")
+            .expect("shared terminal asset")
+            .2;
+        let shared = ThemeContentDigest::from_digest(shared_asset);
+        confirmed(
+            manager
+                .install_system(&both, now)
+                .await
+                .expect("install both roles"),
+        );
+        assert_eq!(
+            env.themes()
+                .system_content_references()
+                .await
+                .expect("read both references")
+                .into_iter()
+                .find(|reference| reference.digest == shared)
+                .expect("shared digest tracked")
+                .live_references,
+            2
+        );
+        for theme in [common::theme::Theme::Terminal, common::theme::Theme::Studio] {
+            let package = both.theme(theme);
+            let persisted = env
+                .themes()
+                .system_theme_revision(theme)
+                .await
+                .expect("read persisted shared package")
+                .expect("persisted shared package exists");
+            for path in ["assets/shared-a.png", "assets/shared-b.png"] {
+                let (mime, bytes, digest) = package
+                    .revision()
+                    .asset(path)
+                    .expect("compiled shared asset");
+                assert_eq!(mime, "image/png");
+                assert_eq!(digest, shared_asset);
+                assert_eq!(bytes, png);
+                let asset = persisted
+                    .assets
+                    .iter()
+                    .find(|asset| asset.path == path)
+                    .expect("persisted shared asset");
+                assert_eq!(asset.mime, mime);
+                assert_eq!(
+                    asset.digest,
+                    common::theme::ThemeAssetDigest::from_digest(shared_asset)
+                );
+            }
+        }
+        assert_eq!(
+            fs::read(manager.content_path(shared.as_ref())).expect("read one physical shared file"),
+            png
+        );
+        assert!(
+            manager.collect_system(&shared, now).await.is_err(),
+            "live shared bytes cannot collect"
+        );
+
+        confirmed(
+            manager
+                .install_system(&one, partial)
+                .await
+                .expect("detach one role"),
+        );
+        let partial_deadline = partial
+            .checked_add(retention)
+            .expect("retention deadline fits");
+        let reference = env
+            .themes()
+            .system_content_references()
+            .await
+            .expect("read partial references")
+            .into_iter()
+            .find(|reference| reference.digest == shared)
+            .expect("shared digest remains tracked");
+        assert_eq!(reference.live_references, 1);
+        assert_eq!(reference.retained_until_unix_seconds, partial_deadline);
+        confirmed(
+            manager
+                .install_system(&both, now)
+                .await
+                .expect("reattach at earlier clock"),
+        );
+        confirmed(
+            manager
+                .install_system(&one, now)
+                .await
+                .expect("repeat at earlier clock"),
+        );
+        assert_eq!(
+            env.themes()
+                .system_content_references()
+                .await
+                .expect("read repeated references")
+                .into_iter()
+                .find(|reference| reference.digest == shared)
+                .expect("shared digest remains tracked")
+                .retained_until_unix_seconds,
+            partial_deadline
+        );
+        confirmed(
+            manager
+                .install_system(&neither, later)
+                .await
+                .expect("detach final role"),
+        );
+        let final_deadline = later
+            .checked_add(retention)
+            .expect("retention deadline fits");
+        let reference = env
+            .themes()
+            .system_content_references()
+            .await
+            .expect("read final references")
+            .into_iter()
+            .find(|reference| reference.digest == shared)
+            .expect("shared digest remains retained");
+        assert_eq!(reference.live_references, 0);
+        assert_eq!(reference.retained_until_unix_seconds, final_deadline);
+        confirmed(
+            manager
+                .install_system(&neither, now)
+                .await
+                .expect("repeat earlier release"),
+        );
+        assert_eq!(
+            env.themes()
+                .system_content_references()
+                .await
+                .expect("read earlier repeated references")
+                .into_iter()
+                .find(|reference| reference.digest == shared)
+                .expect("shared digest remains retained")
+                .retained_until_unix_seconds,
+            final_deadline,
+            "an earlier supplied clock cannot shorten the final guarantee"
+        );
+        assert!(
+            manager
+                .collect_system(&shared, final_deadline - 1)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            fs::read(manager.content_path(shared.as_ref()))
+                .expect("shared file remains before deadline"),
+            png
+        );
+        confirmed(
+            manager
+                .collect_system(&shared, final_deadline)
+                .await
+                .expect("collect at deadline"),
+        );
+        assert!(!manager.content_path(shared.as_ref()).exists());
+        assert!(
+            env.themes()
+                .content_eligibility(&shared)
+                .await
+                .expect("read final eligibility")
+                .is_none()
+        );
+        assert_eq!(
+            env.themes().site_quota().await.expect("read final quota"),
+            quotas
+        );
+        assert!(
+            env.themes()
+                .owner_quota(ThemeOwner::Site)
+                .await
+                .expect("read site quota")
+                .is_none()
+        );
+        assert!(
+            env.themes()
+                .list_themes(ThemeOwner::Site)
+                .await
+                .expect("read custom themes")
+                .is_empty()
         );
     }
 
@@ -927,6 +2274,10 @@ mod tests {
             .expect_expired_retained_content()
             .once()
             .returning(|_| Ok(Vec::new()));
+        storage
+            .expect_expired_system_content()
+            .once()
+            .returning(|_| Ok(Vec::new()));
         storage.expect_content_eligibility().returning(|_| Ok(None));
         let manager = ThemeAssetManager::new(
             Arc::new(storage),
@@ -967,6 +2318,10 @@ mod tests {
             });
         storage
             .expect_expired_retained_content()
+            .once()
+            .returning(|_| Ok(Vec::new()));
+        storage
+            .expect_expired_system_content()
             .once()
             .returning(|_| Ok(Vec::new()));
         let manager = ThemeAssetManager::new(
@@ -1025,6 +2380,14 @@ mod tests {
             .expect_collect_retained_content()
             .once()
             .returning(|_, _, _, _| Ok(()));
+        storage
+            .expect_content_eligibility()
+            .once()
+            .returning(|_| Ok(None));
+        storage
+            .expect_expired_system_content()
+            .once()
+            .returning(|_| Ok(Vec::new()));
         storage
             .expect_list_content_eligibility()
             .times(2)
@@ -1198,6 +2561,10 @@ mod tests {
             .expect_collect_retained_content()
             .once()
             .returning(|_, _, _, _| Ok(()));
+        detached
+            .expect_content_eligibility()
+            .once()
+            .returning(|_| Ok(None));
         let manager = ThemeAssetManager::new(
             Arc::new(detached),
             mock_write_scope(),
@@ -1220,6 +2587,10 @@ mod tests {
             .returning(|| Ok(Vec::new()));
         reconciliation_storage
             .expect_expired_retained_content()
+            .once()
+            .returning(|_| Ok(Vec::new()));
+        reconciliation_storage
+            .expect_expired_system_content()
             .once()
             .returning(|_| Ok(Vec::new()));
         reconciliation_storage
@@ -1395,6 +2766,10 @@ mod tests {
         let mut storage = MockThemeStorage::new();
         storage
             .expect_expired_retained_content()
+            .once()
+            .returning(|_| Ok(Vec::new()));
+        storage
+            .expect_expired_system_content()
             .once()
             .returning(|_| Ok(Vec::new()));
         storage

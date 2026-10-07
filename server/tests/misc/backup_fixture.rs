@@ -8,6 +8,7 @@ use common::test_support::{
     parse_audience_name, parse_byte_size, parse_content_hash, parse_content_type,
     parse_display_name, parse_filename,
 };
+use common::theme::{Theme, ThemeContentDigest};
 use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::{AudienceTarget, ViewerIdentity};
@@ -15,26 +16,50 @@ use host::config_key::UserConfigKey;
 use host::passkey::Credential;
 use host::password::Password;
 use jaunder::cli::StorageArgs;
+use jiff::Timestamp;
 use serde_json::Value;
 use sqlx::{postgres::PgPoolOptions, sqlite::SqlitePoolOptions};
 use std::sync::Arc;
+
+use axum::{
+    Extension,
+    body::Body,
+    http::{HeaderMap, Request, StatusCode, header},
+};
 use storage::test_support::{
     SeedRawPost, confirmed_for, fp, passkey_credential_fixture, seed_local_subscription,
 };
 use storage::{
     HubMutationOutcome, MediaRecord, OperatorStatus, PasskeyCredentialId, PasskeyLabel,
-    PasskeyUserHandle, PublisherGeneration, StorageRuntimeConfig, open_existing_database,
+    PasskeyUserHandle, PublisherGeneration, StorageRuntimeConfig, SystemThemeContentReference,
+    SystemThemeRevision, ThemeAssetManager, ThemeContentEligibility, ThemeStorage,
+    open_existing_database,
 };
+use tower::ServiceExt;
 
 /// SHA-256 the media-table fixture row is keyed by; any stable value works, since
 /// the media *files* are mirrored separately from the media *table*.
 const FIXTURE_MEDIA_SHA256: &str =
     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-/// Identifiers returned by [`populate_backup_fixture`] so
-/// [`assert_backup_fixture_restored`] can check non-author visibility fidelity
-/// (a `Named`-audience post must survive restore visible to its subscriber, not
-/// silently Private — the bug in issue #4).
+/// One installed system content record and its exact immutable bytes.
+pub struct SystemThemeContentFixture {
+    pub eligibility: ThemeContentEligibility,
+    pub bytes: Vec<u8>,
+}
+
+/// Closed system inventory installed through the ordinary content lifecycle.
+pub struct SystemBackupFixture {
+    pub contents: Vec<SystemThemeContentFixture>,
+    pub references: Vec<SystemThemeContentReference>,
+    pub application: ThemeContentEligibility,
+    pub revisions: Vec<SystemThemeRevision>,
+    pub retained_application: ThemeContentDigest,
+    pub retained_studio: ThemeContentDigest,
+}
+
+/// Identifiers and system inventory captured by [`populate_backup_fixture`] for
+/// [`assert_backup_fixture_restored`], including Named-audience visibility.
 pub struct BackupFixtureIds {
     /// The operator who authors the fixture posts and owns the audience.
     pub author: UserId,
@@ -64,6 +89,7 @@ pub struct BackupFixtureIds {
     pub passkey_serialization: Value,
     pub passkey_created_at: UtcInstant,
     pub passkey_last_used_at: UtcInstant,
+    pub system: SystemBackupFixture,
 }
 
 /// Fixed microsecond-precision publish time: deterministic and safe from
@@ -145,6 +171,40 @@ async fn set_backup_passkey_timestamps(args: &StorageArgs, credential_id: &Passk
 /// Immutable pre-Jiff NDJSON spelling captured from the deployed Chrono backup
 /// format. It deliberately differs from Jiff's public `Z` rendering.
 const PRE_JIFF_BACKUP_PUBLISHED_AT_BYTES: &[u8] = b"2026-04-29T12:34:56.789012+00:00";
+
+pub fn assert_exported_system_theme_backup(backup_path: &std::path::Path, ids: &BackupFixtureIds) {
+    for table in [
+        "theme_content_eligibility",
+        "system_application_current",
+        "system_theme_content_references",
+        "system_theme_current",
+        "system_theme_revision_assets",
+        "system_theme_revisions",
+    ] {
+        assert!(
+            backup_path
+                .join("db")
+                .join(format!("{table}.ndjson"))
+                .is_file(),
+            "backup must contain {table} rows"
+        );
+    }
+    for content in &ids.system.contents {
+        let digest = content.eligibility.digest.as_ref();
+        assert_eq!(
+            std::fs::read(
+                backup_path
+                    .join("themes")
+                    .join(&digest[..2])
+                    .join(&digest[2..4])
+                    .join(digest),
+            )
+            .expect("read backed up system content"),
+            content.bytes,
+            "backup must retain exact system content bytes for {digest}"
+        );
+    }
+}
 
 pub fn assert_exported_backup_timestamp_bytes(backup_path: &std::path::Path) {
     let rows = std::fs::read(backup_path.join("db").join("posts.ndjson"))
@@ -304,6 +364,7 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
         author,
     )
     .await;
+    let system = install_system_backup_fixture(&factory, args).await;
     std::fs::write(args.storage_path.join("media").join("avatar.txt"), "media")
         .expect("write media");
     BackupFixtureIds {
@@ -322,6 +383,113 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
         passkey_serialization: passkey.serialization,
         passkey_created_at: passkey.created_at,
         passkey_last_used_at: passkey.last_used_at,
+        system,
+    }
+}
+
+async fn install_system_backup_fixture(
+    factory: &storage::StorageFactory,
+    args: &StorageArgs,
+) -> SystemBackupFixture {
+    use host::system_theme::qualification::{self, Fixture};
+
+    let manager = ThemeAssetManager::new(
+        factory.themes(),
+        factory.write_scope(),
+        Arc::new(args.storage_path.clone()),
+    );
+    let now = Timestamp::now().as_second();
+    let a = qualification::compile(Fixture::A).expect("compile A system inventory");
+    let b_application =
+        qualification::compile(Fixture::BApplication).expect("compile B application inventory");
+    let b_theme = qualification::compile(Fixture::BTheme).expect("compile B theme inventory");
+    for (inventory, offset, operation) in [
+        (&a, 0, "install A system inventory"),
+        (&b_application, 1, "install B application system inventory"),
+        (&b_theme, 2, "install B theme system inventory"),
+    ] {
+        confirmed_for(
+            manager
+                .install_system(inventory, now + offset)
+                .await
+                .expect(operation),
+            operation,
+        );
+    }
+
+    let themes = factory.themes();
+    let references = themes
+        .system_content_references()
+        .await
+        .expect("read system references");
+    let contents = futures_util::future::try_join_all(references.iter().map(|reference| {
+        let themes = Arc::clone(&themes);
+        async move {
+            let eligibility = themes
+                .content_eligibility(&reference.digest)
+                .await?
+                .expect("system reference has content eligibility");
+            let digest = reference.digest.as_ref();
+            let bytes = std::fs::read(
+                args.storage_path
+                    .join("themes")
+                    .join(&digest[..2])
+                    .join(&digest[2..4])
+                    .join(digest),
+            )
+            .expect("read installed system content");
+            Ok::<_, sqlx::Error>(SystemThemeContentFixture { eligibility, bytes })
+        }
+    }))
+    .await
+    .expect("read system content eligibility");
+    let application = themes
+        .system_application_content()
+        .await
+        .expect("read current system application")
+        .expect("installed system application");
+    let revisions = futures_util::future::try_join_all(
+        [Theme::Terminal, Theme::Studio, Theme::Reader]
+            .into_iter()
+            .map(|theme| {
+                let themes = Arc::clone(&themes);
+                async move {
+                    themes
+                        .system_theme_revision(theme)
+                        .await?
+                        .ok_or(sqlx::Error::RowNotFound)
+                }
+            }),
+    )
+    .await
+    .expect("read current system revisions");
+    let studio = revisions
+        .iter()
+        .find(|revision| revision.theme == Theme::Studio)
+        .expect("current Studio revision");
+    let retained_application = b_application.application().content_digest();
+    let retained_studio =
+        ThemeContentDigest::from_digest(a.theme(Theme::Studio).stylesheet_content().digest());
+    assert_ne!(application.digest, retained_application);
+    assert_ne!(
+        studio.stylesheet_digest,
+        a.theme(Theme::Studio).stylesheet_digest()
+    );
+    assert!(references.iter().any(
+        |reference| reference.digest == retained_application && reference.live_references == 0
+    ));
+    assert!(
+        references
+            .iter()
+            .any(|reference| reference.digest == retained_studio && reference.live_references == 0)
+    );
+    SystemBackupFixture {
+        contents,
+        references,
+        application,
+        revisions,
+        retained_application,
+        retained_studio,
     }
 }
 
@@ -624,6 +792,11 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
     assert_restored_public_post_and_passkey(factory.posts(), factory.passkeys(), ids).await;
     assert_restored_named_post(factory.posts(), ids).await;
     assert_restored_side_tables(factory.user_config(), factory.media(), args, ids).await;
+    assert_restored_system_theme_content(factory.themes(), args, ids).await;
+    assert_restored_system_theme_http(&factory, args, ids).await;
+    reconcile_restored_system_theme_content(&factory, args, ids).await;
+    assert_restored_system_theme_content(factory.themes(), args, ids).await;
+    assert_restored_system_theme_http(&factory, args, ids).await;
 }
 
 async fn assert_restored_backup_author(users: Arc<dyn storage::UserStorage>) {
@@ -733,6 +906,203 @@ async fn assert_restored_named_post(posts: Arc<dyn storage::PostStorage>, ids: &
             .is_none(),
         "a Named-audience post must not be visible to anonymous"
     );
+}
+
+fn assert_immutable_theme_headers(
+    headers: &HeaderMap,
+    content: &SystemThemeContentFixture,
+    etag: &str,
+) {
+    assert_eq!(headers[header::CONTENT_TYPE], content.eligibility.mime);
+    assert_eq!(headers[header::ETAG], etag);
+    assert_eq!(
+        headers[header::CACHE_CONTROL],
+        "public, max-age=31536000, immutable"
+    );
+    assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+}
+
+async fn assert_restored_system_theme_http(
+    factory: &storage::StorageFactory,
+    args: &StorageArgs,
+    ids: &BackupFixtureIds,
+) {
+    let app = jaunder::theme_content::router::<()>()
+        .layer(Extension(Arc::new(args.storage_path.clone())))
+        .layer(Extension(factory.themes()));
+    let current_studio = ids
+        .system
+        .revisions
+        .iter()
+        .find(|revision| revision.theme == Theme::Studio)
+        .expect("current Studio revision");
+    let current_studio = ids
+        .system
+        .contents
+        .iter()
+        .find(|content| {
+            content.eligibility.digest.as_ref() == current_studio.stylesheet_digest.as_ref()
+        })
+        .expect("current Studio content");
+    for digest in [
+        &ids.system.application.digest,
+        &ids.system.retained_application,
+        &current_studio.eligibility.digest,
+        &ids.system.retained_studio,
+    ] {
+        let content = ids
+            .system
+            .contents
+            .iter()
+            .find(|content| content.eligibility.digest == *digest)
+            .expect("recorded system content");
+        let uri = format!("/theme/{digest}");
+        let etag = format!("\"sha256-{digest}\"");
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&uri)
+                    .body(Body::empty())
+                    .expect("build theme request"),
+            )
+            .await
+            .expect("theme router response");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_immutable_theme_headers(response.headers(), content, &etag);
+        assert_eq!(
+            axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("read theme response body")
+                .as_ref(),
+            content.bytes
+        );
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(uri)
+                    .header(header::IF_NONE_MATCH, &etag)
+                    .body(Body::empty())
+                    .expect("build conditional theme request"),
+            )
+            .await
+            .expect("conditional theme router response");
+        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+        assert_immutable_theme_headers(response.headers(), content, &etag);
+        assert!(
+            axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("read empty conditional theme response")
+                .is_empty()
+        );
+    }
+}
+
+async fn reconcile_restored_system_theme_content(
+    factory: &storage::StorageFactory,
+    args: &StorageArgs,
+    ids: &BackupFixtureIds,
+) {
+    use host::system_theme::qualification::{self, Fixture};
+
+    let manager = ThemeAssetManager::new(
+        factory.themes(),
+        factory.write_scope(),
+        Arc::new(args.storage_path.clone()),
+    );
+    let inventory = qualification::compile(Fixture::BTheme).expect("compile restored release");
+    confirmed_for(
+        manager
+            .install_system(&inventory, Timestamp::now().as_second())
+            .await
+            .expect("install restored current release"),
+        "install restored current release",
+    );
+    manager
+        .reconcile_startup()
+        .await
+        .expect("reconcile restored system content");
+    for digest in [
+        &ids.system.retained_application,
+        &ids.system.retained_studio,
+    ] {
+        assert!(
+            args.storage_path
+                .join("themes")
+                .join(&digest.as_ref()[..2])
+                .join(&digest.as_ref()[2..4])
+                .join(digest.as_ref())
+                .is_file(),
+            "reconciliation must retain restored superseded system content"
+        );
+    }
+}
+
+async fn assert_restored_system_theme_content(
+    themes: Arc<dyn ThemeStorage>,
+    args: &StorageArgs,
+    ids: &BackupFixtureIds,
+) {
+    assert_eq!(
+        themes
+            .system_content_references()
+            .await
+            .expect("read restored system references"),
+        ids.system.references
+    );
+    assert_eq!(
+        themes
+            .system_application_content()
+            .await
+            .expect("read restored system application"),
+        Some(ids.system.application.clone())
+    );
+    for revision in &ids.system.revisions {
+        assert_eq!(
+            themes
+                .system_theme_revision(revision.theme)
+                .await
+                .expect("read restored system revision"),
+            Some(revision.clone())
+        );
+    }
+    for content in &ids.system.contents {
+        let digest = content.eligibility.digest.as_ref();
+        assert_eq!(
+            themes
+                .content_eligibility(&content.eligibility.digest)
+                .await
+                .expect("read restored system content eligibility"),
+            Some(content.eligibility.clone())
+        );
+        assert_eq!(
+            std::fs::read(
+                args.storage_path
+                    .join("themes")
+                    .join(&digest[..2])
+                    .join(&digest[2..4])
+                    .join(digest),
+            )
+            .expect("read restored system content"),
+            content.bytes,
+            "restore must retain exact system content bytes for {digest}"
+        );
+    }
+    for digest in [
+        &ids.system.retained_application,
+        &ids.system.retained_studio,
+    ] {
+        assert!(
+            themes
+                .content_eligibility(digest)
+                .await
+                .expect("read retained system content eligibility")
+                .is_some(),
+            "restored superseded system content must remain eligible"
+        );
+    }
 }
 
 async fn assert_restored_side_tables(

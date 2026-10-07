@@ -71,7 +71,7 @@ subsystems or authorization for parallel implementation writers.
     correcting the full devtool's native-library RPATH; docs-only tooling builds
     without the host producer. Runtime consumer adoption remains task 4 work.
 
-- [ ] Task 3: Add atomic system publication to the existing content lifecycle.
+- [x] Task 3: Add atomic system publication to the existing content lifecycle.
   - Add paired SQLite/PostgreSQL migrations and exact storage operations for
     system-owned package revisions and current application/package references.
     Reuse the content eligibility, digest locks, installer, and collector rather
@@ -88,6 +88,15 @@ subsystems or authorization for parallel implementation writers.
     rollback, shared system/custom digests, quota isolation, failure atomicity,
     retention boundaries, and orphan/uncertain-commit reconciliation. Exercise
     the existing backup formats with retained system bytes and eligibility.
+  - Evidence: focused both-backend migration, manager, shared-role retention,
+    concurrency, and real commit-acknowledgement-loss proofs pass. Populated
+    same/cross-backend backup/restore and four-hop replay preserve exact current
+    and retained bytes; the production router proves immutable 200/304
+    responses. Admission uses indexed current-live and bounded incoming
+    references, preserving retained rollback deadlines without visiting
+    unrelated history. Integrated storage/host/server all-target clippy and
+    independent Standards and Spec follow-up reviews pass. Runtime adoption
+    remains task 4 work.
 
 - [ ] Task 4: Wire startup and all document/serving consumers to the inventory.
   - Install and reconcile current system artifacts before readiness; inject only

@@ -10,7 +10,8 @@
 use std::{collections::BTreeMap, fmt::Write as _, fs, path::Path};
 
 use common::theme::{
-    Theme, ThemeContentDigest, ThemeRevisionDigest, ThemeSourceDigest, ThemeStylesheetDigest,
+    Theme, ThemeAssetDigest, ThemeContentDigest, ThemeRevisionDigest, ThemeSourceDigest,
+    ThemeStylesheetDigest,
 };
 use thiserror::Error;
 
@@ -317,16 +318,39 @@ fn compile_bundled_theme(
     manifest: &[u8],
     stylesheet: &[u8],
 ) -> Result<BundledThemePackage, SystemThemeError> {
-    let archive = export_theme_package(manifest, stylesheet, &BTreeMap::new())
+    compile_bundled_theme_with_assets(theme, manifest, stylesheet, &BTreeMap::new())
+}
+
+/// Runs one bundled package through the ordinary archive, validation, canonical
+/// source export, and compiler boundary. Asset URLs come only from the
+/// validator-minted asset digests, so package CSS cannot select an identity.
+fn compile_bundled_theme_with_assets(
+    theme: Theme,
+    manifest: &[u8],
+    stylesheet: &[u8],
+    assets: &BTreeMap<String, Vec<u8>>,
+) -> Result<BundledThemePackage, SystemThemeError> {
+    let archive = export_theme_package(manifest, stylesheet, assets)
         .map_err(|source| SystemThemeError { theme, source })?;
     let validated = validate_theme_package(&archive, ThemePackageLimits::default())
         .map_err(|source| SystemThemeError { theme, source })?;
     let source_digest = validated.source_digest();
+    let asset_urls = validated
+        .asset_digests()
+        .map(|(path, digest)| {
+            (
+                path.to_owned(),
+                ThemeAssetDigest::from_digest(digest)
+                    .content_url()
+                    .to_string(),
+            )
+        })
+        .collect();
     let package_bytes = validated
         .export_archive()
         .map_err(|source| SystemThemeError { theme, source })?;
     let revision = validated
-        .compile(&BTreeMap::new(), ThemePackageLimits::default())
+        .compile(&asset_urls, ThemePackageLimits::default())
         .map_err(|source| SystemThemeError { theme, source })?;
     Ok(BundledThemePackage {
         theme,
@@ -334,6 +358,65 @@ fn compile_bundled_theme(
         package_bytes,
         revision,
     })
+}
+
+/// Closed test-only inventories that share one validated package asset across
+/// selected bundled roles. They never alter the trusted application role or
+/// ordinary/qualification release inputs.
+#[cfg(any(test, feature = "test-utils"))]
+pub mod shared_asset_fixture {
+    use super::*;
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum SharingFixture {
+        Both,
+        One,
+        Neither,
+    }
+
+    const ASSET_A: &str = "assets/shared-a.png";
+    const ASSET_B: &str = "assets/shared-b.png";
+    const ASSET_MANIFEST_TERMINAL: &[u8] = br#"{"schema":1,"name":"Terminal","style_contract":1,"assets":{"assets/shared-a.png":"image/png","assets/shared-b.png":"image/png"},"defaults":{"header":["assets/shared-a.png","assets/shared-b.png"]}}"#;
+    const ASSET_MANIFEST_STUDIO: &[u8] = br#"{"schema":1,"name":"Studio","style_contract":1,"assets":{"assets/shared-a.png":"image/png","assets/shared-b.png":"image/png"},"defaults":{"header":["assets/shared-a.png","assets/shared-b.png"]}}"#;
+    const ASSET_CSS: &[u8] = b"\nbody { background-image: url(\"assets/shared-a.png\"); }\n";
+
+    /// Compiles a closed asset-sharing inventory from validated PNG package
+    /// input supplied by a test fixture; it cannot construct application CSS.
+    ///
+    /// # Errors
+    ///
+    /// Returns ordinary package validation/compiler errors for invalid input.
+    pub fn compile(
+        fixture: SharingFixture,
+        png: &[u8],
+    ) -> Result<SystemArtifactInventory, SystemThemeError> {
+        let mut inventory = compile_system_artifact_inventory()?;
+        let assets = BTreeMap::from([
+            (ASSET_A.to_owned(), png.to_vec()),
+            (ASSET_B.to_owned(), png.to_vec()),
+        ]);
+        if matches!(fixture, SharingFixture::Both | SharingFixture::One) {
+            let mut stylesheet = TERMINAL_CSS.to_vec();
+            stylesheet.extend_from_slice(ASSET_CSS);
+            inventory.themes[0] = compile_bundled_theme_with_assets(
+                Theme::Terminal,
+                ASSET_MANIFEST_TERMINAL,
+                &stylesheet,
+                &assets,
+            )?;
+        }
+        if matches!(fixture, SharingFixture::Both) {
+            let mut stylesheet = STUDIO_CSS.to_vec();
+            stylesheet.extend_from_slice(ASSET_CSS);
+            inventory.themes[1] = compile_bundled_theme_with_assets(
+                Theme::Studio,
+                ASSET_MANIFEST_STUDIO,
+                &stylesheet,
+                &assets,
+            )?;
+        }
+        Ok(inventory)
+    }
 }
 
 #[cfg(test)]
@@ -500,6 +583,30 @@ mod tests {
         assert_eq!(
             a.theme(Theme::Reader).stylesheet_digest(),
             b_theme.theme(Theme::Reader).stylesheet_digest(),
+        );
+    }
+
+    #[test]
+    fn empty_asset_producer_input_preserves_shipped_package_identity() {
+        let inventory = compile_system_artifact_inventory().expect("shipped packages compile");
+        let direct = compile_bundled_theme_with_assets(
+            Theme::Terminal,
+            TERMINAL_MANIFEST,
+            TERMINAL_CSS,
+            &BTreeMap::new(),
+        )
+        .expect("empty asset producer input compiles");
+        assert_eq!(
+            direct.package_bytes(),
+            inventory.theme(Theme::Terminal).package_bytes()
+        );
+        assert_eq!(
+            direct.source_digest(),
+            inventory.theme(Theme::Terminal).source_digest()
+        );
+        assert_eq!(
+            direct.revision_digest(),
+            inventory.theme(Theme::Terminal).revision_digest()
         );
     }
 

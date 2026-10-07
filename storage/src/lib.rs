@@ -45,6 +45,7 @@ pub mod sql;
 mod sqlite;
 mod storage_factory;
 mod subscriptions;
+mod system_themes;
 mod theme_asset_manager;
 mod theme_manager;
 mod themes;
@@ -117,6 +118,7 @@ pub use sqlite::{
 };
 pub use storage_factory::*;
 pub use subscriptions::*;
+pub use system_themes::{SystemThemeAdmission, SystemThemeContentReference, SystemThemeRevision};
 pub use theme_asset_manager::{
     THEME_CONTENT_RETENTION_SECONDS, ThemeAssetError, ThemeAssetManager, ThemeContentReconciliation,
 };

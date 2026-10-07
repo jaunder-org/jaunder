@@ -7,8 +7,9 @@ use tempfile::TempDir;
 
 use crate::misc::backup_fixture::{
     assert_backup_fixture_restored, assert_exported_backup_timestamp_bytes,
-    assert_supported_post_precedes_out_of_range_post, make_pre_jiff_backup_fixture,
-    populate_backup_fixture, replace_named_post_timestamp_with_out_of_range,
+    assert_exported_system_theme_backup, assert_supported_post_precedes_out_of_range_post,
+    make_pre_jiff_backup_fixture, populate_backup_fixture,
+    replace_named_post_timestamp_with_out_of_range,
 };
 
 use storage::test_support::{PostgresDbGuard, PostgresTestConfig, unique_postgres_url};
@@ -56,6 +57,7 @@ async fn sqlite_backup_restores_into_postgres() {
     .await
     .expect("sqlite backup");
     assert_exported_backup_timestamp_bytes(&backup_path);
+    assert_exported_system_theme_backup(&backup_path, &ids);
     make_pre_jiff_backup_fixture(&backup_path);
 
     let (target_args, _pg_target) = postgres_storage_args(&base, "postgres-target").await;
@@ -88,6 +90,7 @@ async fn postgres_backup_restores_into_sqlite() {
     .await
     .expect("postgres backup");
     assert_exported_backup_timestamp_bytes(&backup_path);
+    assert_exported_system_theme_backup(&backup_path, &ids);
     make_pre_jiff_backup_fixture(&backup_path);
 
     let target_args = sqlite_storage_args(&base, "sqlite-target");
@@ -119,6 +122,7 @@ async fn sqlite_backup_restores_into_sqlite() {
     .await
     .expect("sqlite backup");
     assert_exported_backup_timestamp_bytes(&backup_path);
+    assert_exported_system_theme_backup(&backup_path, &ids);
     make_pre_jiff_backup_fixture(&backup_path);
 
     let target_args = sqlite_storage_args(&base, "sqlite-target");
@@ -149,6 +153,7 @@ async fn postgres_backup_restores_into_postgres() {
     .await
     .expect("postgres backup");
     assert_exported_backup_timestamp_bytes(&backup_path);
+    assert_exported_system_theme_backup(&backup_path, &ids);
     make_pre_jiff_backup_fixture(&backup_path);
 
     let (target_args, _pg_target) = postgres_storage_args(&base, "postgres-target").await;
@@ -284,6 +289,7 @@ async fn backup_round_trips_full_cycle_across_backends() {
         .await
         .expect("backup p1");
     assert_exported_backup_timestamp_bytes(&pg_seed_export);
+    assert_exported_system_theme_backup(&pg_seed_export, &ids);
 
     // S1 (sqlite): restore, assert, export E_S1.
     let s1 = sqlite_storage_args(&base, "s1");
@@ -301,6 +307,7 @@ async fn backup_round_trips_full_cycle_across_backends() {
     .await
     .expect("backup s1");
     assert_exported_backup_timestamp_bytes(&sqlite_relay_export);
+    assert_exported_system_theme_backup(&sqlite_relay_export, &ids);
 
     // P2 (postgres): restore, assert, export E_P2.
     let (p2, _pg_p2) = postgres_storage_args(&base, "p2").await;
@@ -314,6 +321,7 @@ async fn backup_round_trips_full_cycle_across_backends() {
         .await
         .expect("backup p2");
     assert_exported_backup_timestamp_bytes(&pg_return_export);
+    assert_exported_system_theme_backup(&pg_return_export, &ids);
 
     // S2 (sqlite): restore, assert, export E_S2.
     let s2 = sqlite_storage_args(&base, "s2");
@@ -331,6 +339,7 @@ async fn backup_round_trips_full_cycle_across_backends() {
     .await
     .expect("backup s2");
     assert_exported_backup_timestamp_bytes(&sqlite_final_export);
+    assert_exported_system_theme_backup(&sqlite_final_export, &ids);
 
     // Both same-backend dump pairs are byte-identical — nothing drifts across the cycle.
     assert_backups_equal(&pg_seed_export, &pg_return_export);

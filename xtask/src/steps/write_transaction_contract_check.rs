@@ -16,7 +16,7 @@ use crate::steps::scan::run_source_scan;
 
 const POLICED_ROOTS: &[&str] = &["storage/src", "server/src", "web/src"];
 
-/// The authoritative, closed application-mutation census. Counts add to 96.
+/// The authoritative, closed application-mutation census. Counts add to 98.
 const AUDITED_TRAITS: &[(&str, &[&str])] = &[
     (
         "AudienceStorage",
@@ -130,6 +130,8 @@ const AUDITED_TRAITS: &[(&str, &[&str])] = &[
     (
         "ThemeStorage",
         &[
+            "admit_system_inventory",
+            "collect_system_content",
             "create_theme",
             "replace_draft",
             "rename_theme",
@@ -553,13 +555,28 @@ mod tests {
     }
 
     #[test]
-    fn exact_ninety_four_method_census_passes() {
+    fn exact_audited_method_census_passes() {
         let source = complete_census().replacen(
             "trait MediaStorage {",
             "trait MediaStorage { async fn media_entry_is_reclaimable(&self, transaction: &mut WriteTransaction);",
             1,
         );
         assert!(problems(&fixture(&source)).is_none());
+    }
+
+    #[test]
+    fn system_content_mutations_require_the_scoped_capability() {
+        // System ownership must not introduce an independently committing path.
+        for method in ["admit_system_inventory", "collect_system_content"] {
+            let scoped = format!("async fn {method}(&self, transaction: &mut WriteTransaction);");
+            let source =
+                complete_census().replacen(&scoped, &format!("async fn {method}(&self);"), 1);
+            assert!(
+                problems(&fixture(&source))
+                    .expect("system mutation without a capability must fail")
+                    .contains(&format!("ThemeStorage::{method} must take"))
+            );
+        }
     }
 
     #[test]
