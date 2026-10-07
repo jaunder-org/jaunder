@@ -334,6 +334,10 @@ impl OrgShortcodeExport<'_> {
 impl orgize::export::Traverser for OrgShortcodeExport<'_> {
     fn event(&mut self, event: orgize::export::Event, ctx: &mut orgize::export::TraversalContext) {
         match event {
+            orgize::export::Event::Enter(orgize::export::Container::VerseBlock(block)) => {
+                export_org_verse(self.source, &mut self.html, block);
+                ctx.skip();
+            }
             orgize::export::Event::Enter(orgize::export::Container::SourceBlock(block)) => {
                 if self.highlight_error.is_none()
                     && let Some(language) = block.language()
@@ -423,6 +427,90 @@ impl orgize::export::Traverser for OrgShortcodeExport<'_> {
             event => self.html.event(event, ctx),
         }
     }
+}
+
+/// Verse is prose with authored line boundaries. Reuse the document exporter
+/// for inline objects, retaining footnote identity and inert shortcode text.
+fn export_org_verse(
+    source: &str,
+    html: &mut orgize::export::HtmlExport,
+    block: orgize::ast::VerseBlock,
+) {
+    use orgize::export::{Container, Event, TraversalContext, Traverser};
+
+    let content = &source[usize::from(block.content_start())..usize::from(block.content_end())];
+    html.event(
+        Event::Enter(Container::VerseBlock(block.clone())),
+        &mut TraversalContext::default(),
+    );
+    let indent = content
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(verse_indent)
+        .min()
+        .unwrap_or(0);
+    for line in content.lines() {
+        html.push_str("&nbsp;".repeat(verse_indent(line).saturating_sub(indent)));
+        for object in
+            verse_inline_objects(line.trim_start_matches([' ', '\t'])).children_with_tokens()
+        {
+            html.element(object, &mut TraversalContext::default());
+        }
+        html.push_str("<br>");
+    }
+    html.event(
+        Event::Leave(Container::VerseBlock(block)),
+        &mut TraversalContext::default(),
+    );
+}
+
+/// A leading prose sentinel prevents line text from becoming a block, heading,
+/// TODO keyword, or tag list. Remove only that sentinel from the parsed tree;
+/// orgize remains the authority for all inline syntax and text export.
+fn verse_inline_objects(line: &str) -> orgize::SyntaxNode {
+    use orgize::rowan::{GreenNode, GreenToken, NodeOrToken, ast::AstNode};
+
+    let parsed = orgize::Org::parse(format!("x {line}"));
+    let Some(paragraph) = parsed.first_node::<orgize::ast::Paragraph>() else {
+        unreachable!("a prose-prefixed verse line always parses as a paragraph");
+    };
+    let children =
+        paragraph.syntax().children_with_tokens().enumerate().map(
+            |(index, element)| match element {
+                NodeOrToken::Node(node) => NodeOrToken::Node(node.green().into_owned()),
+                NodeOrToken::Token(token) => {
+                    let text = if index == 0 {
+                        let Some(text) = token.text().strip_prefix("x ") else {
+                            unreachable!("the first prose token contains the verse sentinel");
+                        };
+                        text
+                    } else {
+                        token.text()
+                    };
+                    NodeOrToken::Token(GreenToken::new(
+                        orgize::rowan::SyntaxKind(token.kind() as u16),
+                        text,
+                    ))
+                }
+            },
+        );
+    orgize::SyntaxNode::new_root(GreenNode::new(
+        orgize::rowan::SyntaxKind(orgize::SyntaxKind::PARAGRAPH as u16),
+        children.collect::<Vec<_>>(),
+    ))
+}
+
+/// Org export measures indentation in columns; tabs reach the next eight-column stop.
+fn verse_indent(line: &str) -> usize {
+    line.chars()
+        .take_while(|ch| matches!(ch, ' ' | '\t'))
+        .fold(0, |columns, ch| {
+            if ch == '\t' {
+                columns + 8 - columns % 8
+            } else {
+                columns + 1
+            }
+        })
 }
 
 fn render_org_with_shortcodes(
@@ -1673,6 +1761,98 @@ mod tests {
                 "{format:?}: {unchanged}"
             );
         }
+    }
+
+    #[test]
+    fn org_verse_preserves_prose_layout_and_inline_markup() {
+        let source = "#+begin_verse\nTo bait fish withal.\n  A *bold* line.\n    A [[https://example.org][linked]] line.\n\nLast line.\n#+end_verse";
+        let html = render(&parse_post_body(source), PostFormat::Org);
+        assert!(html.contains("To bait fish withal.<br>"), "{html}");
+        assert!(
+            html.contains("&nbsp;&nbsp;A <b>bold</b> line.<br>"),
+            "{html}"
+        );
+        assert!(
+            html.contains("&nbsp;&nbsp;&nbsp;&nbsp;A <a href=\"https://example.org\""),
+            "{html}"
+        );
+        assert!(html.contains("<br><br>Last line.<br></p>"), "{html}");
+        assert!(
+            !html.contains("<pre") && !html.contains("#+begin"),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn org_verse_keeps_line_text_out_of_block_and_shortcode_syntax() {
+        for delimiter in ["verse", "VERSE"] {
+            let source = format!(
+                "#+begin_{delimiter}\nTODO first :tag:\nNot a heading :tag:\n- Not a list\n{{{{< youtube dQw4w9WgXcQ >}}}}\n  ~literal---...~ /prose--word/\n#+end_{delimiter}"
+            );
+            let html = render(&parse_post_body(&source), PostFormat::Org);
+            assert!(
+                html.contains("TODO first :tag:<br>Not a heading :tag:<br>- Not a list<br>"),
+                "{html}"
+            );
+            assert!(
+                html.contains("{{&lt; youtube dQw4w9WgXcQ &gt;}}<br>"),
+                "{html}"
+            );
+            assert!(
+                html.contains("<code>literal---...</code> <i>prose–word</i>"),
+                "{html}"
+            );
+            assert!(
+                !html.contains("<iframe") && !html.contains("<ul") && !html.contains("<h"),
+                "{html}"
+            );
+        }
+    }
+
+    #[test]
+    fn org_verse_relative_indentation_tabs_empty_lines_and_safe_text() {
+        let source = "#+BEGIN_VERSE\n  first <script>unsafe</script> & text\n\tsecond\n    third\n\n#+END_VERSE";
+        let html = render(&parse_post_body(source), PostFormat::Org);
+        assert!(
+            html.contains("<p>first &lt;script&gt;unsafe&lt;/script&gt; &amp; text<br>"),
+            "{html}"
+        );
+        assert!(html.contains("&nbsp;".repeat(6).as_str()), "{html}");
+        assert!(html.contains("&nbsp;&nbsp;third<br><br></p>"), "{html}");
+        let empty = render(
+            &parse_post_body("#+begin_verse\n#+end_verse"),
+            PostFormat::Org,
+        );
+        assert_eq!(empty.as_ref(), "<p></p>");
+    }
+
+    #[test]
+    fn org_quote_retains_paragraphs_inline_markup_and_inert_shortcodes() {
+        for delimiter in ["quote", "QUOTE"] {
+            let source = format!(
+                "#+begin_{delimiter}\nFirst *bold* paragraph.\n\nSecond /italic/ [[https://example.org][link]].\n\n{{{{< youtube dQw4w9WgXcQ >}}}}\n#+end_{delimiter}"
+            );
+            let html = render(&parse_post_body(&source), PostFormat::Org);
+            assert!(
+                html.starts_with("<blockquote><p>First <b>bold</b> paragraph."),
+                "{html}"
+            );
+            assert!(
+                html.contains("</p><p>Second <i>italic</i> <a href="),
+                "{html}"
+            );
+            assert!(html.ends_with("</p></blockquote>"), "{html}");
+            assert!(!html.contains("<iframe"), "{html}");
+        }
+    }
+
+    #[test]
+    fn org_verse_correction_preserves_ordinary_and_literal_blocks() {
+        let source = "Ordinary\nwrapped prose.\n\n#+begin_example\n*literal*\nnext line\n#+end_example\n\n#+begin_src text\n*literal*\nnext line\n#+end_src";
+        let html = render(&parse_post_body(source), PostFormat::Org);
+        assert!(html.contains("<p>Ordinary\nwrapped prose."), "{html}");
+        assert!(html.contains("<pre>*literal*\nnext line\n</pre>"), "{html}");
+        assert!(!html.contains("<br>"), "{html}");
     }
 
     #[test]
