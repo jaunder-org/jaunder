@@ -110,14 +110,16 @@ them up case-insensitively."
 (defun jaunder--auth-secret ()
   "Retrieve the app password for the active blog's user via auth-source.
 Thin I/O wrapper over `auth-source-search' using `jaunder--auth-source-spec'."
-  (let* ((match (car (apply #'auth-source-search
-                            (jaunder--auth-source-spec (jaunder--active-base-url)
-                                                       (jaunder--active-username)))))
-         (secret (and match (plist-get match :secret))))
-    (cond ((functionp secret) (funcall secret))
-          (secret secret)
-          (t (error "jaunder: no auth-source entry for %s@%s"
-                    (jaunder--active-username) (jaunder--active-base-url))))))
+  (jaunder--with-debug-operation
+   "auth.lookup" nil
+   (let* ((match (car (apply #'auth-source-search
+                             (jaunder--auth-source-spec (jaunder--active-base-url)
+                                                        (jaunder--active-username)))))
+          (secret (and match (plist-get match :secret))))
+     (cond ((functionp secret) (funcall secret))
+           (secret secret)
+           (t (error "jaunder: no auth-source entry for %s@%s"
+                     (jaunder--active-username) (jaunder--active-base-url)))))))
 
 (defun jaunder--curl-header-value (value)
   "Escape VALUE so `plz' transmits the header intact through curl's config file.

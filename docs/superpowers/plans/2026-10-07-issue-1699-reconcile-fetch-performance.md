@@ -44,7 +44,7 @@ backend behavior changes; use existing live Emacs fixtures for consumer proof.
     roots, return/signal/quit preservation, buffer lifecycle, clear without
     creation, fresh IDs after clear, eviction-marker accounting, and
     sink/warning failure.
-- [ ] **3. Instrument acquisition, transformation and filesystem work.**
+- [x] **3. Instrument acquisition, transformation and filesystem work.**
   - Depends on 1 and 2. Own every `transport.*`, `service.*`, `atom.*`, `org.*`,
     `member.*`, `post-link.*`, `media.*`, and `pull.*` label from the spec.
     Instrument real owning boundaries, not just their interactive callers.
@@ -57,10 +57,21 @@ backend behavior changes; use existing live Emacs fixtures for consumer proof.
     and content sentinels at dynamic field producers. Retain Media trust/no-
     overwrite, conditional revalidation, partial success and source invariants.
     Run focused live publish/pull workflows with diagnostics both off and on.
+  - Evidence: 467/467 pure tests and warning-free compilation. Five focused live
+    publish/pull/reconciliation tests passed both off and on against freshly
+    provisioned servers; all 24 task-3 labels were observed, with no live
+    credential/account/origin leakage. Reproduction and parked evidence:
+    `.xtask/issue-1699/task3-live-proof.el` and
+    `1791410827438-2657327.{out,err}` in the same evidence directory. These
+    temporary tools do not ship; authoritative coverage remains task 5.
 - [ ] **4. Instrument user workflows and complete correlation.**
   - Depends on 2 and 3. Own every `config.*`, `auth.*`, `author.*`, `publish.*`,
     `delete.*`, `report.*`, `inventory.*`, `reconcile.*`, `conflict.*`,
     `merge.*` label; no spec inventory label is left outside tasks 3/4.
+  - Progress: `config.resolve` and `auth.lookup` wrap their actual owners,
+    without dynamic fields. Four focused off/on, privacy, condition and
+    disabled-work proofs pass; the complete pure suite is 471/471 and
+    byte-compilation is warning-free. Remaining workflow owners are pending.
   - Contract: outer command/batch/row spans nest existing lower-level
     operations; direct helper calls remain independent roots. Ediff setup and
     later finish/ cancel/discard are separate calls, not a fictitious

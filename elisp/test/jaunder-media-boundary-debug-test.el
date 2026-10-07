@@ -1,7 +1,7 @@
 ;;; jaunder-media-boundary-debug-test.el --- Media diagnostic boundaries -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; Real publish and pulled-copy owners preserve bytes, request/work counts and
+;; Real publish and Local Media Copy owners preserve bytes, work counts and
 ;; signal data with logging off/on.  Failure snapshots include committed copies
 ;; and staging leftovers, so diagnostics cannot hide partial filesystem effects.
 
@@ -40,7 +40,7 @@
              spans)))
 
 (defun jaunder-media-debug--pull (debug scenario)
-  "Run real pulled-copy SCENARIO with DEBUG and return comparable effects."
+  "Run real Local Media Copy SCENARIO with DEBUG and return comparable effects."
   (jaunder-debug-boundary--with-session
    (let* ((root (file-name-as-directory (make-temp-file "jaunder-media-proof-" t)))
           (bytes (string-as-unibyte "private-bytes"))
