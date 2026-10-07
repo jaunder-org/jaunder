@@ -79,9 +79,9 @@ Member inventory."
 (defun jaunder--pulled-post-link-target-p (local member root)
   "Return non-nil when LOCAL still proves MEMBER's same-root Org target."
   (let ((path (jaunder-inventory-local-path local)))
-    (and (file-regular-p path)
+    (and (not (jaunder--inventory-local-member-evidence-reason local member))
+         (file-regular-p path)
          (file-in-directory-p (file-truename path) (file-truename root))
-         (not (jaunder--inventory-local-member-evidence-reason local member))
          (pcase-let ((`(,id ,slug) (jaunder--read-local-properties path)))
            (let ((current (jaunder--make-inventory-local
                            :path path :id (jaunder--canonical-post-id id) :slug slug)))
@@ -92,11 +92,14 @@ Member inventory."
 Only one valid Member/local proof may own an href.  Invalid alternate outcomes,
 duplicate href evidence, and incomplete local evidence deliberately produce no
 replacement."
-  (let ((by-href (make-hash-table :test #'equal)))
+  (let ((by-href (make-hash-table :test #'equal))
+        ;; Only equal Post IDs can prove a target.  Preserve competing local
+        ;; evidence in each bucket so an indexed join cannot hide ambiguity.
+        (by-id (jaunder--index-by locals #'jaunder-inventory-local-id)))
     (dolist (member members)
       (let ((href (jaunder-inventory-member-alternate-href member)))
         (when (and href (not (jaunder-inventory-member-alternate-invalid-reason member)))
-          (dolist (local locals)
+          (dolist (local (gethash (jaunder-inventory-member-id member) by-id))
             (when (jaunder--pulled-post-link-target-p local member root)
               (puthash href
                        (cons (format "./%s.org" (jaunder-inventory-member-slug member))
