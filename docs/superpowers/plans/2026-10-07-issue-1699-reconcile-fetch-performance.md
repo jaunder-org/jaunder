@@ -76,8 +76,16 @@ backend behavior changes; use existing live Emacs fixtures for consumer proof.
     off/on proofs cover both creation paths, actual
     publishing/write-back/rename, local deletion, input-buffer exit, callback
     correlation, and native error/quit partial effects; the pure suite is
-    474/474 and byte-compilation is warning-free. Remaining workflow owners are
-    pending.
+    474/474 and byte-compilation is warning-free. Publishing and deletion now
+    cover all eight required labels, including both validation, conditional
+    update, and checkpoint owners. `publish.recover` owns durable intent
+    preparation/matching; its replay transfer/retries are timed by
+    `publish.create`. Seven focused proofs compare native return values,
+    wire/key/If-Match/delay sequences, unchanged and changed recovery,
+    checkpoint/rename partial effects, standalone calls, parent trees, and
+    disabled diagnostic factories. The pure suite is 481/481; production forms
+    are structurally identical after removing diagnostic wrappers. Remaining
+    report/inventory, batch/row, conflict, and merge owners are pending.
   - Contract: outer command/batch/row spans nest existing lower-level
     operations; direct helper calls remain independent roots. Ediff setup and
     later finish/ cancel/discard are separate calls, not a fictitious

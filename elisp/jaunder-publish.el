@@ -44,13 +44,14 @@
   "Signal an error if ENTRY is not publishable; return nil otherwise.
 Requires a non-empty body; a `scheduled' STATUS requires a future #+DATE:
 \(DATE-RAW interpreted in TZ)."
-  (when (string= (string-trim (or (jaunder-entry-body entry) "")) "")
-    (error "jaunder: refusing to publish an empty body"))
-  (when (and status (string= (downcase status) "scheduled"))
-    (let ((utc (and date-raw (jaunder--org-date->utc date-raw tz))))
-      (unless (and utc (time-less-p (current-time) (date-to-time utc)))
-        (error "jaunder: a scheduled post needs a future #+DATE:"))))
-  nil)
+  (jaunder--with-debug-operation "publish.validate" nil
+                                 (when (string= (string-trim (or (jaunder-entry-body entry) "")) "")
+                                   (error "jaunder: refusing to publish an empty body"))
+                                 (when (and status (string= (downcase status) "scheduled"))
+                                   (let ((utc (and date-raw (jaunder--org-date->utc date-raw tz))))
+                                     (unless (and utc (time-less-p (current-time) (date-to-time utc)))
+                                       (error "jaunder: a scheduled post needs a future #+DATE:"))))
+                                 nil))
 
 (defun jaunder--location->id (location)
   "Return the trailing numeric post id from a create `Location' URL, or nil."
@@ -68,22 +69,23 @@ Clearing `published' keeps `jaunder--atom-entry->xml' from emitting a
 (defun jaunder--rename-to-slug (slug)
   "Rename the current buffer's file and buffer to SLUG.org in its directory.
 A no-op when already so named; on collision appends `-N'.  Returns the path."
-  (let* ((old (or (buffer-file-name)
-                  (error "jaunder: buffer is not visiting a file")))
-         (dir (file-name-directory old))
-         (target (expand-file-name (concat slug ".org") dir)))
-    (if (string= old target)
-        old
-      (let ((final target) (n 1))
-        (while (and (file-exists-p final) (not (equal final old)))
-          (setq final (expand-file-name (format "%s-%d.org" slug n) dir)
-                n (1+ n)))
-        (unless (equal final old)
-          (rename-file old final)
-          ;; ALONG-WITH-FILE=t: the file is already moved, so don't re-save it;
-          ;; NO-QUERY=t: never prompt (publish is automated).
-          (set-visited-file-name final t t))
-        final))))
+  (jaunder--with-debug-operation "publish.checkpoint" nil
+                                 (let* ((old (or (buffer-file-name)
+                                                 (error "jaunder: buffer is not visiting a file")))
+                                        (dir (file-name-directory old))
+                                        (target (expand-file-name (concat slug ".org") dir)))
+                                   (if (string= old target)
+                                       old
+                                     (let ((final target) (n 1))
+                                       (while (and (file-exists-p final) (not (equal final old)))
+                                         (setq final (expand-file-name (format "%s-%d.org" slug n) dir)
+                                               n (1+ n)))
+                                       (unless (equal final old)
+                                         (rename-file old final)
+                                         ;; ALONG-WITH-FILE=t: the file is already moved, so don't re-save it;
+                                         ;; NO-QUERY=t: never prompt (publish is automated).
+                                         (set-visited-file-name final t t))
+                                       final)))))
 
 (defun jaunder--save-buffer-silently ()
   "Save the current Post without routine file and backup chatter."
@@ -106,63 +108,64 @@ Precondition for the publish-now `#+DATE:' render: the buffer's JAUNDER_DATE_TZ
 must already be recorded (the command calls `jaunder--ensure-date-tz' before the
 send); absent it, the render falls back to the local zone via
 `jaunder--resolve-zone'."
-  (let* ((fields (jaunder--harvest-response-fields (plist-get response :body)))
-         (audiences (jaunder--synchronized-response-audiences
-                     fields audience-capable))
-         (slug (cdr (assq 'slug fields)))
-         (published (cdr (assq 'published fields)))
-         (etag (jaunder--response-header response "ETag"))
-         (id (jaunder--location->id
-              (jaunder--response-header response "Location")))
-         (now (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t))
-         (synced-at (if (eq create-intent-matches 'changed)
-                        (or (jaunder--buffer-property "JAUNDER_CREATE_ATTEMPT_AT") now)
-                      now)))
-    ;; Refuse a partial create checkpoint: an ID without this validator would
-    ;; turn a restart into an unconditional PUT.
-    (when created
-      (unless id (error "jaunder: create response has no Member ID"))
-      (unless slug (error "jaunder: create response has no canonical slug"))
-      (unless (jaunder--strong-etag-p etag)
-        (error "jaunder: create response must carry a strong ETag")))
-    (when (and (not created) (not (jaunder--strong-etag-p etag)))
-      (error "jaunder: update response must carry a strong ETag"))
-    (when created (jaunder--set-property "JAUNDER_ID" id))
-    (when slug (jaunder--set-property "JAUNDER_SLUG" slug))
-    ;; A replay's ETag is the remote baseline even when the local Entry changed
-    ;; after its recorded create attempt.  The original attempt time leaves that
-    ;; changed file visibly local-ahead rather than marker-unclassifiable.
-    (jaunder--set-property "JAUNDER_SYNCED" etag)
-    (jaunder--set-property "JAUNDER_SYNCED_AT" synced-at)
-    (when (eq create-intent-matches 'changed)
-      (jaunder--set-property "JAUNDER_LOCAL_AHEAD" "true"))
-    (when conditional-update
-      (jaunder--remove-property "JAUNDER_LOCAL_AHEAD"))
-    (when published
-      ;; published→UTC (drop the offset): the canonical value the server stamped.
-      (let ((utc (format-time-string "%Y-%m-%dT%H:%M:%SZ"
-                                     (date-to-time published) t))
-            (tz (jaunder--buffer-property "JAUNDER_DATE_TZ")))
-        (jaunder--set-property "JAUNDER_DATE_UTC" utc)
-        ;; "publish now": no author #+DATE: — render it from the server time.
-        (unless (jaunder--buffer-keyword "DATE")
-          (jaunder--set-keyword "DATE" (jaunder--utc->org-date utc tz)))))
-    ;; A changed replay checkpoints remote identity without discarding an
-    ;; authored local audience edit that still needs a conditional update.
-    (when (and audiences (not (eq create-intent-matches 'changed)))
-      (jaunder--replace-audience-properties audiences))
-    ;; Converge confirmed metadata before the identity checkpoint; an interrupted
-    ;; create still retains its ID, ETag and intent in that first saved image.
-    (jaunder--order-local-properties)
-    ;; This is the create identity checkpoint.  It deliberately precedes the
-    ;; intent cleanup below so an interruption retains a conditional baseline.
-    (jaunder--save-buffer-silently)
-    (when (jaunder--buffer-property "JAUNDER_ID")
-      (jaunder--remove-property "JAUNDER_CREATE_KEY")
-      (jaunder--remove-property "JAUNDER_CREATE_DIGEST")
-      (jaunder--remove-property "JAUNDER_CREATE_ATTEMPT_AT")
-      (jaunder--save-buffer-silently))
-    slug))
+  (jaunder--with-debug-operation "publish.checkpoint" nil
+                                 (let* ((fields (jaunder--harvest-response-fields (plist-get response :body)))
+                                        (audiences (jaunder--synchronized-response-audiences
+                                                    fields audience-capable))
+                                        (slug (cdr (assq 'slug fields)))
+                                        (published (cdr (assq 'published fields)))
+                                        (etag (jaunder--response-header response "ETag"))
+                                        (id (jaunder--location->id
+                                             (jaunder--response-header response "Location")))
+                                        (now (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t))
+                                        (synced-at (if (eq create-intent-matches 'changed)
+                                                       (or (jaunder--buffer-property "JAUNDER_CREATE_ATTEMPT_AT") now)
+                                                     now)))
+                                   ;; Refuse a partial create checkpoint: an ID without this validator would
+                                   ;; turn a restart into an unconditional PUT.
+                                   (when created
+                                     (unless id (error "jaunder: create response has no Member ID"))
+                                     (unless slug (error "jaunder: create response has no canonical slug"))
+                                     (unless (jaunder--strong-etag-p etag)
+                                       (error "jaunder: create response must carry a strong ETag")))
+                                   (when (and (not created) (not (jaunder--strong-etag-p etag)))
+                                     (error "jaunder: update response must carry a strong ETag"))
+                                   (when created (jaunder--set-property "JAUNDER_ID" id))
+                                   (when slug (jaunder--set-property "JAUNDER_SLUG" slug))
+                                   ;; A replay's ETag is the remote baseline even when the local Entry changed
+                                   ;; after its recorded create attempt.  The original attempt time leaves that
+                                   ;; changed file visibly local-ahead rather than marker-unclassifiable.
+                                   (jaunder--set-property "JAUNDER_SYNCED" etag)
+                                   (jaunder--set-property "JAUNDER_SYNCED_AT" synced-at)
+                                   (when (eq create-intent-matches 'changed)
+                                     (jaunder--set-property "JAUNDER_LOCAL_AHEAD" "true"))
+                                   (when conditional-update
+                                     (jaunder--remove-property "JAUNDER_LOCAL_AHEAD"))
+                                   (when published
+                                     ;; published→UTC (drop the offset): the canonical value the server stamped.
+                                     (let ((utc (format-time-string "%Y-%m-%dT%H:%M:%SZ"
+                                                                    (date-to-time published) t))
+                                           (tz (jaunder--buffer-property "JAUNDER_DATE_TZ")))
+                                       (jaunder--set-property "JAUNDER_DATE_UTC" utc)
+                                       ;; "publish now": no author #+DATE: — render it from the server time.
+                                       (unless (jaunder--buffer-keyword "DATE")
+                                         (jaunder--set-keyword "DATE" (jaunder--utc->org-date utc tz)))))
+                                   ;; A changed replay checkpoints remote identity without discarding an
+                                   ;; authored local audience edit that still needs a conditional update.
+                                   (when (and audiences (not (eq create-intent-matches 'changed)))
+                                     (jaunder--replace-audience-properties audiences))
+                                   ;; Converge confirmed metadata before the identity checkpoint; an interrupted
+                                   ;; create still retains its ID, ETag and intent in that first saved image.
+                                   (jaunder--order-local-properties)
+                                   ;; This is the create identity checkpoint.  It deliberately precedes the
+                                   ;; intent cleanup below so an interruption retains a conditional baseline.
+                                   (jaunder--save-buffer-silently)
+                                   (when (jaunder--buffer-property "JAUNDER_ID")
+                                     (jaunder--remove-property "JAUNDER_CREATE_KEY")
+                                     (jaunder--remove-property "JAUNDER_CREATE_DIGEST")
+                                     (jaunder--remove-property "JAUNDER_CREATE_ATTEMPT_AT")
+                                     (jaunder--save-buffer-silently))
+                                   slug)))
 
 (defun jaunder--new-post-in (dir now-string)
   "Create and save a timestamped draft in DIR stamped NOW-STRING; return its path.
@@ -402,42 +405,44 @@ Retries a signalled transport error or a 5xx status, up to 3 attempts total
 (backoff ~1s then ~2s); a 4xx or 2xx returns immediately.  Returns the
 `jaunder--http-request' response plist.  The ephemeral key lives only for this
 call unless KEY is supplied by durable create recovery."
-  (let ((key (or key (jaunder--idempotency-key)))
-        (delays '(1 2))
-        (attempt 0)
-        resp)
-    (while (null resp)
-      (setq attempt (1+ attempt))
-      (let ((r (condition-case err
-                   (jaunder--http-request "POST" url xml jaunder--entry-content-type
-                                          (list (cons "Idempotency-Key" key)))
-                 (plz-error (if (< attempt 3) 'retry (signal (car err) (cdr err)))))))
-        (cond
-         ((eq r 'retry) (sleep-for (pop delays)))
-         ((and (integerp (plist-get r :status))
-               (<= 500 (plist-get r :status) 599)
-               (< attempt 3))
-          (sleep-for (pop delays)))
-         (t (setq resp r)))))
-    resp))
+  (jaunder--with-debug-operation "publish.create" nil
+                                 (let ((key (or key (jaunder--idempotency-key)))
+                                       (delays '(1 2))
+                                       (attempt 0)
+                                       resp)
+                                   (while (null resp)
+                                     (setq attempt (1+ attempt))
+                                     (let ((r (condition-case err
+                                                  (jaunder--http-request "POST" url xml jaunder--entry-content-type
+                                                                         (list (cons "Idempotency-Key" key)))
+                                                (plz-error (if (< attempt 3) 'retry (signal (car err) (cdr err)))))))
+                                       (cond
+                                        ((eq r 'retry) (sleep-for (pop delays)))
+                                        ((and (integerp (plist-get r :status))
+                                              (<= 500 (plist-get r :status) 599)
+                                              (< attempt 3))
+                                         (sleep-for (pop delays)))
+                                        (t (setq resp r)))))
+                                   resp)))
 
 (defun jaunder--create-intent (xml)
   "Persist and return the durable create intent for exact sent XML.
 The digest distinguishes a later local edit from the Entry that may already
 have committed after a response-less request."
-  (let ((key (or (jaunder--buffer-property "JAUNDER_CREATE_KEY")
-                 (jaunder--idempotency-key))))
-    (unless (jaunder--buffer-property "JAUNDER_CREATE_KEY")
-      (jaunder--set-property "JAUNDER_CREATE_KEY" key)
-      (jaunder--set-property "JAUNDER_CREATE_DIGEST" (secure-hash 'sha256 xml))
-      (jaunder--set-property "JAUNDER_CREATE_ATTEMPT_AT"
-                             (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t))
-      (jaunder--save-buffer-silently))
-    (list :key key
-          :matches (if (equal (jaunder--buffer-property "JAUNDER_CREATE_DIGEST")
-                              (secure-hash 'sha256 xml))
-                       'matched
-                     'changed))))
+  (jaunder--with-debug-operation "publish.recover" nil
+                                 (let ((key (or (jaunder--buffer-property "JAUNDER_CREATE_KEY")
+                                                (jaunder--idempotency-key))))
+                                   (unless (jaunder--buffer-property "JAUNDER_CREATE_KEY")
+                                     (jaunder--set-property "JAUNDER_CREATE_KEY" key)
+                                     (jaunder--set-property "JAUNDER_CREATE_DIGEST" (secure-hash 'sha256 xml))
+                                     (jaunder--set-property "JAUNDER_CREATE_ATTEMPT_AT"
+                                                            (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t))
+                                     (jaunder--save-buffer-silently))
+                                   (list :key key
+                                         :matches (if (equal (jaunder--buffer-property "JAUNDER_CREATE_DIGEST")
+                                                             (secure-hash 'sha256 xml))
+                                                      'matched
+                                                    'changed)))))
 
 (defun jaunder--prepare-reviewed-update ()
   "Return publishable XML and audience evidence without changing the local Post.
@@ -467,11 +472,12 @@ its conditional PUT.  Uploaded Media can survive a later blocked Post write."
 
 (defun jaunder--send-reviewed-update (edit-uri etag xml)
   "PUT XML at reviewed EDIT-URI conditionally on strong ETAG."
-  (unless (jaunder--strong-etag-p etag)
-    (error "jaunder: conflict resolution requires a strong reviewed ETag"))
-  (jaunder--http-request
-   "PUT" edit-uri xml jaunder--entry-content-type
-   (list (cons "If-Match" etag))))
+  (jaunder--with-debug-operation "publish.update" nil
+                                 (unless (jaunder--strong-etag-p etag)
+                                   (error "jaunder: conflict resolution requires a strong reviewed ETag"))
+                                 (jaunder--http-request
+                                  "PUT" edit-uri xml jaunder--entry-content-type
+                                  (list (cons "If-Match" etag)))))
 
 (defun jaunder-publish (&optional force-draft)
   "Publish the current buffer's org post over AtomPub.
@@ -485,86 +491,90 @@ JAUNDER_STATUS.  A non-2xx create leaves any
 previously authored content intact but retains its durable create intent for
 safe retry."
   (interactive)
-  (let ((file (or (buffer-file-name)
-                  (error "jaunder: buffer is not visiting a file"))))
-    ;; Reject local TITLE source before configured-root resolution, service discovery,
-    ;; links, Media, or create-intent checkpoint work.
-    (jaunder--org-title (org-collect-keywords '("TITLE")))
-    (jaunder--call-with-blog
-     file
-     (lambda ()
-       (let* ((status (jaunder--buffer-property "JAUNDER_STATUS"))
-              (date-raw (jaunder--buffer-keyword "DATE"))
-              (tz (jaunder--buffer-property "JAUNDER_DATE_TZ"))
-              (id (jaunder--buffer-property "JAUNDER_ID"))
-              (synced (jaunder--buffer-property "JAUNDER_SYNCED"))
-              (entry (jaunder--org->atom))
-              audience-capable)
-         (when force-draft (jaunder--force-draft entry))
-         ;; Validate BEFORE any buffer write, so a rejected publish leaves the
-         ;; on-disk file pristine.
-         (jaunder--validate-publish entry status date-raw tz)
-         ;; An ID-bearing create recovery must never fall through to an
-         ;; unconditional PUT.  Its intent remains durable for safe recovery.
-         (when (and id (not (jaunder--strong-etag-p synced)))
-           (error "jaunder: JAUNDER_ID requires a strong JAUNDER_SYNCED ETag"))
-         ;; All synchronization needs valid service evidence.  Prove audience
-         ;; capability before Local Post Link localization, Media upload, or
-         ;; any Post mutation.
-         (setq audience-capable
-               (jaunder--require-synchronization-audience-evidence
-                (jaunder--active-base-url) (jaunder-entry-audiences entry)))
-         ;; Claim and validate Local Post Links before any upload or Post
-         ;; mutation.  Like media localization, this changes only the sent body.
-         (setf (jaunder-entry-body entry)
-               (jaunder--localize-post-links (jaunder-entry-body entry)))
-         ;; Record the machine zone (idempotent) so #+DATE: is interpreted in a
-         ;; recorded zone on later machines.  A first-publish's org->atom above
-         ;; already used the local zone, which equals the captured name.
-         (jaunder--ensure-date-tz)
-         ;; Authoring-hygiene warning: `tz' is the zone recorded
-         ;; *before* the capture above, so a difference means the
-         ;; author moved machines since recording it.
-         (jaunder--warn-zone-mismatch tz)
-         ;; Warn (once per session per blog) if the server won't
-         ;; honour the per-entry text/org content type.
-         (jaunder--warn-missing-format-media-type
-          (jaunder--active-base-url))
-         (setf (jaunder-entry-body entry)
-               (jaunder--localize-media (jaunder-entry-body entry)))
-         (let* ((xml (jaunder--atom-entry->xml entry))
-                (intent (unless id (jaunder--create-intent xml)))
-                (resp (if id
-                          (jaunder--http-request
-                           "PUT"
-                           (jaunder--member-url id)
-                           xml jaunder--entry-content-type
-                           (when synced (list (cons "If-Match" synced))))
-                        (jaunder--create-with-retry
-                         (jaunder--build-url (jaunder--active-base-url) "atompub"
-                                             (jaunder--active-username) "posts")
-                         xml (plist-get intent :key))))
-                (code (plist-get resp :status)))
-           (unless (memq code '(200 201))
-             (error "jaunder: publish failed (HTTP %s)" code))
-           (let* ((source-path (buffer-file-name))
-                  (slug (jaunder--write-back resp (null id)
-                                             (plist-get intent :matches)
-                                             (and id synced) audience-capable))
-                  (destination (if slug (jaunder--rename-to-slug slug) source-path)))
-             (if (equal source-path destination)
-                 (message "jaunder: published %s" (or slug ""))
-               (message "jaunder: published %s; renamed %s -> %s"
-                        (or slug "") source-path destination))
-             ;; Callers that batch ordinary publishing need the actual response
-             ;; status; in particular, durable create replay can return 200.
-             (list :response resp :http-status code :slug slug
-                   :source-path source-path :path destination))))))))
+  (jaunder--with-debug-operation "publish.post" nil
+                                 (let ((file (or (buffer-file-name)
+                                                 (error "jaunder: buffer is not visiting a file"))))
+                                   ;; Reject local TITLE source before configured-root resolution, service discovery,
+                                   ;; links, Media, or create-intent checkpoint work.
+                                   (jaunder--with-debug-operation "publish.validate" nil
+                                                                  (jaunder--org-title (org-collect-keywords '("TITLE"))))
+                                   (jaunder--call-with-blog
+                                    file
+                                    (lambda ()
+                                      (let* ((status (jaunder--buffer-property "JAUNDER_STATUS"))
+                                             (date-raw (jaunder--buffer-keyword "DATE"))
+                                             (tz (jaunder--buffer-property "JAUNDER_DATE_TZ"))
+                                             (id (jaunder--buffer-property "JAUNDER_ID"))
+                                             (synced (jaunder--buffer-property "JAUNDER_SYNCED"))
+                                             (entry (jaunder--org->atom))
+                                             audience-capable)
+                                        (when force-draft (jaunder--force-draft entry))
+                                        ;; Validate BEFORE any buffer write, so a rejected publish leaves the
+                                        ;; on-disk file pristine.
+                                        (jaunder--validate-publish entry status date-raw tz)
+                                        ;; An ID-bearing create recovery must never fall through to an
+                                        ;; unconditional PUT.  Its intent remains durable for safe recovery.
+                                        (when (and id (not (jaunder--strong-etag-p synced)))
+                                          (error "jaunder: JAUNDER_ID requires a strong JAUNDER_SYNCED ETag"))
+                                        ;; All synchronization needs valid service evidence.  Prove audience
+                                        ;; capability before Local Post Link localization, Media upload, or
+                                        ;; any Post mutation.
+                                        (setq audience-capable
+                                              (jaunder--require-synchronization-audience-evidence
+                                               (jaunder--active-base-url) (jaunder-entry-audiences entry)))
+                                        ;; Claim and validate Local Post Links before any upload or Post
+                                        ;; mutation.  Like media localization, this changes only the sent body.
+                                        (setf (jaunder-entry-body entry)
+                                              (jaunder--localize-post-links (jaunder-entry-body entry)))
+                                        ;; Record the machine zone (idempotent) so #+DATE: is interpreted in a
+                                        ;; recorded zone on later machines.  A first-publish's org->atom above
+                                        ;; already used the local zone, which equals the captured name.
+                                        (jaunder--ensure-date-tz)
+                                        ;; Authoring-hygiene warning: `tz' is the zone recorded
+                                        ;; *before* the capture above, so a difference means the
+                                        ;; author moved machines since recording it.
+                                        (jaunder--warn-zone-mismatch tz)
+                                        ;; Warn (once per session per blog) if the server won't
+                                        ;; honour the per-entry text/org content type.
+                                        (jaunder--warn-missing-format-media-type
+                                         (jaunder--active-base-url))
+                                        (setf (jaunder-entry-body entry)
+                                              (jaunder--localize-media (jaunder-entry-body entry)))
+                                        (let* ((xml (jaunder--atom-entry->xml entry))
+                                               (intent (unless id (jaunder--create-intent xml)))
+                                               (resp (if id
+                                                         (jaunder--with-debug-operation "publish.update" nil
+                                                                                        (jaunder--http-request
+                                                                                         "PUT"
+                                                                                         (jaunder--member-url id)
+                                                                                         xml jaunder--entry-content-type
+                                                                                         (when synced (list (cons "If-Match" synced)))))
+                                                       (jaunder--create-with-retry
+                                                        (jaunder--build-url (jaunder--active-base-url) "atompub"
+                                                                            (jaunder--active-username) "posts")
+                                                        xml (plist-get intent :key))))
+                                               (code (plist-get resp :status)))
+                                          (unless (memq code '(200 201))
+                                            (error "jaunder: publish failed (HTTP %s)" code))
+                                          (let* ((source-path (buffer-file-name))
+                                                 (slug (jaunder--write-back resp (null id)
+                                                                            (plist-get intent :matches)
+                                                                            (and id synced) audience-capable))
+                                                 (destination (if slug (jaunder--rename-to-slug slug) source-path)))
+                                            (if (equal source-path destination)
+                                                (message "jaunder: published %s" (or slug ""))
+                                              (message "jaunder: published %s; renamed %s -> %s"
+                                                       (or slug "") source-path destination))
+                                            ;; Callers that batch ordinary publishing need the actual response
+                                            ;; status; in particular, durable create replay can return 200.
+                                            (list :response resp :http-status code :slug slug
+                                                  :source-path source-path :path destination)))))))))
 
 (defun jaunder-save-draft ()
   "Publish the current buffer as a server-side draft (forces `app:draft')."
   (interactive)
-  (jaunder-publish t))
+  (jaunder--with-debug-operation "publish.draft" nil
+                                 (jaunder-publish t)))
 
 
 (provide 'jaunder-publish)
