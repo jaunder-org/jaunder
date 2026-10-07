@@ -290,6 +290,41 @@
                           (jaunder--debug-span-fields state)
                           (jaunder--debug-span-outcome state) elapsed)))
 
+(defun jaunder--debug-cancel-terminal (state)
+  "Correct STATE's retained terminal after a user quit during final emission.
+The event remains one complete line; retention accounting and its IDs stay put."
+  (when-let* ((buffer (get-buffer jaunder--debug-buffer-name)))
+    (with-current-buffer buffer
+      (save-excursion
+        (goto-char (point-max))
+        (when (re-search-backward
+               (concat "^.* span=" (regexp-quote (jaunder--debug-span-id state))
+                       " label=" (regexp-quote (jaunder--debug-span-label state))
+                       " phase=end .*outcome=\\(success\\|error\\)") nil t)
+          (let* ((begin (line-beginning-position))
+                 (end (line-end-position))
+                 (line (concat (buffer-substring-no-properties begin (match-beginning 1))
+                               "cancelled"
+                               (buffer-substring-no-properties (match-end 1) end))))
+            (unless (<= (string-bytes line) 1024) (error "diagnostic event too large"))
+            (let ((inhibit-read-only t))
+              (delete-region begin end)
+              (goto-char begin)
+              (insert line))))))))
+
+(defun jaunder--debug-complete (state)
+  "Finish STATE, classifying user cancellation during terminal diagnostics."
+  (let (cancelled)
+    (let ((inhibit-quit t))
+      (jaunder--debug-safe (lambda () (jaunder--debug-finish state)))
+      ;; Acknowledge pending input before releasing it, including sink input.
+      ;; It is re-signalled outside the ancillary-failure guard below.
+      (when quit-flag
+        (setq quit-flag nil cancelled t)
+        (setf (jaunder--debug-span-outcome state) "cancelled")
+        (jaunder--debug-safe (lambda () (jaunder--debug-cancel-terminal state)))))
+    (when cancelled (signal 'quit nil))))
+
 (defun jaunder--debug-field-form (fields)
   "Construct a lazy plist form from alternating literal keys and value forms."
   (let (result)
@@ -308,11 +343,17 @@
   "Run BODY once with an optional diagnostic span for literal LABEL and FIELDS."
   (declare (indent 2) (debug (form form body)))
   (unless (stringp label) (error "Diagnostic labels must be literal strings"))
-  (let ((state (make-symbol "state")))
+  (let ((state (make-symbol "state"))
+        (finished (make-symbol "finished"))
+        (complete (make-symbol "complete")))
     `(if (not jaunder-debug)
          (progn ,@body)
-       (let ((jaunder--debug-operation-stack jaunder--debug-operation-stack)
-             ,state)
+       (let* ((jaunder--debug-operation-stack jaunder--debug-operation-stack)
+              ,state ,finished
+              (,complete (lambda ()
+                           (when (and ,state jaunder-debug (not ,finished))
+                             (setq ,finished t)
+                             (jaunder--debug-complete ,state)))))
          (unwind-protect
              (condition-case err
                  (progn
@@ -325,15 +366,18 @@
                                ,label (lambda () ,(jaunder--debug-field-form fields))))))
                      ;; Failed setup cannot lend an ancestor's field-update target.
                      (unless ,state (setq jaunder--debug-operation-stack nil)))
-                   ,@body)
+                   ;; Release terminal input under the classifier, not while unwinding.
+                   (prog1 (progn ,@body) (funcall ,complete)))
                (quit (when ,state (setf (jaunder--debug-span-outcome ,state) "cancelled"))
+                     (funcall ,complete)
                      (signal (car err) (cdr err)))
                (error (when ,state (setf (jaunder--debug-span-outcome ,state) "error"))
+                      (funcall ,complete)
                       (signal (car err) (cdr err))))
            (when ,state
              (unwind-protect
-                 (when jaunder-debug
-                   (jaunder--debug-safe (lambda () (jaunder--debug-finish ,state))))
+                 ;; Retain a terminal for nonlocal BODY exits not classified above.
+                 (funcall ,complete)
                (setq jaunder--debug-operation-stack
                      (delq ,state jaunder--debug-operation-stack)))))))))
 

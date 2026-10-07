@@ -21,6 +21,7 @@
 (require 'jaunder-datetime)
 (require 'jaunder-inventory)
 (require 'jaunder-publish)
+(require 'jaunder-debug)
 
 (declare-function jaunder--pull-destination "jaunder-pull")
 (declare-function jaunder--pull-destination-exists-p "jaunder-pull")
@@ -815,49 +816,51 @@ Return a plist suitable for a terminal result; no DELETE is sent here."
 
 (defun jaunder--reconcile-pull-preflight (row staged)
   "Return a blocking reason unless ROW remains safe for STAGED replacement."
-  (let* ((local (jaunder-reconcile-row-local row))
-         (path (and local (jaunder-inventory-local-path local)))
-         (id (jaunder--reconcile-row-post-id row))
-         (expected-hash (jaunder-reconcile-row-local-sha256 row))
-         (destination (jaunder--reconcile-pull-destination row (plist-get staged :slug)))
-         (buffer (and path (get-file-buffer path))))
-    (cond
-     ((not (and path (file-regular-p path))) 'local-file-missing)
-     ((not (and expected-hash
-                (equal expected-hash (jaunder--reconcile-file-sha256 path))))
-      'local-bytes-changed)
-     ((and (buffer-live-p buffer) (buffer-modified-p buffer)) 'local-buffer-modified)
-     ((and (buffer-live-p buffer)
-           (not (jaunder--reconcile-visiting-buffer-matches-bytes-p
-                 buffer expected-hash))) 'local-buffer-stale)
-     ((and (buffer-live-p buffer)
-           (not (equal (jaunder--canonical-post-id
-                        (with-current-buffer buffer
-                          (jaunder--buffer-property "JAUNDER_ID"))) id)))
-      'matched-identity-changed)
-     ((not (equal (jaunder--reconcile-current-local-id row) id))
-      'matched-identity-changed)
-     ((and (not (equal path destination))
-           (jaunder--pull-destination-exists-p destination))
-      'pull-destination-occupied))))
+  (jaunder--with-debug-operation "pull.preflight" ()
+                                 (let* ((local (jaunder-reconcile-row-local row))
+                                        (path (and local (jaunder-inventory-local-path local)))
+                                        (id (jaunder--reconcile-row-post-id row))
+                                        (expected-hash (jaunder-reconcile-row-local-sha256 row))
+                                        (destination (jaunder--reconcile-pull-destination row (plist-get staged :slug)))
+                                        (buffer (and path (get-file-buffer path))))
+                                   (cond
+                                    ((not (and path (file-regular-p path))) 'local-file-missing)
+                                    ((not (and expected-hash
+                                               (equal expected-hash (jaunder--reconcile-file-sha256 path))))
+                                     'local-bytes-changed)
+                                    ((and (buffer-live-p buffer) (buffer-modified-p buffer)) 'local-buffer-modified)
+                                    ((and (buffer-live-p buffer)
+                                          (not (jaunder--reconcile-visiting-buffer-matches-bytes-p
+                                                buffer expected-hash))) 'local-buffer-stale)
+                                    ((and (buffer-live-p buffer)
+                                          (not (equal (jaunder--canonical-post-id
+                                                       (with-current-buffer buffer
+                                                         (jaunder--buffer-property "JAUNDER_ID"))) id)))
+                                     'matched-identity-changed)
+                                    ((not (equal (jaunder--reconcile-current-local-id row) id))
+                                     'matched-identity-changed)
+                                    ((and (not (equal path destination))
+                                          (jaunder--pull-destination-exists-p destination))
+                                     'pull-destination-occupied)))))
 
 (defun jaunder--reconcile-pull-remote-revalidation (row etag)
   "Return structured current-ETag evidence for ROW against reviewed ETAG."
-  (condition-case err
-      (let* ((response (jaunder--http-request
-                        "GET" (jaunder-inventory-member-edit-uri
-                               (jaunder-reconcile-row-member row))))
-             (status (plist-get response :status))
-             (current (jaunder--response-header response "ETag")))
-        (cond ((not (and (integerp status) (<= 200 status 299)))
-               (list :reason 'pull-revalidation-http-error :http-status status :etag current))
-              ((not (jaunder--strong-etag-p current))
-               (list :reason 'pull-revalidation-etag-invalid :http-status status :etag current))
-              ((not (equal etag current))
-               (list :reason 'etag-stale :http-status status :etag current))
-              (t (list :ok t :http-status status :etag current))))
-    (error (list :reason 'pull-revalidation-transport-error
-                 :detail (jaunder--reconcile-pull-error-detail err)))))
+  (jaunder--with-debug-operation "pull.revalidate" ()
+                                 (condition-case err
+                                     (let* ((response (jaunder--http-request
+                                                       "GET" (jaunder-inventory-member-edit-uri
+                                                              (jaunder-reconcile-row-member row))))
+                                            (status (plist-get response :status))
+                                            (current (jaunder--response-header response "ETag")))
+                                       (cond ((not (and (integerp status) (<= 200 status 299)))
+                                              (list :reason 'pull-revalidation-http-error :http-status status :etag current))
+                                             ((not (jaunder--strong-etag-p current))
+                                              (list :reason 'pull-revalidation-etag-invalid :http-status status :etag current))
+                                             ((not (equal etag current))
+                                              (list :reason 'etag-stale :http-status status :etag current))
+                                             (t (list :ok t :http-status status :etag current))))
+                                   (error (list :reason 'pull-revalidation-transport-error
+                                                :detail (jaunder--reconcile-pull-error-detail err))))))
 
 (defun jaunder--reconcile-pull-unique-match (row)
   "Return structured fresh-inventory evidence that ROW remains uniquely matched.
@@ -970,32 +973,33 @@ No server or local Post mutation is authorized by the preview ETag alone."
 
 (defun jaunder--reconcile-replace-pulled-file (path destination bytes)
   "Atomically replace PATH then rename to DESTINATION, reporting committed state."
-  (let ((temporary nil))
-    (unwind-protect
-        (progn
-          (setq temporary (make-temp-file
-                           (expand-file-name ".jaunder-pull-" (file-name-directory path))))
-          (let ((coding-system-for-write 'utf-8-unix))
-            (write-region bytes nil temporary nil 'silent))
-          (rename-file temporary path t)
-          (setq temporary nil)
-          (let ((buffer (get-file-buffer path)))
-            (when (buffer-live-p buffer)
-              (with-current-buffer buffer (revert-buffer t t) (set-buffer-modified-p nil))))
-          (if (equal path destination)
-              (list :path path :local-effect 'replaced)
-            (condition-case err
-                (progn
-                  (rename-file path destination nil)
-                  (let ((buffer (get-file-buffer path)))
-                    (when (buffer-live-p buffer)
-                      (with-current-buffer buffer
-                        (set-visited-file-name destination t t)
-                        (set-buffer-modified-p nil))))
-                  (list :path destination :local-effect 'renamed))
-              (error (list :path path :local-effect 'replaced-at-old-path
-                           :detail (error-message-string err))))))
-      (when (and temporary (file-exists-p temporary)) (delete-file temporary)))))
+  (jaunder--with-debug-operation "pull.install" ()
+                                 (let ((temporary nil))
+                                   (unwind-protect
+                                       (progn
+                                         (setq temporary (make-temp-file
+                                                          (expand-file-name ".jaunder-pull-" (file-name-directory path))))
+                                         (let ((coding-system-for-write 'utf-8-unix))
+                                           (write-region bytes nil temporary nil 'silent))
+                                         (rename-file temporary path t)
+                                         (setq temporary nil)
+                                         (let ((buffer (get-file-buffer path)))
+                                           (when (buffer-live-p buffer)
+                                             (with-current-buffer buffer (revert-buffer t t) (set-buffer-modified-p nil))))
+                                         (if (equal path destination)
+                                             (list :path path :local-effect 'replaced)
+                                           (condition-case err
+                                               (progn
+                                                 (rename-file path destination nil)
+                                                 (let ((buffer (get-file-buffer path)))
+                                                   (when (buffer-live-p buffer)
+                                                     (with-current-buffer buffer
+                                                       (set-visited-file-name destination t t)
+                                                       (set-buffer-modified-p nil))))
+                                                 (list :path destination :local-effect 'renamed))
+                                             (error (list :path path :local-effect 'replaced-at-old-path
+                                                          :detail (error-message-string err))))))
+                                     (when (and temporary (file-exists-p temporary)) (delete-file temporary))))))
 
 (defun jaunder--reconcile-preserve-legacy-audience (path bytes)
   "Carry PATH's exact leading audience header lines into staged Org BYTES.

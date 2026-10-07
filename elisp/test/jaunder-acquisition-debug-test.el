@@ -9,28 +9,16 @@
 (require 'cl-lib)
 (require 'jaunder)
 
+(load (expand-file-name "jaunder-debug-boundary-fixture.el"
+                        (file-name-directory (or load-file-name buffer-file-name))) nil t)
+
+;; Suite-local vocabulary delegates session ownership to the shared fixture.
 (defmacro jaunder-acquisition-debug-test--with-session (&rest body)
-  "Run BODY with an isolated enabled or disabled diagnostic session."
+  "Delegate BODY's session ownership to the shared boundary fixture."
   (declare (indent 0) (debug t))
-  `(let ((jaunder-debug nil)
-         (jaunder--debug-buffer-name " *Jaunder acquisition diagnostic tests*")
-         (jaunder--debug-id-counter 0)
-         (jaunder--debug-event-count 0)
-         (jaunder--debug-discarded 0)
-         (jaunder--debug-operation-stack nil))
-     (unwind-protect
-         (progn ,@body)
-       (when-let* ((buffer (get-buffer jaunder--debug-buffer-name)))
-         (kill-buffer buffer)))))
-
-(defun jaunder-acquisition-debug-test--text ()
-  "Return the retained acquisition diagnostic text."
-  (with-current-buffer jaunder--debug-buffer-name (buffer-string)))
-
-(defun jaunder-acquisition-debug-test--label-count (label text)
-  "Return the number of event lines for LABEL in TEXT."
-  (cl-count-if (lambda (line) (string-match-p (concat "label=" label) line))
-               (split-string text "\n" t)))
+  `(jaunder-debug-boundary--with-session ,@body))
+(defalias 'jaunder-acquisition-debug-test--text 'jaunder-debug-boundary--text)
+(defalias 'jaunder-acquisition-debug-test--label-count 'jaunder-debug-boundary--label-count)
 
 (defconst jaunder-acquisition-debug-test--service-document
   (concat "<service xmlns=\"http://www.w3.org/2007/app\""

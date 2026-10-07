@@ -1,32 +1,25 @@
 ;;; jaunder-transform-debug-test.el --- Transformation diagnostic boundaries -*- lexical-binding: t; -*-
 
+;;; Commentary:
+;; Real-owner proofs for Org and Member representation and Local Post Link
+;; diagnostics: exact bytes/work, nesting, disabled behavior, and privacy.
+
 ;;; Code:
 
 (require 'ert)
 (require 'cl-lib)
 (require 'jaunder)
 
+(load (expand-file-name "jaunder-debug-boundary-fixture.el"
+                        (file-name-directory (or load-file-name buffer-file-name))) nil t)
+
+;; Suite-local vocabulary delegates session ownership to the shared fixture.
 (defmacro jaunder-transform-debug-test--with-session (&rest body)
-  "Run BODY with isolated diagnostic state."
+  "Delegate BODY's session ownership to the shared boundary fixture."
   (declare (indent 0) (debug t))
-  `(let ((jaunder-debug nil)
-         (jaunder--debug-buffer-name " *Jaunder transform diagnostic tests*")
-         (jaunder--debug-id-counter 0)
-         (jaunder--debug-event-count 0)
-         (jaunder--debug-discarded 0)
-         (jaunder--debug-operation-stack nil))
-     (unwind-protect (progn ,@body)
-       (when-let* ((buffer (get-buffer jaunder--debug-buffer-name)))
-         (kill-buffer buffer)))))
-
-(defun jaunder-transform-debug-test--text ()
-  "Return the retained diagnostic text."
-  (with-current-buffer jaunder--debug-buffer-name (buffer-string)))
-
-(defun jaunder-transform-debug-test--label-count (label text)
-  "Return count of LABEL event lines in TEXT."
-  (cl-count-if (lambda (line) (string-match-p (concat "label=" label) line))
-               (split-string text "\n" t)))
+  `(jaunder-debug-boundary--with-session ,@body))
+(defalias 'jaunder-transform-debug-test--text 'jaunder-debug-boundary--text)
+(defalias 'jaunder-transform-debug-test--label-count 'jaunder-debug-boundary--label-count)
 
 (defun jaunder-transform-debug-test--member-xml (&optional body)
   "Return a valid draft Member XML containing BODY."

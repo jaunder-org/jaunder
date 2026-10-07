@@ -315,14 +315,25 @@
 
 (ert-deftest jaunder-debug-acceptance-pending-user-quit-stops-the-operation ()
   "Pending keyboard cancellation is deferred through logging, never consumed."
-  (dolist (stage '(clock initial update))
+  (dolist (stage '(clock initial update terminal-clock terminal-write))
     (jaunder-debug-acceptance--with-state
-     (let ((quit-flag nil) (runs 0) (samples 0))
-       (cl-letf (((symbol-function 'jaunder--debug-now)
+     (let ((quit-flag nil) (debug-on-quit nil) (runs 0) (samples 0) (writes 0)
+           (append-line (symbol-function 'jaunder--debug-append-line)))
+       (cl-letf (((symbol-function 'jaunder--debug-timestamp)
+                  (lambda () "2026-10-07T12:00:00.123Z"))
+                 ((symbol-function 'jaunder--debug-now)
                   (lambda ()
                     (setq samples (1+ samples))
-                    (when (and (eq stage 'clock) (= samples 1)) (setq quit-flag t))
-                    10.0)))
+                    (when (or (and (eq stage 'clock) (= samples 1))
+                              (and (eq stage 'terminal-clock) (= samples 2)))
+                      (setq quit-flag t))
+                    10.0))
+                 ((symbol-function 'jaunder--debug-append-line)
+                  (lambda (line)
+                    (funcall append-line line)
+                    (setq writes (1+ writes))
+                    (when (and (eq stage 'terminal-write) (= writes 2))
+                      (setq quit-flag t)))))
          (let ((condition
                 (condition-case condition
                     (jaunder--with-debug-operation "config.resolve"
@@ -332,12 +343,36 @@
                                                    (setq runs (1+ runs)))
                   (quit condition))))
            (should (eq (car-safe condition) 'quit))))
-       (should (= runs (if (eq stage 'update) 1 0)))
+       (should (= runs (pcase stage ('update 1) ((or 'terminal-clock 'terminal-write) 2) (_ 0))))
        (should-not jaunder--debug-operation-stack)
        (should-not jaunder-debug-acceptance--warnings)
        (let ((text (jaunder-debug-acceptance--text)))
          (should (= 2 (length (split-string text "\n" t))))
          (should (string-match-p "outcome=cancelled" text)))))))
+
+(ert-deftest jaunder-debug-acceptance-terminal-cancellation-unwinds-nested-spans ()
+  "A child terminal quit cancels both spans without updating parent fields."
+  (jaunder-debug-acceptance--with-state
+   (let ((append-line (symbol-function 'jaunder--debug-append-line))
+         (writes 0) (quit-flag nil))
+     (cl-letf (((symbol-function 'jaunder--debug-append-line)
+                (lambda (line)
+                  (funcall append-line line)
+                  (setq writes (1+ writes))
+                  (when (= writes 3) (setq quit-flag t)))))
+       (should (equal '(quit)
+                      (condition-case condition
+                          (jaunder--with-debug-operation "config.resolve" (count 7)
+                                                         (jaunder--with-debug-operation "atom.serialize" () 'result)
+                                                         (jaunder--debug-fields count 99))
+                        (quit condition)))))
+     (should-not jaunder--debug-operation-stack)
+     (should-not jaunder-debug-acceptance--warnings)
+     (let ((text (jaunder-debug-acceptance--text)))
+       (should (= 4 (length (split-string text "\n" t))))
+       (should (= 2 (cl-count-if (lambda (line) (string-match-p "outcome=cancelled" line))
+                                 (split-string text "\n" t))))
+       (should-not (string-match-p "count=99" text))))))
 
 (ert-deftest jaunder-debug-acceptance-view-and-buffer-lifetime ()
   "Emission never displays; q buries evidence; clear and recreation preserve IDs."
