@@ -594,6 +594,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NonE2eValidationSurface {
     HostGateWithoutTests,
+    NixPlatformContract,
     NixStaticChecks,
     WasmBudget,
     HostTests,
@@ -603,8 +604,9 @@ enum NonE2eValidationSurface {
     ElispCoverage,
 }
 
-const NON_E2E_VALIDATION_SURFACES: [NonE2eValidationSurface; 8] = [
+const NON_E2E_VALIDATION_SURFACES: [NonE2eValidationSurface; 9] = [
     NonE2eValidationSurface::HostGateWithoutTests,
+    NonE2eValidationSurface::NixPlatformContract,
     NonE2eValidationSurface::NixStaticChecks,
     NonE2eValidationSurface::WasmBudget,
     NonE2eValidationSurface::HostTests,
@@ -617,7 +619,10 @@ const NON_E2E_VALIDATION_SURFACES: [NonE2eValidationSurface; 8] = [
 impl NonE2eValidationSurface {
     const fn belongs_to_lane(self, lane: CiValidateLane) -> bool {
         match lane {
-            CiValidateLane::Host => matches!(self, Self::HostGateWithoutTests | Self::HostTests),
+            CiValidateLane::Host => matches!(
+                self,
+                Self::HostGateWithoutTests | Self::NixPlatformContract | Self::HostTests
+            ),
             CiValidateLane::Hermetic => matches!(self, Self::NixStaticChecks | Self::WasmBudget),
             CiValidateLane::TestChecks => {
                 matches!(self, Self::WasmTests | Self::Doctests | Self::ElispCoverage)
@@ -630,6 +635,7 @@ impl NonE2eValidationSurface {
     const fn name(self) -> &'static str {
         match self {
             Self::HostGateWithoutTests => "host-gate-without-tests",
+            Self::NixPlatformContract => "nix-platform-contract",
             Self::NixStaticChecks => "nix-static-checks",
             Self::WasmBudget => "wasm-budget",
             Self::HostTests => "host-tests",
@@ -645,6 +651,17 @@ impl NonE2eValidationSurface {
             Self::HostGateWithoutTests => {
                 gate::run_host_gate_without_tests(sh, Mode::Check, policy, result);
             }
+            Self::NixPlatformContract => result.push(crate::sh::step(
+                sh,
+                "nix-platform-contract",
+                "nix",
+                &[
+                    "eval",
+                    "--impure",
+                    "--expr",
+                    "import ./nix/platform-contract.nix { flake = builtins.getFlake (toString ./.); }",
+                ],
+            )),
             Self::NixStaticChecks => steps::nix::static_checks(result),
             // Deliberately in `validate` and not `check`: it costs a `nix build
             // .#site`, which the pre-commit gate should not pay (#836).
@@ -739,6 +756,7 @@ mod tests {
             full,
             [
                 "host-gate-without-tests",
+                "nix-platform-contract",
                 "nix-static-checks",
                 "wasm-budget",
                 "host-tests",
@@ -750,7 +768,14 @@ mod tests {
         );
 
         let host = validation_surface_names(Some(CiValidateLane::Host));
-        assert_eq!(host, ["host-gate-without-tests", "host-tests"]);
+        assert_eq!(
+            host,
+            [
+                "host-gate-without-tests",
+                "nix-platform-contract",
+                "host-tests"
+            ]
+        );
         assert_eq!(
             validation_surface_names(Some(CiValidateLane::Hermetic)),
             ["nix-static-checks", "wasm-budget"]

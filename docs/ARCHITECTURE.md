@@ -2622,16 +2622,26 @@ it disables the dev-only auto-initialization of a missing database on `serve`
 
 **What the flake ships.** `flake.nix` exports `packages.jaunder` (the deployable
 server binary), `packages.site`, the narrow `nixosModules.jaunder` module, the
-single-host `nixosModules.jaunder-stack` module, and, for every system from
-`flake-utils.lib.eachDefaultSystem`, `emacsPackages.${system}.jaunder` (a
-standalone Emacs Protocol Client package for installed-package lists such as
-Home Manager's `programs.emacs.extraPackages`). The Protocol Client package
-contains the production `elisp/*.el` modules rooted at `jaunder.el`, excluding
-`elisp/test/`, `elisp/scripts/`, and documentation; it carries Nixpkgs's
-packaged `plz` and the pinned `cmark` Emacs package transitively. Nixpkgs's
-`plz` provides its immutable Nix-store curl executable reference, so the
-Protocol Client adds no separate curl PATH propagation
+single-host `nixosModules.jaunder-stack` module, and, for each explicitly
+supported system (`x86_64-linux`, `aarch64-linux`, `aarch64-darwin`),
+`emacsPackages.${system}.jaunder` (a standalone Emacs Protocol Client package
+for installed-package lists such as Home Manager's
+`programs.emacs.extraPackages`). The Protocol Client package contains the
+production `elisp/*.el` modules rooted at `jaunder.el`, excluding `elisp/test/`,
+`elisp/scripts/`, and documentation; it carries Nixpkgs's packaged `plz` and the
+pinned `cmark` Emacs package transitively. Nixpkgs's `plz` provides its
+immutable Nix-store curl executable reference, so the Protocol Client adds no
+separate curl PATH propagation
 ([Emacs Protocol Client flake package output](adr/0191-emacs-protocol-client-flake-package-output.md)).
+The system boundary reflects the pinned nixpkgs: Intel Darwin is not advertised.
+Portable server, CSR, and development-tool packages are exposed on the supported
+systems. Development shells retain Nix-pinned browsers and fonts on Linux;
+Darwin explicitly provisions browsers matching the pinned Playwright version
+into a writable versioned cache, without downloads on shell entry. NixOS VM
+checks, ELF patching, diagnostic coverage producers, canonical screenshot
+updates, and theme thumbnails remain Linux-only. Actual Safari investigation is
+separate from Playwright WebKit and from mobile-device proof
+([supported Nix platform and browser boundaries](adr/drafts/supported-nix-platform-and-browser-boundaries.md)).
 `packages.jaunder` remains the deployable server-binary output. `packages.site`
 is **no longer a deployment artifact** — the binary embeds the bundle — and is
 retained only so `cargo xtask audit-wasm` can build `.#site` and inspect the

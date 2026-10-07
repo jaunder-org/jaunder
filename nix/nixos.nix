@@ -626,7 +626,7 @@ in
 
   packagesForSystem =
     { system, pkgs }:
-    pkgs.lib.optionalAttrs (pkgs.stdenv.isLinux && system == interactiveTestingVmSystem) {
+    pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.isLinux && system == interactiveTestingVmSystem) {
       production-baseline-sqlite-vm = productionBaselineSqliteConfiguration.config.system.build.vm;
       production-baseline-postgres-vm = productionBaselinePostgresConfiguration.config.system.build.vm;
       production-baseline-proxy = pkgs.writeShellApplication {
@@ -658,7 +658,7 @@ in
       };
     in
     pkgs.lib.optionalAttrs
-      (pkgs.stdenv.isLinux && pkgs.stdenv.hostPlatform.system == interactiveTestingVmSystem)
+      (pkgs.stdenv.hostPlatform.isLinux && pkgs.stdenv.hostPlatform.system == interactiveTestingVmSystem)
       {
         interactive-testing-vm = {
           type = "app";

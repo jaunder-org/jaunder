@@ -516,6 +516,7 @@ mod tests {
         assert!(err.to_string().contains("run `jaunder init` first"));
     }
 
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn run_shut_down_dispatches_missing_runtime_identity_refusal() {
         let base = TempDir::new().expect("storage root");
@@ -530,6 +531,23 @@ mod tests {
         assert!(
             message.contains("missing runtime identity") || message.contains("Linux-only"),
             "dispatch must preserve the shutdown command's refusal: {error:#}"
+        );
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[tokio::test]
+    async fn run_shut_down_dispatches_unsupported_platform_refusal() {
+        let base = TempDir::new().expect("storage root");
+        let error = run(test_cli(Commands::ShutDown {
+            storage: test_storage_args(&base),
+            timeout: std::num::NonZeroU64::new(1).expect("positive timeout"),
+        }))
+        .await
+        .expect_err("identity-verified shutdown requires Linux pidfds");
+
+        assert!(
+            error.to_string().contains("Linux-only"),
+            "dispatch must preserve the unsupported-platform refusal: {error:#}"
         );
     }
 

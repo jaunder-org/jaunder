@@ -90,14 +90,24 @@ let
     pkgs.gh
   ];
 
-  themeThumbnailBrowser = if pkgs.stdenv.hostPlatform.isLinux then "${pkgs.chromium}/bin/chromium" else "";
-
-  shellEnv = {
-    RUST_SRC_PATH = "${toolchain}/lib/rustlib/src/rust/library";
+  linuxBrowserEnv = {
     PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
     FONTCONFIG_FILE = "${visualFontConfig}";
-    JAUNDER_THEME_THUMBNAIL_BROWSER = themeThumbnailBrowser;
+    JAUNDER_THEME_THUMBNAIL_BROWSER = "${pkgs.chromium}/bin/chromium";
+  };
+
+  darwinBrowserEnv = {
+    # Playwright's browser binaries are not packaged for Darwin in nixpkgs.
+    # Keep shell entry offline; the shellHook points Playwright at an
+    # operator-managed cache whose contents match the pinned @playwright/test
+    # version from Nix. The path needs runtime $HOME expansion, so it cannot be
+    # a plain mkShell environment attribute.
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
+  };
+
+  shellEnv = (if pkgs.stdenv.hostPlatform.isDarwin then darwinBrowserEnv else linuxBrowserEnv) // {
+    RUST_SRC_PATH = "${toolchain}/lib/rustlib/src/rust/library";
     LC_ALL = "C.UTF-8";
     TZ = "UTC";
     # The host `ert` step (run via `nix develop .#ci -c cargo xtask …`)
@@ -117,7 +127,12 @@ let
     E2E_TYPES_NODE_MODULES = "${e2ePackage}/node_modules";
     E2E_PLAYWRIGHT_TEST = "${pkgs.playwright-test}/lib/node_modules/@playwright/test";
     shellHook = ''
-      export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}:$LD_LIBRARY_PATH"
+      ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+        export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}:$LD_LIBRARY_PATH"
+      ''}
+      ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
+        export PLAYWRIGHT_BROWSERS_PATH="''${XDG_CACHE_HOME:-$HOME/Library/Caches}/ms-playwright-jaunder/${pkgs.playwright-test.version}"
+      ''}
 
       # Provision end2end/node_modules (the tsc type-dep closure) so the
       # devShell `tsc` and IDEs can type-check end2end/ offline in this
@@ -137,13 +152,14 @@ in
   # tool, so the weekly job gets it without the pull-request path paying
   # for it. See .github/workflows/mutants.yml.
   mutants = pkgs.mkShell (shellEnv // { buildInputs = ciInputs ++ [ pkgs.cargo-mutants ]; });
+  # Full interactive shell for local development.
+  default = pkgs.mkShell (shellEnv // { buildInputs = ciInputs ++ devOnly; });
+} // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
   theme-thumbnail = pkgs.mkShell {
-    buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ themeThumbnailEnvironment ];
+    buildInputs = [ themeThumbnailEnvironment ];
     FONTCONFIG_FILE = "${visualFontConfig}";
-    JAUNDER_THEME_THUMBNAIL_BROWSER = themeThumbnailBrowser;
+    JAUNDER_THEME_THUMBNAIL_BROWSER = "${pkgs.chromium}/bin/chromium";
     LC_ALL = "C.UTF-8";
     TZ = "UTC";
   };
-  # Full interactive shell for local development.
-  default = pkgs.mkShell (shellEnv // { buildInputs = ciInputs ++ devOnly; });
 }

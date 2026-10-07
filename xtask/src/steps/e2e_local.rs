@@ -848,6 +848,16 @@ fn run_lifecycle(
     );
 }
 
+fn validate_visual_update_platform(update: bool, linux: bool) -> Result<(), &'static str> {
+    if update && !linux {
+        Err(
+            "canonical visual snapshot updates are Linux-only; run without --update-visual-snapshots for host browser investigation",
+        )
+    } else {
+        Ok(())
+    }
+}
+
 /// Build the served CSR bundle and binaries once, then execute each planned
 /// browser against its own complete server/database/capture lifecycle.
 pub fn run(
@@ -857,6 +867,12 @@ pub fn run(
     test_filter: Option<&str>,
     update_visual_snapshots: bool,
 ) {
+    if let Err(detail) =
+        validate_visual_update_platform(update_visual_snapshots, cfg!(target_os = "linux"))
+    {
+        result.push(StepResult::fail("e2e-local-platform").detail(detail));
+        return;
+    }
     // Resolve the whole Playwright environment before any subprocess. Missing
     // PATH is a configuration failure, not a late empty command search.
     let env_root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -921,6 +937,14 @@ mod tests {
                 "seed-e2e",
             ]
         );
+    }
+
+    #[test]
+    fn canonical_visual_updates_require_linux_but_browser_investigation_does_not() {
+        assert!(validate_visual_update_platform(true, false).is_err());
+        assert!(validate_visual_update_platform(true, true).is_ok());
+        assert!(validate_visual_update_platform(false, false).is_ok());
+        assert!(validate_visual_update_platform(false, true).is_ok());
     }
 
     #[test]
