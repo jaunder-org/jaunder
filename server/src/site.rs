@@ -144,7 +144,11 @@ pub fn shell_html() -> Arc<str> {
 
 /// The embedded static shell is the bundle producer's rendered `index.html`.
 fn spa_shell() -> Response {
-    Html(shell_html().to_string()).into_response()
+    (
+        [(header::CACHE_CONTROL, "no-store")],
+        Html(shell_html().to_string()),
+    )
+        .into_response()
 }
 
 /// Insert a validated `ETag` header, skipping it if the value can't be a header
@@ -173,12 +177,16 @@ fn build_response(
     let mut headers = HeaderMap::new();
     headers.insert(header::VARY, HeaderValue::from_static("Accept-Encoding"));
     insert_etag(&mut headers, etag.as_ref());
-    if immutable {
-        headers.insert(
-            header::CACHE_CONTROL,
-            HeaderValue::from_static("public, max-age=31536000, immutable"),
-        );
-    }
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(if immutable {
+            "public, max-age=31536000, immutable"
+        } else {
+            // Stable non-manifest names may change with a release. Stored bytes
+            // remain useful, but every reuse must validate their representation.
+            "no-cache"
+        }),
+    );
     headers.insert(
         header::CONTENT_TYPE,
         HeaderValue::from_str(&content_type_for(logical_path))
@@ -522,6 +530,10 @@ mod tests {
             .unwrap();
         let resp = serve_site(req).await;
         assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
         let ct = resp
             .headers()
             .get(header::CONTENT_TYPE)
@@ -577,10 +589,33 @@ mod tests {
             "the favicon must serve as an image, not fall through to the SPA shell; got {ct} (#291)"
         );
 
+        assert_eq!(
+            resp.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-cache"
+        );
+        let etag = resp.headers().get(header::ETAG).unwrap().clone();
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         assert!(
             !body.is_empty(),
             "the embedded favicon must have bytes (#291)"
+        );
+        let conditional = Request::builder()
+            .uri("/favicon.ico")
+            .header(header::IF_NONE_MATCH, &etag)
+            .body(Body::empty())
+            .unwrap();
+        let response = serve_site(conditional).await;
+        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-cache"
+        );
+        assert_eq!(response.headers().get(header::ETAG), Some(&etag));
+        assert!(
+            to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .is_empty()
         );
     }
 
@@ -683,8 +718,9 @@ mod tests {
             .find("window.__jaunderWasmFetch = fetch")
             .expect("early fetch");
         let stylesheet = shell
-            .find(r#"<link rel="stylesheet" href="/style/jaunder.css" />"#)
-            .expect("stylesheet");
+            .find(r#"<link rel="stylesheet" href="/theme/"#)
+            .expect("digest-addressed application stylesheet");
+        assert!(!shell.contains("/style/"), "{shell}");
         let import = shell.find("import {initMeasured}").expect("module import");
         let mark = shell.find("performance.mark").expect("init mark");
         let init = shell
@@ -697,15 +733,48 @@ mod tests {
     }
 
     #[test]
-    fn non_manifest_assets_remain_without_immutable_cache_control() {
-        let response = build_response(
-            "favicon.ico",
-            Bytes::from_static(b"icon"),
-            [2u8; 32],
-            Encoding::Identity,
-            None,
-            false,
-        );
-        assert!(response.headers().get(header::CACHE_CONTROL).is_none());
+    fn mutable_non_manifest_assets_require_revalidation_on_200_and_304() {
+        for logical in ["favicon.ico", "index.html"] {
+            let response = build_response(
+                logical,
+                Bytes::from_static(b"mutable"),
+                [2u8; 32],
+                Encoding::Identity,
+                None,
+                false,
+            );
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                response.headers().get(header::CACHE_CONTROL).unwrap(),
+                "no-cache"
+            );
+            let etag = response
+                .headers()
+                .get(header::ETAG)
+                .unwrap()
+                .to_str()
+                .unwrap();
+            let conditional = build_response(
+                logical,
+                Bytes::from_static(b"mutable"),
+                [2u8; 32],
+                Encoding::Identity,
+                Some(etag),
+                false,
+            );
+            assert_eq!(conditional.status(), StatusCode::NOT_MODIFIED);
+            assert_eq!(
+                conditional.headers().get(header::CACHE_CONTROL).unwrap(),
+                "no-cache"
+            );
+            assert_eq!(
+                conditional.headers().get(header::ETAG),
+                response.headers().get(header::ETAG)
+            );
+            assert_eq!(
+                conditional.headers().get(header::VARY).unwrap(),
+                "Accept-Encoding"
+            );
+        }
     }
 }

@@ -1698,18 +1698,20 @@ theme changes that representation.
 The custom-theme architecture is governed by the accepted
 [`css-package-public-themes` ADR](adr/0184-css-package-public-themes.md).
 
-#### Committed direction — bundled Theme Packages
+#### Bundled Theme Packages and protected application styling
 
 The
 [unified styling assets decision](adr/drafts/unified-theme-and-application-assets.md)
-will use that same package validation, compilation, revision, and presentation
-pipeline for system-managed bundled Studio, Terminal, and Reader. Existing named
-selections will follow the installed release; bundled packages will be
+is implemented through the same package validation, compilation, revision, and
+presentation pipeline for system-managed bundled Studio, Terminal, and Reader.
+Existing named selections follow the installed release. Bundled packages are
 selectable but not editable/deletable through custom catalogs or charged to
-custom-theme quotas. Application CSS will retain system-only authority over
-structure, private surfaces, and protected controls while sharing theme
-content's installation, digest serving, eligibility, and retention mechanism.
-Custom packages will remain scoped and cannot acquire that authority.
+custom-theme quotas. Protected application CSS is a system-only, non-selectable
+role: it controls structure, private surfaces, and trusted controls, while
+sharing theme content's installation, digest serving, eligibility, and
+retention. Custom packages remain scoped and cannot acquire that authority. Home
+loads only protected application styling, never the selected public Theme
+Package.
 
 #### Current custom-theme lifecycle
 
@@ -2525,10 +2527,12 @@ further SIGINT retains interactive forced exit. The bounded wait never escalates
 on timeout. No administration secret or network control channel exists
 ([identity-verified local shutdown](adr/0181-identity-verified-local-shutdown.md)).
 
-- `StaticAssets` (`server/src/assets.rs`, `#[folder = "assets/"]`) carries the
-  base stylesheets `jaunder.css` and `jaunder-themes.css`, mounted at `/style`
-  by `axum_embed::ServeEmbed` (`server/src/lib.rs`), which supplies ETag and
-  conditional-request handling.
+- `SystemArtifactInventory` (`host/src/system_theme.rs`) carries canonical
+  compiled bundled Theme Packages and protected application CSS. Startup
+  (`server/src/system_artifacts.rs`, `storage/src/system_themes.rs`) installs
+  and verifies their bytes and atomically advances system references before
+  serving. Stored metadata owns runtime digest URLs; missing or corrupt admitted
+  content fails closed rather than falling back to embedded stylesheets.
 - `Site` (`server/src/site.rs`, `#[folder = "$OUT_DIR/site"]`) carries the CSR
   client: full-SHA-256-named runtime assets, their precompressed `.br`/`.gz`
   siblings, and the `public/` assets flattened to the site root
@@ -2541,43 +2545,44 @@ on timeout. No administration secret or network control channel exists
   ([content-addressed CSR bundle manifest](adr/0175-content-addressed-csr-bundle-manifest.md)).
 
 [ADR-0003](adr/0003-asset-management.md) establishes single-binary asset
-provisioning. The built-in base stylesheets are embedded separately; published
-custom Theme Package CSS is served through persistent content eligibility, not
-arbitrary user-uploaded global stylesheets.
+provisioning. System and custom styling share persistent content eligibility;
+custom Theme Packages remain scoped rather than arbitrary global stylesheets.
 
 `ServeEmbed` does no `Accept-Encoding` negotiation, so `site::serve_site` is a
 hand-written handler: it picks Brotli, gzip, or identity bytes against the
 embedded variants and derives `Content-Type` from the logical runtime asset.
 Every manifest-backed `/pkg/` response, including `304`, carries
 `Cache-Control: public, max-age=31536000, immutable`; it also retains
-`Vary: Accept-Encoding` and a per-representation ETag. Only the data directory
-and the database live outside the binary, so **"single binary" holds without
-qualification.** This was not always true: until #237 (closed 2026-07-17) the
-WASM bundle was served from an on-disk site root by `ServeDir`. The WASM
-bundle's size is gated separately on raw bytes
+`Vary: Accept-Encoding` and a per-representation ETag. Stable non-manifest site
+assets, currently the favicon and generated index document, require `no-cache`
+revalidation on both `200` and `304`; an unmatched SPA shell is `no-store`. Only
+the data directory and the database live outside the binary, so **"single
+binary" holds without qualification.** This was not always true: until #237
+(closed 2026-07-17) the WASM bundle was served from an on-disk site root by
+`ServeDir`. The WASM bundle's size is gated separately on raw bytes
 ([ADR-0106](adr/0106-wasm-raw-size-budget.md)). Rendering architecture —
 leptos-CSR client plus the server-side public projector — is owned by the web
 section ([ADR-0040](adr/0040-web-rendering-leptos-csr.md),
 [ADR-0041](adr/0041-public-projector-and-csr-client.md)).
 
-### Committed direction — shared styling assets
+### Shared styling asset lifecycle
 
-The
-[unified styling assets decision](adr/drafts/unified-theme-and-application-assets.md)
-will replace the separate embedded stylesheet handler. The binary will carry
-system-managed bundled Theme Packages and application CSS for the shared
-persistent content store. Before accepting requests, startup will idempotently
-install and verify that inventory and atomically advance system references;
-failure will prevent startup. System and custom styling assets will share
-digest-addressed immutable responses and retain superseded bytes while
-referenced and through the one-year asset lifetime plus five-minute HTML
-freshness window after detachment. Backup/restore will preserve retained content
-and eligibility. All document consumers, including the database-independent
-thumbnail transport, will use generated digest references. Legacy
-`/style/jaunder.css` and `/style/jaunder-themes.css` will return 404 without
-aliases or SPA fallback; legacy documents may be unstyled until refreshed. This
-amends ADR-0003's serving mechanism while preserving single-binary provisioning
-and CSR asset behavior.
+System and custom styling assets use the same digest-addressed immutable
+responses and collector. Superseded bytes remain eligible while referenced and
+through the one-year asset lifetime plus five-minute public-HTML freshness
+window after detachment. Backup/restore preserves retained bytes and
+eligibility; rollback atomically reinstalls the older release's system
+references without removing newer retained content. All document consumers,
+including the DB-independent thumbnail transport, use generated digest
+references. The unused `StaticAssets` embed and aggregate `jaunder-themes.css`
+are removed; canonical application source remains `server/assets/jaunder.css`.
+Legacy `/style/jaunder.css` and `/style/jaunder-themes.css` return 404 without
+aliases or SPA fallback. Previously cached legacy responses cannot be evicted by
+this change; legacy documents may be unstyled until refreshed. This amends
+ADR-0003's serving mechanism while preserving single-binary provisioning and the
+independent CSR and Media contracts. The bounded inventory, cache policies,
+upgrade/restore instructions, and qualification limits are in
+[application assets](application-assets.md).
 
 ### Current CLI surface
 

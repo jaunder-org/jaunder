@@ -1,4 +1,3 @@
-pub mod assets;
 pub mod atompub;
 pub mod backup;
 mod bundle;

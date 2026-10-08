@@ -132,7 +132,7 @@ subsystems or authorization for parallel implementation writers.
     reviews pass. Same-origin release switching and actual Safari remain task 5
     qualification boundaries, not claims of these local browser proofs.
 
-- [ ] Task 5: Prove deployment transitions and unchanged visual presentation.
+- [x] Task 5: Prove deployment transitions and unchanged visual presentation.
   - Extend the existing isolated production-baseline coordinator/Playwright
     bridge with a bounded cache-transition proof. It already switches immutable
     packages behind stable Caddy origin while retaining a browser context;
@@ -168,6 +168,17 @@ subsystems or authorization for parallel implementation writers.
     Compare before/after narrow/wide Local, permalink, and Home screenshots for
     all public bundled themes and one custom package. Retain actual Safari
     evidence if available; otherwise name the device/browser evidence gap.
+  - Evidence: clean `df860966fac563c6cdb1ba6ddac175822f19df38` qualification
+    passed on SQLite and PostgreSQL, all seven phases each, with one retained
+    anonymous/authenticated context pair per backend, real cached A
+    observations, both computed styling cutovers/rollbacks, and same-backend
+    restored immutable content. Exact source/product/CSR/VM/runtime identities
+    and 200/304-empty observations are retained in
+    `docs/evidence/styling-qualification/df860966fac563c6cdb1ba6ddac175822f19df38-1791488769470905508/`.
+    Parent inspected the actual record against the matrix and protected Home
+    contract. Task 4's final fourteen visual pairs remain the before/after
+    proof; actual Safari/iPhone remains explicitly unqualified, not inferred
+    from Chromium. This is not #1419 production acceptance or milestone closure.
 
 - [ ] Task 6: Reconcile asset inventory, documentation, and release evidence.
   - Record every mutable non-manifest asset's cache/identity disposition,
@@ -183,6 +194,19 @@ subsystems or authorization for parallel implementation writers.
     #1419's final release-candidate qualification without changing its claim or
     running live production work. Present visual pairs with the PR review
     handoff.
+  - Implementation evidence: `docs/application-assets.md` records the bounded
+    inventory and upgrade/rollback/fresh-target restore rules. Stable favicon
+    and index responses explicitly revalidate on 200/304; unmatched SPA shells
+    are no-store. The obsolete `StaticAssets` embed and aggregate themes CSS are
+    removed, while canonical application source remains compiler input.
+    Architecture and glossary now describe implemented delivery rather than
+    future intent. Native focused proofs pass: 25 site response tests, 13 Media
+    tests, and 61 package/security tests; TypeScript also passes. The new live
+    stylesheet-timing test first failed on null retired-URL attribution, then
+    passed with actual DOM-owned digest references; the combined Chromium
+    boot-marks/static-assets suite passes all 28 cases. Independent final
+    review, commit-boundary certification, and PR CI remain pending; this
+    checkbox stays open until those barriers are satisfied.
 
 ## Risk checks and acceptance coverage
 

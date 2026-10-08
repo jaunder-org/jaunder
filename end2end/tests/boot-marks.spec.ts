@@ -1,10 +1,7 @@
-// `test` comes from `./fixtures`, not `@playwright/test`, even though the cases below
-// are pure and drive no server fn: the `traced-context` gate forbids the upstream
-// import anywhere under `end2end/tests` (only `fixtures.ts` is exempt), because a spec
-// that opens no `e2e.test` span makes everything it drives unattributable — and that
-// under-reports SILENTLY. A blanket rule is the point; carving out "but this one is
-// pure" is how the guard stops guarding. The assertions here are still pure, so the
-// merge invariant is proven by their logic, not by any browser behavior (#818).
+// Use the traced fixture for both the pure diagnostic cases and live harvests.
+// The `traced-context` gate forbids upstream `test` imports: every test owns an
+// `e2e.test` span, including pure cases, so browser work cannot become silently
+// unattributable. The merge invariant is still proven by pure logic (#818).
 import { test, expect } from "./fixtures";
 import {
   mergeDocumentTiming,
@@ -47,6 +44,61 @@ const documentTiming = (
   jaunderThemesCssResponseEndMs: null,
   wasm: null,
   ...overrides,
+});
+
+test("harvests the document-owned application and public stylesheet timings", async ({
+  page,
+  bootTiming,
+}) => {
+  await goto(page, "/");
+  await expect(
+    page.locator(
+      "link[data-jaunder-theme-stylesheet]:not([data-jaunder-theme-staged])",
+    ),
+  ).toHaveCount(1);
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        Array.from(
+          document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]'),
+        ).every((link) => link.sheet !== null),
+      ),
+    )
+    .toBe(true);
+  const actual = await page.evaluate(() => {
+    const application = document.querySelector<HTMLLinkElement>(
+      'link[rel="stylesheet"]:not([data-jaunder-theme-stylesheet]):not([data-jaunder-theme-staged])',
+    );
+    const theme = document.querySelector<HTMLLinkElement>(
+      "link[data-jaunder-theme-stylesheet]:not([data-jaunder-theme-staged])",
+    );
+    if (!application || !theme)
+      throw new Error("document lacks its stylesheet owners");
+    const resources = performance.getEntriesByType(
+      "resource",
+    ) as PerformanceResourceTiming[];
+    const responseEnd = (link: HTMLLinkElement) =>
+      resources
+        .filter((entry) => entry.name === link.href)
+        .sort((left, right) => left.startTime - right.startTime)[0]
+        ?.responseEnd;
+    return {
+      application: responseEnd(application),
+      theme: responseEnd(theme),
+      applicationPath: new URL(application.href).pathname,
+      themePath: new URL(theme.href).pathname,
+    };
+  });
+  expect(actual.applicationPath).toMatch(/^\/theme\/[0-9a-f]{64}$/);
+  expect(actual.themePath).toMatch(/^\/theme\/[0-9a-f]{64}$/);
+  expect(actual.application).toBeGreaterThan(0);
+  expect(actual.theme).toBeGreaterThan(0);
+  await expect
+    .poll(async () => (await bootTiming())?.jaunderCssResponseEndMs)
+    .toBe(actual.application);
+  await expect
+    .poll(async () => (await bootTiming())?.jaunderThemesCssResponseEndMs)
+    .toBe(actual.theme);
 });
 
 // `toBe` (identity), not `toEqual`, in the snapshot-selection cases below: the

@@ -205,8 +205,16 @@ A prop whose value **does** reach the view stays owned — the view must own it.
 
 ## 7. CSS conventions
 
-- All bespoke classes are prefixed `j-` and live in `server/assets/jaunder.css`.
-  Themes (variables only) live in `jaunder-themes.css`.
+- Bespoke protected application classes are prefixed `j-`; canonical application
+  CSS lives in `server/assets/jaunder.css` and is compiled into a non-selectable
+  system artifact, not served at a stable `/style` URL.
+- Bundled Studio, Terminal and Reader are Theme Packages under
+  `host/system_theme_sources/<name>/` (`theme.json` and canonical `style.css`).
+  Public package CSS uses the same validation/scoping compiler as custom
+  packages; it is not restricted to variables. Custom packages cannot style
+  trusted controls or private surfaces. See
+  [application assets](application-assets.md) for digest delivery, retention and
+  the retired stylesheet routes.
 - Component variants use BEM-ish modifier classes: `.j-btn.is-primary`,
   `.j-card-head`, `.j-backup-field-wide`.
 - Inline `style="…"` is permitted for one-off layout tweaks (`margin-top:8px`,

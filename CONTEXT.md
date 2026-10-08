@@ -69,7 +69,7 @@ landmarks, and named concept hooks, not incidental wrapper nesting or sibling
 positions. _Avoid_: template API (themes cannot replace the document), DOM
 snapshot (incidental structure is not contractual).
 
-**Theme Package**: A portable, non-executable custom public theme containing a
+**Theme Package**: A portable, non-executable public theme containing a
 versioned manifest, one CSS entry point that Jaunder validates and scopes, and
 optional package-local font or raster-image assets. A custom stored Theme
 Package belongs to the operator or one author; owner Media bindings remain
