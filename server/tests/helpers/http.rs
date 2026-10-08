@@ -50,12 +50,39 @@ pub fn prepare_app(
     build(storage_path)
 }
 
+/// Admits the canonical catalog before normal app-test composition, just as
+/// startup does. Fault-injected request scopes remain separate from admission.
+pub async fn install_app_system_inventory(
+    themes: std::sync::Arc<dyn storage::ThemeStorage>,
+    write_scope: storage::WriteScope,
+    storage: &TempDir,
+) -> common::root_relative_url::RootRelativeUrl {
+    let inventory = host::system_theme::compile_system_artifact_inventory()
+        .expect("compile canonical app-test system inventory");
+    let manager = storage::ThemeAssetManager::new(
+        themes,
+        write_scope,
+        std::sync::Arc::new(storage.path().to_path_buf()),
+    );
+    storage::test_support::confirmed(
+        manager
+            .install_system(&inventory, 0)
+            .await
+            .expect("install app-test system inventory"),
+    );
+    manager
+        .reconcile_startup()
+        .await
+        .expect("reconcile app-test immutable content");
+    inventory.application().content_digest().content_url()
+}
+
 /// Router composition at a test root. The input expression supplies focused
 /// storage minting methods; the expanded router crosses only exact dependencies.
 macro_rules! make_app {
     ($env:expr, $storage:expr) => {
         make_app!(
-            @build $storage,
+            @build $storage, ($env).write_scope(),
             storage::InstanceId::new(),
             storage::test_support::noop_mailer(),
             false,
@@ -83,7 +110,7 @@ macro_rules! make_app {
     };
     ($env:expr, $storage:expr; override_mailer = $mailer:expr) => {
         make_app!(
-            @build $storage,
+            @build $storage, ($env).write_scope(),
             storage::InstanceId::new(),
             $mailer,
             false,
@@ -128,7 +155,7 @@ macro_rules! make_app {
         resolver = $resolver:expr
     ) => {
         make_app!(
-            @build $storage, $instance_id, $mailer, $secure_cookies, $resolver;
+            @build $storage, ($env).write_scope(), $instance_id, $mailer, $secure_cookies, $resolver;
             site_config = ($env).site_config(),
             passkeys = ($env).passkeys(),
             users = ($env).users(),
@@ -149,7 +176,7 @@ macro_rules! make_app {
         )
     };
     ($env:expr, $storage:expr; override_write_scope = $write_scope:expr) => {
-        make_app!(@build $storage, storage::InstanceId::new(), storage::test_support::noop_mailer(), false, std::sync::Arc::new(jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new());
+        make_app!(@build $storage, ($env).write_scope(), storage::InstanceId::new(), storage::test_support::noop_mailer(), false, std::sync::Arc::new(jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new());
             site_config = ($env).site_config(), passkeys = ($env).passkeys(), users = ($env).users(), sessions = ($env).sessions(),
             invites = ($env).invites(), email_verifications = ($env).email_verifications(),
             password_resets = ($env).password_resets(), posts = ($env).posts(),
@@ -160,7 +187,7 @@ macro_rules! make_app {
         )
     };
     ($env:expr, $storage:expr; override_sessions = $sessions:expr) => {
-        make_app!(@build $storage, storage::InstanceId::new(), storage::test_support::noop_mailer(), false, std::sync::Arc::new(jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new());
+        make_app!(@build $storage, ($env).write_scope(), storage::InstanceId::new(), storage::test_support::noop_mailer(), false, std::sync::Arc::new(jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new());
             site_config = ($env).site_config(), passkeys = ($env).passkeys(), users = ($env).users(), sessions = $sessions,
             invites = ($env).invites(), email_verifications = ($env).email_verifications(),
             password_resets = ($env).password_resets(), posts = ($env).posts(),
@@ -171,7 +198,7 @@ macro_rules! make_app {
         )
     };
     ($env:expr, $storage:expr; override_site_config = $site_config:expr) => {
-        make_app!(@build $storage, storage::InstanceId::new(), storage::test_support::noop_mailer(), false, std::sync::Arc::new(jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new());
+        make_app!(@build $storage, ($env).write_scope(), storage::InstanceId::new(), storage::test_support::noop_mailer(), false, std::sync::Arc::new(jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new());
             site_config = $site_config, passkeys = ($env).passkeys(), users = ($env).users(), sessions = ($env).sessions(),
             invites = ($env).invites(), email_verifications = ($env).email_verifications(),
             password_resets = ($env).password_resets(), posts = ($env).posts(),
@@ -182,7 +209,7 @@ macro_rules! make_app {
         )
     };
     ($env:expr, $storage:expr; override_feed_cache = $feed_cache:expr) => {
-        make_app!(@build $storage, storage::InstanceId::new(), storage::test_support::noop_mailer(), false, std::sync::Arc::new(jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new());
+        make_app!(@build $storage, ($env).write_scope(), storage::InstanceId::new(), storage::test_support::noop_mailer(), false, std::sync::Arc::new(jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new());
             site_config = ($env).site_config(), passkeys = ($env).passkeys(), users = ($env).users(), sessions = ($env).sessions(),
             invites = ($env).invites(), email_verifications = ($env).email_verifications(),
             password_resets = ($env).password_resets(), posts = ($env).posts(),
@@ -193,7 +220,7 @@ macro_rules! make_app {
         )
     };
     ($env:expr, $storage:expr; override_posts_and_publisher = $posts:expr, $publisher:expr) => {
-        make_app!(@build $storage, storage::InstanceId::new(), storage::test_support::noop_mailer(), false, std::sync::Arc::new(jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new());
+        make_app!(@build $storage, ($env).write_scope(), storage::InstanceId::new(), storage::test_support::noop_mailer(), false, std::sync::Arc::new(jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new());
             site_config = ($env).site_config(), passkeys = ($env).passkeys(), users = ($env).users(), sessions = ($env).sessions(),
             invites = ($env).invites(), email_verifications = ($env).email_verifications(),
             password_resets = ($env).password_resets(), posts = $posts,
@@ -204,7 +231,7 @@ macro_rules! make_app {
         )
     };
     (
-        @build $storage:expr,
+        @build $storage:expr, $startup_write_scope:expr,
         $instance_id:expr, $mailer:expr, $secure_cookies:expr, $resolver:expr;
         site_config = $site_config:expr,
         passkeys = $passkeys:expr,
@@ -223,7 +250,11 @@ macro_rules! make_app {
         feed_cache = $feed_cache:expr,
         feed_events = $feed_events:expr,
         publisher = $publisher:expr,
-    ) => {
+    ) => {{
+        let themes: std::sync::Arc<dyn storage::ThemeStorage> = $themes;
+        let application_stylesheet_url = $crate::helpers::install_app_system_inventory(
+            themes.clone(), $startup_write_scope, $storage,
+        ).await;
         $crate::helpers::prepare_app($storage, |storage_path| {
             let site_config: std::sync::Arc<dyn storage::SiteConfigStorage> = $site_config;
             let passkeys: std::sync::Arc<dyn storage::PasskeyStorage> = $passkeys;
@@ -242,7 +273,7 @@ macro_rules! make_app {
             let audiences: std::sync::Arc<dyn storage::AudienceStorage> = $audiences;
             let media: std::sync::Arc<dyn storage::MediaStorage> = $media;
             let user_config: std::sync::Arc<dyn storage::UserConfigStorage> = $user_config;
-            let themes: std::sync::Arc<dyn storage::ThemeStorage> = $themes;
+            let themes = themes;
             let feed_cache: std::sync::Arc<dyn storage::FeedCacheStorage> = $feed_cache;
             let feed_events: std::sync::Arc<dyn storage::FeedEventStorage> = $feed_events;
             let publisher: std::sync::Arc<dyn storage::PublisherStorage> = $publisher;
@@ -353,7 +384,7 @@ macro_rules! make_app {
                 users.clone(),
                 themes.clone(),
                 site_config.clone(),
-                "/theme/application".parse().expect("test application URL"),
+                application_stylesheet_url,
                 jaunder::projector::Shell(jaunder::site::shell_html()),
             );
             let app = jaunder::application_routes(
@@ -379,7 +410,7 @@ macro_rules! make_app {
             .layer(axum::Extension(write_scope));
             jaunder::create_router(app, &instance_id, $secure_cookies, false)
         })
-    };
+    }};
 }
 pub(crate) use make_app as make_app_macro;
 

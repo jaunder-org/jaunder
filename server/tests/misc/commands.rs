@@ -1134,6 +1134,11 @@ async fn cmd_backup_covers_every_table_or_deliberately_excludes_it(#[case] backe
             "site_config",
             "subscription_statuses",
             "subscriptions",
+            "system_application_current",
+            "system_theme_content_references",
+            "system_theme_current",
+            "system_theme_revision_assets",
+            "system_theme_revisions",
             "tags",
             "target_kinds",
             "theme_content_eligibility",
@@ -1185,8 +1190,8 @@ async fn cmd_backup_covers_every_table_or_deliberately_excludes_it(#[case] backe
     // SQLite's Post ID allocator is a migration-seeded table; PostgreSQL
     // reserves IDs through a sequence instead.
     let expected_table_count = match &args.db {
-        storage::DbConnectOptions::Sqlite(_) => 50,
-        storage::DbConnectOptions::Postgres { .. } => 49,
+        storage::DbConnectOptions::Sqlite(_) => 55,
+        storage::DbConnectOptions::Postgres { .. } => 54,
     };
     assert_eq!(
         live_table_count, expected_table_count,

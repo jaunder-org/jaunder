@@ -202,7 +202,7 @@ async fn instance_header_covers_not_found_method_not_allowed_and_handler_error(
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/style/not-found.css")
+                .uri("/style/jaunder.css")
                 .body(Body::empty())
                 .unwrap(),
         )

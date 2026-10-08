@@ -18,14 +18,14 @@ CREATE TABLE system_theme_revision_assets (
     PRIMARY KEY (theme_token, revision_digest, path),
     FOREIGN KEY (theme_token, revision_digest)
         REFERENCES system_theme_revisions(theme_token, revision_digest)
-        ON DELETE RESTRICT
+        ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED
 );
 CREATE TABLE system_theme_current (
     theme_token TEXT PRIMARY KEY CHECK (theme_token IN ('terminal', 'studio', 'reader')),
     revision_digest TEXT NOT NULL CHECK (length(revision_digest) = 64),
     FOREIGN KEY (theme_token, revision_digest)
         REFERENCES system_theme_revisions(theme_token, revision_digest)
-        ON DELETE RESTRICT
+        ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED
 );
 CREATE TABLE system_application_current (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -38,7 +38,8 @@ CREATE TABLE system_theme_content_references (
     digest TEXT PRIMARY KEY CHECK (length(digest) = 64),
     live_references BIGINT NOT NULL CHECK (live_references >= 0),
     retained_until_unix_seconds BIGINT NOT NULL,
-    FOREIGN KEY (digest) REFERENCES theme_content_eligibility(digest) ON DELETE RESTRICT
+    FOREIGN KEY (digest) REFERENCES theme_content_eligibility(digest)
+        ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED
 );
 -- Release admission reads only current roles; detached history must not grow
 -- transaction work as old releases accumulate.

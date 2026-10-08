@@ -63,6 +63,24 @@ fail with the typed schema-mismatch error before mutation. There may be one
 materializable fixture per format version plus any number of historical-schema
 fixtures for that version.
 
+## Schema-51 format-3 evidence
+
+`format-3-schema-51/` is hand-authored from the immutable schema-41 format-3 row
+examples, with a new provenance manifest and explicit empty NDJSON members for
+the drained code-migration queue and five system-theme tables. It models an
+initialized, never-served instance: release-role installation belongs to startup
+admission. The old `format-3/` bytes and digest remain unchanged and its index
+entry is historical-schema evidence, not current-schema materialization.
+
+The current-writer oracle extends its independent format-3 table inventory for
+schema 51 and requires that exact schema version and complete path set. Its
+populated writer seed installs canonical A, B-app and B-theme inventories; the
+raw-wire checks require current application/theme identities, binary manifest
+cells, live/retained references and six exact immutable content members. The
+public backup interoperability tests and canonical styling qualification
+separately prove populated restoration/readability. Neither proof relabels a
+historical fixture or changes the format version.
+
 ## Retirement
 
 Keep every historical fixture, including one for a retired format. After schema

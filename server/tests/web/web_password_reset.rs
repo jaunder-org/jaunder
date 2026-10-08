@@ -27,7 +27,7 @@ use storage::test_support::{Backend, SeedUser, backends, mock_write_scope};
 macro_rules! password_reset_app {
     ($env:expr; $mailer:expr, $users:expr, $password_resets:expr, $write_scope:expr, $site_config:expr) => {
         make_app!(
-            @build &($env).base,
+            @build &($env).base, ($env).write_scope(),
             storage::InstanceId::new(),
             {
                 let mailer: Arc<dyn MailSender> = $mailer.clone();

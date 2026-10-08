@@ -54,7 +54,7 @@ async fn publish_fixture(
             theme_id,
             &compiled,
             theme_quota_limits(i64::MAX),
-            0,
+            jiff::Timestamp::now().as_second(),
         )
         .await
         .expect("publish fixture");
@@ -282,6 +282,7 @@ async fn only_eligible_theme_content_is_public(#[case] backend: Backend) {
     let env = backend.setup().await;
     let storage = TempDir::new().expect("temporary content root");
     let digest = "a".repeat(64);
+    let app = make_app!(&env, &storage);
     let file = storage
         .path()
         .join("themes")
@@ -290,7 +291,6 @@ async fn only_eligible_theme_content_is_public(#[case] backend: Backend) {
         .join(&digest);
     std::fs::create_dir_all(file.parent().expect("content parent")).expect("create content parent");
     std::fs::write(&file, b"draft css").expect("write known draft bytes");
-    let app = make_app!(&env, &storage);
 
     assert_eq!(
         get(&app, format!("/theme/{digest}")).await.status(),
@@ -356,7 +356,13 @@ async fn removed_theme_content_remains_public_through_retention(#[case] backend:
         .run(move |transaction| {
             Box::pin(async move {
                 themes
-                    .remove_theme(transaction, ThemeOwner::Site, theme.id, 100)
+                    .remove_theme(
+                        transaction,
+                        ThemeOwner::Site,
+                        theme.id,
+                        jiff::Timestamp::now().as_second()
+                            + storage::THEME_CONTENT_RETENTION_SECONDS,
+                    )
                     .await
             })
         })
