@@ -392,39 +392,46 @@ let
 
   cargoArtifactsLeanDev = craneLib.buildDepsOnly (commonArgs // leanDevProfile);
 
-  jaunderBin = craneLib.buildPackage (
-    hostArgs
-    // {
-      inherit cargoArtifacts;
-      cargoExtraArgs = "-p jaunder";
-      # Embed the CSR bundle + public assets into the binary (#237): the
-      # release artifact is self-contained (ADR-0003/0008), serving pkg/*
-      # and public/* with no external files. `server/build.rs` stages these
-      # into the embed; the env vars are its inputs (the crane `src` filter
-      # admits neither the bundle nor public/, so they arrive via env). This
-      # is the build-order edge that makes the binary depend on the bundle.
-      JAUNDER_CSR_BUNDLE_DIR = "${csrWasmBundle}";
-      JAUNDER_PUBLIC_DIR = "${../public}";
-      # Tests are covered by the separate `coverage` check (which runs the
-      # instrumented nextest suite) and, for doctests — which nextest
-      # structurally cannot run — the separate `doctests` check. Disabling
-      # here avoids a redundant `cargo test` compile + run during the
-      # package build.
-      doCheck = false;
-      nativeBuildInputs =
-        hostArgs.nativeBuildInputs ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.patchelf ];
-      postFixup = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
-        patchelf --add-rpath \
-          "${
-            pkgs.lib.makeLibraryPath [
-              pkgs.openssl
-              pkgs.dav1d
-            ]
-          }" \
-          "$out/bin/jaunder"
-      '';
-    }
-  );
+  mkJaunderBin =
+    {
+      pname ? "jaunder",
+      csrBundle ? csrWasmBundle,
+      passthru ? { },
+    }:
+    craneLib.buildPackage (
+      hostArgs
+      // {
+        inherit cargoArtifacts pname passthru;
+        cargoExtraArgs = "-p jaunder";
+        # Embed the CSR bundle + public assets into the binary (#237): the
+        # release artifact is self-contained (ADR-0003/0008), serving pkg/*
+        # and public/* with no external files. `server/build.rs` stages these
+        # into the embed; the env vars are its inputs (the crane `src` filter
+        # admits neither the bundle nor public/, so they arrive via env). This
+        # is the build-order edge that makes the binary depend on the bundle.
+        JAUNDER_CSR_BUNDLE_DIR = "${csrBundle}";
+        JAUNDER_PUBLIC_DIR = "${../public}";
+        # Tests are covered by the separate `coverage` check (which runs the
+        # instrumented nextest suite) and, for doctests — which nextest
+        # structurally cannot run — the separate `doctests` check. Disabling
+        # here avoids a redundant `cargo test` compile + run during the
+        # package build.
+        doCheck = false;
+        nativeBuildInputs =
+          hostArgs.nativeBuildInputs ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.patchelf ];
+        postFixup = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+          patchelf --add-rpath \
+            "${
+              pkgs.lib.makeLibraryPath [
+                pkgs.openssl
+                pkgs.dav1d
+              ]
+            }" \
+            "$out/bin/jaunder"
+        '';
+      }
+    );
+  jaunderBin = mkJaunderBin { };
 
   # The out-of-process e2e seed helper (ADR-0046). Built as its own small
   # crane package (no leptos/wasm/web deps; shares cargoArtifacts) and placed
@@ -592,36 +599,60 @@ let
   # The in-sandbox dev tool. Offline coverage/doctest sandboxes run it from
   # PATH instead of an in-sandbox `cargo run`, whose dependencies would not be
   # vendored. The CSR shell is retained directly in toolsSrc for include_str!.
-  devtoolBin = craneLib.buildPackage (
-    toolsArgs
-    // {
-      cargoArtifacts = toolsCargoArtifacts;
-      pname = "devtool";
-      cargoExtraArgs = "${toolsArgs.cargoExtraArgs} -p devtool";
-      doCheck = false;
-      installPhase = ''
-        mkdir -p $out/bin
-        cp tools/target/release/devtool $out/bin/devtool
-      '';
-      # `installPhase` copies a host-linked executable directly, bypassing
-      # Crane's normal cargo binary install path. Give the full producer an
-      # ELF runtime closure for its native host dependencies.
-      nativeBuildInputs =
-        toolsArgs.nativeBuildInputs
-        ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.patchelf ];
-      postFixup = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
-        patchelf --add-rpath \
-          "${
-            pkgs.lib.makeLibraryPath [
-              pkgs.openssl
-              pkgs.dav1d
-            ]
-          }" \
-          "$out/bin/devtool"
-      '';
-      doNotPostBuildInstallCargoBinaries = true;
-    }
-  );
+  mkDevtoolBin =
+    {
+      pname ? "devtool",
+      qualification ? false,
+    }:
+    let
+      cargoExtraArgs =
+        "${toolsArgs.cargoExtraArgs} -p devtool"
+        + pkgs.lib.optionalString qualification " --features qualification";
+      cargoArtifacts =
+        if qualification then
+          craneLib.buildDepsOnly (
+            toolsArgs
+            // {
+              dummySrc = toolsSrc;
+              inherit cargoExtraArgs;
+            }
+          )
+        else
+          toolsCargoArtifacts;
+    in
+    craneLib.buildPackage (
+      toolsArgs
+      // {
+        inherit cargoArtifacts cargoExtraArgs pname;
+        doCheck = false;
+        installPhase = ''
+          mkdir -p $out/bin
+          cp tools/target/release/devtool $out/bin/devtool
+        '';
+        # `installPhase` copies a host-linked executable directly, bypassing
+        # Crane's normal cargo binary install path. Give the full producer an
+        # ELF runtime closure for its native host dependencies.
+        nativeBuildInputs =
+          toolsArgs.nativeBuildInputs
+          ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.patchelf ];
+        postFixup = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+          patchelf --add-rpath \
+            "${
+              pkgs.lib.makeLibraryPath [
+                pkgs.openssl
+                pkgs.dav1d
+              ]
+            }" \
+            "$out/bin/devtool"
+        '';
+        doNotPostBuildInstallCargoBinaries = true;
+      }
+    );
+  devtoolBin = mkDevtoolBin { };
+  qualificationDevtoolBin = mkDevtoolBin {
+    pname = "jaunder-system-artifact-qualification-devtool";
+    qualification = true;
+  };
   docsDevtoolBin = craneLib.buildPackage (
     docsToolsArgs
     // {
@@ -788,11 +819,15 @@ let
   wasmShapeSection = "";
   wasmShapeSectionCount = 1;
 
-  csrWasmBundle =
-    pkgs.runCommand "jaunder-csr-wasm-bundle"
+  mkCsrWasmBundle =
+    {
+      devtool,
+      fixture ? null,
+    }:
+    pkgs.runCommand "jaunder-csr-wasm-bundle${pkgs.lib.optionalString (fixture != null) "-${fixture}"}"
       {
         nativeBuildInputs = [
-          devtoolBin
+          devtool
           pkgs.binaryen
           wasm-bindgen-cli
         ];
@@ -804,12 +839,40 @@ let
         # drift (#236). The resulting root holds the build-only manifest,
         # rendered shell, and served `pkg/` assets.
         devtool csr-bundle --wasm ${csrWasm}/lib/csr.wasm --out $out${
+          pkgs.lib.optionalString (fixture != null) " --system-artifact-fixture ${fixture}"
+        }${
           pkgs.lib.optionalString (wasmExperimentArm != "") " --wasm-experiment-arm ${wasmExperimentArm}"
         }${
           pkgs.lib.optionalString (wasmShapeSection != "")
             " --wasm-shape-section ${wasmShapeSection} --wasm-shape-section-count ${toString wasmShapeSectionCount}"
         }
       '';
+  csrWasmBundle = mkCsrWasmBundle { devtool = devtoolBin; };
+  mkSystemArtifactQualificationPackage =
+    fixture:
+    if
+      !builtins.elem fixture [
+        "a"
+        "b-app"
+        "b-theme"
+      ]
+    then
+      throw "unknown system-artifact qualification fixture `${fixture}`"
+    else
+      let
+        csrBundle = mkCsrWasmBundle {
+          devtool = qualificationDevtoolBin;
+          inherit fixture;
+        };
+      in
+      mkJaunderBin {
+        pname = "jaunder-system-artifact-qualification-${fixture}";
+        inherit csrBundle;
+        passthru = {
+          inherit csrBundle fixture;
+          systemArtifactInventory = "${csrBundle}/system-artifacts";
+        };
+      };
 
   # Separately instrumented CSR producer for the Playwright/WASM coverage probe.
   #
@@ -1095,6 +1158,7 @@ in
       leanTestProfile
       leanDevAndTestProfile
       jaunderBin
+      mkSystemArtifactQualificationPackage
       diagnosticJaunderBin
       diagnosticBaselineJaunderBin
       diagnosticCsrWasmBundle
