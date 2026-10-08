@@ -513,37 +513,38 @@ hide otherwise valid synchronization markers."
 
 (defun jaunder--reconcile-refresh-buffer (buffer)
   "Rebuild BUFFER's report from fresh inventory without discarding its results."
-  (with-current-buffer buffer
-    (let* ((root (jaunder-reconcile-report-root jaunder-reconcile-report))
-           ;; Build before changing the report buffer, so a failed inventory leaves its
-           ;; existing reviewable state available to the User.
-           (report (jaunder--call-with-blog
-                    root
-                    (lambda ()
-                      (jaunder--reconcile-build-report
-                       root (jaunder--inventory-for-root root)))))
-           (marks (jaunder--reconcile-pruned-marks report jaunder-reconcile-marks))
-           (text (buffer-substring (point-min) (point-max)))
-           (point (point))
-           (previous-report jaunder-reconcile-report)
-           (previous-marks jaunder-reconcile-marks)
-           (previous-results jaunder-reconcile-last-batch-results)
-           (modified (buffer-modified-p)))
-      (condition-case err
-          (progn
-            (setq-local jaunder-reconcile-marks marks)
-            (jaunder--render-reconcile-report report buffer))
-        (error
-         (let ((inhibit-read-only t)
-               (inhibit-modification-hooks t))
-           (erase-buffer)
-           (insert text))
-         (setq-local jaunder-reconcile-report previous-report)
-         (setq-local jaunder-reconcile-marks previous-marks)
-         (setq-local jaunder-reconcile-last-batch-results previous-results)
-         (goto-char point)
-         (set-buffer-modified-p modified)
-         (signal (car err) (cdr err)))))))
+  (jaunder--with-debug-operation "report.refresh" nil
+                                 (with-current-buffer buffer
+                                   (let* ((root (jaunder-reconcile-report-root jaunder-reconcile-report))
+                                          ;; Build before changing the report buffer, so a failed inventory leaves its
+                                          ;; existing reviewable state available to the User.
+                                          (report (jaunder--call-with-blog
+                                                   root
+                                                   (lambda ()
+                                                     (jaunder--reconcile-build-report
+                                                      root (jaunder--inventory-for-root root)))))
+                                          (marks (jaunder--reconcile-pruned-marks report jaunder-reconcile-marks))
+                                          (text (buffer-substring (point-min) (point-max)))
+                                          (point (point))
+                                          (previous-report jaunder-reconcile-report)
+                                          (previous-marks jaunder-reconcile-marks)
+                                          (previous-results jaunder-reconcile-last-batch-results)
+                                          (modified (buffer-modified-p)))
+                                     (condition-case err
+                                         (progn
+                                           (setq-local jaunder-reconcile-marks marks)
+                                           (jaunder--render-reconcile-report report buffer))
+                                       (error
+                                        (let ((inhibit-read-only t)
+                                              (inhibit-modification-hooks t))
+                                          (erase-buffer)
+                                          (insert text))
+                                        (setq-local jaunder-reconcile-report previous-report)
+                                        (setq-local jaunder-reconcile-marks previous-marks)
+                                        (setq-local jaunder-reconcile-last-batch-results previous-results)
+                                        (goto-char point)
+                                        (set-buffer-modified-p modified)
+                                        (signal (car err) (cdr err))))))))
 
 (defun jaunder--reconcile-with-progress (success failure work)
   "Display synchronous WORK before blocking; report SUCCESS or FAILURE at exit."
@@ -1758,22 +1759,23 @@ operations write there, never to either Post.  `C-c C-c' explicitly finishes."
 (defun jaunder-reconcile (root)
   "Reconcile ROOT with its configured AtomPub Collection without resolving it."
   (interactive (list default-directory))
-  (jaunder--reconcile-with-progress
-   "report ready" "report failed"
-   (lambda ()
-     (jaunder--call-with-blog
-      root
-      (lambda ()
-        (let* ((configured-root (car (jaunder--blog-entry-for root)))
-               (inventory (jaunder--inventory-for-root configured-root))
-               (report (jaunder--reconcile-build-report configured-root inventory))
-               (buffer (jaunder--render-reconcile-report report)))
-          (with-current-buffer buffer
-            (setq-local jaunder-reconcile-last-batch-results nil)
-            (setq-local jaunder-reconcile-marks (make-hash-table :test #'equal))
-            (jaunder--render-reconcile-report report buffer))
-          (display-buffer buffer)
-          report))))))
+  (jaunder--with-debug-operation "report.open" nil
+                                 (jaunder--reconcile-with-progress
+                                  "report ready" "report failed"
+                                  (lambda ()
+                                    (jaunder--call-with-blog
+                                     root
+                                     (lambda ()
+                                       (let* ((configured-root (car (jaunder--blog-entry-for root)))
+                                              (inventory (jaunder--inventory-for-root configured-root))
+                                              (report (jaunder--reconcile-build-report configured-root inventory))
+                                              (buffer (jaunder--render-reconcile-report report)))
+                                         (with-current-buffer buffer
+                                           (setq-local jaunder-reconcile-last-batch-results nil)
+                                           (setq-local jaunder-reconcile-marks (make-hash-table :test #'equal))
+                                           (jaunder--render-reconcile-report report buffer))
+                                         (display-buffer buffer)
+                                         report)))))))
 
 
 

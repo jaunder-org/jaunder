@@ -88,8 +88,16 @@ backend behavior changes; use existing live Emacs fixtures for consumer proof.
     edges, reject cycles and misordered terminals, require intent completion
     before sibling transfer, and directly exercise intent, write-back, rename
     and no-op rename. The pure suite is 483/483; production forms remain
-    structurally identical after removing diagnostic wrappers. Remaining
-    report/inventory, batch/row, conflict, and merge owners are pending.
+    structurally identical after removing diagnostic wrappers. Report open and
+    refresh, local discovery, complete Collection pagination, each page, and the
+    complete identity join now wrap their six actual owners without fields. Six
+    further proofs cover real report rendering/classification, retained
+    marks/results, direct helper roots, exact requests/progress, native
+    wire/read/join/partial-render errors and quits, invalid pages, disabled
+    factories, privacy, and diagnostic retention after report-buffer exit. The
+    pure suite is 489/489; compilation is warning-free and all 110
+    inventory/reconciliation function forms are identical after removing
+    diagnostic wrappers. Batch/row, conflict, and merge owners remain pending.
   - Contract: outer command/batch/row spans nest existing lower-level
     operations; direct helper calls remain independent roots. Ediff setup and
     later finish/ cancel/discard are separate calls, not a fictitious
