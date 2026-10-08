@@ -7,6 +7,7 @@
 let
   lib = sourceFlake.inputs.nixpkgs.lib;
   ordinary = sourceFlake.packages.${system};
+  pkgs = sourceFlake.inputs.nixpkgs.legacyPackages.${system};
   mk =
     fixture:
     import ./system-artifact-qualification.nix {
@@ -54,6 +55,11 @@ assert
     "system"
   ];
 assert builtins.all variantMatches fixtures;
+assert
+  !pkgs.stdenv.hostPlatform.isLinux
+  || builtins.all (
+    package: package.LD_LIBRARY_PATH == lib.makeLibraryPath [ pkgs.dav1d ]
+  ) ([ ordinary.jaunder ] ++ packages);
 assert builtins.length (lib.unique (map (package: package.drvPath) packages)) == 3;
 assert builtins.length (lib.unique (map (package: package.csrBundle.drvPath) packages)) == 3;
 assert !(lib.hasInfix "--features qualification" ordinary.devtool.buildPhase);

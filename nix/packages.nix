@@ -430,6 +430,11 @@ let
             "$out/bin/jaunder"
         '';
       }
+      // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+        # The canonical inventory loader links host AVIF decoding into the
+        # server build script. It runs before output postFixup can add rpaths.
+        LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.dav1d ];
+      }
     );
   jaunderBin = mkJaunderBin { };
 
