@@ -114,7 +114,20 @@ backend behavior changes; use existing live Emacs fixtures for consumer proof.
     regressions also ran enabled (45/45, no diagnostic warnings). Pure suite:
     496/496; compilation warning-free; 76 native reconcile defuns equivalent
     after stripping only diagnostic wrappers. Final live evidence remains
-    pending. Conflict and merge owners remain pending.
+    pending. Both batch/row reviews approved; the Standards wording note (action
+    known at start, only decision initially unknown) is corrected in README.
+    Explicit conflict commands and separate scratch finish/cancel/discard
+    callbacks now have the seven remaining label groups. Remote staging and
+    actual snapshot/Ediff setup are separate `merge.stage` owners. Six permanent
+    tests replay existing native prompt/mutation/staging/startup/drift/partial/
+    racing-edit assertions off/on, verify real command→batch→row parentage,
+    independent retained-scratch callback roots, privacy and exact native
+    error/quit payloads for all seven labels. The full runner caught a duplicate
+    test load; replay now loads legacy contracts lazily only during focused
+    execution. Pure suite: 502/502; compilation warning-free; all 76 native
+    reconcile defuns still equivalent. Conflict/merge independent review remains
+    pending; final live populations/coverage and exhaustive owner/field
+    inventory are Task 5.
   - Contract: outer command/batch/row spans nest existing lower-level
     operations; direct helper calls remain independent roots. Ediff setup and
     later finish/ cancel/discard are separate calls, not a fictitious

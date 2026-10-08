@@ -86,15 +86,25 @@ per-selected-Post complete Collection verification cost during pull.
 `reconcile.batch` encloses the confirmed executor, including result recording
 and report refresh. `reconcile.row` encloses the actual push, pull, delete,
 keep-local, and keep-remote owners; direct calls are independent roots. Both use
-allowlisted `action`/`decision` fields, initially `unknown` until native results
-exist. Row decisions project native outcomes: success → `proceed`, blocked →
-`blocked`, no-op → `no-op`, partial → `partial`, lost remote outcome →
-`remote-unknown`, and other outcomes → `unknown`. Batch decisions summarize
-retained outcomes; cancellation after a recorded row or refresh failure means a
-partial batch, not that the row failed. Event `outcome` classifies native
-return/error/quit, distinct from the business decision. Pending keyboard input
-remains owned by the executor until its result checkpoint. Disabled diagnostics
-perform no field projection.
+allowlisted `action`/`decision` fields: action is known at start; decision is
+initially `unknown` until native results exist. Row decisions project native
+outcomes: success → `proceed`, blocked → `blocked`, no-op → `no-op`, partial →
+`partial`, lost remote outcome → `remote-unknown`, and other outcomes →
+`unknown`. Batch decisions summarize retained outcomes; cancellation after a
+recorded row or refresh failure means a partial batch, not that the row failed.
+Event `outcome` classifies native return/error/quit, distinct from the business
+decision. Pending keyboard input remains owned by the executor until its result
+checkpoint. Disabled diagnostics perform no field projection.
+
+`conflict.local`, `conflict.remote`, and `conflict.merge` time the explicit
+resolution commands, including native confirmation and eligibility guards.
+`merge.stage` times remote staging and, separately, the actual snapshot/Ediff
+setup block. `merge.finish`, `merge.cancel`, and `merge.discard` time
+independent scratch callbacks, not a fictitious operation spanning the User's
+editing time. These boundaries add no optional fields; scratch bytes, names,
+paths, reviewed ETags, and raw conditions never enter diagnostics. Exiting Ediff
+or cancelling still does not publish; only the existing explicit finish flow may
+do so.
 
 ## Post audience metadata
 
