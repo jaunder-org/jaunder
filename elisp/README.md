@@ -221,9 +221,13 @@ by `jaunder-deferred-quit-debug-test.el`.
 
 `jaunder-debug-edebug-test.el` additionally instruments actual macro call
 syntax: keys remain literal, field forms remain lazy, and native
-values/condition data retain identity. Edebug/coverage instrumentation must not
-turn field plists into function calls. Host pure/live and controlled-wire proofs
-are distinct from the authoritative hermetic coverage producer/consumer verdict.
+values/condition data retain identity. Deferred fields/projections keep their
+own coverage counters across instrumented helper calls; they must not be treated
+as data or attributed to a helper. `jaunder-debug-guard-test.el` exercises
+rejected initial fields and bounded cancellation rewrites after a retained-event
+fault. Edebug/coverage instrumentation must not turn field plists into function
+calls. Host pure/live and controlled-wire proofs are distinct from the
+authoritative hermetic coverage producer/consumer verdict.
 
 ## Post audience metadata
 

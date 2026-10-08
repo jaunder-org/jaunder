@@ -624,7 +624,8 @@ report remains visibly reviewable, and the User must refresh before retrying."
 
 (defmacro jaunder--with-reconcile-batch-debug (action buffer &rest body)
   "Run actual batch BODY once, projecting only native ACTION and BUFFER outcomes."
-  (declare (indent 2) (debug (form form body)))
+  ;; Both projections execute in deferred diagnostic thunks, not caller context.
+  (declare (indent 2) (debug ([&define def-form] [&define def-form] body)))
   (let ((value (make-symbol "value")))
     `(jaunder--with-debug-operation "reconcile.batch"
                                     (action (jaunder--reconcile-debug-action ,action) decision "unknown")
