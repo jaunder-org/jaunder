@@ -67,7 +67,12 @@ async fn atompub_routes_forbid_intermediary_transformation(#[case] backend: Back
         )
         .await
         .unwrap();
-    assert_eq!(unknown.headers()[header::CACHE_CONTROL], "no-transform");
+    // The unmatched route also receives the SPA shell's no-store policy;
+    // AtomPub must preserve that policy while prohibiting transformation.
+    assert_eq!(
+        unknown.headers()[header::CACHE_CONTROL],
+        "no-store, no-transform"
+    );
     let outside = app
         .oneshot(
             Request::builder()
