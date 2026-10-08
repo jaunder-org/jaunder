@@ -103,7 +103,18 @@ backend behavior changes; use existing live Emacs fixtures for consumer proof.
     result checkpoint. Two red/green regressions cover native value identity,
     body/sink input, and the real executor recording before cancellation and
     refreshing with input cleared. The pure suite is 491/491; compilation is
-    warning-free. Batch/row, conflict, and merge owners remain pending.
+    warning-free; both independent reviews approved that correction. The actual
+    confirmed executor and all five push/pull/delete/keep-local/keep-remote row
+    owners now have batch/row timers and allowlisted action/decision
+    projections. Five permanent tests cover direct roots, eligibility/no-op
+    results, native return identity/error/quit, disabled field laziness,
+    retained outcome aggregation, displayed order/foreign filtering/duplicate
+    selections, append-before-cancel, and refresh failure. The real executor
+    calls actual push owners in both modes; existing successful/failing mutation
+    regressions also ran enabled (45/45, no diagnostic warnings). Pure suite:
+    496/496; compilation warning-free; 76 native reconcile defuns equivalent
+    after stripping only diagnostic wrappers. Final live evidence remains
+    pending. Conflict and merge owners remain pending.
   - Contract: outer command/batch/row spans nest existing lower-level
     operations; direct helper calls remain independent roots. Ediff setup and
     later finish/ cancel/discard are separate calls, not a fictitious

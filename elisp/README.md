@@ -83,6 +83,19 @@ Diagnostics are client-local, unsaved troubleshooting evidence. Share only after
 reviewing it. They time client boundaries but do not remove the
 per-selected-Post complete Collection verification cost during pull.
 
+`reconcile.batch` encloses the confirmed executor, including result recording
+and report refresh. `reconcile.row` encloses the actual push, pull, delete,
+keep-local, and keep-remote owners; direct calls are independent roots. Both use
+allowlisted `action`/`decision` fields, initially `unknown` until native results
+exist. Row decisions project native outcomes: success → `proceed`, blocked →
+`blocked`, no-op → `no-op`, partial → `partial`, lost remote outcome →
+`remote-unknown`, and other outcomes → `unknown`. Batch decisions summarize
+retained outcomes; cancellation after a recorded row or refresh failure means a
+partial batch, not that the row failed. Event `outcome` classifies native
+return/error/quit, distinct from the business decision. Pending keyboard input
+remains owned by the executor until its result checkpoint. Disabled diagnostics
+perform no field projection.
+
 ## Post audience metadata
 
 An Org Post may declare its explicit audience with repeated file properties:
