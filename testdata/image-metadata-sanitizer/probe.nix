@@ -4,6 +4,16 @@
 let
   flake = builtins.getFlake (toString ../..);
   pkgs = flake.inputs.nixpkgs.legacyPackages.${system};
+  helpers = ./.;
+  # TEST-SIDE decoder instrumentation only; never invoked by the rewriter.
+  hevcNative = assert pkgs.libde265.version == "1.1.1";
+    pkgs.libde265.overrideAttrs (old: {
+      pname = "libde265-hevc-test-boundary";
+      nativeBuildInputs = old.nativeBuildInputs ++ [ pkgs.python3 ];
+      postPatch = (old.postPatch or "") + ''
+        python3 ${./instrument_hevc_native.py} .
+      '';
+    });
 in
 pkgs.runCommand "issue-1702-image-sanitizer-feasibility-witness"
   {
@@ -237,6 +247,19 @@ pkgs.runCommand "issue-1702-image-sanitizer-feasibility-witness"
     python3 -B ${./verify_rgb_controls.py} "$out/fixtures" ${./rewrite_rgb_icc.py} > "$out/reports/ordinary-icc-controls.txt"
     ./validate-rgb-icc "$out/fixtures/ordinary/control-shared-trc.icc" \
       "$out/fixtures/ordinary/control-shared-trc.scrubbed.icc" >> "$out/reports/ordinary-icc-transform-validation.txt"
+    # New closed-layout HEVC/HEIF tranche. All earlier witnesses above remain
+    # unchanged; original libheif bit6 array signaling stays a rejected input.
+    $CC -std=c17 -Wall -Wextra -Werror ${./consume_heif.c} \
+      -I${pkgs.libheif.dev}/include -L${pkgs.lib.getLib pkgs.libheif}/lib -lheif -o consume-heif
+    python3 -B ${helpers}/verify_hevc_ownership.py "$out/fixtures" \
+      "$out/reports/hevc-ownership" ${hevcNative}/bin/dec265 ${helpers}/validate_hevc.py \
+      > "$out/reports/hevc-ownership-controls.txt"
+    python3 -B ${helpers}/make_heif_fixtures.py "$out/fixtures" "$out/fixtures/heif-owned"
+    heif-enc -q 50 -o "$out/fixtures/heif-owned/aux-alpha.heic" \
+      "$out/fixtures/heif-owned/alpha-source.png"
+    python3 -B ${helpers}/verify_heif_controls.py "$out/fixtures/heif-owned" "$out/fixtures" \
+      "$out/reports/heif-rewrite" ${helpers}/rewrite_heif.py "$PWD/consume-heif" \
+      "$out/fixtures/heif-owned/aux-alpha.heic" > "$out/reports/heif-rewrite-controls.txt"
     sha256sum "$out"/fixtures/input/* "$out"/fixtures/candidate/* "$out"/fixtures/webp/input/* \
       "$out"/fixtures/webp/candidate/* "$out"/reports/*.png > "$out/reports/SHA256SUMS"
   ''
