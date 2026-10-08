@@ -162,6 +162,8 @@ export class StylingSession {
       body: `# Styling qualification\n\nRetained browser release continuity.\n\n![Styling qualification image](${image.url})`,
       slug: "styling-qualification",
       publish: true,
+      // Public surfaces are the subject; Site/User audience defaults are not.
+      audience: "public",
     });
     this.permalink = await followPermalink(this.homePage, post);
     const cookies = await this.authenticated.cookies();
