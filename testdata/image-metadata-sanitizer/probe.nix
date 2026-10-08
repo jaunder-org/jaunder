@@ -101,6 +101,26 @@ pkgs.runCommand "issue-1702-image-sanitizer-feasibility-witness"
       ${./rewrite_rgb_icc.py} ${./verify_gif.py} ${pkgs.imagemagick}/bin/magick \
       > "$out/reports/gif-controls.txt"
 
+    # Candidate-only WebP witness: fixture construction uses Pillow/libwebp;
+    # inspection is separately implemented with Python's standard library.
+    PYTHONPATH=${./.} python3 -B ${./make_webp_fixtures.py} "$out/fixtures/ordinary" "$out/fixtures/webp/input"
+    python3 -B ${./verify_webp_candidate.py} "$out/fixtures/webp" \
+      ${pkgs.exiftool}/bin/exiftool > "$out/reports/webp-exiftool-candidate.json"
+    python3 -B ${./verify_webp_candidate_oracle_controls.py} \
+      "$out/reports/webp-exiftool-candidate.json" ${./verify_webp_candidate.py} \
+      > "$out/reports/webp-candidate-oracle-controls.txt"
+    python3 -B ${./verify_webp_controls.py} "$out/fixtures/webp" \
+      ${./verify_webp_candidate.py} > "$out/reports/webp-controls.txt"
+    {
+      printf 'pillow-nix-version=%s\n' '${pkgs.python3Packages.pillow.version}'
+      printf 'pillow-nix-path=%s\n' '${pkgs.python3Packages.pillow}'
+      printf 'pillow-license=%s\n' '${builtins.toJSON pkgs.python3Packages.pillow.meta.license}'
+      printf 'libwebp-nix-version=%s\n' '${pkgs.libwebp.version}'
+      printf 'libwebp-nix-path=%s\n' '${pkgs.libwebp}'
+      printf 'libwebp-license=%s\n' '${builtins.toJSON pkgs.libwebp.meta.license}'
+      python3 -c 'from PIL import Image, features; print("pillow-runtime-version=" + Image.__version__); print("libwebp-runtime-version=" + str(features.version_module("webp")))'
+    } > "$out/reports/webp-package-metadata.txt"
+
     magick "$out/fixtures/input/base.png" -profile "$out/fixtures/icc/input-v4.icc" \
       -quality 92 "$out/fixtures/input/device-like.jpg"
     heif-enc -q 50 -o "$out/fixtures/input/device-like.heic" \
@@ -188,6 +208,6 @@ pkgs.runCommand "issue-1702-image-sanitizer-feasibility-witness"
     python3 -B ${./verify_rgb_controls.py} "$out/fixtures" ${./rewrite_rgb_icc.py} > "$out/reports/ordinary-icc-controls.txt"
     ./validate-rgb-icc "$out/fixtures/ordinary/control-shared-trc.icc" \
       "$out/fixtures/ordinary/control-shared-trc.scrubbed.icc" >> "$out/reports/ordinary-icc-transform-validation.txt"
-    sha256sum "$out"/fixtures/input/* "$out"/fixtures/candidate/* "$out"/reports/*.png \
-      > "$out/reports/SHA256SUMS"
+    sha256sum "$out"/fixtures/input/* "$out"/fixtures/candidate/* "$out"/fixtures/webp/input/* \
+      "$out"/fixtures/webp/candidate/* "$out"/reports/*.png > "$out/reports/SHA256SUMS"
   ''
