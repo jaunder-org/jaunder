@@ -71,12 +71,13 @@ than temporary files."
 
 (defun jaunder--pull-media-original-root (root)
   "Return canonical ROOT after rejecting an invalid original-proof boundary."
-  (unless (and (stringp root) (file-name-absolute-p root))
-    (error "jaunder pull media: configured root is invalid: %S" root))
-  (let ((root (directory-file-name (expand-file-name root))))
-    (unless (and (file-directory-p root) (not (file-symlink-p root)))
-      (error "jaunder pull media: configured root is not a safe directory: %s" root))
-    root))
+  (jaunder--with-debug-operation "media.path" nil
+                                 (unless (and (stringp root) (file-name-absolute-p root))
+                                   (error "jaunder pull media: configured root is invalid: %S" root))
+                                 (let ((root (directory-file-name (expand-file-name root))))
+                                   (unless (and (file-directory-p root) (not (file-symlink-p root)))
+                                     (error "jaunder pull media: configured root is not a safe directory: %s" root))
+                                   root)))
 
 (defun jaunder--pull-media-original-safe-regular-p (root path)
   "Return non-nil when PATH is a readable regular non-symlink under ROOT.
@@ -85,23 +86,24 @@ Every extant component from ROOT through PATH is checked instead of following a
 convenient truename: original reuse must not authorize a destination through a
 symlink.  Missing, unreadable, non-directory, and nonregular paths are expected
 ineligibility; filesystem errors intentionally propagate to the caller."
-  (when (and (file-in-directory-p path root)
-             (not (file-symlink-p path))
-             (file-attributes path))
-    (let ((component root)
-          (parts (split-string (file-relative-name path root) "/" t))
-          safe)
-      (setq safe (and (not (file-symlink-p component))
-                      (file-attributes component)
-                      (file-directory-p component)))
-      (while (and safe (> (length parts) 1))
-        (setq component (expand-file-name (pop parts) component)
-              safe (and (not (file-symlink-p component))
-                        (file-attributes component)
-                        (file-directory-p component))))
-      (and safe
-           (file-regular-p path)
-           (file-readable-p path)))))
+  (jaunder--with-debug-operation "media.path" nil
+                                 (when (and (file-in-directory-p path root)
+                                            (not (file-symlink-p path))
+                                            (file-attributes path))
+                                   (let ((component root)
+                                         (parts (split-string (file-relative-name path root) "/" t))
+                                         safe)
+                                     (setq safe (and (not (file-symlink-p component))
+                                                     (file-attributes component)
+                                                     (file-directory-p component)))
+                                     (while (and safe (> (length parts) 1))
+                                       (setq component (expand-file-name (pop parts) component)
+                                             safe (and (not (file-symlink-p component))
+                                                       (file-attributes component)
+                                                       (file-directory-p component))))
+                                     (and safe
+                                          (file-regular-p path)
+                                          (file-readable-p path))))))
 
 (defun jaunder--pull-media-original-link-spelling (record)
   "Return RECORD's eligible relative destination spelling without a fragment.
@@ -1073,17 +1075,18 @@ public media identity and URL hash are valid only for the direct response."
 
 This only validates and constructs the path; unlike
 `jaunder--pull-media-target-path', it does not create directories."
-  (unless (and (stringp root) (file-name-absolute-p root))
-    (error "jaunder pull media: configured root is invalid: %S" root))
-  (let ((case-fold-search nil))
-    (unless (string-match-p jaunder--pull-media-sha256-regexp hash)
-      (error "jaunder pull media: invalid planned hash: %S" hash)))
-  (unless (jaunder--pull-media-safe-leaf-p leaf)
-    (error "jaunder pull media: invalid decoded filename: %S" leaf))
-  (let* ((root (directory-file-name (expand-file-name root)))
-         (media (expand-file-name "local-media" root))
-         (digest (expand-file-name hash media)))
-    (expand-file-name leaf digest)))
+  (jaunder--with-debug-operation "media.path" nil
+                                 (unless (and (stringp root) (file-name-absolute-p root))
+                                   (error "jaunder pull media: configured root is invalid: %S" root))
+                                 (let ((case-fold-search nil))
+                                   (unless (string-match-p jaunder--pull-media-sha256-regexp hash)
+                                     (error "jaunder pull media: invalid planned hash: %S" hash)))
+                                 (unless (jaunder--pull-media-safe-leaf-p leaf)
+                                   (error "jaunder pull media: invalid decoded filename: %S" leaf))
+                                 (let* ((root (directory-file-name (expand-file-name root)))
+                                        (media (expand-file-name "local-media" root))
+                                        (digest (expand-file-name hash media)))
+                                   (expand-file-name leaf digest))))
 
 (defun jaunder--pull-media-target-path (root hash leaf)
   "Return ROOT's safe Local Media Copy path for HASH and decoded LEAF."
@@ -1176,60 +1179,62 @@ trust chain.  Reused references keep their exact original spelling; other
 references retain ordinary localization and, when needed, carry verified bytes
 for later no-overwrite installation.  This intentionally leaves final original
 revalidation and fallback installation to the matched-pull consumer."
-  (let ((case-fold-search nil))
-    (unless (and (stringp instance-id)
-                 (string-match-p jaunder--pull-media-instance-id-regexp instance-id))
-      (error "jaunder pull media: Member instance identity is not canonical")))
-  (let ((seen (make-hash-table :test #'equal))
-        (fallbacks nil)
-        (reuses nil)
-        references)
-    (dolist (reference (jaunder-pull-media-plan-references plan))
-      (let* ((hash (jaunder-pull-media-reference-hash reference))
-             (leaf (jaunder-pull-media-reference-leaf reference))
-             (original (and original-proof
-                            (jaunder--pull-media-original-for-hash original-proof hash)))
-             (key (concat hash "\0" leaf)))
-        ;; Copy the reference so staging never mutates the parser's immutable plan.
-        (push (jaunder--make-pull-media-reference
-               :url (jaunder-pull-media-reference-url reference)
-               :hash hash :leaf leaf
-               :target (if original
-                           (jaunder-pull-media-original-destination-spelling original)
-                         (jaunder-pull-media-reference-target reference))
-               :replacements (jaunder-pull-media-reference-replacements reference))
-              references)
-        (unless (gethash key seen)
-          (puthash key t seen)
-          (cond
-           (original
-            ;; A matching original proves destination choice, not remote authority.
-            (let ((target (jaunder--pull-media-fallback-path root hash leaf))
-                  (fallback-target (jaunder-pull-media-reference-target reference)))
-              (push (jaunder--make-pull-media-reuse
-                     :original original
-                     :fallback
-                     (jaunder--make-pull-media-fallback
-                      :hash hash :leaf leaf :target target :native-target fallback-target
-                      :bytes (jaunder--pull-media-fetch-verified-bytes
-                              (jaunder-pull-media-reference-url reference) instance-id hash)))
-                    reuses)))
-           (t
-            (let ((target (jaunder--pull-media-target-path root hash leaf)))
-              (if (or (file-exists-p target) (file-symlink-p target))
-                  (jaunder--pull-media-require-existing-copy target hash)
-                (push (jaunder--make-pull-media-fallback
-                       :hash hash :leaf leaf :target target
-                       :native-target (jaunder-pull-media-reference-target reference)
+  (jaunder--with-debug-operation
+   "media.materialize" (count (length (jaunder-pull-media-plan-references plan)))
+   (let ((case-fold-search nil))
+     (unless (and (stringp instance-id)
+                  (string-match-p jaunder--pull-media-instance-id-regexp instance-id))
+       (error "jaunder pull media: Member instance identity is not canonical")))
+   (let ((seen (make-hash-table :test #'equal))
+         (fallbacks nil)
+         (reuses nil)
+         references)
+     (dolist (reference (jaunder-pull-media-plan-references plan))
+       (let* ((hash (jaunder-pull-media-reference-hash reference))
+              (leaf (jaunder-pull-media-reference-leaf reference))
+              (original (and original-proof
+                             (jaunder--pull-media-original-for-hash original-proof hash)))
+              (key (concat hash "\0" leaf)))
+         ;; Copy the reference so staging never mutates the parser's immutable plan.
+         (push (jaunder--make-pull-media-reference
+                :url (jaunder-pull-media-reference-url reference)
+                :hash hash :leaf leaf
+                :target (if original
+                            (jaunder-pull-media-original-destination-spelling original)
+                          (jaunder-pull-media-reference-target reference))
+                :replacements (jaunder-pull-media-reference-replacements reference))
+               references)
+         (unless (gethash key seen)
+           (puthash key t seen)
+           (cond
+            (original
+             ;; A matching original proves destination choice, not remote authority.
+             (let ((target (jaunder--pull-media-fallback-path root hash leaf))
+                   (fallback-target (jaunder-pull-media-reference-target reference)))
+               (push (jaunder--make-pull-media-reuse
+                      :original original
+                      :fallback
+                      (jaunder--make-pull-media-fallback
+                       :hash hash :leaf leaf :target target :native-target fallback-target
                        :bytes (jaunder--pull-media-fetch-verified-bytes
-                               (jaunder-pull-media-reference-url reference) instance-id hash))
-                      fallbacks))))))))
-    (jaunder--make-pull-media-staged
-     :plan (jaunder--make-pull-media-plan
-            :format (jaunder-pull-media-plan-format plan)
-            :body (jaunder-pull-media-plan-body plan)
-            :references (nreverse references))
-     :reuses (nreverse reuses) :fallbacks (nreverse fallbacks))))
+                               (jaunder-pull-media-reference-url reference) instance-id hash)))
+                     reuses)))
+            (t
+             (let ((target (jaunder--pull-media-target-path root hash leaf)))
+               (if (or (file-exists-p target) (file-symlink-p target))
+                   (jaunder--pull-media-require-existing-copy target hash)
+                 (push (jaunder--make-pull-media-fallback
+                        :hash hash :leaf leaf :target target
+                        :native-target (jaunder-pull-media-reference-target reference)
+                        :bytes (jaunder--pull-media-fetch-verified-bytes
+                                (jaunder-pull-media-reference-url reference) instance-id hash))
+                       fallbacks))))))))
+     (jaunder--make-pull-media-staged
+      :plan (jaunder--make-pull-media-plan
+             :format (jaunder-pull-media-plan-format plan)
+             :body (jaunder-pull-media-plan-body plan)
+             :references (nreverse references))
+      :reuses (nreverse reuses) :fallbacks (nreverse fallbacks)))))
 
 (defun jaunder--pull-media-staged-with-reuse-fallbacks (staged rejected-reuses)
   "Return STAGED with REJECTED-REUSES converted to ordinary Local Media Copy
@@ -1283,50 +1288,51 @@ Media Copies.
 Successful reuse has no ordinary fallback and therefore creates no redundant
 `local-media/' path.  A caller that rejects a reuse first converts it with
 `jaunder--pull-media-staged-with-reuse-fallbacks'."
-  (let (temporaries)
-    (unwind-protect
-        (progn
-          (dolist (fallback (jaunder-pull-media-staged-fallbacks staged))
-            (let* ((hash (jaunder-pull-media-fallback-hash fallback))
-                   (leaf (jaunder-pull-media-fallback-leaf fallback))
-                   (target (jaunder--pull-media-target-path root hash leaf)))
-              (unless (equal target (jaunder-pull-media-fallback-target fallback))
-                (error "jaunder pull media: target changed during installation: %s" target))
-              (if (or (file-exists-p target) (file-symlink-p target))
-                  (jaunder--pull-media-require-existing-copy target hash)
-                (let ((temporary (jaunder--pull-media-temporary-path target)))
-                  ;; Cleanup owns the file before either following operation can fail.
-                  (push (list temporary target hash leaf) temporaries)
-                  (jaunder--pull-media-write-bytes
-                   (jaunder-pull-media-fallback-bytes fallback) temporary)
-                  (unless (jaunder--pull-media-verified-file-p temporary hash)
-                    (error "jaunder pull media: staged bytes disagree with URL hash"))))))
-          (dolist (copy (reverse temporaries))
-            (pcase-let ((`(,temporary ,target ,hash ,leaf) copy))
-              ;; Re-check immediately before mutation: a parent safe during
-              ;; staging may have been replaced by a symlink meanwhile.
-              (unless (equal target (jaunder--pull-media-target-path root hash leaf))
-                (error "jaunder pull media: target changed during installation: %s" target))
-              (condition-case err
-                  (rename-file temporary target nil)
-                (file-already-exists
-                 (jaunder--pull-media-require-existing-copy target hash))
-                (file-error
-                 ;; A concurrent creator may win after the failed no-overwrite rename.
-                 (if (or (file-exists-p target) (file-symlink-p target))
-                     (jaunder--pull-media-require-existing-copy target hash)
-                   (signal (car err) (cdr err)))))))
-          nil)
-      (dolist (copy temporaries)
-        (jaunder--pull-media-clean-temporary (car copy))))))
+  (jaunder--with-debug-operation
+   "media.materialize" (count (length (jaunder-pull-media-staged-fallbacks staged)))
+   (let (temporaries)
+     (unwind-protect
+         (progn
+           (dolist (fallback (jaunder-pull-media-staged-fallbacks staged))
+             (let* ((hash (jaunder-pull-media-fallback-hash fallback))
+                    (leaf (jaunder-pull-media-fallback-leaf fallback))
+                    (target (jaunder--pull-media-target-path root hash leaf)))
+               (unless (equal target (jaunder-pull-media-fallback-target fallback))
+                 (error "jaunder pull media: target changed during installation: %s" target))
+               (if (or (file-exists-p target) (file-symlink-p target))
+                   (jaunder--pull-media-require-existing-copy target hash)
+                 (let ((temporary (jaunder--pull-media-temporary-path target)))
+                   ;; Cleanup owns the file before either following operation can fail.
+                   (push (list temporary target hash leaf) temporaries)
+                   (jaunder--pull-media-write-bytes
+                    (jaunder-pull-media-fallback-bytes fallback) temporary)
+                   (unless (jaunder--pull-media-verified-file-p temporary hash)
+                     (error "jaunder pull media: staged bytes disagree with URL hash"))))))
+           (dolist (copy (reverse temporaries))
+             (pcase-let ((`(,temporary ,target ,hash ,leaf) copy))
+               ;; Re-check immediately before mutation: a parent safe during
+               ;; staging may have been replaced by a symlink meanwhile.
+               (unless (equal target (jaunder--pull-media-target-path root hash leaf))
+                 (error "jaunder pull media: target changed during installation: %s" target))
+               (condition-case err
+                   (rename-file temporary target nil)
+                 (file-already-exists
+                  (jaunder--pull-media-require-existing-copy target hash))
+                 (file-error
+                  ;; A concurrent creator may win after the failed no-overwrite rename.
+                  (if (or (file-exists-p target) (file-symlink-p target))
+                      (jaunder--pull-media-require-existing-copy target hash)
+                    (signal (car err) (cdr err)))))))
+           nil)
+       (dolist (copy temporaries)
+         (jaunder--pull-media-clean-temporary (car copy)))))))
+
 (defun jaunder--pull-media-materialize (root instance-id plan)
   "Materialize PLAN's verified Local Media Copies under configured ROOT.
 Ordinary callers retain durable-copy behavior; matched callers use staging to
 carry original-reuse evidence until their final installation boundary."
-  (jaunder--with-debug-operation
-   "media.materialize" (count (length (jaunder-pull-media-plan-references plan)))
-   (jaunder--pull-media-finalize-staged
-    root (jaunder--pull-media-stage root instance-id plan))))
+  (jaunder--pull-media-finalize-staged
+   root (jaunder--pull-media-stage root instance-id plan)))
 
 (provide 'jaunder-pull-media)
 ;;; jaunder-pull-media.el ends here
