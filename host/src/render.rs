@@ -1676,6 +1676,164 @@ mod tests {
     }
 
     #[test]
+    fn org_verse_preserves_prose_layout_and_inline_markup() {
+        let source = "#+begin_verse\nTo bait fish withal.\n  A *bold* line.\n    A [[https://example.org][linked]] line.\n\nLast line.\n#+end_verse";
+        let html = render(&parse_post_body(source), PostFormat::Org);
+        assert!(html.contains("To bait fish withal.<br>"), "{html}");
+        assert!(
+            html.contains("&nbsp;&nbsp;A <b>bold</b> line.<br>"),
+            "{html}"
+        );
+        assert!(
+            html.contains("&nbsp;&nbsp;&nbsp;&nbsp;A <a href=\"https://example.org\""),
+            "{html}"
+        );
+        assert!(html.contains("<br><br>Last line.<br></p>"), "{html}");
+        assert!(
+            !html.contains("<pre") && !html.contains("#+begin"),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn org_verse_preserves_multiline_emphasis_and_distinct_anonymous_notes() {
+        let source = "#+begin_verse\n*first\nsecond*\nA[fn::first note]\nB[fn::other note]\n#+end_verse\n\n#+begin_verse\nC[fn::third note]\n#+end_verse";
+        let rendered = super::render_post_scoped(
+            PostId::from(77),
+            None,
+            parse_post_body(source),
+            PostFormat::Org,
+        )
+        .unwrap();
+        let html = rendered.rendered_html().as_ref();
+        assert!(html.contains("<b>first<br>second</b><br>"), "{html}");
+        for number in 1..=3 {
+            assert!(
+                html.contains(&format!("id=\"post-77-fn-{number}\"")),
+                "{html}"
+            );
+        }
+        for note in ["first note", "other note", "third note"] {
+            assert!(html.contains(note), "{html}");
+        }
+    }
+
+    #[test]
+    fn org_verse_multiline_inline_objects_keep_literal_and_reference_boundaries() {
+        let source = "Outside[fn::outside note].\n\n#+begin_verse\nA ~literal\ncode~ and =verbatim=.\n[[https://example.org][linked\nlabel]]\nFirst[fn:named] then second[fn:named].\n#+end_verse\n\n[fn:named] Named note.";
+        let rendered = super::render_post_scoped(
+            PostId::from(78),
+            None,
+            parse_post_body(source),
+            PostFormat::Org,
+        )
+        .unwrap();
+        let html = rendered.rendered_html().as_ref();
+        assert!(
+            html.contains("<code>literal\ncode</code> and <code>verbatim</code>"),
+            "{html}"
+        );
+        assert!(html.contains(">linked<br>label</a>"), "{html}");
+        assert!(
+            html.contains("outside note") && html.contains("Named note."),
+            "{html}"
+        );
+        assert!(
+            html.contains("id=\"post-78-fn-1\"") && html.contains("id=\"post-78-fn-2\""),
+            "{html}"
+        );
+        assert!(html.contains("id=\"post-78-fnref-2-2\""), "{html}");
+    }
+
+    #[test]
+    fn org_verse_keeps_line_text_out_of_block_and_shortcode_syntax() {
+        for delimiter in ["verse", "VERSE"] {
+            let source = format!(
+                "#+begin_{delimiter}\nTODO first :tag:\nNot a heading :tag:\n- Not a list\n{{{{< youtube dQw4w9WgXcQ >}}}}\n  ~literal---...~ /prose--word/\n#+end_{delimiter}"
+            );
+            let html = render(&parse_post_body(&source), PostFormat::Org);
+            assert!(
+                html.contains("TODO first :tag:<br>Not a heading :tag:<br>- Not a list<br>"),
+                "{html}"
+            );
+            assert!(
+                html.contains("{{&lt; youtube dQw4w9WgXcQ &gt;}}<br>"),
+                "{html}"
+            );
+            assert!(
+                html.contains("<code>literal---...</code> <i>prose–word</i>"),
+                "{html}"
+            );
+            assert!(
+                !html.contains("<iframe") && !html.contains("<ul") && !html.contains("<h"),
+                "{html}"
+            );
+        }
+    }
+
+    #[test]
+    fn org_verse_native_parser_preserves_nested_escapes_and_mixed_case_delimiters() {
+        let source = "#+BEGIN_VERSE\n*first\n,#+plain*\n{{< youtube dQw4w9WgXcQ >}}\n#+end_verse\n\n#+BEGIN_QUOTE\n*quoted*\n#+end_quote";
+        let html = render(&parse_post_body(source), PostFormat::Org);
+        assert!(html.contains("<b>first<br>#+plain</b>"), "{html}");
+        assert!(
+            html.contains("{{&lt; youtube dQw4w9WgXcQ &gt;}}<br>"),
+            "{html}"
+        );
+        assert!(html.contains("<blockquote><p><b>quoted</b>"), "{html}");
+        assert!(
+            !html.contains(",#+plain") && !html.contains("<iframe"),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn org_verse_relative_indentation_tabs_empty_lines_and_safe_text() {
+        let source = "#+BEGIN_VERSE\n  first <script>unsafe</script> & text\n\tsecond\n    third\n\n#+END_VERSE";
+        let html = render(&parse_post_body(source), PostFormat::Org);
+        assert!(
+            html.contains("<p>first &lt;script&gt;unsafe&lt;/script&gt; &amp; text<br>"),
+            "{html}"
+        );
+        assert!(html.contains("&nbsp;".repeat(6).as_str()), "{html}");
+        assert!(html.contains("&nbsp;&nbsp;third<br><br></p>"), "{html}");
+        let empty = render(
+            &parse_post_body("#+begin_verse\n#+end_verse"),
+            PostFormat::Org,
+        );
+        assert_eq!(empty.as_ref(), "<p></p>");
+    }
+
+    #[test]
+    fn org_quote_retains_paragraphs_inline_markup_and_inert_shortcodes() {
+        for delimiter in ["quote", "QUOTE"] {
+            let source = format!(
+                "#+begin_{delimiter}\nFirst *bold* paragraph.\n\nSecond /italic/ [[https://example.org][link]].\n\n{{{{< youtube dQw4w9WgXcQ >}}}}\n#+end_{delimiter}"
+            );
+            let html = render(&parse_post_body(&source), PostFormat::Org);
+            assert!(
+                html.starts_with("<blockquote><p>First <b>bold</b> paragraph."),
+                "{html}"
+            );
+            assert!(
+                html.contains("</p><p>Second <i>italic</i> <a href="),
+                "{html}"
+            );
+            assert!(html.ends_with("</p></blockquote>"), "{html}");
+            assert!(!html.contains("<iframe"), "{html}");
+        }
+    }
+
+    #[test]
+    fn org_verse_correction_preserves_ordinary_and_literal_blocks() {
+        let source = "Ordinary\nwrapped prose.\n\n#+begin_example\n*literal*\nnext line\n#+end_example\n\n#+begin_src text\n*literal*\nnext line\n#+end_src";
+        let html = render(&parse_post_body(source), PostFormat::Org);
+        assert!(html.contains("<p>Ordinary\nwrapped prose."), "{html}");
+        assert!(html.contains("<pre>*literal*\nnext line\n</pre>"), "{html}");
+        assert!(!html.contains("<br>"), "{html}");
+    }
+
+    #[test]
     fn org_list() {
         let html = render_org("- alpha\n- beta");
         assert!(html.contains("alpha"));

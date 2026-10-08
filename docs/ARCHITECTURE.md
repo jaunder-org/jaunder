@@ -154,7 +154,7 @@ by URL scheme: `DbConnectOptions` (`storage/src/db.rs`) parses `sqlite:` vs
 `postgres://` and `open_database`/`open_existing_database` dispatch accordingly.
 Each backend has its own migration tree under
 `storage/migrations/{sqlite,postgres}`; the two trees carry identical numbered
-filenames (currently `0001`–`0049`), and maintaining that parity — same
+filenames (currently `0001`–`0050`), and maintaining that parity — same
 migrations, same behavior — is the accepted cost of the pluggable strategy
 ([ADR-0001](adr/0001-storage-backends.md)).
 
@@ -181,9 +181,11 @@ re-enqueues it for Org footnotes, including databases that already drained
 both earlier requests completed, without resetting the separate bounded refresh
 checkpoint
 ([catalog-wide code token quality and repeatable projection refresh](adr/drafts/catalog-code-token-quality-and-refresh.md)).
-On SQLite, `0048` also initializes the short-write Post ID allocator shared by
-all Post creations; PostgreSQL uses its existing Post sequence. Org creation
-reserves identity in a separate short `WriteScope` before rendering, outside the
+`0050` re-enqueues the same operation for Org verse line boundaries and inline
+formatting, including databases that completed all prior requests. On SQLite,
+`0048` also initializes the short-write Post ID allocator shared by all Post
+creations; PostgreSQL uses its existing Post sequence. Org creation reserves
+identity in a separate short `WriteScope` before rendering, outside the
 content-write transaction. Sandbox and performance seeding reserve up to 256 Org
 IDs in one bounded short scope per batch, then render outside it; performance
 revisions render with the existing Post ID. An unused reservation is allowed if
@@ -570,8 +572,16 @@ The source and rendered forms feed deliberately separate serialization surfaces
 Collection preserves native source — detailed in the Protocols section
 ([ADR-0015](adr/0015-atompub-serialization-surfaces.md)). Org prose export uses
 a focused `v0.10` `orgize` fork for Emacs-compatible `---`, `--`, and `...`
-typography; code, verbatim, link destinations, and authored source remain
-literal
+typography and native verse inline parsing/layout export. Verse paragraphs keep
+physical line breaks, blank lines, relative indentation, and inline markup;
+recursive inline parsing preserves comma escapes and inert shortcode-looking
+text, including with Org-fc enabled. Verse and quote closing names match
+case-insensitively; unrelated blocks retain their previous matching semantics.
+Quotes retain semantic blockquotes with ordinary paragraph boundaries. Jaunder
+traverses the original Orgize document directly; there is no host-owned verse
+syntax-tree adapter. Literal code/verbatim, link destinations, native source,
+and document-owned footnote identity remain intact. Exported HTML still crosses
+the existing host sanitization boundary
 ([Org export fork](adr/drafts/orgize-v010-special-string-export-fork.md)).
 
 **Content rights follow the User's current publication-wide setting.** Every
