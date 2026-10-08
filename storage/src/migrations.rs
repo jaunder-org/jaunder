@@ -3113,7 +3113,7 @@ module Main where
     /// bundled revisions are closed release input, not mutable Site themes.
     #[apply(backends)]
     #[tokio::test]
-    async fn migration_0050_creates_closed_system_theme_metadata(#[case] backend: Backend) {
+    async fn migration_0051_creates_closed_system_theme_metadata(#[case] backend: Backend) {
         let db = MigrationDatabase::new(backend).await;
         db.migrate_current().await.unwrap();
         assert_eq!(
