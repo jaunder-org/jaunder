@@ -101,8 +101,8 @@
                                                     (let ((text (jaunder-pull-boundary-debug-test--text)))
                                                       (dolist (label '("pull.stage" "pull.revalidate" "pull.install"))
                                                         (should (= 2 (jaunder-pull-boundary-debug-test--count label text))))
-                                                      ;; Direct preflight plus install-staged's final preflight are distinct calls.
-                                                      (should (= 4 (jaunder-pull-boundary-debug-test--count "pull.preflight" text)))
+                                                      ;; Direct preflight plus both install guards bracket Media finalization.
+                                                      (should (= 6 (jaunder-pull-boundary-debug-test--count "pull.preflight" text)))
                                                       (should (string-match-p "parent=" text))
                                                       (should-not (string-match-p
                                                                    "private.example\\|private-user\\|private-title\\|private-body\\|sha256" text))))))))
