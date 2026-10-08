@@ -91,6 +91,10 @@ pkgs.runCommand "issue-1702-image-sanitizer-feasibility-witness"
       ${./rewrite_jpeg.py} ${./rewrite_rgb_icc.py} ${./rewrite_webp.py} ${./rewrite_png.py} \
       ${./verify_rgb_icc.py} "$PWD/validate-rgb-icc" ${pkgs.imagemagick}/bin/magick \
       ${pkgs.exiftool}/bin/exiftool > "$out/reports/jpeg-controls.json"
+    PYTHONPATH=${./.} python3 -B ${./verify_jpeg_entropy.py} "$out/fixtures/jpeg-entropy" \
+      ${./rewrite_jpeg.py} ${./rewrite_rgb_icc.py} ${./rewrite_webp.py} ${./rewrite_png.py} \
+      ${./verify_rgb_icc.py} "$PWD/validate-rgb-icc" ${pkgs.imagemagick}/bin/magick \
+      > "$out/reports/jpeg-baseline-entropy.json"
     python3 -B ${./make_png_fixtures.py} "$out/fixtures/ordinary" "$out/fixtures/png/input"
     python3 -B ${./verify_png_candidate.py} "$out/fixtures/png" ${pkgs.exiftool}/bin/exiftool \
       > "$out/reports/png-apng-exiftool-candidate.json"

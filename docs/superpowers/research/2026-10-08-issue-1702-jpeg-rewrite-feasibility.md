@@ -6,8 +6,9 @@ product integration, a production upload validator, or device-native HEIF proof.
 ## Implementation and admission
 
 `testdata/image-metadata-sanitizer/rewrite_jpeg.py` does no pixel decoding or
-encoding. It copies the complete entropy-coded scan and DQT/DHT/SOF/SOS payloads
-in order. Fixture encoding uses pinned Pillow; Pillow and ImageMagick are output
+encoding. It validates the bounded baseline coefficient syntax described below,
+then copies the complete entropy-coded scan and DQT/DHT/SOF/SOS payloads in
+order. Fixture encoding uses pinned Pillow; Pillow and ImageMagick are output
 consumers. They may share libjpeg and LittleCMS: two consumer interfaces are not
 two independent JPEG codecs.
 
@@ -57,8 +58,9 @@ and Adobe's
 [DCT filter technical note 5116](https://www.adobe.com/content/dam/acom/en/devnet/dct/pdfs/5116.DCT_Filter.pdf).
 The marker framing, scan headers, JFIF density/thumbnail fields, Exif TIFF
 layout and Adobe color-transform signal inform this restricted envelope.
-Consumers supply the actual display evidence; header checks do not certify DCT
-entropy.
+Consumers supply the actual display evidence. Header checks alone do not certify
+DCT entropy; the additional bounded syntax proof below is separate from both
+pixel rendering and general JPEG certification.
 
 ## Executable proof
 
@@ -104,6 +106,127 @@ positions. Privacy and budget controls insert metadata after JFIF (and output
 privacy mutations after ICC), so the new ordering guard cannot mask those
 intended checks.
 
+## Baseline entropy grammar extension
+
+The checked metadata tranche's 66 positives, 38 domain negatives and 15 complete
+observer mutations remain unchanged. `rewrite_jpeg.py` now parses Huffman
+coefficient **syntax**, without dequantization, IDCT, color conversion, raster
+allocation, re-encoding or a native-decoder validity shortcut. Its three scalar
+DC predictors and streaming stuffed-byte reader do not store an image-sized
+coefficient array. Output publication still occurs only after all metadata and
+entropy checks succeed; compressed source bytes are never repaired.
+
+### Primary normative evidence
+
+The actual [T.81 PDF](https://www.w3.org/Graphics/JPEG/itu-t81.pdf) was fetched
+for this extension (SHA-256
+`631031d4ba56b06abee3e312a0f235b9422da9c7267d1c8f7604418795768bf0`). With
+explicit controller approval, a transient gitignored `.xtask` derivation using
+the witness's exact existing nixpkgs import extracted it with pinned Poppler
+26.06.0: `/nix/store/g0f2man6jdwimdpz383l8p11r1rzx9hs-poppler-utils-26.06.0`. No
+downloaded normative PDF, extraction tool or production dependency was added to
+the fixture source. Host `pdftotext` was absent; the first approved extraction
+failed on the renamed `poppler_utils` attribute, then succeeded with the
+explicitly approved `poppler-utils` correction. These were tool failures, not
+image-domain rejections.
+
+Relevant printed T.81 page numbers and mandatory functions:
+
+- A.2.3–A.2.4, page 26: interleaved component/block order and completion of
+  partial MCUs. Replicating right/bottom samples is a **recommendation**, not a
+  dummy-block coefficient restriction; the grammar does not impose it.
+- B.1.1.5, page 33; E.1.4, page 80; F.1.2.3, page 91: only one-bits complete the
+  final Huffman byte, including a stuffed zero if this creates `FF`. Exact
+  required blocks must consume the scan apart from these 0–7 fill bits; hidden
+  extra entropy bytes reject. The existing no-marker-fill/no-restart envelope
+  stays closed, not all T.81 marker layouts.
+- Annex C/C.2, pages 50–52: canonical Huffman assignment in increasing
+  width/order, maximum width 16, reserved all-ones code space. Prefix tables are
+  bounded by the already-validated unique baseline symbols before allocation.
+- F.1.1.4–F.1.1.5, pages 87–88; F.2.1.3, page 104: quantized coefficients have
+  signed 11-bit precision for 8-bit input, and DC prediction is component-local,
+  initialized to zero at scan start. The prototype enforces reconstructed
+  quantized DC in `[-1024, 1023]`, **not** an invented bound on the transmitted
+  difference. DC differences may use category 11 through magnitude 2047. F.2's
+  later IDCT/clamping tolerance is not an input-validity exemption.
+- F.1.2.1/Table F.1, pages 88–89; F.1.2.2/Table F.2, pages 89–90;
+  F.2.2.1–F.2.2.4, pages 104–110: DC categories 0–11, AC categories 1–10,
+  amplitude sign extension, runs 0–15, EOB and 16-zero ZRL, exact zig-zag slots
+  1–63. A nonzero coefficient at 63 completes its block without EOB. A ZRL
+  exceeding the 63 AC slots or a nonzero run landing beyond 63 rejects as
+  overflow. A ZRL exactly covering slots 48–63 is instead **conservatively
+  unsupported**: the cited encoder/decoder flow diagrams do not establish a
+  mandatory malformed-input ruling for this terminal form. Its normative
+  validity remains unresolved; this boundary is not claimed as JPEG overflow.
+- F.2.2.5, pages 110–111: MSB-first reads remove only `FF00` stuffing. There is
+  no unexpected-marker/restart/native-consumer fallback.
+
+These constrain this prototype's restricted baseline coefficient domain; they
+are not a claim of T.81 Part 2 encoder/decoder compliance or IDCT certification.
+
+### Independent required corpus and sensitivity
+
+`verify_jpeg_entropy.py` defines **892 independently enumerated required
+positive identities**. Explicit fixed and mixed Huffman codeword/width schedules
+are authored independently of the rewriter's canonical compiler. Coefficient
+layouts are constructor inputs, not producer/validator traces. A second,
+test-only string-prefix observer consumes these words, independently checks the
+signed coefficient/block models and terminal bits, and compares its bounded
+aggregates/digest with the real compiler/grammar parser. The independent
+marker/privacy/rendering observer imports no entropy rewriting code.
+
+The asserted matrix covers all DC categories, signed low/high magnitude edges
+(including valid category-11 transitions between -1024 and 1023), all 160
+nonzero AC run/size combinations at both signs/magnitude edges, EOB/ZRL, every
+nonzero AC position 1–63, a dense 63-AC block, ZRL's last admitted slot
+boundary, component-local 4:2:0 predictors, canonical empty-width intervals,
+mixed lengths and **actual** consumed Huffman widths 1–16, byte
+crossings/stuffing and all final fill counts 0–7. Valid ZRL followed by EOB is
+observed as F.2 decoding syntax; it is not rejected merely because F.1's
+efficient encoder uses one trailing EOB. A final `FF00` made by fill bits and
+amplitude-generated `FF00` both occur in actual positive inputs.
+
+Both 4:4:4 and 4:2:0 use independently enumerated padded MCU counts at
+dimensions 1×1, 7×7, 8×8, 9×9, 15×15, 16×16, 17×17, 1×17, 17×1 and 33×25. Each
+golden is consumer-valid in pinned Pillow and ImageMagick without observed
+warnings; source/output raw rasters and byte streams agree. Hand-authored
+zero-DC/EOB canvases additionally equal exact independently specified RGB
+`(128,128,128)` pixels in both consumers. Complex coefficient cases use
+independent syntax models and actual consumers, not a test-side IDCT pretending
+to be the oracle. Two interfaces may share libjpeg; that caveat is unchanged.
+
+**181 additional independently enumerated CLI domain controls** assert unchanged
+input/no output and exact targeted diagnostics: partial Huffman codes, every
+proper DC/AC amplitude-prefix length at physical byte EOF, unallocated prefixes,
+illegal DHT categories/zero-size symbols/all-ones code, DC predictor precision,
+AC/ZRL overflow, conservative terminal-ZRL rejection, missing/extra padded
+blocks and whole MCUs, hidden extra bytes, every single-zero final-fill position
+and malformed stuffing/restarts. Valid JFIF/frame/scan ordering is retained so
+header failures cannot mask entropy controls. Missing-input and unrelated
+programming-error escape controls in the existing suite remain green. Three
+additional deliberate output scan/codeword/fill mutations run through the
+**actual complete observer**, requiring its compressed-control mismatch before
+consumer calls. No warning/crash is counted as a typed grammar rejection.
+
+The earlier incorrectly classified `zrl-exact-16-trailing` case is retained
+byte-for-byte as `unsupported-terminal-zrl-with-extra-block`; its bytes also
+included an extra block. Two additional terminal-ZRL controls, one per sampling
+mode, have exactly the required remaining blocks. Pinned Pillow and ImageMagick
+consume them without observed warnings and produce exactly the same raw/display
+pixels as their EOB counterparts before the CLI's precise
+`unsupported terminal ZRL` rejection is asserted. Consumer tolerance is not a
+normative validity proof. True ZRL overflow and all existing extra-block/MCU
+controls remain intact; successful admission has not widened. The report retains
+these separately as `unsupported_consumer_controls` rather than presenting them
+as proven malformed JPEG syntax. Both review axes blocked the earlier normative
+claim; this reclassification addresses that finding.
+
+The report `reports/jpeg-baseline-entropy.json` retains required identities,
+per-case independently observed coefficient hashes, actual bit/width/category/
+MCU/block/fill/stuff counts, consumer hashes, and exact rejection diagnostics.
+All published coverage observations are asserted; no failed observation is
+merely serialized as green.
+
 ## Bounds and limitations
 
 The prototype reads at most 32 MiB plus one byte, bounds metadata to 8 MiB and
@@ -113,9 +236,13 @@ MiB metadata acceptance and plus-one rejection. The parser's record guard admits
 65,535 segment/scan records and rejects the next (EOI needs guard headroom).
 Lowered **test-only** file/pixel limits prove exact-boundary comparisons on
 small valid images; actual over-cap inputs also reject. This is not a 512 MiB
-allocator ceiling, CPU/deadline/cancellation isolation, full entropy validation,
-or a measured 100-million-pixel consumer proof. Those task-2 and platform
-requirements remain open.
+allocator ceiling, CPU/deadline/cancellation isolation, general JPEG entropy
+validation, or a measured 100-million-pixel consumer proof. The new reader
+checks a conservative physical-bit lower bound before dimension-driven MCU work,
+bounds each block to 63 AC positions and each code to 16 bits, and keeps bounded
+tables and scalar state; this is grammar/work structure, not measured task-2
+allocation or deadline enforcement. Those task-2 and platform requirements
+remain open.
 
 ## Reproduction
 
