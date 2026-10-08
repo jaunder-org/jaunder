@@ -116,6 +116,46 @@ pub(crate) enum QualificationPhase {
     ThemeB,
     Restored,
 }
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum BrowserReply {
+    Passed(Box<QualificationResult>),
+    Failed(BrowserFailure),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BrowserFailure {
+    sequence: u32,
+    phase: QualificationPhase,
+    error: String,
+}
+
+pub(crate) fn decode_browser_reply(
+    bytes: &[u8],
+    request: &QualificationRequest,
+) -> Result<QualificationResult> {
+    match serde_json::from_slice(bytes).context("reading qualification browser result")? {
+        BrowserReply::Passed(result) => {
+            result.validate_for(request)?;
+            Ok(*result)
+        }
+        BrowserReply::Failed(failure) => {
+            if failure.sequence != request.sequence
+                || failure.phase != request.phase
+                || failure.error.trim().is_empty()
+            {
+                bail!("qualification browser emitted an invalid failure identity");
+            }
+            bail!(
+                "qualification browser failed during {:?}: {}",
+                failure.phase,
+                failure.error
+            );
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum CacheEvidence {
@@ -766,6 +806,29 @@ mod tests {
         assert!(observed.validate_for(&request).is_err());
         request.phase = QualificationPhase::AWarm;
         assert!(request.validate().is_err());
+    }
+
+    #[test]
+    fn browser_failure_is_closed_and_preserves_the_actual_error() {
+        let request = request(
+            QualificationPhase::AppB,
+            QualificationFixture::BApplication,
+            QualificationTransition::Application,
+        );
+        let bytes = br#"{"sequence":1,"phase":"app-b","error":"image decode failed"}"#;
+        let error = decode_browser_reply(bytes, &request).unwrap_err();
+        assert!(error.to_string().contains("image decode failed"));
+        for invalid in [
+            br#"{"sequence":2,"phase":"app-b","error":"wrong sequence"}"#.as_slice(),
+            br#"{"sequence":1,"phase":"theme-b","error":"wrong phase"}"#.as_slice(),
+            br#"{"sequence":1,"phase":"app-b","error":"","checks":[]}"#.as_slice(),
+            br#"{"sequence":1,"phase":"app-b","error":""}"#.as_slice(),
+        ] {
+            assert!(decode_browser_reply(invalid, &request).is_err());
+        }
+        assert!(
+            decode_browser_reply(&serde_json::to_vec(&result(&request)).unwrap(), &request).is_ok()
+        );
     }
 
     #[test]

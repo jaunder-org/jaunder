@@ -1648,12 +1648,10 @@ impl BehaviorSession {
             &format!("result-{sequence}.json"),
             "qualification browser result",
         )?;
-        let result: QualificationResult = serde_json::from_slice(&fs::read(
-            self.coordinator.join(format!("result-{sequence}.json")),
-        )?)
-        .context("reading qualification browser result")?;
-        result.validate_for(&request)?;
-        Ok(result)
+        crate::qualification::decode_browser_reply(
+            &fs::read(self.coordinator.join(format!("result-{sequence}.json")))?,
+            &request,
+        )
     }
 
     pub(crate) fn close(&mut self) -> Result<()> {

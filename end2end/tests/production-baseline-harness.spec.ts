@@ -46,6 +46,7 @@ async function publish(
   value:
     | BrowserResult
     | Awaited<ReturnType<StylingSession["run"]>>
+    | { sequence: number; phase: BrowserRequest["phase"]; error: string }
     | { readonly: true },
 ): Promise<void> {
   const temporary = `${path}.tmp`;
@@ -193,15 +194,18 @@ test("production baseline host bridge preserves one browser context", async ({
             : await runPhase(request, page, tracedContext),
         );
       } catch (error) {
-        await publish(`${coordinator}/result-${sequence}.json`, {
+        const failure = {
           sequence,
           phase: request.phase,
-          checks: [],
           error:
             error instanceof Error
               ? (error.stack ?? error.message)
               : String(error),
-        });
+        };
+        await publish(
+          `${coordinator}/result-${sequence}.json`,
+          styling ? failure : { ...failure, checks: [] },
+        );
         throw error;
       }
     }

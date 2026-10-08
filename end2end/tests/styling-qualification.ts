@@ -11,6 +11,7 @@ import { allowSecondBoot } from "./bootBudget";
 import { BASE_URL, goto, login, TEST_PASSWORD } from "./helpers";
 import { composePost, followPermalink, openComposerFromSidebar } from "./posts";
 import { seedSandboxProfileViaTool, seedUserViaTool } from "./seed";
+import { uploadMedia } from "./media-helpers";
 
 type Surface = "local" | "author-permalink" | "home";
 type Asset = {
@@ -142,12 +143,23 @@ export class StylingSession {
     if (this.created || !request.seed_process)
       throw new Error("invalid styling Create phase");
     process.env.JAUNDER_E2E_SEED_PROCESS = request.seed_process;
-    await seedSandboxProfileViaTool("demo");
+    // The demo baseline intentionally renders a raw text Media fixture as an
+    // image. Styling qualification owns a decodable image, not that raw-byte
+    // continuity scenario; ordinary #1419 demo coverage stays independent.
+    await seedSandboxProfileViaTool("standard");
     const author = await seedUserViaTool("styling-author", TEST_PASSWORD);
     await login(this.homePage, author.username, TEST_PASSWORD);
+    const image = await uploadMedia(
+      this.homePage,
+      "styling-qualification.svg",
+      Buffer.from(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="96" height="64" viewBox="0 0 96 64"><rect width="96" height="64" fill="#386d89"/></svg>',
+      ),
+      "image/svg+xml",
+    );
     await openComposerFromSidebar(this.homePage);
     const post = await composePost(this.homePage, {
-      body: "# Styling qualification\n\nRetained browser release continuity.",
+      body: `# Styling qualification\n\nRetained browser release continuity.\n\n![Styling qualification image](${image.url})`,
       slug: "styling-qualification",
       publish: true,
     });
@@ -188,6 +200,11 @@ export class StylingSession {
       await goto(page, path);
       await expect(page.locator(".j-root")).toBeVisible();
       await expect(page.locator(".j-topbar")).toBeVisible();
+      await expect(
+        page.locator(
+          '[data-jaunder-part="post-body"] img[alt="Styling qualification image"]',
+        ),
+      ).toBeVisible();
       if (expected.surface === "home") {
         await expect(page.locator(".j-root")).toHaveAttribute(
           "data-jaunder-private",
