@@ -214,6 +214,30 @@ subsystems or authorization for parallel implementation writers.
     production acceptance. Final clean-tree pre-PR proof and authoritative PR CI
     remain external ship barriers; no merge is authorized.
 
+### Post-rebase ship evidence
+
+The incoming Org verse migration remains 0050; system-theme metadata is now
+0051 on both backends. The standalone xtask Org fork and lock match the root.
+Both migration tests pass on SQLite/PostgreSQL, and same-role Standards/Spec
+integration challenges returned OK after updating the architecture's range.
+Clean-pin qualification at `cf6f3c6ca78ee44a5eeaceb964636012dbd12464` passed in
+402630 ms with actual schema 51, three canonical products, six VM profiles,
+seven phases per backend, retained contexts/cache events and same-backend restore.
+Its sanitized record is
+`docs/evidence/styling-qualification/cf6f3c6ca78ee44a5eeaceb964636012dbd12464-1791498046680090084/`.
+The earlier schema-50 evidence is historical, not relabeled.
+
+Fourteen AFTER captures were refreshed from that executable source after the
+incoming Load-more CSS change and compared with the untouched BEFORE captures.
+All full-page dimensions remain equal, no extra rows, and 199–510 differing
+pixels are confined to fixture timestamps; all image-fit assertions pass.
+Artifacts remain transient under `/tmp/pi-playwright/issue-1695-after-rebased/`.
+The supplemental capture passed in a combined invocation; the main capture
+initially hit duplicate fixture-user creation when sharing its database and then
+passed from a fresh canonical e2e-local invocation. No production defect or
+acceptance is inferred from that capture-harness correction. Authoritative PR CI
+remains the external ship barrier; actual Safari/iPhone remains unqualified.
+
 ## Risk checks and acceptance coverage
 
 - Tasks 1/2/4 cover spec acceptance 1 and package authority/selection parity.

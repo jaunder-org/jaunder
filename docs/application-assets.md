@@ -101,10 +101,14 @@ compares actual schema before browser admission.
 
 Sanitized JSON/Markdown is published atomically under
 `docs/evidence/styling-qualification/`; raw credentials, traces, backups, disks
-and logs stay private. The completed
-[source-pinned qualification](evidence/styling-qualification/df860966fac563c6cdb1ba6ddac175822f19df38-1791488769470905508/summary.md)
-records backup format 3 and schema 50. It complements, rather than replaces, the
-fourteen full-page visual pairs and focused interaction/accessibility tests.
+and logs stay private. The historical
+[pre-rebase qualification](evidence/styling-qualification/df860966fac563c6cdb1ba6ddac175822f19df38-1791488769470905508/summary.md)
+records backup format 3 and schema 50. The completed
+[post-rebase qualification](evidence/styling-qualification/cf6f3c6ca78ee44a5eeaceb964636012dbd12464-1791498046680090084/summary.md)
+records format 3 and observed schema 51 on both backends, including same-backend
+restore after preserving the incoming Org verse migration. These proofs
+complement, rather than replace, the fourteen refreshed full-page visual pairs
+and focused interaction/accessibility tests.
 
 Chromium (or automated WebKit elsewhere) is **not actual Safari or iPhone
 qualification**. Desktop Safari and iPhone remain unqualified until separately
