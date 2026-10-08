@@ -92,6 +92,14 @@ pkgs.runCommand "issue-1702-image-sanitizer-feasibility-witness"
     python3 -B ${./verify_png_controls.py} "$out/fixtures/png" ${./rewrite_png.py} \
       ${./rewrite_rgb_icc.py} ${./verify_png_candidate.py} \
       > "$out/reports/png-apng-controls.txt"
+    python3 -B ${./make_gif_fixtures.py} "$out/fixtures/ordinary" "$out/fixtures/gif/input"
+    python3 -B ${./verify_gif.py} "$out/fixtures/gif" ${./rewrite_gif.py} \
+      ${./rewrite_rgb_icc.py} ${./verify_rgb_icc.py} "$PWD/validate-rgb-icc" \
+      ${pkgs.exiftool}/bin/exiftool ${pkgs.imagemagick}/bin/magick \
+      > "$out/reports/gif-rewrite.json"
+    python3 -B ${./verify_gif_controls.py} "$out/fixtures/gif" ${./rewrite_gif.py} \
+      ${./rewrite_rgb_icc.py} ${./verify_gif.py} ${pkgs.imagemagick}/bin/magick \
+      > "$out/reports/gif-controls.txt"
 
     magick "$out/fixtures/input/base.png" -profile "$out/fixtures/icc/input-v4.icc" \
       -quality 92 "$out/fixtures/input/device-like.jpg"
