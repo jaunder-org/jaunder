@@ -65,8 +65,31 @@ fn qualification_expression(
     ))
 }
 
+#[derive(Clone, Copy)]
+enum BackupCompatibility {
+    ProductionBaseline,
+    CurrentQualification,
+}
+
+impl BackupCompatibility {
+    const fn format_version(self) -> u32 {
+        match self {
+            Self::ProductionBaseline => 1,
+            Self::CurrentQualification => common::backup::CURRENT_BACKUP_FORMAT_VERSION,
+        }
+    }
+
+    fn validate(self, format: u32, schema: u32) -> Result<()> {
+        if format != self.format_version() || schema == 0 {
+            bail!("unsupported backup compatibility before target mutation");
+        }
+        Ok(())
+    }
+}
+
 pub struct BaselineLifecycle {
     workspace: PathBuf,
+    backup_compatibility: BackupCompatibility,
     harness_ref: String,
     nix_cache: PathBuf,
     proxy: Option<Child>,
@@ -127,7 +150,9 @@ impl BaselineLifecycle {
         root: &Path,
         source: &crate::qualification::SourcePin,
     ) -> Result<Self> {
-        Self::create_with_harness(root, source.locked_ref().to_owned())
+        let mut lifecycle = Self::create_with_harness(root, source.locked_ref().to_owned())?;
+        lifecycle.backup_compatibility = BackupCompatibility::CurrentQualification;
+        Ok(lifecycle)
     }
 
     /// Construct the intentionally mutable path-flake boundary for the opt-in
@@ -151,6 +176,7 @@ impl BaselineLifecycle {
         restrict(&gcroots)?;
         Ok(Self {
             workspace,
+            backup_compatibility: BackupCompatibility::ProductionBaseline,
             harness_ref,
             nix_cache,
             proxy: None,
@@ -880,9 +906,8 @@ socket.on("end", () => {{
         let manifest = read_backup_manifest(&path)?;
         let schema_version = u32::try_from(manifest.schema_version)
             .context("backup manifest has a negative schema version")?;
-        if manifest.format_version != 1 || schema_version == 0 {
-            bail!("unsupported backup compatibility before target mutation");
-        }
+        self.backup_compatibility
+            .validate(manifest.format_version, schema_version)?;
         Ok(BackupArtifact {
             sha256: sha256_file(&path)?,
             path,
@@ -917,9 +942,9 @@ socket.on("end", () => {{
             let manifest = read_backup_manifest(&host_path)?;
             let schema_version = u32::try_from(manifest.schema_version)
                 .context("schema probe manifest has a negative schema version")?;
-            if manifest.format_version != 1 || schema_version == 0 {
-                bail!("schema probe reported unsupported backup compatibility");
-            }
+            self.backup_compatibility
+                .validate(manifest.format_version, schema_version)
+                .context("schema probe reported unsupported backup compatibility")?;
             Ok(schema_version)
         })();
         let guest_cleanup = self.guest(deployment_id, &format!("rm -f {guest_path}"));
@@ -946,9 +971,8 @@ socket.on("end", () => {{
     /// The lifecycle owns the transfer and in-guest mutation so workflow code
     /// cannot reach VM disks or control channels directly.
     pub fn restore(&self, deployment_id: &str, backup: &BackupArtifact) -> Result<()> {
-        if backup.format_version != 1 || backup.schema_version == 0 {
-            bail!("unsupported backup compatibility before target mutation");
-        }
+        self.backup_compatibility
+            .validate(backup.format_version, backup.schema_version)?;
         let package = &self
             .deployments
             .get(deployment_id)
@@ -1544,6 +1568,23 @@ fn regular_metadata(path: &Path) -> Result<fs::Metadata> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn qualification_backup_policy_preserves_ordinary_baseline_admission() {
+        let ordinary = BackupCompatibility::ProductionBaseline;
+        let qualification = BackupCompatibility::CurrentQualification;
+        let current = common::backup::CURRENT_BACKUP_FORMAT_VERSION;
+        assert_ne!(current, 1);
+        assert!(ordinary.validate(1, 50).is_ok());
+        assert!(ordinary.validate(current, 50).is_err());
+        assert!(qualification.validate(current, 50).is_ok());
+        assert!(qualification.validate(1, 50).is_err());
+        for policy in [ordinary, qualification] {
+            assert!(policy.validate(0, 50).is_err());
+            assert!(policy.validate(current + 1, 50).is_err());
+            assert!(policy.validate(policy.format_version(), 0).is_err());
+        }
+    }
 
     #[test]
     fn qualification_expression_binds_the_typed_fixture_to_the_harness_source() {

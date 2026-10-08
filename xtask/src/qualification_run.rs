@@ -289,6 +289,9 @@ fn backend(
         lifecycle.start_package(&restored_id, backend, a.source.clone(), a.package.clone())?;
         lifecycle.restore(&restored_id, &backup)?;
         lifecycle.restart_service(&restored_id)?;
+        if lifecycle.observe_schema(&restored_id)? != backup.schema_version {
+            bail!("restored qualification schema differs from its source backup");
+        }
         lifecycle.configure_base_url(&restored_id)?;
         lifecycle.select_proxy(&restored_id)?;
         let restored = lifecycle.runtime_identity(&restored_id)?;
@@ -407,7 +410,7 @@ impl Evidence {
                 })
                 .collect::<Vec<_>>()
                 != expected
-                || backend.backup_format != 1
+                || backend.backup_format != common::backup::CURRENT_BACKUP_FORMAT_VERSION
                 || backend.backup_schema == 0
                 || backend.backup_sha256.len() != 64
             {

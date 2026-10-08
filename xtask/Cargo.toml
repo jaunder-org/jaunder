@@ -29,6 +29,7 @@ tar = "0.4.46"
 brotli = "9.0.0"
 coverage = { path = "../tools/coverage" }
 host = { path = "../host" }
+common = { path = "../common" }
 csr_bundle = { path = "../tools/csr_bundle" }
 doctests = { path = "../tools/doctests" }
 tabled = "0.22.0"
