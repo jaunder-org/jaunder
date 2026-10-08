@@ -286,9 +286,13 @@ fn backend(
         }
         let backup = lifecycle.backup(id)?;
         let restored_id = format!("{id}-restored");
-        lifecycle.start_package(&restored_id, backend, a.source.clone(), a.package.clone())?;
-        lifecycle.restore(&restored_id, &backup)?;
-        lifecycle.restart_service(&restored_id)?;
+        lifecycle.restore_package(
+            &restored_id,
+            backend,
+            a.source.clone(),
+            a.package.clone(),
+            &backup,
+        )?;
         if lifecycle.observe_schema(&restored_id)? != backup.schema_version {
             bail!("restored qualification schema differs from its source backup");
         }

@@ -66,6 +66,32 @@ fn qualification_expression(
 }
 
 #[derive(Clone, Copy)]
+enum GuestBoot {
+    Fresh,
+    Persisted,
+    FreshRestore,
+    RestoredIsolated,
+}
+
+impl GuestBoot {
+    const fn reuse_disk(self) -> bool {
+        matches!(self, Self::Persisted | Self::RestoredIsolated)
+    }
+
+    const fn routes_proxy(self) -> bool {
+        matches!(self, Self::Fresh | Self::Persisted)
+    }
+
+    fn apply(self, command: &mut Command) {
+        if let Self::FreshRestore = self {
+            // Keep the ordinary VM profile, but prevent startup from acquiring
+            // runtime locks or installing content before the empty-target restore.
+            command.env("QEMU_KERNEL_PARAMS", "systemd.mask=jaunder.service");
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 enum BackupCompatibility {
     ProductionBaseline,
     CurrentQualification,
@@ -647,6 +673,38 @@ socket.on("end", () => {{
         package: PackageIdentity,
         reuse_disk: bool,
     ) -> Result<RuntimeIdentity> {
+        let boot = if reuse_disk {
+            GuestBoot::Persisted
+        } else {
+            GuestBoot::Fresh
+        };
+        self.launch_guest(deployment_id, backend, revision, package, boot)?;
+        self.admit_started_guest(deployment_id, boot)
+    }
+
+    fn admit_started_guest(
+        &mut self,
+        deployment_id: &str,
+        boot: GuestBoot,
+    ) -> Result<RuntimeIdentity> {
+        if matches!(boot, GuestBoot::FreshRestore) {
+            bail!("restore preparation cannot admit a serving runtime");
+        }
+        self.wait_for_guest(deployment_id)?;
+        if boot.routes_proxy() {
+            self.select_proxy(deployment_id)?;
+        }
+        self.runtime_identity(deployment_id)
+    }
+
+    fn launch_guest(
+        &mut self,
+        deployment_id: &str,
+        backend: StorageBackend,
+        revision: ResolvedRevision,
+        package: PackageIdentity,
+        boot: GuestBoot,
+    ) -> Result<()> {
         self.refuse_existing_deployment(deployment_id)?;
         let vm_output = self.pre_realize_vm_profile(&package, backend)?;
         let runner = vm_output.join("bin").join(format!(
@@ -654,10 +712,10 @@ socket.on("end", () => {{
             backend_name(backend)
         ));
         let disk = self.workspace.join(format!("{deployment_id}.qcow2"));
-        if disk.exists() != reuse_disk {
+        if disk.exists() != boot.reuse_disk() {
             bail!(
                 "{} deployment disk {}",
-                if reuse_disk {
+                if boot.reuse_disk() {
                     "missing persisted"
                 } else {
                     "fresh"
@@ -670,9 +728,14 @@ socket.on("end", () => {{
             "hostfwd=tcp:127.0.0.1:{application_port}-:3000,hostfwd=tcp:127.0.0.1:{control_port}-:39000"
         );
         let vm_log = self.workspace.join(format!("{deployment_id}.vm.log"));
-        let vm_output = fs::File::create(&vm_log)?;
+        let vm_output = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&vm_log)?;
         let vm_error = vm_output.try_clone()?;
-        let vm = Command::new(&runner)
+        let mut command = Command::new(&runner);
+        boot.apply(&mut command);
+        let vm = command
             .current_dir(&self.workspace)
             .env("NIX_DISK_IMAGE", &disk)
             .env("QEMU_NET_OPTS", network)
@@ -694,9 +757,7 @@ socket.on("end", () => {{
                 vm,
             },
         );
-        self.wait_for_guest(deployment_id)?;
-        self.select_proxy(deployment_id)?;
-        self.runtime_identity(deployment_id)
+        Ok(())
     }
 
     fn refuse_existing_deployment(&self, deployment_id: &str) -> Result<()> {
@@ -971,6 +1032,61 @@ socket.on("end", () => {{
     /// The lifecycle owns the transfer and in-guest mutation so workflow code
     /// cannot reach VM disks or control channels directly.
     pub fn restore(&self, deployment_id: &str, backup: &BackupArtifact) -> Result<()> {
+        self.restore_with(deployment_id, backup, baseline_command)
+    }
+
+    /// Restore into a fresh, never-served guest, then boot its ordinary service.
+    /// The transient unit exposes the canonical unit's environment without
+    /// starting it; it disappears with the restore boot's runtime filesystem.
+    pub(crate) fn restore_package(
+        &mut self,
+        deployment_id: &str,
+        backend: StorageBackend,
+        revision: ResolvedRevision,
+        package: PackageIdentity,
+        backup: &BackupArtifact,
+    ) -> Result<RuntimeIdentity> {
+        if !matches!(
+            self.backup_compatibility,
+            BackupCompatibility::CurrentQualification
+        ) {
+            bail!("fresh package restore is qualification-only");
+        }
+        self.backup_compatibility
+            .validate(backup.format_version, backup.schema_version)?;
+        self.launch_guest(
+            deployment_id,
+            backend,
+            revision.clone(),
+            package.clone(),
+            GuestBoot::FreshRestore,
+        )?;
+        self.wait_for_guest(deployment_id)?;
+        self.guest(
+            deployment_id,
+            &restore_preparation_command(&package, backend),
+        )?;
+        self.restore_with(deployment_id, backup, restore_service_command)?;
+        // The boot-generated mask is immutable for this boot. A normal reboot
+        // both removes it and exercises ordinary startup over the restored disk.
+        self.park(deployment_id)?;
+        self.deployments.remove(deployment_id);
+        self.launch_guest(
+            deployment_id,
+            backend,
+            revision,
+            package,
+            GuestBoot::RestoredIsolated,
+        )?;
+        self.admit_started_guest(deployment_id, GuestBoot::RestoredIsolated)
+    }
+
+    fn restore_with(
+        &self,
+        deployment_id: &str,
+        backup: &BackupArtifact,
+        invocation: fn(&PackageIdentity, &str) -> String,
+    ) -> Result<()> {
         self.backup_compatibility
             .validate(backup.format_version, backup.schema_version)?;
         let package = &self
@@ -987,7 +1103,7 @@ socket.on("end", () => {{
         }
         self.guest(
             deployment_id,
-            &baseline_command(package, &format!("restore {guest_path}")),
+            &invocation(package, &format!("restore {guest_path}")),
         )
         .context("restoring compatibility-validated backup")
         .map(|_| ())
@@ -1217,8 +1333,25 @@ socket.on("end", () => {{
                 Ok(0) => bail!("guest control response closed before exit-status frame"),
                 Ok(count) => {
                     output.extend_from_slice(&bytes[..count]);
-                    if let Some(body) = complete_status(&output)? {
-                        return Ok(body);
+                    match complete_status(&output) {
+                        Ok(Some(body)) => return Ok(body),
+                        Ok(None) => {}
+                        Err(error) => {
+                            return Err(match persist_guest_failure(&self.workspace, &output) {
+                                Ok(path) => error.context(format!(
+                                    "restricted guest output: {}",
+                                    path.display()
+                                )),
+                                Err(diagnostic) => {
+                                    // Preserve the primary command failure even if
+                                    // ancillary private diagnostic retention fails.
+                                    eprintln!(
+                                        "warning: retaining guest failure output failed: {diagnostic:#}"
+                                    );
+                                    error
+                                }
+                            });
+                        }
                     }
                 }
                 Err(error)
@@ -1414,6 +1547,44 @@ fn baseline_command(package: &PackageIdentity, args: &str) -> String {
     )
 }
 
+fn restore_service_command(package: &PackageIdentity, args: &str) -> String {
+    // A missing environment is an infrastructure failure, not permission to
+    // let the CLI select its default database in a transient unit's directory.
+    let command = format!(
+        "set -e\nset -o pipefail\nvalues=$(systemctl show --property=Environment --value jaunder-restore-env.service | tr ' ' '\\n' | grep '^JAUNDER_')\ntest -n \"$values\"\nexport $values\n: \"${{JAUNDER_DB:?missing canonical restore database}}\"\nexport JAUNDER_STORAGE_PATH=/var/lib/jaunder/data\n{} {args}",
+        Path::new(&package.output_path)
+            .join("bin/jaunder")
+            .display(),
+    );
+    let quoted = format!("'{}'", command.replace('\'', "'\\''"));
+    format!(
+        "systemd-run --quiet --wait --pipe --collect --property=User=jaunder --property=Group=jaunder --setenv=PATH=\"$PATH\" /bin/sh -c {quoted}"
+    )
+}
+
+fn restore_preparation_command(package: &PackageIdentity, backend: StorageBackend) -> String {
+    let bootstrap = match backend {
+        StorageBackend::Sqlite => "",
+        StorageBackend::Postgres => "systemctl start jaunder-baseline-postgres-bootstrap.service\n",
+    };
+    format!(
+        "set -e\ntest \"$(systemctl show --property=LoadState --value jaunder.service)\" = masked\ntest ! -e /var/lib/jaunder/data\ncp /etc/systemd/system/jaunder.service /run/systemd/system/jaunder-restore-env.service\nsystemctl daemon-reload\ntest \"$(systemctl show --property=ActiveState --value jaunder-restore-env.service)\" = inactive\ninstall -d -m 0700 -o jaunder -g jaunder /var/lib/jaunder\n{bootstrap}{}",
+        restore_service_command(package, "init"),
+    )
+}
+
+fn persist_guest_failure(workspace: &Path, output: &[u8]) -> Result<PathBuf> {
+    let mut diagnostic = tempfile::Builder::new()
+        .prefix("guest-failure-")
+        .suffix(".log")
+        .tempfile_in(workspace)?;
+    diagnostic.write_all(output)?;
+    let (_, path) = diagnostic
+        .keep()
+        .context("retaining private guest failure output")?;
+    Ok(path)
+}
+
 fn read_backup_manifest(path: &Path) -> Result<BackupManifest> {
     let file = fs::File::open(path)?;
     let decoder = GzDecoder::new(file);
@@ -1568,6 +1739,111 @@ fn regular_metadata(path: &Path) -> Result<fs::Metadata> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restore_preparation_keeps_the_canonical_environment_and_service_user() {
+        let package = PackageIdentity {
+            installable: String::new(),
+            derivation: String::new(),
+            nar_hash: String::new(),
+            executable_sha256: String::new(),
+            output_path: "/nix/store/fixture-package".into(),
+        };
+        for backend in [StorageBackend::Sqlite, StorageBackend::Postgres] {
+            let preparation = restore_preparation_command(&package, backend);
+            assert!(preparation.starts_with("set -e\ntest"));
+            assert!(preparation.contains("test ! -e /var/lib/jaunder/data"));
+            assert!(preparation.contains("cp /etc/systemd/system/jaunder.service /run/systemd/system/jaunder-restore-env.service"));
+            assert!(
+                preparation
+                    .contains("ActiveState --value jaunder-restore-env.service)\" = inactive")
+            );
+            assert_eq!(
+                preparation.contains("systemctl start jaunder-baseline-postgres-bootstrap.service"),
+                backend == StorageBackend::Postgres
+            );
+            assert!(preparation.contains("--property=User=jaunder --property=Group=jaunder"));
+            assert!(preparation.contains("--setenv=PATH=\"$PATH\""));
+            assert!(preparation.contains("set -o pipefail"));
+            assert!(preparation.contains("JAUNDER_DB:?missing canonical restore database"));
+            assert!(
+                Command::new("sh")
+                    .args(["-n", "-c", &preparation])
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        let ordinary = baseline_command(&package, "backup");
+        assert!(ordinary.contains("Environment --value jaunder.service"));
+        assert!(!ordinary.contains("systemd-run"));
+        assert!(!ordinary.contains("jaunder-restore-env"));
+        let restore = restore_service_command(&package, "restore /var/lib/jaunder/fixture.tar.gz");
+        assert!(restore.contains("Environment --value jaunder-restore-env.service"));
+        assert!(restore.contains("/nix/store/fixture-package/bin/jaunder restore"));
+        assert!(
+            Command::new("sh")
+                .args(["-n", "-c", &restore])
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+
+    #[test]
+    fn restore_boot_is_fresh_and_masks_only_the_owned_service() {
+        assert!(!GuestBoot::FreshRestore.reuse_disk());
+        assert!(!GuestBoot::Fresh.reuse_disk());
+        assert!(GuestBoot::Persisted.reuse_disk());
+        assert!(GuestBoot::RestoredIsolated.reuse_disk());
+        assert!(GuestBoot::Fresh.routes_proxy());
+        assert!(GuestBoot::Persisted.routes_proxy());
+        assert!(!GuestBoot::FreshRestore.routes_proxy());
+        assert!(!GuestBoot::RestoredIsolated.routes_proxy());
+        for boot in [
+            GuestBoot::Fresh,
+            GuestBoot::Persisted,
+            GuestBoot::FreshRestore,
+            GuestBoot::RestoredIsolated,
+        ] {
+            let mut command = Command::new("runner");
+            boot.apply(&mut command);
+            let environment = command.get_envs().collect::<Vec<_>>();
+            if matches!(boot, GuestBoot::FreshRestore) {
+                assert_eq!(
+                    environment,
+                    vec![(
+                        std::ffi::OsStr::new("QEMU_KERNEL_PARAMS"),
+                        Some(std::ffi::OsStr::new("systemd.mask=jaunder.service"))
+                    )]
+                );
+            } else {
+                assert!(environment.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn private_guest_failure_retains_original_bytes_without_public_error_body() {
+        let workspace = tempfile::tempdir().unwrap();
+        let output = b"private original restore error\n__JAUNDER_BASELINE_STATUS__1\n";
+        let path = persist_guest_failure(workspace.path(), output).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), output);
+        assert!(
+            !complete_status(output)
+                .unwrap_err()
+                .to_string()
+                .contains("private original")
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
 
     #[test]
     fn qualification_backup_policy_preserves_ordinary_baseline_admission() {
