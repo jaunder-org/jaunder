@@ -180,7 +180,7 @@ subsystems or authorization for parallel implementation writers.
     proof; actual Safari/iPhone remains explicitly unqualified, not inferred
     from Chromium. This is not #1419 production acceptance or milestone closure.
 
-- [ ] Task 6: Reconcile asset inventory, documentation, and release evidence.
+- [x] Task 6: Reconcile asset inventory, documentation, and release evidence.
   - Record every mutable non-manifest asset's cache/identity disposition,
     including favicon and thumbnail consumers. Stable mutable assets must have
     an explicit policy rather than accidental heuristic or immutable caching.
@@ -204,9 +204,15 @@ subsystems or authorization for parallel implementation writers.
     tests, and 61 package/security tests; TypeScript also passes. The new live
     stylesheet-timing test first failed on null retired-URL attribution, then
     passed with actual DOM-owned digest references; the combined Chromium
-    boot-marks/static-assets suite passes all 28 cases. Independent final
-    review, commit-boundary certification, and PR CI remain pending; this
-    checkbox stays open until those barriers are satisfied.
+    boot-marks/static-assets suite passes all 28 cases. Whole-branch Standards
+    review returned OK with a closed-catalog maintainability note; Spec review's
+    sole stale-style-guide finding was corrected and its same-role challenge
+    returned OK. Independent conformance covered acceptance 1–9, explicitly
+    leaving actual Safari/iPhone unqualified. Enforced commit certification passed
+    for `2ffa02e5` after inspecting and restaging a prose-only formatter mutation.
+    This checkbox records delivered implementation/documentation, not merge or
+    production acceptance. Final clean-tree pre-PR proof and authoritative PR CI
+    remain external ship barriers; no merge is authorized.
 
 ## Risk checks and acceptance coverage
 
