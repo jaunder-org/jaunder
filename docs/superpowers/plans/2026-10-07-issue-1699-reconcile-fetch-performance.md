@@ -97,7 +97,13 @@ backend behavior changes; use existing live Emacs fixtures for consumer proof.
     factories, privacy, and diagnostic retention after report-buffer exit. The
     pure suite is 489/489; compilation is warning-free and all 110
     inventory/reconciliation function forms are identical after removing
-    diagnostic wrappers. Batch/row, conflict, and merge owners remain pending.
+    diagnostic wrappers. A batch-level regression exposed terminal diagnostics
+    releasing pending input despite the enclosing owner's `inhibit-quit`:
+    completion now leaves that input for the owner to acknowledge after its
+    result checkpoint. Two red/green regressions cover native value identity,
+    body/sink input, and the real executor recording before cancellation and
+    refreshing with input cleared. The pure suite is 491/491; compilation is
+    warning-free. Batch/row, conflict, and merge owners remain pending.
   - Contract: outer command/batch/row spans nest existing lower-level
     operations; direct helper calls remain independent roots. Ediff setup and
     later finish/ cancel/discard are separate calls, not a fictitious

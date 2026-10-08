@@ -313,13 +313,13 @@ The event remains one complete line; retention accounting and its IDs stay put."
               (insert line))))))))
 
 (defun jaunder--debug-complete (state)
-  "Finish STATE, classifying user cancellation during terminal diagnostics."
-  (let (cancelled)
+  "Finish STATE, respecting an enclosing owner's deferred keyboard cancellation."
+  (let ((deferred inhibit-quit) cancelled)
     (let ((inhibit-quit t))
       (jaunder--debug-safe (lambda () (jaunder--debug-finish state)))
-      ;; Acknowledge pending input before releasing it, including sink input.
-      ;; It is re-signalled outside the ancillary-failure guard below.
-      (when quit-flag
+      ;; An enclosing mutation/checkpoint owner must retain pending input until
+      ;; its own acknowledgement boundary.  Otherwise release it after emission.
+      (when (and quit-flag (not deferred))
         (setq quit-flag nil cancelled t)
         (setf (jaunder--debug-span-outcome state) "cancelled")
         (jaunder--debug-safe (lambda () (jaunder--debug-cancel-terminal state)))))
