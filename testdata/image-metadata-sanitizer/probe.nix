@@ -111,6 +111,14 @@ pkgs.runCommand "issue-1702-image-sanitizer-feasibility-witness"
       > "$out/reports/webp-candidate-oracle-controls.txt"
     python3 -B ${./verify_webp_controls.py} "$out/fixtures/webp" \
       ${./verify_webp_candidate.py} > "$out/reports/webp-controls.txt"
+    python3 -B ${./verify_webp_rewrite.py} "$out/fixtures/webp" \
+      ${./rewrite_webp.py} ${./rewrite_rgb_icc.py} ${./rewrite_png.py} \
+      ${./verify_webp_candidate.py} ${./verify_rgb_icc.py} "$PWD/validate-rgb-icc" \
+      > "$out/reports/webp-rewrite.json"
+    python3 -B ${./verify_webp_rewrite_controls.py} "$out/fixtures/webp" \
+      ${./rewrite_webp.py} ${./rewrite_rgb_icc.py} ${./rewrite_png.py} \
+      ${./verify_webp_candidate.py} ${./verify_webp_rewrite.py} ${./verify_rgb_icc.py} ./validate-rgb-icc \
+      > "$out/reports/webp-rewrite-controls.txt"
     {
       printf 'pillow-nix-version=%s\n' '${pkgs.python3Packages.pillow.version}'
       printf 'pillow-nix-path=%s\n' '${pkgs.python3Packages.pillow}'
