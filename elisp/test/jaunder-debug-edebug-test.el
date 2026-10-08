@@ -62,12 +62,13 @@
      (jaunder-debug-edebug--with-owner
       (let ((data (list "private native failure")) (fields 0))
         (setq jaunder-debug t)
-        (should (equal (condition-case err
-                           (jaunder-debug-edebug--owner
-                            (lambda () (cl-incf fields) "private unsafe format")
-                            (lambda () (signal kind data)))
-                         (error err) (quit err))
-                       (cons kind data)))
+        (let ((caught (condition-case err
+                          (jaunder-debug-edebug--owner
+                           (lambda () (cl-incf fields) "private unsafe format")
+                           (lambda () (signal kind data)))
+                        (error err) (quit err))))
+          (should (eq (car caught) kind))
+          (should (eq (cdr caught) data)))
         (should (= fields 2))
         (let ((text (jaunder-debug-boundary--text)))
           (jaunder-debug-boundary--assert-tree text '("publish.validate"))
