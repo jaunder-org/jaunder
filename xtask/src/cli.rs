@@ -391,6 +391,8 @@ pub enum Command {
 /// atomically publishes only sanitized dated evidence.
 #[derive(Subcommand)]
 pub enum ProductionBaselineCommand {
+    /// Qualify closed styling releases from the clean current local commit.
+    QualifyStyling,
     /// Discover same-revision deployment, recovery, and continuity evidence.
     Discover {
         /// Git revision that resolves to a commit reachable from the upstream repository.
@@ -750,6 +752,9 @@ impl Cli {
             }
             Command::ProductionBaseline(ProductionBaselineCommand::Accept { .. }) => {
                 "production-baseline-accept"
+            }
+            Command::ProductionBaseline(ProductionBaselineCommand::QualifyStyling) => {
+                "production-baseline-qualify-styling"
             }
             Command::Sandbox { .. } => "sandbox",
             Command::Pr(PrCommand::Watch { .. }) => "pr-watch",
