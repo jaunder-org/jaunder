@@ -2776,13 +2776,37 @@ and denominator.
 and nothing but `require` forms for the feature modules (`elisp/jaunder.el:30`):
 the format-neutral entry IR (`jaunder-entry.el`, the
 `cl-defstruct jaunder-entry`), blog config and request context
-(`jaunder-config.el`), soft authoring warnings (`jaunder-warn.el`), timezone
-handling (`jaunder-datetime.el`), the wire encoder/response harvester
+(`jaunder-config.el`), soft authoring warnings (`jaunder-warn.el`), bounded
+client diagnostics (`jaunder-debug.el`), timezone handling
+(`jaunder-datetime.el`), the wire encoder/response harvester
 (`jaunder-atom.el`), the org document interface (`jaunder-org.el`), HTTP
 (`jaunder-transport.el`), the service-document capability probe
 (`jaunder-service.el`), Collection/local identity inventory
 (`jaunder-inventory.el`), Local Post Link mapping (`jaunder-post-link.el`),
 media (`jaunder-media.el`), and the user commands (`jaunder-publish.el`).
+
+### Local client diagnostics
+
+`jaunder-debug.el` owns off-by-default, timestamped operation diagnostics for
+the Emacs Protocol Client. Its lazy operation and field macros bypass clocks,
+field producers, encoding, buffer creation and ID state while disabled. Enabled
+commands and lower-level owners form correlated parent/child spans; callbacks
+that run after authoring or merge setup are independent operations, not one
+continuously open span. Native values, conditions and mutation checkpoints
+retain their ownership, including deferred keyboard cancellation.
+
+The core accepts only closed labels, keys and enums plus bounded numeric fields;
+it never accepts arguments, URLs, paths, account names, credentials, authored
+content, hashes, response bytes or free-form errors as diagnostic text. Events
+are bounded ASCII lines retained only in the read-only `*Jaunder Debug*` buffer:
+at most 10,000 events and one cumulative eviction marker. Explicit show, clear
+and disable controls own its lifecycle; frontend exit and disabling retain
+existing evidence, and logging never displays the buffer automatically. Sink or
+warning failures are ancillary and cannot replace the operation's native
+outcome. Deferred field expressions retain their own executable Edebug coverage
+points under [ADR-0162](adr/0162-elisp-stateless-coverage-gate.md).
+[The client guide](../elisp/README.md) owns the complete boundary/proof
+inventory and capture/sharing procedure.
 
 ### Transport and auth
 

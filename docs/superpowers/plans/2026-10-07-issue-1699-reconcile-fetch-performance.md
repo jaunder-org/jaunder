@@ -64,7 +64,7 @@ backend behavior changes; use existing live Emacs fixtures for consumer proof.
     `.xtask/issue-1699/task3-live-proof.el` and
     `1791410827438-2657327.{out,err}` in the same evidence directory. These
     temporary tools do not ship; authoritative coverage remains task 5.
-- [ ] **4. Instrument user workflows and complete correlation.**
+- [x] **4. Instrument user workflows and complete correlation.**
   - Depends on 2 and 3. Own every `config.*`, `auth.*`, `author.*`, `publish.*`,
     `delete.*`, `report.*`, `inventory.*`, `reconcile.*`, `conflict.*`,
     `merge.*` label; no spec inventory label is left outside tasks 3/4.
@@ -113,8 +113,8 @@ backend behavior changes; use existing live Emacs fixtures for consumer proof.
     calls actual push owners in both modes; existing successful/failing mutation
     regressions also ran enabled (45/45, no diagnostic warnings). Pure suite:
     496/496; compilation warning-free; 76 native reconcile defuns equivalent
-    after stripping only diagnostic wrappers. Final live evidence remains
-    pending. Both batch/row reviews approved; the Standards wording note (action
+    after stripping only diagnostic wrappers. Final live evidence is recorded
+    below. Both batch/row reviews approved; the Standards wording note (action
     known at start, only decision initially unknown) is corrected in README.
     Explicit conflict commands and separate scratch finish/cancel/discard
     callbacks now have the seven remaining label groups. Remote staging and
@@ -125,9 +125,10 @@ backend behavior changes; use existing live Emacs fixtures for consumer proof.
     error/quit payloads for all seven labels. The full runner caught a duplicate
     test load; replay now loads legacy contracts lazily only during focused
     execution. Pure suite: 502/502; compilation warning-free; all 76 native
-    reconcile defuns still equivalent. Conflict/merge independent review remains
-    pending; final live populations/coverage and exhaustive owner/field
-    inventory are Task 5.
+    reconcile defuns still equivalent. Both independent conflict/merge reviews
+    approved. Task 4's permanent owner/lifecycle and correlation contracts are
+    delivered; complete live populations, coverage and owner/field inventory
+    evidence are recorded under Task 5.
   - Contract: outer command/batch/row spans nest existing lower-level
     operations; direct helper calls remain independent roots. Ediff setup and
     later finish/ cancel/discard are separate calls, not a fictitious
@@ -141,6 +142,35 @@ backend behavior changes; use existing live Emacs fixtures for consumer proof.
     authoring, merge scratch and Ediff-view exit without deleting retained
     diagnostics.
 - [ ] **5. Reconcile evidence, document usage, and verify the branch.**
+  - Delivered evidence: README maps all 52 expanded labels to 64 actual
+    production boundaries and named permanent proofs; the source-reader census
+    reconciles both directions. The host coverage producer passes 508/508 pure
+    and 40/40 live tests; production byte-compilation is warning-free. The
+    authoritative `ci-validate test-checks` lane passes its hermetic Emacs
+    producer, artifact lift and consumer: 3,971 covered points and 214 existing
+    accepted ignored points, with no new suppressions. Deferred fields and batch
+    projections have permanent regressions requiring their own live Edebug
+    counters; both independent follow-up reviews approved.
+  - Privacy evidence: the complete enabled live population retains 5,298 events,
+    2,649 paired spans and 47 labels; the five labels absent from live execution
+    have pure actual-lifecycle proofs. The runtime input audit passes 40/40 live
+    tests and checks 168 distinct actual credential/account/origin/path/header
+    inputs and authored sentinels without leakage. Short authored words that
+    coincide with admitted literal enums are governed by the closed-schema and
+    permanent producer proofs, not claimed as unique runtime sentinels.
+    Temporary reproduction and bounded result files are in `.xtask/issue-1699/`
+    and do not ship.
+  - Verification still pending: the real-filesystem 1,000-Post replay observes
+    exactly 1,000 validations in 0.790s; this is local timing, not the required
+    affected-production replay. Whole-branch Standards, Spec and independent
+    conformance review confirm the delivered functional contracts, but block
+    shipping on production timing confirmation and the final authoritative
+    whole-tree/CI verdict. The original Rust producer's two 30-second SQLite
+    timeouts are not assertion failures; the exact archived instrumented suite
+    passes 5,491/5,491 under the unchanged timeout, but does not replace a fresh
+    coverage producer/report/consumer gate. No Rust or timeout source changes
+    were made. The final tree must be reviewed, archived and reconciled with
+    upstream before its shipping proof.
   - Depends on 1–4. Add the exhaustive label-to-test/field-producer table to
     `elisp/README.md`, with option/controls, privacy, sharing, retention and
     remaining Collection cost. Each expanded spec label names an actual pure or
