@@ -80,16 +80,93 @@ an upload-policy change; task-2 execution/resource/platform proof is unfinished.
   the observer does not check only frame0.
 
 LZW validation tracks dictionary string lengths, first symbols, maximum palette
-indices and expansion count, not a full pixel raster. The current corpus does
-**not** prove full/deferred-clear twelve-bit dictionaries: the prototype admits
-only minimum code size 2 and three/four-bit states, rejecting before the first
-five-bit transition (including if the next code would be end/clear). Higher
-minimum sizes and wider/full/deferred-clear states cannot succeed. This is a
-fixture-supported subset, not a viable general GIF envelope yet. Interlace,
-ANIMEXTS, user-input controls, Plain Text and XMP/unknown applications reject
-until proved. Other GIF structures, metadata limits, previews, rendering
-variants and platform/runtime safety remain unproven. Reports:
-`gif-rewrite.json` and `gif-controls.txt` under the witness's `reports/`.
+indices and expansion count, not a full pixel raster. The initial pilot admitted
+only minimum size 2 and three/four-bit states. The independently proved
+dictionary extension below supersedes that restriction, not the other GIF
+feature restrictions or production caveats. Interlace, ANIMEXTS, user-input
+controls, Plain Text and XMP/unknown applications reject until proved. Other GIF
+structures, metadata limits, previews, rendering variants and platform/runtime
+safety remain unproven. Reports: `gif-rewrite.json` and `gif-controls.txt` under
+the witness's `reports/`.
+
+## Executed LZW dictionary extension (2026-10-08)
+
+The primary GIF89a Appendix F specifies minimum+1 initial width, clear+2 first
+entry, LSB-first packing and maximum code 4095 at twelve bits. Its **cover-sheet
+Deferred Clear Code** clarification requires a full dictionary to remain frozen
+at twelve bits until clear; code 4096 cannot be represented. The validator now
+implements those states, using 4096 length/first/maximum entries without
+decoding a raster. No container feature acceptance changed.
+
+`verify_gif_lzw_envelope.py` constructs explicit code-word/width schedules by
+**literal ordinal formulas**, not the validator's dictionary algorithm. After N
+literals, highest allocated entry is clear+N and entry k is the pair of literals
+at ordinals k-clear-2 and k-clear-1. Known next-entry specials append two copies
+of the previous literal; chained specials explicitly yield strings of lengths
+2/3/4. Golden palette indices and RGBA canvases are constructed directly from
+those authored symbols. Neither golden construction nor packing imports the
+rewriter. Both pinned Pillow **12.3.0** and ImageMagick **7.1.2-29**
+independently check every source and rewritten canvas exactly, and Pillow checks
+exact palette and indices. Rewrites preserve every byte for these metadata-free
+controls, including compressed sub-blocks, through repeat and second-pass
+invocations.
+
+| Minimum | Executed positive rows | Admitted widths | Transitions checked |
+| ------- | ---------------------- | --------------- | ------------------- |
+| 2       | 82                     | 3–12            | 3→4 through 11→12   |
+| 3       | 74                     | 4–12            | 4→5 through 11→12   |
+| 4       | 66                     | 5–12            | 5→6 through 11→12   |
+| 5       | 58                     | 6–12            | 6→7 through 11→12   |
+| 6       | 50                     | 7–12            | 7→8 through 11→12   |
+| 7       | 42                     | 8–12            | 8→9 through 11→12   |
+| 8       | 34                     | 9–12            | 9→10 through 11→12  |
+
+For **every** minimum/width pair, rows terminate, clear/reset, reference an
+allocated entry or exercise KwKwK immediately before and after the allocation
+boundary. Twelve-bit after-boundary KwKwK is intentionally absent: the table is
+full and no next code exists. All seven minima allocate and reference entry
+4095, freeze the dictionary while referencing its last and earlier entries and
+literals, then clear at twelve bits and exercise reset KwKwK. Separate chained
+specials prove a previous dictionary string rather than only a previous literal.
+Schedules (`*.words.json`) and independently authored `*.golden.rgba` are
+retained beside each fixture, distinct from consumer evidence in the reports.
+These are state witnesses, not validator runtime traces.
+
+**406 positive rows and 222 new malformed rows execute.** The latter cover
+initial/after-clear unallocated codes, missing initial clear, premature end,
+forward codes at all non-full transition states, truncated variable-width ends,
+expansion overflow and stale entries after reset at every width, plus
+unsupported minima 0/1/9/12/255. All reject via the explicit GIF domain error,
+unchanged input and no output; infrastructure failures cannot satisfy those
+assertions. The original 45-case suite retains all **38 malformed/unsupported**
+cases; the six valid minimum3–8 streams and valid first-five-bit stream are
+migrated to named positive golden controls, not deleted as malformed. Original
+seven inputs/15 paired animation canvases, six ICC
+privacy/all-four-LittleCMS-intent pairs, compressed/frame-control fidelity and
+late-frame observer checks remain green.
+
+Before widening, the 301-row initial consumer-only matrix passed with the old
+rewriter and all 45 original rejection controls (Nix output
+`/nix/store/p8pfx94lyah723i10h2fd1g9xz3rkxak-issue-1702-image-sanitizer-feasibility-witness`).
+The final focused full witness passed with 406 rows, including additional normal
+entry references at every width and chained specials. Final output:
+`/nix/store/m1gr20x2gk6hdxjsyqw055sh9z6hvbsa-issue-1702-image-sanitizer-feasibility-witness`.
+Reports `gif-lzw-consumers.json`, `gif-lzw-rewrite.json`, `gif-rewrite.json`,
+`gif-controls.txt` and `gif-consumer-packages.txt` provide per-row results and
+pinned consumer identities. A separately executed census reconciles all 406
+required row identities and the 222 rejection records. Invocation:
+
+```sh
+devtool run -- nix build --impure --out-link .xtask/image-metadata-witness --print-out-paths --file testdata/image-metadata-sanitizer/probe.nix
+```
+
+This is a synthetic grammar/state envelope, **not all-GIF certification**, pixel
+steganography detection or entropy-safety proof. Strict initial-clear and
+zero-padding/no-post-EOI-byte restrictions remain. Interlace, user-input, Plain
+Text, ANIMEXTS, XMP and unknown applications remain closed. File/pixel/frame/
+record guards are fixture prototype guards: no measured production allocation,
+deadline, cancellation, isolation or supported-platform safety follows. No
+product integration, task-1 completion or shared-upload policy change occurred.
 
 ## WebP
 

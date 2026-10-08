@@ -5,7 +5,6 @@ import struct
 import subprocess
 import sys
 from pathlib import Path
-from PIL import Image
 
 
 def split(data):
@@ -97,24 +96,11 @@ if __name__ == "__main__":
     cases["LZW-extra-bytes"] = bare_header + descriptor + b"\2\3\x84\x0b\0\0;"
     small_palette = bare_header[:10] + bytes([bare_header[10] & ~7]) + bare_header[11:19]
     cases["LZW-palette-index"] = small_palette + b"," + struct.pack("<HHHHB", 0, 0, 1, 1, 0) + code_stream([(4, 3), (3, 3), (5, 3)]) + b";"
-    for minimum in range(3, 9):
-        codes = [(1 << minimum, minimum + 1), (0, minimum + 1),
-                 (1, minimum + 1), (2, minimum + 1), ((1 << minimum) + 1, minimum + 1)]
-        cases[f"unproved-minimum-{minimum}"] = bare_header + descriptor + code_stream(codes, minimum) + b";"
-    # This valid stream reaches the FIRST unproved 4->5-bit transition. It is
-    # independently decoded below before the prototype's rejection is checked.
-    crossing = [(4, 3)] + [(i % 4, 3 if i < 3 else 4) for i in range(11)] + [(5, 5)]
-    cases["unproved-width5"] = bare_header + b"," + struct.pack("<HHHHB", 0, 0, 11, 1, 0) + code_stream(crossing) + b";"
+    # The seven valid formerly unsupported streams are now positive golden
+    # controls in verify_gif_lzw_envelope.py; malformed cases remain here.
     for label, data in cases.items():
         before, after = work / (label + ".gif"), work / (label + ".output.gif")
         before.write_bytes(data)
-        if label.startswith("unproved-"):
-            with Image.open(before) as image:
-                image.load()
-                assert image.n_frames == 1
-            consumer = subprocess.run([magick, str(before), "-coalesce", "-depth", "8", "rgba:" + str(before) + ".rgba"], capture_output=True, check=True)
-            assert not consumer.stderr
-            assert len(Path(str(before) + ".rgba").read_bytes()) == 12 * 10 * 4
         result = subprocess.run([sys.executable, "-B", rewrite, str(before), str(after), icc], capture_output=True, text=True)
         last = result.stderr.splitlines()[-1] if result.stderr else ""
         assert result.returncode == 1 and last.startswith(("ValueError: invalid GIF ", "ValueError: invalid ICC ")), (label, result.stderr)
@@ -148,4 +134,4 @@ if __name__ == "__main__":
     new_frames = proof.decode(mutant)[0]
     assert old_frames[:-1] == new_frames[:-1] and old_frames[-1] != new_frames[-1]
     assert proof.inspect(root / "input" / "finite-v4.gif")[0] != proof.inspect(mutant)[0]
-    print(f"{len(cases)} no-output domain rejections; KwKwK/code-width growth, 4-bit boundary/reset, independently decoded unproved-state rejection and late-frame controls pass")
+    print(f"{len(cases)} no-output domain rejections; KwKwK/code-width growth, 4-bit boundary/reset, migrated valid states covered by golden envelope suite; late-frame controls pass")

@@ -92,6 +92,9 @@ pkgs.runCommand "issue-1702-image-sanitizer-feasibility-witness"
     python3 -B ${./verify_png_controls.py} "$out/fixtures/png" ${./rewrite_png.py} \
       ${./rewrite_rgb_icc.py} ${./verify_png_candidate.py} \
       > "$out/reports/png-apng-controls.txt"
+    # Independent golden consumer proof runs before any rewrite acceptance.
+    python3 -B ${./verify_gif_lzw_envelope.py} "$out/fixtures/gif" ${pkgs.imagemagick}/bin/magick \
+      > "$out/reports/gif-lzw-consumers.json"
     python3 -B ${./make_gif_fixtures.py} "$out/fixtures/ordinary" "$out/fixtures/gif/input"
     python3 -B ${./verify_gif.py} "$out/fixtures/gif" ${./rewrite_gif.py} \
       ${./rewrite_rgb_icc.py} ${./verify_rgb_icc.py} "$PWD/validate-rgb-icc" \
@@ -100,6 +103,12 @@ pkgs.runCommand "issue-1702-image-sanitizer-feasibility-witness"
     python3 -B ${./verify_gif_controls.py} "$out/fixtures/gif" ${./rewrite_gif.py} \
       ${./rewrite_rgb_icc.py} ${./verify_gif.py} ${pkgs.imagemagick}/bin/magick \
       > "$out/reports/gif-controls.txt"
+    python3 -B ${./verify_gif_lzw_envelope.py} "$out/fixtures/gif" ${pkgs.imagemagick}/bin/magick \
+      ${./rewrite_gif.py} ${./rewrite_rgb_icc.py} > "$out/reports/gif-lzw-rewrite.json"
+    {
+      printf 'pillow-version=%s\nimagemagick-version=%s\n' '${pkgs.python3Packages.pillow.version}' '${pkgs.imagemagick.version}'
+      printf 'pillow-path=%s\nimagemagick-path=%s\n' '${pkgs.python3Packages.pillow}' '${pkgs.imagemagick}'
+    } > "$out/reports/gif-consumer-packages.txt"
 
     # Candidate-only WebP witness: fixture construction uses Pillow/libwebp;
     # inspection is separately implemented with Python's standard library.

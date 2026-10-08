@@ -54,9 +54,9 @@ def encoded_blocks(data):
 
 
 def lzw(data, minimum, palette, expected):
-    require(minimum == 2, "unproved LZW minimum size")
+    require(2 <= minimum <= 8, "unsupported LZW minimum size")
     clear, eoi = 1 << minimum, (1 << minimum) + 1
-    lengths, firsts, maxima = [0] * 16, [0] * 16, [0] * 16
+    lengths, firsts, maxima = [0] * 4096, [0] * 4096, [0] * 4096
     for index in range(clear):
         lengths[index], firsts[index], maxima[index] = 1, index, index
     next_code, width, previous = clear + 2, minimum + 1, None
@@ -81,17 +81,18 @@ def lzw(data, minimum, palette, expected):
             require(code < clear or code >= clear + 2, "LZW reserved code")
             length, first, maximum = lengths[code], firsts[code], maxima[code]
         else:
-            require(code == next_code and previous is not None and next_code < 16, "LZW dictionary code")
+            require(code == next_code and previous is not None and next_code < 4096, "LZW dictionary code")
             length, first, maximum = lengths[previous] + 1, firsts[previous], maxima[previous]
         require(maximum < palette and emitted + length <= expected, "LZW palette/expansion")
         emitted += length
-        if previous is not None and next_code < 16:
+        if previous is not None and next_code < 4096:
             lengths[next_code] = lengths[previous] + 1
             firsts[next_code] = firsts[previous]
             maxima[next_code] = max(maxima[previous], first)
             next_code += 1
-            if next_code == 1 << width:
-                require(width < 4, "unproved LZW width/saturation")
+            # GIF89a deferred clear: freeze the full table, never enter
+            # a 13-bit state or allocate code 4096; only clear resets it.
+            if next_code == 1 << width and width < 12:
                 width += 1
         previous = code
 
