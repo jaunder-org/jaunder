@@ -12,7 +12,7 @@ pkgs.runCommand "issue-1702-image-sanitizer-feasibility-witness"
       pkgs.imagemagick
       pkgs.libheif
       pkgs.lcms
-      pkgs.python3
+      (pkgs.python3.withPackages (python: [ python.pillow ]))
       pkgs.stdenv.cc
     ];
   }
@@ -83,6 +83,16 @@ pkgs.runCommand "issue-1702-image-sanitizer-feasibility-witness"
           "$out/fixtures/ordinary/$stem.output-second.jpg" "$out/fixtures/ordinary/$stem.second"
       done
     done
+    python3 -B ${./make_png_fixtures.py} "$out/fixtures/ordinary" "$out/fixtures/png/input"
+    python3 -B ${./verify_png_candidate.py} "$out/fixtures/png" ${pkgs.exiftool}/bin/exiftool \
+      > "$out/reports/png-apng-exiftool-candidate.json"
+    python3 -B ${./verify_png_rewrite.py} "$out/fixtures/png" ${./rewrite_png.py} \
+      ${./rewrite_rgb_icc.py} ${./verify_png_candidate.py} ${./verify_rgb_icc.py} \
+      "$PWD/validate-rgb-icc" > "$out/reports/png-apng-rewrite.json"
+    python3 -B ${./verify_png_controls.py} "$out/fixtures/png" ${./rewrite_png.py} \
+      ${./rewrite_rgb_icc.py} ${./verify_png_candidate.py} \
+      > "$out/reports/png-apng-controls.txt"
+
     magick "$out/fixtures/input/base.png" -profile "$out/fixtures/icc/input-v4.icc" \
       -quality 92 "$out/fixtures/input/device-like.jpg"
     heif-enc -q 50 -o "$out/fixtures/input/device-like.heic" \
