@@ -142,35 +142,44 @@ backend behavior changes; use existing live Emacs fixtures for consumer proof.
     authoring, merge scratch and Ediff-view exit without deleting retained
     diagnostics.
 - [ ] **5. Reconcile evidence, document usage, and verify the branch.**
-  - Delivered evidence: README maps all 52 expanded labels to 64 actual
-    production boundaries and named permanent proofs; the source-reader census
-    reconciles both directions. The host coverage producer passes 508/508 pure
-    and 40/40 live tests; production byte-compilation is warning-free. The
-    authoritative `ci-validate test-checks` lane passes its hermetic Emacs
-    producer, artifact lift and consumer: 3,971 covered points and 214 existing
-    accepted ignored points, with no new suppressions. Deferred fields and batch
+  - Delivered evidence after upstream reconciliation: README maps all 52
+    expanded labels to 68 actual production boundaries and named permanent
+    proofs; the source-reader census reconciles both directions. The full pure
+    population passes 532/532; the full live population passes 46/46 with
+    diagnostics disabled and enabled. Production byte-compilation is
+    warning-free. The fresh authoritative `ci-validate test-checks` lane passes
+    its hermetic Emacs producer, artifact lift and consumer: 4,205 covered
+    points and 223 accepted ignored points; producer outcome is success across
+    all 18 modules. No branch suppressions were added. Deferred fields and batch
     projections have permanent regressions requiring their own live Edebug
-    counters; both independent follow-up reviews approved.
-  - Privacy evidence: the complete enabled live population retains 5,298 events,
-    2,649 paired spans and 47 labels; the five labels absent from live execution
-    have pure actual-lifecycle proofs. The runtime input audit passes 40/40 live
-    tests and checks 168 distinct actual credential/account/origin/path/header
-    inputs and authored sentinels without leakage. Short authored words that
-    coincide with admitted literal enums are governed by the closed-schema and
-    permanent producer proofs, not claimed as unique runtime sentinels.
-    Temporary reproduction and bounded result files are in `.xtask/issue-1699/`
-    and do not ship.
+    counters. All three retained reviewers close the post-rebase Media owner
+    findings: actual acquisition/reuse, fallback installation and
+    original/fallback path safety own spans; ordinary composition adds no
+    duplicate facade span. Five new tests demonstrate controlled red/green,
+    off/on behavior, standalone roots, exact native conditions and topology.
+  - Privacy evidence after the Media-owner fix: the complete enabled live
+    population retains 7,512 events, 3,756 paired spans, 543 roots and 47
+    labels; the five labels absent from live execution have pure
+    actual-lifecycle proofs. Strict schema, bounds and immediate-parent/LIFO
+    topology checks pass, with a maximum event size of 183 bytes. The runtime
+    input audit passes 46/46 live tests and checks 201 distinct actual
+    credential/account/origin/path/header inputs and authored sentinels without
+    leakage. Short authored words that coincide with admitted literal enums are
+    governed by the closed-schema and permanent producer proofs, not claimed as
+    unique runtime sentinels. Temporary reproduction and bounded result files
+    are in `.xtask/issue-1699/` and do not ship.
   - Verification still pending: the real-filesystem 1,000-Post replay observes
-    exactly 1,000 validations in 0.790s; this is local timing, not the required
-    affected-production replay. Whole-branch Standards, Spec and independent
-    conformance review confirm the delivered functional contracts, but block
-    shipping on production timing confirmation and the final authoritative
-    whole-tree/CI verdict. The original Rust producer's two 30-second SQLite
-    timeouts are not assertion failures; the exact archived instrumented suite
-    passes 5,491/5,491 under the unchanged timeout, but does not replace a fresh
-    coverage producer/report/consumer gate. No Rust or timeout source changes
-    were made. The final tree must be reviewed, archived and reconciled with
-    upstream before its shipping proof.
+    exactly 1,000 validations in 0.790s before upstream reconciliation; current
+    permanent pure regressions retain the work-count bound. This is local
+    timing, not the required affected-production replay. Whole-branch Standards,
+    Spec and independent conformance review confirm the delivered functional
+    contracts, but block shipping on production timing confirmation and the
+    final authoritative whole-tree/CI verdict. The original Rust producer's two
+    30-second SQLite timeouts are not assertion failures; the exact archived
+    instrumented suite passes 5,491/5,491 under the unchanged timeout, but does
+    not replace a fresh coverage producer/report/consumer gate. No Rust or
+    timeout source changes were made. The final tree must be reviewed, archived
+    and reconciled with upstream before its shipping proof.
   - Depends on 1–4. Add the exhaustive label-to-test/field-producer table to
     `elisp/README.md`, with option/controls, privacy, sharing, retention and
     remaining Collection cost. Each expanded spec label names an actual pure or
