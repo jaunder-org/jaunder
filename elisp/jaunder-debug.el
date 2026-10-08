@@ -341,7 +341,9 @@ The event remains one complete line; retention accounting and its IDs stay put."
 
 (defmacro jaunder--with-debug-operation (label fields &rest body)
   "Run BODY once with an optional diagnostic span for literal LABEL and FIELDS."
-  (declare (indent 2) (debug (form form body)))
+  ;; Plist keys are literal syntax; only alternating value forms are executable.
+  ;; Treating the whole plist as a form corrupts it during Edebug instrumentation.
+  (declare (indent 2) (debug (stringp (&rest [sexp form]) body)))
   (unless (stringp label) (error "Diagnostic labels must be literal strings"))
   (let ((state (make-symbol "state"))
         (finished (make-symbol "finished"))
