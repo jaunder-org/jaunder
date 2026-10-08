@@ -2795,16 +2795,17 @@ that run after authoring or merge setup are independent operations, not one
 continuously open span. Native values, conditions and mutation checkpoints
 retain their ownership, including deferred keyboard cancellation.
 
-The core accepts only closed labels, keys and enums plus bounded numeric fields;
-it never accepts arguments, URLs, paths, account names, credentials, authored
-content, hashes, response bytes or free-form errors as diagnostic text. Events
-are bounded ASCII lines retained only in the read-only `*Jaunder Debug*` buffer:
-at most 10,000 events and one cumulative eviction marker. Explicit show, clear
-and disable controls own its lifecycle; frontend exit and disabling retain
-existing evidence, and logging never displays the buffer automatically. Sink or
-warning failures are ancillary and cannot replace the operation's native
-outcome. Deferred field expressions retain their own executable Edebug coverage
-points under [ADR-0162](adr/0162-elisp-stateless-coverage-gate.md).
+The core accepts only closed labels and keys, closed enum and boolean values,
+and bounded numeric fields. It never accepts arguments, URLs, paths, account
+names, credentials, authored content, hashes, response bytes or free-form errors
+as diagnostic text. Events are bounded ASCII lines retained only in the
+read-only `*Jaunder Debug*` buffer: at most 10,000 events and one cumulative
+eviction marker. Explicit show, clear and disable controls own its lifecycle;
+frontend exit and disabling retain existing evidence, and logging never displays
+the buffer automatically. Sink or warning failures are ancillary and cannot
+replace the operation's native outcome. Deferred field expressions retain their
+own executable Edebug coverage points under
+[ADR-0162](adr/0162-elisp-stateless-coverage-gate.md).
 [The client guide](../elisp/README.md) owns the complete boundary/proof
 inventory and capture/sharing procedure.
 
